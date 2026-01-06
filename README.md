@@ -12,13 +12,23 @@
 - **📁 PARA Detection** - Automatic classification based on folder structure
 - **🔒 100% Local** - Your data never leaves your machine
 
+### Configuration Highlights
+
+- **Flexible AI Setup** - Configure Ollama and LM Studio independently (local or network)
+- **Multi-Index Support** - Switch embedding models without losing previous indexes
+- **Chunk Size Control** - Tune search precision vs context (32-8192 chars)
+- **Auto-Detection** - Models discovered automatically, dimensions displayed
+
 ## Prerequisites
 
 - [Obsidian](https://obsidian.md/) desktop (v1.4.0+)
-- [Ollama](https://ollama.ai/) running locally with an embedding model:
+- [Ollama](https://ollama.ai/) running with an embedding model:
   ```bash
   ollama pull nomic-embed-text
   ```
+- [LM Studio](https://lmstudio.ai/) running with a chat model loaded
+
+> **Note:** Both services can run locally or on a network machine (e.g., your AI workstation). The setup wizard lets you configure each service independently.
 
 ## Installation (Dev Alpha)
 

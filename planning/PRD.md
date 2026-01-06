@@ -85,11 +85,19 @@
   ### Onboarding
 
   **Guided Setup Wizard:**
-  1. Welcome + local LLM detection (Ollama/LM Studio)
-  2. Embedding model selection (based on available models)
-  3. Vault structure detection (auto-detect PARA or configure)
-  4. Initial indexing with progress indicator
-  5. **First Wow:** Vault health score revealed with insights
+  1. **AI Services Configuration**
+     - Separate Local/Network toggle per service (Ollama, LM Studio)
+     - Default IPs: localhost or 192.168.86.249 (configurable)
+     - Model auto-detection from connected services
+     - Embedding model dimension displayed (768d, 1024d, etc.)
+  2. **Indexing Configuration**
+     - Chunk size slider (32-8192 chars) with performance tooltip
+     - Excluded folders list
+     - Vault statistics preview (note count, est. time)
+  3. **Multi-Index Awareness**
+     - Shows existing indexes if returning user
+     - Model change creates new index (old preserved)
+  4. **Start Indexing** - Background process begins
 
   ### Smart Connections Migration
 
@@ -104,11 +112,17 @@
 
   ### Phase 1: Core (MVP)
   - [x] Setup wizard with LLM detection (Ollama + LM Studio)
+    - [x] Separate Local/Network toggles per service
+    - [x] Model auto-detection and dimension display
+    - [x] Chunk size slider (32-8192 chars)
+    - [x] Vault statistics display
   - [x] Simple vector store with brute-force cosine similarity
+  - [x] Multi-index architecture (index per model, preserve on switch)
   - [x] Semantic search (sidebar command)
   - [x] Related notes panel
   - [x] Basic Vault Vitals (note count, inbox size, orphan count)
   - [x] PARA-aware note type detection
+  - [ ] **NEEDS FIX:** Pipeline integration after wizard completion
 
   ### Phase 2: Intelligence
   - [ ] Multi-pass note processing (classify → enrich → link)
@@ -236,5 +250,5 @@
 
   ---
 
-  *Last updated: 2026-01-05*
+  *Last updated: 2026-01-06*
   *Author: Anthony Kougkas*

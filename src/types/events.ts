@@ -10,6 +10,7 @@ import type { SearchResult } from "./search";
 /** All event types supported by the EventBus */
 export type EventType =
   | "health:changed"
+  | "services:initialized"
   | "index:progress"
   | "index:complete"
   | "index:error"
@@ -22,6 +23,7 @@ export type EventType =
 /** Event payload mapping */
 export interface EventPayloads {
   "health:changed": HealthChangedEvent;
+  "services:initialized": ServicesInitializedEvent;
   "index:progress": IndexProgressEvent;
   "index:complete": IndexCompleteEvent;
   "index:error": IndexErrorEvent;
@@ -35,6 +37,10 @@ export interface EventPayloads {
 export interface HealthChangedEvent {
   service: "ollama" | "lmstudio";
   health: ServiceHealth;
+}
+
+export interface ServicesInitializedEvent {
+  // Empty - just signals that all services are ready
 }
 
 export interface IndexProgressEvent {

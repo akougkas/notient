@@ -32,7 +32,21 @@ interface StateFile {
   version: number;
   modelKey: string;
   lastFullIndexAt: number | null;
+  indexingInProgress: boolean;
+  indexingStartedAt: number | null;
   notes: Record<string, NoteState>;
+}
+
+/** Exported index state for UI */
+export interface IndexStats {
+  exists: boolean;
+  modelKey: string | null;
+  noteCount: number;
+  chunkCount: number;
+  lastFullIndexAt: number | null;
+  indexingInProgress: boolean;
+  indexingStartedAt: number | null;
+  needsRecovery: boolean; // True if crash detected
 }
 
 /**
@@ -42,6 +56,8 @@ export class IndexManager {
   private states: Map<string, NoteState> = new Map();
   private modelKey: string = "";
   private lastFullIndexAt: number | null = null;
+  private indexingInProgress = false;
+  private indexingStartedAt: number | null = null;
   private dirty = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -113,6 +129,8 @@ export class IndexManager {
   /** Record that a full index completed */
   recordFullIndex(): void {
     this.lastFullIndexAt = Date.now();
+    this.indexingInProgress = false;
+    this.indexingStartedAt = null;
     this.dirty = true;
     this.scheduleSave();
   }
@@ -120,6 +138,44 @@ export class IndexManager {
   /** Get last full index timestamp */
   getLastFullIndexAt(): number | null {
     return this.lastFullIndexAt;
+  }
+
+  /** Mark that indexing has started (for crash recovery detection) */
+  beginIndexing(): void {
+    this.indexingInProgress = true;
+    this.indexingStartedAt = Date.now();
+    this.dirty = true;
+    void this.saveState(); // Save immediately
+  }
+
+  /** Mark that indexing has completed */
+  endIndexing(): void {
+    this.indexingInProgress = false;
+    this.indexingStartedAt = null;
+    this.dirty = true;
+    this.scheduleSave();
+  }
+
+  /** Get index statistics for UI */
+  async getStats(): Promise<IndexStats> {
+    const chunkCount = await this.countChunks();
+    
+    // Detect crash: indexing was in progress but took > 30 minutes (stuck)
+    const CRASH_THRESHOLD_MS = 30 * 60 * 1000;
+    const needsRecovery = this.indexingInProgress && 
+      this.indexingStartedAt !== null &&
+      (Date.now() - this.indexingStartedAt) > CRASH_THRESHOLD_MS;
+
+    return {
+      exists: this.states.size > 0 || chunkCount > 0,
+      modelKey: this.modelKey || null,
+      noteCount: this.states.size,
+      chunkCount,
+      lastFullIndexAt: this.lastFullIndexAt,
+      indexingInProgress: this.indexingInProgress,
+      indexingStartedAt: this.indexingStartedAt,
+      needsRecovery,
+    };
   }
 
   // ============ Vector Operations (delegates to store) ============
@@ -235,9 +291,16 @@ export class IndexManager {
       }
 
       this.lastFullIndexAt = data.lastFullIndexAt;
+      this.indexingInProgress = data.indexingInProgress ?? false;
+      this.indexingStartedAt = data.indexingStartedAt ?? null;
       this.states.clear();
       for (const [notePath, state] of Object.entries(data.notes)) {
         this.states.set(notePath, state);
+      }
+
+      // Log crash recovery state
+      if (this.indexingInProgress) {
+        console.log(`[IndexManager] Detected interrupted indexing from ${new Date(this.indexingStartedAt ?? 0).toISOString()}`);
       }
 
       console.log(`[IndexManager] Loaded state for ${this.states.size} notes`);
@@ -254,6 +317,8 @@ export class IndexManager {
       version: 1,
       modelKey: this.modelKey,
       lastFullIndexAt: this.lastFullIndexAt,
+      indexingInProgress: this.indexingInProgress,
+      indexingStartedAt: this.indexingStartedAt,
       notes: Object.fromEntries(this.states),
     };
 

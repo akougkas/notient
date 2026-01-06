@@ -22,11 +22,17 @@ export class NotientSidebarView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private kernel: Kernel,
-    private searchPipeline: SearchPipeline | null
+    private kernel: Kernel
   ) {
     super(leaf);
     this.paraDetector = new ParaDetector(kernel.settings);
+  }
+
+  /**
+   * Get search pipeline dynamically from kernel (lazy resolution)
+   */
+  private getSearchPipeline(): SearchPipeline | null {
+    return this.kernel.getService<SearchPipeline>("search");
   }
 
   getViewType(): string {
@@ -133,11 +139,16 @@ export class NotientSidebarView extends ItemView {
   private async performSearch(query: string): Promise<void> {
     if (!this.resultsContainer) return;
 
-    if (!this.searchPipeline || !this.kernel.capabilities.search) {
+    const searchPipeline = this.getSearchPipeline();
+    
+    if (!searchPipeline || !this.kernel.capabilities.search) {
       this.resultsContainer.empty();
+      const isInitializing = this.kernel.isServicesInitializing;
       this.resultsContainer.createDiv({
         cls: "notient-message",
-        text: "Search unavailable. Complete setup first or check that Ollama is running.",
+        text: isInitializing 
+          ? "Initializing services... please wait"
+          : "Search unavailable. Complete setup first or check that Ollama is running.",
       });
       return;
     }
@@ -149,7 +160,7 @@ export class NotientSidebarView extends ItemView {
     });
 
     try {
-      const results = await this.searchPipeline.search(query, { topK: 10 });
+      const results = await searchPipeline.search(query, { topK: 10 });
       this.renderSearchResults(results);
     } catch (error) {
       console.error("[Sidebar] Search error:", error);
@@ -225,10 +236,15 @@ export class NotientSidebarView extends ItemView {
       return;
     }
 
-    if (!this.searchPipeline || !this.kernel.capabilities.search) {
+    const searchPipeline = this.getSearchPipeline();
+    
+    if (!searchPipeline || !this.kernel.capabilities.search) {
+      const isInitializing = this.kernel.isServicesInitializing;
       this.relatedContainer.createDiv({
         cls: "notient-message",
-        text: "Related notes unavailable - complete setup first",
+        text: isInitializing
+          ? "Initializing services... please wait"
+          : "Related notes unavailable - complete setup first",
       });
       return;
     }
@@ -239,7 +255,7 @@ export class NotientSidebarView extends ItemView {
     });
 
     try {
-      const related = await this.searchPipeline.findRelated(this.currentNotePath);
+      const related = await searchPipeline.findRelated(this.currentNotePath);
       this.renderRelatedNotes(related);
     } catch (error) {
       console.error("[Sidebar] Related notes error:", error);
@@ -306,8 +322,17 @@ export class NotientSidebarView extends ItemView {
     // Listen for health changes
     const unsubHealth = this.kernel.eventBus.on("health:changed", () => {
       this.renderStatus();
+      // Re-check related notes when services become available
+      this.updateRelatedNotes();
     });
     this.register(() => unsubHealth());
+
+    // Listen for services initialized
+    const unsubServices = this.kernel.eventBus.on("services:initialized", () => {
+      this.renderStatus();
+      this.updateRelatedNotes();
+    });
+    this.register(() => unsubServices());
 
     // Listen for index progress
     const unsubIndex = this.kernel.eventBus.on("index:progress", ({ progress }) => {

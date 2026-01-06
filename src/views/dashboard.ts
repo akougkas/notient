@@ -10,7 +10,7 @@ import type { VaultVitalsData, HealthScore } from "../types/vitals";
 import { VIEW_TYPE_DASHBOARD } from "../core/constants";
 
 /** Common interface for vitals implementations */
-interface VitalsProvider {
+export interface VitalsProvider {
   compute(): Promise<VaultVitalsData>;
   getCached(): VaultVitalsData | null;
   calculateHealthScore(vitals: VaultVitalsData): HealthScore;
@@ -22,10 +22,16 @@ export class NotientDashboardView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private kernel: Kernel,
-    private vaultVitals: VitalsProvider | null
+    private kernel: Kernel
   ) {
     super(leaf);
+  }
+
+  /**
+   * Get vault vitals service dynamically from kernel (lazy resolution)
+   */
+  private getVaultVitals(): VitalsProvider | null {
+    return this.kernel.getService<VitalsProvider>("vitals");
   }
 
   getViewType(): string {
@@ -66,6 +72,12 @@ export class NotientDashboardView extends ItemView {
       this.renderVitals(vitals);
     });
     this.register(() => unsub());
+
+    // Listen for services initialized - refresh when ready
+    const unsubServices = this.kernel.eventBus.on("services:initialized", () => {
+      this.refresh();
+    });
+    this.register(() => unsubServices());
   }
 
   async onClose(): Promise<void> {
@@ -79,10 +91,15 @@ export class NotientDashboardView extends ItemView {
 
     this.vitalsContainer.empty();
 
-    if (!this.vaultVitals) {
+    const vaultVitals = this.getVaultVitals();
+    
+    if (!vaultVitals) {
+      const isInitializing = this.kernel.isServicesInitializing;
       this.vitalsContainer.createDiv({
         cls: "notient-message",
-        text: "Vitals unavailable - complete setup first",
+        text: isInitializing
+          ? "Initializing services... please wait"
+          : "Vitals unavailable - complete setup first",
       });
       return;
     }
@@ -93,7 +110,7 @@ export class NotientDashboardView extends ItemView {
     });
 
     try {
-      const vitals = await this.vaultVitals.compute();
+      const vitals = await vaultVitals.compute();
       this.renderVitals(vitals);
     } catch (error) {
       console.error("[Dashboard] Error computing vitals:", error);
@@ -106,11 +123,12 @@ export class NotientDashboardView extends ItemView {
   }
 
   private renderVitals(vitals: VaultVitalsData): void {
-    if (!this.vitalsContainer || !this.vaultVitals) return;
+    const vaultVitals = this.getVaultVitals();
+    if (!this.vitalsContainer || !vaultVitals) return;
     this.vitalsContainer.empty();
 
     // Health Score Card
-    const healthScore = this.vaultVitals.calculateHealthScore(vitals);
+    const healthScore = vaultVitals.calculateHealthScore(vitals);
     this.renderHealthScore(this.vitalsContainer, healthScore);
 
     // Stats Grid

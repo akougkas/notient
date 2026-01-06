@@ -1,51 +1,98 @@
 /**
- * Setup Wizard Modal
+ * Setup Wizard Modal - Comprehensive Configuration
  *
- * Guides the user through initial configuration.
- * BOTH Ollama AND LM Studio are REQUIRED for plugin functionality.
+ * Features:
+ * - SEPARATE network toggles per service with default IPs
+ * - IP always visible, auto-populated by Local/Network buttons
+ * - Model dimension auto-detected (read-only)
+ * - Chunk size slider (32-8192) with performance/accuracy tooltip
  */
 
-import { Modal, App, Setting } from "obsidian";
+import { Modal, App, debounce } from "obsidian";
 import type { NotientSettings } from "../types/settings";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { AvailableModel } from "../types/services";
+import { MODEL_DEFAULTS } from "../core/constants";
 
 export interface SetupWizardResult {
   completed: boolean;
   settings: Partial<NotientSettings>;
 }
 
-type WizardStep =
-  | "welcome"
-  | "ollama"
-  | "embedding-model"
-  | "lmstudio"
-  | "reasoning-model"
-  | "indexing"
-  | "complete";
+type ConnectionStatus = "idle" | "checking" | "connected" | "error";
+
+// Default IPs per service
+const DEFAULT_IPS = {
+  ollama: { local: "localhost", network: "192.168.86.249" },
+  lmstudio: { local: "127.0.0.1", network: "192.168.86.249" },
+};
+
+const DEFAULT_PORTS = {
+  ollama: "11434",
+  lmstudio: "1234",
+};
+
+interface ServiceConfig {
+  ip: string;
+  port: string;
+  status: ConnectionStatus;
+  error: string;
+  models: AvailableModel[];
+  selectedModel: string;
+}
+
+interface VaultStats {
+  noteCount: number;
+  folderCount: number;
+  totalSizeKB: number;
+  estimatedIndexTimeMin: number;
+}
+
+interface ExistingIndex {
+  modelKey: string;
+  noteCount: number;
+  lastIndexed: number | null;
+}
 
 export class SetupWizardModal extends Modal {
   private result: SetupWizardResult = { completed: false, settings: {} };
-  private currentStep: WizardStep = "welcome";
-
-  // Ollama state (REQUIRED)
-  private ollamaHost: string;
-  private ollamaStatus: "idle" | "checking" | "healthy" | "unhealthy" = "idle";
-  private ollamaError: string = "";
-  private ollamaModels: AvailableModel[] = [];
-  private selectedEmbeddingModel: string = "";
-
-  // LM Studio state (REQUIRED)
-  private lmstudioHost: string;
-  private lmstudioStatus: "idle" | "checking" | "healthy" | "unhealthy" = "idle";
-  private lmstudioError: string = "";
-  private lmstudioModels: AvailableModel[] = [];
-  private selectedReasoningModel: string = "";
-
   private resolvePromise: ((result: SetupWizardResult) => void) | null = null;
 
-  // Track selected chunk preset for UI state
-  private selectedChunkPreset: "precise" | "balanced" | "context" = "balanced";
+  // Service configurations
+  private ollama: ServiceConfig = {
+    ip: DEFAULT_IPS.ollama.local,
+    port: DEFAULT_PORTS.ollama,
+    status: "idle",
+    error: "",
+    models: [],
+    selectedModel: "",
+  };
+
+  private lmstudio: ServiceConfig = {
+    ip: DEFAULT_IPS.lmstudio.local,
+    port: DEFAULT_PORTS.lmstudio,
+    status: "idle",
+    error: "",
+    models: [],
+    selectedModel: "",
+  };
+
+  // Chunk size (slider)
+  private chunkSize: number = 1500;
+
+  // Vault configuration
+  private excludedFolders: string = ".obsidian, .trash, templates";
+
+  // Existing indexes (multi-index support)
+  private existingIndexes: ExistingIndex[] = [];
+  private currentIndexModel: string | null = null;
+
+  // Vault stats
+  private vaultStats: VaultStats | null = null;
+
+  // Debounced check functions
+  private debouncedCheckOllama = debounce(() => this.checkOllama(), 500, true);
+  private debouncedCheckLMStudio = debounce(() => this.checkLMStudio(), 500, true);
 
   constructor(
     app: App,
@@ -53,10 +100,63 @@ export class SetupWizardModal extends Modal {
     private currentSettings: NotientSettings
   ) {
     super(app);
-    this.ollamaHost = currentSettings.ollama.host;
-    this.lmstudioHost = currentSettings.lmstudio.host;
-    this.selectedEmbeddingModel = currentSettings.ollama.embeddingModel;
-    this.selectedReasoningModel = currentSettings.lmstudio.reasoningModel;
+    this.initializeFromSettings();
+    this.computeVaultStats();
+    this.detectExistingIndexes();
+  }
+
+  private initializeFromSettings(): void {
+    // Parse Ollama host
+    const ollamaHost = this.currentSettings.ollama.host;
+    const ollamaMatch = ollamaHost.match(/https?:\/\/([^:]+):?(\d+)?/);
+    if (ollamaMatch) {
+      this.ollama.ip = ollamaMatch[1];
+      if (ollamaMatch[2]) this.ollama.port = ollamaMatch[2];
+    }
+
+    // Parse LM Studio host
+    const lmHost = this.currentSettings.lmstudio.host;
+    const lmMatch = lmHost.match(/https?:\/\/([^:]+):?(\d+)?/);
+    if (lmMatch) {
+      this.lmstudio.ip = lmMatch[1];
+      if (lmMatch[2]) this.lmstudio.port = lmMatch[2];
+    }
+
+    this.ollama.selectedModel = this.currentSettings.ollama.embeddingModel;
+    this.lmstudio.selectedModel = this.currentSettings.lmstudio.reasoningModel;
+
+    this.excludedFolders = this.currentSettings.indexing.excludedFolders.join(", ");
+    this.chunkSize = this.currentSettings.indexing.chunkSize;
+  }
+
+  private computeVaultStats(): void {
+    const files = this.app.vault.getMarkdownFiles();
+    const folders = new Set<string>();
+    let totalSize = 0;
+
+    for (const file of files) {
+      totalSize += file.stat.size;
+      const folder = file.parent?.path;
+      if (folder) folders.add(folder);
+    }
+
+    this.vaultStats = {
+      noteCount: files.length,
+      folderCount: folders.size,
+      totalSizeKB: Math.round(totalSize / 1024),
+      estimatedIndexTimeMin: Math.max(1, Math.round(files.length / 200)),
+    };
+  }
+
+  private detectExistingIndexes(): void {
+    if (this.currentSettings.setupComplete && this.currentSettings.ollama.embeddingModel) {
+      this.currentIndexModel = this.currentSettings.ollama.embeddingModel;
+      this.existingIndexes = [{
+        modelKey: this.currentSettings.ollama.embeddingModel,
+        noteCount: 0,
+        lastIndexed: null,
+      }];
+    }
   }
 
   async run(): Promise<SetupWizardResult> {
@@ -67,9 +167,14 @@ export class SetupWizardModal extends Modal {
   }
 
   onOpen(): void {
-    this.containerEl.addClass("notient-wizard");
-    this.modalEl.style.width = "600px";
-    this.renderStep();
+    this.containerEl.addClass("notient-setup");
+    this.modalEl.addClass("notient-setup-modal");
+    this.render();
+
+    setTimeout(() => {
+      this.checkOllama();
+      this.checkLMStudio();
+    }, 300);
   }
 
   onClose(): void {
@@ -79,700 +184,474 @@ export class SetupWizardModal extends Modal {
     }
   }
 
+  // ==================== Host URL Construction ====================
+
+  private getHost(config: ServiceConfig): string {
+    return `http://${config.ip}:${config.port}`;
+  }
+
+  private getModelDimension(modelName: string): number | null {
+    return MODEL_DEFAULTS.EMBEDDING_DIMENSIONS[modelName] ?? null;
+  }
+
   // ==================== Connection Checks ====================
 
   private async checkOllama(): Promise<void> {
-    this.ollamaStatus = "checking";
-    this.ollamaError = "";
-    this.renderStep();
+    this.ollama.status = "checking";
+    this.ollama.error = "";
+    this.updateServiceCard("ollama");
 
     try {
-      console.log(`[SetupWizard] Testing Ollama at ${this.ollamaHost}`);
-
-      // Add timeout to fetch
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
-      const models = await this.healthMonitor.fetchOllamaModels(this.ollamaHost);
-      clearTimeout(timeout);
-
-      console.log(`[SetupWizard] Ollama returned ${models.length} models`);
+      const models = await this.healthMonitor.fetchOllamaModels(this.getHost(this.ollama));
 
       if (models.length > 0) {
-        this.ollamaStatus = "healthy";
-        this.ollamaModels = models;
+        this.ollama.status = "connected";
+        this.ollama.models = models;
 
-        // Auto-select first embedding model if none selected
-        if (!this.selectedEmbeddingModel) {
-          const embeddingModels = models.filter((m) =>
-            m.capabilities.includes("embedding")
-          );
-          if (embeddingModels.length > 0) {
-            this.selectedEmbeddingModel = embeddingModels[0].name;
-          }
+        // Auto-select first embedding model, or first model if no embedding models
+        if (!this.ollama.selectedModel || !models.some(m => m.name === this.ollama.selectedModel)) {
+          const embeddingModels = models.filter((m) => m.capabilities.includes("embedding"));
+          this.ollama.selectedModel = embeddingModels[0]?.name || models[0]?.name || "";
         }
       } else {
-        this.ollamaStatus = "unhealthy";
-        this.ollamaError = "Connected but no models found. Run: ollama pull nomic-embed-text";
+        this.ollama.status = "error";
+        this.ollama.error = "No models. Run: ollama pull nomic-embed-text";
       }
     } catch (err) {
-      this.ollamaStatus = "unhealthy";
-      if (err instanceof Error) {
-        if (err.name === "AbortError") {
-          this.ollamaError = "Connection timeout (10s). Check if Ollama is running.";
-        } else {
-          this.ollamaError = err.message;
-        }
-      } else {
-        this.ollamaError = "Connection failed. Is Ollama running?";
-      }
-      this.ollamaModels = [];
-      console.error("[SetupWizard] Ollama check failed:", err);
+      this.ollama.status = "error";
+      this.ollama.error = err instanceof Error ? err.message : "Connection failed";
+      this.ollama.models = [];
     }
 
-    this.renderStep();
+    this.updateServiceCard("ollama");
+    this.updateActions();
   }
 
   private async checkLMStudio(): Promise<void> {
-    this.lmstudioStatus = "checking";
-    this.lmstudioError = "";
-    this.renderStep();
+    this.lmstudio.status = "checking";
+    this.lmstudio.error = "";
+    this.updateServiceCard("lmstudio");
 
     try {
-      console.log(`[SetupWizard] Testing LM Studio at ${this.lmstudioHost}`);
-
-      const models = await this.healthMonitor.fetchLMStudioModels(this.lmstudioHost);
-      console.log(`[SetupWizard] LM Studio returned ${models.length} models`);
+      const models = await this.healthMonitor.fetchLMStudioModels(this.getHost(this.lmstudio));
 
       if (models.length > 0) {
-        this.lmstudioStatus = "healthy";
-        this.lmstudioModels = models;
+        this.lmstudio.status = "connected";
+        this.lmstudio.models = models;
 
-        // Auto-select first model if none selected
-        if (!this.selectedReasoningModel) {
-          this.selectedReasoningModel = models[0].name;
+        // Auto-select first model if current selection not in list
+        if (!this.lmstudio.selectedModel || !models.some(m => m.name === this.lmstudio.selectedModel)) {
+          this.lmstudio.selectedModel = models[0]?.name || "";
         }
       } else {
-        this.lmstudioStatus = "unhealthy";
-        this.lmstudioError = "Connected but no models loaded. Load a model in LM Studio.";
+        this.lmstudio.status = "error";
+        this.lmstudio.error = "No models loaded. Load a model in LM Studio.";
       }
     } catch (err) {
-      this.lmstudioStatus = "unhealthy";
-      if (err instanceof Error) {
-        this.lmstudioError = err.message;
-      } else {
-        this.lmstudioError = "Connection failed. Is LM Studio server running?";
-      }
-      this.lmstudioModels = [];
-      console.error("[SetupWizard] LM Studio check failed:", err);
+      this.lmstudio.status = "error";
+      this.lmstudio.error = err instanceof Error ? err.message : "Connection failed";
+      this.lmstudio.models = [];
     }
 
-    this.renderStep();
+    this.updateServiceCard("lmstudio");
+    this.updateActions();
   }
 
   // ==================== Rendering ====================
 
-  private renderStep(): void {
+  private render(): void {
     const { contentEl } = this;
     contentEl.empty();
 
-    switch (this.currentStep) {
-      case "welcome":
-        this.renderWelcome();
-        break;
-      case "ollama":
-        this.renderOllama();
-        break;
-      case "embedding-model":
-        this.renderEmbeddingModel();
-        break;
-      case "lmstudio":
-        this.renderLMStudio();
-        break;
-      case "reasoning-model":
-        this.renderReasoningModel();
-        break;
-      case "indexing":
-        this.renderIndexing();
-        break;
-      case "complete":
-        this.renderComplete();
-        break;
+    // Header
+    const header = contentEl.createDiv({ cls: "notient-setup-header" });
+    header.createEl("h1", { text: "✨ Notient Setup" });
+
+    // Services grid (side by side)
+    const servicesGrid = contentEl.createDiv({ cls: "notient-services-grid" });
+    this.renderServiceCard(servicesGrid, "ollama");
+    this.renderServiceCard(servicesGrid, "lmstudio");
+
+    // Vault section with chunk size slider
+    this.renderVaultSection(contentEl);
+
+    // Index section (if indexes exist)
+    if (this.existingIndexes.length > 0) {
+      this.renderIndexSection(contentEl);
     }
+
+    // Actions
+    this.renderActions(contentEl);
   }
 
-  private renderWelcome(): void {
-    const { contentEl } = this;
+  private renderServiceCard(container: HTMLElement, service: "ollama" | "lmstudio"): void {
+    const config = service === "ollama" ? this.ollama : this.lmstudio;
+    const defaults = DEFAULT_IPS[service];
+    const isOllama = service === "ollama";
+    const cardId = `${service}-card`;
 
-    contentEl.createEl("h1", { text: "Welcome to Notient" });
+    const card = container.createDiv({ cls: "notient-service-card", attr: { id: cardId } });
 
-    contentEl.createEl("p", {
-      text: "AI-powered vault management using local LLMs. Your data never leaves your machine.",
+    // Header row: icon, title, status badge
+    const header = card.createDiv({ cls: "notient-card-header" });
+    const titleArea = header.createDiv({ cls: "notient-card-title-area" });
+    titleArea.createEl("h3", { text: isOllama ? "🦙 Embeddings" : "🤖 Chat" });
+    titleArea.createEl("span", {
+      text: isOllama ? "Ollama" : "LM Studio",
+      cls: "notient-card-service-name",
     });
 
-    const reqBox = contentEl.createDiv({ cls: "notient-wizard-requirements" });
-    reqBox.createEl("h3", { text: "Required Services" });
+    this.renderStatusBadge(header, config.status);
 
-    const reqList = reqBox.createEl("ul");
-    reqList.createEl("li").innerHTML = "<strong>Ollama</strong> - For generating embeddings (semantic search)";
-    reqList.createEl("li").innerHTML = "<strong>LM Studio</strong> - For AI reasoning and suggestions";
-
-    const note = contentEl.createDiv({ cls: "notient-wizard-note" });
-    note.innerHTML = "💡 <strong>Tip:</strong> Both services can run on a remote machine with a GPU. You'll configure the host URLs in the next steps.";
-
-    const warning = contentEl.createDiv({ cls: "notient-wizard-warning" });
-    warning.innerHTML = "⚠️ <strong>Both services are required.</strong> Notient cannot function without them.";
-
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-    const nextBtn = actions.createEl("button", {
-      text: "Configure Ollama →",
-      cls: "mod-cta",
+    // Local/Network buttons (auto-populate IP)
+    const modeRow = card.createDiv({ cls: "notient-card-mode-row" });
+    
+    const localBtn = modeRow.createEl("button", {
+      text: "🏠 Local",
+      cls: `notient-mode-btn-compact ${this.isLocalIP(config.ip, service) ? "active" : ""}`,
     });
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "ollama";
-      this.renderStep();
-    });
-  }
-
-  private renderOllama(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h2", { text: "Step 1: Connect to Ollama" });
-    contentEl.createEl("p", {
-      text: "Ollama provides embeddings for semantic search. This is required.",
-      cls: "notient-wizard-required"
+    localBtn.addEventListener("click", () => {
+      config.ip = defaults.local;
+      this.updateServiceCard(service);
+      if (isOllama) this.checkOllama();
+      else this.checkLMStudio();
     });
 
-    // Host input
-    new Setting(contentEl)
-      .setName("Ollama Host URL")
-      .setDesc("The URL where Ollama is running")
-      .addText((text) =>
-        text
-          .setPlaceholder("http://127.0.0.1:11434")
-          .setValue(this.ollamaHost)
-          .onChange((value) => {
-            this.ollamaHost = value.trim();
-            this.ollamaStatus = "idle";
-          })
-      );
-
-    // Test button
-    const testRow = contentEl.createDiv({ cls: "notient-wizard-test-row" });
-    const testBtn = testRow.createEl("button", {
-      text: this.ollamaStatus === "checking" ? "Testing..." : "Test Connection",
-      cls: "notient-test-btn"
+    const networkBtn = modeRow.createEl("button", {
+      text: "📡 Network",
+      cls: `notient-mode-btn-compact ${config.ip === defaults.network ? "active" : ""}`,
     });
-    testBtn.disabled = this.ollamaStatus === "checking";
-    testBtn.addEventListener("click", () => this.checkOllama());
-
-    // Status display
-    const statusDiv = contentEl.createDiv({ cls: "notient-wizard-status" });
-    this.renderConnectionStatus(statusDiv, this.ollamaStatus, this.ollamaError, this.ollamaModels.length);
-
-    // Show available models if connected
-    if (this.ollamaStatus === "healthy" && this.ollamaModels.length > 0) {
-      const modelsDiv = contentEl.createDiv({ cls: "notient-wizard-models" });
-      modelsDiv.createEl("h4", { text: `Found ${this.ollamaModels.length} models:` });
-      const modelList = modelsDiv.createEl("ul");
-      for (const model of this.ollamaModels.slice(0, 8)) {
-        const caps = model.capabilities.length > 0 ? ` (${model.capabilities.join(", ")})` : "";
-        modelList.createEl("li", { text: `${model.name}${caps}` });
-      }
-      if (this.ollamaModels.length > 8) {
-        modelList.createEl("li", { text: `... and ${this.ollamaModels.length - 8} more` });
-      }
-    }
-
-    // Troubleshooting
-    if (this.ollamaStatus === "unhealthy") {
-      this.renderOllamaTroubleshooting(contentEl);
-    }
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "welcome";
-      this.renderStep();
+    networkBtn.addEventListener("click", () => {
+      config.ip = defaults.network;
+      this.updateServiceCard(service);
+      if (isOllama) this.checkOllama();
+      else this.checkLMStudio();
     });
 
-    const canProceed = this.ollamaStatus === "healthy" && this.ollamaModels.length > 0;
-    const nextBtn = actions.createEl("button", {
-      text: "Select Embedding Model →",
-      cls: canProceed ? "mod-cta" : "",
-    });
-    nextBtn.disabled = !canProceed;
-    if (!canProceed) {
-      nextBtn.title = "Connect to Ollama first";
-    }
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "embedding-model";
-      this.renderStep();
-    });
-  }
-
-  private renderEmbeddingModel(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h2", { text: "Step 2: Select Embedding Model" });
-    contentEl.createEl("p", {
-      text: "Choose which Ollama model to use for generating embeddings.",
-    });
-
-    // Separate embedding models from others
-    const embeddingModels = this.ollamaModels.filter((m) =>
-      m.capabilities.includes("embedding")
-    );
-    const otherModels = this.ollamaModels.filter(
-      (m) => !m.capabilities.includes("embedding")
-    );
-
-    // Dropdown for model selection
-    new Setting(contentEl)
-      .setName("Embedding Model")
-      .setDesc(embeddingModels.length > 0
-        ? "Models marked with ⭐ are optimized for embeddings"
-        : "No embedding-specific models found. Select any model.")
-      .addDropdown((dropdown) => {
-        // Embedding models first (recommended)
-        for (const m of embeddingModels) {
-          dropdown.addOption(m.name, `⭐ ${m.name} (embedding)`);
-        }
-        // Then other models
-        for (const m of otherModels) {
-          dropdown.addOption(m.name, m.name);
-        }
-
-        dropdown.setValue(this.selectedEmbeddingModel || (embeddingModels[0]?.name ?? otherModels[0]?.name ?? ""));
-        dropdown.onChange((value) => {
-          this.selectedEmbeddingModel = value;
-          this.renderStep();
-        });
-      });
-
-    // Manual input option
-    new Setting(contentEl)
-      .setName("Or enter model name manually")
-      .setDesc("If your model isn't listed above")
-      .addText((text) =>
-        text
-          .setPlaceholder("e.g., nomic-embed-text")
-          .setValue(this.ollamaModels.find(m => m.name === this.selectedEmbeddingModel) ? "" : this.selectedEmbeddingModel)
-          .onChange((value) => {
-            if (value.trim()) {
-              this.selectedEmbeddingModel = value.trim();
-            }
-          })
-      );
-
-    // Show current selection
-    if (this.selectedEmbeddingModel) {
-      const selectedDiv = contentEl.createDiv({ cls: "notient-wizard-selected" });
-      selectedDiv.innerHTML = `✓ Selected: <strong>${this.selectedEmbeddingModel}</strong>`;
-    }
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "ollama";
-      this.renderStep();
-    });
-
-    const canProceed = Boolean(this.selectedEmbeddingModel);
-    const nextBtn = actions.createEl("button", {
-      text: "Configure LM Studio →",
-      cls: canProceed ? "mod-cta" : "",
-    });
-    nextBtn.disabled = !canProceed;
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "lmstudio";
-      this.renderStep();
-    });
-  }
-
-  private renderLMStudio(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h2", { text: "Step 3: Connect to LM Studio" });
-    contentEl.createEl("p", {
-      text: "LM Studio provides AI reasoning capabilities. This is required.",
-      cls: "notient-wizard-required"
-    });
-
-    // Host input
-    new Setting(contentEl)
-      .setName("LM Studio Host URL")
-      .setDesc("The URL where LM Studio's local server is running")
-      .addText((text) =>
-        text
-          .setPlaceholder("http://127.0.0.1:1234")
-          .setValue(this.lmstudioHost)
-          .onChange((value) => {
-            this.lmstudioHost = value.trim();
-            this.lmstudioStatus = "idle";
-          })
-      );
-
-    // Test button
-    const testRow = contentEl.createDiv({ cls: "notient-wizard-test-row" });
-    const testBtn = testRow.createEl("button", {
-      text: this.lmstudioStatus === "checking" ? "Testing..." : "Test Connection",
-      cls: "notient-test-btn"
-    });
-    testBtn.disabled = this.lmstudioStatus === "checking";
-    testBtn.addEventListener("click", () => this.checkLMStudio());
-
-    // Status display
-    const statusDiv = contentEl.createDiv({ cls: "notient-wizard-status" });
-    this.renderConnectionStatus(statusDiv, this.lmstudioStatus, this.lmstudioError, this.lmstudioModels.length);
-
-    // Show available models if connected
-    if (this.lmstudioStatus === "healthy" && this.lmstudioModels.length > 0) {
-      const modelsDiv = contentEl.createDiv({ cls: "notient-wizard-models" });
-      modelsDiv.createEl("h4", { text: `Found ${this.lmstudioModels.length} model(s):` });
-      const modelList = modelsDiv.createEl("ul");
-      for (const model of this.lmstudioModels) {
-        modelList.createEl("li", { text: model.name });
-      }
-    }
-
-    // Troubleshooting
-    if (this.lmstudioStatus === "unhealthy") {
-      this.renderLMStudioTroubleshooting(contentEl);
-    }
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "embedding-model";
-      this.renderStep();
-    });
-
-    const canProceed = this.lmstudioStatus === "healthy" && this.lmstudioModels.length > 0;
-    const nextBtn = actions.createEl("button", {
-      text: "Select Reasoning Model →",
-      cls: canProceed ? "mod-cta" : "",
-    });
-    nextBtn.disabled = !canProceed;
-    if (!canProceed) {
-      nextBtn.title = "Connect to LM Studio first";
-    }
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "reasoning-model";
-      this.renderStep();
-    });
-  }
-
-  private renderReasoningModel(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h2", { text: "Step 4: Select Reasoning Model" });
-    contentEl.createEl("p", {
-      text: "Choose which LM Studio model to use for AI reasoning and suggestions.",
-    });
-
-    // Dropdown for model selection
-    new Setting(contentEl)
-      .setName("Reasoning Model")
-      .setDesc("The model currently loaded in LM Studio")
-      .addDropdown((dropdown) => {
-        for (const m of this.lmstudioModels) {
-          dropdown.addOption(m.name, m.name);
-        }
-
-        dropdown.setValue(this.selectedReasoningModel || this.lmstudioModels[0]?.name || "");
-        dropdown.onChange((value) => {
-          this.selectedReasoningModel = value;
-          this.renderStep();
-        });
-      });
-
-    // Manual input option
-    new Setting(contentEl)
-      .setName("Or enter model ID manually")
-      .setDesc("If your model isn't listed above")
-      .addText((text) =>
-        text
-          .setPlaceholder("e.g., mistralai/ministral-3-14b")
-          .setValue(this.lmstudioModels.find(m => m.name === this.selectedReasoningModel) ? "" : this.selectedReasoningModel)
-          .onChange((value) => {
-            if (value.trim()) {
-              this.selectedReasoningModel = value.trim();
-            }
-          })
-      );
-
-    // Show current selection
-    if (this.selectedReasoningModel) {
-      const selectedDiv = contentEl.createDiv({ cls: "notient-wizard-selected" });
-      selectedDiv.innerHTML = `✓ Selected: <strong>${this.selectedReasoningModel}</strong>`;
-    }
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "lmstudio";
-      this.renderStep();
-    });
-
-    const canProceed = Boolean(this.selectedReasoningModel);
-    const nextBtn = actions.createEl("button", {
-      text: "Indexing Options →",
-      cls: canProceed ? "mod-cta" : "",
-    });
-    nextBtn.disabled = !canProceed;
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "indexing";
-      this.renderStep();
-    });
-  }
-
-  private renderIndexing(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h2", { text: "Step 5: Search Quality" });
-    contentEl.createEl("p", {
-      text: "How should Notient break up your notes for semantic search?",
-      cls: "notient-wizard-subtitle"
-    });
-
-    // Chunk size presets - visual cards
-    const presetSection = contentEl.createDiv({ cls: "notient-chunk-presets" });
-    presetSection.createEl("label", { text: "Search Style", cls: "notient-preset-label" });
-
-    const presetGrid = presetSection.createDiv({ cls: "notient-preset-grid" });
-
-    // Determine current selection based on chunk size
-    const currentChunkSize = this.result.settings.indexing?.chunkSize ?? this.currentSettings.indexing.chunkSize;
-    if (currentChunkSize <= 600) this.selectedChunkPreset = "precise";
-    else if (currentChunkSize >= 1000) this.selectedChunkPreset = "context";
-    else this.selectedChunkPreset = "balanced";
-
-    const presets = [
-      {
-        id: "precise" as const,
-        name: "Precise",
-        desc: "Smaller chunks, pinpoint accuracy",
-        detail: "Best for short notes, atomic ideas",
-        size: 800,
-        icon: "🎯"
-      },
-      {
-        id: "balanced" as const,
-        name: "Balanced",
-        desc: "Recommended for most vaults",
-        detail: "Good mix of precision & context",
-        size: 1500,
-        icon: "⚖️"
-      },
-      {
-        id: "context" as const,
-        name: "Context-Rich",
-        desc: "Larger chunks, more surrounding text",
-        detail: "Best for long-form articles",
-        size: 2500,
-        icon: "📚"
-      }
-    ];
-
-    for (const preset of presets) {
-      const card = presetGrid.createDiv({
-        cls: `notient-preset-card ${this.selectedChunkPreset === preset.id ? "selected" : ""}`
-      });
-
-      card.createEl("div", { text: preset.icon, cls: "notient-preset-icon" });
-      card.createEl("div", { text: preset.name, cls: "notient-preset-name" });
-      card.createEl("div", { text: preset.desc, cls: "notient-preset-desc" });
-      card.createEl("div", { text: preset.detail, cls: "notient-preset-detail" });
-
-      card.addEventListener("click", () => {
-        this.selectedChunkPreset = preset.id;
-        this.result.settings.indexing = {
-          ...this.currentSettings.indexing,
-          ...this.result.settings.indexing,
-          chunkSize: preset.size,
-        };
-        this.renderStep();
-      });
-    }
-
-    // Show current values
-    const currentValues = contentEl.createDiv({ cls: "notient-current-values" });
-    const finalSize = this.result.settings.indexing?.chunkSize ?? this.currentSettings.indexing.chunkSize;
-    currentValues.innerHTML = `<span class="notient-values-label">Max chunk size:</span> ${finalSize} characters`;
-
-    // Excluded folders - simplified
-    const excludeSection = contentEl.createDiv({ cls: "notient-exclude-section" });
-    excludeSection.createEl("label", { text: "Skip These Folders", cls: "notient-preset-label" });
-
-    const excludeInput = excludeSection.createEl("input", {
+    // IP input (always visible)
+    const ipRow = card.createDiv({ cls: "notient-ip-row-always" });
+    ipRow.createEl("label", { text: "Host:" });
+    const ipInput = ipRow.createEl("input", {
       type: "text",
-      cls: "notient-exclude-input",
-      placeholder: ".obsidian, templates, archive"
+      cls: "notient-ip-input-full",
+      value: config.ip,
+      placeholder: defaults.network,
     });
-    excludeInput.value = (this.result.settings.indexing?.excludedFolders ?? this.currentSettings.indexing.excludedFolders).join(", ");
-    excludeInput.addEventListener("input", () => {
-      this.result.settings.indexing = {
-        ...this.currentSettings.indexing,
-        ...this.result.settings.indexing,
-        excludedFolders: excludeInput.value
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      };
+    ipInput.addEventListener("input", (e) => {
+      config.ip = (e.target as HTMLInputElement).value;
+      if (isOllama) this.debouncedCheckOllama();
+      else this.debouncedCheckLMStudio();
     });
 
-    const excludeHint = excludeSection.createDiv({ cls: "notient-exclude-hint" });
-    excludeHint.textContent = "Comma-separated folder names to exclude from indexing";
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "reasoning-model";
-      this.renderStep();
+    // Port input (inline with IP)
+    ipRow.createEl("label", { text: ":" });
+    const portInput = ipRow.createEl("input", {
+      type: "text",
+      cls: "notient-port-input",
+      value: config.port,
+    });
+    portInput.addEventListener("input", (e) => {
+      config.port = (e.target as HTMLInputElement).value;
+      if (isOllama) this.debouncedCheckOllama();
+      else this.debouncedCheckLMStudio();
     });
 
-    const nextBtn = actions.createEl("button", {
-      text: "Review & Finish →",
-      cls: "mod-cta",
-    });
-    nextBtn.addEventListener("click", () => {
-      this.currentStep = "complete";
-      this.renderStep();
-    });
+    // Error display
+    if (config.status === "error" && config.error) {
+      const errorDiv = card.createDiv({ cls: "notient-card-error" });
+      errorDiv.textContent = config.error;
+    }
+
+    // Model selection dropdown
+    const modelRow = card.createDiv({ cls: "notient-model-row" });
+    modelRow.createEl("label", { text: "Model:" });
+
+    if (config.models.length > 0) {
+      const selectWrapper = modelRow.createDiv({ cls: "notient-select-wrapper" });
+      const select = selectWrapper.createEl("select", { cls: "notient-model-select" });
+
+      if (isOllama) {
+        const embeddingModels = config.models.filter((m) => m.capabilities.includes("embedding"));
+        const otherModels = config.models.filter((m) => !m.capabilities.includes("embedding"));
+
+        if (embeddingModels.length > 0) {
+          const optgroup = select.createEl("optgroup", { attr: { label: "⭐ Embedding Models" } });
+          for (const m of embeddingModels) {
+            const opt = optgroup.createEl("option", { value: m.name, text: m.name });
+            if (m.name === config.selectedModel) opt.selected = true;
+          }
+        }
+
+        if (otherModels.length > 0) {
+          const optgroup = select.createEl("optgroup", { attr: { label: "Other" } });
+          for (const m of otherModels) {
+            const opt = optgroup.createEl("option", { value: m.name, text: m.name });
+            if (m.name === config.selectedModel) opt.selected = true;
+          }
+        }
+      } else {
+        for (const m of config.models) {
+          const opt = select.createEl("option", { value: m.name, text: m.name });
+          if (m.name === config.selectedModel) opt.selected = true;
+        }
+      }
+
+      select.addEventListener("change", (e) => {
+        config.selectedModel = (e.target as HTMLSelectElement).value;
+        this.updateActions();
+        if (isOllama) this.updateServiceCard("ollama"); // Re-render to update dimension display
+      });
+
+      // Show dimension for embedding model (READ-ONLY, auto-detected)
+      if (isOllama && config.selectedModel) {
+        const dim = this.getModelDimension(config.selectedModel);
+        if (dim) {
+          selectWrapper.createEl("span", {
+            text: `${dim}d vectors`,
+            cls: "notient-model-dim",
+            attr: { title: "Vector dimensions (auto-detected from model)" },
+          });
+        } else {
+          selectWrapper.createEl("span", {
+            text: "dimensions unknown",
+            cls: "notient-model-dim-unknown",
+            attr: { title: "Dimension will be detected when indexing starts" },
+          });
+        }
+      }
+    } else {
+      modelRow.createEl("span", {
+        cls: "notient-model-placeholder",
+        text: config.status === "checking" ? "Detecting..." : "Connect to detect",
+      });
+    }
+
+    // Model change notice for embeddings (NEW INDEX, not replace)
+    if (isOllama && this.currentIndexModel && config.selectedModel &&
+        config.selectedModel !== this.currentIndexModel) {
+      const notice = card.createDiv({ cls: "notient-model-notice" });
+      notice.innerHTML = `ℹ️ New index for <b>${config.selectedModel}</b>. <b>${this.currentIndexModel}</b> preserved.`;
+    }
   }
 
-  private renderComplete(): void {
-    const { contentEl } = this;
-
-    contentEl.createEl("h1", { text: "Setup Complete!" });
-
-    const summary = contentEl.createDiv({ cls: "notient-wizard-summary" });
-    summary.createEl("h3", { text: "Your Configuration:" });
-
-    const table = summary.createEl("table", { cls: "notient-config-table" });
-
-    this.addConfigRow(table, "Ollama Host", this.ollamaHost);
-    this.addConfigRow(table, "Embedding Model", this.selectedEmbeddingModel);
-    this.addConfigRow(table, "LM Studio Host", this.lmstudioHost);
-    this.addConfigRow(table, "Reasoning Model", this.selectedReasoningModel);
-
-    contentEl.createEl("p", {
-      text: "Click 'Start Notient' to save your configuration and begin indexing your vault.",
-    });
-
-    const note = contentEl.createDiv({ cls: "notient-wizard-note" });
-    note.innerHTML = "💡 Indexing runs in the background. You can use Obsidian while it processes.";
-
-    // Navigation
-    const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });
-
-    const backBtn = actions.createEl("button", { text: "← Back" });
-    backBtn.addEventListener("click", () => {
-      this.currentStep = "indexing";
-      this.renderStep();
-    });
-
-    const startBtn = actions.createEl("button", {
-      text: "Start Notient",
-      cls: "mod-cta",
-    });
-    startBtn.addEventListener("click", () => {
-      this.finalizeSettings();
-      this.close();
-    });
+  private isLocalIP(ip: string, service: "ollama" | "lmstudio"): boolean {
+    const local = DEFAULT_IPS[service].local;
+    return ip === local || ip === "127.0.0.1" || ip === "localhost";
   }
 
-  // ==================== Helpers ====================
-
-  private renderConnectionStatus(
-    container: HTMLElement,
-    status: "idle" | "checking" | "healthy" | "unhealthy",
-    error: string,
-    modelCount: number
-  ): void {
-    container.empty();
-
-    const statusEl = container.createDiv({ cls: `notient-status notient-status-${status}` });
+  private renderStatusBadge(container: HTMLElement, status: ConnectionStatus): void {
+    const badge = container.createDiv({ cls: `notient-status-badge status-${status}` });
 
     switch (status) {
-      case "idle":
-        statusEl.innerHTML = "⏸️ Click 'Test Connection' to verify";
-        break;
       case "checking":
-        statusEl.innerHTML = "⏳ Testing connection...";
+        badge.innerHTML = '<span class="notient-spinner"></span>';
         break;
-      case "healthy":
-        statusEl.innerHTML = `✅ Connected successfully! Found ${modelCount} model(s).`;
+      case "connected":
+        badge.textContent = "●";
+        badge.title = "Connected";
         break;
-      case "unhealthy":
-        statusEl.innerHTML = `❌ Connection failed: ${error}`;
+      case "error":
+        badge.textContent = "●";
+        badge.title = "Error";
         break;
+      default:
+        badge.textContent = "○";
+        badge.title = "Not checked";
     }
   }
 
-  private renderOllamaTroubleshooting(container: HTMLElement): void {
-    const help = container.createDiv({ cls: "notient-wizard-troubleshooting" });
-    help.createEl("h4", { text: "Troubleshooting Ollama:" });
-    const list = help.createEl("ul");
-    list.createEl("li", { text: "Ensure Ollama is installed and running" });
-    list.createEl("li", { text: "Start Ollama with: ollama serve" });
-    list.createEl("li", { text: "For remote access: OLLAMA_HOST=0.0.0.0 ollama serve" });
-    list.createEl("li", { text: "Check firewall allows connections on port 11434" });
-    list.createEl("li", { text: "Pull an embedding model: ollama pull nomic-embed-text" });
+  private renderVaultSection(container: HTMLElement): void {
+    const section = container.createDiv({ cls: "notient-vault-section" });
+
+    // Vault stats bar
+    if (this.vaultStats) {
+      const stats = section.createDiv({ cls: "notient-vault-stats" });
+      stats.createEl("span", { text: `📝 ${this.vaultStats.noteCount} notes` });
+      stats.createEl("span", { text: `📁 ${this.vaultStats.folderCount} folders` });
+      if (this.vaultStats.noteCount > 100) {
+        stats.createEl("span", {
+          text: `⏱ ~${this.vaultStats.estimatedIndexTimeMin} min`,
+          cls: "notient-estimate",
+        });
+      }
+    }
+
+    // Chunk Size Slider
+    const chunkSection = section.createDiv({ cls: "notient-chunk-section" });
+    
+    const chunkHeader = chunkSection.createDiv({ cls: "notient-chunk-header" });
+    chunkHeader.createEl("label", { text: "Chunk Size:" });
+    const chunkValue = chunkHeader.createEl("span", { 
+      text: `${this.chunkSize} chars`,
+      cls: "notient-chunk-value",
+    });
+
+    const slider = chunkSection.createEl("input", {
+      type: "range",
+      cls: "notient-chunk-slider",
+      attr: {
+        min: "32",
+        max: "8192",
+        step: "32",
+        value: String(this.chunkSize),
+      },
+    });
+
+    slider.addEventListener("input", (e) => {
+      this.chunkSize = parseInt((e.target as HTMLInputElement).value, 10);
+      chunkValue.textContent = `${this.chunkSize} chars`;
+    });
+
+    // Tooltip explaining performance/accuracy tradeoff
+    const tooltip = chunkSection.createDiv({ cls: "notient-chunk-tooltip" });
+    tooltip.innerHTML = `
+      <span class="notient-tooltip-label">⚡ Smaller chunks</span> → faster search, more precise matches, more API calls<br>
+      <span class="notient-tooltip-label">📚 Larger chunks</span> → more context per result, fewer chunks, less granular
+    `;
+
+    // Two-column layout for other options
+    const optionsGrid = section.createDiv({ cls: "notient-options-grid" });
+
+    // Excluded folders
+    const excludeCol = optionsGrid.createDiv({ cls: "notient-option-col" });
+    excludeCol.createEl("label", { text: "Exclude folders:" });
+    const excludeInput = excludeCol.createEl("input", {
+      type: "text",
+      cls: "notient-exclude-input",
+      value: this.excludedFolders,
+      placeholder: ".obsidian, templates",
+    });
+    excludeInput.addEventListener("input", (e) => {
+      this.excludedFolders = (e.target as HTMLInputElement).value;
+    });
   }
 
-  private renderLMStudioTroubleshooting(container: HTMLElement): void {
-    const help = container.createDiv({ cls: "notient-wizard-troubleshooting" });
-    help.createEl("h4", { text: "Troubleshooting LM Studio:" });
-    const list = help.createEl("ul");
-    list.createEl("li", { text: "Ensure LM Studio is running with a model loaded" });
-    list.createEl("li", { text: "Enable the local server: Settings → Local Server → Start Server" });
-    list.createEl("li", { text: "Default port is 1234 (check LM Studio settings)" });
-    list.createEl("li", { text: "For remote access: enable 'Serve on Local Network'" });
-    list.createEl("li", { text: "Check that CORS is enabled in LM Studio settings" });
+  private renderIndexSection(container: HTMLElement): void {
+    const section = container.createDiv({ cls: "notient-index-section" });
+    section.createEl("h4", { text: "📊 Existing Indexes" });
+
+    const list = section.createDiv({ cls: "notient-index-list" });
+
+    for (const idx of this.existingIndexes) {
+      const item = list.createDiv({ cls: "notient-index-item" });
+      const dim = this.getModelDimension(idx.modelKey);
+      item.createEl("span", {
+        text: `${idx.modelKey}${dim ? ` (${dim}d)` : ""}`,
+        cls: "notient-index-model",
+      });
+      if (idx.modelKey === this.currentIndexModel) {
+        item.createEl("span", { text: "active", cls: "notient-index-active" });
+      }
+    }
+
+    section.createEl("p", {
+      text: "Manage indexes in Settings → Advanced",
+      cls: "notient-index-hint",
+    });
   }
 
-  private addConfigRow(table: HTMLTableElement, label: string, value: string): void {
-    const row = table.createEl("tr");
-    row.createEl("td", { text: label, cls: "notient-config-label" });
-    row.createEl("td", { text: value, cls: "notient-config-value" });
+  private renderActions(container: HTMLElement): void {
+    const actions = container.createDiv({ cls: "notient-setup-actions" });
+
+    const cancelBtn = actions.createEl("button", { text: "Cancel", cls: "notient-cancel-btn" });
+    cancelBtn.addEventListener("click", () => this.close());
+
+    const startBtn = actions.createEl("button", {
+      cls: "notient-start-btn",
+      attr: { id: "notient-start-btn" },
+    });
+
+    const canStart = this.canStart();
+    const isNewModel = this.isNewEmbeddingModel();
+    const hasExisting = this.existingIndexes.length > 0;
+
+    if (isNewModel && hasExisting) {
+      startBtn.textContent = "➕ Create New Index";
+    } else if (hasExisting) {
+      startBtn.textContent = "✓ Save & Continue";
+    } else {
+      startBtn.textContent = "🚀 Start Indexing";
+    }
+
+    startBtn.disabled = !canStart;
+    startBtn.addEventListener("click", () => this.finish());
   }
 
-  private finalizeSettings(): void {
-    // Compile final settings - both services are REQUIRED and ENABLED
+  // ==================== UI Updates ====================
+
+  private updateServiceCard(service: "ollama" | "lmstudio"): void {
+    const cardId = `${service}-card`;
+    const card = document.getElementById(cardId);
+    if (!card) return;
+
+    const container = card.parentElement;
+    if (!container) return;
+
+    card.remove();
+    this.renderServiceCard(container, service);
+  }
+
+  private updateActions(): void {
+    const actionsDiv = this.contentEl.querySelector(".notient-setup-actions");
+    if (actionsDiv) {
+      actionsDiv.remove();
+      this.renderActions(this.contentEl);
+    }
+  }
+
+  private canStart(): boolean {
+    return (
+      this.ollama.status === "connected" &&
+      this.lmstudio.status === "connected" &&
+      Boolean(this.ollama.selectedModel) &&
+      Boolean(this.lmstudio.selectedModel)
+    );
+  }
+
+  private isNewEmbeddingModel(): boolean {
+    if (!this.currentIndexModel) return false;
+    return this.ollama.selectedModel !== this.currentIndexModel;
+  }
+
+  // ==================== Finalization ====================
+
+  private finish(): void {
     this.result.settings.ollama = {
       ...this.currentSettings.ollama,
-      host: this.ollamaHost,
-      embeddingModel: this.selectedEmbeddingModel,
-      enabled: true, // Always enabled - required
+      host: this.getHost(this.ollama),
+      embeddingModel: this.ollama.selectedModel,
+      enabled: true,
     };
 
     this.result.settings.lmstudio = {
       ...this.currentSettings.lmstudio,
-      host: this.lmstudioHost,
-      reasoningModel: this.selectedReasoningModel,
-      enabled: true, // Always enabled - required
+      host: this.getHost(this.lmstudio),
+      reasoningModel: this.lmstudio.selectedModel,
+      enabled: true,
+    };
+
+    this.result.settings.indexing = {
+      ...this.currentSettings.indexing,
+      chunkSize: this.chunkSize,
+      excludedFolders: this.excludedFolders
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     };
 
     this.result.completed = true;
     this.result.settings.setupComplete = true;
 
     console.log("[SetupWizard] Configuration finalized:", {
-      ollamaHost: this.ollamaHost,
-      embeddingModel: this.selectedEmbeddingModel,
-      lmstudioHost: this.lmstudioHost,
-      reasoningModel: this.selectedReasoningModel,
+      ollamaHost: this.getHost(this.ollama),
+      embeddingModel: this.ollama.selectedModel,
+      modelDimension: this.getModelDimension(this.ollama.selectedModel),
+      lmstudioHost: this.getHost(this.lmstudio),
+      reasoningModel: this.lmstudio.selectedModel,
+      chunkSize: this.chunkSize,
+      isNewModel: this.isNewEmbeddingModel(),
     });
+
+    this.close();
   }
 }

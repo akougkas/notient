@@ -136,6 +136,7 @@ export default class NotientPlugin extends Plugin {
     if (this.servicesInitialized) return;
 
     console.log("[Notient] Initializing services...");
+    this.kernel.setServicesInitializing(true);
 
     try {
       const eventBus = this.kernel.eventBus;
@@ -217,32 +218,36 @@ export default class NotientPlugin extends Plugin {
           this.vectorStore,
           this.indexManager
         );
+        this.kernel.registerService("vitals", this.vaultVitals);
 
         this.servicesInitialized = true;
+        this.kernel.setServicesInitialized();
         console.log("[Notient] Services initialized successfully");
 
         // Start background indexing
         setTimeout(() => this.startBackgroundIndexing(), 2000);
       } catch (error) {
         console.error("[Notient] Failed to initialize AI services:", error);
+        this.kernel.setServicesInitializing(false);
         this.kernel.obsidian.notice(
           "Failed to connect to AI services. Check that Ollama and LM Studio are running."
         );
       }
     } catch (error) {
       console.error("[Notient] Service initialization failed:", error);
+      this.kernel.setServicesInitializing(false);
     }
   }
 
   private registerViews(): void {
-    // Sidebar view
+    // Sidebar view - services resolved lazily via kernel.getService()
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {
-      return new NotientSidebarView(leaf, this.kernel, this.searchPipeline);
+      return new NotientSidebarView(leaf, this.kernel);
     });
 
-    // Dashboard view
+    // Dashboard view - services resolved lazily via kernel.getService()
     this.registerView(VIEW_TYPE_DASHBOARD, (leaf) => {
-      return new NotientDashboardView(leaf, this.kernel, this.vaultVitals);
+      return new NotientDashboardView(leaf, this.kernel);
     });
   }
 
@@ -334,6 +339,44 @@ export default class NotientPlugin extends Plugin {
       id: "run-setup",
       name: "Run setup wizard",
       callback: () => this.showSetupWizard(),
+    });
+
+    // Debug diagnostics
+    this.addCommand({
+      id: "debug-diagnostics",
+      name: "Debug: Show diagnostics",
+      callback: async () => {
+        const search = this.kernel.getService<SearchPipeline>("search");
+        const store = this.vectorStore;
+        
+        const caps = this.kernel.capabilities;
+        const health = this.kernel.serviceHealth;
+        
+        const diagnostics = {
+          servicesInitialized: this.servicesInitialized,
+          capabilities: caps,
+          health: {
+            ollama: health.ollama.status,
+            lmstudio: health.lmstudio.status,
+          },
+          vectorStore: store ? {
+            ready: store.isReady(),
+            chunkCount: await store.countChunks(),
+            noteCount: await store.countNotes(),
+          } : null,
+          searchPipeline: search ? "available" : "null",
+        };
+        
+        console.log("[Notient] Diagnostics:", diagnostics);
+        
+        // Also show in notice
+        const storeInfo = store 
+          ? `${await store.countChunks()} chunks / ${await store.countNotes()} notes`
+          : "not ready";
+        this.kernel.obsidian.notice(
+          `Notient: Ollama=${health.ollama.status}, Search=${search ? "ready" : "no"}, Store=${storeInfo}`
+        );
+      },
     });
   }
 

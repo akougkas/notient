@@ -521,157 +521,679 @@
   color: var(--text-faint);
 }
 
-/* ============ Setup Wizard ============ */
+/* ============ NEW Setup Wizard (Compact Design) ============ */
 
-.notient-wizard {
-  max-width: 600px;
+.notient-setup-modal {
+  width: 640px !important;
+  max-width: 95vw !important;
 }
 
-.notient-wizard .modal-content {
-  padding: var(--size-4-4);
+.notient-setup .modal-content {
+  padding: 0 !important;
 }
 
-.notient-wizard-status {
-  padding: var(--size-4-3);
-  border-radius: var(--radius-m);
-  margin-bottom: var(--size-4-4);
-  font-weight: var(--font-medium);
-}
-
-.notient-wizard-status.status-checking {
-  background: var(--background-modifier-message);
-  color: var(--text-muted);
-}
-
-.notient-wizard-status.status-healthy {
-  background: var(--background-modifier-success);
-  color: var(--text-success);
-}
-
-.notient-wizard-status.status-unhealthy {
-  background: var(--background-modifier-error);
-  color: var(--text-error);
-}
-
-.notient-wizard-status.status-skipped {
+/* Header - minimal */
+.notient-setup-header {
+  padding: var(--size-4-3) var(--size-4-4);
   background: var(--background-secondary);
-  color: var(--text-muted);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.notient-wizard-test {
-  margin: var(--size-4-3) 0;
-}
-
-.notient-wizard-test button {
-  background: var(--interactive-normal);
-  padding: var(--size-4-2) var(--size-4-4);
-  border-radius: var(--radius-m);
-  cursor: pointer;
-}
-
-.notient-wizard-models {
-  margin: var(--size-4-4) 0;
-  padding: var(--size-4-3);
-  background: var(--background-secondary);
-  border-radius: var(--radius-m);
-}
-
-.notient-wizard-models h4 {
-  margin: 0 0 var(--size-4-2) 0;
-  color: var(--text-success);
-}
-
-.notient-wizard-models ul {
+.notient-setup-header h1 {
   margin: 0;
-  padding-left: var(--size-4-4);
-}
-
-.notient-wizard-models li {
-  color: var(--text-muted);
-  font-size: var(--font-small);
-}
-
-.notient-wizard-help {
-  margin: var(--size-4-4) 0;
-  padding: var(--size-4-3);
-  background: var(--background-modifier-message);
-  border-radius: var(--radius-m);
-  border-left: 3px solid var(--interactive-accent);
-}
-
-.notient-wizard-help h4 {
-  margin: 0 0 var(--size-4-2) 0;
+  font-size: 1.2rem;
+  font-weight: var(--font-semibold);
   color: var(--text-normal);
 }
 
-.notient-wizard-help ul {
-  margin: 0;
-  padding-left: var(--size-4-4);
+/* Network Mode - compact inline */
+.notient-network-section {
+  padding: var(--size-4-2) var(--size-4-4);
+  background: var(--background-primary);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.notient-wizard-note {
-  margin: var(--size-4-3) 0;
-  padding: var(--size-4-3);
+.notient-network-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-3);
+  flex-wrap: wrap;
+}
+
+.notient-mode-toggle-compact {
+  display: flex;
   background: var(--background-secondary);
   border-radius: var(--radius-m);
+  padding: 2px;
+}
+
+.notient-mode-btn-compact {
+  padding: var(--size-2-2) var(--size-4-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
   color: var(--text-muted);
-  font-size: var(--font-small);
-}
-
-.notient-wizard-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--size-4-2);
-  margin-top: var(--size-4-6);
-  padding-top: var(--size-4-4);
-  border-top: 1px solid var(--background-modifier-border);
-}
-
-.notient-wizard-actions button {
-  padding: var(--size-4-2) var(--size-4-4);
-  border-radius: var(--radius-m);
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.notient-wizard-actions button.mod-cta {
+.notient-mode-btn-compact:hover {
+  color: var(--text-normal);
+}
+
+.notient-mode-btn-compact.active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
 
-.notient-wizard-actions button:disabled {
+.notient-ip-group {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-ip-prefix {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.notient-ip-input-compact {
+  width: 130px;
+  padding: var(--size-2-2) var(--size-2-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+
+.notient-ip-input-compact:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+/* Services Grid */
+.notient-services-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--size-4-3);
+  padding: var(--size-4-3) var(--size-4-4);
+}
+
+@media (max-width: 550px) {
+  .notient-services-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Service Cards - compact */
+.notient-service-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.notient-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.notient-card-title-area {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--size-2-2);
+}
+
+.notient-card-header h3 {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.notient-card-service-name {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+}
+
+/* Status Badge - minimal */
+.notient-status-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.notient-status-badge.status-idle {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.notient-status-badge.status-checking {
+  background: var(--color-yellow);
+}
+
+.notient-status-badge.status-connected {
+  background: var(--color-green);
+  color: var(--text-on-accent);
+}
+
+.notient-status-badge.status-error {
+  background: var(--color-red);
+  color: var(--text-on-accent);
+}
+
+/* Spinner */
+.notient-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--text-normal);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: notient-spin 0.8s linear infinite;
+}
+
+@keyframes notient-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Connection Row */
+.notient-conn-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-conn-row label {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-port-input {
+  width: 60px;
+  padding: var(--size-2-1) var(--size-2-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-smallest);
+}
+
+.notient-port-input:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+/* Card Error */
+.notient-card-error {
+  font-size: var(--font-smallest);
+  color: var(--text-error);
+  background: var(--background-modifier-error);
+  padding: var(--size-2-1) var(--size-2-2);
+  border-radius: var(--radius-s);
+}
+
+/* Model Row */
+.notient-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-model-row label {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.notient-select-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-model-select {
+  flex: 1;
+  padding: var(--size-2-1) var(--size-2-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+
+.notient-model-select:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.notient-model-placeholder {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+}
+
+.notient-model-dim {
+  font-size: var(--font-smallest);
+  color: var(--text-accent);
+  white-space: nowrap;
+}
+
+/* Model Warning */
+.notient-model-warning {
+  font-size: var(--font-smallest);
+  color: var(--text-warning);
+  background: rgba(var(--color-orange-rgb), 0.1);
+  padding: var(--size-2-1) var(--size-2-2);
+  border-radius: var(--radius-s);
+  border-left: 2px solid var(--color-orange);
+}
+
+/* Model Notice (info - for new index creation) */
+.notient-model-notice {
+  font-size: var(--font-smallest);
+  color: var(--text-accent);
+  background: rgba(var(--interactive-accent-rgb), 0.1);
+  padding: var(--size-2-1) var(--size-2-2);
+  border-radius: var(--radius-s);
+  border-left: 2px solid var(--interactive-accent);
+}
+
+/* Card Mode Row (per-service toggle) */
+.notient-card-mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+/* IP Row (always visible) */
+.notient-ip-row-always {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-1);
+  font-size: var(--font-smallest);
+}
+
+.notient-ip-row-always label {
+  color: var(--text-muted);
+}
+
+.notient-ip-input-full {
+  flex: 1;
+  min-width: 100px;
+  padding: var(--size-2-1) var(--size-2-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-smallest);
+}
+
+.notient-ip-input-full:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+/* Chunk Size Section (Wizard) */
+.notient-chunk-section {
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-chunk-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-2-2);
+}
+
+.notient-chunk-header label {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.notient-chunk-value {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-accent);
+}
+
+.notient-chunk-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.notient-chunk-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  border: 2px solid var(--background-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.notient-chunk-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  border: 2px solid var(--background-primary);
+}
+
+.notient-chunk-tooltip {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.notient-tooltip-label {
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+/* Model dimension display (read-only) */
+.notient-model-dim {
+  font-size: var(--font-smallest);
+  color: var(--text-accent);
+  white-space: nowrap;
+  padding: var(--size-2-1) var(--size-2-2);
+  background: rgba(var(--interactive-accent-rgb), 0.1);
+  border-radius: var(--radius-s);
+}
+
+.notient-model-dim-unknown {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Index Section in wizard */
+.notient-index-section {
+  padding: var(--size-4-2) var(--size-4-4);
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.notient-index-section h4 {
+  margin: 0 0 var(--size-4-2) 0;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+}
+
+.notient-index-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-4-2);
+}
+
+.notient-index-item {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  padding: var(--size-2-1) var(--size-2-3);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
+}
+
+.notient-index-model {
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+}
+
+.notient-index-active {
+  color: var(--color-green);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.notient-index-hint {
+  margin: 0;
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+}
+
+/* Vault Section */
+.notient-vault-section {
+  padding: var(--size-4-3) var(--size-4-4);
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.notient-vault-stats {
+  display: flex;
+  gap: var(--size-4-4);
+  margin-bottom: var(--size-4-3);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-vault-stats .notient-estimate {
+  color: var(--text-faint);
+}
+
+.notient-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--size-4-3);
+}
+
+@media (max-width: 500px) {
+  .notient-options-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.notient-option-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1);
+}
+
+.notient-option-col label {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-exclude-input {
+  padding: var(--size-2-2) var(--size-2-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-smallest);
+}
+
+.notient-exclude-input:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.notient-quality-select {
+  padding: var(--size-2-2) var(--size-2-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+
+/* Actions */
+.notient-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3) var(--size-4-4);
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.notient-cancel-btn {
+  padding: var(--size-2-2) var(--size-4-3);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+}
+
+.notient-cancel-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.notient-start-btn {
+  padding: var(--size-2-2) var(--size-4-4);
+  background: var(--interactive-accent);
+  border: none;
+  border-radius: var(--radius-s);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  transition: all 0.15s ease;
+}
+
+.notient-start-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.notient-start-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.notient-wizard-summary {
-  margin: var(--size-4-4) 0;
-  padding: var(--size-4-4);
-  background: var(--background-secondary);
+/* ============ Legacy styles kept for compatibility ============ */
+
+.notient-model-row-legacy label {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+.notient-model-select {
+  width: 100%;
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
 }
 
-.notient-wizard-summary h3 {
-  margin: 0 0 var(--size-4-2) 0;
+.notient-model-select:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
 }
 
-.notient-wizard-summary ul {
-  margin: 0;
+.notient-model-placeholder {
+  font-size: var(--font-ui-small);
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Card Actions */
+.notient-card-actions {
+  margin-top: auto;
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.notient-refresh-btn {
+  padding: var(--size-2-2) var(--size-4-3);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.notient-refresh-btn:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.notient-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Help Section */
+.notient-help-section {
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-modifier-message);
+  border-radius: var(--radius-s);
+  border-left: 3px solid var(--color-orange);
+  font-size: var(--font-smallest);
+}
+
+.notient-help-section strong {
+  color: var(--text-normal);
+}
+
+.notient-help-section ul {
+  margin: var(--size-2-1) 0 0 0;
   padding-left: var(--size-4-4);
+  color: var(--text-muted);
 }
 
-.notient-wizard-summary li {
+.notient-help-section li {
   margin-bottom: var(--size-2-1);
 }
 
-.notient-model-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--size-4-2);
-  margin: var(--size-4-3) 0;
+/* Search Quality Section */
+.notient-quality-section {
+  padding: var(--size-4-4) var(--size-4-6);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
-.notient-model-card {
-  padding: var(--size-4-3);
+.notient-quality-options {
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+@media (max-width: 600px) {
+  .notient-quality-options {
+    flex-direction: column;
+  }
+}
+
+.notient-quality-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
   background: var(--background-secondary);
   border: 2px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
@@ -679,49 +1201,89 @@
   transition: all 0.15s ease;
 }
 
-.notient-model-card:hover {
+.notient-quality-option:hover {
+  border-color: var(--text-muted);
+}
+
+.notient-quality-option.active {
   border-color: var(--interactive-accent);
-  background: var(--background-modifier-hover);
+  background: linear-gradient(180deg, var(--background-secondary) 0%, rgba(var(--interactive-accent-rgb), 0.05) 100%);
 }
 
-.notient-model-card.selected {
-  border-color: var(--interactive-accent);
-  background: var(--background-modifier-active-hover);
+.notient-quality-icon {
+  font-size: 1.2rem;
 }
 
-.notient-model-card strong {
-  display: block;
-  margin-bottom: var(--size-2-1);
-  word-break: break-all;
+.notient-quality-name {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
 }
 
-.notient-model-card .model-size {
+.notient-quality-desc {
+  flex: 1;
   font-size: var(--font-smallest);
   color: var(--text-muted);
 }
 
-.notient-model-card .model-caps {
-  margin-top: var(--size-4-2);
+/* Setup Actions */
+.notient-setup-actions {
   display: flex;
-  gap: var(--size-2-1);
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--size-4-3);
+  padding: var(--size-4-4) var(--size-4-6);
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
-.notient-model-card .model-caps span {
-  font-size: var(--font-smallest);
-  padding: var(--size-2-1) var(--size-2-2);
-  background: var(--background-modifier-border);
-  border-radius: var(--radius-s);
+.notient-cancel-btn {
+  padding: var(--size-4-2) var(--size-4-4);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
 }
 
-.notient-model-card .cap-embedding {
-  background: var(--color-green);
+.notient-cancel-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.notient-start-btn {
+  padding: var(--size-4-2) var(--size-4-6);
+  background: var(--interactive-accent);
+  border: none;
+  border-radius: var(--radius-m);
   color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  transition: all 0.15s ease;
 }
 
-.notient-model-card .cap-chat {
-  background: var(--color-blue);
-  color: var(--text-on-accent);
+.notient-start-btn:hover:not(:disabled) {
+  background: var(--interactive-accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.notient-start-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ============ Legacy Setup Wizard (kept for compatibility) ============ */
+
+.notient-wizard {
+  max-width: 600px;
+}
+
+.notient-wizard .modal-content {
+  padding: var(--size-4-4);
 }
 
 /* ============ Settings ============ */
@@ -780,6 +1342,256 @@
   color: var(--text-error);
   font-size: var(--font-smallest);
   margin-left: var(--size-4-2);
+}
+
+/* ============ Settings Tab Styles ============ */
+
+.notient-settings {
+  max-width: 600px;
+}
+
+.notient-settings-section {
+  margin-bottom: var(--size-4-4);
+  padding-bottom: var(--size-4-3);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.notient-settings-section:last-child {
+  border-bottom: none;
+}
+
+.notient-settings-section h2 {
+  margin: 0 0 var(--size-4-3) 0;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+
+/* Status Row */
+.notient-settings-status-row {
+  display: flex;
+  gap: var(--size-4-4);
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  margin-bottom: var(--size-4-4);
+  font-size: var(--font-ui-small);
+}
+
+.notient-settings-status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-muted);
+}
+
+.notient-settings-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.notient-settings-dot.status-healthy {
+  background: var(--color-green);
+}
+
+.notient-settings-dot.status-unhealthy {
+  background: var(--color-red);
+}
+
+.notient-settings-dot.status-checking {
+  background: var(--color-yellow);
+}
+
+.notient-settings-dot.status-unknown {
+  background: var(--background-modifier-border);
+}
+
+/* Toggle Row */
+.notient-settings-toggle-row {
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-settings-toggle {
+  display: inline-flex;
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  padding: 2px;
+}
+
+.notient-settings-toggle-btn {
+  padding: var(--size-2-2) var(--size-4-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.notient-settings-toggle-btn:hover {
+  color: var(--text-normal);
+}
+
+.notient-settings-toggle-btn.active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* Service Box */
+.notient-settings-service-box {
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-settings-service-box h3 {
+  margin: 0 0 var(--size-4-2) 0;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+  padding-bottom: var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* Warning */
+.notient-settings-warning {
+  font-size: var(--font-smallest);
+  color: var(--text-warning);
+  background: rgba(var(--color-orange-rgb), 0.1);
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-s);
+  border-left: 2px solid var(--color-orange);
+  margin-top: var(--size-4-2);
+}
+
+/* Preset Buttons */
+.notient-settings-presets {
+  display: flex;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-settings-preset-btn {
+  padding: var(--size-2-2) var(--size-4-2);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.notient-settings-preset-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text-normal);
+}
+
+.notient-settings-preset-btn.active {
+  border-color: var(--interactive-accent);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* Notice (info) */
+.notient-settings-notice {
+  font-size: var(--font-ui-small);
+  color: var(--text-accent);
+  background: rgba(var(--interactive-accent-rgb), 0.1);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-s);
+  border-left: 3px solid var(--interactive-accent);
+  margin-top: var(--size-4-2);
+}
+
+/* Info Box for index management */
+.notient-settings-info-box {
+  font-size: var(--font-ui-small);
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-settings-info-dim {
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+  margin-top: var(--size-2-1);
+}
+
+/* Settings Slider Section */
+.notient-settings-slider-section {
+  margin-bottom: var(--size-4-3);
+}
+
+.notient-settings-slider-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-2-2);
+}
+
+.notient-settings-slider-header label {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.notient-settings-slider-value {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-accent);
+}
+
+.notient-settings-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.notient-settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  border: 2px solid var(--background-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.notient-settings-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  border: 2px solid var(--background-primary);
+}
+
+.notient-settings-tooltip {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+}
+
+.notient-tooltip-small {
+  color: var(--color-yellow);
+}
+
+.notient-tooltip-large {
+  color: var(--color-cyan);
+}
+
+.notient-tooltip-sep {
+  color: var(--text-faint);
+  margin: 0 var(--size-2-2);
 }
 
 /* ============ Wizard Chunk Presets ============ */

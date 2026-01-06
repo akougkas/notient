@@ -39,6 +39,8 @@ export class Kernel {
   private _abortController: AbortController;
   private _initialized = false;
   private _disposed = false;
+  private _servicesInitializing = false;
+  private _servicesInitialized = false;
 
   private _serviceHealth: ServiceState = {
     ollama: { status: "unknown", lastChecked: null, error: null },
@@ -59,6 +61,7 @@ export class Kernel {
   private vectorStore: unknown = null;
   private indexer: unknown = null;
   private searchPipeline: unknown = null;
+  private vaultVitals: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -115,6 +118,26 @@ export class Kernel {
 
   get hasWriteLock(): boolean {
     return this._vaultLock.isHeld();
+  }
+
+  get isServicesInitializing(): boolean {
+    return this._servicesInitializing;
+  }
+
+  get isServicesInitialized(): boolean {
+    return this._servicesInitialized;
+  }
+
+  /** Mark services as initializing (called by main.ts) */
+  setServicesInitializing(value: boolean): void {
+    this._servicesInitializing = value;
+  }
+
+  /** Mark services as initialized and emit event (called by main.ts) */
+  setServicesInitialized(): void {
+    this._servicesInitializing = false;
+    this._servicesInitialized = true;
+    this._eventBus.emit("services:initialized", {});
   }
 
   // ============ Lifecycle ============
@@ -216,6 +239,9 @@ export class Kernel {
       case "search":
         this.searchPipeline = service;
         break;
+      case "vitals":
+        this.vaultVitals = service;
+        break;
     }
   }
 
@@ -234,6 +260,8 @@ export class Kernel {
         return this.indexer as T;
       case "search":
         return this.searchPipeline as T;
+      case "vitals":
+        return this.vaultVitals as T;
       default:
         return null;
     }
@@ -255,6 +283,7 @@ export class Kernel {
 
     // Dispose services in reverse order
     const disposables = [
+      this.vaultVitals,
       this.searchPipeline,
       this.indexer,
       this.vectorStore,
