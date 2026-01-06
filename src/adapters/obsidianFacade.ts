@@ -1,0 +1,297 @@
+/**
+ * Obsidian Facade - Thin wrapper for Obsidian APIs
+ * 
+ * Allows core logic to be tested without Obsidian runtime.
+ * All vault operations go through this facade.
+ */
+
+import {
+  App,
+  TFile,
+  TFolder,
+  CachedMetadata,
+  Notice,
+  Vault,
+  MetadataCache,
+  Workspace,
+  EventRef,
+} from "obsidian";
+
+export interface NoteInfo {
+  path: string;
+  name: string;
+  basename: string;
+  extension: string;
+  stat: {
+    ctime: number;
+    mtime: number;
+    size: number;
+  };
+}
+
+export interface NoteFrontmatter {
+  tags?: string[];
+  [key: string]: unknown;
+}
+
+export interface NoteMetadata {
+  frontmatter: NoteFrontmatter | null;
+  tags: string[];
+  links: string[];
+  headings: { level: number; heading: string }[];
+}
+
+/**
+ * Facade over Obsidian's App, Vault, MetadataCache, and Workspace
+ */
+export class ObsidianFacade {
+  constructor(private app: App) {}
+
+  /**
+   * Get the Obsidian App instance
+   */
+  getApp(): App {
+    return this.app;
+  }
+
+  /**
+   * Get the vault instance
+   */
+  get vault(): Vault {
+    return this.app.vault;
+  }
+
+  /**
+   * Get the metadata cache
+   */
+  get metadataCache(): MetadataCache {
+    return this.app.metadataCache;
+  }
+
+  /**
+   * Get the workspace
+   */
+  get workspace(): Workspace {
+    return this.app.workspace;
+  }
+
+  // ============ File Operations ============
+
+  /**
+   * Get all markdown files in the vault
+   */
+  getMarkdownFiles(): TFile[] {
+    return this.app.vault.getMarkdownFiles();
+  }
+
+  /**
+   * Get file info without reading content
+   */
+  getFileInfo(file: TFile): NoteInfo {
+    return {
+      path: file.path,
+      name: file.name,
+      basename: file.basename,
+      extension: file.extension,
+      stat: {
+        ctime: file.stat.ctime,
+        mtime: file.stat.mtime,
+        size: file.stat.size,
+      },
+    };
+  }
+
+  /**
+   * Read file content as string
+   */
+  async readFile(file: TFile): Promise<string> {
+    return this.app.vault.read(file);
+  }
+
+  /**
+   * Read file content by path
+   */
+  async readFileByPath(path: string): Promise<string | null> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      return this.app.vault.read(file);
+    }
+    return null;
+  }
+
+  /**
+   * Get file by path
+   */
+  getFileByPath(path: string): TFile | null {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile ? file : null;
+  }
+
+  /**
+   * Get folder by path
+   */
+  getFolderByPath(path: string): TFolder | null {
+    const folder = this.app.vault.getAbstractFileByPath(path);
+    return folder instanceof TFolder ? folder : null;
+  }
+
+  /**
+   * Check if path exists
+   */
+  async pathExists(path: string): Promise<boolean> {
+    return this.app.vault.getAbstractFileByPath(path) !== null;
+  }
+
+  // ============ Metadata Operations ============
+
+  /**
+   * Get cached metadata for a file
+   */
+  getFileMetadata(file: TFile): NoteMetadata {
+    const cache = this.app.metadataCache.getFileCache(file);
+    return this.parseMetadata(cache);
+  }
+
+  /**
+   * Get cached metadata by path
+   */
+  getMetadataByPath(path: string): NoteMetadata | null {
+    const file = this.getFileByPath(path);
+    if (!file) return null;
+    return this.getFileMetadata(file);
+  }
+
+  private parseMetadata(cache: CachedMetadata | null): NoteMetadata {
+    if (!cache) {
+      return { frontmatter: null, tags: [], links: [], headings: [] };
+    }
+
+    const tags: string[] = [];
+    
+    // Get frontmatter tags
+    if (cache.frontmatter?.tags) {
+      const fmTags = cache.frontmatter.tags;
+      if (Array.isArray(fmTags)) {
+        tags.push(...fmTags);
+      } else if (typeof fmTags === "string") {
+        tags.push(fmTags);
+      }
+    }
+    
+    // Get inline tags
+    if (cache.tags) {
+      tags.push(...cache.tags.map((t) => t.tag.replace(/^#/, "")));
+    }
+
+    const links: string[] = [];
+    if (cache.links) {
+      links.push(...cache.links.map((l) => l.link));
+    }
+    if (cache.embeds) {
+      links.push(...cache.embeds.map((e) => e.link));
+    }
+
+    const headings = cache.headings?.map((h) => ({
+      level: h.level,
+      heading: h.heading,
+    })) ?? [];
+
+    return {
+      frontmatter: cache.frontmatter ? { ...cache.frontmatter } : null,
+      tags: [...new Set(tags)], // Dedupe
+      links: [...new Set(links)],
+      headings,
+    };
+  }
+
+  // ============ Event Subscriptions ============
+
+  /**
+   * Subscribe to file creation events
+   */
+  onFileCreate(callback: (file: TFile) => void): EventRef {
+    return this.app.vault.on("create", (file) => {
+      if (file instanceof TFile && file.extension === "md") {
+        callback(file);
+      }
+    });
+  }
+
+  /**
+   * Subscribe to file modification events
+   */
+  onFileModify(callback: (file: TFile) => void): EventRef {
+    return this.app.vault.on("modify", (file) => {
+      if (file instanceof TFile && file.extension === "md") {
+        callback(file);
+      }
+    });
+  }
+
+  /**
+   * Subscribe to file rename events
+   */
+  onFileRename(
+    callback: (file: TFile, oldPath: string) => void
+  ): EventRef {
+    return this.app.vault.on("rename", (file, oldPath) => {
+      if (file instanceof TFile && file.extension === "md") {
+        callback(file, oldPath);
+      }
+    });
+  }
+
+  /**
+   * Subscribe to file deletion events
+   */
+  onFileDelete(callback: (file: TFile) => void): EventRef {
+    return this.app.vault.on("delete", (file) => {
+      if (file instanceof TFile && file.extension === "md") {
+        callback(file);
+      }
+    });
+  }
+
+  /**
+   * Subscribe to active file change
+   */
+  onActiveFileChange(callback: (file: TFile | null) => void): EventRef {
+    return this.app.workspace.on("active-leaf-change", () => {
+      const file = this.app.workspace.getActiveFile();
+      callback(file);
+    });
+  }
+
+  /**
+   * Unsubscribe from an event
+   */
+  offEvent(ref: EventRef): void {
+    this.app.vault.offref(ref);
+  }
+
+  // ============ UI Operations ============
+
+  /**
+   * Show a notice to the user
+   */
+  notice(message: string, timeout?: number): void {
+    new Notice(message, timeout);
+  }
+
+  /**
+   * Open a file in the workspace
+   */
+  async openFile(path: string): Promise<void> {
+    const file = this.getFileByPath(path);
+    if (file) {
+      await this.app.workspace.openLinkText(path, "", true);
+    }
+  }
+
+  /**
+   * Get the currently active file
+   */
+  getActiveFile(): TFile | null {
+    return this.app.workspace.getActiveFile();
+  }
+}

@@ -16,9 +16,9 @@ Notient is a free, open-source Obsidian community plugin that provides AI-powere
 - **Local-only**: No cloud model APIs. No user data leaves the machine.
 - **Bun-only**: Use Bun for install/build/test. No npm/yarn/pnpm workflows.
 - **Language**: TypeScript strict.
-- **LLM reasoning**: `@lmstudio/sdk`.
-- **Embeddings**: `ollama` JS library (local host only).
-- **Vector DB**: `@lancedb/lancedb`.
+- **LLM reasoning**: LM Studio (OpenAI-compatible API).
+- **Embeddings**: Ollama (local or remote on LAN).
+- **Vector DB**: Orama (pure JS, bundled with plugin).
 - **Target runtime**: Obsidian desktop (Electron). Set `manifest.json.isDesktopOnly = true`.
 
 ### 1.3 Non-goals
@@ -42,13 +42,13 @@ Notient is structured around:
 - **UI layer**: Settings tab + Sidebar view + Dashboard view.
 - **Core orchestration**: Kernel/ServiceManager, event bus, background queue.
 - **Domain pipelines**: indexing, semantic search, vault vitals.
-- **Integrations**: LM Studio, Ollama, LanceDB.
+- **Integrations**: LM Studio, Ollama, Orama.
 
 ### 2.3 Key cross-cutting requirements
 - **Degraded mode**: plugin always loads; features disable gracefully when dependencies fail.
 - **Non-blocking UI**: indexing and heavy work must not freeze the renderer.
 - **Crash-safe**: queue and index state survive restarts.
-- **Multi-window safety**: protect LanceDB + writes with a lock.
+- **Multi-window safety**: protect writes with a lock.
 - **Upgradeable**: settings schema versioning; data migrations; model switching.
 
 ### 2.4 Architecture diagram
@@ -67,7 +67,7 @@ flowchart TD
   Kernel --> Ollama[OllamaEmbeddingsService]
   Kernel --> LM[LMStudioReasoningService]
   Kernel --> VS[VectorStoreInterface]
-  VS --> Lance[LanceDBStore]
+  VS --> Orama[OramaStore]
 
   Queue --> Indexer[IndexPipeline]
   Queue --> Search[SearchPipeline]
@@ -98,7 +98,7 @@ Maintain PRD layout and add a small set of “foundation” modules:
 - `src/services/ollama.ts` — embeddings client wrapper
 - `src/services/lmstudio.ts` — LM Studio client wrapper
 - `src/services/vectorStore.ts` — interface + domain model
-- `src/services/lancedb.ts` — LanceDB implementation
+- `src/services/orama.ts` — Orama vector store implementation
 - `src/services/vaultLock.ts` — multi-window lock
 
 - `src/adapters/obsidianFacade.ts` — wrappers for App/Vault/Workspace
@@ -110,7 +110,7 @@ Under `{vaultRoot}/.obsidian/plugins/notient/`:
 - `data.json` — plugin settings
 - `cache/` — ephemeral caches (search results, query embeddings)
 - `processing-queue/` — persistent job queue
-- `lancedb/` — vector DB storage
+- `orama-*.json` — vector DB storage (per model)
 - `locks/` — lockfiles
 - `logs/` — optional local logs (debug only)
 
@@ -177,11 +177,14 @@ This allows `bun test` for core modules without Obsidian.
 - Use `embed({ model, input, truncate?, keep_alive? })`.
 - Support custom `fetch` if needed in Obsidian runtime.
 
-### 5.3 LanceDB (vector store)
-- Use `@lancedb/lancedb`.
-- Treat as **native module** (napi-rs). In dev-alpha:
-  - keep as runtime dependency
-  - externalize from bundling so it loads from `node_modules`
+### 5.3 Orama (vector store)
+- Use `@orama/orama` + `@orama/plugin-data-persistence`.
+- **Pure JavaScript** - no native modules, bundled with plugin.
+- Persisted as JSON files in plugin folder.
+- Advantages over LanceDB:
+  - No native module distribution issues
+  - Works in all Electron environments
+  - Simpler build/bundle process
 
 ## 6) Data model and persistence
 ### 6.1 Stable identifiers
@@ -205,34 +208,30 @@ Maintain an index state store to avoid re-embedding unchanged notes:
 Storage location:
 - persisted as JSON in `processing-queue/` or a dedicated `index-state.json` (implementation choice), but must be crash-safe and atomic.
 
-### 6.3 LanceDB schema (minimum viable)
-A single primary table per modelKey:
-- `chunks` table fields:
+### 6.3 Orama schema (minimum viable)
+A single database per modelKey, stored as `orama-{modelKey}.json`:
+- Document fields:
   - `chunkId` (string, primary)
   - `noteId` (string)
   - `path` (string)
-  - `title` (string, optional)
-  - `headingPath` (string[], optional)
+  - `title` (string)
+  - `headingPath` (string, JSON serialized)
   - `chunkIndex` (number)
   - `text` (string)
-  - `embedding` (vector<float>)
+  - `embedding` (vector[dimension])
   - `mtimeMs` (number)
   - `contentHash` (string)
-  - `tags` (string[], optional)
-  - `frontmatter` (json-ish, optional)
-
-Optional tables later:
-- `notes` table (note-level aggregates)
-- `links` table (graph)
+  - `tags` (string, JSON serialized)
+  - `frontmatter` (string, JSON serialized)
+  - `modelKey` (string)
 
 ### 6.4 Model switching / dimension mismatch
 Strategy:
-- Scope DB directories by modelKey:
-  - `lancedb/<modelKey>/...`
+- Scope DB files by modelKey: `orama-{modelKey}.json`
 - On model change:
-  - create new DB
+  - create new DB file
   - enqueue background reindex
-  - keep old DB for rollback
+  - old DB file remains until cleanup
 
 ### 6.5 Caches
 - Query embedding cache (bounded LRU)
@@ -265,7 +264,7 @@ Strategy:
 ## 8) Semantic search pipeline
 ### 8.1 MVP behavior
 - Embed query
-- Vector search in LanceDB
+- Vector search in Orama
 - Return topK chunks; group by note; show snippets in sidebar
 
 ### 8.2 Hybrid cache architecture (PRD speed differentiator)
@@ -339,7 +338,7 @@ AI suggests; human approves. No silent modifications.
   - current note context
 
 ### 12.3 Degraded mode UX
-- Show capability badges (Ollama/LMS/LanceDB) with status.
+- Show capability badges (Ollama/LM Studio) with status.
 - Provide “Fix” hints (host URL, model name, start service).
 
 ### 12.4 Theme awareness
@@ -351,7 +350,7 @@ AI suggests; human approves. No silent modifications.
 - Acquire a lockfile under `locks/`.
 - If lock acquisition fails:
   - disable DB writes + indexing
-  - allow read-only search if DB can be opened safely (or disable LanceDB entirely if unsafe)
+  - allow read-only search if possible
 
 ### 13.2 Plugin unload cleanup
 - Abort in-flight work
@@ -394,7 +393,7 @@ AI suggests; human approves. No silent modifications.
 Because Obsidian plugin installs do not run `npm install`, we must ship runtime deps with the plugin release.
 
 Planned options (evaluate in Phase 4):
-- Platform-specific release artifacts (one zip per OS/arch) bundling the correct LanceDB native binary.
+- Single release artifact works on all platforms (Orama is pure JS).
 - Multi-platform bundle with per-platform binaries + runtime selection.
 - Optional binary downloader at first run (with user confirmation) if acceptable.
 
@@ -457,12 +456,12 @@ Each dev session should produce:
 Recommended early sessions:
 - **Session A**: Phase 0 repo bootstrap + kernel + paths + lock + minimal UI
 - **Session B**: queue + indexing skeleton + status UI
-- **Session C**: Ollama embeddings + LanceDB upsert + minimal semantic search
+- **Session C**: Ollama embeddings + Orama upsert + minimal semantic search
 - **Session D**: vitals MVP + PARA detection + event wiring
 - **Session E**: onboarding wizard + model selection + reindex flow
 
 ## 19) Risk register (must be tracked continuously)
-- Native module loading and path resolution (LanceDB)
+- Vector store initialization and persistence
 - Service initialization order and lazy init
 - Runtime health signaling and degraded mode UX
 - Storage paths cross-platform correctness
@@ -481,7 +480,7 @@ Recommended early sessions:
 ## 20) Decision log (ADR cadence)
 Create ADRs for:
 - Build/bundling strategy with Bun for Obsidian
-- LanceDB native dependency and distribution plan
+- Vector store choice (Orama selected for pure JS compatibility)
 - Embedding model switching strategy (modelKey + DB scoping)
 - Degraded-mode capability model
 - Queue format and crash recovery semantics

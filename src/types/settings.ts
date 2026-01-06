@@ -1,0 +1,116 @@
+/**
+ * Plugin settings schema with versioning support
+ */
+
+export const SETTINGS_VERSION = 1;
+
+export interface NotientSettings {
+  /** Schema version for migrations */
+  version: number;
+
+  /** Ollama configuration */
+  ollama: {
+    host: string;
+    embeddingModel: string;
+    enabled: boolean;
+  };
+
+  /** LM Studio configuration */
+  lmstudio: {
+    host: string;
+    reasoningModel: string;
+    enabled: boolean;
+  };
+
+  /** Indexing configuration */
+  indexing: {
+    /** Chunk size in characters */
+    chunkSize: number;
+    /** Chunk overlap in characters */
+    chunkOverlap: number;
+    /** Debounce delay for vault events (ms) */
+    debounceMs: number;
+    /** Batch size for indexing jobs */
+    batchSize: number;
+    /** Excluded folders (relative paths) */
+    excludedFolders: string[];
+  };
+
+  /** PARA folder mappings */
+  para: {
+    inbox: string[];
+    projects: string[];
+    areas: string[];
+    resources: string[];
+    archive: string[];
+  };
+
+  /** UI preferences */
+  ui: {
+    showVitalsOnStartup: boolean;
+    sidebarPosition: "left" | "right";
+  };
+
+  /** Advanced options */
+  advanced: {
+    debugLogging: boolean;
+    keepAliveMs: number;
+  };
+
+  /** Setup wizard completion flag */
+  setupComplete: boolean;
+}
+
+export const DEFAULT_SETTINGS: NotientSettings = {
+  version: SETTINGS_VERSION,
+  ollama: {
+    host: "http://127.0.0.1:11434",
+    embeddingModel: "nomic-embed-text",
+    enabled: true,
+  },
+  lmstudio: {
+    host: "http://127.0.0.1:1234",
+    reasoningModel: "",
+    enabled: true,
+  },
+  indexing: {
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    debounceMs: 5000,
+    batchSize: 10,
+    excludedFolders: [".obsidian", ".trash"],
+  },
+  para: {
+    inbox: ["0-inbox"],
+    projects: ["1-projects"],
+    areas: ["2-areas", "3-areas"],
+    resources: ["2-knowledge"],
+    archive: ["4-archive"],
+  },
+  ui: {
+    showVitalsOnStartup: true,
+    sidebarPosition: "right",
+  },
+  advanced: {
+    debugLogging: false,
+    keepAliveMs: 300000, // 5 minutes
+  },
+  setupComplete: false,
+};
+
+/** Validation result for settings */
+export interface SettingsValidation {
+  valid: boolean;
+  errors: SettingsError[];
+  warnings: SettingsWarning[];
+}
+
+export interface SettingsError {
+  field: string;
+  message: string;
+}
+
+export interface SettingsWarning {
+  field: string;
+  message: string;
+}

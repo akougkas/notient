@@ -35,17 +35,17 @@
   ## Technical Architecture
 
   ### Stack
-  - **Language:** TypeScript
-  - **Build:** Bun
-  - **LLM (Reasoning):** LM Studio TypeScript SDK (https://lmstudio.ai/docs/typescript)
-  - **LLM (Embeddings):** Ollama JS SDK (https://github.com/ollama/ollama-js)
-  - **Vector DB:** LanceDB (stored in `.obsidian/plugins/notient/`)
+  - **Language:** TypeScript (strict mode)
+  - **Build:** Bun + esbuild
+  - **LLM (Reasoning):** LM Studio (OpenAI-compatible API)
+  - **LLM (Embeddings):** Ollama (local or remote on LAN)
+  - **Vector DB:** Orama (pure JS, bundled with plugin)
   - **UI Framework:** Obsidian API + native components
 
   ### Data Storage
   .obsidian/plugins/notient/
   ├── data.json           # Plugin settings
-  ├── lancedb/            # Vector embeddings database
+  ├── orama-*.json        # Vector embeddings (per model)
   ├── cache/              # Search result cache
   └── processing-queue/   # Pending batch operations
 
@@ -102,12 +102,12 @@
   ## Features
 
   ### Phase 1: Core (MVP)
-  - [ ] Setup wizard with LLM detection
-  - [ ] LanceDB integration for embeddings
-  - [ ] Semantic search (sidebar command)
-  - [ ] Related notes panel
-  - [ ] Basic Vault Vitals (note count, inbox size, orphan count)
-  - [ ] PARA-aware note type detection
+  - [x] Setup wizard with LLM detection (Ollama + LM Studio)
+  - [x] Orama vector store for embeddings
+  - [x] Semantic search (sidebar command)
+  - [x] Related notes panel
+  - [x] Basic Vault Vitals (note count, inbox size, orphan count)
+  - [x] PARA-aware note type detection
 
   ### Phase 2: Intelligence
   - [ ] Multi-pass note processing (classify → enrich → link)
@@ -205,7 +205,7 @@
 
   Ship incrementally as features become ready:
   - Week 1-2: Project setup, core architecture, basic sidebar
-  - Week 3-4: LanceDB integration, semantic search
+  - Week 3-4: Vector store integration (Orama), semantic search
   - Week 5-6: Vault Vitals dashboard MVP
   - Week 7-8: Context-aware sidebar, PARA detection
   - Ongoing: Agent capabilities, polish, community feedback
@@ -229,7 +229,7 @@
   ## Open Questions
 
   1. Exact embedding models to recommend for different hardware tiers?
-  2. LanceDB vs alternatives (better-sqlite3-vec, etc.) - benchmark needed?
+  2. ~~LanceDB vs alternatives~~ → Orama selected (pure JS, no native modules)
   3. Obsidian API limitations for vault operations?
   4. Hot reload during development - best Bun workflow?
 
