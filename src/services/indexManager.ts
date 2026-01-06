@@ -17,6 +17,7 @@ import type { Kernel } from "../core/kernel";
 import type { VectorStore } from "./vectorStore";
 import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
+import { generateNoteId } from "../core/indexer/simpleChunker";
 
 /** State for a single indexed note */
 export interface NoteState {
@@ -135,6 +136,11 @@ export class IndexManager {
   /** Get count of indexed notes */
   getIndexedCount(): number {
     return this.states.size;
+  }
+
+  /** Check if a specific note is indexed */
+  isNoteIndexed(notePath: string): boolean {
+    return this.states.has(notePath);
   }
 
   /** Record that a full index completed */
@@ -359,7 +365,7 @@ export class IndexManager {
     for (const notePath of stalePaths) {
       const state = this.states.get(notePath);
       if (state) {
-        const noteId = this.generateNoteId(notePath);
+        const noteId = generateNoteId(notePath);
         await this.vectorStore.deleteByNoteId(noteId);
         this.states.delete(notePath);
         removed++;
@@ -374,17 +380,6 @@ export class IndexManager {
 
     console.log(`[IndexManager] Trimmed ${removed} stale entries`);
     return { removed };
-  }
-
-  private generateNoteId(notePath: string): string {
-    // Simple hash for noteId - must match chunker's generateNoteId
-    let hash = 0;
-    for (let i = 0; i < notePath.length; i++) {
-      const char = notePath.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return `note_${Math.abs(hash).toString(36)}`;
   }
 
   // ============ Export / Import ============

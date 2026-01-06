@@ -58,10 +58,12 @@ export class Kernel {
   // Service references (set during initialization)
   private healthMonitor: unknown = null;
   private ollamaService: unknown = null;
+  private lmStudioService: unknown = null;
   private vectorStore: unknown = null;
   private indexManager: unknown = null;
   private indexer: unknown = null;
   private searchPipeline: unknown = null;
+  private contextBuilder: unknown = null;
   private vaultVitals: unknown = null;
 
   constructor(private context: KernelContext) {
@@ -231,6 +233,9 @@ export class Kernel {
       case "ollama":
         this.ollamaService = service;
         break;
+      case "lmstudio":
+        this.lmStudioService = service;
+        break;
       case "vectorStore":
         this.vectorStore = service;
         break;
@@ -242,6 +247,9 @@ export class Kernel {
         break;
       case "search":
         this.searchPipeline = service;
+        break;
+      case "context":
+        this.contextBuilder = service;
         break;
       case "vitals":
         this.vaultVitals = service;
@@ -258,6 +266,8 @@ export class Kernel {
         return this.healthMonitor as T;
       case "ollama":
         return this.ollamaService as T;
+      case "lmstudio":
+        return this.lmStudioService as T;
       case "vectorStore":
         return this.vectorStore as T;
       case "indexManager":
@@ -266,6 +276,8 @@ export class Kernel {
         return this.indexer as T;
       case "search":
         return this.searchPipeline as T;
+      case "context":
+        return this.contextBuilder as T;
       case "vitals":
         return this.vaultVitals as T;
       default:
@@ -290,10 +302,12 @@ export class Kernel {
     // Dispose services in reverse order
     const disposables = [
       this.vaultVitals,
+      this.contextBuilder,
       this.searchPipeline,
       this.indexer,
       this.indexManager,
       this.vectorStore,
+      this.lmStudioService,
       this.ollamaService,
       this.healthMonitor,
     ];

@@ -1,0 +1,420 @@
+/**
+ * LM Studio Reasoning Service
+ *
+ * Provides chat completions via OpenAI-compatible API.
+ * Used for: search reranking, note classification, chat.
+ */
+
+import type { Kernel } from "../core/kernel";
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface RankedResult {
+  noteId: string;
+  path: string;
+  title: string;
+  score: number;
+  reasoning: string;
+}
+
+interface RerankCandidate {
+  noteId: string;
+  path: string;
+  title: string;
+  text: string;
+  originalScore: number;
+}
+
+const RERANK_SYSTEM_PROMPT = `You rank search results by relevance. Output ONLY valid JSON.
+
+Example output:
+{"rankings":[{"index":0,"score":90,"reason":"exact match"},{"index":2,"score":70,"reason":"related"}]}
+
+Rules:
+- score: 0-100
+- index: candidate number
+- reason: brief (under 30 chars)
+- Only include relevant results (score >= 30)`;
+
+const CHAT_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vault. You help users understand and navigate their notes.
+
+Guidelines:
+- Answer based on the provided notes when possible
+- Cite specific notes using [Note Title] format
+- Be concise but helpful
+- If information isn't in the notes, say so
+- Don't make up information not present in the context`;
+
+/**
+ * LM Studio Service - provides reasoning capabilities
+ */
+export class LMStudioService {
+  private baseUrl: string = "";
+  private model: string = "";
+  private disposed = false;
+  private initialized = false;
+
+  constructor(private kernel: Kernel) {}
+
+  async initialize(): Promise<void> {
+    if (this.disposed) return;
+
+    const settings = this.kernel.settings;
+    this.baseUrl = settings.lmstudio.host;
+    this.model = settings.lmstudio.reasoningModel;
+
+    if (!this.baseUrl || !this.model) {
+      throw new Error("LM Studio not configured");
+    }
+
+    // Verify connectivity
+    try {
+      await this.listModels();
+      this.initialized = true;
+      console.log(`[LMStudioService] Initialized with model=${this.model}`);
+    } catch (error) {
+      console.error("[LMStudioService] Failed to connect:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * List available models from LM Studio
+   */
+  async listModels(): Promise<string[]> {
+    const response = await fetch(`${this.baseUrl}/v1/models`);
+    if (!response.ok) {
+      throw new Error(`LM Studio API error: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.data.map((m: { id: string }) => m.id);
+  }
+
+  /**
+   * Simple chat completion (non-streaming)
+   */
+  async chat(messages: ChatMessage[]): Promise<string> {
+    if (this.disposed || !this.initialized) {
+      throw new Error("LMStudioService not initialized");
+    }
+
+    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 1500,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "unknown");
+      console.error("[LMStudioService] Chat error:", response.status, errorText);
+      throw new Error(`LM Studio chat error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
+    
+    if (!content) {
+      console.warn("[LMStudioService] Empty content in response. Full response:", JSON.stringify(data).slice(0, 500));
+    }
+    
+    return content;
+  }
+
+  /**
+   * Streaming chat completion
+   */
+  async *chatStream(messages: ChatMessage[]): AsyncIterable<string> {
+    if (this.disposed || !this.initialized) {
+      throw new Error("LMStudioService not initialized");
+    }
+
+    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 1500,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`LM Studio stream error: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE format
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") return;
+
+            try {
+              const json = JSON.parse(data);
+              const content = json.choices?.[0]?.delta?.content;
+              if (content) yield content;
+            } catch {
+              // Skip malformed JSON
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Rerank search results using LLM
+   */
+  async rerank(
+    query: string,
+    candidates: RerankCandidate[]
+  ): Promise<RankedResult[]> {
+    if (this.disposed || !this.initialized) {
+      // Return original order if service unavailable
+      return candidates.map((c) => ({
+        noteId: c.noteId,
+        path: c.path,
+        title: c.title,
+        score: c.originalScore,
+        reasoning: "Vector similarity",
+      }));
+    }
+
+    if (candidates.length === 0) return [];
+
+    // Limit candidates for efficient reranking (fewer = faster, better for smaller models)
+    const topCandidates = candidates.slice(0, 10);
+
+    const prompt = this.buildRerankPrompt(query, topCandidates);
+
+    try {
+      const response = await this.chat([
+        { role: "system", content: RERANK_SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ]);
+
+      // Check for empty response
+      if (!response || response.trim().length === 0) {
+        console.warn("[LMStudioService] Empty response from LLM, using vector scores");
+        return this.fallbackToVectorScores(topCandidates);
+      }
+
+      console.log("[LMStudioService] Rerank response length:", response.length);
+      return this.parseRerankResponse(response, topCandidates);
+    } catch (error) {
+      console.error("[LMStudioService] Rerank failed:", error);
+      return this.fallbackToVectorScores(topCandidates);
+    }
+  }
+
+  /**
+   * Fallback to vector similarity scores
+   */
+  private fallbackToVectorScores(candidates: RerankCandidate[]): RankedResult[] {
+    return candidates.map((c) => ({
+      noteId: c.noteId,
+      path: c.path,
+      title: c.title,
+      score: c.originalScore,
+      reasoning: "Vector similarity",
+    }));
+  }
+
+  /**
+   * Build prompt for reranking
+   */
+  private buildRerankPrompt(query: string, candidates: RerankCandidate[]): string {
+    // Keep it simple for smaller models
+    const candidateList = candidates
+      .map((c, i) => {
+        const preview = c.text.slice(0, 150).replace(/\n/g, " ").trim();
+        return `[${i}] ${c.title}: ${preview}`;
+      })
+      .join("\n");
+
+    return `Query: "${query}"
+
+${candidateList}
+
+Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"reason":"best match"}]}`;
+  }
+
+  /**
+   * Parse LLM reranking response
+   */
+  private parseRerankResponse(
+    response: string,
+    candidates: RerankCandidate[]
+  ): RankedResult[] {
+    try {
+      // Check for empty or too short response
+      if (!response || response.trim().length < 10) {
+        console.warn("[LMStudioService] Response too short:", response);
+        return this.fallbackToVectorScores(candidates);
+      }
+
+      // Extract JSON from response (handle markdown code blocks)
+      let jsonStr = response.trim();
+      
+      // Remove markdown code blocks
+      const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      }
+
+      // Try to find JSON object in response
+      const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (objectMatch) {
+        jsonStr = objectMatch[0];
+      } else {
+        console.warn("[LMStudioService] No JSON object found in response");
+        return this.fallbackToVectorScores(candidates);
+      }
+
+      // Try to parse - handle incomplete JSON by closing brackets
+      let parsed: { rankings?: Array<{ index: number; score: number; reason?: string }> };
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        // Try to fix incomplete JSON
+        const fixedJson = this.tryFixIncompleteJson(jsonStr);
+        if (fixedJson) {
+          parsed = JSON.parse(fixedJson);
+        } else {
+          throw new Error("Cannot parse JSON");
+        }
+      }
+
+      if (!parsed.rankings || !Array.isArray(parsed.rankings)) {
+        console.warn("[LMStudioService] No rankings array in response");
+        return this.fallbackToVectorScores(candidates);
+      }
+
+      // Map rankings back to candidates
+      const results: RankedResult[] = [];
+      for (const ranking of parsed.rankings) {
+        const idx = typeof ranking.index === "number" ? ranking.index : parseInt(String(ranking.index), 10);
+        const score = typeof ranking.score === "number" ? ranking.score : parseInt(String(ranking.score), 10);
+        
+        if (isNaN(idx) || isNaN(score)) continue;
+        
+        const candidate = candidates[idx];
+        if (candidate && score >= 30) {
+          results.push({
+            noteId: candidate.noteId,
+            path: candidate.path,
+            title: candidate.title,
+            score: score / 100, // Normalize to 0-1
+            reasoning: ranking.reason || "Relevant",
+          });
+        }
+      }
+
+      // If no valid rankings, fallback
+      if (results.length === 0) {
+        console.warn("[LMStudioService] No valid rankings extracted");
+        return this.fallbackToVectorScores(candidates);
+      }
+
+      // Sort by score descending
+      results.sort((a, b) => b.score - a.score);
+      console.log(`[LMStudioService] Reranked ${results.length} results`);
+      return results;
+    } catch (error) {
+      console.warn("[LMStudioService] Failed to parse rerank response:", error);
+      return this.fallbackToVectorScores(candidates);
+    }
+  }
+
+  /**
+   * Try to fix incomplete JSON (missing closing brackets)
+   */
+  private tryFixIncompleteJson(jsonStr: string): string | null {
+    try {
+      // Count brackets
+      const openBraces = (jsonStr.match(/\{/g) || []).length;
+      const closeBraces = (jsonStr.match(/\}/g) || []).length;
+      const openBrackets = (jsonStr.match(/\[/g) || []).length;
+      const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+
+      let fixed = jsonStr;
+      
+      // Add missing closing brackets
+      for (let i = 0; i < openBrackets - closeBrackets; i++) {
+        fixed += "]";
+      }
+      for (let i = 0; i < openBraces - closeBraces; i++) {
+        fixed += "}";
+      }
+
+      // Try to parse
+      JSON.parse(fixed);
+      return fixed;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Build a RAG chat prompt with context
+   */
+  buildChatSystemPrompt(
+    contextSummary: string,
+    relevantNotes: Array<{ title: string; path: string; text: string }>
+  ): string {
+    const noteSummaries = relevantNotes
+      .slice(0, 5)
+      .map((n) => `- **${n.title}** (${n.path}): ${n.text.slice(0, 200)}...`)
+      .join("\n");
+
+    return `${CHAT_SYSTEM_PROMPT}
+
+VAULT CONTEXT:
+${contextSummary}
+
+RELEVANT NOTES:
+${noteSummaries}`;
+  }
+
+  /**
+   * Check if service is ready
+   */
+  isReady(): boolean {
+    return this.initialized && !this.disposed;
+  }
+
+  /**
+   * Dispose of the service
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.initialized = false;
+  }
+}

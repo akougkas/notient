@@ -209,21 +209,34 @@ export class NotientSettingTab extends PluginSettingTab {
 
   private renderConnectionStatus(containerEl: HTMLElement): void {
     const health = this.kernel.serviceHealth;
+    const caps = this.kernel.capabilities;
     const isReady = this.kernel.isServicesInitialized;
 
-    const statusRow = containerEl.createDiv({ cls: "notient-settings-status-row" });
+    const statusBox = containerEl.createDiv({ cls: "notient-settings-status-box" });
+
+    // Service status row
+    const statusRow = statusBox.createDiv({ cls: "notient-settings-status-row" });
 
     // Ollama status
     const ollamaStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
     ollamaStatus.createSpan({ cls: `notient-settings-dot status-${health.ollama.status}` });
     ollamaStatus.createSpan({ text: "Ollama" });
+    if (caps.embedding) {
+      ollamaStatus.createSpan({ text: "(embeddings)", cls: "notient-settings-cap" });
+    }
 
     // LM Studio status
     const lmStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
     lmStatus.createSpan({ cls: `notient-settings-dot status-${health.lmstudio.status}` });
     lmStatus.createSpan({ text: "LM Studio" });
+    if (caps.reasoning) {
+      lmStatus.createSpan({ text: "(chat + rerank)", cls: "notient-settings-cap" });
+    }
 
-    // Index stats - only show if services are ready
+    // Capabilities row
+    const capRow = statusBox.createDiv({ cls: "notient-settings-cap-row" });
+    
+    // Index stats
     if (isReady) {
       const indexManager = this.kernel.getService<{ 
         getIndexedCount(): number;
@@ -232,15 +245,22 @@ export class NotientSettingTab extends PluginSettingTab {
       
       if (indexManager) {
         const count = indexManager.getIndexedCount();
-        const indexStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
-        indexStatus.createSpan({ text: `📊 ${count} notes indexed` });
+        const model = indexManager.getActiveModelKey();
+        capRow.createSpan({ text: `📊 ${count} notes indexed` });
+        if (model) {
+          capRow.createSpan({ text: `(${model})`, cls: "notient-settings-model-tag" });
+        }
       }
+
+      // Show capability icons
+      const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
+      if (caps.search) capIcons.createSpan({ text: "🔍", attr: { title: "Search ready" } });
+      if (caps.reasoning) capIcons.createSpan({ text: "🤖", attr: { title: "Chat & rerank ready" } });
+      if (caps.indexing) capIcons.createSpan({ text: "📝", attr: { title: "Indexing available" } });
     } else if (this.kernel.isServicesInitializing) {
-      const initStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
-      initStatus.createSpan({ text: "⏳ Initializing..." });
+      capRow.createSpan({ text: "⏳ Initializing services...", cls: "notient-settings-info-dim" });
     } else {
-      const notReady = statusRow.createDiv({ cls: "notient-settings-status-item" });
-      notReady.createSpan({ text: "⚠️ Run setup wizard" });
+      capRow.createSpan({ text: "⚠️ Run setup wizard to configure", cls: "notient-settings-warning" });
     }
   }
 

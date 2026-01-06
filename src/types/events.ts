@@ -66,6 +66,8 @@ export interface SearchCompleteEvent {
   results: SearchResult[];
   durationMs: number;
   cached: boolean;
+  /** Whether LLM reranking was applied */
+  reranked?: boolean;
 }
 
 export interface VitalsUpdatedEvent {

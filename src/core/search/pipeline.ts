@@ -1,20 +1,20 @@
 /**
  * Semantic Search Pipeline
  * 
- * Provides fast semantic search with caching.
- * Implements the hybrid cache architecture from the PRD.
+ * Provides fast semantic search with LLM reranking and caching.
+ * Architecture: Vector search (fast) → LLM reranking (smart)
  */
 
 import type { Kernel } from "../kernel";
 import type { EventBus } from "../events/eventBus";
 import type { OllamaService } from "../../services/ollama";
 import type { VectorStore } from "../../services/vectorStore";
+import type { LMStudioService } from "../../services/lmstudio";
 import type {
   SearchOptions,
   SearchResult,
   ChunkSearchResult,
   RelatedNote,
-  DEFAULT_SEARCH_OPTIONS,
 } from "../../types/search";
 import { CACHE_CONFIG } from "../constants";
 
@@ -24,8 +24,13 @@ interface CacheEntry {
   queryEmbedding: number[];
 }
 
+/** Extended search options with reranking control */
+export interface ExtendedSearchOptions extends SearchOptions {
+  enableReranking?: boolean;
+}
+
 /**
- * Semantic search pipeline with caching
+ * Semantic search pipeline with LLM reranking and caching
  */
 export class SearchPipeline {
   private queryCache: Map<string, CacheEntry> = new Map();
@@ -40,6 +45,13 @@ export class SearchPipeline {
   ) {}
 
   /**
+   * Get LM Studio service (lazy resolution)
+   */
+  private getLMStudio(): LMStudioService | null {
+    return this.kernel.getService<LMStudioService>("lmstudio");
+  }
+
+  /**
    * Initialize the pipeline
    */
   async initialize(): Promise<void> {
@@ -47,16 +59,20 @@ export class SearchPipeline {
   }
 
   /**
-   * Perform a semantic search
+   * Perform a semantic search with optional LLM reranking
    */
   async search(
     query: string,
-    options: Partial<SearchOptions> = {}
+    options: Partial<ExtendedSearchOptions> = {}
   ): Promise<SearchResult[]> {
     if (this.disposed) return [];
 
+    const enableReranking = options.enableReranking ?? true;
+    const requestedTopK = options.topK ?? 10;
+
     const fullOptions: SearchOptions = {
-      topK: options.topK ?? 10,
+      // Get more candidates for reranking
+      topK: enableReranking ? 50 : requestedTopK,
       minScore: options.minScore ?? 0.3,
       includeContent: options.includeContent ?? true,
       paraType: options.paraType,
@@ -65,7 +81,7 @@ export class SearchPipeline {
     };
 
     const startTime = Date.now();
-    const cacheKey = this.getCacheKey(query, fullOptions);
+    const cacheKey = this.getCacheKey(query, { ...fullOptions, topK: requestedTopK });
 
     this.eventBus.emit("search:started", { query });
 
@@ -82,28 +98,24 @@ export class SearchPipeline {
     }
 
     try {
-      // Get query embedding (with caching)
+      // Phase 1: Vector search (fast, <100ms)
       const queryEmbedding = await this.getQueryEmbedding(query);
-
-      // #region agent log
-      const qNorm = Math.sqrt(queryEmbedding.reduce((s,v)=>s+v*v,0));
-      const qMean = queryEmbedding.reduce((s,v)=>s+v,0)/queryEmbedding.length;
-      const qVariance = queryEmbedding.reduce((s,v)=>s+(v-qMean)**2,0)/queryEmbedding.length;
-      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pipeline.ts:search',message:'QUERY EMBEDDING ANALYSIS',data:{query,embeddingLen:queryEmbedding.length,first10:queryEmbedding.slice(0,10),norm:qNorm,mean:qMean,variance:qVariance},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B,F,I'})}).catch(()=>{});
-      // #endregion
-
-      // Vector search with hybrid lexical matching
       const chunkResults = await this.vectorStore.search(
         queryEmbedding,
         { ...fullOptions, queryText: query }
       );
 
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pipeline.ts:search',message:'Raw chunk results',data:{totalChunks:chunkResults.length,top5:chunkResults.slice(0,5).map(c=>({path:c.path,title:c.title,score:c.score,textLen:c.text?.length,textPreview:c.text?.slice(0,100)}))},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,E'})}).catch(()=>{});
-      // #endregion
-
       // Group by note
-      const results = this.groupByNote(chunkResults);
+      let results = this.groupByNote(chunkResults);
+
+      // Phase 2: LLM reranking (smart, adds ~500ms)
+      const lmStudio = this.getLMStudio();
+      if (enableReranking && lmStudio?.isReady() && results.length > 0) {
+        results = await this.rerankWithLLM(query, results, lmStudio);
+      }
+
+      // Limit to requested topK
+      results = results.slice(0, requestedTopK);
 
       // Cache results
       this.updateCache(cacheKey, results, queryEmbedding);
@@ -113,12 +125,54 @@ export class SearchPipeline {
         results,
         durationMs: Date.now() - startTime,
         cached: false,
+        reranked: enableReranking && lmStudio?.isReady(),
       });
 
       return results;
     } catch (error) {
       console.error("[SearchPipeline] Search failed:", error);
       return [];
+    }
+  }
+
+  /**
+   * Rerank results using LLM
+   */
+  private async rerankWithLLM(
+    query: string,
+    results: SearchResult[],
+    lmStudio: LMStudioService
+  ): Promise<SearchResult[]> {
+    try {
+      // Build candidates for reranking
+      const candidates = results.map((r) => ({
+        noteId: r.noteId,
+        path: r.path,
+        title: r.title,
+        text: r.chunks[0]?.text || r.title,
+        originalScore: r.bestScore,
+      }));
+
+      // Get reranked results
+      const reranked = await lmStudio.rerank(query, candidates);
+
+      // Map back to SearchResult format
+      const rerankedResults: SearchResult[] = [];
+      for (const ranked of reranked) {
+        const original = results.find((r) => r.noteId === ranked.noteId);
+        if (original) {
+          rerankedResults.push({
+            ...original,
+            bestScore: ranked.score,
+            reasoning: ranked.reasoning,
+          });
+        }
+      }
+
+      return rerankedResults;
+    } catch (error) {
+      console.warn("[SearchPipeline] LLM reranking failed, using vector scores:", error);
+      return results;
     }
   }
 

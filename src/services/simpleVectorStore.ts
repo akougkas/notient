@@ -196,8 +196,6 @@ export class SimpleVectorStore implements VectorStore {
   ): Promise<ChunkSearchResult[]> {
     if (this.disposed || this.docs.size === 0) return [];
 
-    this.resetDebugCounters(); // Reset debug counters for this search
-
     const query = new Float32Array(queryEmbedding);
     const queryNorm = this.magnitude(query);
     if (queryNorm === 0) return [];
@@ -257,38 +255,6 @@ export class SimpleVectorStore implements VectorStore {
 
     // Sort by score descending
     scored.sort((a, b) => b.score - a.score);
-
-    // #region agent log
-    const debugTop10 = scored.slice(0,10).map(s => ({path:s.doc.path,title:s.doc.title,score:s.score,textLen:s.doc.text.length,textPreview:s.doc.text.slice(0,80),embNorm:this.magnitude(s.doc.embedding),penalized:s.doc.text.length<MIN_TEXT_LENGTH,lexicalMatch:s.lexicalMatch}));
-    fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:search',message:'Top 10 scored docs (hybrid search)',data:{queryNorm,queryTerms,totalScored:scored.length,minScore:options.minScore,minTextLen:MIN_TEXT_LENGTH,lexicalBoost:LEXICAL_BOOST,titleBoost:TITLE_BOOST,top10:debugTop10},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'K,L,O'})}).catch(()=>{});
-    // #endregion
-
-    // #region agent log - Deep embedding analysis for DTIO vs query
-    const dtioDoc = scored.find(s => s.doc.path.toLowerCase().includes('dtio'));
-    if (dtioDoc) {
-      // Calculate detailed metrics
-      const dtioEmb = dtioDoc.doc.embedding;
-      let dotProduct = 0;
-      for (let i = 0; i < query.length; i++) { dotProduct += query[i] * dtioEmb[i]; }
-      
-      // Sample embedding values to check if they look reasonable
-      const queryFirst10 = Array.from(query.slice(0, 10));
-      const dtioFirst10 = Array.from(dtioEmb.slice(0, 10));
-      
-      // Check embedding diversity - are values spread or clustered?
-      let queryVariance = 0, dtioVariance = 0;
-      const queryMean = Array.from(query).reduce((a,b) => a+b, 0) / query.length;
-      const dtioMean = Array.from(dtioEmb).reduce((a,b) => a+b, 0) / dtioEmb.length;
-      for (let i = 0; i < query.length; i++) {
-        queryVariance += (query[i] - queryMean) ** 2;
-        dtioVariance += (dtioEmb[i] - dtioMean) ** 2;
-      }
-      queryVariance /= query.length;
-      dtioVariance /= dtioEmb.length;
-      
-      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:search',message:'DEEP EMBEDDING ANALYSIS',data:{query:{first10:queryFirst10,mean:queryMean,variance:queryVariance,norm:queryNorm},dtio:{path:dtioDoc.doc.path,text:dtioDoc.doc.text,score:dtioDoc.score,first10:dtioFirst10,mean:dtioMean,variance:dtioVariance,norm:this.magnitude(dtioEmb)},dotProduct,calculatedScore:dotProduct/(queryNorm*this.magnitude(dtioEmb))},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'F,H,I'})}).catch(()=>{});
-    }
-    // #endregion
 
     // Apply filters and build results
     const results: ChunkSearchResult[] = [];
@@ -426,9 +392,6 @@ export class SimpleVectorStore implements VectorStore {
     );
   }
 
-  // Debug counter for cosine similarity logging
-  private _debugCosineCount = 0;
-
   private cosineSimilarity(
     a: Float32Array,
     aNorm: number,
@@ -445,21 +408,7 @@ export class SimpleVectorStore implements VectorStore {
     const bNorm = Math.sqrt(bNormSq);
     if (bNorm === 0) return 0;
 
-    const score = dot / (aNorm * bNorm);
-
-    // #region agent log - Log first 3 calculations per search
-    if (this._debugCosineCount < 3) {
-      this._debugCosineCount++;
-      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:cosineSimilarity',message:'Cosine calc details',data:{dot,aNorm,bNorm,score,aLen:a.length,bLen:b.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    }
-    // #endregion
-
-    return score;
-  }
-
-  // Reset debug counter before search
-  private resetDebugCounters(): void {
-    this._debugCosineCount = 0;
+    return dot / (aNorm * bNorm);
   }
 
   private magnitude(vec: Float32Array): number {

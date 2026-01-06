@@ -65,6 +65,8 @@ export interface SearchResult {
   chunks: ChunkSearchResult[];
   /** Last modified time */
   mtimeMs: number;
+  /** LLM reasoning for why this result is relevant (from reranking) */
+  reasoning?: string;
 }
 
 /** Related notes result */

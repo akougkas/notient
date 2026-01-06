@@ -15,10 +15,12 @@ import { Plugin } from "obsidian";
 import { Kernel, KernelContext } from "./core/kernel";
 import { HealthMonitor } from "./services/healthMonitor";
 import { OllamaService } from "./services/ollama";
+import { LMStudioService } from "./services/lmstudio";
 import { SimpleVectorStore } from "./services/simpleVectorStore";
 import { IndexManager } from "./services/indexManager";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { SearchPipeline } from "./core/search/pipeline";
+import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
@@ -36,10 +38,12 @@ export default class NotientPlugin extends Plugin {
   // Services - initialized lazily
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
+  private lmStudioService: LMStudioService | null = null;
   private vectorStore: SimpleVectorStore | null = null;
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
+  private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
 
   private servicesInitialized = false;
@@ -110,6 +114,7 @@ export default class NotientPlugin extends Plugin {
     try {
       // Dispose services in reverse order
       this.vaultVitals?.dispose();
+      this.contextBuilder = null;
       this.searchPipeline?.dispose();
       this.indexer?.dispose();
       if (this.indexManager) {
@@ -118,6 +123,7 @@ export default class NotientPlugin extends Plugin {
       if (this.vectorStore) {
         await this.vectorStore.dispose();
       }
+      this.lmStudioService?.dispose();
       this.ollamaService?.dispose();
       this.healthMonitor?.dispose();
 
@@ -178,10 +184,21 @@ export default class NotientPlugin extends Plugin {
 
       // Initialize AI services
       try {
-        // Ollama service
+        // Ollama service (embeddings)
         this.ollamaService = new OllamaService(this.kernel);
         await this.ollamaService.initialize();
         this.kernel.registerService("ollama", this.ollamaService);
+
+        // LM Studio service (reasoning/chat)
+        this.lmStudioService = new LMStudioService(this.kernel);
+        try {
+          await this.lmStudioService.initialize();
+          this.kernel.registerService("lmstudio", this.lmStudioService);
+          console.log("[Notient] LM Studio service initialized");
+        } catch (lmError) {
+          console.warn("[Notient] LM Studio initialization failed (chat/reranking disabled):", lmError);
+          // Continue without LM Studio - search still works with vector similarity
+        }
 
         // Vector store (simple brute-force implementation)
         this.vectorStore = new SimpleVectorStore(this.kernel);
@@ -213,6 +230,10 @@ export default class NotientPlugin extends Plugin {
         await this.searchPipeline.initialize();
         this.kernel.registerService("search", this.searchPipeline);
 
+        // Vault context builder (for RAG)
+        this.contextBuilder = new VaultContextBuilder(this.kernel);
+        this.kernel.registerService("context", this.contextBuilder);
+
         // Vault vitals (simplified)
         this.vaultVitals = new SimpleVaultVitals(
           this.kernel,
@@ -226,17 +247,33 @@ export default class NotientPlugin extends Plugin {
         this.kernel.setServicesInitialized();
         console.log("[Notient] Services initialized successfully");
 
-        // Handle index options
-        const showOptions = this._pendingFreshSetup;
-        this._pendingFreshSetup = false;
-        
-        if (showOptions && this.indexManager) {
-          // Show index options modal for user to choose
-          setTimeout(() => this.showIndexOptionsAndStart(), 500);
-        } else {
-          // Normal sync for returning users
-          setTimeout(() => this.startBackgroundIndexing("sync"), 2000);
+        // Handle index action from wizard or default behavior
+        const indexAction = this._pendingIndexAction;
+        this._pendingIndexAction = "none";
+
+        console.log("[Notient] Index action decision:", { 
+          action: indexAction, 
+          setupComplete: this.settings.setupComplete,
+          hasIndex: await this.indexManager.getIndexedCount() > 0
+        });
+
+        if (indexAction !== "none") {
+          // Execute the action explicitly requested by wizard
+          setTimeout(() => this.executeIndexAction(indexAction), 500);
+        } else if (this.settings.setupComplete) {
+          // For returning users with setup complete: check if index exists
+          const indexCount = await this.indexManager.getIndexedCount();
+          if (indexCount === 0) {
+            // No index at all - need to build
+            console.log("[Notient] No index found, starting initial indexing");
+            setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
+          } else {
+            // Has index - don't auto-sync, let user trigger it
+            console.log("[Notient] Existing index found with", indexCount, "notes. Ready to use.");
+            this.kernel.obsidian.notice(`Notient ready! ${indexCount} notes indexed.`);
+          }
         }
+        // If setup not complete and no wizard action, don't do anything
       } catch (error) {
         console.error("[Notient] Failed to initialize AI services:", error);
         this.kernel.setServicesInitializing(false);
@@ -456,10 +493,10 @@ export default class NotientPlugin extends Plugin {
       this.settingTab.updateSettings(this.settings);
       this.kernel.updateSettings(this.settings);
 
-      console.log(`[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}`);
+      // Store the index action from wizard
+      this._pendingIndexAction = result.indexAction;
 
-      // Track if this is truly fresh setup for force reindex
-      this._pendingFreshSetup = !wasSetupComplete;
+      console.log(`[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}, indexAction=${result.indexAction}`);
 
       if (!wasSetupComplete) {
         this.kernel.obsidian.notice("Notient configured! Initializing...");
@@ -473,13 +510,14 @@ export default class NotientPlugin extends Plugin {
     }
   }
 
-  // Flag to track if we just completed fresh setup
-  private _pendingFreshSetup = false;
+  // Track the index action requested by the wizard
+  private _pendingIndexAction: "none" | "use_existing" | "sync" | "rebuild" = "none";
 
   private async reinitializeServices(): Promise<void> {
     try {
       // Dispose old services
       this.searchPipeline?.dispose();
+      this.contextBuilder = null;
       this.indexer?.dispose();
       if (this.indexManager) {
         await this.indexManager.dispose();
@@ -487,12 +525,15 @@ export default class NotientPlugin extends Plugin {
       if (this.vectorStore) {
         await this.vectorStore.dispose();
       }
+      this.lmStudioService?.dispose();
       this.ollamaService?.dispose();
 
       this.searchPipeline = null;
+      this.contextBuilder = null;
       this.indexer = null;
       this.indexManager = null;
       this.vectorStore = null;
+      this.lmStudioService = null;
       this.ollamaService = null;
       this.servicesInitialized = false;
 
@@ -511,7 +552,30 @@ export default class NotientPlugin extends Plugin {
   }
 
   /**
-   * Show index options modal and start appropriate indexing action
+   * Execute index action from wizard
+   */
+  private async executeIndexAction(action: "use_existing" | "sync" | "rebuild"): Promise<void> {
+    if (!this.indexManager) return;
+
+    console.log("[Notient] Executing index action:", action);
+
+    switch (action) {
+      case "use_existing":
+        this.kernel.obsidian.notice("Using existing index. Ready to search!");
+        break;
+      case "sync":
+        this.kernel.obsidian.notice("Syncing index with vault changes...");
+        await this.startBackgroundIndexing("sync");
+        break;
+      case "rebuild":
+        this.kernel.obsidian.notice("Building index from scratch...");
+        await this.startBackgroundIndexing("rebuild");
+        break;
+    }
+  }
+
+  /**
+   * Show index options modal (for manual trigger from settings/commands)
    */
   private async showIndexOptionsAndStart(): Promise<void> {
     if (!this.indexManager) return;

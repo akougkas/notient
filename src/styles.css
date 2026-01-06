@@ -4,17 +4,83 @@
  * Uses Obsidian CSS variables for theme compatibility.
  */
 
-/* ============ Sidebar ============ */
+/* ============ Sidebar - Dual Panel Layout ============ */
 
 .notient-sidebar {
-  padding: var(--size-4-2);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
 }
 
 .notient-status {
-  margin-bottom: var(--size-4-4);
   padding: var(--size-4-2);
   background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+/* Panel header */
+.notient-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--size-4-2);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.notient-clear-chat {
+  font-size: var(--font-smallest);
+  padding: 2px 6px;
+  background: var(--background-modifier-border);
+  border: none;
   border-radius: var(--radius-s);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.notient-clear-chat:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* Search panel */
+.notient-search-panel {
+  flex: 0 0 40%;
+  min-height: 200px;
+  max-height: 50%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Panel divider */
+.notient-panel-divider {
+  height: 4px;
+  background: var(--background-modifier-border);
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+
+.notient-panel-divider:hover {
+  background: var(--interactive-accent);
+}
+
+/* Chat panel */
+.notient-chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 200px;
 }
 
 .notient-badges {
@@ -55,12 +121,9 @@
 }
 
 /* Search */
-.notient-search-section {
-  margin-bottom: var(--size-4-4);
-}
-
 .notient-search-wrapper {
-  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-2);
+  flex-shrink: 0;
 }
 
 .notient-search-input {
@@ -79,9 +142,10 @@
 }
 
 /* Results */
-.notient-results {
-  max-height: 40vh;
+.notient-search-results {
+  flex: 1;
   overflow-y: auto;
+  padding: var(--size-4-2);
 }
 
 .notient-result-item {
@@ -108,10 +172,22 @@
   font-size: var(--font-ui-small);
 }
 
-.notient-result-title {
+.notient-result-title-wrapper {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-result-title {
   font-weight: var(--font-semibold);
   color: var(--text-normal);
+  cursor: pointer;
+}
+
+.notient-result-title:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
 }
 
 .notient-result-score {
@@ -120,6 +196,25 @@
   background: var(--background-modifier-border);
   padding: var(--size-2-1) var(--size-2-2);
   border-radius: var(--radius-s);
+}
+
+.notient-result-actions {
+  display: flex;
+  gap: var(--size-2-1);
+  align-items: center;
+}
+
+.notient-action-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.notient-action-icon:hover {
+  opacity: 1;
 }
 
 .notient-result-path {
@@ -132,6 +227,344 @@
   font-size: var(--font-small);
   color: var(--text-faint);
   line-height: 1.4;
+  position: relative;
+}
+
+.notient-result-reasoning {
+  font-size: var(--font-smallest);
+  color: var(--text-accent);
+  margin-top: var(--size-2-2);
+  padding: var(--size-2-1) var(--size-2-2);
+  background: rgba(var(--interactive-accent-rgb), 0.1);
+  border-radius: var(--radius-s);
+  position: relative;
+}
+
+/* ============ Selectable Text & Copy Buttons ============ */
+
+.notient-selectable {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
+}
+
+.notient-copy-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  opacity: 0.5;
+  border-radius: var(--radius-s);
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.notient-copy-btn:hover {
+  opacity: 1;
+  background: var(--background-modifier-hover);
+}
+
+/* ============ Open Note Section ============ */
+
+.notient-open-note-section {
+  padding: var(--size-4-2);
+  background: var(--background-primary-alt);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.notient-no-note {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  padding: var(--size-4-2);
+}
+
+.notient-open-note-header {
+  margin-bottom: var(--size-4-2);
+}
+
+.notient-open-note-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-open-note-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--font-ui-medium);
+  color: var(--text-normal);
+  flex: 1;
+}
+
+.notient-open-note-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-top: var(--size-2-2);
+}
+
+.notient-para-badge {
+  font-size: var(--font-smallest);
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
+  text-transform: uppercase;
+  font-weight: var(--font-medium);
+}
+
+.notient-para-badge.para-inbox {
+  background: var(--color-blue);
+  color: var(--text-on-accent);
+}
+
+.notient-para-badge.para-projects {
+  background: var(--color-green);
+  color: var(--text-on-accent);
+}
+
+.notient-para-badge.para-areas {
+  background: var(--color-yellow);
+  color: var(--text-normal);
+}
+
+.notient-para-badge.para-resources {
+  background: var(--color-purple);
+  color: var(--text-on-accent);
+}
+
+.notient-para-badge.para-archive {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.notient-staleness {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-staleness.status-unindexed {
+  color: var(--text-warning);
+}
+
+.notient-staleness.status-stale {
+  color: var(--color-yellow);
+}
+
+.notient-open-note-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-1);
+  margin-top: var(--size-2-2);
+}
+
+.notient-tag {
+  font-size: var(--font-smallest);
+  padding: 1px 4px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+}
+
+/* Related notes sections */
+.notient-related-section {
+  margin-top: var(--size-4-2);
+}
+
+.notient-related-header {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-1);
+}
+
+.notient-related-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-1);
+}
+
+.notient-related-item {
+  font-size: var(--font-smallest);
+  padding: 2px 6px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.notient-related-item:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+}
+
+/* Actions section */
+.notient-actions-section {
+  margin-top: var(--size-4-2);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.notient-actions-header {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+}
+
+.notient-actions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+}
+
+.notient-action-btn {
+  font-size: var(--font-smallest);
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.notient-action-btn:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* ============ Chat Panel ============ */
+
+.notient-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--size-4-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.notient-chat-message {
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  max-width: 90%;
+}
+
+.notient-chat-message.user {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  align-self: flex-end;
+  margin-left: 10%;
+}
+
+.notient-chat-message.assistant {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  align-self: flex-start;
+  margin-right: 10%;
+}
+
+.notient-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--size-2-1);
+}
+
+.notient-message-role {
+  font-size: var(--font-smallest);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.notient-message-text {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.notient-chat-message.user .notient-copy-btn {
+  color: var(--text-on-accent);
+}
+
+.notient-chat-message.notient-chat-streaming {
+  border: 1px solid var(--interactive-accent);
+}
+
+.notient-chat-message.notient-chat-streaming::after {
+  content: "▌";
+  animation: notient-blink 1s step-end infinite;
+}
+
+@keyframes notient-blink {
+  50% { opacity: 0; }
+}
+
+.notient-chat-citations {
+  margin-top: var(--size-4-2);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-citation {
+  display: inline-block;
+  margin-left: var(--size-2-2);
+  padding: var(--size-2-1) var(--size-2-2);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  color: var(--text-accent);
+}
+
+.notient-citation:hover {
+  background: var(--background-modifier-hover);
+}
+
+.notient-chat-input-area {
+  display: flex;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  flex-shrink: 0;
+}
+
+.notient-chat-input {
+  flex: 1;
+  min-height: 60px;
+  max-height: 120px;
+  resize: none;
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+}
+
+.notient-chat-input:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.notient-chat-send {
+  padding: var(--size-4-2) var(--size-4-4);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-m);
+  cursor: pointer;
+  font-weight: var(--font-medium);
+  align-self: flex-end;
+}
+
+.notient-chat-send:hover {
+  background: var(--interactive-accent-hover);
 }
 
 /* Related Notes */
@@ -949,32 +1382,211 @@
   color: var(--text-muted);
 }
 
+.notient-index-info {
+  padding: var(--size-4-2);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  margin-bottom: var(--size-4-2);
+}
+
+.notient-index-info-model {
+  font-weight: var(--font-medium);
+  color: var(--text-normal);
+}
+
+.notient-index-info-dim {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  margin-top: var(--size-2-1);
+}
+
+.notient-index-actions {
+  margin-top: var(--size-4-2);
+}
+
+.notient-index-actions > label {
+  display: block;
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+}
+
+.notient-index-action-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
+  padding: var(--size-2-2) var(--size-4-2);
+  margin-bottom: var(--size-2-1);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.notient-index-action-option:hover {
+  background: var(--background-modifier-hover);
+}
+
+.notient-index-action-option input[type="radio"] {
+  margin-top: 2px;
+}
+
+.notient-index-action-option label {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.notient-action-label {
+  font-weight: var(--font-medium);
+  color: var(--text-normal);
+}
+
+.notient-action-desc {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.notient-all-indexes {
+  margin-top: var(--size-4-3);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Index List - Disk-based scanning UI */
+.notient-model-info {
+  padding: var(--size-2-2) var(--size-4-2);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  margin-bottom: var(--size-4-2);
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.notient-model-info-text {
+  font-size: var(--font-small);
+  color: var(--text-normal);
+}
+
+.notient-no-index,
+.notient-new-index {
+  padding: var(--size-4-2);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  text-align: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--background-modifier-border);
+}
+
 .notient-index-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--size-2-2);
-  margin-bottom: var(--size-4-2);
+  margin: var(--size-4-2) 0;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .notient-index-item {
   display: flex;
-  align-items: center;
-  gap: var(--size-2-2);
-  padding: var(--size-2-1) var(--size-2-3);
+  flex-direction: column;
+  gap: var(--size-2-1);
+  padding: var(--size-2-2) var(--size-4-2);
   background: var(--background-primary);
   border-radius: var(--radius-s);
   font-size: var(--font-smallest);
+  border: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.notient-index-item.compatible {
+  cursor: pointer;
+  border-color: var(--background-modifier-border);
+}
+
+.notient-index-item.compatible:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.notient-index-item.compatible.selected {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.notient-index-item.incompatible {
+  opacity: 0.6;
+  border-color: var(--color-red);
+  border-style: dashed;
+}
+
+.notient-index-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.notient-compat-icon {
+  font-size: 14px;
+  min-width: 18px;
+}
+
+.notient-index-item.compatible .notient-compat-icon {
+  color: var(--color-green);
+}
+
+.notient-index-item.incompatible .notient-compat-icon {
+  color: var(--color-red);
 }
 
 .notient-index-model {
   color: var(--text-normal);
   font-family: var(--font-monospace);
+  font-weight: var(--font-medium);
+}
+
+.notient-index-dim {
+  background: var(--background-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.notient-index-stats {
+  display: flex;
+  gap: var(--size-4-2);
+  color: var(--text-muted);
+}
+
+.notient-index-stats .state-complete {
+  color: var(--color-green);
+}
+
+.notient-index-stats .state-incomplete,
+.notient-index-stats .state-stale {
+  color: var(--color-yellow);
+}
+
+.notient-index-stats .state-crashed {
+  color: var(--color-red);
+}
+
+.notient-compat-reason {
+  font-size: 10px;
+  color: var(--color-red);
+  padding: var(--size-2-1) 0;
+}
+
+.notient-index-count {
+  color: var(--text-muted);
 }
 
 .notient-index-active {
   color: var(--color-green);
   font-size: 9px;
   text-transform: uppercase;
+  padding: 1px 4px;
+  background: rgba(var(--color-green-rgb), 0.1);
+  border-radius: var(--radius-s);
 }
 
 .notient-index-hint {
@@ -1332,14 +1944,18 @@
   font-weight: var(--font-semibold);
 }
 
-/* Status Row */
-.notient-settings-status-row {
-  display: flex;
-  gap: var(--size-4-4);
+/* Status Box */
+.notient-settings-status-box {
+  margin-bottom: var(--size-4-4);
   padding: var(--size-4-2) var(--size-4-3);
   background: var(--background-secondary);
   border-radius: var(--radius-m);
-  margin-bottom: var(--size-4-4);
+}
+
+.notient-settings-status-row {
+  display: flex;
+  gap: var(--size-4-4);
+  flex-wrap: wrap;
   font-size: var(--font-ui-small);
 }
 
@@ -1348,6 +1964,46 @@
   align-items: center;
   gap: var(--size-2-2);
   color: var(--text-muted);
+}
+
+.notient-settings-cap {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+}
+
+.notient-settings-cap-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-top: var(--size-2-2);
+  padding-top: var(--size-2-2);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-small);
+}
+
+.notient-settings-model-tag {
+  font-family: var(--font-monospace);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  padding: 1px 4px;
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+}
+
+.notient-settings-cap-icons {
+  display: flex;
+  gap: var(--size-2-1);
+  margin-left: auto;
+}
+
+.notient-settings-cap-icons span {
+  font-size: 14px;
+  opacity: 0.8;
+  cursor: help;
+}
+
+.notient-settings-warning {
+  color: var(--text-warning);
 }
 
 .notient-settings-dot {

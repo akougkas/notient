@@ -1,486 +1,513 @@
 # MASTER_PLAN.md — Notient (Local-first Obsidian AI Vault Manager)
 
+> **Version 2.0 - Architectural Reset**
+> This version reflects strategic decisions made in the January 2026 architecture review.
+
 ## 0) Purpose and scope of this master plan
+
 This document is the canonical plan for building **Notient** across multiple development phases and work sessions.
 
-- **Inputs**:
-  - PRD: [/home/akougkas/.cursor/worktrees/notient__WSL__ubuntu-24.04_/dva/PRD.md](/home/akougkas/.cursor/worktrees/notient__WSL__ubuntu-24.04_/dva/PRD.md)
-  - Bootstrap prompt (to be updated to match this master plan): [/home/akougkas/.cursor/worktrees/notient__WSL__ubuntu-24.04_/dva/planning/prompts/bootstrap.md](/home/akougkas/.cursor/worktrees/notient__WSL__ubuntu-24.04_/dva/planning/prompts/bootstrap.md)
-- **Code repository location** (execution target): `/home/akougkas/projects/notient` (aka `~/projects/notient`).
+- **PRD**: `planning/PRD.md` (v2.0)
+- **Code repository**: `/home/akougkas/projects/notient`
 
 ## 1) Product definition
+
 ### 1.1 Vision
-Notient is a free, open-source Obsidian community plugin that provides AI-powered vault management using **local LLMs only**, combining **fast semantic search**, **incremental note processing**, **vault health monitoring**, and an **agentic UI** that can perform vault operations **with user confirmation**.
+Notient is a free, open-source Obsidian community plugin that provides AI-powered vault management using **local LLMs only**, combining:
+- **Chat-first semantic search** with LLM reranking
+- **Dynamic vault context** awareness per query
+- **Agentic operations** with trust levels and universal undo
+- **Human-in-steering-wheel** philosophy
 
 ### 1.2 Non-negotiables (constraints)
 - **Local-only**: No cloud model APIs. No user data leaves the machine.
 - **Bun-only**: Use Bun for install/build/test. No npm/yarn/pnpm workflows.
 - **Language**: TypeScript strict.
-- **LLM reasoning**: LM Studio (OpenAI-compatible API).
+- **LLM reasoning**: LM Studio (OpenAI-compatible API) - MUST BE USED (not just configured)
 - **Embeddings**: Ollama (local or remote on LAN).
 - **Vector Store**: Custom brute-force cosine similarity (pure JS, zero dependencies).
-- **Target runtime**: Obsidian desktop (Electron). Set `manifest.json.isDesktopOnly = true`.
+- **Target runtime**: Obsidian desktop (Electron). `manifest.json.isDesktopOnly = true`.
+- **No debug cruft**: Console-only logging, no external telemetry.
 
 ### 1.3 Non-goals
 - Mobile support (desktop-first).
 - Cloud API support (OpenAI/Claude/etc).
 - Real-time collaboration.
 - Vault sync.
+- Over-engineered undo beyond Obsidian's capabilities.
 
 ### 1.4 Success criteria (product)
-- Search feels instant in steady state.
-- Vault vitals create a daily/weekly “why” to open the dashboard.
-- Agentic operations are safe: no unconfirmed writes.
+- Search feels intelligent (LLM-reranked, not just similarity scores).
+- Chat provides useful answers with citations.
+- Agent actions respect trust levels.
+- User always feels in control.
 
 ## 2) Top-level architecture
+
 ### 2.1 Runtime model (Obsidian desktop)
-- Code runs in Obsidian’s plugin environment (Electron renderer with Node APIs available).
-- File system access and vault operations go through Obsidian APIs; absolute vault path is obtained via desktop file system adapter.
+- Code runs in Obsidian's plugin environment (Electron renderer with Node APIs available).
+- File system access and vault operations go through Obsidian APIs.
 
-### 2.2 System decomposition
-Notient is structured around:
-- **UI layer**: Settings tab + Sidebar view + Dashboard view.
-- **Core orchestration**: Kernel/ServiceManager, event bus, background queue.
-- **Domain pipelines**: indexing, semantic search, vault vitals.
-- **Integrations**: LM Studio, Ollama.
+### 2.2 System decomposition (REVISED)
 
-### 2.3 Key cross-cutting requirements
-- **Degraded mode**: plugin always loads; features disable gracefully when dependencies fail.
-- **Non-blocking UI**: indexing and heavy work must not freeze the renderer.
-- **Crash-safe**: queue and index state survive restarts.
-- **Multi-window safety**: protect writes with a lock.
-- **Upgradeable**: settings schema versioning; data migrations; model switching.
+```
+Notient Architecture v2.0
+├── UI Layer
+│   ├── Dual-Panel Sidebar (search + chat)
+│   ├── Command-Center Dashboard
+│   └── Settings Tab
+│
+├── Core Services
+│   ├── Kernel (service orchestration)
+│   ├── EventBus (typed pub/sub)
+│   └── VaultContextBuilder (dynamic, per-query)
+│
+├── AI Services
+│   ├── OllamaService (embeddings only)
+│   ├── LMStudioService (reasoning, reranking, chat) ← NEW, MUST IMPLEMENT
+│   └── SearchPipeline (vector + LLM rerank)
+│
+├── Storage Services
+│   ├── HybridVectorStore (note + section embeddings) ← REVISED
+│   ├── IndexManager (state tracking)
+│   └── ConversationStore (chat history) ← NEW
+│
+└── Agent Services ← PHASE 2/3
+    ├── ClassificationAgent
+    ├── WorkflowRunner
+    └── ActionHistory (undo support)
+```
+
+### 2.3 Key architectural decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Embedding granularity | Hybrid (note + sections) | Flexible retrieval, broad + precise |
+| Search ranking | LLM reranking | Smarter than pure cosine similarity |
+| Vault context | Dynamic per-query | More relevant than static scan |
+| Primary UX | Dual panels (search + chat) | Both always visible, no mode switching |
+| Agent autonomy | Trust levels | Balance automation vs control |
+| Observability | Console-only | No debug telemetry, clean code |
 
 ### 2.4 Architecture diagram
+
 ```mermaid
 flowchart TD
-  UI[UI_Settings_Sidebar_Dashboard] --> State[UIStateStore]
-  State --> Events[EventBus]
+  subgraph UI
+    Sidebar[Dual-Panel Sidebar]
+    Dashboard[Command Dashboard]
+    Settings[Settings Tab]
+  end
 
-  Events --> Kernel[Kernel_ServiceManager]
-  Kernel --> Paths[StoragePaths]
-  Kernel --> Health[RuntimeHealthMonitor]
-  Kernel --> Lock[VaultLock]
-  Kernel --> Obs[ObsidianFacade]
+  subgraph Core
+    Kernel[Kernel]
+    Events[EventBus]
+    Context[VaultContextBuilder]
+  end
 
-  Kernel --> Ollama[OllamaEmbeddingsService]
-  Kernel --> LM[LMStudioReasoningService]
-  Kernel --> IM[IndexManager]
-  IM --> VS[SimpleVectorStore]
+  subgraph AI
+    Ollama[OllamaService<br/>embeddings]
+    LMStudio[LMStudioService<br/>reasoning/chat]
+    Search[SearchPipeline<br/>vector + rerank]
+  end
 
-  Kernel --> Indexer[SimpleIndexer]
-  Kernel --> Search[SearchPipeline]
-  Kernel --> Vitals[SimpleVaultVitals]
+  subgraph Storage
+    Vector[HybridVectorStore<br/>note + sections]
+    Index[IndexManager]
+    Conv[ConversationStore]
+  end
+
+  Sidebar --> Events
+  Dashboard --> Events
+  Events --> Kernel
+
+  Kernel --> Ollama
+  Kernel --> LMStudio
+  Kernel --> Context
+
+  Search --> Ollama
+  Search --> LMStudio
+  Search --> Vector
+  Search --> Context
+
+  LMStudio --> Conv
 ```
 
 ## 3) Repository layout (code)
-Repo root: `/home/akougkas/projects/notient`
 
-### 3.1 Source layout
-Maintain PRD layout and add a small set of “foundation” modules:
+### 3.1 Source layout (REVISED)
 
-- `src/main.ts` — plugin entry
-- `src/settings.ts` — settings tab UI + settings store
-- `src/views/sidebar.ts` — sidebar view
-- `src/views/dashboard.ts` — dashboard view
-
-- `src/core/kernel.ts` — service manager + lifecycle
-- `src/core/events/eventBus.ts` — typed event bus
-- `src/core/indexer/` — indexing pipeline (simpleIndexer, simpleChunker)
-- `src/core/search/` — semantic search
-- `src/core/vitals/` — vault vitals
-- `src/core/para/` — PARA detection and note typing
-
-- `src/services/storagePaths.ts` — compute plugin data directories
-- `src/services/healthMonitor.ts` — dependency probing + status events
-- `src/services/ollama.ts` — embeddings client wrapper
-- `src/services/lmstudio.ts` — LM Studio client wrapper
-- `src/services/vectorStore.ts` — interface + domain model
-- `src/services/simpleVectorStore.ts` — brute-force cosine similarity implementation
-- `src/services/indexManager.ts` — index + state coordination
-- `src/services/vaultLock.ts` — multi-window lock
-
-- `src/adapters/obsidianFacade.ts` — wrappers for App/Vault/Workspace
-- `src/types/` — shared types (settings, events, models)
+```
+src/
+├── main.ts                     # Plugin entry
+├── settings.ts                 # Settings tab + store
+│
+├── views/
+│   ├── sidebar.ts              # Dual-panel (search + chat)
+│   ├── searchPanel.ts          # Search results component
+│   ├── chatPanel.ts            # Chat interface component ← NEW
+│   └── dashboard.ts            # Command center
+│
+├── core/
+│   ├── kernel.ts               # Service manager
+│   ├── events/eventBus.ts      # Typed event bus
+│   ├── context/                # Vault context ← NEW
+│   │   └── vaultContextBuilder.ts
+│   ├── indexer/
+│   │   ├── hybridIndexer.ts    # Note + section indexing ← REVISED
+│   │   └── simpleChunker.ts    # Section extraction
+│   ├── search/
+│   │   ├── pipeline.ts         # Vector search + LLM rerank ← REVISED
+│   │   └── reranker.ts         # LM Studio reranking ← NEW
+│   ├── chat/                   # Chat system ← NEW
+│   │   ├── chatService.ts
+│   │   └── promptBuilder.ts
+│   ├── vitals/
+│   └── para/
+│
+├── services/
+│   ├── ollama.ts               # Embeddings
+│   ├── lmstudio.ts             # Reasoning/chat ← MUST IMPLEMENT
+│   ├── hybridVectorStore.ts    # Note + section storage ← REVISED
+│   ├── indexManager.ts
+│   ├── conversationStore.ts    # Chat history ← NEW
+│   ├── healthMonitor.ts
+│   ├── storagePaths.ts
+│   └── vaultLock.ts
+│
+├── agents/                     # Phase 2/3 ← NEW
+│   ├── classifier.ts
+│   ├── workflowRunner.ts
+│   └── actionHistory.ts
+│
+├── adapters/
+│   └── obsidianFacade.ts
+│
+└── types/
+    ├── settings.ts
+    ├── events.ts
+    ├── search.ts
+    ├── chat.ts                 # ← NEW
+    └── agents.ts               # ← NEW
+```
 
 ### 3.2 Data layout (on disk)
-Under `{vaultRoot}/.obsidian/plugins/notient/`:
 
-- `data.json` — plugin settings
-- `index-{modelKey}.json` — vector embeddings (per model)
-- `state-{modelKey}.json` — index state (per model)
-- `cache/` — ephemeral caches (search results, query embeddings)
-- `locks/` — lockfiles
-- `logs/` — optional local logs (debug only)
+```
+{vaultRoot}/.obsidian/plugins/notient/
+├── data.json                   # Plugin settings
+├── index-{modelKey}.json       # Hybrid embeddings (notes + sections)
+├── state-{modelKey}.json       # Index state
+├── conversations.json          # Chat history (optional persistence)
+├── action-history.json         # Agent action log for undo
+├── cache/                      # LRU caches
+└── locks/                      # Multi-window safety
+```
 
-## 4) Core abstractions
-### 4.1 SettingsStore
-- Loads/saves `data.json` via Obsidian plugin data APIs.
-- Exposes typed settings + validation results.
-- Supports schema versioning and migration of settings.
+## 4) Core services
 
-**Validation policy**:
-- Never block plugin load.
-- Mark capabilities as unavailable with actionable error text.
+### 4.1 LMStudioService (NEW - CRITICAL)
 
-### 4.2 StoragePaths
-- Resolves the absolute vault root path (desktop-only).
-- Computes and ensures plugin data directories exist.
-- Provides a single source of truth for any disk paths.
+**This service MUST be implemented.** Currently LM Studio is configured but never called.
 
-### 4.3 Kernel / ServiceManager
-Single owner of:
-- Initialization order
-- Shutdown/unload cleanup
-- Shared cancellation / abort
-- Capability registry (what features are enabled right now)
+```typescript
+interface LMStudioService {
+  // Health & status
+  isAvailable(): Promise<boolean>;
+  listModels(): Promise<string[]>;
 
-**Lifecycle shape**:
-- Constructors are sync.
-- `initialize(ctx)` is async.
-- `dispose()` is sync/async safe and idempotent.
+  // Reasoning operations
+  rerank(query: string, candidates: SearchResult[]): Promise<RankedResult[]>;
+  classify(note: NoteContent): Promise<Classification>;
+  chat(messages: ChatMessage[], context: VaultContext): Promise<ChatResponse>;
 
-### 4.4 EventBus
-Typed pub/sub channel for:
-- Health changes
-- Queue changes
-- Indexing progress
-- Search status
-- Vitals refresh
+  // Streaming support
+  chatStream(messages: ChatMessage[], context: VaultContext): AsyncIterable<string>;
+}
+```
 
-### 4.5 SimpleIndexer (batch processing)
-- Direct async batch processing with UI yielding.
-- No persistent queue needed - simpler and more reliable.
-- Retry strategy: bounded attempts + exponential backoff metadata.
+### 4.2 VaultContextBuilder (NEW)
 
-### 4.6 ObsidianFacade
-A thin wrapper interface around Obsidian APIs used by core logic:
-- Reading note contents
-- Listing markdown files
-- Workspace interactions
-- UI notifications
+Builds dynamic context per query (not static scan):
 
-This allows `bun test` for core modules without Obsidian.
+```typescript
+interface VaultContextBuilder {
+  // Build context relevant to a specific query
+  buildForQuery(query: string, candidates: SearchResult[]): VaultContext;
 
-## 5) Dependency integrations
-### 5.1 LM Studio (reasoning)
-- Use `@lmstudio/sdk`.
-- Capabilities:
-  - model detection/listing
-  - chat completions (streaming optional)
-  - embeddings may exist but Notient uses Ollama for embeddings per PRD
+  // Context includes:
+  // - Relevant folder paths from candidates
+  // - Active tags in candidate notes
+  // - Link graph fragment (1-hop from candidates)
+  // - PARA distribution of candidates
+  // - Recent modifications in relevant areas
+}
+```
 
-### 5.2 Ollama (embeddings)
-- Use `ollama` library.
-- Restrict to local host by default (`http://127.0.0.1:11434`).
-- Use `embed({ model, input, truncate?, keep_alive? })`.
-- Support custom `fetch` if needed in Obsidian runtime.
+### 4.3 HybridVectorStore (REVISED)
 
-### 5.3 SimpleVectorStore (vector store)
-- Custom brute-force cosine similarity implementation.
-- **Pure JavaScript** - zero external dependencies, bundled with plugin.
-- Persisted as JSON files in plugin folder (`index-{modelKey}.json`).
-- Fast enough for <100K vectors (<50ms search time).
-- Advantages over LanceDB:
-  - No native module distribution issues
-  - Works in all Electron environments
-  - Simpler build/bundle process
+Stores both note-level and section-level embeddings:
 
-## 6) Data model and persistence
-### 6.1 Stable identifiers
-- `noteId`: stable id derived from normalized vault path.
-- `chunkId`: stable id derived from `(noteId, chunkIndex, chunkHash)`.
-- `modelKey`: stable key derived from embedding model identity + dimension.
+```typescript
+interface HybridEmbedding {
+  noteId: string;
+  path: string;
+  title: string;
 
-### 6.2 Index state
-Maintain an index state store to avoid re-embedding unchanged notes:
+  // Note-level embedding (whole content)
+  noteEmbedding: number[];
+  noteHash: string;
 
-- Per note:
-  - `path`
-  - `mtimeMs`
-  - `sizeBytes`
-  - `contentHash`
-  - `chunkCount`
-  - `lastEmbeddedAt`
-  - `modelKey`
-  - `status` + `lastError`
+  // Section-level embeddings (chunks)
+  sections: Array<{
+    sectionId: string;
+    heading: string;
+    text: string;
+    embedding: number[];
+  }>;
 
-Storage location:
-- persisted as JSON in `processing-queue/` or a dedicated `index-state.json` (implementation choice), but must be crash-safe and atomic.
+  // Metadata
+  mtimeMs: number;
+  tags: string[];
+  frontmatter: Record<string, unknown>;
+}
+```
 
-### 6.3 Vector store schema (minimum viable)
-A single index per modelKey, stored as `index-{modelKey}.json`:
-- Document fields:
-  - `chunkId` (string, primary)
-  - `noteId` (string)
-  - `path` (string)
-  - `title` (string)
-  - `headingPath` (string, JSON serialized)
-  - `chunkIndex` (number)
-  - `text` (string)
-  - `embedding` (vector[dimension])
-  - `mtimeMs` (number)
-  - `contentHash` (string)
-  - `tags` (string, JSON serialized)
-  - `frontmatter` (string, JSON serialized)
-  - `modelKey` (string)
+### 4.4 SearchPipeline (REVISED)
 
-### 6.4 Model switching / dimension mismatch
-Strategy:
-- Scope index files by modelKey: `index-{modelKey}.json`, `state-{modelKey}.json`
-- On model change:
-  - create new DB file
-  - enqueue background reindex
-  - old DB file remains until cleanup
+Two-phase search with LLM reranking:
 
-### 6.5 Caches
-- Query embedding cache (bounded LRU)
-- Search results cache (bounded LRU; keyed by `(query, filters, modelKey)`)
+```typescript
+interface SearchPipeline {
+  search(query: string, options: SearchOptions): Promise<SearchResult[]>;
 
-## 7) Indexing pipeline
-### 7.1 Ingestion sources
-- Startup scan: enumerate markdown files.
-- Vault events: `create`, `modify`, `rename`, `delete`.
+  // Phase 1: Vector search (fast, top-50)
+  // Phase 2: LLM reranking (smart, final top-K)
+  // Phase 3: Build dynamic context for chat
+}
+```
 
-### 7.2 Pipeline stages
-- Discover candidates
-- Read contents
-- Chunk (configurable chunk size/overlap)
-- Compute hashes
-- Embed via Ollama
-- Upsert into vector store
-- Update index state
+## 5) UI architecture
 
-### 7.3 Non-blocking execution
-- Use a queue worker that time-slices (process N items then yield).
-- Avoid heavy work inside event handlers.
-- Optionally introduce Node `worker_threads` later if needed; keep abstractions so it can move.
+### 5.1 Dual-Panel Sidebar
 
-### 7.4 Failure handling
-- Per-job errors recorded and surfaced in UI.
-- Retriable errors vs permanent errors.
-- Abort on unload.
+```
+┌─────────────────────────────────┐
+│ [Search Panel - 40%]            │
+│ ┌─────────────────────────────┐ │
+│ │ 🔍 [Search input...]        │ │
+│ │                             │ │
+│ │ Results (LLM-reranked):     │ │
+│ │ • Note A - "relevant because"│ │
+│ │ • Note B - "matches topic"  │ │
+│ │ • Note C - "similar content"│ │
+│ └─────────────────────────────┘ │
+├─────────────────────────────────┤
+│ [Chat Panel - 60%]              │
+│ ┌─────────────────────────────┐ │
+│ │ 💬 Chat with your vault     │ │
+│ │                             │ │
+│ │ [Message history...]        │ │
+│ │                             │ │
+│ │ AI: Based on your notes...  │ │
+│ │     [Citation 1] [Cite 2]   │ │
+│ │                             │ │
+│ │ [Ask a question...]     [⏎] │ │
+│ └─────────────────────────────┘ │
+└─────────────────────────────────┘
+```
 
-## 8) Semantic search pipeline
-### 8.1 MVP behavior
-- Embed query via Ollama
-- Brute-force cosine similarity search in SimpleVectorStore
-- Return topK chunks; group by note; show snippets in sidebar
+### 5.2 Dashboard (Command Center)
 
-### 8.2 Hybrid cache architecture (PRD speed differentiator)
-- Immediate response:
-  - if cached results exist → return <100ms target
-  - else quick vector search → aim <500ms
-- Async refinement:
-  - rerank/group/expand context
-  - update UI incrementally
+```
+┌────────────────────────────────────────────────────┐
+│ NOTIENT DASHBOARD                                  │
+├────────────────────────────────────────────────────┤
+│                                                    │
+│ [Vault Vitals]          [Agent Actions]           │
+│ ┌──────────────┐        ┌──────────────────┐      │
+│ │ Health: 87%  │        │ Available:       │      │
+│ │ Notes: 1,234 │        │ • Process Inbox  │      │
+│ │ Orphans: 23  │        │ • Find Duplicates│      │
+│ │ Inbox: 15    │        │ • Batch Classify │      │
+│ └──────────────┘        └──────────────────┘      │
+│                                                    │
+│ [Action History]                                   │
+│ ┌──────────────────────────────────────────┐      │
+│ │ Today:                                   │      │
+│ │ • Tagged 5 notes with #project  [Undo]   │      │
+│ │ • Moved 3 notes to Archive      [Undo]   │      │
+│ │ Yesterday:                               │      │
+│ │ • Linked 12 related notes       [Undo]   │      │
+│ └──────────────────────────────────────────┘      │
+│                                                    │
+│ [Index Status]                                     │
+│ Model: nomic-embed-text (384d) | Notes: 1,234/1,250│
+│ [Sync] [Rebuild] [Export]                         │
+└────────────────────────────────────────────────────┘
+```
 
-### 8.3 Filters (gradual)
-- Note type (PARA)
-- Folder/path
-- Tags
-- Date ranges
+## 6) Agent autonomy model
 
-## 9) Vault Vitals
-### 9.1 MVP vitals (Phase 1)
-- note count
-- inbox size
-- orphan count (no links)
-- processing queue length
+### 6.1 Trust levels
 
-### 9.2 Expanded vitals (Phase 2+)
-- freshness / decay warnings
-- connectivity hubs/clusters
-- coverage gaps (topic modeling / embedding clustering)
-- suggestions counts + acceptance rate
+| Level | Risk | Actions | Behavior |
+|-------|------|---------|----------|
+| **Low** | Reversible, metadata-only | Add/remove tags, update frontmatter | Auto-apply, log to history |
+| **Medium** | Structural changes | Move notes, create links, rename | Confirm dialog, one-click approve |
+| **High** | Destructive/lossy | Merge, archive, delete | Warning + explicit confirmation |
 
-## 10) PARA note type system
-### 10.1 Detection
-- Path-based defaults:
-  - Inbox: `0-inbox/`
-  - Projects: `1-projects/`
-  - Areas: `2-areas/`, `3-areas/`
-  - Resources: `2-knowledge/`
-  - Archive: `4-archive/`
-- Allow user mapping overrides.
+### 6.2 Workflow types
 
-### 10.2 Usage
-- Drives sidebar behaviors and default suggestions.
+```typescript
+type WorkflowScope =
+  | { type: "note", path: string }           // Process single note
+  | { type: "folder", path: string }         // Process folder (batch)
+  | { type: "vault" }                        // Full vault operation
+  | { type: "selection", paths: string[] };  // Selected notes
+```
 
-## 11) Agentic capabilities (with confirmation)
-### 11.1 Principle
-AI suggests; human approves. No silent modifications.
+### 6.3 Undo philosophy
 
-### 11.2 Tool system design
-- Define tools as pure functions over a “proposed change” model:
-  - tag additions
-  - frontmatter edits
-  - link insertions
-  - move/merge/archive/delete
-- UI shows a diff/preview; user confirms; then apply via Obsidian APIs.
+- Use Obsidian's native undo where possible (file content changes)
+- Track structural changes (moves, renames) in `action-history.json`
+- Dashboard shows recent actions with undo buttons
+- No over-engineering: if Obsidian can't undo it natively, warn before action
 
-### 11.3 Phase gating
-- Phase 1: read-only suggestions
-- Phase 3: write operations + confirmations
+## 7) Phased roadmap
 
-## 12) UI architecture
-### 12.1 Views
-- **Sidebar**: context-aware panels + search + quick vitals
-- **Dashboard**: Vault Vitals + batch operations + settings surface
+### Phase 1.5: ARCHITECTURAL RESET (Current Priority)
 
-### 12.2 State management
-- UI subscribes to EventBus.
-- A `UIStateStore` holds:
-  - health status
-  - indexing progress
-  - queue status
-  - last search results
-  - current note context
+**Goal:** Transform from broken search MVP to intelligent assistant foundation.
 
-### 12.3 Degraded mode UX
-- Show capability badges (Ollama/LM Studio) with status.
-- Provide “Fix” hints (host URL, model name, start service).
+**Critical fixes:**
+1. Remove all debug telemetry (3 locations)
+2. Fix dual note ID generation bug (IndexManager vs Chunker)
+3. Implement LMStudioService (actual API calls, not just config)
 
-### 12.4 Theme awareness
-- Use Obsidian CSS variables.
-- Keep styling minimal; avoid hard-coded colors.
+**New capabilities:**
+4. Hybrid embedding storage (note + sections)
+5. LLM-based search reranking
+6. Dynamic vault context builder
+7. Dual-panel sidebar (search + chat)
+8. Basic chat interface with RAG
 
-## 13) Concurrency, locking, and lifecycle
-### 13.1 Multi-window concurrency
-- Acquire a lockfile under `locks/`.
-- If lock acquisition fails:
-  - disable DB writes + indexing
-  - allow read-only search if possible
+**Exit criteria:**
+- Search returns LLM-reranked results with reasoning
+- Chat answers questions using retrieved context
+- No debug code in codebase
+- Clean console-only logging
 
-### 13.2 Plugin unload cleanup
-- Abort in-flight work
-- Stop timers
-- Close DB connections/file handles
-- Flush queue/index state
+### Phase 2: Intelligence
 
-## 14) Developer workflow (fast inner loop)
-### 14.1 Scripts
-- `bun install`
-- `bun run build` → emits `main.js`
-- `bun run dev` → `bun build --watch` + sync outputs into an Obsidian dev vault plugin folder
+**Capabilities:**
+- Multi-pass processing (classify → enrich → link)
+- Inbox triage workflow
+- Suggested tags/links with preview
+- Background classification
 
-### 14.2 Debugging
-- Use Obsidian dev tools console
-- Structured logging with log levels (debug/info/warn/error)
-
-## 15) Testing strategy
-### 15.1 Unit tests (Bun)
-- Core logic: PARA detection, chunking, hashing, queue transitions, settings validation
-- Use `ObsidianFacade` mocks
-
-### 15.2 Integration tests (local)
-- Optional harness that runs against a fixture vault
-- Smoke tests for indexing/search
-
-### 15.3 Performance benchmarks
-- Measure:
-  - indexing throughput
-  - query latency cached/uncached
-  - memory footprint trends
-
-## 16) Packaging and releases
-### 16.1 Dev-alpha (now)
-- Manual install flow.
-- `node_modules` can be shipped inside plugin folder.
-- Accept that native modules are platform-bound.
-
-### 16.2 Community release (later)
-Because Obsidian plugin installs do not run `npm install`, we must ship runtime deps with the plugin release.
-
-Planned options (evaluate in Phase 4):
-- Single release artifact works on all platforms (SimpleVectorStore is pure JS).
-- Multi-platform bundle with per-platform binaries + runtime selection.
-- Optional binary downloader at first run (with user confirmation) if acceptable.
-
-## 17) Phased roadmap with exit criteria
-### Phase 0 — Bootstrap foundation
-Exit criteria:
-- Repo compiles, plugin loads, settings tab renders
-- Kernel/Services/EventBus/Paths/Queue/Lock scaffolding exists
-
-### Phase 1 — Core MVP (PRD Phase 1)
-Capabilities:
-- Setup wizard (minimal): detect LM Studio/Ollama availability, select embedding model
-- Initial indexing with progress
-- Sidebar semantic search command
-- Related notes panel (basic)
-- Basic Vault Vitals (note count, inbox size, orphan count, queue length)
-- PARA detection
-
-Exit criteria:
-- Index and search works end-to-end on a 500+ note vault
-- Degraded mode works (turn off Ollama/LMS and UI explains)
-
-### Phase 2 — Intelligence
-Capabilities:
-- Multi-pass processing (classify → enrich → link) as queued jobs
-- Suggestions for tags/links
-- Context-aware sidebar panels
-- Full Vault Vitals dashboard
-
-Exit criteria:
-- Batch queue is reliable across restarts
+**Exit criteria:**
+- Inbox notes get classification suggestions
+- User can batch-review suggestions
 - Suggestions are previewable and safe
 
-### Phase 3 — Agentic
-Capabilities:
-- Tool-based agent with confirmation UI
-- Vault operations: move/merge/archive/delete behind confirm
-- Automation rules (opt-in)
+### Phase 3: Agentic
 
-Exit criteria:
-- No silent writes
-- Robust diff/preview and undo-friendly operations
+**Capabilities:**
+- Trust-level agent actions
+- Workflow runner (note/folder/vault scope)
+- Action history with undo
+- Dashboard as command center
 
-### Phase 4 — Polish
-Capabilities:
-- Smart Connections migration wizard
+**Exit criteria:**
+- Low-risk actions auto-apply
+- Medium/high-risk actions confirm
+- Undo works for tracked actions
+
+### Phase 4: Polish
+
+**Capabilities:**
+- Smart Connections migration
+- Performance optimization
+- Community release packaging
 - Advanced visualizations
-- Performance optimizations
-- Packaging strategy finalized for community releases
 
-Exit criteria:
-- Release-ready artifacts, docs, migration experience
+## 8) Implementation session guide
 
-## 18) Session-based execution model
-Each dev session should produce:
-- a shippable increment (even if dev-alpha)
-- updated docs/ADR entries
-- updated tests for new core behaviors
+### Session: ARCHITECTURAL RESET
 
-Recommended early sessions:
-- **Session A**: Phase 0 repo bootstrap + kernel + paths + lock + minimal UI
-- **Session B**: queue + indexing skeleton + status UI
-- **Session C**: Ollama embeddings + SimpleVectorStore + minimal semantic search
-- **Session D**: vitals MVP + PARA detection + event wiring
-- **Session E**: onboarding wizard + model selection + reindex flow
+**Objective:** Execute Phase 1.5 in one comprehensive session.
 
-## 19) Risk register (must be tracked continuously)
-- Vector store initialization and persistence
-- Service initialization order and lazy init
-- Runtime health signaling and degraded mode UX
-- Storage paths cross-platform correctness
-- Plugin unload cleanup
-- Settings validation policy
-- Testing seams without Obsidian
-- Vault event debouncing + queueing
-- Dev inner loop speed
-- Renderer blocking avoidance
-- Multi-window DB locking
-- Networking quirks (fetch/CORS)
-- Queue crash recovery
-- Memory bounds for large vaults
-- Packaging strategy for community release
+**Sequence:**
 
-## 20) Decision log (ADR cadence)
-Create ADRs for:
-- Build/bundling strategy with Bun for Obsidian
-- Vector store choice (Custom brute-force cosine similarity for simplicity & zero dependencies)
-- Embedding model switching strategy (modelKey + DB scoping)
-- Degraded-mode capability model
-- Queue format and crash recovery semantics
+1. **Clean house** (30 min)
+   - Remove debug telemetry from 3 files
+   - Fix note ID generation in IndexManager
+   - Clean up console logging
+
+2. **LMStudioService** (2 hours)
+   - Implement service class with OpenAI-compatible API
+   - Add rerank(), chat(), chatStream() methods
+   - Wire into kernel service registry
+
+3. **Hybrid storage** (1.5 hours)
+   - Modify vector store schema for note + section embeddings
+   - Update indexer to generate both levels
+   - Maintain backward compatibility (migration)
+
+4. **Search reranking** (1 hour)
+   - Modify pipeline to do vector top-50 → LLM rerank
+   - Add reranking prompt template
+   - Return results with reasoning
+
+5. **Vault context** (1 hour)
+   - Implement VaultContextBuilder
+   - Dynamic context from search candidates
+   - Inject into LM prompts
+
+6. **Dual-panel UI** (2 hours)
+   - Redesign sidebar with search + chat panels
+   - Implement chat message history
+   - Wire RAG pipeline (search → context → LM → response)
+
+7. **Testing & polish** (1 hour)
+   - Manual testing on real vault
+   - Fix obvious issues
+   - Update docs
+
+**Total estimated:** 9 hours
+
+## 9) Risk register
+
+### Critical (must address in Phase 1.5)
+- ❌ Debug telemetry shipping to production
+- ❌ LM Studio configured but never used
+- ❌ Dual note ID generation causes data corruption
+
+### High (address soon)
+- ⚠️ Search results are meaningless similarity scores
+- ⚠️ No vault awareness in LLM context
+- ⚠️ No chat interface despite competition having it
+
+### Medium (Phase 2+)
+- Agent actions without trust levels
+- No undo for structural changes
+- Missing inbox triage workflow
+
+## 10) Decision log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-01-06 | Hybrid embeddings (note + sections) | Flexible retrieval, broad + precise |
+| 2026-01-06 | LLM reranking over pure cosine | Smarter results, competitive with SC v4 |
+| 2026-01-06 | Dynamic context per query | More relevant than static vault scan |
+| 2026-01-06 | Dual-panel sidebar | Search + chat always visible |
+| 2026-01-06 | Trust levels for agents | Balance automation vs user control |
+| 2026-01-06 | Remove all debug telemetry | Clean code, no data leaks |
+| 2026-01-06 | Full architectural reset | Comprehensive fix over incremental patches |
+
+---
+
+*Last updated: 2026-01-06*
+*Author: Anthony Kougkas*
+*Version: 2.0 (Architectural Reset)*
