@@ -68,12 +68,12 @@ export class IndexOptionsModal extends Modal {
     // State-specific message
     switch (stats.state) {
       case "none":
-        infoBox.createEl("p", { text: "No existing index found. Ready to start fresh." });
+        infoBox.createEl("p", { text: "No index found. Ready to create one." });
         break;
       
       case "complete":
-        infoBox.createEl("p", { 
-          text: `✅ Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} chunks` 
+        infoBox.createEl("p", {
+          text: `✅ Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} passages`
         });
         if (stats.lastFullIndexAt) {
           const date = new Date(stats.lastFullIndexAt).toLocaleDateString();
@@ -110,8 +110,8 @@ export class IndexOptionsModal extends Modal {
           text: `🔄 Found index data but state is unclear`,
           cls: "notient-index-info-warning"
         });
-        infoBox.createEl("p", { 
-          text: `${stats.chunkCount} chunks found. Recommend rebuilding.`,
+        infoBox.createEl("p", {
+          text: `${stats.chunkCount} passages found. Rebuilding recommended.`,
           cls: "notient-index-info-dim"
         });
         break;

@@ -28,7 +28,7 @@ echo "🔨 Building..."
 
 if [ $? -eq 0 ]; then
     echo "📦 Copying to vault..."
-    cp main.js manifest.json "$VAULT_PLUGIN/"
+    cp main.js manifest.json src/styles.css "$VAULT_PLUGIN/"
     echo "✅ Done! Reload Obsidian (Ctrl+R) or toggle plugin off/on"
 else
     echo "❌ Build failed"

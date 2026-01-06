@@ -299,9 +299,9 @@ export class SetupWizardModal extends Modal {
       return { isCompatible: true, reason: "Dimensions match" };
     }
 
-    return { 
-      isCompatible: false, 
-      reason: `Dimension mismatch: index=${indexDimension}d, model=${this.selectedModelDimension}d` 
+    return {
+      isCompatible: false,
+      reason: `Incompatible: different embedding sizes`
     };
   }
 
@@ -436,11 +436,11 @@ export class SetupWizardModal extends Modal {
         }
       } else {
         this.ollama.status = "error";
-        this.ollama.error = "No models. Run: ollama pull nomic-embed-text";
+        this.ollama.error = "No models found. Install one with: ollama pull nomic-embed-text";
       }
     } catch (err) {
       this.ollama.status = "error";
-      this.ollama.error = err instanceof Error ? err.message : "Connection failed";
+      this.ollama.error = err instanceof Error ? err.message : "Couldn't connect";
       this.ollama.models = [];
     }
 
@@ -466,11 +466,11 @@ export class SetupWizardModal extends Modal {
         }
       } else {
         this.lmstudio.status = "error";
-        this.lmstudio.error = "No models loaded. Load a model in LM Studio.";
+        this.lmstudio.error = "No models found. Load a model in LM Studio first.";
       }
     } catch (err) {
       this.lmstudio.status = "error";
-      this.lmstudio.error = err instanceof Error ? err.message : "Connection failed";
+      this.lmstudio.error = err instanceof Error ? err.message : "Couldn't connect";
       this.lmstudio.models = [];
     }
 
@@ -625,13 +625,13 @@ export class SetupWizardModal extends Modal {
         selectWrapper.createEl("span", {
           text: `${this.selectedModelDimension}d`,
           cls: "notient-model-dim",
-          attr: { title: "Vector dimensions" },
+          attr: { title: "Embedding size" },
         });
       }
     } else {
       modelRow.createEl("span", {
         cls: "notient-model-placeholder",
-        text: config.status === "checking" ? "Detecting..." : "Connect to detect",
+        text: config.status === "checking" ? "Finding models..." : "Connect to see models",
       });
     }
   }
@@ -760,7 +760,7 @@ export class SetupWizardModal extends Modal {
 
       const stats = info.createDiv({ cls: "notient-index-stats" });
       stats.createEl("span", { text: `${idx.noteCount} notes` });
-      stats.createEl("span", { text: `${idx.chunkCount} chunks` });
+      stats.createEl("span", { text: `${idx.chunkCount} passages` });
       
       const stateIcons: Record<DiskIndex["state"], string> = {
         complete: "✅",

@@ -242,11 +242,11 @@ export class NotientSidebarView extends ItemView {
 
     const stalenessEl = metaRow.createSpan({ cls: `notient-staleness status-${ctx.staleness.status}` });
     if (ctx.staleness.status === "unindexed") {
-      stalenessEl.setText("⚠️ Not indexed");
+      stalenessEl.setText("Not in search yet");
     } else if (ctx.staleness.status === "stale") {
-      stalenessEl.setText("🔄 Modified since indexing");
+      stalenessEl.setText("Changed since last sync");
     } else {
-      stalenessEl.setText(`✓ ${ctx.staleness.daysSinceModified}d old`);
+      stalenessEl.setText(`Indexed ${ctx.staleness.daysSinceModified} days ago`);
     }
 
     // Tags
@@ -360,7 +360,7 @@ export class NotientSidebarView extends ItemView {
 
     if (!this.kernel.capabilities.search) {
       const warning = this.statusContainer.createDiv({ cls: "notient-warning" });
-      warning.setText("Search unavailable - Ollama must be running");
+      warning.setText("Search unavailable - Ollama isn't connected");
     }
   }
 
@@ -424,8 +424,8 @@ export class NotientSidebarView extends ItemView {
       this.searchResults.createDiv({
         cls: "notient-message",
         text: this.kernel.isServicesInitializing
-          ? "Initializing services..."
-          : "Search unavailable. Complete setup first.",
+          ? "Connecting to your AI..."
+          : "Search unavailable - complete setup first",
       });
       return;
     }
@@ -434,7 +434,7 @@ export class NotientSidebarView extends ItemView {
     this.searchResults.empty();
     const loadingEl = this.searchResults.createDiv({ cls: "notient-loading" });
     loadingEl.createSpan({ cls: "notient-spinner" });
-    loadingEl.createSpan({ text: " Searching...", cls: "notient-loading-text" });
+    loadingEl.createSpan({ text: " Thinking...", cls: "notient-loading-text" });
 
     try {
       const results = await searchPipeline.search(query, {
@@ -448,7 +448,7 @@ export class NotientSidebarView extends ItemView {
       this.searchResults.empty();
       this.searchResults.createDiv({
         cls: "notient-error",
-        text: "Search failed. Please try again.",
+        text: "Search failed. Try again?",
       });
     }
   }
@@ -460,7 +460,7 @@ export class NotientSidebarView extends ItemView {
     if (results.length === 0) {
       this.searchResults.createDiv({
         cls: "notient-message",
-        text: "No results found",
+        text: "No matches found. Try different words?",
       });
       return;
     }
@@ -564,7 +564,7 @@ export class NotientSidebarView extends ItemView {
     // Welcome message
     this.addChatMessage(
       "assistant",
-      "Hi! I can answer questions about your notes. Try asking something like:\n• What do I know about [topic]?\n• Summarize my notes on [subject]\n• Find connections between [A] and [B]"
+      "Ask me anything about your notes:\n• What do I know about [topic]?\n• Summarize my notes on [subject]\n• Find connections between [A] and [B]"
     );
 
     // Input area
@@ -605,7 +605,7 @@ export class NotientSidebarView extends ItemView {
     if (!lmStudio?.isReady()) {
       this.addChatMessage(
         "assistant",
-        "⚠️ LM Studio not available. Please ensure it's running and connected in settings."
+        "Chat unavailable - LM Studio isn't connected"
       );
       return;
     }
@@ -698,7 +698,7 @@ export class NotientSidebarView extends ItemView {
       console.error("[Sidebar] Chat error:", error);
       const textEl = responseEl.querySelector(".notient-message-text");
       if (textEl) {
-        textEl.setText("⚠️ Error generating response. Please try again.");
+        textEl.setText("Something went wrong. Try again?");
       }
       responseEl.removeClass("notient-chat-streaming");
     }

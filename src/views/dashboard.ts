@@ -98,15 +98,15 @@ export class NotientDashboardView extends ItemView {
       this.vitalsContainer.createDiv({
         cls: "notient-message",
         text: isInitializing
-          ? "Initializing services... please wait"
-          : "Vitals unavailable - complete setup first",
+          ? "Connecting to your AI..."
+          : "Dashboard unavailable - complete setup first",
       });
       return;
     }
 
     this.vitalsContainer.createDiv({
       cls: "notient-loading",
-      text: "Computing vault vitals...",
+      text: "Analyzing your vault...",
     });
 
     try {
@@ -117,7 +117,7 @@ export class NotientDashboardView extends ItemView {
       this.vitalsContainer.empty();
       this.vitalsContainer.createDiv({
         cls: "notient-error",
-        text: "Failed to compute vault vitals",
+        text: "Couldn't analyze your vault",
       });
     }
   }
@@ -317,7 +317,7 @@ export class NotientDashboardView extends ItemView {
     section.createEl("h3", { text: "🌟 Most Connected Notes" });
 
     if (vitals.connectivity.topConnectedNotes.length === 0) {
-      section.createDiv({ text: "No connected notes found", cls: "notient-message" });
+      section.createDiv({ text: "No linked notes yet", cls: "notient-message" });
       return;
     }
 

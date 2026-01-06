@@ -246,7 +246,7 @@ export class NotientSettingTab extends PluginSettingTab {
       if (indexManager) {
         const count = indexManager.getIndexedCount();
         const model = indexManager.getActiveModelKey();
-        capRow.createSpan({ text: `📊 ${count} notes indexed` });
+        capRow.createSpan({ text: `📊 ${count} notes ready for search` });
         if (model) {
           capRow.createSpan({ text: `(${model})`, cls: "notient-settings-model-tag" });
         }
@@ -258,9 +258,9 @@ export class NotientSettingTab extends PluginSettingTab {
       if (caps.reasoning) capIcons.createSpan({ text: "🤖", attr: { title: "Chat & rerank ready" } });
       if (caps.indexing) capIcons.createSpan({ text: "📝", attr: { title: "Indexing available" } });
     } else if (this.kernel.isServicesInitializing) {
-      capRow.createSpan({ text: "⏳ Initializing services...", cls: "notient-settings-info-dim" });
+      capRow.createSpan({ text: "⏳ Connecting to your AI...", cls: "notient-settings-info-dim" });
     } else {
-      capRow.createSpan({ text: "⚠️ Run setup wizard to configure", cls: "notient-settings-warning" });
+      capRow.createSpan({ text: "⚠️ Run the setup wizard to get started", cls: "notient-settings-warning" });
     }
   }
 
@@ -322,7 +322,7 @@ export class NotientSettingTab extends PluginSettingTab {
     const dim = this.getModelDimension(this.settings.ollama.embeddingModel);
     const modelSetting = new Setting(section)
       .setName("Embedding Model")
-      .setDesc(dim ? `${dim}-dimensional vectors (auto-detected)` : "Dimension detected on first use");
+      .setDesc(dim ? `Embedding size: ${dim} dimensions` : "Size will be detected when you start");
 
     modelSetting.addText((text) =>
       text
@@ -461,9 +461,9 @@ export class NotientSettingTab extends PluginSettingTab {
     // Tooltip
     const tooltip = sliderSection.createDiv({ cls: "notient-settings-tooltip" });
     tooltip.innerHTML = `
-      <span class="notient-tooltip-small">⚡ Smaller</span> = precise matches, more chunks
+      <span class="notient-tooltip-small">⚡ Smaller passages</span> = precise search
       <span class="notient-tooltip-sep">|</span>
-      <span class="notient-tooltip-large">📚 Larger</span> = more context, fewer chunks
+      <span class="notient-tooltip-large">📚 Larger</span> = more context
     `;
 
     // Excluded folders
@@ -507,7 +507,7 @@ export class NotientSettingTab extends PluginSettingTab {
       infoBox.createEl("div", { 
         text: this.kernel.isServicesInitializing 
           ? "⏳ Services initializing..." 
-          : "⚠️ Services not ready. Complete setup wizard first.",
+          : "⚠️ Services not ready - complete setup wizard first",
         cls: "notient-settings-info-dim" 
       });
     } else if (indexManager) {
