@@ -41,13 +41,19 @@ export class OllamaService {
       return;
     }
 
+    console.log(`[OllamaService] Initializing with host=${settings.ollama.host}, model=${settings.ollama.embeddingModel}`);
+
     this.client = new Ollama({
       host: settings.ollama.host,
     });
 
-    // Pre-fetch model dimension
+    // Pre-fetch model dimension - REQUIRED before any getModelKey() calls
     if (settings.ollama.embeddingModel) {
-      await this.detectDimension(settings.ollama.embeddingModel);
+      const dim = await this.detectDimension(settings.ollama.embeddingModel);
+      console.log(`[OllamaService] Detected dimension=${dim} for model=${settings.ollama.embeddingModel}`);
+      console.log(`[OllamaService] Model key will be: ${this.getModelKey()}`);
+    } else {
+      console.warn("[OllamaService] No embedding model configured!");
     }
   }
 

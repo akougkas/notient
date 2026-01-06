@@ -23,6 +23,7 @@ import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
+import { IndexOptionsModal, IndexOption } from "./views/indexOptionsModal";
 import { NotientSettingTab, loadSettings, saveSettings } from "./settings";
 import { VIEW_TYPE_SIDEBAR, VIEW_TYPE_DASHBOARD } from "./core/constants";
 import type { NotientSettings } from "./types/settings";
@@ -225,8 +226,17 @@ export default class NotientPlugin extends Plugin {
         this.kernel.setServicesInitialized();
         console.log("[Notient] Services initialized successfully");
 
-        // Start background indexing
-        setTimeout(() => this.startBackgroundIndexing(), 2000);
+        // Handle index options
+        const showOptions = this._pendingFreshSetup;
+        this._pendingFreshSetup = false;
+        
+        if (showOptions && this.indexManager) {
+          // Show index options modal for user to choose
+          setTimeout(() => this.showIndexOptionsAndStart(), 500);
+        } else {
+          // Normal sync for returning users
+          setTimeout(() => this.startBackgroundIndexing("sync"), 2000);
+        }
       } catch (error) {
         console.error("[Notient] Failed to initialize AI services:", error);
         this.kernel.setServicesInitializing(false);
@@ -417,6 +427,10 @@ export default class NotientPlugin extends Plugin {
       this.healthMonitor = new HealthMonitor(this.kernel);
     }
 
+    // Track if this is a fresh setup or reconfiguration
+    const wasSetupComplete = this.settings.setupComplete;
+    const previousModel = this.settings.ollama.embeddingModel;
+
     const wizard = new SetupWizardModal(
       this.app,
       this.healthMonitor,
@@ -426,6 +440,9 @@ export default class NotientPlugin extends Plugin {
     const result = await wizard.run();
 
     if (result.completed) {
+      const newModel = result.settings.ollama?.embeddingModel || previousModel;
+      const modelChanged = previousModel !== newModel;
+
       this.settings = {
         ...this.settings,
         ...result.settings,
@@ -439,10 +456,25 @@ export default class NotientPlugin extends Plugin {
       this.settingTab.updateSettings(this.settings);
       this.kernel.updateSettings(this.settings);
 
-      this.kernel.obsidian.notice("Notient configured! Initializing...");
+      console.log(`[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}`);
+
+      // Track if this is truly fresh setup for force reindex
+      this._pendingFreshSetup = !wasSetupComplete;
+
+      if (!wasSetupComplete) {
+        this.kernel.obsidian.notice("Notient configured! Initializing...");
+      } else if (modelChanged) {
+        this.kernel.obsidian.notice(`Model changed to ${newModel}. Creating new index...`);
+      } else {
+        this.kernel.obsidian.notice("Settings updated! Reconnecting...");
+      }
+
       await this.reinitializeServices();
     }
   }
+
+  // Flag to track if we just completed fresh setup
+  private _pendingFreshSetup = false;
 
   private async reinitializeServices(): Promise<void> {
     try {
@@ -478,33 +510,91 @@ export default class NotientPlugin extends Plugin {
     }
   }
 
-  private async startBackgroundIndexing(): Promise<void> {
+  /**
+   * Show index options modal and start appropriate indexing action
+   */
+  private async showIndexOptionsAndStart(): Promise<void> {
+    if (!this.indexManager) return;
+
+    const stats = await this.indexManager.getStats();
+    console.log("[Notient] Showing index options. State:", stats.state, stats);
+
+    // If no index exists, just start indexing
+    if (stats.state === "none") {
+      this.kernel.obsidian.notice("Starting initial vault indexing...");
+      await this.startBackgroundIndexing("rebuild");
+      return;
+    }
+
+    // Show options modal
+    const modal = new IndexOptionsModal(this.app, stats, false);
+    const result = await modal.run();
+
+    console.log("[Notient] User chose:", result.option);
+
+    switch (result.option) {
+      case "use_existing":
+        this.kernel.obsidian.notice("Using existing index. Ready to search!");
+        break;
+      case "resume":
+        this.kernel.obsidian.notice("Resuming indexing...");
+        await this.startBackgroundIndexing("sync");
+        break;
+      case "rebuild":
+        this.kernel.obsidian.notice("Rebuilding index from scratch...");
+        await this.startBackgroundIndexing("rebuild");
+        break;
+      case "cancel":
+        this.kernel.obsidian.notice("Indexing skipped. You can start it later from settings.");
+        break;
+    }
+  }
+
+  /**
+   * Start background indexing with specified action
+   */
+  private async startBackgroundIndexing(action: "sync" | "rebuild"): Promise<void> {
     if (!this.indexer || !this.indexManager) {
       console.log("[Notient] Cannot start indexing - services not initialized");
       return;
     }
 
     if (!this.kernel.capabilities.indexing) {
-      console.log("[Notient] Cannot start indexing - missing capabilities");
+      console.log("[Notient] Cannot start indexing - missing capabilities:", this.kernel.capabilities);
+      const health = this.kernel.serviceHealth;
+      if (health.ollama.status !== "healthy") {
+        this.kernel.obsidian.notice("Cannot index: Ollama not connected");
+      }
       return;
     }
 
     try {
-      // Check for crash recovery
       const stats = await this.indexManager.getStats();
-      if (stats.needsRecovery) {
-        console.log("[Notient] Detected interrupted indexing session");
+      console.log("[Notient] Starting indexing:", { action, state: stats.state });
+
+      if (action === "rebuild") {
+        console.log("[Notient] Full reindex requested");
+        const result = await this.indexer.fullReindex();
         this.kernel.obsidian.notice(
-          "Previous indexing was interrupted. Starting fresh sync...",
+          `Indexing complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
           5000
         );
-        // Clear the in-progress flag and restart
-        this.indexManager.endIndexing();
+      } else {
+        // Sync - incremental indexing
+        const result = await this.indexer.syncVault();
+        
+        if (result.added > 0 || result.updated > 0) {
+          this.kernel.obsidian.notice(
+            `Sync complete: ${result.added} new, ${result.updated} updated`,
+            3000
+          );
+        } else {
+          this.kernel.obsidian.notice("Index up to date", 2000);
+        }
       }
-
-      await this.indexer.syncVault();
     } catch (error) {
-      console.error("[Notient] Background indexing failed:", error);
+      console.error("[Notient] Indexing failed:", error);
+      this.kernel.obsidian.notice("Indexing failed. Check console for details.");
     }
   }
 }

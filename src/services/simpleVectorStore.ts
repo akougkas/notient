@@ -94,12 +94,14 @@ export class SimpleVectorStore implements VectorStore {
     this.modelKey = ollama.getModelKey();
     this.dimension = await ollama.getDimension();
 
+    console.log(`[SimpleVectorStore] Initializing for modelKey=${this.modelKey}, dim=${this.dimension}`);
+
     // Try to load existing index
     const loaded = await this.loadFromDisk();
     if (!loaded) {
-      console.log(
-        `[SimpleVectorStore] Created fresh index (${this.dimension}-dim)`
-      );
+      console.log(`[SimpleVectorStore] Created fresh index (${this.dimension}-dim)`);
+    } else {
+      console.log(`[SimpleVectorStore] Using existing index: ${this.docs.size} chunks, ${this.noteIdToChunkIds.size} notes`);
     }
   }
 
@@ -185,7 +187,7 @@ export class SimpleVectorStore implements VectorStore {
   }
 
   /**
-   * Search using brute-force cosine similarity
+   * Search using brute-force cosine similarity with hybrid lexical boost
    * For 50K vectors, this takes ~10-20ms - well within target
    */
   async search(
@@ -194,22 +196,99 @@ export class SimpleVectorStore implements VectorStore {
   ): Promise<ChunkSearchResult[]> {
     if (this.disposed || this.docs.size === 0) return [];
 
+    this.resetDebugCounters(); // Reset debug counters for this search
+
     const query = new Float32Array(queryEmbedding);
     const queryNorm = this.magnitude(query);
     if (queryNorm === 0) return [];
 
+    // Hybrid search: prepare query terms for lexical matching
+    const queryTerms = options.queryText
+      ? options.queryText.toLowerCase().split(/\s+/).filter(t => t.length >= 2)
+      : [];
+
     // Score all documents
-    const scored: Array<{ doc: StoredDoc; score: number }> = [];
+    const scored: Array<{ doc: StoredDoc; score: number; lexicalMatch: boolean }> = [];
+
+    // Minimum text length for full score - shorter texts get penalized
+    const MIN_TEXT_LENGTH = 50;
+    const LENGTH_PENALTY_FACTOR = 0.3; // How much to penalize short texts (0-1)
+    
+    // Lexical boost for hybrid search
+    const LEXICAL_BOOST = 0.15; // Boost for notes containing query terms
+    const TITLE_BOOST = 0.25;  // Extra boost for title matches
 
     for (const doc of this.docs.values()) {
-      const score = this.cosineSimilarity(query, queryNorm, doc.embedding);
+      let score = this.cosineSimilarity(query, queryNorm, doc.embedding);
+      let lexicalMatch = false;
+      
+      // Apply length penalty for very short chunks
+      // Short texts produce generic embeddings that falsely match many queries
+      if (doc.text.length < MIN_TEXT_LENGTH) {
+        const lengthRatio = doc.text.length / MIN_TEXT_LENGTH;
+        const penalty = 1 - (LENGTH_PENALTY_FACTOR * (1 - lengthRatio));
+        score = score * penalty;
+      }
+
+      // Apply lexical boost for hybrid search
+      // Notes containing the query terms should rank higher
+      if (queryTerms.length > 0) {
+        const textLower = doc.text.toLowerCase();
+        const titleLower = doc.title.toLowerCase();
+        const pathLower = doc.path.toLowerCase();
+        
+        // Check if any query term appears in content/title/path
+        const textMatch = queryTerms.some(term => textLower.includes(term));
+        const titleMatch = queryTerms.some(term => titleLower.includes(term) || pathLower.includes(term));
+        
+        if (titleMatch) {
+          score = Math.min(0.99, score + TITLE_BOOST); // Title/path match gets biggest boost
+          lexicalMatch = true;
+        } else if (textMatch) {
+          score = Math.min(0.99, score + LEXICAL_BOOST); // Content match gets smaller boost
+          lexicalMatch = true;
+        }
+      }
+
       if (score >= options.minScore) {
-        scored.push({ doc, score });
+        scored.push({ doc, score, lexicalMatch });
       }
     }
 
     // Sort by score descending
     scored.sort((a, b) => b.score - a.score);
+
+    // #region agent log
+    const debugTop10 = scored.slice(0,10).map(s => ({path:s.doc.path,title:s.doc.title,score:s.score,textLen:s.doc.text.length,textPreview:s.doc.text.slice(0,80),embNorm:this.magnitude(s.doc.embedding),penalized:s.doc.text.length<MIN_TEXT_LENGTH,lexicalMatch:s.lexicalMatch}));
+    fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:search',message:'Top 10 scored docs (hybrid search)',data:{queryNorm,queryTerms,totalScored:scored.length,minScore:options.minScore,minTextLen:MIN_TEXT_LENGTH,lexicalBoost:LEXICAL_BOOST,titleBoost:TITLE_BOOST,top10:debugTop10},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'K,L,O'})}).catch(()=>{});
+    // #endregion
+
+    // #region agent log - Deep embedding analysis for DTIO vs query
+    const dtioDoc = scored.find(s => s.doc.path.toLowerCase().includes('dtio'));
+    if (dtioDoc) {
+      // Calculate detailed metrics
+      const dtioEmb = dtioDoc.doc.embedding;
+      let dotProduct = 0;
+      for (let i = 0; i < query.length; i++) { dotProduct += query[i] * dtioEmb[i]; }
+      
+      // Sample embedding values to check if they look reasonable
+      const queryFirst10 = Array.from(query.slice(0, 10));
+      const dtioFirst10 = Array.from(dtioEmb.slice(0, 10));
+      
+      // Check embedding diversity - are values spread or clustered?
+      let queryVariance = 0, dtioVariance = 0;
+      const queryMean = Array.from(query).reduce((a,b) => a+b, 0) / query.length;
+      const dtioMean = Array.from(dtioEmb).reduce((a,b) => a+b, 0) / dtioEmb.length;
+      for (let i = 0; i < query.length; i++) {
+        queryVariance += (query[i] - queryMean) ** 2;
+        dtioVariance += (dtioEmb[i] - dtioMean) ** 2;
+      }
+      queryVariance /= query.length;
+      dtioVariance /= dtioEmb.length;
+      
+      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:search',message:'DEEP EMBEDDING ANALYSIS',data:{query:{first10:queryFirst10,mean:queryMean,variance:queryVariance,norm:queryNorm},dtio:{path:dtioDoc.doc.path,text:dtioDoc.doc.text,score:dtioDoc.score,first10:dtioFirst10,mean:dtioMean,variance:dtioVariance,norm:this.magnitude(dtioEmb)},dotProduct,calculatedScore:dotProduct/(queryNorm*this.magnitude(dtioEmb))},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'F,H,I'})}).catch(()=>{});
+    }
+    // #endregion
 
     // Apply filters and build results
     const results: ChunkSearchResult[] = [];
@@ -347,6 +426,9 @@ export class SimpleVectorStore implements VectorStore {
     );
   }
 
+  // Debug counter for cosine similarity logging
+  private _debugCosineCount = 0;
+
   private cosineSimilarity(
     a: Float32Array,
     aNorm: number,
@@ -363,7 +445,21 @@ export class SimpleVectorStore implements VectorStore {
     const bNorm = Math.sqrt(bNormSq);
     if (bNorm === 0) return 0;
 
-    return dot / (aNorm * bNorm);
+    const score = dot / (aNorm * bNorm);
+
+    // #region agent log - Log first 3 calculations per search
+    if (this._debugCosineCount < 3) {
+      this._debugCosineCount++;
+      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorStore.ts:cosineSimilarity',message:'Cosine calc details',data:{dot,aNorm,bNorm,score,aLen:a.length,bLen:b.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    }
+    // #endregion
+
+    return score;
+  }
+
+  // Reset debug counter before search
+  private resetDebugCounters(): void {
+    this._debugCosineCount = 0;
   }
 
   private magnitude(vec: Float32Array): number {
@@ -391,13 +487,18 @@ export class SimpleVectorStore implements VectorStore {
 
   private async loadFromDisk(): Promise<boolean> {
     const indexPath = this.getIndexPath();
+    console.log(`[SimpleVectorStore] Looking for index at: ${indexPath}`);
 
     try {
       const exists = await fs.promises
         .access(indexPath)
         .then(() => true)
         .catch(() => false);
-      if (!exists) return false;
+      
+      if (!exists) {
+        console.log(`[SimpleVectorStore] No index file found for modelKey=${this.modelKey}`);
+        return false;
+      }
 
       const raw = await fs.promises.readFile(indexPath, "utf-8");
       const data = JSON.parse(raw) as {
@@ -405,14 +506,16 @@ export class SimpleVectorStore implements VectorStore {
         docs: PersistedDoc[];
       };
 
+      console.log(`[SimpleVectorStore] Found index: fileModelKey=${data.meta.modelKey}, fileDim=${data.meta.dimension}, docCount=${data.meta.docCount}`);
+
       // Validate model key and dimension
       if (data.meta.modelKey !== this.modelKey) {
-        console.log("[SimpleVectorStore] Model key mismatch, creating fresh");
+        console.log(`[SimpleVectorStore] Model key mismatch: file=${data.meta.modelKey}, current=${this.modelKey}. Creating fresh.`);
         return false;
       }
 
       if (data.meta.dimension !== this.dimension) {
-        console.log("[SimpleVectorStore] Dimension mismatch, creating fresh");
+        console.log(`[SimpleVectorStore] Dimension mismatch: file=${data.meta.dimension}, current=${this.dimension}. Creating fresh.`);
         return false;
       }
 

@@ -85,11 +85,22 @@ export class SearchPipeline {
       // Get query embedding (with caching)
       const queryEmbedding = await this.getQueryEmbedding(query);
 
-      // Vector search
+      // #region agent log
+      const qNorm = Math.sqrt(queryEmbedding.reduce((s,v)=>s+v*v,0));
+      const qMean = queryEmbedding.reduce((s,v)=>s+v,0)/queryEmbedding.length;
+      const qVariance = queryEmbedding.reduce((s,v)=>s+(v-qMean)**2,0)/queryEmbedding.length;
+      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pipeline.ts:search',message:'QUERY EMBEDDING ANALYSIS',data:{query,embeddingLen:queryEmbedding.length,first10:queryEmbedding.slice(0,10),norm:qNorm,mean:qMean,variance:qVariance},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B,F,I'})}).catch(()=>{});
+      // #endregion
+
+      // Vector search with hybrid lexical matching
       const chunkResults = await this.vectorStore.search(
         queryEmbedding,
-        fullOptions
+        { ...fullOptions, queryText: query }
       );
+
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pipeline.ts:search',message:'Raw chunk results',data:{totalChunks:chunkResults.length,top5:chunkResults.slice(0,5).map(c=>({path:c.path,title:c.title,score:c.score,textLen:c.text?.length,textPreview:c.text?.slice(0,100)}))},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,E'})}).catch(()=>{});
+      // #endregion
 
       // Group by note
       const results = this.groupByNote(chunkResults);

@@ -78,11 +78,11 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     excludedFolders: [".obsidian", ".trash"],
   },
   para: {
-    inbox: ["0-inbox"],
-    projects: ["1-projects"],
-    areas: ["2-areas", "3-areas"],
-    resources: ["2-knowledge"],
-    archive: ["4-archive"],
+    inbox: ["0-inbox", "inbox", "daily"],
+    projects: ["1-projects", "projects"],
+    areas: ["2-areas", "areas"],
+    resources: ["2-knowledge", "3-resources", "resources", "reference"],
+    archive: ["4-archive", "archive"],
   },
   ui: {
     showVitalsOnStartup: true,

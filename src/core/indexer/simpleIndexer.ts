@@ -164,8 +164,9 @@ export class SimpleIndexer {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
 
-    console.log("[SimpleIndexer] Starting full reindex...");
+    console.log("[SimpleIndexer] Starting full reindex - clearing existing index...");
     await this.indexManager.clearAll();
+    console.log("[SimpleIndexer] Index cleared, starting fresh sync...");
     return this.syncVault();
   }
 
@@ -397,6 +398,9 @@ export class SimpleIndexer {
     });
   }
 
+  // Debug counter for embedding logging
+  private _embedLogCount = 0;
+
   private async embedChunks(
     chunks: { text: string; [key: string]: unknown }[]
   ): Promise<EmbeddedChunk[]> {
@@ -416,6 +420,16 @@ export class SimpleIndexer {
       for (let j = 0; j < batch.length; j++) {
         const embedding = embeddings[j];
         if (!embedding || embedding.length === 0) continue;
+
+        // #region agent log - Log first 5 embeddings generated during indexing
+        if (this._embedLogCount < 5) {
+          this._embedLogCount++;
+          const norm = Math.sqrt(embedding.reduce((s: number, v: number) => s + v * v, 0));
+          const mean = embedding.reduce((s: number, v: number) => s + v, 0) / embedding.length;
+          const variance = embedding.reduce((s: number, v: number) => s + (v - mean) ** 2, 0) / embedding.length;
+          fetch('http://127.0.0.1:7243/ingest/db54760c-b4fe-42b5-bf91-10d41f2f08fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'simpleIndexer.ts:embedChunks',message:'EMBEDDING GENERATED',data:{text:texts[j].slice(0,100),textLen:texts[j].length,embeddingLen:embedding.length,first10:embedding.slice(0,10),norm,mean,variance},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'F,G,H'})}).catch(()=>{});
+        }
+        // #endregion
 
         embedded.push({
           ...(batch[j] as EmbeddedChunk),

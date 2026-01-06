@@ -37,16 +37,27 @@ interface StateFile {
   notes: Record<string, NoteState>;
 }
 
+/** Index completion state */
+export type IndexState = 
+  | "none"           // No index exists for this model
+  | "complete"       // Index exists and all vault notes are indexed
+  | "incomplete"     // Index exists but some notes missing
+  | "crashed"        // Previous indexing was interrupted
+  | "stale";         // Index exists but may have outdated entries
+
 /** Exported index state for UI */
 export interface IndexStats {
   exists: boolean;
   modelKey: string | null;
   noteCount: number;
   chunkCount: number;
+  vaultNoteCount: number;
   lastFullIndexAt: number | null;
   indexingInProgress: boolean;
   indexingStartedAt: number | null;
   needsRecovery: boolean; // True if crash detected
+  state: IndexState;
+  completionPercent: number;
 }
 
 /**
@@ -159,6 +170,7 @@ export class IndexManager {
   /** Get index statistics for UI */
   async getStats(): Promise<IndexStats> {
     const chunkCount = await this.countChunks();
+    const vaultNoteCount = this.kernel.obsidian.getMarkdownFiles().length;
     
     // Detect crash: indexing was in progress but took > 30 minutes (stuck)
     const CRASH_THRESHOLD_MS = 30 * 60 * 1000;
@@ -166,15 +178,36 @@ export class IndexManager {
       this.indexingStartedAt !== null &&
       (Date.now() - this.indexingStartedAt) > CRASH_THRESHOLD_MS;
 
+    // Determine index state
+    let state: IndexState;
+    if (this.states.size === 0 && chunkCount === 0) {
+      state = "none";
+    } else if (needsRecovery) {
+      state = "crashed";
+    } else if (this.states.size >= vaultNoteCount) {
+      state = "complete";
+    } else if (this.states.size > 0) {
+      state = "incomplete";
+    } else {
+      state = "stale"; // Has chunks but no state tracking
+    }
+
+    const completionPercent = vaultNoteCount > 0 
+      ? Math.round((this.states.size / vaultNoteCount) * 100)
+      : 0;
+
     return {
       exists: this.states.size > 0 || chunkCount > 0,
       modelKey: this.modelKey || null,
       noteCount: this.states.size,
       chunkCount,
+      vaultNoteCount,
       lastFullIndexAt: this.lastFullIndexAt,
       indexingInProgress: this.indexingInProgress,
       indexingStartedAt: this.indexingStartedAt,
       needsRecovery,
+      state,
+      completionPercent,
     };
   }
 
@@ -438,20 +471,25 @@ export class IndexManager {
 
   private async loadState(): Promise<void> {
     const statePath = this.getStatePath();
+    console.log(`[IndexManager] Looking for state at: ${statePath}`);
 
     try {
       const exists = await fs.promises
         .access(statePath)
         .then(() => true)
         .catch(() => false);
-      if (!exists) return;
+      
+      if (!exists) {
+        console.log(`[IndexManager] No state file found for modelKey=${this.modelKey}, starting fresh`);
+        return;
+      }
 
       const raw = await fs.promises.readFile(statePath, "utf-8");
       const data: StateFile = JSON.parse(raw);
 
       // Validate model key
       if (data.modelKey !== this.modelKey) {
-        console.log("[IndexManager] Model key mismatch, starting fresh");
+        console.log(`[IndexManager] Model key mismatch: file=${data.modelKey}, current=${this.modelKey}. Starting fresh.`);
         return;
       }
 
@@ -468,7 +506,7 @@ export class IndexManager {
         console.log(`[IndexManager] Detected interrupted indexing from ${new Date(this.indexingStartedAt ?? 0).toISOString()}`);
       }
 
-      console.log(`[IndexManager] Loaded state for ${this.states.size} notes`);
+      console.log(`[IndexManager] Loaded state: ${this.states.size} notes, modelKey=${this.modelKey}`);
     } catch (error) {
       console.warn("[IndexManager] Failed to load state:", error);
     }

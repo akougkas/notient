@@ -154,10 +154,11 @@ export class NotientSidebarView extends ItemView {
     }
 
     this.resultsContainer.empty();
-    this.resultsContainer.createDiv({
+    const loadingEl = this.resultsContainer.createDiv({
       cls: "notient-loading",
-      text: "Searching...",
     });
+    loadingEl.createSpan({ cls: "notient-spinner" });
+    loadingEl.createSpan({ text: " Searching...", cls: "notient-loading-text" });
 
     try {
       const results = await searchPipeline.search(query, { topK: 10 });
@@ -251,8 +252,7 @@ export class NotientSidebarView extends ItemView {
 
     this.relatedContainer.createDiv({
       cls: "notient-loading",
-      text: "Finding related notes...",
-    });
+    }).innerHTML = '<span class="notient-spinner"></span><span class="notient-loading-text"> Finding related notes...</span>';
 
     try {
       const related = await searchPipeline.findRelated(this.currentNotePath);

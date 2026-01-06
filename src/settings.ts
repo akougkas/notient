@@ -209,21 +209,38 @@ export class NotientSettingTab extends PluginSettingTab {
 
   private renderConnectionStatus(containerEl: HTMLElement): void {
     const health = this.kernel.serviceHealth;
+    const isReady = this.kernel.isServicesInitialized;
 
     const statusRow = containerEl.createDiv({ cls: "notient-settings-status-row" });
 
+    // Ollama status
     const ollamaStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
     ollamaStatus.createSpan({ cls: `notient-settings-dot status-${health.ollama.status}` });
     ollamaStatus.createSpan({ text: "Ollama" });
 
+    // LM Studio status
     const lmStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
     lmStatus.createSpan({ cls: `notient-settings-dot status-${health.lmstudio.status}` });
     lmStatus.createSpan({ text: "LM Studio" });
 
-    const indexManager = this.kernel.getService<{ getIndexedCount(): number }>("indexer");
-    if (indexManager) {
-      const indexStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
-      indexStatus.createSpan({ text: `📊 ${indexManager.getIndexedCount()} indexed` });
+    // Index stats - only show if services are ready
+    if (isReady) {
+      const indexManager = this.kernel.getService<{ 
+        getIndexedCount(): number;
+        getActiveModelKey(): string;
+      }>("indexManager");
+      
+      if (indexManager) {
+        const count = indexManager.getIndexedCount();
+        const indexStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
+        indexStatus.createSpan({ text: `📊 ${count} notes indexed` });
+      }
+    } else if (this.kernel.isServicesInitializing) {
+      const initStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
+      initStatus.createSpan({ text: "⏳ Initializing..." });
+    } else {
+      const notReady = statusRow.createDiv({ cls: "notient-settings-status-item" });
+      notReady.createSpan({ text: "⚠️ Run setup wizard" });
     }
   }
 
@@ -448,79 +465,202 @@ export class NotientSettingTab extends PluginSettingTab {
   }
 
   private renderIndexManagement(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv({ cls: "notient-settings-section" });
+    const section = containerEl.createDiv({ cls: "notient-settings-section notient-index-management" });
     section.createEl("h2", { text: "Index Management" });
 
-    const indexManager = this.kernel.getService<{
+    const isReady = this.kernel.isServicesInitialized;
+
+    const indexManager = isReady ? this.kernel.getService<{
       getIndexedCount(): number;
       getActiveModelKey(): string;
       listAvailableIndices(): string[];
-    }>("indexer");
+      exportIndex(): Promise<string>;
+      importIndex(json: string): Promise<{ modelKey: string; noteCount: number }>;
+      trimIndex(): Promise<{ removed: number }>;
+      deleteIndex(modelKey: string): Promise<boolean>;
+    }>("indexManager") : null;
 
-    if (indexManager) {
-      const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
-      infoBox.createEl("div", { text: `Active: ${indexManager.getActiveModelKey() || "none"}` });
+    // Info box showing current state
+    const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
+    
+    if (!isReady) {
+      infoBox.createEl("div", { 
+        text: this.kernel.isServicesInitializing 
+          ? "⏳ Services initializing..." 
+          : "⚠️ Services not ready. Complete setup wizard first.",
+        cls: "notient-settings-info-dim" 
+      });
+    } else if (indexManager) {
+      const activeKey = indexManager.getActiveModelKey() || "none";
+      const noteCount = indexManager.getIndexedCount();
+      
+      infoBox.createEl("div", { text: `🔑 Active Index: ${activeKey}` });
+      infoBox.createEl("div", { text: `📊 Notes: ${noteCount}`, cls: "notient-settings-info-dim" });
 
       const indices = indexManager.listAvailableIndices();
-      if (indices.length > 0) {
+      if (indices.length > 1) {
         infoBox.createEl("div", {
-          text: `Available: ${indices.join(", ")}`,
+          text: `📁 All indexes: ${indices.join(", ")}`,
           cls: "notient-settings-info-dim",
         });
       }
+    } else {
+      infoBox.createEl("div", { text: "No index data available", cls: "notient-settings-info-dim" });
     }
 
-    new Setting(section)
-      .setName("Export index")
-      .setDesc("Save to file for backup")
-      .addButton((btn) => btn.setButtonText("Export...").onClick(() => {
-        this.kernel.obsidian.notice("Export coming soon");
+    // Actions section
+    const actionsDiv = section.createDiv({ cls: "notient-settings-index-actions" });
+
+    // Sync button
+    new Setting(actionsDiv)
+      .setName("Sync Index")
+      .setDesc("Index new and changed notes")
+      .addButton((btn) => btn.setButtonText("▶️ Sync").onClick(() => {
+        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
+          .commands.executeCommandById("notient:reindex-vault");
       }));
 
-    new Setting(section)
-      .setName("Import index")
-      .setDesc("Load from file")
-      .addButton((btn) => btn.setButtonText("Import...").onClick(() => {
-        this.kernel.obsidian.notice("Import coming soon");
+    // Trim button
+    new Setting(actionsDiv)
+      .setName("Trim Stale Entries")
+      .setDesc("Remove vectors for deleted notes")
+      .addButton((btn) => btn.setButtonText("🧹 Trim").onClick(async () => {
+        if (!indexManager) {
+          this.kernel.obsidian.notice("Index manager not ready");
+          return;
+        }
+        try {
+          const result = await indexManager.trimIndex();
+          this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
+          this.display();
+        } catch (error) {
+          this.kernel.obsidian.notice(`Trim failed: ${error}`);
+        }
       }));
 
-    new Setting(section)
-      .setName("Trim index")
-      .setDesc("Remove deleted notes")
-      .addButton((btn) => btn.setButtonText("Trim").onClick(() => {
-        this.kernel.obsidian.notice("Trim coming soon");
+    // Export/Import row
+    const ioDiv = section.createDiv({ cls: "notient-settings-index-io" });
+    
+    new Setting(ioDiv)
+      .setName("Export")
+      .setDesc("Backup to file")
+      .addButton((btn) => btn.setButtonText("📤 Export").onClick(async () => {
+        if (!indexManager) {
+          this.kernel.obsidian.notice("Index manager not ready");
+          return;
+        }
+        try {
+          const json = await indexManager.exportIndex();
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `notient-index-${indexManager.getActiveModelKey()}-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          this.kernel.obsidian.notice("Index exported");
+        } catch (error) {
+          this.kernel.obsidian.notice(`Export failed: ${error}`);
+        }
       }));
 
-    new Setting(section)
-      .setName("Delete index")
-      .setDesc("Remove specific model index")
-      .addButton((btn) => btn.setButtonText("Delete...").setWarning().onClick(() => {
-        this.kernel.obsidian.notice("Delete coming soon");
+    new Setting(ioDiv)
+      .setName("Import")
+      .setDesc("Load from backup")
+      .addButton((btn) => btn.setButtonText("📥 Import").onClick(() => {
+        if (!indexManager) {
+          this.kernel.obsidian.notice("Index manager not ready");
+          return;
+        }
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        input.onchange = async (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const result = await indexManager.importIndex(text);
+            this.kernel.obsidian.notice(
+              `Imported ${result.noteCount} notes for ${result.modelKey}`
+            );
+            this.display();
+          } catch (error) {
+            this.kernel.obsidian.notice(`Import failed: ${error}`);
+          }
+        };
+        input.click();
       }));
+
+    // Danger zone
+    const dangerDiv = section.createDiv({ cls: "notient-settings-danger-zone" });
+    dangerDiv.createEl("h4", { text: "⚠️ Danger Zone" });
+
+    new Setting(dangerDiv)
+      .setName("Rebuild Index")
+      .setDesc("Clear and re-index everything from scratch")
+      .addButton((btn) => btn.setButtonText("🔄 Rebuild").setWarning().onClick(() => {
+        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
+          .commands.executeCommandById("notient:full-reindex");
+      }));
+
+    // Delete other indexes (if multiple exist)
+    if (indexManager) {
+      const indices = indexManager.listAvailableIndices();
+      const activeKey = indexManager.getActiveModelKey();
+      const otherIndices = indices.filter((k) => k !== activeKey);
+
+      if (otherIndices.length > 0) {
+        new Setting(dangerDiv)
+          .setName("Delete Old Indexes")
+          .setDesc(`Other indexes: ${otherIndices.join(", ")}`)
+          .addButton((btn) => btn.setButtonText("🗑️ Delete All Old").setWarning().onClick(async () => {
+            for (const key of otherIndices) {
+              await indexManager.deleteIndex(key);
+            }
+            this.kernel.obsidian.notice(`Deleted ${otherIndices.length} old indexes`);
+            this.display();
+          }));
+      }
+    }
   }
 
   private renderParaSection(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "PARA Folders" });
+    section.createEl("h2", { text: "IPARA Folder Mapping" });
 
-    const paraTypes: Array<{ key: keyof NotientSettings["para"]; label: string }> = [
-      { key: "inbox", label: "📥 Inbox" },
-      { key: "projects", label: "🎯 Projects" },
-      { key: "areas", label: "🏠 Areas" },
-      { key: "resources", label: "📚 Resources" },
-      { key: "archive", label: "📦 Archive" },
+    // Description
+    const desc = section.createDiv({ cls: "notient-settings-para-desc" });
+    desc.innerHTML = `
+      <p>Map your vault folders to IPARA pillars. Each pillar can span <b>multiple folders</b> (comma-separated).</p>
+      <p class="notient-settings-info-dim">Examples: <code>1-projects</code> or <code>1-projects/active, 4-archive/completed-projects</code></p>
+      <p class="notient-settings-info-dim">Subfolders are automatically included when matching.</p>
+    `;
+
+    const paraTypes: Array<{ key: keyof NotientSettings["para"]; label: string; hint: string }> = [
+      { key: "inbox", label: "📥 Inbox", hint: "Unsorted notes, daily captures" },
+      { key: "projects", label: "🎯 Projects", hint: "Active work with deadlines" },
+      { key: "areas", label: "🏠 Areas", hint: "Ongoing responsibilities" },
+      { key: "resources", label: "📚 Resources", hint: "Reference material, knowledge" },
+      { key: "archive", label: "📦 Archive", hint: "Completed/inactive items" },
     ];
 
-    for (const { key, label } of paraTypes) {
-      new Setting(section).setName(label).addText((text) =>
-        text.setValue(this.settings.para[key].join(", ")).onChange(async (value) => {
-          this.settings.para[key] = value
-            .split(",")
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0);
-          await this.onSettingsChange(this.settings);
-        })
-      );
+    for (const { key, label, hint } of paraTypes) {
+      new Setting(section)
+        .setName(label)
+        .setDesc(hint)
+        .addText((text) =>
+          text
+            .setPlaceholder(`folder1, folder2/subfolder`)
+            .setValue(this.settings.para[key].join(", "))
+            .onChange(async (value) => {
+              this.settings.para[key] = value
+                .split(",")
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0);
+              await this.onSettingsChange(this.settings);
+            })
+        );
     }
   }
 
@@ -559,9 +699,9 @@ export class NotientSettingTab extends PluginSettingTab {
       .setDesc("Delete ALL data")
       .addButton((btn) =>
         btn.setButtonText("Clear All").setWarning().onClick(async () => {
-          const indexManager = this.kernel.getService<{ clearAll(): Promise<void> }>("indexer");
-          if (indexManager) {
-            await indexManager.clearAll();
+          const indexMgr = this.kernel.getService<{ clearAll(): Promise<void> }>("indexManager");
+          if (indexMgr) {
+            await indexMgr.clearAll();
             this.kernel.obsidian.notice("All indexes cleared");
           }
         })

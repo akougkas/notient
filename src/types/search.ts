@@ -16,6 +16,8 @@ export interface SearchOptions {
   tags?: string[];
   /** Include note content in results */
   includeContent: boolean;
+  /** Original query text for hybrid search (lexical boost) */
+  queryText?: string;
 }
 
 export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
