@@ -62,8 +62,6 @@ export interface ProcessingStatus {
   pendingCount: number;
   /** Notes with errors */
   errorCount: number;
-  /** Jobs in queue */
-  queueLength: number;
   /** Last full index time */
   lastFullIndexAt: number | null;
   /** Index freshness percentage */

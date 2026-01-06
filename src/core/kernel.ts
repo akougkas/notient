@@ -48,7 +48,7 @@ export class Kernel {
   private _capabilities: CapabilityStatus = {
     embedding: false,
     reasoning: false,
-    vectorStore: true, // Orama is pure JS, always available
+    vectorStore: true, // SimpleVectorStore is pure JS, always available
     indexing: false,
     search: false,
   };
@@ -59,7 +59,6 @@ export class Kernel {
   private vectorStore: unknown = null;
   private indexer: unknown = null;
   private searchPipeline: unknown = null;
-  private jobQueue: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -191,7 +190,7 @@ export class Kernel {
     this._capabilities = {
       embedding: hasOllama,
       reasoning: hasLMStudio,
-      vectorStore: true, // Orama is always available (pure JS)
+      vectorStore: true, // SimpleVectorStore is always available (pure JS)
       indexing: hasOllama && hasLock,
       search: hasOllama,
     };
@@ -217,9 +216,6 @@ export class Kernel {
       case "search":
         this.searchPipeline = service;
         break;
-      case "jobQueue":
-        this.jobQueue = service;
-        break;
     }
   }
 
@@ -238,8 +234,6 @@ export class Kernel {
         return this.indexer as T;
       case "search":
         return this.searchPipeline as T;
-      case "jobQueue":
-        return this.jobQueue as T;
       default:
         return null;
     }
@@ -266,7 +260,6 @@ export class Kernel {
       this.vectorStore,
       this.ollamaService,
       this.healthMonitor,
-      this.jobQueue,
     ];
 
     for (const service of disposables) {

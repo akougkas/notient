@@ -4,7 +4,6 @@
 
 import type { ServiceHealth } from "./services";
 import type { IndexProgress } from "./indexer";
-import type { JobQueueStatus } from "./queue";
 import type { VaultVitalsData } from "./vitals";
 import type { SearchResult } from "./search";
 
@@ -14,7 +13,6 @@ export type EventType =
   | "index:progress"
   | "index:complete"
   | "index:error"
-  | "queue:changed"
   | "search:started"
   | "search:complete"
   | "vitals:updated"
@@ -27,7 +25,6 @@ export interface EventPayloads {
   "index:progress": IndexProgressEvent;
   "index:complete": IndexCompleteEvent;
   "index:error": IndexErrorEvent;
-  "queue:changed": QueueChangedEvent;
   "search:started": SearchStartedEvent;
   "search:complete": SearchCompleteEvent;
   "vitals:updated": VitalsUpdatedEvent;
@@ -52,10 +49,6 @@ export interface IndexCompleteEvent {
 export interface IndexErrorEvent {
   path: string;
   error: string;
-}
-
-export interface QueueChangedEvent {
-  status: JobQueueStatus;
 }
 
 export interface SearchStartedEvent {

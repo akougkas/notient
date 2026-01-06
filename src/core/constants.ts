@@ -12,7 +12,6 @@ export const VIEW_TYPE_DASHBOARD = "notient-dashboard";
 /** Storage paths relative to plugin folder */
 export const STORAGE_PATHS = {
   CACHE: "cache",
-  QUEUE: "processing-queue",
   LOCKS: "locks",
   LOGS: "logs",
   INDEX_STATE: "index-state.json",
@@ -39,8 +38,6 @@ export const PERFORMANCE = {
   SEARCH_LATENCY_CACHED_MS: 100,
   /** Target uncached search latency (ms) */
   SEARCH_LATENCY_UNCACHED_MS: 500,
-  /** Time slice for queue worker (ms) */
-  QUEUE_TIME_SLICE_MS: 50,
   /** Health check interval (ms) */
   HEALTH_CHECK_INTERVAL_MS: 30000,
 } as const;

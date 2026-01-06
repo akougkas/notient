@@ -68,14 +68,14 @@ src/
 │   ├── kernel.ts           # Service orchestration
 │   ├── constants.ts        # Global constants
 │   ├── events/             # Typed event bus
-│   ├── queue/              # Persistent job queue
-│   ├── indexer/            # Note indexing pipeline
+│   ├── indexer/            # Note chunking & indexing
 │   ├── search/             # Semantic search
 │   ├── vitals/             # Vault health metrics
 │   └── para/               # PARA method detection
 ├── services/
 │   ├── ollama.ts           # Embedding generation
-│   ├── orama.ts            # Vector storage (pure JS)
+│   ├── simpleVectorStore.ts # Vector storage (pure JS, brute-force cosine)
+│   ├── indexManager.ts     # Index & state coordination
 │   ├── healthMonitor.ts    # Service health checks
 │   ├── storagePaths.ts     # Path management
 │   └── vaultLock.ts        # Multi-window safety
@@ -93,11 +93,10 @@ All data is stored in `.obsidian/plugins/notient/`:
 
 ```
 ├── data.json              # Plugin settings
-├── orama-*.json           # Vector embeddings (per model)
-├── processing-queue/      # Background job state
+├── index-{modelKey}.json  # Vector embeddings (per model)
+├── state-{modelKey}.json  # Indexing state (per model)
 ├── cache/                 # Query caches
-├── locks/                 # Multi-window locks
-└── index-state.json       # Indexing progress
+└── locks/                 # Multi-window locks
 ```
 
 ## Tech Stack
@@ -106,7 +105,7 @@ All data is stored in `.obsidian/plugins/notient/`:
 - **Build:** Bun + esbuild
 - **LLM Reasoning:** [LM Studio](https://lmstudio.ai/) (OpenAI-compatible API)
 - **Embeddings:** [Ollama](https://ollama.ai/)
-- **Vector DB:** [Orama](https://orama.com/) (pure JS, bundled)
+- **Vector Store:** Custom brute-force cosine similarity (pure JS, zero dependencies)
 - **UI:** Obsidian native API + CSS variables
 
 ## Roadmap

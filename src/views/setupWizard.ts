@@ -44,6 +44,9 @@ export class SetupWizardModal extends Modal {
 
   private resolvePromise: ((result: SetupWizardResult) => void) | null = null;
 
+  // Track selected chunk preset for UI state
+  private selectedChunkPreset: "precise" | "balanced" | "context" = "balanced";
+
   constructor(
     app: App,
     private healthMonitor: HealthMonitor,
@@ -535,48 +538,100 @@ export class SetupWizardModal extends Modal {
   private renderIndexing(): void {
     const { contentEl } = this;
 
-    contentEl.createEl("h2", { text: "Step 5: Indexing Options" });
+    contentEl.createEl("h2", { text: "Step 5: Search Quality" });
     contentEl.createEl("p", {
-      text: "Configure how Notient indexes your vault for semantic search.",
+      text: "How should Notient break up your notes for semantic search?",
+      cls: "notient-wizard-subtitle"
     });
 
-    new Setting(contentEl)
-      .setName("Chunk Size")
-      .setDesc("Characters per chunk. Recommended: 500-1500")
-      .addText((text) =>
-        text
-          .setPlaceholder("1000")
-          .setValue(String(this.currentSettings.indexing.chunkSize))
-          .onChange((value) => {
-            const num = parseInt(value, 10);
-            if (!isNaN(num) && num >= 100 && num <= 5000) {
-              this.result.settings.indexing = {
-                ...this.currentSettings.indexing,
-                ...this.result.settings.indexing,
-                chunkSize: num,
-              };
-            }
-          })
-      );
+    // Chunk size presets - visual cards
+    const presetSection = contentEl.createDiv({ cls: "notient-chunk-presets" });
+    presetSection.createEl("label", { text: "Search Style", cls: "notient-preset-label" });
 
-    new Setting(contentEl)
-      .setName("Excluded Folders")
-      .setDesc("Folders to skip during indexing (comma-separated)")
-      .addText((text) =>
-        text
-          .setPlaceholder(".obsidian, templates")
-          .setValue(this.currentSettings.indexing.excludedFolders.join(", "))
-          .onChange((value) => {
-            this.result.settings.indexing = {
-              ...this.currentSettings.indexing,
-              ...this.result.settings.indexing,
-              excludedFolders: value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            };
-          })
-      );
+    const presetGrid = presetSection.createDiv({ cls: "notient-preset-grid" });
+
+    // Determine current selection based on chunk size
+    const currentChunkSize = this.result.settings.indexing?.chunkSize ?? this.currentSettings.indexing.chunkSize;
+    if (currentChunkSize <= 600) this.selectedChunkPreset = "precise";
+    else if (currentChunkSize >= 1000) this.selectedChunkPreset = "context";
+    else this.selectedChunkPreset = "balanced";
+
+    const presets = [
+      {
+        id: "precise" as const,
+        name: "Precise",
+        desc: "Smaller chunks, pinpoint accuracy",
+        detail: "Best for short notes, atomic ideas",
+        size: 800,
+        icon: "🎯"
+      },
+      {
+        id: "balanced" as const,
+        name: "Balanced",
+        desc: "Recommended for most vaults",
+        detail: "Good mix of precision & context",
+        size: 1500,
+        icon: "⚖️"
+      },
+      {
+        id: "context" as const,
+        name: "Context-Rich",
+        desc: "Larger chunks, more surrounding text",
+        detail: "Best for long-form articles",
+        size: 2500,
+        icon: "📚"
+      }
+    ];
+
+    for (const preset of presets) {
+      const card = presetGrid.createDiv({
+        cls: `notient-preset-card ${this.selectedChunkPreset === preset.id ? "selected" : ""}`
+      });
+
+      card.createEl("div", { text: preset.icon, cls: "notient-preset-icon" });
+      card.createEl("div", { text: preset.name, cls: "notient-preset-name" });
+      card.createEl("div", { text: preset.desc, cls: "notient-preset-desc" });
+      card.createEl("div", { text: preset.detail, cls: "notient-preset-detail" });
+
+      card.addEventListener("click", () => {
+        this.selectedChunkPreset = preset.id;
+        this.result.settings.indexing = {
+          ...this.currentSettings.indexing,
+          ...this.result.settings.indexing,
+          chunkSize: preset.size,
+        };
+        this.renderStep();
+      });
+    }
+
+    // Show current values
+    const currentValues = contentEl.createDiv({ cls: "notient-current-values" });
+    const finalSize = this.result.settings.indexing?.chunkSize ?? this.currentSettings.indexing.chunkSize;
+    currentValues.innerHTML = `<span class="notient-values-label">Max chunk size:</span> ${finalSize} characters`;
+
+    // Excluded folders - simplified
+    const excludeSection = contentEl.createDiv({ cls: "notient-exclude-section" });
+    excludeSection.createEl("label", { text: "Skip These Folders", cls: "notient-preset-label" });
+
+    const excludeInput = excludeSection.createEl("input", {
+      type: "text",
+      cls: "notient-exclude-input",
+      placeholder: ".obsidian, templates, archive"
+    });
+    excludeInput.value = (this.result.settings.indexing?.excludedFolders ?? this.currentSettings.indexing.excludedFolders).join(", ");
+    excludeInput.addEventListener("input", () => {
+      this.result.settings.indexing = {
+        ...this.currentSettings.indexing,
+        ...this.result.settings.indexing,
+        excludedFolders: excludeInput.value
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+    });
+
+    const excludeHint = excludeSection.createDiv({ cls: "notient-exclude-hint" });
+    excludeHint.textContent = "Comma-separated folder names to exclude from indexing";
 
     // Navigation
     const actions = contentEl.createDiv({ cls: "notient-wizard-actions" });

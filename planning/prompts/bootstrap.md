@@ -18,7 +18,7 @@ Notient is a free, open-source Obsidian community plugin that provides AI-powere
 - **Language**: TypeScript strict.
 - **LLM reasoning**: LM Studio (OpenAI-compatible API).
 - **Embeddings**: Ollama (local or remote on LAN).
-- **Vector DB**: Orama (pure JS, bundled with plugin).
+- **Vector Store**: Custom brute-force cosine similarity (pure JS, zero dependencies).
 - **Target runtime**: Obsidian desktop (Electron). Set `manifest.json.isDesktopOnly = true`.
 
 ### 1.3 Non-goals
@@ -42,7 +42,7 @@ Notient is structured around:
 - **UI layer**: Settings tab + Sidebar view + Dashboard view.
 - **Core orchestration**: Kernel/ServiceManager, event bus, background queue.
 - **Domain pipelines**: indexing, semantic search, vault vitals.
-- **Integrations**: LM Studio, Ollama, Orama.
+- **Integrations**: LM Studio, Ollama.
 
 ### 2.3 Key cross-cutting requirements
 - **Degraded mode**: plugin always loads; features disable gracefully when dependencies fail.
@@ -61,17 +61,16 @@ flowchart TD
   Kernel --> Paths[StoragePaths]
   Kernel --> Health[RuntimeHealthMonitor]
   Kernel --> Lock[VaultLock]
-  Kernel --> Queue[JobQueue]
   Kernel --> Obs[ObsidianFacade]
 
   Kernel --> Ollama[OllamaEmbeddingsService]
   Kernel --> LM[LMStudioReasoningService]
-  Kernel --> VS[VectorStoreInterface]
-  VS --> Orama[OramaStore]
+  Kernel --> IM[IndexManager]
+  IM --> VS[SimpleVectorStore]
 
-  Queue --> Indexer[IndexPipeline]
-  Queue --> Search[SearchPipeline]
-  Queue --> Vitals[VaultVitals]
+  Kernel --> Indexer[SimpleIndexer]
+  Kernel --> Search[SearchPipeline]
+  Kernel --> Vitals[SimpleVaultVitals]
 ```
 
 ## 3) Repository layout (code)
@@ -87,8 +86,7 @@ Maintain PRD layout and add a small set of “foundation” modules:
 
 - `src/core/kernel.ts` — service manager + lifecycle
 - `src/core/events/eventBus.ts` — typed event bus
-- `src/core/queue/jobQueue.ts` — persistent queue
-- `src/core/indexer/` — indexing pipeline
+- `src/core/indexer/` — indexing pipeline (simpleIndexer, simpleChunker)
 - `src/core/search/` — semantic search
 - `src/core/vitals/` — vault vitals
 - `src/core/para/` — PARA detection and note typing
@@ -98,7 +96,8 @@ Maintain PRD layout and add a small set of “foundation” modules:
 - `src/services/ollama.ts` — embeddings client wrapper
 - `src/services/lmstudio.ts` — LM Studio client wrapper
 - `src/services/vectorStore.ts` — interface + domain model
-- `src/services/orama.ts` — Orama vector store implementation
+- `src/services/simpleVectorStore.ts` — brute-force cosine similarity implementation
+- `src/services/indexManager.ts` — index + state coordination
 - `src/services/vaultLock.ts` — multi-window lock
 
 - `src/adapters/obsidianFacade.ts` — wrappers for App/Vault/Workspace
@@ -108,9 +107,9 @@ Maintain PRD layout and add a small set of “foundation” modules:
 Under `{vaultRoot}/.obsidian/plugins/notient/`:
 
 - `data.json` — plugin settings
+- `index-{modelKey}.json` — vector embeddings (per model)
+- `state-{modelKey}.json` — index state (per model)
 - `cache/` — ephemeral caches (search results, query embeddings)
-- `processing-queue/` — persistent job queue
-- `orama-*.json` — vector DB storage (per model)
 - `locks/` — lockfiles
 - `logs/` — optional local logs (debug only)
 
@@ -149,9 +148,9 @@ Typed pub/sub channel for:
 - Search status
 - Vitals refresh
 
-### 4.5 JobQueue (persistent)
-- Queue stored under `processing-queue/`.
-- Crash-safe: jobs in `in_progress` revert to `pending` on startup.
+### 4.5 SimpleIndexer (batch processing)
+- Direct async batch processing with UI yielding.
+- No persistent queue needed - simpler and more reliable.
 - Retry strategy: bounded attempts + exponential backoff metadata.
 
 ### 4.6 ObsidianFacade
@@ -177,10 +176,11 @@ This allows `bun test` for core modules without Obsidian.
 - Use `embed({ model, input, truncate?, keep_alive? })`.
 - Support custom `fetch` if needed in Obsidian runtime.
 
-### 5.3 Orama (vector store)
-- Use `@orama/orama` + `@orama/plugin-data-persistence`.
-- **Pure JavaScript** - no native modules, bundled with plugin.
-- Persisted as JSON files in plugin folder.
+### 5.3 SimpleVectorStore (vector store)
+- Custom brute-force cosine similarity implementation.
+- **Pure JavaScript** - zero external dependencies, bundled with plugin.
+- Persisted as JSON files in plugin folder (`index-{modelKey}.json`).
+- Fast enough for <100K vectors (<50ms search time).
 - Advantages over LanceDB:
   - No native module distribution issues
   - Works in all Electron environments
@@ -208,8 +208,8 @@ Maintain an index state store to avoid re-embedding unchanged notes:
 Storage location:
 - persisted as JSON in `processing-queue/` or a dedicated `index-state.json` (implementation choice), but must be crash-safe and atomic.
 
-### 6.3 Orama schema (minimum viable)
-A single database per modelKey, stored as `orama-{modelKey}.json`:
+### 6.3 Vector store schema (minimum viable)
+A single index per modelKey, stored as `index-{modelKey}.json`:
 - Document fields:
   - `chunkId` (string, primary)
   - `noteId` (string)
@@ -227,7 +227,7 @@ A single database per modelKey, stored as `orama-{modelKey}.json`:
 
 ### 6.4 Model switching / dimension mismatch
 Strategy:
-- Scope DB files by modelKey: `orama-{modelKey}.json`
+- Scope index files by modelKey: `index-{modelKey}.json`, `state-{modelKey}.json`
 - On model change:
   - create new DB file
   - enqueue background reindex
@@ -263,8 +263,8 @@ Strategy:
 
 ## 8) Semantic search pipeline
 ### 8.1 MVP behavior
-- Embed query
-- Vector search in Orama
+- Embed query via Ollama
+- Brute-force cosine similarity search in SimpleVectorStore
 - Return topK chunks; group by note; show snippets in sidebar
 
 ### 8.2 Hybrid cache architecture (PRD speed differentiator)
@@ -393,7 +393,7 @@ AI suggests; human approves. No silent modifications.
 Because Obsidian plugin installs do not run `npm install`, we must ship runtime deps with the plugin release.
 
 Planned options (evaluate in Phase 4):
-- Single release artifact works on all platforms (Orama is pure JS).
+- Single release artifact works on all platforms (SimpleVectorStore is pure JS).
 - Multi-platform bundle with per-platform binaries + runtime selection.
 - Optional binary downloader at first run (with user confirmation) if acceptable.
 
@@ -456,7 +456,7 @@ Each dev session should produce:
 Recommended early sessions:
 - **Session A**: Phase 0 repo bootstrap + kernel + paths + lock + minimal UI
 - **Session B**: queue + indexing skeleton + status UI
-- **Session C**: Ollama embeddings + Orama upsert + minimal semantic search
+- **Session C**: Ollama embeddings + SimpleVectorStore + minimal semantic search
 - **Session D**: vitals MVP + PARA detection + event wiring
 - **Session E**: onboarding wizard + model selection + reindex flow
 
@@ -480,7 +480,7 @@ Recommended early sessions:
 ## 20) Decision log (ADR cadence)
 Create ADRs for:
 - Build/bundling strategy with Bun for Obsidian
-- Vector store choice (Orama selected for pure JS compatibility)
+- Vector store choice (Custom brute-force cosine similarity for simplicity & zero dependencies)
 - Embedding model switching strategy (modelKey + DB scoping)
 - Degraded-mode capability model
 - Queue format and crash recovery semantics

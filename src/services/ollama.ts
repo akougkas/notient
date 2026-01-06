@@ -69,15 +69,8 @@ export class OllamaService {
     }
 
     try {
-      const response = await this.client.embed({
-        model,
-        input: text,
-        truncate: true,
-        keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
-      });
-
       return {
-        embedding: response.embeddings[0],
+        embedding: (await this.embedRequest(text, model, { timeoutMs: 30000 }))[0],
         model,
       };
     } catch (error) {
@@ -87,8 +80,8 @@ export class OllamaService {
   }
 
   /**
-   * Generate embeddings for multiple texts - ONE AT A TIME with timeout
-   * This prevents UI freezing by not batching network calls
+   * Generate embeddings for multiple texts in a single Ollama `/api/embed` call.
+   * Uses a hard timeout to avoid indefinitely stuck requests.
    */
   async embedBatch(texts: string[]): Promise<BatchEmbeddingResult> {
     if (this.disposed) {
@@ -104,57 +97,81 @@ export class OllamaService {
       throw new Error("No embedding model configured");
     }
 
-    const embeddings: number[][] = [];
-    const TIMEOUT_MS = 30000; // 30 second timeout per embedding
-
-    // Process ONE text at a time to keep UI responsive
-    for (const text of texts) {
-      try {
-        const response = await this.embedWithTimeout(text, model, TIMEOUT_MS);
-        embeddings.push(response);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Embedding failed: ${message}`);
-      }
+    if (texts.length === 0) {
+      return { embeddings: [], model };
     }
 
     return {
-      embeddings,
+      embeddings: await this.embedRequest(texts, model, { timeoutMs: 30000 }),
       model,
     };
   }
 
   /**
-   * Embed single text with timeout protection
+   * Direct Ollama embed call with timeout + abort support.
+   *
+   * We intentionally bypass the Ollama JS SDK here because its `embed()` method
+   * does not accept an AbortSignal, making timeouts/cancellation ineffective in
+   * long-running vault indexing.
    */
-  private async embedWithTimeout(
-    text: string,
+  private async embedRequest(
+    input: string | string[],
     model: string,
-    timeoutMs: number
-  ): Promise<number[]> {
-    if (!this.client) {
-      throw new Error("Client not initialized");
+    options: { timeoutMs: number; signal?: AbortSignal }
+  ): Promise<number[][]> {
+    const host = this.kernel.settings.ollama.host.replace(/\/$/, "");
+    const url = `${host}/api/embed`;
+
+    // Timeout + optional upstream abort
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (options.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
 
     try {
-      const response = await this.client.embed({
-        model,
-        input: text,
-        truncate: true,
-        keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input,
+          truncate: true,
+          keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
+        }),
+        signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-      return response.embeddings[0];
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(
+          `Ollama /api/embed failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`
+        );
+      }
+
+      const data = (await response.json()) as { embeddings: number[][] };
+      if (!data?.embeddings || !Array.isArray(data.embeddings)) {
+        throw new Error("Ollama /api/embed returned invalid response");
+      }
+      return data.embeddings;
     } catch (error) {
-      clearTimeout(timeoutId);
       if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`Embedding timed out after ${timeoutMs}ms`);
+        throw new Error(`Embedding timed out after ${options.timeoutMs}ms`);
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      if (options.signal) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
     }
   }
 
@@ -181,19 +198,9 @@ export class OllamaService {
       return known;
     }
 
-    // Generate test embedding
-    if (!this.client) {
-      throw new Error("Client not initialized");
-    }
-
     try {
-      const response = await this.client.embed({
-        model,
-        input: "test",
-        truncate: true,
-      });
-
-      this.modelDimension = response.embeddings[0].length;
+      const embeddings = await this.embedRequest("test", model, { timeoutMs: 15000 });
+      this.modelDimension = embeddings[0]?.length ?? 768;
       return this.modelDimension;
     } catch (error) {
       // Default fallback

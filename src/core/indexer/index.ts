@@ -2,6 +2,5 @@
  * Indexer module exports
  */
 
-export { IndexPipeline } from "./pipeline";
-export { IndexStateStore } from "./indexState";
-export { chunkNote, generateNoteId, generateContentHash } from "./chunker";
+export { SimpleIndexer } from "./simpleIndexer";
+export { chunkNote, generateNoteId, generateContentHash } from "./simpleChunker";

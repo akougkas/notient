@@ -1,14 +1,14 @@
 /**
- * Vault Vitals
- * 
+ * Simple Vault Vitals
+ *
  * Computes health metrics for the vault.
+ * Works with the simplified IndexManager.
  */
 
 import type { Kernel } from "../kernel";
 import type { EventBus } from "../events/eventBus";
 import type { VectorStore } from "../../services/vectorStore";
-import type { IndexStateStore } from "../indexer/indexState";
-import type { JobQueue } from "../queue/jobQueue";
+import type { IndexManager } from "../../services/indexManager";
 import { ParaDetector } from "../para/detector";
 import type {
   VaultVitalsData,
@@ -20,9 +20,9 @@ import type {
 } from "../../types/vitals";
 
 /**
- * Vault vitals calculator
+ * Vault vitals calculator (simplified version)
  */
-export class VaultVitals {
+export class SimpleVaultVitals {
   private paraDetector: ParaDetector;
   private disposed = false;
   private lastVitals: VaultVitalsData | null = null;
@@ -31,8 +31,7 @@ export class VaultVitals {
     private kernel: Kernel,
     private eventBus: EventBus,
     private vectorStore: VectorStore,
-    private indexState: IndexStateStore,
-    private jobQueue: JobQueue
+    private indexManager: IndexManager
   ) {
     this.paraDetector = new ParaDetector(kernel.settings);
   }
@@ -46,10 +45,10 @@ export class VaultVitals {
     }
 
     const files = this.kernel.obsidian.getMarkdownFiles();
-    
+
     const counts = await this.computeCounts(files);
     const connectivity = await this.computeConnectivity(files);
-    const processing = this.computeProcessingStatus();
+    const processing = await this.computeProcessingStatus();
     const paraDistribution = this.computeParaDistribution(files);
 
     const vitals: VaultVitalsData = {
@@ -79,22 +78,19 @@ export class VaultVitals {
   private async computeCounts(files: { path: string }[]): Promise<VaultCounts> {
     let orphanCount = 0;
     let hubCount = 0;
-    let totalTags = 0;
-    let totalLinks = 0;
     let inboxSize = 0;
+    let totalLinks = 0;
 
     const allTags = new Set<string>();
-    const linkCounts: Map<string, number> = new Map();
 
     for (const file of files) {
       const metadata = this.kernel.obsidian.getMetadataByPath(file.path);
-      
+
       // Count links
       const links = metadata?.links ?? [];
-      linkCounts.set(file.path, links.length);
       totalLinks += links.length;
 
-      // Orphan detection
+      // Orphan detection (no outgoing links)
       if (links.length === 0) {
         orphanCount++;
       }
@@ -148,9 +144,7 @@ export class VaultVitals {
 
       outgoingLinks.set(file.path, links.length);
 
-      // Count incoming links
       for (const link of links) {
-        // Resolve link to path
         const linkedPath = this.resolveLink(link, files);
         if (linkedPath) {
           incomingLinks.set(
@@ -169,7 +163,7 @@ export class VaultVitals {
     for (const file of files) {
       const incoming = incomingLinks.get(file.path) ?? 0;
       const outgoing = outgoingLinks.get(file.path) ?? 0;
-      
+
       totalLinks += outgoing;
       if (incoming === 0) noIncoming++;
       if (outgoing === 0) noOutgoing++;
@@ -208,40 +202,38 @@ export class VaultVitals {
    * Resolve a link to a file path
    */
   private resolveLink(link: string, files: { path: string }[]): string | null {
-    // Simple resolution - could be improved with Obsidian's link resolution
     const normalized = link.replace(/\.md$/, "").toLowerCase();
-    
+
     for (const file of files) {
       const filePath = file.path.toLowerCase();
       const fileBase = filePath.replace(/\.md$/, "");
-      
+
       if (fileBase === normalized || fileBase.endsWith("/" + normalized)) {
         return file.path;
       }
     }
-    
+
     return null;
   }
 
   /**
-   * Compute processing status from index state
+   * Compute processing status from IndexManager
    */
-  private computeProcessingStatus(): ProcessingStatus {
-    const counts = this.indexState.getCounts();
-    const queueStatus = this.jobQueue.getStatus();
-    const lastFullIndex = this.indexState.getLastFullIndexAt();
+  private async computeProcessingStatus(): Promise<ProcessingStatus> {
+    const totalFiles = this.kernel.obsidian.getMarkdownFiles().length;
+    const indexedCount = this.indexManager.getIndexedCount();
+    const lastFullIndex = this.indexManager.getLastFullIndexAt();
 
-    const total =
-      counts.pending + counts.processing + counts.indexed + counts.error;
-    const freshness = total > 0 ? (counts.indexed / total) * 100 : 0;
+    const pendingCount = Math.max(0, totalFiles - indexedCount);
+    const freshness =
+      totalFiles > 0 ? Math.round((indexedCount / totalFiles) * 100) : 0;
 
     return {
-      indexedCount: counts.indexed,
-      pendingCount: counts.pending + counts.processing,
-      errorCount: counts.error,
-      queueLength: queueStatus.pending + queueStatus.inProgress,
+      indexedCount,
+      pendingCount,
+      errorCount: 0,
       lastFullIndexAt: lastFullIndex,
-      freshness: Math.round(freshness),
+      freshness,
     };
   }
 
@@ -273,7 +265,6 @@ export class VaultVitals {
    */
   calculateHealthScore(vitals: VaultVitalsData): HealthScore {
     // Connectivity score (0-100)
-    // Good: high average links, low orphans
     const avgLinksScore = Math.min(
       vitals.connectivity.averageLinksPerNote * 20,
       100
@@ -288,13 +279,6 @@ export class VaultVitals {
     const freshness = vitals.processing.freshness;
 
     // Organization score
-    // Good: low unknown, distributed across PARA
-    const totalPara =
-      vitals.paraDistribution.inbox +
-      vitals.paraDistribution.projects +
-      vitals.paraDistribution.areas +
-      vitals.paraDistribution.resources +
-      vitals.paraDistribution.archive;
     const unknownRatio =
       vitals.counts.totalNotes > 0
         ? vitals.paraDistribution.unknown / vitals.counts.totalNotes
@@ -302,7 +286,6 @@ export class VaultVitals {
     const organization = Math.max((1 - unknownRatio) * 100, 0);
 
     // Processing score
-    // Good: low pending, low errors
     const errorRatio =
       vitals.counts.totalNotes > 0
         ? vitals.processing.errorCount / vitals.counts.totalNotes
@@ -311,7 +294,10 @@ export class VaultVitals {
 
     // Overall score (weighted average)
     const overall = Math.round(
-      connectivity * 0.3 + freshness * 0.25 + organization * 0.25 + processing * 0.2
+      connectivity * 0.3 +
+        freshness * 0.25 +
+        organization * 0.25 +
+        processing * 0.2
     );
 
     return {

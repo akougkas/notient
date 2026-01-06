@@ -8,12 +8,17 @@ VAULT_PLUGIN="/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient"
 if [[ "$1" == "--reset" || "$1" == "-r" ]]; then
     echo "🗑️  Resetting plugin data..."
     rm -f "$VAULT_PLUGIN/data.json" 2>/dev/null
-    rm -f "$VAULT_PLUGIN/orama-*.json" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/index-*.json" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/state-*.json" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/cache" 2>/dev/null
-    rm -rf "$VAULT_PLUGIN/processing-queue" 2>/dev/null
-    rm -rf "$VAULT_PLUGIN/lancedb" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/locks" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/logs" 2>/dev/null
+    # Legacy cleanup (pre-0.2.0)
+    rm -f "$VAULT_PLUGIN/orama-*.json" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/orama-*.orama" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/orama-*.meta.json" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/processing-queue" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/lancedb" 2>/dev/null
     rm -f "$VAULT_PLUGIN/index-state.json" 2>/dev/null
     echo "✅ Reset complete"
 fi

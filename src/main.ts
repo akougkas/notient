@@ -3,17 +3,23 @@
  *
  * Main plugin entry point.
  * SAFETY: Plugin must always load. Services initialize lazily after setup.
+ *
+ * Architecture (Simplified):
+ * - SimpleVectorStore: Brute-force cosine similarity, JSON persistence
+ * - IndexManager: Coordinates vector store and note state
+ * - SimpleIndexer: Batch processing with UI yields, no JobQueue
+ * - SearchPipeline: Cached semantic search
  */
 
 import { Plugin } from "obsidian";
 import { Kernel, KernelContext } from "./core/kernel";
-import { JobQueue } from "./core/queue/jobQueue";
 import { HealthMonitor } from "./services/healthMonitor";
 import { OllamaService } from "./services/ollama";
-import { OramaStore } from "./services/orama";
-import { IndexPipeline } from "./core/indexer/pipeline";
+import { SimpleVectorStore } from "./services/simpleVectorStore";
+import { IndexManager } from "./services/indexManager";
+import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { SearchPipeline } from "./core/search/pipeline";
-import { VaultVitals } from "./core/vitals/vitals";
+import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
@@ -29,50 +35,43 @@ export default class NotientPlugin extends Plugin {
   // Services - initialized lazily
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
-  private vectorStore: OramaStore | null = null;
-  private jobQueue: JobQueue | null = null;
-  private indexPipeline: IndexPipeline | null = null;
+  private vectorStore: SimpleVectorStore | null = null;
+  private indexManager: IndexManager | null = null;
+  private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
-  private vaultVitals: VaultVitals | null = null;
+  private vaultVitals: SimpleVaultVitals | null = null;
 
   private servicesInitialized = false;
 
   async onload(): Promise<void> {
-    console.log("[Notient] Loading plugin - step 1: start");
+    console.log("[Notient] Loading plugin...");
 
     try {
-      // Load settings first - this is always safe
-      console.log("[Notient] Loading plugin - step 2: loading settings");
+      // Load settings first
       this.settings = await loadSettings(this);
-      console.log("[Notient] Loading plugin - step 3: settings loaded, setupComplete =", this.settings.setupComplete);
+      console.log(
+        "[Notient] Settings loaded, setupComplete =",
+        this.settings.setupComplete
+      );
 
-      // Create kernel (lightweight, just creates event bus and paths)
-      console.log("[Notient] Loading plugin - step 4: creating kernel");
+      // Create kernel (lightweight)
       const context: KernelContext = {
         app: this.app,
         plugin: this,
         settings: this.settings,
       };
       this.kernel = new Kernel(context);
-      console.log("[Notient] Loading plugin - step 5: kernel created");
 
-      // Initialize kernel (creates directories, tries lock)
-      console.log("[Notient] Loading plugin - step 6: initializing kernel");
+      // Initialize kernel
       await this.kernel.initialize();
-      console.log("[Notient] Loading plugin - step 7: kernel initialized");
 
-      // Register views - safe, just registers factories
-      console.log("[Notient] Loading plugin - step 8: registering views");
+      // Register views
       this.registerViews();
-      console.log("[Notient] Loading plugin - step 9: views registered");
 
       // Register commands
-      console.log("[Notient] Loading plugin - step 10: registering commands");
       this.registerCommands();
-      console.log("[Notient] Loading plugin - step 11: commands registered");
 
       // Add settings tab
-      console.log("[Notient] Loading plugin - step 12: adding settings tab");
       this.settingTab = new NotientSettingTab(
         this.app,
         this,
@@ -85,30 +84,22 @@ export default class NotientPlugin extends Plugin {
         }
       );
       this.addSettingTab(this.settingTab);
-      console.log("[Notient] Loading plugin - step 13: settings tab added");
 
       // Add ribbon icon
-      console.log("[Notient] Loading plugin - step 14: adding ribbon icon");
       this.addRibbonIcon("sparkles", "Notient", () => {
         this.activateSidebar();
       });
-      console.log("[Notient] Loading plugin - step 15: ribbon added");
 
       // Check if setup needed
       if (!this.settings.setupComplete) {
-        console.log("[Notient] Loading plugin - step 16: scheduling setup wizard");
-        // Show wizard after a short delay to let UI settle
         setTimeout(() => this.showSetupWizard(), 500);
       } else {
-        console.log("[Notient] Loading plugin - step 16: scheduling service init");
-        // Initialize services in background (non-blocking)
         setTimeout(() => this.initializeServicesAsync(), 1000);
       }
 
-      console.log("[Notient] Plugin loaded successfully - all steps complete");
+      console.log("[Notient] Plugin loaded successfully");
     } catch (error) {
       console.error("[Notient] Failed to load plugin:", error);
-      // Don't throw - plugin should always load
     }
   }
 
@@ -119,13 +110,15 @@ export default class NotientPlugin extends Plugin {
       // Dispose services in reverse order
       this.vaultVitals?.dispose();
       this.searchPipeline?.dispose();
-      this.indexPipeline?.dispose();
+      this.indexer?.dispose();
+      if (this.indexManager) {
+        await this.indexManager.dispose();
+      }
       if (this.vectorStore) {
         await this.vectorStore.dispose();
       }
       this.ollamaService?.dispose();
       this.healthMonitor?.dispose();
-      this.jobQueue?.dispose();
 
       // Dispose kernel last
       this.kernel?.dispose();
@@ -137,8 +130,7 @@ export default class NotientPlugin extends Plugin {
   }
 
   /**
-   * Initialize services asynchronously with proper error handling
-   * REQUIRES: Both Ollama AND LM Studio must be configured
+   * Initialize services asynchronously
    */
   private async initializeServicesAsync(): Promise<void> {
     if (this.servicesInitialized) return;
@@ -147,27 +139,25 @@ export default class NotientPlugin extends Plugin {
 
     try {
       const eventBus = this.kernel.eventBus;
-      const storagePaths = this.kernel.storagePaths;
 
-      // Job queue - safe, just file operations
-      this.jobQueue = new JobQueue(storagePaths, eventBus);
-      await this.jobQueue.initialize();
-      this.kernel.registerService("jobQueue", this.jobQueue);
-
-      // Health monitor - makes network requests but handles errors
+      // Health monitor
       this.healthMonitor = new HealthMonitor(this.kernel);
       await this.healthMonitor.initialize();
       this.kernel.registerService("healthMonitor", this.healthMonitor);
 
-      // BOTH Ollama AND LM Studio are MANDATORY
+      // Validate required configuration
       const hasEmbeddingModel = Boolean(this.settings.ollama.embeddingModel);
       const hasReasoningModel = Boolean(this.settings.lmstudio.reasoningModel);
       const ollamaEnabled = this.settings.ollama.enabled;
       const lmstudioEnabled = this.settings.lmstudio.enabled;
 
-      // Validate all required configuration
-      if (!hasEmbeddingModel || !hasReasoningModel || !ollamaEnabled || !lmstudioEnabled) {
-        console.error("[Notient] MISSING REQUIRED CONFIGURATION:", {
+      if (
+        !hasEmbeddingModel ||
+        !hasReasoningModel ||
+        !ollamaEnabled ||
+        !lmstudioEnabled
+      ) {
+        console.error("[Notient] Missing required configuration:", {
           hasEmbeddingModel,
           hasReasoningModel,
           ollamaEnabled,
@@ -182,64 +172,62 @@ export default class NotientPlugin extends Plugin {
       console.log("[Notient] Required services configured:", {
         embeddingModel: this.settings.ollama.embeddingModel,
         reasoningModel: this.settings.lmstudio.reasoningModel,
-        ollamaUrl: this.settings.ollama.host,
-        lmstudioUrl: this.settings.lmstudio.host,
       });
 
-      // All required - proceed with initialization
-      if (true) {
+      // Initialize AI services
+      try {
         // Ollama service
         this.ollamaService = new OllamaService(this.kernel);
-        try {
-          await this.ollamaService.initialize();
-          this.kernel.registerService("ollama", this.ollamaService);
+        await this.ollamaService.initialize();
+        this.kernel.registerService("ollama", this.ollamaService);
 
-          // Vector store (depends on Ollama for model key)
-          this.vectorStore = new OramaStore(this.kernel);
-          await this.vectorStore.initialize();
-          this.kernel.registerService("vectorStore", this.vectorStore);
+        // Vector store (simple brute-force implementation)
+        this.vectorStore = new SimpleVectorStore(this.kernel);
+        await this.vectorStore.initialize();
+        this.kernel.registerService("vectorStore", this.vectorStore);
 
-          // Index pipeline
-          this.indexPipeline = new IndexPipeline(
-            this.kernel,
-            eventBus,
-            this.jobQueue,
-            this.ollamaService,
-            this.vectorStore
-          );
-          await this.indexPipeline.initialize();
-          this.kernel.registerService("indexer", this.indexPipeline);
+        // Index manager (coordinates store and state)
+        this.indexManager = new IndexManager(this.kernel, this.vectorStore);
+        await this.indexManager.initialize();
 
-          // Search pipeline
-          this.searchPipeline = new SearchPipeline(
-            this.kernel,
-            eventBus,
-            this.ollamaService,
-            this.vectorStore
-          );
-          await this.searchPipeline.initialize();
-          this.kernel.registerService("search", this.searchPipeline);
+        // Simple indexer (no JobQueue)
+        this.indexer = new SimpleIndexer(
+          this.kernel,
+          eventBus,
+          this.indexManager,
+          this.ollamaService
+        );
+        await this.indexer.initialize();
+        this.kernel.registerService("indexer", this.indexer);
 
-          // Vault vitals
-          this.vaultVitals = new VaultVitals(
-            this.kernel,
-            eventBus,
-            this.vectorStore,
-            this.indexPipeline.getStateStore(),
-            this.jobQueue
-          );
+        // Search pipeline
+        this.searchPipeline = new SearchPipeline(
+          this.kernel,
+          eventBus,
+          this.ollamaService,
+          this.vectorStore
+        );
+        await this.searchPipeline.initialize();
+        this.kernel.registerService("search", this.searchPipeline);
 
-          this.servicesInitialized = true;
-          console.log("[Notient] Services initialized successfully");
+        // Vault vitals (simplified)
+        this.vaultVitals = new SimpleVaultVitals(
+          this.kernel,
+          eventBus,
+          this.vectorStore,
+          this.indexManager
+        );
 
-          // Start background indexing after another delay
-          setTimeout(() => this.startBackgroundIndexing(), 2000);
-        } catch (error) {
-          console.error("[Notient] Failed to initialize AI services:", error);
-          this.kernel.obsidian.notice(
-            "Failed to connect to AI services. Check that Ollama and LM Studio are running."
-          );
-        }
+        this.servicesInitialized = true;
+        console.log("[Notient] Services initialized successfully");
+
+        // Start background indexing
+        setTimeout(() => this.startBackgroundIndexing(), 2000);
+      } catch (error) {
+        console.error("[Notient] Failed to initialize AI services:", error);
+        this.kernel.obsidian.notice(
+          "Failed to connect to AI services. Check that Ollama and LM Studio are running."
+        );
       }
     } catch (error) {
       console.error("[Notient] Service initialization failed:", error);
@@ -288,19 +276,41 @@ export default class NotientPlugin extends Plugin {
       },
     });
 
-    // Reindex vault
+    // Reindex vault (incremental)
     this.addCommand({
       id: "reindex-vault",
-      name: "Reindex entire vault",
+      name: "Sync vault index (incremental)",
       callback: async () => {
-        if (!this.indexPipeline || !this.kernel.capabilities.indexing) {
+        if (!this.indexer || !this.kernel.capabilities.indexing) {
           this.kernel.obsidian.notice(
             "Cannot index - check service connections"
           );
           return;
         }
-        this.kernel.obsidian.notice("Starting vault reindex...");
-        await this.indexPipeline.startFullIndex();
+        this.kernel.obsidian.notice("Starting vault sync...");
+        const result = await this.indexer.syncVault();
+        this.kernel.obsidian.notice(
+          `Sync complete: ${result.added} added, ${result.updated} updated`
+        );
+      },
+    });
+
+    // Full reindex
+    this.addCommand({
+      id: "full-reindex",
+      name: "Full reindex (rebuild everything)",
+      callback: async () => {
+        if (!this.indexer || !this.kernel.capabilities.indexing) {
+          this.kernel.obsidian.notice(
+            "Cannot index - check service connections"
+          );
+          return;
+        }
+        this.kernel.obsidian.notice("Starting full reindex...");
+        const result = await this.indexer.fullReindex();
+        this.kernel.obsidian.notice(
+          `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`
+        );
       },
     });
 
@@ -359,10 +369,8 @@ export default class NotientPlugin extends Plugin {
   }
 
   private async showSetupWizard(): Promise<void> {
-    // Need health monitor for wizard, initialize it first if needed
     if (!this.healthMonitor) {
       this.healthMonitor = new HealthMonitor(this.kernel);
-      // Don't await initialize - let wizard handle connection testing
     }
 
     const wizard = new SetupWizardModal(
@@ -374,7 +382,6 @@ export default class NotientPlugin extends Plugin {
     const result = await wizard.run();
 
     if (result.completed) {
-      // Apply settings
       this.settings = {
         ...this.settings,
         ...result.settings,
@@ -388,10 +395,7 @@ export default class NotientPlugin extends Plugin {
       this.settingTab.updateSettings(this.settings);
       this.kernel.updateSettings(this.settings);
 
-      // Initialize services now that we have config
       this.kernel.obsidian.notice("Notient configured! Initializing...");
-
-      // Reinitialize everything with new settings
       await this.reinitializeServices();
     }
   }
@@ -400,14 +404,18 @@ export default class NotientPlugin extends Plugin {
     try {
       // Dispose old services
       this.searchPipeline?.dispose();
-      this.indexPipeline?.dispose();
+      this.indexer?.dispose();
+      if (this.indexManager) {
+        await this.indexManager.dispose();
+      }
       if (this.vectorStore) {
         await this.vectorStore.dispose();
       }
       this.ollamaService?.dispose();
 
       this.searchPipeline = null;
-      this.indexPipeline = null;
+      this.indexer = null;
+      this.indexManager = null;
       this.vectorStore = null;
       this.ollamaService = null;
       this.servicesInitialized = false;
@@ -427,8 +435,8 @@ export default class NotientPlugin extends Plugin {
   }
 
   private async startBackgroundIndexing(): Promise<void> {
-    if (!this.indexPipeline) {
-      console.log("[Notient] Cannot start indexing - pipeline not initialized");
+    if (!this.indexer) {
+      console.log("[Notient] Cannot start indexing - indexer not initialized");
       return;
     }
 
@@ -438,7 +446,7 @@ export default class NotientPlugin extends Plugin {
     }
 
     try {
-      await this.indexPipeline.startFullIndex();
+      await this.indexer.syncVault();
     } catch (error) {
       console.error("[Notient] Background indexing failed:", error);
     }

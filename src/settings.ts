@@ -106,12 +106,6 @@ export function validateSettings(settings: NotientSettings): SettingsValidation 
       message: "Chunk size must be at least 100 characters",
     });
   }
-  if (settings.indexing.chunkOverlap >= settings.indexing.chunkSize) {
-    errors.push({
-      field: "indexing.chunkOverlap",
-      message: "Chunk overlap must be less than chunk size",
-    });
-  }
 
   return {
     valid: errors.length === 0,
@@ -301,32 +295,16 @@ export class NotientSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "Indexing" });
 
     new Setting(containerEl)
-      .setName("Chunk Size")
-      .setDesc("Target size for text chunks (characters)")
+      .setName("Max Chunk Size")
+      .setDesc("Maximum size for text chunks (characters). Notes are split by headings first.")
       .addText((text) =>
         text
-          .setPlaceholder("1000")
+          .setPlaceholder("1500")
           .setValue(String(this.settings.indexing.chunkSize))
           .onChange(async (value) => {
             const num = parseInt(value, 10);
             if (!isNaN(num) && num >= 100) {
               this.settings.indexing.chunkSize = num;
-              await this.onSettingsChange(this.settings);
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Chunk Overlap")
-      .setDesc("Overlap between chunks (characters)")
-      .addText((text) =>
-        text
-          .setPlaceholder("200")
-          .setValue(String(this.settings.indexing.chunkOverlap))
-          .onChange(async (value) => {
-            const num = parseInt(value, 10);
-            if (!isNaN(num) && num >= 0) {
-              this.settings.indexing.chunkOverlap = num;
               await this.onSettingsChange(this.settings);
             }
           })

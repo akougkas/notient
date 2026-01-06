@@ -84,12 +84,3 @@ export interface EmbeddedChunk extends NoteChunk {
   modelKey: string;
 }
 
-/** Chunking options */
-export interface ChunkingOptions {
-  /** Target chunk size in characters */
-  chunkSize: number;
-  /** Overlap between chunks */
-  chunkOverlap: number;
-  /** Whether to preserve markdown structure */
-  preserveStructure: boolean;
-}

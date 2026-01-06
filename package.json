@@ -31,8 +31,6 @@
   },
   "dependencies": {
     "@lmstudio/sdk": "^0.3.0",
-    "@orama/orama": "^3.1.18",
-    "@orama/plugin-data-persistence": "^3.1.18",
     "ollama": "^0.5.0"
   }
 }

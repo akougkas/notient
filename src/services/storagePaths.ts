@@ -17,13 +17,11 @@ export interface StoragePathsConfig {
   pluginRoot: string;
   /** Cache folder */
   cache: string;
-  /** Processing queue folder */
-  queue: string;
   /** Lock files folder */
   locks: string;
   /** Logs folder */
   logs: string;
-  /** Index state file path */
+  /** Index state file path (legacy, kept for migration) */
   indexState: string;
 }
 
@@ -54,7 +52,6 @@ export class StoragePaths {
       vaultRoot,
       pluginRoot,
       cache: path.join(pluginRoot, STORAGE_PATHS.CACHE),
-      queue: path.join(pluginRoot, STORAGE_PATHS.QUEUE),
       locks: path.join(pluginRoot, STORAGE_PATHS.LOCKS),
       logs: path.join(pluginRoot, STORAGE_PATHS.LOGS),
       indexState: path.join(pluginRoot, STORAGE_PATHS.INDEX_STATE),
@@ -67,7 +64,6 @@ export class StoragePaths {
   async ensureDirectories(): Promise<void> {
     const dirs = [
       this.config.cache,
-      this.config.queue,
       this.config.locks,
       this.config.logs,
     ];
@@ -96,13 +92,6 @@ export class StoragePaths {
    */
   get cache(): string {
     return this.config.cache;
-  }
-
-  /**
-   * Get the queue directory path
-   */
-  get queue(): string {
-    return this.config.queue;
   }
 
   /**

@@ -6,9 +6,15 @@
 
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import type { Kernel } from "../core/kernel";
-import type { VaultVitals } from "../core/vitals/vitals";
 import type { VaultVitalsData, HealthScore } from "../types/vitals";
 import { VIEW_TYPE_DASHBOARD } from "../core/constants";
+
+/** Common interface for vitals implementations */
+interface VitalsProvider {
+  compute(): Promise<VaultVitalsData>;
+  getCached(): VaultVitalsData | null;
+  calculateHealthScore(vitals: VaultVitalsData): HealthScore;
+}
 
 export class NotientDashboardView extends ItemView {
   private vitalsContainer: HTMLElement | null = null;
@@ -17,7 +23,7 @@ export class NotientDashboardView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private kernel: Kernel,
-    private vaultVitals: VaultVitals | null
+    private vaultVitals: VitalsProvider | null
   ) {
     super(leaf);
   }
@@ -226,13 +232,12 @@ export class NotientDashboardView extends ItemView {
 
   private renderProcessingCard(container: HTMLElement, vitals: VaultVitalsData): void {
     const card = container.createDiv({ cls: "notient-stat-card" });
-    card.createEl("h3", { text: "⚙️ Processing" });
+    card.createEl("h3", { text: "⚙️ Indexing" });
 
     const stats = [
       { label: "Indexed", value: vitals.processing.indexedCount },
       { label: "Pending", value: vitals.processing.pendingCount, highlight: vitals.processing.pendingCount > 0 },
       { label: "Errors", value: vitals.processing.errorCount, highlight: vitals.processing.errorCount > 0 },
-      { label: "Queue Length", value: vitals.processing.queueLength },
       { label: "Freshness", value: `${vitals.processing.freshness}%` },
     ];
 

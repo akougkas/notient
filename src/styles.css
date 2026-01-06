@@ -781,3 +781,270 @@
   font-size: var(--font-smallest);
   margin-left: var(--size-4-2);
 }
+
+/* ============ Wizard Chunk Presets ============ */
+
+.notient-wizard-subtitle {
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-4);
+}
+
+.notient-chunk-presets {
+  margin-bottom: var(--size-4-4);
+}
+
+.notient-preset-label {
+  display: block;
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-4-2);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.notient-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--size-4-3);
+}
+
+@media (max-width: 600px) {
+  .notient-preset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.notient-preset-card {
+  padding: var(--size-4-4);
+  background: var(--background-secondary);
+  border: 2px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.notient-preset-card:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+  transform: translateY(-2px);
+}
+
+.notient-preset-card.selected {
+  border-color: var(--interactive-accent);
+  background: linear-gradient(135deg, var(--background-secondary) 0%, rgba(var(--interactive-accent-rgb), 0.1) 100%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.notient-preset-icon {
+  font-size: 2rem;
+  margin-bottom: var(--size-4-2);
+}
+
+.notient-preset-name {
+  font-weight: var(--font-bold);
+  font-size: var(--font-ui-medium);
+  color: var(--text-normal);
+  margin-bottom: var(--size-2-2);
+}
+
+.notient-preset-desc {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-1);
+}
+
+.notient-preset-detail {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.notient-current-values {
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-modifier-message);
+  border-radius: var(--radius-m);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: var(--size-4-4);
+}
+
+.notient-values-label {
+  font-weight: var(--font-medium);
+  color: var(--text-normal);
+}
+
+.notient-exclude-section {
+  margin-bottom: var(--size-4-2);
+}
+
+.notient-exclude-input {
+  width: 100%;
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  margin-top: var(--size-4-2);
+}
+
+.notient-exclude-input:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.notient-exclude-hint {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  margin-top: var(--size-2-1);
+}
+
+/* Config table styling */
+.notient-config-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.notient-config-table tr {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.notient-config-table tr:last-child {
+  border-bottom: none;
+}
+
+.notient-config-label {
+  padding: var(--size-4-2) var(--size-4-2) var(--size-4-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.notient-config-value {
+  padding: var(--size-4-2);
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
+  word-break: break-all;
+}
+
+/* Wizard required text */
+.notient-wizard-required {
+  color: var(--text-muted);
+}
+
+/* Test row styling */
+.notient-wizard-test-row {
+  margin: var(--size-4-3) 0;
+}
+
+.notient-test-btn {
+  padding: var(--size-4-2) var(--size-4-4);
+  background: var(--interactive-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  cursor: pointer;
+  font-weight: var(--font-medium);
+}
+
+.notient-test-btn:hover:not(:disabled) {
+  background: var(--interactive-hover);
+}
+
+.notient-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Selected model indicator */
+.notient-wizard-selected {
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-modifier-success);
+  border-radius: var(--radius-m);
+  color: var(--text-success);
+  margin-top: var(--size-4-3);
+}
+
+/* Wizard requirements box */
+.notient-wizard-requirements {
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  margin: var(--size-4-3) 0;
+}
+
+.notient-wizard-requirements h3 {
+  margin: 0 0 var(--size-4-2) 0;
+  font-size: var(--font-ui-medium);
+}
+
+.notient-wizard-requirements ul {
+  margin: 0;
+  padding-left: var(--size-4-4);
+}
+
+.notient-wizard-requirements li {
+  margin-bottom: var(--size-2-2);
+}
+
+/* Wizard warning */
+.notient-wizard-warning {
+  padding: var(--size-4-3);
+  background: var(--background-modifier-error);
+  border-radius: var(--radius-m);
+  color: var(--text-error);
+  margin: var(--size-4-3) 0;
+}
+
+/* Troubleshooting section */
+.notient-wizard-troubleshooting {
+  padding: var(--size-4-3);
+  background: var(--background-modifier-message);
+  border-radius: var(--radius-m);
+  border-left: 3px solid var(--color-orange);
+  margin: var(--size-4-4) 0;
+}
+
+.notient-wizard-troubleshooting h4 {
+  margin: 0 0 var(--size-4-2) 0;
+  color: var(--text-warning);
+}
+
+.notient-wizard-troubleshooting ul {
+  margin: 0;
+  padding-left: var(--size-4-4);
+}
+
+.notient-wizard-troubleshooting li {
+  margin-bottom: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+/* Status display within wizard */
+.notient-status {
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  font-size: var(--font-ui-small);
+}
+
+.notient-status-idle {
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.notient-status-checking {
+  background: var(--background-modifier-message);
+  color: var(--text-accent);
+}
+
+.notient-status-healthy {
+  background: var(--background-modifier-success);
+  color: var(--text-success);
+}
+
+.notient-status-unhealthy {
+  background: var(--background-modifier-error);
+  color: var(--text-error);
+}

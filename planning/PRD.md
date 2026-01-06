@@ -39,15 +39,16 @@
   - **Build:** Bun + esbuild
   - **LLM (Reasoning):** LM Studio (OpenAI-compatible API)
   - **LLM (Embeddings):** Ollama (local or remote on LAN)
-  - **Vector DB:** Orama (pure JS, bundled with plugin)
+  - **Vector Store:** Custom brute-force cosine similarity (pure JS, zero dependencies)
   - **UI Framework:** Obsidian API + native components
 
   ### Data Storage
   .obsidian/plugins/notient/
   ├── data.json           # Plugin settings
-  ├── orama-*.json        # Vector embeddings (per model)
+  ├── index-{modelKey}.json   # Vector embeddings (per model)
+  ├── state-{modelKey}.json   # Index state (per model)
   ├── cache/              # Search result cache
-  └── processing-queue/   # Pending batch operations
+  └── locks/              # Multi-window safety
 
   ### Embedding Strategy
   - **Model:** User chooses during setup wizard
@@ -103,7 +104,7 @@
 
   ### Phase 1: Core (MVP)
   - [x] Setup wizard with LLM detection (Ollama + LM Studio)
-  - [x] Orama vector store for embeddings
+  - [x] Simple vector store with brute-force cosine similarity
   - [x] Semantic search (sidebar command)
   - [x] Related notes panel
   - [x] Basic Vault Vitals (note count, inbox size, orphan count)
@@ -229,7 +230,7 @@
   ## Open Questions
 
   1. Exact embedding models to recommend for different hardware tiers?
-  2. ~~LanceDB vs alternatives~~ → Orama selected (pure JS, no native modules)
+  2. ~~LanceDB vs alternatives~~ → Custom brute-force cosine similarity (pure JS, zero dependencies)
   3. Obsidian API limitations for vault operations?
   4. Hot reload during development - best Bun workflow?
 

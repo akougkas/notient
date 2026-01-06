@@ -2,4 +2,4 @@
  * Vitals module exports
  */
 
-export { VaultVitals } from "./vitals";
+export { SimpleVaultVitals } from "./simpleVitals";

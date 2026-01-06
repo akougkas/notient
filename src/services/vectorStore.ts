@@ -64,4 +64,27 @@ export interface VectorStore {
    * Dispose of the store
    */
   dispose(): void;
+
+  /**
+   * Optional: signal the store that a large bulk indexing operation is starting.
+   * Implementations may suspend expensive persistence work while bulk updates run.
+   */
+  beginBulkUpdate?(): void;
+
+  /**
+   * Optional: signal the store that bulk indexing has finished.
+   * Implementations may resume persistence and flush pending writes.
+   */
+  endBulkUpdate?(): Promise<void>;
+
+  /**
+   * Optional: force persistence of any pending writes.
+   */
+  flush?(): Promise<void>;
+
+  /**
+   * Optional: clear ALL data for full reindex.
+   * Much faster than deleting documents one by one.
+   */
+  clearAll?(): Promise<void>;
 }

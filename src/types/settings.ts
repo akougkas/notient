@@ -24,13 +24,11 @@ export interface NotientSettings {
 
   /** Indexing configuration */
   indexing: {
-    /** Chunk size in characters */
+    /** Maximum chunk size in characters */
     chunkSize: number;
-    /** Chunk overlap in characters */
-    chunkOverlap: number;
     /** Debounce delay for vault events (ms) */
     debounceMs: number;
-    /** Batch size for indexing jobs */
+    /** Batch size for embedding requests */
     batchSize: number;
     /** Excluded folders (relative paths) */
     excludedFolders: string[];
@@ -74,10 +72,9 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     enabled: true,
   },
   indexing: {
-    chunkSize: 1000,
-    chunkOverlap: 200,
+    chunkSize: 1500,
     debounceMs: 5000,
-    batchSize: 10,
+    batchSize: 4,
     excludedFolders: [".obsidian", ".trash"],
   },
   para: {
