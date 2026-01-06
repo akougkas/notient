@@ -262,6 +262,171 @@ export class IndexManager {
     }
   }
 
+  /**
+   * Delete a specific model's index files
+   */
+  async deleteIndex(modelKey: string): Promise<boolean> {
+    if (modelKey === this.modelKey) {
+      // Can't delete active index - clear it instead
+      await this.clearAll();
+      return true;
+    }
+
+    try {
+      const indexPath = path.join(
+        this.kernel.storagePaths.pluginRoot,
+        `index-${modelKey}.json`
+      );
+      const statePath = path.join(
+        this.kernel.storagePaths.pluginRoot,
+        `state-${modelKey}.json`
+      );
+
+      const indexExists = await fs.promises
+        .access(indexPath)
+        .then(() => true)
+        .catch(() => false);
+      const stateExists = await fs.promises
+        .access(statePath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (indexExists) {
+        await fs.promises.unlink(indexPath);
+      }
+      if (stateExists) {
+        await fs.promises.unlink(statePath);
+      }
+
+      console.log(`[IndexManager] Deleted index for ${modelKey}`);
+      return true;
+    } catch (error) {
+      console.error(`[IndexManager] Failed to delete index ${modelKey}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Trim stale entries - remove vectors for notes that no longer exist
+   */
+  async trimIndex(): Promise<{ removed: number }> {
+    const currentPaths = new Set(
+      this.kernel.obsidian.getMarkdownFiles().map((f) => f.path)
+    );
+    
+    let removed = 0;
+    const stalePaths: string[] = [];
+
+    for (const notePath of Array.from(this.states.keys())) {
+      if (!currentPaths.has(notePath)) {
+        stalePaths.push(notePath);
+      }
+    }
+
+    for (const notePath of stalePaths) {
+      const state = this.states.get(notePath);
+      if (state) {
+        const noteId = this.generateNoteId(notePath);
+        await this.vectorStore.deleteByNoteId(noteId);
+        this.states.delete(notePath);
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      this.dirty = true;
+      await this.saveState();
+      await this.vectorStore.flush?.();
+    }
+
+    console.log(`[IndexManager] Trimmed ${removed} stale entries`);
+    return { removed };
+  }
+
+  private generateNoteId(notePath: string): string {
+    // Simple hash for noteId - must match chunker's generateNoteId
+    let hash = 0;
+    for (let i = 0; i < notePath.length; i++) {
+      const char = notePath.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return `note_${Math.abs(hash).toString(36)}`;
+  }
+
+  // ============ Export / Import ============
+
+  /**
+   * Export index to a portable JSON format
+   */
+  async exportIndex(): Promise<string> {
+    const indexPath = path.join(
+      this.kernel.storagePaths.pluginRoot,
+      `index-${this.modelKey}.json`
+    );
+
+    try {
+      const indexData = await fs.promises.readFile(indexPath, "utf-8");
+      const stateData: StateFile = {
+        version: 1,
+        modelKey: this.modelKey,
+        lastFullIndexAt: this.lastFullIndexAt,
+        indexingInProgress: false,
+        indexingStartedAt: null,
+        notes: Object.fromEntries(this.states),
+      };
+
+      const exportData = {
+        exportedAt: Date.now(),
+        index: JSON.parse(indexData),
+        state: stateData,
+      };
+
+      return JSON.stringify(exportData);
+    } catch (error) {
+      throw new Error(`Failed to export index: ${error}`);
+    }
+  }
+
+  /**
+   * Import index from exported JSON
+   * Returns model key of imported index (may differ from current)
+   */
+  async importIndex(jsonData: string): Promise<{ modelKey: string; noteCount: number }> {
+    try {
+      const data = JSON.parse(jsonData) as {
+        exportedAt: number;
+        index: { meta: { modelKey: string; dimension: number }; docs: unknown[] };
+        state: StateFile;
+      };
+
+      const importedModelKey = data.index.meta.modelKey;
+
+      // Write index file
+      const indexPath = path.join(
+        this.kernel.storagePaths.pluginRoot,
+        `index-${importedModelKey}.json`
+      );
+      await fs.promises.writeFile(indexPath, JSON.stringify(data.index));
+
+      // Write state file
+      const statePath = path.join(
+        this.kernel.storagePaths.pluginRoot,
+        `state-${importedModelKey}.json`
+      );
+      await fs.promises.writeFile(statePath, JSON.stringify(data.state, null, 2));
+
+      console.log(`[IndexManager] Imported index for ${importedModelKey}`);
+
+      return {
+        modelKey: importedModelKey,
+        noteCount: Object.keys(data.state.notes).length,
+      };
+    } catch (error) {
+      throw new Error(`Failed to import index: ${error}`);
+    }
+  }
+
   // ============ Private Methods ============
 
   private getStatePath(): string {

@@ -190,6 +190,7 @@ export default class NotientPlugin extends Plugin {
         // Index manager (coordinates store and state)
         this.indexManager = new IndexManager(this.kernel, this.vectorStore);
         await this.indexManager.initialize();
+        this.kernel.registerService("indexManager", this.indexManager);
 
         // Simple indexer (no JobQueue)
         this.indexer = new SimpleIndexer(
@@ -478,8 +479,8 @@ export default class NotientPlugin extends Plugin {
   }
 
   private async startBackgroundIndexing(): Promise<void> {
-    if (!this.indexer) {
-      console.log("[Notient] Cannot start indexing - indexer not initialized");
+    if (!this.indexer || !this.indexManager) {
+      console.log("[Notient] Cannot start indexing - services not initialized");
       return;
     }
 
@@ -489,6 +490,18 @@ export default class NotientPlugin extends Plugin {
     }
 
     try {
+      // Check for crash recovery
+      const stats = await this.indexManager.getStats();
+      if (stats.needsRecovery) {
+        console.log("[Notient] Detected interrupted indexing session");
+        this.kernel.obsidian.notice(
+          "Previous indexing was interrupted. Starting fresh sync...",
+          5000
+        );
+        // Clear the in-progress flag and restart
+        this.indexManager.endIndexing();
+      }
+
       await this.indexer.syncVault();
     } catch (error) {
       console.error("[Notient] Background indexing failed:", error);

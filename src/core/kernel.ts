@@ -59,6 +59,7 @@ export class Kernel {
   private healthMonitor: unknown = null;
   private ollamaService: unknown = null;
   private vectorStore: unknown = null;
+  private indexManager: unknown = null;
   private indexer: unknown = null;
   private searchPipeline: unknown = null;
   private vaultVitals: unknown = null;
@@ -233,6 +234,9 @@ export class Kernel {
       case "vectorStore":
         this.vectorStore = service;
         break;
+      case "indexManager":
+        this.indexManager = service;
+        break;
       case "indexer":
         this.indexer = service;
         break;
@@ -256,6 +260,8 @@ export class Kernel {
         return this.ollamaService as T;
       case "vectorStore":
         return this.vectorStore as T;
+      case "indexManager":
+        return this.indexManager as T;
       case "indexer":
         return this.indexer as T;
       case "search":
@@ -286,6 +292,7 @@ export class Kernel {
       this.vaultVitals,
       this.searchPipeline,
       this.indexer,
+      this.indexManager,
       this.vectorStore,
       this.ollamaService,
       this.healthMonitor,
