@@ -21,6 +21,7 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 4. **Human-centered** - Trust levels for agent autonomy, user always in steering wheel
 5. **Privacy** - Local-only, period. Zero cloud. Zero data leaves machine.
 6. **Speed** - Hybrid embeddings (note-level + section-level) + LRU caching
+7. **Clean Architecture** - Modular LLM abstraction, separated agent logic, reusable chat module
 
 ---
 
@@ -38,7 +39,7 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 1. **Local-only** - Ollama + LM Studio only. No cloud APIs. Ever.
 2. **Human-in-steering-wheel** - Trust levels for autonomy, universal undo, user commands agents
 3. **Theme-aware** - Respects user's Obsidian theme and aesthetic
-4. **Simplicity over complexity** - Fewer abstractions, clean code, no debug cruft
+4. **Simplicity over complexity** - Clean abstractions, modular code, no debug cruft
 
 ---
 
@@ -46,11 +47,57 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 
 ### Stack
 - **Language:** TypeScript (strict mode)
-- **Build:** Bun + esbuild
+- **Build:** Bun + esbuild (with Biome for linting)
 - **LLM (Reasoning):** LM Studio (OpenAI-compatible API) - search orchestration, classification, chat
 - **LLM (Embeddings):** Ollama (local or remote on LAN)
 - **Vector Store:** Custom brute-force cosine similarity (pure JS, zero dependencies)
 - **UI Framework:** Obsidian API + native components
+
+### Architecture Overview (v3.0)
+
+```
+src/
+├── core/
+│   ├── kernel.ts                    # Service registry & orchestration
+│   ├── eventBus.ts                  # Typed pub/sub events
+│   │
+│   ├── llm/                         # LLM Abstraction Layer ✅
+│   │   ├── types.ts                 # ChatMessage, CompletionOptions
+│   │   ├── provider.ts              # LLMProvider interface
+│   │   └── providers/
+│   │       ├── openai-compatible.ts # Base for OpenAI-style APIs
+│   │       └── lmstudio.ts          # LM Studio specific
+│   │
+│   ├── agent/                       # Notient Agent Module ✅
+│   │   ├── types.ts                 # AgentTask, TaskResult, NoteContext
+│   │   ├── promptBuilder.ts         # Notient personality + RAG formatting
+│   │   ├── taskInference.ts         # Task type detection from query
+│   │   ├── agentLoop.ts             # Core execution orchestration
+│   │   └── taskQueue.ts             # Sequential task queue
+│   │
+│   ├── chat/                        # Reusable Chat Module ✅
+│   │   ├── types.ts                 # ChatConfig, ExtendedChatMessage
+│   │   ├── session.ts               # History management, sliding window
+│   │   └── streaming.ts             # Stream utilities
+│   │
+│   ├── context/                     # Vault context builder
+│   ├── search/                      # Search pipeline with reranking
+│   ├── indexer/                     # Batch indexing with progress
+│   ├── para/                        # PARA classification
+│   └── vitals/                      # Vault health metrics
+│
+├── views/                           # UI Layer (pure UI, no business logic)
+│   ├── sidebar.ts                   # Note Vitals + Agent Streams
+│   ├── taskModal.ts                 # Task popup with chat
+│   ├── dashboard.ts                 # Vault Vitals
+│   └── setupWizard.ts               # First-run configuration
+│
+├── services/                        # Legacy services (deprecated)
+│   └── lmstudio.ts                  # @deprecated → use core/llm
+│
+└── adapters/
+    └── obsidianFacade.ts            # Obsidian API wrapper
+```
 
 ### Data Storage
 ```
@@ -58,7 +105,6 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 ├── data.json                    # Plugin settings
 ├── index-{modelKey}.json        # Hybrid embeddings (note-level + section-level)
 ├── state-{modelKey}.json        # Index state (per model)
-├── conversations.json           # Per-task chat history (Phase 1.7)
 ├── cache/                       # Search result cache
 └── locks/                       # Multi-window safety
 ```
@@ -246,51 +292,65 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - [x] Tabbed sidebar (Note + Agents tabs)
 - [x] Note Vitals dashboard component (health, links, freshness, tags)
 - [x] Omnibar search experience (debounced, with results)
-- [x] Agent chat with streaming UI (via sendQuery)
+- [x] Agent chat with streaming UI
 - [x] Quick actions based on note state (Enrich, Link, Move)
 - [x] Insight Stream with dynamic suggestions
 - [x] Agent Dashboard (service status cards)
-- [x] Activity Log (generated from chat history)
+- [x] Activity Log (task-based)
 - [x] Footer with service health status
 
-### Phase 1.7: BACKEND COMPLETION (Current)
+### Phase 1.7: BACKEND COMPLETION ✅ COMPLETE
+- [x] **Search Settings with Presets**
+  - [x] Preset dropdown: Quick / Balanced / Thorough / Custom
+  - [x] Custom mode reveals: top-K slider, reranking toggle, min score
+  - [x] Wire presets to SearchPipeline
+- [x] **Agent Task System**
+  - [x] `AgentTask` type with status, progress, per-task chat history
+  - [x] `AgentTaskQueue` service (sequential, one at a time)
+  - [x] Activity stream with full task cards
+  - [x] Quick Actions fire tasks → appear in stream
+  - [x] Cancel button (always cancelable)
+- [x] **TaskModal Popup**
+  - [x] Note preview section
+  - [x] RAG sources (citations)
+  - [x] Task results display
+  - [x] Chat section with message bubbles
+  - [x] Enter sends, Shift+Enter newline
+  - [x] Streaming with cursor, cancel discards partial
+  - [x] Citations as `[[Note Name]]` links
+- [x] **Agent Dashboard Status**
+  - [x] Three capability cards: Semantic Search, Context Builder, Chat Assistant
+  - [x] Combined status: health dot + pulsing when processing
+  - [x] Last activity timestamp per agent
+- [x] **Index Progress in Footer**
+  - [x] Non-blocking progress bar during indexing
+  - [x] Note count: "X notes indexed"
+  - [x] Last sync timestamp
 
-**Scope:** Hybrid approach - foundation now, defer bulk operations to Phase 2.
+### Phase 1.8: ARCHITECTURE REFACTOR ✅ COMPLETE
+- [x] **LLM Abstraction Layer** (`core/llm/`)
+  - [x] `LLMProvider` interface for swappable providers
+  - [x] `OpenAICompatibleProvider` base class
+  - [x] `LMStudioProvider` extends base (configuration only)
+  - [x] Clean separation: ZERO Notient-specific logic in LLM layer
+- [x] **Notient Agent Module** (`core/agent/`)
+  - [x] `NotientPromptBuilder` - centralized prompt construction
+  - [x] `NotientAgent` - single source of agent logic
+  - [x] `AgentTaskQueue` - task queue management
+  - [x] `inferTaskType()` - task type detection
+- [x] **Chat Module** (`core/chat/`)
+  - [x] `ChatSession` - reusable history management
+  - [x] Sliding window for LLM context (10 messages)
+  - [x] Streaming utilities
+- [x] **Build System Modernization**
+  - [x] Strict TypeScript configuration
+  - [x] Biome for linting
+  - [x] Path aliases (`@core/*`, `@views/*`, `@types/*`)
+- [x] **Views refactored to pure UI**
+  - [x] TaskModal delegates to NotientAgent
+  - [x] Sidebar delegates to services via Kernel
 
-- [ ] **Search Settings with Presets**
-  - [ ] Preset dropdown: Quick / Balanced / Thorough / Custom
-  - [ ] Custom mode reveals: top-K slider, reranking toggle, min score
-  - [ ] Wire presets to SearchPipeline
-- [ ] **Agent Task System** (Core new architecture)
-  - [ ] `AgentTask` type with status, progress, per-task chat history
-  - [ ] `AgentTaskQueue` service (sequential, one at a time)
-  - [ ] Activity stream with full task cards (not just activity log)
-  - [ ] Quick Actions fire tasks → appear in stream
-  - [ ] Cancel button (always cancelable)
-- [ ] **TaskModal Popup**
-  - [ ] Note preview section
-  - [ ] RAG sources (citations)
-  - [ ] Task results display
-  - [ ] Chat section with message bubbles
-  - [ ] Enter sends, Shift+Enter newline
-  - [ ] Streaming with cursor, cancel discards partial
-  - [ ] Citations as `[[Note Name]]` links (prompt LLM to use format)
-- [ ] **Agent Dashboard Status**
-  - [ ] Three capability cards: Semantic Search, Context Builder, Chat Assistant
-  - [ ] Combined status: health dot + pulsing when processing
-  - [ ] Last activity timestamp per agent
-- [ ] **Index Progress in Footer**
-  - [ ] Non-blocking progress bar during indexing
-  - [ ] Note count: "X notes indexed"
-  - [ ] Last sync timestamp
-
-**Deferred to Phase 2:**
-- Bulk omnibar commands (`/enrich all in Projects/`)
-- Complex queue management (priority, retry)
-- Conversation persistence across sessions
-- Multi-agent orchestration on single note
-
-### Phase 2: AGENTIC
+### Phase 2: AGENTIC (Next)
 - [ ] Trust-level agent actions (low/medium/high risk)
 - [ ] Bulk omnibar commands (`/enrich all in folder/`)
 - [ ] Batch processing with review UI
@@ -319,7 +379,7 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 ### Core Capabilities
 
 **Streaming Responses (✅ Implemented)**
-- All chat responses stream token-by-token via `chatStream()`
+- All chat responses stream token-by-token via `LLMProvider.stream()`
 - AbortController support for cancellation
 - Graceful handling of connection drops mid-stream
 
@@ -335,27 +395,11 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - Related note discovery via semantic similarity
 - Batch classification for inbox processing
 
-### Phased Rollout
-
-**Phase 1.5: Search Orchestrator ✅**
-- Rerank vector search results by query relevance
-- Synthesize search results into coherent answers
-- Extract key insights from multiple notes
-
-**Phase 2: Background Classifier**
-- Process inbox notes silently
-- Suggest tags, folders, related notes
-- User reviews suggestions in batch
-
-**Phase 3: Interactive Assistant**
-- Full chat interface with conversation history
-- Ask questions about vault, get summaries
-- Compare notes, find contradictions
-
 ### Prompt Architecture
-- System prompt with vault context (dynamic)
+- System prompt with vault context (dynamic via `NotientPromptBuilder`)
+- Current note content prominently included
 - RAG query format with retrieved chunks
-- Structured output parsing for classifications
+- Task-specific instructions based on inferred task type
 - Configurable prompt templates in settings
 
 ---
@@ -380,19 +424,16 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - Folder mapping for each PARA type
 - Multiple folders per type support
 
-### Needed Configuration (Phase 1.7)
-
-**Search Settings (Preset-Based):**
+**Search Settings (✅ Implemented):**
 - Preset selector: Quick / Balanced / Thorough / Custom
   - Quick: 5 results, no reranking, 0.5 min score
   - Balanced: 10 results, reranking enabled, 0.3 min score (default)
   - Thorough: 25 results, reranking enabled, 0.2 min score
 - Custom mode reveals individual sliders
 
-**Chat Settings:**
+**Chat Settings (✅ Implemented):**
 - Max conversation history for LLM context: 10 messages (sliding window)
 - Activity retention: session-only (clears on restart)
-- Clear conversation button in TaskModal
 
 **Agent Settings (Phase 2):**
 - Trust level defaults (low/medium/high)
@@ -445,11 +486,12 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 | Dual-panel UI | ✅ Search + Chat | ⚠️ Chat only | ⚠️ Chat only |
 | Agent trust levels | ✅ Low/Med/High | ❌ | ❌ |
 | PARA-aware | ✅ Built-in | ❌ | ❌ |
+| Modular architecture | ✅ Clean abstractions | ❌ | ❌ |
 | Price | Free | Free | Freemium |
 
 ---
 
-## Open Questions (Resolved)
+## Resolved Design Decisions
 
 1. ~~Chunking strategy~~ → **Hybrid: note-level + section-level**
 2. ~~LM Studio role~~ → **Phased: orchestrator → classifier → chat**
@@ -462,9 +504,12 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 9. ~~Task concurrency~~ → **Sequential, one at a time**
 10. ~~Activity retention~~ → **Session-only, clears on restart**
 11. ~~Phase order~~ → **Agentic (Phase 2) before Intelligence (Phase 3)**
+12. ~~LLM abstraction~~ → **Provider interface + OpenAI-compatible base**
+13. ~~Agent logic location~~ → **Centralized in `core/agent/` module**
+14. ~~Chat session management~~ → **Reusable `ChatSession` class**
 
 ---
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.3 (Phase 1.7 Architecture Refined)*
+*Version: 3.0 (Phase 1 Complete - Ready for Phase 2)*

@@ -1,15 +1,16 @@
 # MASTER_PLAN.md — Notient (Local-first Obsidian AI Vault Manager)
 
-> **Version 2.3 - Phase 1.7 Architecture Refined**
-> Agent Streams = vault-global activity feed. Chat in popup modal. Presets for search.
+> **Version 3.0 - Phase 1 Complete, Ready for Phase 2: AGENTIC**
+> All foundation work done. Clean architecture. Next: trust levels, bulk operations, undo.
 
 ## 0) Purpose and scope of this master plan
 
 This document is the canonical plan for building **Notient** across multiple development phases and work sessions.
 
-- **PRD**: `planning/PRD.md` (v2.3)
+- **PRD**: `planning/PRD.md` (v3.0)
 - **UI/UX Spec**: `planning/prompts/ui-ux.md`
 - **Phase 1.7 Spec**: `planning/prompts/phase-1.7-backend-completion.md`
+- **Phase 1.8 Spec**: `planning/prompts/phase-1.8-architecture-refactor.md`
 - **Code repository**: `/home/akougkas/projects/notient`
 
 ## 1) Product definition
@@ -60,34 +61,46 @@ Notient transforms notes from passive files into living entities with health, dy
 - Code runs in Obsidian's plugin environment (Electron renderer with Node APIs available).
 - File system access and vault operations go through Obsidian APIs.
 
-### 2.2 System decomposition (Current State)
+### 2.2 System decomposition (Current State - v3.0)
 
 ```
-Notient Architecture v2.3
+Notient Architecture v3.0 (Phase 1 Complete)
 ├── UI Layer
 │   ├── Sidebar (Note Vitals + Agent Streams) ✅
-│   ├── TaskModal (popup with chat) ← Phase 1.7
+│   ├── TaskModal (popup with chat) ✅
 │   ├── Setup Wizard ✅
 │   ├── Settings Tab ✅
-│   └── Dashboard (Vault Vitals) - basic
+│   └── Dashboard (Vault Vitals) ✅
 │
-├── Core Services
+├── Core Modules
 │   ├── Kernel (service orchestration) ✅
 │   ├── EventBus (typed pub/sub) ✅
-│   └── VaultContextBuilder (dynamic, per-query) ✅
-│
-├── AI Services
-│   ├── OllamaService (embeddings) ✅
-│   ├── LMStudioService (reasoning, reranking, chat streaming) ✅
+│   │
+│   ├── LLM Abstraction (core/llm/) ✅
+│   │   ├── LLMProvider interface
+│   │   ├── OpenAICompatibleProvider base
+│   │   └── LMStudioProvider
+│   │
+│   ├── Agent Module (core/agent/) ✅
+│   │   ├── NotientAgent (execution loop)
+│   │   ├── NotientPromptBuilder
+│   │   ├── AgentTaskQueue
+│   │   └── TaskInference
+│   │
+│   ├── Chat Module (core/chat/) ✅
+│   │   ├── ChatSession
+│   │   └── Streaming utilities
+│   │
+│   ├── VaultContextBuilder ✅
 │   └── SearchPipeline (vector + LLM rerank) ✅
 │
 ├── Storage Services
 │   ├── SimpleVectorStore (brute-force cosine) ✅
 │   ├── IndexManager (state tracking) ✅
-│   └── AgentTaskQueue (task queue, session-only) ← Phase 1.7
+│   └── SimpleIndexer (batch processing) ✅
 │
-└── Agent Services ← Phase 2/3
-    ├── ClassificationAgent
+└── Agent Services ← Phase 2
+    ├── TrustLevelManager
     ├── WorkflowRunner
     └── ActionHistory (undo support)
 ```
@@ -102,21 +115,24 @@ Notient Architecture v2.3
 | Primary UX | Dual panels (search + chat) | Both always visible, no mode switching |
 | Agent autonomy | Trust levels | Balance automation vs control |
 | Observability | Console-only | No debug telemetry, clean code |
+| LLM abstraction | Provider interface | Easy to add new providers (<50 lines) |
+| Agent logic | Centralized module | Single source of truth for AI behavior |
+| Chat management | Reusable ChatSession | Shared across views |
 
 ## 3) Repository layout (code)
 
-### 3.1 Source layout (Current)
+### 3.1 Source layout (Current - v3.0)
 
 ```
 src/
 ├── main.ts                     # Plugin entry ✅
 ├── settings.ts                 # Settings tab + store ✅
-├── styles.css                  # Design system (nv2-* classes) ✅
+├── styles.css                  # Design system (nv2-* classes, 4000+ lines) ✅
 │
 ├── views/
 │   ├── sidebar.ts              # Two-view (Note Vitals + Agent Streams) ✅
-│   ├── taskModal.ts            # Task popup with chat ← Phase 1.7
-│   ├── dashboard.ts            # Vault Vitals (basic) ✅
+│   ├── taskModal.ts            # Task popup with chat ✅
+│   ├── dashboard.ts            # Vault Vitals ✅
 │   ├── setupWizard.ts          # Setup wizard modal ✅
 │   └── indexOptionsModal.ts    # Index action picker ✅
 │
@@ -124,6 +140,29 @@ src/
 │   ├── kernel.ts               # Service manager ✅
 │   ├── constants.ts            # App constants ✅
 │   ├── events/eventBus.ts      # Typed event bus ✅
+│   │
+│   ├── llm/                    # LLM Abstraction Layer ✅
+│   │   ├── types.ts            # ChatMessage, CompletionOptions
+│   │   ├── provider.ts         # LLMProvider interface
+│   │   ├── providers/
+│   │   │   ├── openai-compatible.ts  # Base implementation
+│   │   │   └── lmstudio.ts           # LM Studio specific
+│   │   └── index.ts            # Exports
+│   │
+│   ├── agent/                  # Notient Agent Module ✅
+│   │   ├── types.ts            # AgentTask, TaskResult, NoteContext
+│   │   ├── promptBuilder.ts    # Notient personality + RAG
+│   │   ├── taskInference.ts    # Task type detection
+│   │   ├── agentLoop.ts        # Core execution orchestration
+│   │   ├── taskQueue.ts        # Sequential queue management
+│   │   └── index.ts            # Exports
+│   │
+│   ├── chat/                   # Reusable Chat Module ✅
+│   │   ├── types.ts            # ChatConfig, ExtendedChatMessage
+│   │   ├── session.ts          # History management
+│   │   ├── streaming.ts        # Stream utilities
+│   │   └── index.ts            # Exports
+│   │
 │   ├── context/
 │   │   └── vaultContextBuilder.ts ✅
 │   ├── indexer/
@@ -138,10 +177,10 @@ src/
 │
 ├── services/
 │   ├── ollama.ts               # Embeddings ✅
-│   ├── lmstudio.ts             # Reasoning/chat/streaming ✅
+│   ├── lmstudio.ts             # @deprecated → use core/llm ✅
 │   ├── simpleVectorStore.ts    # Vector storage ✅
 │   ├── indexManager.ts         # Index state ✅
-│   ├── agentTaskQueue.ts       # Task queue (session-only) ← Phase 1.7
+│   ├── agentTaskQueue.ts       # Re-export from core/agent ✅
 │   ├── healthMonitor.ts        # Service health ✅
 │   ├── storagePaths.ts         # File paths ✅
 │   └── vaultLock.ts            # Multi-window safety ✅
@@ -153,7 +192,9 @@ src/
     ├── settings.ts             # Settings types ✅
     ├── events.ts               # Event types ✅
     ├── search.ts               # Search types ✅
-    └── agentTask.ts            # Task/queue types ← Phase 1.7
+    ├── agentTask.ts            # Re-export from core/agent ✅
+    ├── indexer.ts              # Indexer types ✅
+    └── vitals.ts               # Vitals types ✅
 ```
 
 ### 3.2 Data layout (on disk)
@@ -163,34 +204,77 @@ src/
 ├── data.json                   # Plugin settings
 ├── index-{modelKey}.json       # Hybrid embeddings (notes + sections)
 ├── state-{modelKey}.json       # Index state
-├── conversations.json          # Chat history (Phase 1.7)
 ├── cache/                      # LRU caches
 └── locks/                      # Multi-window safety
 ```
 
 ## 4) Core services (Implemented)
 
-### 4.1 LMStudioService ✅
+### 4.1 LLMProvider Interface ✅
 
 ```typescript
-interface LMStudioService {
-  // Health & status
-  listModels(): Promise<string[]>;
-  isReady(): boolean;
-
-  // Reasoning operations
-  rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]>;
-  chat(messages: ChatMessage[]): Promise<string>;
-
-  // Streaming support ✅
-  chatStream(messages: ChatMessage[], signal?: AbortSignal): AsyncIterable<string>;
+interface LLMProvider {
+  readonly name: string;
+  readonly isReady: boolean;
   
-  // Context building
-  buildChatSystemPrompt(context: string, notes: RelevantNote[]): string;
+  initialize(): Promise<void>;
+  dispose(): void;
+  
+  // Non-streaming
+  complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string>;
+  
+  // Streaming
+  stream(
+    messages: ChatMessage[], 
+    options?: CompletionOptions,
+    signal?: AbortSignal
+  ): AsyncIterable<string>;
+  
+  // Reranking
+  rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]>;
 }
 ```
 
-### 4.2 VaultContextBuilder ✅
+### 4.2 NotientAgent ✅
+
+```typescript
+class NotientAgent {
+  // Core execution with streaming
+  async *executeStreaming(
+    task: AgentTask,
+    signal?: AbortSignal
+  ): AsyncIterable<AgentStreamEvent>;
+  
+  // Non-streaming wrapper
+  async execute(task: AgentTask): Promise<TaskResult>;
+}
+```
+
+### 4.3 AgentTaskQueue ✅
+
+```typescript
+class AgentTaskQueue {
+  enqueue(task: Omit<AgentTask, 'id' | 'status' | 'startedAt'>): string;
+  cancel(taskId: string): void;
+  getAll(): AgentTask[];
+  getById(taskId: string): AgentTask | undefined;
+  onTaskUpdate(callback: (task: AgentTask) => void): void;
+}
+```
+
+### 4.4 ChatSession ✅
+
+```typescript
+class ChatSession {
+  addUserMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage;
+  addAssistantMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage;
+  getMessagesForLLM(): ChatMessage[];  // Last 10 (sliding window)
+  getMessages(): ExtendedChatMessage[];
+  clear(): void;
+}
+```
+
+### 4.5 VaultContextBuilder ✅
 
 ```typescript
 interface VaultContextBuilder {
@@ -207,7 +291,7 @@ interface VaultContextBuilder {
 }
 ```
 
-### 4.3 SearchPipeline ✅
+### 4.6 SearchPipeline ✅
 
 ```typescript
 interface SearchPipeline {
@@ -215,9 +299,9 @@ interface SearchPipeline {
   findRelated(path: string, options: RelatedOptions): Promise<RelatedNote[]>;
   clearCache(): void;
 
+  // Uses settings presets (Quick/Balanced/Thorough/Custom)
   // Phase 1: Vector search (fast, top-50)
   // Phase 2: LLM reranking (smart, final top-K)
-  // Phase 3: Build dynamic context for chat
 }
 ```
 
@@ -240,7 +324,7 @@ interface SearchPipeline {
   - Running/queued tasks show cancel button
   - **Click card → opens TaskModal**
 
-### 5.2 TaskModal (Phase 1.7)
+### 5.2 TaskModal ✅
 
 Popup that opens when clicking any task card:
 - Note preview section
@@ -248,10 +332,12 @@ Popup that opens when clicking any task card:
 - Task results when complete
 - **Chat section**: message bubbles, Enter sends, streaming with cancel
 - Citations as `[[Note Name]]` links
+- Uses ChatSession for history management
+- Delegates all AI logic to NotientAgent
 
 ### 5.3 Design System ✅
 
-CSS classes use `nv2-*` prefix. Key tokens:
+CSS classes use `nv2-*` prefix (4000+ lines). Key tokens:
 - `--nv2-accent`: Notient green (#10b981)
 - `--nv2-bg-primary/secondary/tertiary`: Obsidian surface colors
 - `--nv2-text-primary/secondary/muted`: Obsidian text colors
@@ -280,82 +366,69 @@ CSS classes use `nv2-*` prefix. Key tokens:
 - [x] Tabbed sidebar (Note + Agents views)
 - [x] Note Vitals dashboard (health, links, freshness, tags)
 - [x] Omnibar search experience
-- [x] Agent streaming via sendQuery()
+- [x] Agent streaming via NotientAgent
 - [x] Quick actions (Enrich, Link, Move)
 - [x] Insight Stream with suggestions
 - [x] Agent Dashboard cards
-- [x] Activity Log from chat history
+- [x] Activity Log with task cards
 - [x] Footer with service status
 
-### Phase 1.7: BACKEND COMPLETION (Next Priority)
+### Phase 1.7: BACKEND COMPLETION ✅ COMPLETE
 
-**Goal:** Achieve UI-backend parity with hybrid scope.
+**Completed:**
+- [x] Search Settings with Presets (Quick/Balanced/Thorough/Custom)
+- [x] Agent Task System (AgentTask, AgentTaskQueue, sequential execution)
+- [x] TaskModal Popup (note preview, citations, chat, streaming)
+- [x] Agent Dashboard Status (health + pulsing, timestamps)
+- [x] Index Progress in Footer (progress bar, note count, sync time)
 
-**Scope:** Foundation now, defer bulk operations to Phase 2.
-
-**Search Settings with Presets:**
-- [ ] Preset dropdown: Quick / Balanced / Thorough / Custom
-- [ ] Custom mode reveals: top-K slider, reranking toggle, min score
-- [ ] Wire presets to SearchPipeline
-
-**Agent Task System (Core New Architecture):**
-- [ ] `AgentTask` type with status, progress, per-task chat history
-- [ ] `AgentTaskQueue` service (sequential, one at a time)
-- [ ] Activity stream with full task cards (not just activity log)
-- [ ] Quick Actions fire tasks → appear in stream
-- [ ] Cancel button (always cancelable)
-
-**TaskModal Popup:**
-- [ ] Note preview section
-- [ ] RAG sources (citations)
-- [ ] Task results display
-- [ ] Chat section with message bubbles
-- [ ] Enter sends, Shift+Enter newline
-- [ ] Streaming with cursor, cancel discards partial
-- [ ] Citations as `[[Note Name]]` links (prompt LLM to use format)
-
-**Agent Dashboard Status:**
-- [ ] Three capability cards: Semantic Search, Context Builder, Chat Assistant
-- [ ] Combined status: health dot + pulsing when processing
-- [ ] Last activity timestamp per agent
-
-**Index Progress in Footer:**
-- [ ] Non-blocking progress bar during indexing
-- [ ] Note count: "X notes indexed"
-- [ ] Last sync timestamp
-
-**Key Decisions (from interview):**
+**Key Decisions (implemented):**
 - Chat in popup modal only (not main Agent Streams view)
 - Enter sends, Shift+Enter for newlines
 - Cancel discards partial response entirely
 - Last 10 messages to LLM (sliding window)
-- Inline `[[Note Name]]` citations (prompt LLM)
+- Inline `[[Note Name]]` citations (prompted to LLM)
 - Session-only activity retention
 - Sequential task execution (one at a time)
 
-**Deferred to Phase 2:**
-- Bulk omnibar commands
-- Complex queue management
-- Conversation persistence across sessions
-- Multi-agent orchestration on single note
+### Phase 1.8: ARCHITECTURE REFACTOR ✅ COMPLETE
 
-**Exit criteria:**
-- Task cards appear in activity stream
-- TaskModal opens with full context + chat
-- Search presets work correctly
-- Agent dashboard shows real status
+**Completed:**
+- [x] LLM Abstraction Layer (`core/llm/`)
+  - [x] `LLMProvider` interface for swappable providers
+  - [x] `OpenAICompatibleProvider` base class with streaming + reranking
+  - [x] `LMStudioProvider` extends base
+  - [x] Zero Notient-specific logic in LLM layer
+- [x] Notient Agent Module (`core/agent/`)
+  - [x] `NotientPromptBuilder` - centralized prompt construction
+  - [x] `NotientAgent` - single source of agent logic
+  - [x] `AgentTaskQueue` - task queue management
+  - [x] `inferTaskType()` - task type detection
+- [x] Chat Module (`core/chat/`)
+  - [x] `ChatSession` - reusable history management
+  - [x] Sliding window for LLM context
+  - [x] Streaming utilities
+- [x] Build System Modernization
+  - [x] Strict TypeScript configuration
+  - [x] Biome for linting
+  - [x] `bun run build` passes
+  - [x] `bun run lint` passes
+- [x] Views refactored to pure UI
+  - [x] TaskModal delegates to NotientAgent
+  - [x] Sidebar delegates to services via Kernel
+  - [x] Legacy `services/lmstudio.ts` marked @deprecated
 
-### Phase 2: AGENTIC
+### Phase 2: AGENTIC (Next Priority)
 
 **Goal:** Trust levels, bulk operations, undo system.
 
 **Capabilities:**
-- Trust-level agent actions (low/medium/high risk)
-- Bulk omnibar commands (`/enrich all in folder/`)
-- Workflow runner (note/folder/vault scope)
-- Action history with undo
-- Conversation persistence across sessions
-- Dashboard as command center
+- [ ] Trust-level agent actions (low/medium/high risk)
+- [ ] Bulk omnibar commands (`/enrich all in folder/`)
+- [ ] Workflow runner (note/folder/vault scope)
+- [ ] Action history with undo
+- [ ] Conversation persistence across sessions
+- [ ] Dashboard as command center
 
 **Exit criteria:**
 - Low-risk actions auto-apply
@@ -379,7 +452,6 @@ CSS classes use `nv2-*` prefix. Key tokens:
 - User can batch-review suggestions
 - Suggestions are previewable and safe
 
-
 ## 7) Decision log
 
 | Date | Decision | Rationale |
@@ -395,7 +467,7 @@ CSS classes use `nv2-*` prefix. Key tokens:
 | 2026-01-06 | Sentient Notes philosophy | Notes as living entities with health/agency |
 | 2026-01-06 | Omnibar search | Single input for all query types |
 | 2026-01-06 | Streaming responses required | Real-time token display for chat |
-| 2026-01-06 | Phase 1.6 complete | UI/UX overhaul done, backend parity needed |
+| 2026-01-06 | Phase 1.6 complete | UI/UX overhaul done |
 | 2026-01-06 | Agent Streams = vault-global | Activity feed aggregates all agent tasks |
 | 2026-01-06 | Chat in popup modal only | TaskModal opens on card click, chat there |
 | 2026-01-06 | Search presets | Quick/Balanced/Thorough + Custom option |
@@ -406,9 +478,53 @@ CSS classes use `nv2-*` prefix. Key tokens:
 | 2026-01-06 | 10-message sliding window | LLM context limited to recent messages |
 | 2026-01-06 | Prompt LLM for citations | `[[Note Name]]` format in system prompt |
 | 2026-01-06 | Phase order: Agentic then Intelligence | Phase 2 = trust levels, Phase 3 = classification |
+| 2026-01-06 | LLMProvider interface | Enables swappable providers (<50 lines each) |
+| 2026-01-06 | NotientAgent centralization | Single source of truth for agent logic |
+| 2026-01-06 | ChatSession reusability | Shared across TaskModal and future views |
+| 2026-01-06 | Biome for linting | Modern tooling, strict checks |
+| 2026-01-06 | Phase 1.7 complete | Backend parity achieved |
+| 2026-01-06 | Phase 1.8 complete | Clean architecture established |
+
+## 8) Current state summary
+
+### Build verification
+```bash
+$ bun run build      # ✅ Passes
+$ bun run typecheck  # ✅ No errors
+$ bun run lint       # ✅ Minor warnings only
+```
+
+### Code metrics
+- **Total TypeScript files:** ~45
+- **Lines of CSS:** ~4000 (nv2-* design system)
+- **Core modules:** 3 (llm, agent, chat)
+- **Service registrations:** 12 in Kernel
+
+### Services registered in Kernel
+1. `healthMonitor` - Service health monitoring
+2. `ollama` - Embedding generation
+3. `lmstudio` - Legacy reasoning (deprecated)
+4. `vectorStore` - Vector storage
+5. `indexManager` - Index state management
+6. `indexer` - Batch indexing
+7. `search` - Search pipeline
+8. `context` - Vault context builder
+9. `vitals` - Vault health metrics
+10. `llmProvider` - New LLM abstraction
+11. `agent` - NotientAgent
+12. `taskQueue` - AgentTaskQueue
+
+### Ready for Phase 2
+All Phase 1 work is complete:
+- ✅ Clean architecture with separated concerns
+- ✅ LLM abstraction for easy provider swapping
+- ✅ Centralized agent logic
+- ✅ Reusable chat session management
+- ✅ Full UI/backend parity
+- ✅ Modern build tooling
 
 ---
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.3 (Phase 1.7 Architecture Refined)*
+*Version: 3.0 (Phase 1 Complete - Ready for Phase 2: AGENTIC)*
