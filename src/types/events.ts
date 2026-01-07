@@ -3,6 +3,7 @@
  */
 
 import type { AppliedActionRecord, WorkflowRun } from "../core/agentic/types";
+import type { IntelligenceRecord } from "../core/intelligence/types";
 import type { AgentTask } from "./agentTask";
 import type { IndexProgress } from "./indexer";
 import type { SearchResult } from "./search";
@@ -19,6 +20,7 @@ export type EventType =
   | "search:started"
   | "search:complete"
   | "vitals:updated"
+  | "intelligence:updated"
   | "settings:changed"
   | "note:context-changed"
   | "agent:task-update"
@@ -42,6 +44,7 @@ export interface EventPayloads {
   "search:started": SearchStartedEvent;
   "search:complete": SearchCompleteEvent;
   "vitals:updated": VitalsUpdatedEvent;
+  "intelligence:updated": IntelligenceUpdatedEvent;
   "settings:changed": SettingsChangedEvent;
   "note:context-changed": NoteContextChangedEvent;
   "agent:task-update": AgentTaskUpdateEvent;
@@ -96,6 +99,11 @@ export interface SearchCompleteEvent {
 
 export interface VitalsUpdatedEvent {
   vitals: VaultVitalsData;
+}
+
+export interface IntelligenceUpdatedEvent {
+  path: string;
+  record: IntelligenceRecord;
 }
 
 export interface SettingsChangedEvent {

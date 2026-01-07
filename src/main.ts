@@ -19,6 +19,7 @@ import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
+import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
 import { Kernel, type KernelContext } from "./core/kernel";
 // New architecture (Phase 1.8)
 import { LMStudioProvider } from "./core/llm";
@@ -51,6 +52,8 @@ export default class NotientPlugin extends Plugin {
   private searchPipeline: SearchPipeline | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
+  // Phase 3: Note intelligence (summaries + health)
+  private noteIntelligence: NoteIntelligenceService | null = null;
   // New architecture (Phase 1.8)
   private llmProvider: LMStudioProvider | null = null;
   private notientAgent: NotientAgent | null = null;
@@ -150,6 +153,7 @@ export default class NotientPlugin extends Plugin {
       this.agentTaskQueue = null;
       this.notientAgent = null;
       this.llmProvider?.dispose();
+      this.noteIntelligence?.dispose();
       this.vaultVitals?.dispose();
       this.contextBuilder = null;
       this.searchPipeline?.dispose();
@@ -291,6 +295,11 @@ export default class NotientPlugin extends Plugin {
           console.warn("[Notient] LLM Provider initialization failed:", llmError);
           // Fall back to old service for backward compatibility
         }
+
+        // Phase 3: Note intelligence (background summaries + health)
+        this.noteIntelligence = new NoteIntelligenceService(this.kernel, eventBus);
+        await this.noteIntelligence.initialize();
+        this.kernel.registerService("intelligence", this.noteIntelligence);
 
         // Create NotientAgent (uses LLM provider, search, context)
         if (!this.llmProvider) {
@@ -661,6 +670,7 @@ export default class NotientPlugin extends Plugin {
       this.agentTaskQueue = null;
       this.notientAgent = null;
       this.llmProvider?.dispose();
+      this.noteIntelligence?.dispose();
       this.searchPipeline?.dispose();
       this.contextBuilder = null;
       this.indexer?.dispose();
@@ -674,6 +684,7 @@ export default class NotientPlugin extends Plugin {
       this.ollamaService?.dispose();
 
       this.llmProvider = null;
+      this.noteIntelligence = null;
       this.searchPipeline = null;
       this.contextBuilder = null;
       this.indexer = null;

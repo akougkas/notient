@@ -22,6 +22,7 @@ import type { WorkflowRun } from "../core/agentic/types";
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
 import { VIEW_TYPE_SIDEBAR } from "../core/constants";
 import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
+import type { NoteIntelligenceService } from "../core/intelligence/noteIntelligence";
 import type { Kernel } from "../core/kernel";
 import type { ChatMessage, LLMProvider } from "../core/llm";
 import { ParaDetector } from "../core/para/detector";
@@ -148,6 +149,10 @@ export class NotientSidebarView extends ItemView {
     return this.kernel.getService<WorkflowRunner>("workflowRunner");
   }
 
+  private getNoteIntelligence(): NoteIntelligenceService | null {
+    return this.kernel.getService<NoteIntelligenceService>("intelligence");
+  }
+
   // ============ Main Render ============
 
   private render(): void {
@@ -208,6 +213,7 @@ export class NotientSidebarView extends ItemView {
     // Note Context Card (if note is open)
     if (this.noteVitals) {
       this.renderNoteCard();
+      this.renderNoteIntelligenceSection();
     }
 
     // Quick Actions section
@@ -276,6 +282,56 @@ export class NotientSidebarView extends ItemView {
       cls: "nv2-link-row-label",
       text: `${this.noteVitals.links.outlinks} outlinks`,
     });
+  }
+
+  private renderNoteIntelligenceSection(): void {
+    if (!this.contentEl_ || !this.noteVitals) return;
+
+    const intelligence = this.getNoteIntelligence();
+    if (!intelligence) return;
+
+    const record = intelligence.getRecord(this.noteVitals.path);
+
+    const section = this.contentEl_.createDiv({ cls: "nv2-section" });
+    section.createDiv({ cls: "nv2-section-label", text: "Intelligence" });
+
+    const stream = section.createDiv({ cls: "nv2-insight-stream" });
+
+    // Summary
+    const summaryItem = stream.createDiv({ cls: "nv2-insight" });
+    summaryItem.createDiv({
+      cls: `nv2-insight-dot ${record?.summaryShort ? "" : "nv2-insight-dot--secondary"}`,
+    });
+    const summaryContent = summaryItem.createDiv({ cls: "nv2-insight-content" });
+    const summaryText = summaryContent.createDiv({ cls: "nv2-insight-text" });
+    summaryText.setText(
+      record?.summaryShort ??
+        "No AI summary yet. It will generate in the background after indexing, or you can generate it now.",
+    );
+
+    if (!record?.summaryShort) {
+      const actionBtn = summaryContent.createDiv({
+        cls: "nv2-insight-action nv2-insight-action--primary",
+      });
+      actionBtn.createSpan({ text: "Generate summary" });
+      actionBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void intelligence.regenerate(this.noteVitals?.path ?? "");
+        new Notice("Generating note summary…");
+      });
+    }
+
+    // Health breakdown (from intelligence store)
+    if (record?.health) {
+      const h = record.health;
+      const healthItem = stream.createDiv({ cls: "nv2-insight" });
+      healthItem.createDiv({ cls: "nv2-insight-dot nv2-insight-dot--secondary" });
+      const healthContent = healthItem.createDiv({ cls: "nv2-insight-content" });
+      const healthText = healthContent.createDiv({ cls: "nv2-insight-text" });
+      healthText.setText(
+        `Health: ${h.score}/100 (freshness ${h.breakdown.freshness}, connectivity ${h.breakdown.connectivity}, structure ${h.breakdown.structure}, metadata ${h.breakdown.metadata})`,
+      );
+    }
   }
 
   private getBacklinkPreview(): string {
@@ -1476,6 +1532,14 @@ export class NotientSidebarView extends ItemView {
       this.updateFooterStats();
     });
     this.register(() => unsubIndexComplete());
+
+    // Intelligence updates (Phase 3)
+    const unsubIntelligence = this.kernel.eventBus.on("intelligence:updated", ({ path }) => {
+      if (this.currentView === "note" && this.noteVitals?.path === path) {
+        this.render();
+      }
+    });
+    this.register(() => unsubIntelligence());
 
     // Workflow events (Milestone 2.4)
     const unsubWorkflowStarted = this.kernel.eventBus.on("workflow:started", () => {

@@ -66,6 +66,8 @@ export class Kernel {
   private contextBuilder: unknown = null;
   private vaultVitals: unknown = null;
   private agentTaskQueue: unknown = null;
+  // Phase 3 services (Intelligence)
+  private intelligence: unknown = null;
   // New architecture services (Phase 1.8)
   private llmProvider: unknown = null;
   private notientAgent: unknown = null;
@@ -264,6 +266,9 @@ export class Kernel {
       case "vitals":
         this.vaultVitals = service;
         break;
+      case "intelligence":
+        this.intelligence = service;
+        break;
       case "taskQueue":
         this.agentTaskQueue = service;
         break;
@@ -315,6 +320,8 @@ export class Kernel {
         return this.contextBuilder as T;
       case "vitals":
         return this.vaultVitals as T;
+      case "intelligence":
+        return this.intelligence as T;
       case "taskQueue":
         return this.agentTaskQueue as T;
       case "llmProvider":
@@ -361,6 +368,8 @@ export class Kernel {
       this.trustLevelManager,
       // Phase 1 services
       this.vaultVitals,
+      // Phase 3 services
+      this.intelligence,
       this.contextBuilder,
       this.searchPipeline,
       this.indexer,
