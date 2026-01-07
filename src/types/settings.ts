@@ -2,7 +2,7 @@
  * Plugin settings schema with versioning support
  */
 
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2;
 
 export interface NotientSettings {
   /** Schema version for migrations */
@@ -60,6 +60,62 @@ export interface NotientSettings {
 
   /** Setup wizard completion flag */
   setupComplete: boolean;
+
+  // Phase 2 additions
+
+  /** Agent settings (trust, history, bulk operations) */
+  agent: AgentSettings;
+
+  /** Chat retention settings */
+  chatRetention: ChatRetention;
+}
+
+// =============================================================================
+// Phase 2: Agent Settings
+// =============================================================================
+
+/**
+ * Trust policy for agent actions
+ */
+export interface TrustPolicy {
+  /** Auto-apply low-risk actions without confirmation (default: false) */
+  autoApplyLowRisk: boolean;
+  /** Require confirmation for medium-risk actions (always true in Phase 2) */
+  requireConfirmMediumRisk: boolean;
+  /** Require explicit confirmation for high-risk actions (always true) */
+  requireConfirmHighRisk: boolean;
+}
+
+/**
+ * Agent settings for agentic operations
+ */
+export interface AgentSettings {
+  /** Trust level configuration */
+  trustPolicy: TrustPolicy;
+  /** Action history settings */
+  history: {
+    /** Maximum action records to retain (default: 200) */
+    maxEntries: number;
+    /** Maximum age in days for action records (default: 30) */
+    maxAgeDays: number;
+  };
+  /** Bulk workflow settings */
+  bulk: {
+    /** Maximum notes per workflow (default: 100) */
+    maxNotesPerWorkflow: number;
+    /** Delay between tasks in milliseconds (default: 500) */
+    delayBetweenTasksMs: number;
+  };
+}
+
+/**
+ * Chat retention configuration
+ */
+export interface ChatRetention {
+  /** Maximum messages per note conversation (default: 50) */
+  maxMessagesPerNote: number;
+  /** Maximum age in days for conversations (default: 30) */
+  maxAgeDays: number;
 }
 
 export type SearchPreset = 'quick' | 'balanced' | 'thorough' | 'custom';
@@ -117,6 +173,26 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     keepAliveMs: 300000, // 5 minutes
   },
   setupComplete: false,
+  // Phase 2 defaults
+  agent: {
+    trustPolicy: {
+      autoApplyLowRisk: false,
+      requireConfirmMediumRisk: true,
+      requireConfirmHighRisk: true,
+    },
+    history: {
+      maxEntries: 200,
+      maxAgeDays: 30,
+    },
+    bulk: {
+      maxNotesPerWorkflow: 100,
+      delayBetweenTasksMs: 500,
+    },
+  },
+  chatRetention: {
+    maxMessagesPerNote: 50,
+    maxAgeDays: 30,
+  },
 };
 
 /** Validation result for settings */

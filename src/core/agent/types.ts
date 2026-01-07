@@ -4,6 +4,7 @@
  * Core types for the Notient agent system.
  */
 
+import type { ProposedAction } from "../agentic/types";
 import type { ChatMessage } from "../llm/types";
 
 /**
@@ -54,10 +55,12 @@ export interface AgentTask {
  * Result of a completed task
  */
 export interface TaskResult {
-  type: "enrichment" | "links" | "classification" | "chat";
+  type: "enrichment" | "links" | "classification" | "chat" | "action_plan";
   data: unknown;
   /** Note paths used as RAG context */
   citations: string[];
+  /** Proposed actions from LLM (when type is "action_plan") */
+  actions?: ProposedAction[];
 }
 
 /**
@@ -67,6 +70,7 @@ export type AgentStreamEvent =
   | { type: "progress"; progress: number }
   | { type: "chunk"; content: string }
   | { type: "citations"; paths: string[] }
+  | { type: "actions"; actions: ProposedAction[] }
   | { type: "complete"; result: TaskResult }
   | { type: "error"; error: Error };
 

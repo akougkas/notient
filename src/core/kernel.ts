@@ -70,6 +70,13 @@ export class Kernel {
   private llmProvider: unknown = null;
   private notientAgent: unknown = null;
 
+  // Phase 2 services (Agentic)
+  private conversationStore: unknown = null;
+  private actionHistory: unknown = null;
+  private workflowRunner: unknown = null;
+  private trustLevelManager: unknown = null;
+  private actionApplier: unknown = null;
+
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
     setGlobalEventBus(this._eventBus);
@@ -267,6 +274,22 @@ export class Kernel {
       case "agent":
         this.notientAgent = service;
         break;
+      // Phase 2 services
+      case "conversationStore":
+        this.conversationStore = service;
+        break;
+      case "actionHistory":
+        this.actionHistory = service;
+        break;
+      case "workflowRunner":
+        this.workflowRunner = service;
+        break;
+      case "trustLevelManager":
+        this.trustLevelManager = service;
+        break;
+      case "actionApplier":
+        this.actionApplier = service;
+        break;
     }
   }
 
@@ -299,6 +322,17 @@ export class Kernel {
         return this.llmProvider as T;
       case "agent":
         return this.notientAgent as T;
+      // Phase 2 services
+      case "conversationStore":
+        return this.conversationStore as T;
+      case "actionHistory":
+        return this.actionHistory as T;
+      case "workflowRunner":
+        return this.workflowRunner as T;
+      case "trustLevelManager":
+        return this.trustLevelManager as T;
+      case "actionApplier":
+        return this.actionApplier as T;
       default:
         return null;
     }
@@ -320,6 +354,13 @@ export class Kernel {
 
     // Dispose services in reverse order
     const disposables = [
+      // Phase 2 services first
+      this.workflowRunner,
+      this.actionApplier,
+      this.actionHistory,
+      this.conversationStore,
+      this.trustLevelManager,
+      // Phase 1 services
       this.vaultVitals,
       this.contextBuilder,
       this.searchPipeline,

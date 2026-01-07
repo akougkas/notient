@@ -4,11 +4,15 @@
  * Manages a queue of agent tasks for sequential execution.
  * Tasks are processed one at a time, with support for cancellation
  * and progress tracking.
+ *
+ * Phase 2: Integrates with ConversationStore for conversation persistence.
  */
 
 import type { EventBus } from "../events/eventBus";
 import type { AgentTask } from "./types";
 import type { NotientAgent } from "./agentLoop";
+import type { ConversationStore } from "../chat/conversationStore";
+import type { ExtendedChatMessage } from "../chat/types";
 
 /**
  * Callback for task update notifications
@@ -23,11 +27,19 @@ export class AgentTaskQueue {
   private currentTask: AgentTask | null = null;
   private currentAbortController: AbortController | null = null;
   private onTaskUpdateCallback?: TaskUpdateCallback;
+  private conversationStore?: ConversationStore;
 
   constructor(
     private agent: NotientAgent,
     private eventBus: EventBus
   ) {}
+
+  /**
+   * Set the conversation store for persistence (Phase 2)
+   */
+  setConversationStore(store: ConversationStore): void {
+    this.conversationStore = store;
+  }
 
   /**
    * Enqueue a new task
@@ -38,13 +50,43 @@ export class AgentTaskQueue {
     task: Omit<AgentTask, "id" | "status" | "startedAt">
   ): string {
     const id = crypto.randomUUID();
+
+    // Phase 2: Handle conversation persistence
+    const newMessages = task.chatHistory || [];
+    let mergedChatHistory = newMessages;
+
+    if (this.conversationStore && task.notePath) {
+      // Load persisted conversation history
+      const persistedHistory = this.conversationStore.getHistory(task.notePath);
+      // Convert ExtendedChatMessage to ChatMessage for the agent
+      const simplifiedHistory = persistedHistory.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      // Prepend persisted history to any new messages
+      mergedChatHistory = [...simplifiedHistory, ...newMessages];
+
+      // Persist the new user messages (typically just one)
+      for (const msg of newMessages) {
+        if (msg.role === "user") {
+          const userMessage: ExtendedChatMessage = {
+            id: crypto.randomUUID(),
+            role: "user",
+            content: msg.content,
+            timestamp: new Date(),
+          };
+          this.conversationStore.appendMessage(task.notePath, userMessage);
+        }
+      }
+    }
+
     const newTask: AgentTask = {
       ...task,
       id,
       status: "queued",
       startedAt: new Date(),
       progress: 0,
-      chatHistory: task.chatHistory || [],
+      chatHistory: mergedChatHistory,
     };
 
     this.tasks.push(newTask);
@@ -183,11 +225,23 @@ export class AgentTaskQueue {
 
           case "complete":
             // Add assistant response to chat history
+            const assistantContent = event.result.data as string;
             task.chatHistory.push({
               role: "assistant",
-              content: event.result.data as string,
+              content: assistantContent,
             });
             task.result = event.result;
+
+            // Phase 2: Persist assistant message to ConversationStore
+            if (this.conversationStore && task.notePath) {
+              const assistantMessage: ExtendedChatMessage = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: assistantContent,
+                timestamp: new Date(),
+              };
+              this.conversationStore.appendMessage(task.notePath, assistantMessage);
+            }
             break;
 
           case "error":

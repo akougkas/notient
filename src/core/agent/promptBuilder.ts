@@ -10,6 +10,45 @@
 import type { NoteContext, PromptParams, TaskType } from "./types";
 import { getTaskInstructions } from "./taskInference";
 
+/**
+ * Action plan prompt template (JSON-only mode)
+ * Used after streaming explanation to get structured proposed actions
+ */
+const ACTION_PLAN_PROMPT = `You are an AI assistant analyzing an Obsidian note. Based on the user's request and note content, output ONLY a valid JSON object with proposed actions.
+
+Output format:
+{
+  "actions": [
+    {
+      "type": "frontmatter_set" | "frontmatter_add_tags" | "append_section" | "append_related_links" | "move_note",
+      "risk": "low" | "medium" | "high",
+      "title": "Short description (max 50 chars)",
+      "reason": "Why this action helps the user",
+      "target": "path/to/note.md",
+      "payload": { /* type-specific, see below */ }
+    }
+  ]
+}
+
+Payload formats by type:
+- frontmatter_set: { "key": "string", "value": "any" }
+- frontmatter_add_tags: { "tags": ["tag1", "tag2"] }
+- append_section: { "heading": "Optional Heading", "content": "markdown content" }
+- append_related_links: { "links": ["Note Name", "Other Note"] }
+- move_note: { "from": "current/path.md", "to": "new/folder/path.md" }
+
+Risk levels (enforced):
+- low: frontmatter changes, appending content
+- medium: moving notes, appending links
+- high: reserved for future (merge, trash)
+
+Rules:
+- Output ONLY valid JSON, no explanation or markdown code fences
+- Maximum 10 actions per response
+- Use note names (not paths) in append_related_links payload
+- Paths must be relative to vault root
+- If no actions are appropriate, return { "actions": [] }`;
+
 const BASE_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vault. You help users understand, navigate, and improve their notes.
 
 CRITICAL RULES:
@@ -126,5 +165,52 @@ ${noteSummaries}`;
   formatNoteForPrompt(note: NoteContext): string {
     return `### [[${note.title}]] (${note.path})
 ${note.content.length > 400 ? note.content.slice(0, 400) + "..." : note.content}`;
+  }
+
+  /**
+   * Build a JSON-only prompt for generating action plans
+   * Called after streaming explanation to get structured proposed actions
+   *
+   * @param params - Parameters including current note and context
+   * @returns The action plan system prompt
+   */
+  buildActionPlanPrompt(params: PromptParams): string {
+    const parts: string[] = [ACTION_PLAN_PROMPT];
+
+    // Add current note context for accurate targeting
+    if (params.currentNote?.content) {
+      const truncatedContent =
+        params.currentNote.content.length > 2000
+          ? params.currentNote.content.slice(0, 2000) + "\n[... truncated ...]"
+          : params.currentNote.content;
+
+      parts.push(`
+=== CURRENT NOTE ===
+Title: ${params.currentNote.title}
+Path: ${params.currentNote.path}
+
+${truncatedContent}
+=== END CURRENT NOTE ===`);
+    }
+
+    // Add task type hint for action selection
+    if (params.taskType) {
+      parts.push(`
+Task context: User requested "${params.taskType}" operation.`);
+    }
+
+    // Add related notes for link suggestions
+    if (params.relatedNotes.length > 0) {
+      const noteList = params.relatedNotes
+        .slice(0, 5)
+        .map((n) => `- [[${n.title}]] (${n.path})`)
+        .join("\n");
+
+      parts.push(`
+Related notes that could be linked:
+${noteList}`);
+    }
+
+    return parts.join("\n");
   }
 }

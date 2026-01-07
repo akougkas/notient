@@ -23,6 +23,11 @@ export interface StoragePathsConfig {
   logs: string;
   /** Index state file path (legacy, kept for migration) */
   indexState: string;
+  // Phase 2 additions
+  /** Conversations storage file path */
+  conversations: string;
+  /** Action history storage file path */
+  actions: string;
 }
 
 /**
@@ -55,6 +60,9 @@ export class StoragePaths {
       locks: path.join(pluginRoot, STORAGE_PATHS.LOCKS),
       logs: path.join(pluginRoot, STORAGE_PATHS.LOGS),
       indexState: path.join(pluginRoot, STORAGE_PATHS.INDEX_STATE),
+      // Phase 2 additions
+      conversations: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS),
+      actions: path.join(pluginRoot, STORAGE_PATHS.ACTIONS),
     };
   }
 
@@ -113,6 +121,20 @@ export class StoragePaths {
    */
   get indexState(): string {
     return this.config.indexState;
+  }
+
+  /**
+   * Get the conversations storage file path (Phase 2)
+   */
+  get conversations(): string {
+    return this.config.conversations;
+  }
+
+  /**
+   * Get the actions history file path (Phase 2)
+   */
+  get actions(): string {
+    return this.config.actions;
   }
 
   /**

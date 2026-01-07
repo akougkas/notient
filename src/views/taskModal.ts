@@ -3,9 +3,12 @@ import type { Kernel } from "../core/kernel";
 import type { AgentTask } from "../core/agent/types";
 import type { NotientAgent } from "../core/agent";
 import { ChatSession } from "../core/chat";
+import type { ProposedAction, RiskLevel } from "../core/agentic/types";
+import type { ActionApplier, ActionHistory, TrustLevelManager } from "../core/agentic";
 
 export class TaskModal extends Modal {
     private chatContainerEl: HTMLElement | null = null;
+    private actionsContainerEl: HTMLElement | null = null;
     private inputEl: HTMLTextAreaElement | null = null;
     private sendBtnContainerEl: HTMLElement | null = null;
     private streamingBubbleEl: HTMLElement | null = null;
@@ -13,6 +16,9 @@ export class TaskModal extends Modal {
     private abortController: AbortController | null = null;
     private streamingContent = "";
     private notePreviewContent: string | null = null;
+    private pendingActions: ProposedAction[] = [];
+    /** Track applied action IDs for undo support */
+    private appliedActionRecordIds: Map<string, string> = new Map();
 
     // New architecture: ChatSession for history management
     private session: ChatSession;
@@ -124,6 +130,15 @@ export class TaskModal extends Modal {
         // Chat Container
         this.chatContainerEl = body.createDiv({ cls: "nv2-chat-container" });
         this.renderChatHistory();
+
+        // Proposed Actions Container (below chat)
+        this.actionsContainerEl = body.createDiv({ cls: "nv2-actions-container" });
+
+        // Load any existing actions from task result
+        if (this.task.result?.actions && this.task.result.actions.length > 0) {
+            this.pendingActions = this.task.result.actions;
+            this.renderProposedActions();
+        }
     }
 
     private renderChatInterface(container: HTMLElement): void {
@@ -316,11 +331,22 @@ export class TaskModal extends Modal {
                         this.task.result.citations = event.paths;
                         break;
 
+                    case "actions":
+                        // Store proposed actions and render them
+                        this.pendingActions = event.actions;
+                        this.renderProposedActions();
+                        break;
+
                     case "complete":
                         // Save the complete response
                         this.session.addAssistantMessage(event.result.data as string);
                         this.task.chatHistory = this.session.getMessagesForLLM();
                         this.task.result = event.result;
+                        // Update pending actions from result if available
+                        if (event.result.actions) {
+                            this.pendingActions = event.result.actions;
+                            this.renderProposedActions();
+                        }
                         break;
 
                     case "error":
@@ -406,5 +432,266 @@ export class TaskModal extends Modal {
 
     private formatStatus(status: string): string {
         return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    /**
+     * Render proposed actions from the LLM
+     * Shows risk badge, title, target path, and Apply/Undo buttons
+     */
+    private renderProposedActions(): void {
+        if (!this.actionsContainerEl) return;
+
+        this.actionsContainerEl.empty();
+
+        if (this.pendingActions.length === 0) {
+            return;
+        }
+
+        // Get services
+        const trustManager = this.kernel.getService<TrustLevelManager>("trustLevelManager");
+        const hasWriteLock = this.kernel.hasWriteLock;
+
+        // Section header
+        const header = this.actionsContainerEl.createDiv({ cls: "nv2-actions-header" });
+        header.createEl("h3", { text: "Proposed Actions" });
+        header.createSpan({
+            cls: "nv2-actions-count",
+            text: `(${this.pendingActions.length})`
+        });
+
+        // Actions list
+        const list = this.actionsContainerEl.createDiv({ cls: "nv2-actions-list" });
+
+        for (const action of this.pendingActions) {
+            const actionEl = list.createDiv({ cls: "nv2-action-item" });
+            const isApplied = this.appliedActionRecordIds.has(action.id);
+
+            // Risk badge
+            const riskBadge = actionEl.createSpan({
+                cls: `nv2-risk-badge nv2-risk-${action.risk}`,
+                text: action.risk.toUpperCase()
+            });
+            riskBadge.setAttribute("aria-label", this.getRiskDescription(action.risk));
+
+            // Action content
+            const contentEl = actionEl.createDiv({ cls: "nv2-action-content" });
+
+            // Title with applied indicator
+            const titleEl = contentEl.createDiv({ cls: "nv2-action-title" });
+            if (isApplied) {
+                const checkIcon = titleEl.createSpan({ cls: "nv2-action-applied-icon" });
+                setIcon(checkIcon, "check-circle");
+                titleEl.createSpan({ text: ` ${action.title}` });
+            } else {
+                titleEl.setText(action.title);
+            }
+
+            // Type and target
+            const metaEl = contentEl.createDiv({ cls: "nv2-action-meta" });
+            metaEl.createSpan({
+                cls: "nv2-action-type",
+                text: this.formatActionType(action.type)
+            });
+            metaEl.createSpan({ text: " → " });
+            metaEl.createSpan({
+                cls: "nv2-action-target",
+                text: action.target.split("/").pop() || action.target
+            });
+
+            // Reason
+            if (action.reason) {
+                const reasonEl = contentEl.createDiv({ cls: "nv2-action-reason" });
+                reasonEl.createSpan({ text: action.reason });
+            }
+
+            // Buttons container
+            const btnContainer = actionEl.createDiv({ cls: "nv2-action-buttons" });
+
+            if (isApplied) {
+                // Show Undo button for applied actions
+                const undoBtn = new ButtonComponent(btnContainer)
+                    .setIcon("undo")
+                    .setTooltip("Undo this action")
+                    .onClick(() => this.handleUndo(action));
+                undoBtn.buttonEl.addClass("nv2-btn-undo");
+            } else {
+                // Show Apply button for pending actions
+                const trustDecision = trustManager?.evaluate(action, hasWriteLock);
+                const canApply = hasWriteLock && trustDecision?.allowed;
+                const needsConfirm = trustDecision?.requiresConfirmation ?? true;
+
+                let tooltip = "Apply this action";
+                if (!hasWriteLock) {
+                    tooltip = "Cannot apply: write lock not held";
+                } else if (!trustDecision?.allowed) {
+                    tooltip = trustDecision?.reason || "Action not allowed";
+                } else if (needsConfirm) {
+                    tooltip = "Click to apply (requires confirmation)";
+                }
+
+                const applyBtn = new ButtonComponent(btnContainer)
+                    .setIcon("check")
+                    .setTooltip(tooltip)
+                    .setDisabled(!canApply)
+                    .onClick(() => this.handleApply(action, needsConfirm));
+
+                applyBtn.buttonEl.addClass("nv2-btn-apply");
+                if (!canApply) {
+                    applyBtn.buttonEl.addClass("nv2-btn-disabled");
+                }
+            }
+        }
+
+        // Status info
+        const infoEl = this.actionsContainerEl.createDiv({ cls: "nv2-actions-info" });
+        if (!hasWriteLock) {
+            setIcon(infoEl.createSpan({ cls: "nv2-info-icon nv2-warning" }), "alert-triangle");
+            infoEl.createSpan({ text: "Write lock not held - actions disabled" });
+        } else {
+            setIcon(infoEl.createSpan({ cls: "nv2-info-icon" }), "info");
+            infoEl.createSpan({ text: "Click Apply to execute an action" });
+        }
+
+        this.scrollToBottom();
+    }
+
+    /**
+     * Handle Apply button click
+     */
+    private async handleApply(action: ProposedAction, needsConfirm: boolean): Promise<void> {
+        const actionApplier = this.kernel.getService<ActionApplier>("actionApplier");
+        if (!actionApplier) {
+            this.kernel.obsidian.notice("Action applier not available");
+            return;
+        }
+
+        // For medium/high risk, show a simple confirmation
+        if (needsConfirm) {
+            const confirmed = await this.showConfirmDialog(action);
+            if (!confirmed) return;
+        }
+
+        // Apply the action
+        const result = await actionApplier.applyConfirmed(action, this.task.id);
+
+        if (result.success && result.recordId) {
+            // Track the applied action for undo
+            this.appliedActionRecordIds.set(action.id, result.recordId);
+            this.kernel.obsidian.notice(`Applied: ${action.title}`);
+            this.renderProposedActions();
+
+            // Emit update to refresh sidebar
+            this.kernel.eventBus.emit("agent:task-update", { task: this.task });
+        } else {
+            this.kernel.obsidian.notice(`Failed: ${result.error || "Unknown error"}`);
+        }
+    }
+
+    /**
+     * Handle Undo button click
+     */
+    private async handleUndo(action: ProposedAction): Promise<void> {
+        const actionHistory = this.kernel.getService<ActionHistory>("actionHistory");
+        if (!actionHistory) {
+            this.kernel.obsidian.notice("Action history not available");
+            return;
+        }
+
+        const recordId = this.appliedActionRecordIds.get(action.id);
+        if (!recordId) {
+            this.kernel.obsidian.notice("Cannot undo: record not found");
+            return;
+        }
+
+        const result = await actionHistory.undo(recordId);
+
+        if (result.success) {
+            this.appliedActionRecordIds.delete(action.id);
+            this.kernel.obsidian.notice(`Undone: ${action.title}`);
+            this.renderProposedActions();
+
+            // Emit update to refresh sidebar
+            this.kernel.eventBus.emit("agent:task-update", { task: this.task });
+        } else {
+            this.kernel.obsidian.notice(`Undo failed: ${result.error || "Unknown error"}`);
+        }
+    }
+
+    /**
+     * Show a simple confirmation dialog for actions
+     */
+    private async showConfirmDialog(action: ProposedAction): Promise<boolean> {
+        return new Promise((resolve) => {
+            const modal = new Modal(this.app);
+            modal.titleEl.setText("Confirm Action");
+
+            const content = modal.contentEl;
+            content.createDiv({ cls: "nv2-confirm-message" }).setText(
+                `Apply "${action.title}"?\n\nThis will ${this.getActionVerb(action.type)} ${action.target.split("/").pop()}.`
+            );
+
+            if (action.risk === "high") {
+                content.createDiv({ cls: "nv2-confirm-warning" }).setText(
+                    "⚠️ This is a high-risk action."
+                );
+            }
+
+            const buttons = content.createDiv({ cls: "nv2-confirm-buttons" });
+
+            new ButtonComponent(buttons)
+                .setButtonText("Cancel")
+                .onClick(() => {
+                    modal.close();
+                    resolve(false);
+                });
+
+            new ButtonComponent(buttons)
+                .setButtonText("Apply")
+                .setCta()
+                .onClick(() => {
+                    modal.close();
+                    resolve(true);
+                });
+
+            modal.open();
+        });
+    }
+
+    /**
+     * Get action verb for confirmation messages
+     */
+    private getActionVerb(type: string): string {
+        switch (type) {
+            case "frontmatter_set": return "modify the frontmatter of";
+            case "frontmatter_add_tags": return "add tags to";
+            case "append_section": return "append a section to";
+            case "append_related_links": return "add related links to";
+            case "move_note": return "move";
+            default: return "modify";
+        }
+    }
+
+    /**
+     * Get human-readable description for risk level
+     */
+    private getRiskDescription(risk: RiskLevel): string {
+        switch (risk) {
+            case "low":
+                return "Low risk: Safe to apply, easily reversible";
+            case "medium":
+                return "Medium risk: Requires confirmation before applying";
+            case "high":
+                return "High risk: Extra confirmation required";
+        }
+    }
+
+    /**
+     * Format action type for display
+     */
+    private formatActionType(type: string): string {
+        return type
+            .split("_")
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ");
     }
 }

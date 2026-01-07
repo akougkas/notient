@@ -7,6 +7,7 @@ import type { IndexProgress } from "./indexer";
 import type { VaultVitalsData } from "./vitals";
 import type { SearchResult } from "./search";
 import type { AgentTask } from "./agentTask";
+import type { WorkflowRun, AppliedActionRecord } from "../core/agentic/types";
 
 /** All event types supported by the EventBus */
 export type EventType =
@@ -20,7 +21,16 @@ export type EventType =
   | "vitals:updated"
   | "settings:changed"
   | "note:context-changed"
-  | "agent:task-update";
+  | "agent:task-update"
+  // Phase 2: Workflow events
+  | "workflow:started"
+  | "workflow:progress"
+  | "workflow:completed"
+  | "workflow:cancelled"
+  | "workflow:failed"
+  // Phase 2: Action events
+  | "action:applied"
+  | "action:undone";
 
 /** Event payload mapping */
 export interface EventPayloads {
@@ -35,6 +45,15 @@ export interface EventPayloads {
   "settings:changed": SettingsChangedEvent;
   "note:context-changed": NoteContextChangedEvent;
   "agent:task-update": AgentTaskUpdateEvent;
+  // Phase 2: Workflow events
+  "workflow:started": WorkflowStartedEvent;
+  "workflow:progress": WorkflowProgressEvent;
+  "workflow:completed": WorkflowCompletedEvent;
+  "workflow:cancelled": WorkflowCancelledEvent;
+  "workflow:failed": WorkflowFailedEvent;
+  // Phase 2: Action events
+  "action:applied": ActionAppliedEvent;
+  "action:undone": ActionUndoneEvent;
 }
 
 export interface AgentTaskUpdateEvent {
@@ -87,6 +106,43 @@ export interface SettingsChangedEvent {
 
 export interface NoteContextChangedEvent {
   path: string | null;
+}
+
+// =============================================================================
+// Phase 2: Workflow Events
+// =============================================================================
+
+export interface WorkflowStartedEvent {
+  workflow: WorkflowRun;
+}
+
+export interface WorkflowProgressEvent {
+  workflow: WorkflowRun;
+}
+
+export interface WorkflowCompletedEvent {
+  workflow: WorkflowRun;
+}
+
+export interface WorkflowCancelledEvent {
+  workflow: WorkflowRun;
+}
+
+export interface WorkflowFailedEvent {
+  workflow: WorkflowRun;
+  error: string;
+}
+
+// =============================================================================
+// Phase 2: Action Events
+// =============================================================================
+
+export interface ActionAppliedEvent {
+  record: AppliedActionRecord;
+}
+
+export interface ActionUndoneEvent {
+  recordId: string;
 }
 
 /** Event listener function type */

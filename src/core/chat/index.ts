@@ -14,6 +14,8 @@ export type {
 
 // Core components
 export { ChatSession } from "./session";
+export { ConversationStore } from "./conversationStore";
+export type { ChatRetentionConfig } from "./conversationStore";
 
 // Streaming utilities
 export {

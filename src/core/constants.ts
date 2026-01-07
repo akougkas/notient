@@ -15,6 +15,9 @@ export const STORAGE_PATHS = {
   LOCKS: "locks",
   LOGS: "logs",
   INDEX_STATE: "index-state.json",
+  // Phase 2 additions
+  CONVERSATIONS: "conversations.json",
+  ACTIONS: "actions.json",
 } as const;
 
 /** Lock file names */

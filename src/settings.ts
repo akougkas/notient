@@ -72,6 +72,25 @@ function mergeWithDefaults(data: Partial<NotientSettings>): NotientSettings {
     search: { ...DEFAULT_SETTINGS.search, ...data.search },
     advanced: { ...DEFAULT_SETTINGS.advanced, ...data.advanced },
     setupComplete: data.setupComplete ?? DEFAULT_SETTINGS.setupComplete,
+    // Phase 2 additions
+    agent: {
+      trustPolicy: {
+        ...DEFAULT_SETTINGS.agent.trustPolicy,
+        ...(data.agent?.trustPolicy ?? {}),
+      },
+      history: {
+        ...DEFAULT_SETTINGS.agent.history,
+        ...(data.agent?.history ?? {}),
+      },
+      bulk: {
+        ...DEFAULT_SETTINGS.agent.bulk,
+        ...(data.agent?.bulk ?? {}),
+      },
+    },
+    chatRetention: {
+      ...DEFAULT_SETTINGS.chatRetention,
+      ...(data.chatRetention ?? {}),
+    },
   };
 }
 

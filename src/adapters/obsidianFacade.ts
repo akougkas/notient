@@ -15,6 +15,7 @@ import {
   MetadataCache,
   Workspace,
   EventRef,
+  normalizePath,
 } from "obsidian";
 
 export interface NoteInfo {
@@ -39,6 +40,14 @@ export interface NoteMetadata {
   tags: string[];
   links: string[];
   headings: { level: number; heading: string }[];
+}
+
+/**
+ * Result of a write operation
+ */
+export interface WriteResult {
+  success: boolean;
+  error?: string;
 }
 
 /**
@@ -202,6 +211,182 @@ export class ObsidianFacade {
       links: [...new Set(links)],
       headings,
     };
+  }
+
+  // ============ Write Operations (Phase 2) ============
+
+  /**
+   * Process a file atomically - read, transform, write
+   * Preferred method for most content edits.
+   * @param path - Normalized path to the file
+   * @param fn - Transform function applied to file content
+   */
+  async processFile(
+    path: string,
+    fn: (data: string) => string
+  ): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(path);
+      const file = this.getFileByPath(normalizedPath);
+      if (!file) {
+        return { success: false, error: `File not found: ${normalizedPath}` };
+      }
+
+      await this.app.vault.process(file, fn);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] processFile error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Modify file content directly
+   * Use processFile for atomic read-transform-write when possible.
+   * @param path - Normalized path to the file
+   * @param content - New content to write
+   */
+  async modifyFile(path: string, content: string): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(path);
+      const file = this.getFileByPath(normalizedPath);
+      if (!file) {
+        return { success: false, error: `File not found: ${normalizedPath}` };
+      }
+
+      await this.app.vault.modify(file, content);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] modifyFile error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Rename or move a file
+   * Note: Destination folder must exist - use createFolderIfNeeded first.
+   * @param from - Current path
+   * @param to - New path
+   */
+  async renameFile(from: string, to: string): Promise<WriteResult> {
+    try {
+      const normalizedFrom = normalizePath(from);
+      const normalizedTo = normalizePath(to);
+      const file = this.getFileByPath(normalizedFrom);
+      if (!file) {
+        return { success: false, error: `File not found: ${normalizedFrom}` };
+      }
+
+      // Check if destination already exists
+      if (this.getFileByPath(normalizedTo)) {
+        return { success: false, error: `Destination already exists: ${normalizedTo}` };
+      }
+
+      await this.app.fileManager.renameFile(file, normalizedTo);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] renameFile error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Send a file to trash
+   * @param path - Path to the file
+   * @param useSystemTrash - If true, uses system trash; otherwise vault trash
+   */
+  async trashFile(
+    path: string,
+    useSystemTrash = false
+  ): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(path);
+      const file = this.getFileByPath(normalizedPath);
+      if (!file) {
+        return { success: false, error: `File not found: ${normalizedPath}` };
+      }
+
+      await this.app.vault.trash(file, useSystemTrash);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] trashFile error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Process frontmatter using Obsidian's built-in YAML parser
+   * Avoids manual YAML parsing which can be error-prone.
+   * @param path - Path to the file
+   * @param updater - Function to modify frontmatter object in-place
+   */
+  async processFrontMatter(
+    path: string,
+    updater: (frontmatter: Record<string, unknown>) => void
+  ): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(path);
+      const file = this.getFileByPath(normalizedPath);
+      if (!file) {
+        return { success: false, error: `File not found: ${normalizedPath}` };
+      }
+
+      await this.app.fileManager.processFrontMatter(file, updater);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] processFrontMatter error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Create a folder if it doesn't exist
+   * Required before renameFile when moving to a new folder.
+   * @param folderPath - Path to the folder to create
+   */
+  async createFolderIfNeeded(folderPath: string): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(folderPath);
+
+      // Check if already exists
+      const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+      if (existing) {
+        if (existing instanceof TFolder) {
+          return { success: true }; // Already exists as folder
+        }
+        return { success: false, error: `Path exists but is not a folder: ${normalizedPath}` };
+      }
+
+      // Create folder (creates parent folders as needed)
+      await this.app.vault.createFolder(normalizedPath);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Obsidian may throw if folder already exists (race condition)
+      if (message.includes("Folder already exists")) {
+        return { success: true };
+      }
+      console.error("[ObsidianFacade] createFolderIfNeeded error:", message);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Get the parent folder path from a file path
+   * @param filePath - Path to the file
+   */
+  getParentFolderPath(filePath: string): string {
+    const normalized = normalizePath(filePath);
+    const lastSlash = normalized.lastIndexOf("/");
+    if (lastSlash === -1) {
+      return ""; // Root level
+    }
+    return normalized.substring(0, lastSlash);
   }
 
   // ============ Event Subscriptions ============

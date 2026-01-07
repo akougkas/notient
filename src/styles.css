@@ -3982,7 +3982,7 @@
   .nv2-status-pulsing {
     animation: none;
   }
-  
+
   .nv2-metric-card,
   .nv2-action-btn,
   .nv2-send-btn,
@@ -3990,4 +3990,202 @@
   .nv2-task-card {
     transition: none;
   }
+}
+
+/* ============ V2 Proposed Actions (Phase 2) ============ */
+
+.nv2-actions-container {
+  margin-top: var(--nv2-space-4);
+  border-top: 1px solid var(--nv2-border);
+  padding-top: var(--nv2-space-3);
+}
+
+.nv2-actions-header {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+  margin-bottom: var(--nv2-space-3);
+}
+
+.nv2-actions-header h3 {
+  margin: 0;
+  font-size: var(--nv2-font-sm);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-actions-count {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-action-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-3);
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-tertiary);
+  border-radius: var(--nv2-radius-md);
+  border: 1px solid var(--nv2-border);
+}
+
+.nv2-action-item:hover {
+  border-color: var(--nv2-accent-border);
+}
+
+/* Risk badges */
+.nv2-risk-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--nv2-font-xs);
+  font-weight: 600;
+  border-radius: var(--nv2-radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.nv2-risk-low {
+  background: rgba(74, 144, 226, 0.15);
+  color: var(--nv2-accent);
+}
+
+.nv2-risk-medium {
+  background: rgba(255, 193, 7, 0.15);
+  color: var(--nv2-status-warning);
+}
+
+.nv2-risk-high {
+  background: rgba(220, 53, 69, 0.15);
+  color: var(--nv2-status-error);
+}
+
+.nv2-action-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-action-title {
+  font-size: var(--nv2-font-sm);
+  font-weight: 500;
+  color: var(--nv2-text-primary);
+  margin-bottom: var(--nv2-space-1);
+}
+
+.nv2-action-meta {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-secondary);
+  margin-bottom: var(--nv2-space-1);
+}
+
+.nv2-action-type {
+  color: var(--nv2-accent-text);
+}
+
+.nv2-action-target {
+  color: var(--nv2-text-faint);
+}
+
+.nv2-action-reason {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-faint);
+  font-style: italic;
+  margin-top: var(--nv2-space-1);
+}
+
+.nv2-action-buttons {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--nv2-space-1);
+}
+
+.nv2-action-buttons button {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--nv2-radius-sm);
+  border: 1px solid var(--nv2-border);
+  background: var(--nv2-bg-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-action-buttons button:hover:not(:disabled) {
+  background: var(--nv2-hover);
+  border-color: var(--nv2-accent);
+}
+
+.nv2-action-buttons button:disabled,
+.nv2-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-actions-info {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+  margin-top: var(--nv2-space-3);
+  padding: var(--nv2-space-2) var(--nv2-space-3);
+  background: var(--nv2-bg-secondary);
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-info-icon {
+  color: var(--nv2-accent);
+}
+
+.nv2-info-icon.nv2-warning {
+  color: var(--nv2-status-warning);
+}
+
+/* Applied action indicator */
+.nv2-action-applied-icon {
+  color: var(--nv2-status-success, #22c55e);
+  margin-right: var(--nv2-space-1);
+}
+
+.nv2-action-applied-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Undo button styling */
+.nv2-btn-undo {
+  background: var(--nv2-bg-tertiary) !important;
+  border-color: var(--nv2-status-warning) !important;
+}
+
+.nv2-btn-undo:hover {
+  background: rgba(255, 193, 7, 0.15) !important;
+}
+
+/* Confirm dialog styles */
+.nv2-confirm-message {
+  margin-bottom: var(--nv2-space-4);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.nv2-confirm-warning {
+  padding: var(--nv2-space-2) var(--nv2-space-3);
+  background: rgba(220, 53, 69, 0.1);
+  border-left: 3px solid var(--nv2-status-error);
+  margin-bottom: var(--nv2-space-4);
+  color: var(--nv2-status-error);
+}
+
+.nv2-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--nv2-space-2);
 }

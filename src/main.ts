@@ -25,6 +25,9 @@ import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 // New architecture (Phase 1.8)
 import { LMStudioProvider } from "./core/llm";
 import { NotientAgent, AgentTaskQueue } from "./core/agent";
+// Phase 2: Conversation persistence + Agentic services
+import { ConversationStore } from "./core/chat";
+import { ActionHistory, ActionApplier, TrustLevelManager } from "./core/agentic";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
@@ -52,6 +55,12 @@ export default class NotientPlugin extends Plugin {
   private llmProvider: LMStudioProvider | null = null;
   private notientAgent: NotientAgent | null = null;
   private agentTaskQueue: AgentTaskQueue | null = null;
+
+  // Phase 2: Conversation persistence + Agentic services
+  private conversationStore: ConversationStore | null = null;
+  private actionHistory: ActionHistory | null = null;
+  private trustLevelManager: TrustLevelManager | null = null;
+  private actionApplier: ActionApplier | null = null;
 
   private servicesInitialized = false;
 
@@ -120,6 +129,22 @@ export default class NotientPlugin extends Plugin {
 
     try {
       // Dispose services in reverse order
+      // Phase 2: Flush agentic services first
+      if (this.actionApplier) {
+        this.actionApplier = null;
+      }
+      if (this.trustLevelManager) {
+        this.trustLevelManager = null;
+      }
+      if (this.actionHistory) {
+        await this.actionHistory.dispose();
+        this.actionHistory = null;
+      }
+      if (this.conversationStore) {
+        await this.conversationStore.dispose();
+        this.conversationStore = null;
+      }
+
       this.agentTaskQueue = null;
       this.notientAgent = null;
       this.llmProvider?.dispose();
@@ -279,6 +304,58 @@ export default class NotientPlugin extends Plugin {
         // Agent Task Queue (new architecture)
         this.agentTaskQueue = new AgentTaskQueue(this.notientAgent, eventBus);
         this.kernel.registerService("taskQueue", this.agentTaskQueue);
+
+        // Phase 2: Initialize ConversationStore
+        this.conversationStore = new ConversationStore(
+          this.kernel.storagePaths,
+          {
+            maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
+            maxAgeDays: this.settings.chatRetention.maxAgeDays,
+          }
+        );
+        await this.conversationStore.load();
+        this.kernel.registerService("conversationStore", this.conversationStore);
+
+        // Wire conversation store to task queue
+        this.agentTaskQueue.setConversationStore(this.conversationStore);
+
+        // Subscribe to file renames to update conversation keys
+        this.kernel.obsidian.onFileRename((file, oldPath) => {
+          if (this.conversationStore) {
+            this.conversationStore.handleRename(oldPath, file.path);
+          }
+        });
+
+        // Phase 2: Initialize Agentic services
+        // TrustLevelManager (evaluates action gating)
+        this.trustLevelManager = new TrustLevelManager(
+          this.settings.agent.trustPolicy
+        );
+        this.kernel.registerService("trustLevelManager", this.trustLevelManager);
+
+        // ActionHistory (stores applied actions with undo data)
+        this.actionHistory = new ActionHistory(
+          this.kernel.storagePaths,
+          this.kernel.obsidian,
+          this.kernel.eventBus,
+          {
+            maxEntries: this.settings.agent.history.maxEntries,
+            maxAgeDays: this.settings.agent.history.maxAgeDays,
+          }
+        );
+        await this.actionHistory.load();
+        this.kernel.registerService("actionHistory", this.actionHistory);
+
+        // ActionApplier (applies actions to notes)
+        this.actionApplier = new ActionApplier(
+          this.kernel,
+          this.kernel.obsidian,
+          this.actionHistory,
+          this.trustLevelManager
+        );
+        this.kernel.registerService("actionApplier", this.actionApplier);
+
+        console.log("[Notient] Phase 2 agentic services initialized");
 
         this.servicesInitialized = true;
         this.kernel.setServicesInitialized();
@@ -553,6 +630,22 @@ export default class NotientPlugin extends Plugin {
   private async reinitializeServices(): Promise<void> {
     try {
       // Dispose old services
+      // Phase 2: Flush agentic services first
+      if (this.actionApplier) {
+        this.actionApplier = null;
+      }
+      if (this.trustLevelManager) {
+        this.trustLevelManager = null;
+      }
+      if (this.actionHistory) {
+        await this.actionHistory.dispose();
+        this.actionHistory = null;
+      }
+      if (this.conversationStore) {
+        await this.conversationStore.dispose();
+        this.conversationStore = null;
+      }
+
       this.agentTaskQueue = null;
       this.notientAgent = null;
       this.llmProvider?.dispose();
