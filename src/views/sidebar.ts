@@ -23,6 +23,12 @@ import type { WorkflowRunner } from "../core/agentic/workflowRunner";
 import { VIEW_TYPE_SIDEBAR } from "../core/constants";
 import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
 import type { NoteIntelligenceService } from "../core/intelligence/noteIntelligence";
+import type {
+  IntelligenceEntity,
+  IntelligenceSuggestedLink,
+  IntelligenceSuggestedTag,
+  IntelligenceTriageAction,
+} from "../core/intelligence/types";
 import type { Kernel } from "../core/kernel";
 import type { ChatMessage, LLMProvider } from "../core/llm";
 import { ParaDetector } from "../core/para/detector";
@@ -306,7 +312,7 @@ export class NotientSidebarView extends ItemView {
     const summaryText = summaryContent.createDiv({ cls: "nv2-insight-text" });
     summaryText.setText(
       record?.summaryShort ??
-        "No AI summary yet. It will generate in the background after indexing, or you can generate it now.",
+      "No AI summary yet. It will generate in the background after indexing, or you can generate it now.",
     );
 
     if (!record?.summaryShort) {
@@ -332,6 +338,122 @@ export class NotientSidebarView extends ItemView {
         `Health: ${h.score}/100 (freshness ${h.breakdown.freshness}, connectivity ${h.breakdown.connectivity}, structure ${h.breakdown.structure}, metadata ${h.breakdown.metadata})`,
       );
     }
+
+    // Entities (New)
+    if (record?.entities && record.entities.length > 0) {
+      this.renderEntities(stream, record.entities);
+    }
+
+    // Suggestions (tags/links) (New)
+    if (
+      (record?.suggestedTags && record.suggestedTags.length > 0) ||
+      (record?.suggestedLinks && record.suggestedLinks.length > 0)
+    ) {
+      this.renderSuggestions(stream, record.suggestedTags ?? [], record.suggestedLinks ?? []);
+    }
+
+    // Triage Action (New)
+    if (record?.triageAction) {
+      this.renderTriageAction(stream, record.triageAction);
+    }
+  }
+
+  private renderEntities(container: HTMLElement, entities: IntelligenceEntity[]): void {
+    const item = container.createDiv({ cls: "nv2-insight" });
+    item.createDiv({ cls: "nv2-insight-dot nv2-insight-dot--secondary" });
+    const content = item.createDiv({ cls: "nv2-insight-content" });
+
+    content.createDiv({ cls: "nv2-insight-label", text: "Entities identified" });
+
+    const pillContainer = content.createDiv({ cls: "nv2-entity-cloud" });
+
+    // Show top 8 entities
+    for (const entity of entities.slice(0, 8)) {
+      const pill = pillContainer.createDiv({
+        cls: "nv2-entity-pill",
+        title: `${entity.type}: ${entity.context || "No context"}`
+      });
+      pill.setText(entity.name);
+    }
+  }
+
+  private renderSuggestions(
+    container: HTMLElement,
+    tags: IntelligenceSuggestedTag[],
+    links: IntelligenceSuggestedLink[]
+  ): void {
+    const item = container.createDiv({ cls: "nv2-insight" });
+    item.createDiv({ cls: "nv2-insight-dot" }); // primary dot
+    const content = item.createDiv({ cls: "nv2-insight-content" });
+
+    content.createDiv({ cls: "nv2-insight-label", text: "Suggestions" });
+
+    // Tags
+    if (tags.length > 0) {
+      const row = content.createDiv({ cls: "nv2-suggestion-row" });
+      for (const t of tags.slice(0, 3)) {
+        const btn = row.createEl("button", {
+          cls: "nv2-suggestion-btn",
+          text: `+ #${t.tag}`,
+          title: `${Math.round(t.confidence * 100)}% - ${t.reason}`
+        });
+        btn.addEventListener("click", () => {
+          // TODO: actually apply tag
+          new Notice(`Added #${t.tag} (mock)`);
+          btn.remove();
+        });
+      }
+    }
+
+    // Links
+    if (links.length > 0) {
+      const list = content.createDiv({ cls: "nv2-suggestion-list" });
+      for (const l of links.slice(0, 3)) {
+        const row = list.createDiv({ cls: "nv2-suggestion-link-row" });
+        const text = row.createSpan({ text: `Link to [[${l.title}]]?` });
+        text.setAttribute("title", l.reason);
+
+        const applyBtn = row.createEl("button", { cls: "nv2-suggestion-icon-btn", text: "Link" });
+        applyBtn.addEventListener("click", () => {
+          // TODO: actually insert link
+          new Notice(`Linked to [[${l.title}]] (mock)`);
+          row.remove();
+        });
+      }
+    }
+  }
+
+  private renderTriageAction(container: HTMLElement, action: IntelligenceTriageAction): void {
+    const item = container.createDiv({ cls: "nv2-insight" });
+    item.createDiv({ cls: "nv2-insight-dot nv2-insight-dot--action" });
+    const content = item.createDiv({ cls: "nv2-insight-content" });
+
+    const box = content.createDiv({ cls: "nv2-triage-box" });
+
+    const title = box.createDiv({ cls: "nv2-triage-title" });
+    setIcon(title.createSpan({ cls: "nv2-triage-icon" }), "inbox");
+    title.createSpan({ text: "Inbox Triage" });
+
+    const msg = box.createDiv({ cls: "nv2-triage-message" });
+    if (action.type === "move") {
+      msg.setText(`Move to "${action.target}"? ${action.reason}`);
+    } else if (action.type === "tag") {
+      msg.setText(`Tag as ${action.target}? ${action.reason}`);
+    } else {
+      msg.setText(`${action.type}: ${action.target} (${action.reason})`);
+    }
+
+    const actions = box.createDiv({ cls: "nv2-triage-actions" });
+    const applyBtn = actions.createEl("button", { cls: "nv2-triage-btn nv2-triage-btn--primary", text: "Apply" });
+    applyBtn.addEventListener("click", () => {
+      new Notice(`Applied triage: ${action.type} (mock)`);
+      box.remove();
+    });
+
+    const dismissBtn = actions.createEl("button", { cls: "nv2-triage-btn", text: "Dismiss" });
+    dismissBtn.addEventListener("click", () => {
+      box.remove();
+    });
   }
 
   private getBacklinkPreview(): string {

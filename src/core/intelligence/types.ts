@@ -23,6 +23,32 @@ export interface IntelligenceSummaryStructured {
   purpose: string | null;
 }
 
+export interface IntelligenceEntity {
+  name: string;
+  type: "person" | "project" | "tool" | "concept" | "org" | "other";
+  context?: string;
+}
+
+export interface IntelligenceSuggestedTag {
+  tag: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface IntelligenceSuggestedLink {
+  path: string;
+  title: string;
+  reason: string;
+  confidence: number;
+}
+
+export interface IntelligenceTriageAction {
+  type: "move" | "tag" | "status" | "metadata";
+  target?: string; // e.g. folder path or tag name
+  reason: string;
+  confidence: number;
+}
+
 export interface IntelligenceRecord {
   noteId: string;
   path: string;
@@ -33,6 +59,11 @@ export interface IntelligenceRecord {
 
   summaryShort: string | null;
   summaryStructured: IntelligenceSummaryStructured | null;
+
+  entities: IntelligenceEntity[];
+  suggestedTags: IntelligenceSuggestedTag[];
+  suggestedLinks: IntelligenceSuggestedLink[];
+  triageAction: IntelligenceTriageAction | null;
 
   health: IntelligenceHealth | null;
 }

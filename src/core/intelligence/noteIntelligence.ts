@@ -15,10 +15,15 @@ import type { Kernel } from "../kernel";
 import type { LLMProvider } from "../llm/provider";
 import { IntelligenceDb } from "./intelligenceDb";
 import type {
+  IntelligenceEntity,
   IntelligenceHealth,
   IntelligenceRecord,
+  IntelligenceSuggestedLink,
+  IntelligenceSuggestedTag,
   IntelligenceSummaryStructured,
+  IntelligenceTriageAction,
 } from "./types";
+import type { SearchPipeline } from "../search/pipeline";
 
 const NOTE_TEXT_MAX_CHARS = 12_000;
 
@@ -35,7 +40,7 @@ export class NoteIntelligenceService {
   constructor(
     private kernel: Kernel,
     private eventBus: EventBus,
-  ) {}
+  ) { }
 
   async initialize(): Promise<void> {
     if (this.disposed) return;
@@ -182,7 +187,26 @@ export class NoteIntelligenceService {
       summaryShort: summary?.summaryShort ?? null,
       summaryStructured: summary?.summaryStructured ?? null,
       health,
+      entities: [],
+      suggestedTags: [],
+      suggestedLinks: [],
+      triageAction: null,
     };
+
+    // Pass 2: Extract & Suggest (Entities + Tags)
+    const extraction = await this.extractEntitiesAndTags(
+      title,
+      content,
+      metadata?.tags ?? [],
+    );
+    record.entities = extraction.entities;
+    record.suggestedTags = extraction.suggestedTags;
+
+    // Pass 3: Link Intelligence
+    record.suggestedLinks = await this.suggestLinks(notePath, content, metadata?.tags ?? []);
+
+    // Pass 4: Inbox Triage
+    record.triageAction = await this.inboxTriage(notePath, content, metadata?.tags ?? []);
 
     this.db.upsert(notePath, record);
 
@@ -298,9 +322,9 @@ ${cleaned}`;
         typeof parsed.summaryShort === "string" ? parsed.summaryShort.trim() : "";
       const keyPoints = Array.isArray(parsed.keyPoints)
         ? parsed.keyPoints
-            .filter((p): p is string => typeof p === "string")
-            .map((s) => s.trim())
-            .filter(Boolean)
+          .filter((p): p is string => typeof p === "string")
+          .map((s) => s.trim())
+          .filter(Boolean)
         : [];
       const purpose = typeof parsed.purpose === "string" ? parsed.purpose.trim() : null;
 
@@ -381,7 +405,158 @@ ${cleaned}`;
     };
   }
 
+  private async extractEntitiesAndTags(
+    title: string,
+    content: string,
+    existingTags: string[],
+  ): Promise<{ entities: IntelligenceEntity[]; suggestedTags: IntelligenceSuggestedTag[] }> {
+    const llm = this.getLLM();
+    if (!llm?.isReady) return { entities: [], suggestedTags: [] };
+
+    const cleaned = this.prepareNoteText(content);
+
+    // Prompt for both entities and tags to save a roundtrip
+    const system = `You are an expert knowledge graph extractor.
+Analyze the note content and extract:
+1. Significant entities (people, projects, tools, concepts).
+2. Suggested tags (kebab-case) that categorize this note (exclude existing tags).
+
+Return JSON only:
+{
+  "entities": [{ "name": "...", "type": "person|project|tool|concept|org|other", "context": "brief reason" }],
+  "suggestedTags": [{ "tag": "tag-name", "confidence": 0-1, "reason": "why" }]
+}`;
+
+    const user = `Title: ${title}
+Existing Tags: ${existingTags.join(", ") || "(none)"}
+
+Note Content:
+${cleaned.slice(0, 6000)}`; // limit context window
+
+    try {
+      const response = await llm.complete(
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        { temperature: 0.1, maxTokens: 800 },
+      );
+
+      const parsed = this.parseExtractionJson(response);
+      return parsed ?? { entities: [], suggestedTags: [] };
+    } catch (error) {
+      console.warn("[NoteIntelligence] Extraction failed:", error);
+      return { entities: [], suggestedTags: [] };
+    }
+  }
+
+  private parseExtractionJson(
+    raw: string,
+  ): { entities: IntelligenceEntity[]; suggestedTags: IntelligenceSuggestedTag[] } | null {
+    try {
+      const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] || extractJsonBlock(raw);
+      if (!jsonStr) return null;
+
+      const data = JSON.parse(jsonStr) as {
+        entities?: any[];
+        suggestedTags?: any[];
+      };
+
+      const entities: IntelligenceEntity[] = (data.entities || []).map((e: any) => ({
+        name: String(e.name || "").trim(),
+        type: ["person", "project", "tool", "concept", "org", "other"].includes(e.type)
+          ? e.type
+          : "other",
+        context: e.context ? String(e.context).slice(0, 100) : undefined,
+      })).filter(e => e.name.length > 0);
+
+      const suggestedTags: IntelligenceSuggestedTag[] = (data.suggestedTags || []).map((t: any) => ({
+        tag: String(t.tag || "").replace(/^#/, "").trim(),
+        confidence: Number(t.confidence || 0.5),
+        reason: String(t.reason || ""),
+      })).filter(t => t.tag.length > 0 && t.confidence > 0.4);
+
+      return { entities, suggestedTags };
+    } catch {
+      return null;
+    }
+  }
+
+  private async suggestLinks(
+    notePath: string,
+    content: string,
+    tags: string[],
+  ): Promise<IntelligenceSuggestedLink[]> {
+    const search = this.kernel.getService<SearchPipeline>("searchPipeline");
+    if (!search) return [];
+
+    // Use hierarchical retrieval to find related notes
+    const related = await search.findRelated(notePath, { topK: 5, minScore: 0.45 });
+
+    // Filter down to high value
+    return related.map(r => ({
+      path: r.path,
+      title: r.title,
+      reason: r.sharedTags.length
+        ? `Shared tags: ${r.sharedTags.join(", ")}`
+        : `Semantic similarity ${(r.score * 100).toFixed(0)}%`,
+      confidence: r.score
+    }));
+  }
+
+  private async inboxTriage(
+    notePath: string,
+    content: string,
+    tags: string[]
+  ): Promise<IntelligenceTriageAction | null> {
+    // Only run for "Inbox" or root folders (simple heuristic for now)
+    const isInbox = notePath.includes("Inbox") || !notePath.includes("/");
+    if (!isInbox) return null;
+
+    const llm = this.getLLM();
+    if (!llm?.isReady) return null;
+
+    const system = `You are a strict inbox zero assistant. 
+Review this note and recommend a Triage Action:
+- "move" -> if it belongs in a specific project/area folder.
+- "tag" -> if it needs a status tag (e.g. #todo/triage).
+- "status" -> if it seems like a fleeting note or scratchpad.
+
+Return JSON:
+{ "type": "move|tag|status", "target": "folder/path or #tag", "reason": "...", "confidence": 0-1 }`;
+
+    const user = `Path: ${notePath}
+Tags: ${tags.join(", ")}
+Content: 
+${content.slice(0, 2000)}`;
+
+    try {
+      const response = await llm.complete(
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        { temperature: 0.1, maxTokens: 300 }
+      );
+
+      const jsonStr = response.match(/\{[\s\S]*\}/)?.[0] || extractJsonBlock(response);
+      if (!jsonStr) return null;
+
+      const action = JSON.parse(jsonStr) as IntelligenceTriageAction;
+      if (action.confidence < 0.6) return null;
+
+      return action;
+    } catch {
+      return null;
+    }
+  }
+
   private yieldToUI(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function extractJsonBlock(text: string): string {
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  return match ? match[1].trim() : text.trim();
 }

@@ -31,12 +31,18 @@
   --notient-grid-size: 8px;
 
   /* Typography Scale */
-  --notient-font-xs: 0.6875rem; /* 11px - badges, metadata */
-  --notient-font-sm: 0.75rem; /* 12px - secondary text */
-  --notient-font-base: 0.8125rem; /* 13px - body text */
-  --notient-font-md: 0.875rem; /* 14px - UI elements */
-  --notient-font-lg: 1rem; /* 16px - section headers */
-  --notient-font-xl: 1.25rem; /* 20px - panel titles */
+  --notient-font-xs: 0.6875rem;
+  /* 11px - badges, metadata */
+  --notient-font-sm: 0.75rem;
+  /* 12px - secondary text */
+  --notient-font-base: 0.8125rem;
+  /* 13px - body text */
+  --notient-font-md: 0.875rem;
+  /* 14px - UI elements */
+  --notient-font-lg: 1rem;
+  /* 16px - section headers */
+  --notient-font-xl: 1.25rem;
+  /* 20px - panel titles */
 
   /* Spacing (4px base) */
   --notient-space-1: 4px;
@@ -63,10 +69,8 @@
 }
 
 .theme-dark .notient-grid-bg {
-  background-image: linear-gradient(
-      rgba(255, 255, 255, var(--notient-grid-opacity)) 1px,
-      transparent 1px
-    ), linear-gradient(90deg, rgba(255, 255, 255, var(--notient-grid-opacity)) 1px, transparent 1px);
+  background-image: linear-gradient(rgba(255, 255, 255, var(--notient-grid-opacity)) 1px,
+      transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, var(--notient-grid-opacity)) 1px, transparent 1px);
 }
 
 /* ==========================================================================
@@ -897,15 +901,19 @@
 .notient-sub-fill.score-excellent {
   background: var(--notient-primary);
 }
+
 .notient-sub-fill.score-good {
   background: var(--color-cyan);
 }
+
 .notient-sub-fill.score-fair {
   background: var(--color-yellow);
 }
+
 .notient-sub-fill.score-poor {
   background: var(--color-orange);
 }
+
 .notient-sub-fill.score-critical {
   background: var(--color-red);
 }
@@ -1585,7 +1593,7 @@
   margin-top: var(--notient-space-2);
 }
 
-.notient-index-actions > label {
+.notient-index-actions>label {
   display: block;
   font-size: var(--notient-font-xs);
   color: var(--text-muted);
@@ -2421,6 +2429,7 @@
 
 /* Reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
@@ -2617,11 +2626,13 @@
 }
 
 @keyframes nv2-pulse {
+
   0%,
   100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.6;
     transform: scale(0.95);
@@ -3730,10 +3741,12 @@
 }
 
 @keyframes nv2-status-pulse {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.5;
   }
@@ -4005,6 +4018,7 @@
 /* ============ V2 Reduced Motion ============ */
 
 @media (prefers-reduced-motion: reduce) {
+
   .nv2-status-dot,
   .nv2-typing-cursor,
   .nv2-loading-spinner,
@@ -4218,4 +4232,148 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--nv2-space-2);
+}
+
+/* ==========================================================================
+   INTELLIGENCE SECTIONS (Phase 3)
+   ========================================================================== */
+
+.nv2-entity-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--notient-space-1);
+  margin-top: var(--notient-space-1);
+}
+
+.nv2-entity-pill {
+  font-size: var(--notient-font-xs);
+  padding: 1px 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  color: var(--text-normal);
+  cursor: default;
+}
+
+.nv2-entity-pill:hover {
+  border-color: var(--notient-primary);
+  color: var(--notient-primary);
+}
+
+.nv2-insight-label {
+  font-size: var(--notient-font-xs);
+  color: var(--text-muted);
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--notient-space-1);
+  text-transform: uppercase;
+}
+
+/* Suggestions */
+.nv2-suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--notient-space-1);
+  margin-top: var(--notient-space-1);
+}
+
+.nv2-suggestion-btn {
+  font-size: var(--notient-font-xs);
+  padding: 1px 6px;
+  background: rgba(var(--notient-primary-rgb), 0.1);
+  color: var(--notient-primary);
+  border: 1px dashed var(--notient-primary);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.nv2-suggestion-btn:hover {
+  background: var(--notient-primary);
+  color: #fff;
+  border-style: solid;
+}
+
+.nv2-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notient-space-1);
+  margin-top: var(--notient-space-1);
+}
+
+.nv2-suggestion-link-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--notient-font-sm);
+  padding: var(--notient-space-1);
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+}
+
+.nv2-suggestion-icon-btn {
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  border: none;
+  cursor: pointer;
+}
+
+.nv2-suggestion-icon-btn:hover {
+  background: var(--notient-primary);
+  color: #fff;
+}
+
+/* Triage Box */
+.nv2-triage-box {
+  background: var(--background-primary);
+  border: 1px solid var(--color-blue);
+  border-left-width: 3px;
+  border-radius: var(--radius-s);
+  padding: var(--notient-space-2);
+  margin-top: var(--notient-space-1);
+}
+
+.nv2-triage-title {
+  display: flex;
+  align-items: center;
+  gap: var(--notient-space-1);
+  font-size: var(--notient-font-xs);
+  font-weight: var(--font-bold);
+  color: var(--color-blue);
+  margin-bottom: var(--notient-space-1);
+}
+
+.nv2-triage-message {
+  font-size: var(--notient-font-sm);
+  color: var(--text-normal);
+  margin-bottom: var(--notient-space-2);
+}
+
+.nv2-triage-actions {
+  display: flex;
+  gap: var(--notient-space-2);
+}
+
+.nv2-triage-btn {
+  font-size: var(--notient-font-xs);
+  padding: 2px 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  cursor: pointer;
+}
+
+.nv2-triage-btn--primary {
+  background: var(--color-blue);
+  color: #fff;
+  border-color: var(--color-blue);
+}
+
+.nv2-triage-btn--primary:hover {
+  opacity: 0.9;
+}
+
+.nv2-insight-dot--action {
+  background: var(--color-blue);
+  box-shadow: 0 0 0 2px rgba(var(--color-blue-rgb), 0.2);
 }
