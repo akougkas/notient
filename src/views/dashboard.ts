@@ -24,18 +24,35 @@ export interface VitalsProvider {
   calculateHealthScore(vitals: VaultVitalsData): HealthScore;
 }
 
+/** Debounce delay in milliseconds for rapid re-renders */
+const RENDER_DEBOUNCE_MS = 150;
+
 export class NotientDashboardView extends ItemView {
   private currentTab: DashboardTab = "vitals";
   private containerEl_: HTMLElement | null = null;
   private contentEl_: HTMLElement | null = null;
   private vitalsContainer: HTMLElement | null = null;
   private refreshInterval: ReturnType<typeof setInterval> | null = null;
+  private renderDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     private kernel: Kernel,
   ) {
     super(leaf);
+  }
+
+  /**
+   * Debounced render to prevent UI jank during rapid updates
+   */
+  private debouncedRender(): void {
+    if (this.renderDebounceTimeout) {
+      clearTimeout(this.renderDebounceTimeout);
+    }
+    this.renderDebounceTimeout = setTimeout(() => {
+      this.renderDebounceTimeout = null;
+      this.render();
+    }, RENDER_DEBOUNCE_MS);
   }
 
   /**
@@ -165,32 +182,32 @@ export class NotientDashboardView extends ItemView {
     });
     this.register(() => unsubServices());
 
-    // Workflow events
+    // Workflow events (debounced to prevent UI jank during bulk runs)
     const unsubWorkflow = this.kernel.eventBus.on("workflow:progress", () => {
       if (this.currentTab === "actions") {
-        this.render();
+        this.debouncedRender();
       }
     });
     this.register(() => unsubWorkflow());
 
     const unsubWorkflowComplete = this.kernel.eventBus.on("workflow:completed", () => {
       if (this.currentTab === "actions") {
-        this.render();
+        this.debouncedRender();
       }
     });
     this.register(() => unsubWorkflowComplete());
 
-    // Action events
+    // Action events (debounced)
     const unsubAction = this.kernel.eventBus.on("action:applied", () => {
       if (this.currentTab === "actions") {
-        this.render();
+        this.debouncedRender();
       }
     });
     this.register(() => unsubAction());
 
     const unsubUndo = this.kernel.eventBus.on("action:undone", () => {
       if (this.currentTab === "actions") {
-        this.render();
+        this.debouncedRender();
       }
     });
     this.register(() => unsubUndo());
@@ -200,6 +217,9 @@ export class NotientDashboardView extends ItemView {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval);
     }
+    if (this.renderDebounceTimeout) {
+      clearTimeout(this.renderDebounceTimeout);
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -208,7 +228,7 @@ export class NotientDashboardView extends ItemView {
     this.vitalsContainer.empty();
 
     const vaultVitals = this.getVaultVitals();
-    
+
     if (!vaultVitals) {
       const isInitializing = this.kernel.isServicesInitializing;
       this.vitalsContainer.createDiv({
@@ -249,16 +269,16 @@ export class NotientDashboardView extends ItemView {
 
     // Stats Grid
     const statsGrid = this.vitalsContainer.createDiv({ cls: "notient-stats-grid" });
-    
+
     // Counts Card
     this.renderCountsCard(statsGrid, vitals);
-    
+
     // Connectivity Card
     this.renderConnectivityCard(statsGrid, vitals);
-    
+
     // Processing Card
     this.renderProcessingCard(statsGrid, vitals);
-    
+
     // PARA Distribution Card
     this.renderParaCard(statsGrid, vitals);
 
@@ -273,17 +293,17 @@ export class NotientDashboardView extends ItemView {
 
   private renderHealthScore(container: HTMLElement, score: HealthScore): void {
     const card = container.createDiv({ cls: "notient-health-card" });
-    
+
     // Main score
     const mainScore = card.createDiv({ cls: "notient-main-score" });
     const scoreCircle = mainScore.createDiv({ cls: "notient-score-circle" });
     scoreCircle.createSpan({ text: String(score.overall), cls: "notient-score-value" });
     scoreCircle.createSpan({ text: "/100", cls: "notient-score-max" });
-    
+
     // Score label
-    mainScore.createDiv({ 
+    mainScore.createDiv({
       text: this.getScoreLabel(score.overall),
-      cls: "notient-score-label" 
+      cls: "notient-score-label",
     });
 
     // Sub scores
@@ -297,12 +317,12 @@ export class NotientDashboardView extends ItemView {
   private renderSubScore(container: HTMLElement, label: string, value: number): void {
     const item = container.createDiv({ cls: "notient-sub-score" });
     item.createSpan({ text: label, cls: "notient-sub-label" });
-    
+
     const bar = item.createDiv({ cls: "notient-sub-bar" });
     const fill = bar.createDiv({ cls: "notient-sub-fill" });
     fill.style.width = `${value}%`;
     fill.addClass(this.getScoreClass(value));
-    
+
     item.createSpan({ text: `${value}%`, cls: "notient-sub-value" });
   }
 
@@ -328,8 +348,16 @@ export class NotientDashboardView extends ItemView {
 
     const stats = [
       { label: "Total Notes", value: vitals.counts.totalNotes },
-      { label: "In Inbox", value: vitals.counts.inboxSize, highlight: vitals.counts.inboxSize > 10 },
-      { label: "Orphan Notes", value: vitals.counts.orphanCount, highlight: vitals.counts.orphanCount > 20 },
+      {
+        label: "In Inbox",
+        value: vitals.counts.inboxSize,
+        highlight: vitals.counts.inboxSize > 10,
+      },
+      {
+        label: "Orphan Notes",
+        value: vitals.counts.orphanCount,
+        highlight: vitals.counts.orphanCount > 20,
+      },
       { label: "Hub Notes", value: vitals.counts.hubCount },
       { label: "Unique Tags", value: vitals.counts.totalTags },
       { label: "Total Links", value: vitals.counts.totalLinks },
@@ -370,8 +398,16 @@ export class NotientDashboardView extends ItemView {
 
     const stats = [
       { label: "Indexed", value: vitals.processing.indexedCount },
-      { label: "Pending", value: vitals.processing.pendingCount, highlight: vitals.processing.pendingCount > 0 },
-      { label: "Errors", value: vitals.processing.errorCount, highlight: vitals.processing.errorCount > 0 },
+      {
+        label: "Pending",
+        value: vitals.processing.pendingCount,
+        highlight: vitals.processing.pendingCount > 0,
+      },
+      {
+        label: "Errors",
+        value: vitals.processing.errorCount,
+        highlight: vitals.processing.errorCount > 0,
+      },
       { label: "Freshness", value: `${vitals.processing.freshness}%` },
     ];
 
@@ -389,7 +425,9 @@ export class NotientDashboardView extends ItemView {
     if (vitals.processing.lastFullIndexAt) {
       const date = new Date(vitals.processing.lastFullIndexAt);
       const lastIndex = card.createDiv({ cls: "notient-last-index" });
-      lastIndex.setText(`Last full index: ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`);
+      lastIndex.setText(
+        `Last full index: ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
+      );
     }
   }
 
@@ -410,9 +448,9 @@ export class NotientDashboardView extends ItemView {
     const list = card.createDiv({ cls: "notient-para-list" });
     for (const item of items) {
       const row = list.createDiv({ cls: "notient-para-row" });
-      
+
       row.createSpan({ text: item.label, cls: "notient-para-label" });
-      
+
       const barContainer = row.createDiv({ cls: "notient-para-bar-container" });
       const bar = barContainer.createDiv({ cls: "notient-para-bar" });
       const pct = total > 0 ? (item.value / total) * 100 : 0;
@@ -420,10 +458,10 @@ export class NotientDashboardView extends ItemView {
       if (item.highlight && item.value > 0) {
         bar.addClass("notient-para-unknown");
       }
-      
-      row.createSpan({ 
+
+      row.createSpan({
         text: `${item.value} (${Math.round(pct)}%)`,
-        cls: "notient-para-value" 
+        cls: "notient-para-value",
       });
     }
   }
@@ -441,7 +479,7 @@ export class NotientDashboardView extends ItemView {
     for (const note of vitals.connectivity.topConnectedNotes) {
       const item = list.createDiv({ cls: "notient-top-item" });
       item.addEventListener("click", () => this.openFile(note.path));
-      
+
       item.createSpan({ text: note.title, cls: "notient-top-title" });
       item.createSpan({ text: `${note.linkCount} links`, cls: "notient-top-count" });
     }
@@ -499,7 +537,11 @@ export class NotientDashboardView extends ItemView {
     }
   }
 
-  private renderWorkflowItem(container: HTMLElement, workflow: WorkflowRun, isActive: boolean): void {
+  private renderWorkflowItem(
+    container: HTMLElement,
+    workflow: WorkflowRun,
+    isActive: boolean,
+  ): void {
     const item = container.createDiv({
       cls: `notient-workflow-item ${isActive ? "notient-workflow-item--active" : ""}`,
     });
@@ -564,12 +606,18 @@ export class NotientDashboardView extends ItemView {
     // Errors (if any)
     if (workflow.errors.length > 0) {
       const errorsEl = item.createDiv({ cls: "notient-workflow-errors" });
-      errorsEl.createDiv({ text: `${workflow.errors.length} errors:`, cls: "notient-workflow-errors-title" });
+      errorsEl.createDiv({
+        text: `${workflow.errors.length} errors:`,
+        cls: "notient-workflow-errors-title",
+      });
       for (const err of workflow.errors.slice(0, 3)) {
         errorsEl.createDiv({ text: `• ${err.error}`, cls: "notient-workflow-error" });
       }
       if (workflow.errors.length > 3) {
-        errorsEl.createDiv({ text: `...and ${workflow.errors.length - 3} more`, cls: "notient-workflow-error" });
+        errorsEl.createDiv({
+          text: `...and ${workflow.errors.length - 3} more`,
+          cls: "notient-workflow-error",
+        });
       }
     }
   }
@@ -621,6 +669,12 @@ export class NotientDashboardView extends ItemView {
       text: `${allReviewItems.length} action${allReviewItems.length > 1 ? "s" : ""} pending review`,
     });
 
+    // Info about feature status
+    section.createDiv({
+      cls: "notient-message notient-message--info",
+      text: "Review queue is read-only in this version. Apply/Dismiss will be available in Phase 3.",
+    });
+
     const list = section.createDiv({ cls: "notient-review-list" });
 
     for (const action of allReviewItems.slice(0, 20)) {
@@ -638,23 +692,19 @@ export class NotientDashboardView extends ItemView {
       info.createDiv({ cls: "notient-review-target", text: action.target });
       info.createDiv({ cls: "notient-review-reason", text: action.reason });
 
-      // Action buttons
+      // Action buttons (disabled - feature in development)
       const actions = item.createDiv({ cls: "notient-review-actions" });
 
       const applyBtn = actions.createEl("button", {
-        cls: "notient-btn notient-btn--primary",
+        cls: "notient-btn notient-btn--primary notient-btn--disabled",
         text: "Apply",
-      });
-      applyBtn.addEventListener("click", () => {
-        new Notice("Apply action: Coming in next phase");
+        attr: { disabled: "true", title: "Coming in Phase 3" },
       });
 
       const dismissBtn = actions.createEl("button", {
-        cls: "notient-btn",
+        cls: "notient-btn notient-btn--disabled",
         text: "Dismiss",
-      });
-      dismissBtn.addEventListener("click", () => {
-        new Notice("Dismiss action: Coming in next phase");
+        attr: { disabled: "true", title: "Coming in Phase 3" },
       });
     }
 
@@ -807,7 +857,9 @@ export class NotientDashboardView extends ItemView {
     });
     syncBtn.addEventListener("click", async () => {
       new Notice("Starting index sync...");
-      const indexer = this.kernel.getService<{ syncVault(): Promise<{ added: number; updated: number }> }>("indexer");
+      const indexer = this.kernel.getService<{
+        syncVault(): Promise<{ added: number; updated: number }>;
+      }>("indexer");
       if (indexer) {
         const result = await indexer.syncVault();
         new Notice(`Sync complete: ${result.added} added, ${result.updated} updated`);
@@ -821,10 +873,14 @@ export class NotientDashboardView extends ItemView {
     });
     rebuildBtn.addEventListener("click", async () => {
       new Notice("Starting full reindex...");
-      const indexer = this.kernel.getService<{ fullReindex(): Promise<{ added: number; updated: number; durationMs: number }> }>("indexer");
+      const indexer = this.kernel.getService<{
+        fullReindex(): Promise<{ added: number; updated: number; durationMs: number }>;
+      }>("indexer");
       if (indexer) {
         const result = await indexer.fullReindex();
-        new Notice(`Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`);
+        new Notice(
+          `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
+        );
         this.render();
       }
     });
@@ -839,11 +895,15 @@ export class NotientDashboardView extends ItemView {
     const ollamaRow = healthList.createDiv({ cls: "notient-stat-row" });
     ollamaRow.createSpan({ text: "Ollama (Embeddings)" });
     const ollamaStatus = ollamaRow.createSpan({ text: health.ollama.status });
-    ollamaStatus.addClass(health.ollama.status === "healthy" ? "notient-status-healthy" : "notient-status-error");
+    ollamaStatus.addClass(
+      health.ollama.status === "healthy" ? "notient-status-healthy" : "notient-status-error",
+    );
 
     const lmRow = healthList.createDiv({ cls: "notient-stat-row" });
     lmRow.createSpan({ text: "LM Studio (Reasoning)" });
     const lmStatus = lmRow.createSpan({ text: health.lmstudio.status });
-    lmStatus.addClass(health.lmstudio.status === "healthy" ? "notient-status-healthy" : "notient-status-error");
+    lmStatus.addClass(
+      health.lmstudio.status === "healthy" ? "notient-status-healthy" : "notient-status-error",
+    );
   }
 }

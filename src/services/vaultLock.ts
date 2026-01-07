@@ -1,12 +1,12 @@
 /**
  * Multi-window vault lock management
- * 
+ *
  * Prevents concurrent writes from multiple Obsidian windows.
  * Uses lockfile-based approach with staleness detection.
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { LOCK_FILES } from "../core/constants";
 import type { StoragePaths } from "./storagePaths";
 
@@ -49,14 +49,14 @@ export class VaultLock {
       const metadata: LockMetadata = {
         pid: process.pid,
         timestamp: Date.now(),
-        hostname: require("os").hostname(),
+        hostname: require("node:os").hostname(),
       };
 
       try {
         await fs.promises.writeFile(
           this.lockPath,
           JSON.stringify(metadata),
-          { flag: "wx" } // Exclusive create, fails if exists
+          { flag: "wx" }, // Exclusive create, fails if exists
         );
         this.hasLock = true;
         this.startRefresh();
@@ -160,7 +160,7 @@ export class VaultLock {
           const metadata: LockMetadata = {
             pid: process.pid,
             timestamp: Date.now(),
-            hostname: require("os").hostname(),
+            hostname: require("node:os").hostname(),
           };
           await fs.promises.writeFile(this.lockPath, JSON.stringify(metadata));
         } catch (error) {

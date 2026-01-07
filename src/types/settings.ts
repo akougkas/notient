@@ -118,7 +118,7 @@ export interface ChatRetention {
   maxAgeDays: number;
 }
 
-export type SearchPreset = 'quick' | 'balanced' | 'thorough' | 'custom';
+export type SearchPreset = "quick" | "balanced" | "thorough" | "custom";
 
 export interface SearchSettings {
   preset: SearchPreset;
@@ -165,8 +165,8 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     sidebarPosition: "right",
   },
   search: {
-    preset: 'balanced',
-    custom: { topK: 10, enableReranking: true, minScore: 0.3 }
+    preset: "balanced",
+    custom: { topK: 10, enableReranking: true, minScore: 0.3 },
   },
   advanced: {
     debugLogging: false,

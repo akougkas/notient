@@ -11,10 +11,10 @@ import type { Kernel } from "../kernel";
 import type { ActionHistory } from "./actionHistory";
 import type { TrustLevelManager } from "./trustLevelManager";
 import type {
-  ProposedAction,
   AppliedActionRecord,
-  RestoreContentUndo,
+  ProposedAction,
   RenameBackUndo,
+  RestoreContentUndo,
 } from "./types";
 
 /**
@@ -35,7 +35,7 @@ export class ActionApplier {
     private kernel: Kernel,
     private obsidian: ObsidianFacade,
     private actionHistory: ActionHistory,
-    private trustManager: TrustLevelManager
+    private trustManager: TrustLevelManager,
   ) {}
 
   /**
@@ -49,7 +49,7 @@ export class ActionApplier {
     action: ProposedAction,
     taskId?: string,
     workflowId?: string,
-    skipConfirmation = false
+    skipConfirmation = false,
   ): Promise<ApplyResult> {
     // 1. Check write lock
     if (!this.kernel.hasWriteLock) {
@@ -100,7 +100,7 @@ export class ActionApplier {
   async applyConfirmed(
     action: ProposedAction,
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     return this.apply(action, taskId, workflowId, true);
   }
@@ -126,7 +126,7 @@ export class ActionApplier {
     const settings = this.kernel.settings;
     const excludedFolders = settings.indexing.excludedFolders || [];
     for (const excluded of excludedFolders) {
-      if (normalizedTarget.startsWith(excluded + "/") || normalizedTarget === excluded) {
+      if (normalizedTarget.startsWith(`${excluded}/`) || normalizedTarget === excluded) {
         return `Target is in excluded folder: ${excluded}`;
       }
     }
@@ -140,10 +140,7 @@ export class ActionApplier {
         break;
 
       case "frontmatter_add_tags":
-        if (
-          !Array.isArray(action.payload.tags) ||
-          action.payload.tags.length === 0
-        ) {
+        if (!Array.isArray(action.payload.tags) || action.payload.tags.length === 0) {
           return "frontmatter_add_tags requires at least one tag";
         }
         break;
@@ -155,10 +152,7 @@ export class ActionApplier {
         break;
 
       case "append_related_links":
-        if (
-          !Array.isArray(action.payload.links) ||
-          action.payload.links.length === 0
-        ) {
+        if (!Array.isArray(action.payload.links) || action.payload.links.length === 0) {
           return "append_related_links requires at least one link";
         }
         break;
@@ -186,7 +180,7 @@ export class ActionApplier {
   private async applyAction(
     action: ProposedAction,
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     switch (action.type) {
       case "frontmatter_set":
@@ -215,7 +209,7 @@ export class ActionApplier {
   private async applyFrontmatterSet(
     action: ProposedAction & { type: "frontmatter_set" },
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -235,10 +229,16 @@ export class ActionApplier {
     }
 
     // Record for undo
-    const record = this.createRecord(action, [target], {
-      type: "restore_content",
-      files: [{ path: target, before: beforeContent }],
-    }, taskId, workflowId);
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
 
     this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
@@ -250,7 +250,7 @@ export class ActionApplier {
   private async applyFrontmatterAddTags(
     action: ProposedAction & { type: "frontmatter_add_tags" },
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -272,10 +272,16 @@ export class ActionApplier {
     }
 
     // Record for undo
-    const record = this.createRecord(action, [target], {
-      type: "restore_content",
-      files: [{ path: target, before: beforeContent }],
-    }, taskId, workflowId);
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
 
     this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
@@ -287,7 +293,7 @@ export class ActionApplier {
   private async applyAppendSection(
     action: ProposedAction & { type: "append_section" },
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -314,10 +320,16 @@ export class ActionApplier {
     }
 
     // Record for undo
-    const record = this.createRecord(action, [target], {
-      type: "restore_content",
-      files: [{ path: target, before: beforeContent }],
-    }, taskId, workflowId);
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
 
     this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
@@ -329,7 +341,7 @@ export class ActionApplier {
   private async applyAppendRelatedLinks(
     action: ProposedAction & { type: "append_related_links" },
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -353,10 +365,16 @@ export class ActionApplier {
     }
 
     // Record for undo
-    const record = this.createRecord(action, [target], {
-      type: "restore_content",
-      files: [{ path: target, before: beforeContent }],
-    }, taskId, workflowId);
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
 
     this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
@@ -368,7 +386,7 @@ export class ActionApplier {
   private async applyMoveNote(
     action: ProposedAction & { type: "move_note" },
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
     const from = normalizePath(target);
@@ -394,11 +412,17 @@ export class ActionApplier {
     }
 
     // Record for undo (rename back)
-    const record = this.createRecord(action, [from, to], {
-      type: "rename_back",
-      from: to,    // Current location (after move)
-      to: from,    // Original location (to restore)
-    } as RenameBackUndo, taskId, workflowId);
+    const record = this.createRecord(
+      action,
+      [from, to],
+      {
+        type: "rename_back",
+        from: to, // Current location (after move)
+        to: from, // Original location (to restore)
+      } as RenameBackUndo,
+      taskId,
+      workflowId,
+    );
 
     this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
@@ -412,7 +436,7 @@ export class ActionApplier {
     changedPaths: string[],
     undo: RestoreContentUndo | RenameBackUndo,
     taskId?: string,
-    workflowId?: string
+    workflowId?: string,
   ): AppliedActionRecord {
     return {
       id: `applied-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

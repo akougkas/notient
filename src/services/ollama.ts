@@ -1,13 +1,13 @@
 /**
  * Ollama Embeddings Service
- * 
+ *
  * Wrapper around the Ollama JS SDK for generating embeddings.
  * Restricts to localhost only for privacy.
  */
 
 import { Ollama } from "ollama";
-import type { Kernel } from "../core/kernel";
 import { MODEL_DEFAULTS } from "../core/constants";
+import type { Kernel } from "../core/kernel";
 
 export interface EmbeddingResult {
   embedding: number[];
@@ -35,13 +35,15 @@ export class OllamaService {
    */
   async initialize(): Promise<void> {
     const settings = this.kernel.settings;
-    
+
     if (!settings.ollama.enabled) {
       console.log("[OllamaService] Ollama is disabled");
       return;
     }
 
-    console.log(`[OllamaService] Initializing with host=${settings.ollama.host}, model=${settings.ollama.embeddingModel}`);
+    console.log(
+      `[OllamaService] Initializing with host=${settings.ollama.host}, model=${settings.ollama.embeddingModel}`,
+    );
 
     this.client = new Ollama({
       host: settings.ollama.host,
@@ -50,7 +52,9 @@ export class OllamaService {
     // Pre-fetch model dimension - REQUIRED before any getModelKey() calls
     if (settings.ollama.embeddingModel) {
       const dim = await this.detectDimension(settings.ollama.embeddingModel);
-      console.log(`[OllamaService] Detected dimension=${dim} for model=${settings.ollama.embeddingModel}`);
+      console.log(
+        `[OllamaService] Detected dimension=${dim} for model=${settings.ollama.embeddingModel}`,
+      );
       console.log(`[OllamaService] Model key will be: ${this.getModelKey()}`);
     } else {
       console.warn("[OllamaService] No embedding model configured!");
@@ -123,7 +127,7 @@ export class OllamaService {
   private async embedRequest(
     input: string | string[],
     model: string,
-    options: { timeoutMs: number; signal?: AbortSignal }
+    options: { timeoutMs: number; signal?: AbortSignal },
   ): Promise<number[][]> {
     const host = this.kernel.settings.ollama.host.replace(/\/$/, "");
     const url = `${host}/api/embed`;
@@ -159,7 +163,7 @@ export class OllamaService {
       if (!response.ok) {
         const text = await response.text().catch(() => "");
         throw new Error(
-          `Ollama /api/embed failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`
+          `Ollama /api/embed failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`,
         );
       }
 

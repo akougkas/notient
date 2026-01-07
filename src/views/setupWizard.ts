@@ -11,11 +11,11 @@
  * - Chunk size slider (32-8192) with performance/accuracy tooltip
  */
 
-import { Modal, App, debounce } from "obsidian";
-import type { NotientSettings } from "../types/settings";
+import { type App, Modal, debounce } from "obsidian";
+import { MODEL_DEFAULTS } from "../core/constants";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { AvailableModel } from "../types/services";
-import { MODEL_DEFAULTS } from "../core/constants";
+import type { NotientSettings } from "../types/settings";
 
 export interface SetupWizardResult {
   completed: boolean;
@@ -61,16 +61,16 @@ interface DiskIndex {
   modelKey: string;
   dimension: number;
   chunkCount: number;
-  
+
   // From state file
   noteCount: number;
   lastIndexedAt: number | null;
   indexingInProgress: boolean;
-  
+
   // Computed
   completionPercent: number;
   state: "complete" | "incomplete" | "crashed" | "stale" | "unknown";
-  
+
   // Compatibility with selected model
   isCompatible: boolean;
   compatibilityReason: string;
@@ -104,10 +104,10 @@ export class SetupWizardModal extends Modal {
   };
 
   // Chunk size (slider)
-  private chunkSize: number = 1500;
+  private chunkSize = 1500;
 
   // Vault configuration
-  private excludedFolders: string = ".obsidian, .trash, templates";
+  private excludedFolders = ".obsidian, .trash, templates";
 
   // Disk indexes (found by scanning)
   private diskIndexes: DiskIndex[] = [];
@@ -130,7 +130,7 @@ export class SetupWizardModal extends Modal {
   constructor(
     app: App,
     private healthMonitor: HealthMonitor,
-    private currentSettings: NotientSettings
+    private currentSettings: NotientSettings,
   ) {
     super(app);
     this.initializeFromSettings();
@@ -191,7 +191,7 @@ export class SetupWizardModal extends Modal {
 
     try {
       const adapter = this.app.vault.adapter;
-      
+
       // Check if plugin folder exists
       if (!(await adapter.exists(this.pluginPath))) {
         console.log("[SetupWizard] Plugin folder doesn't exist yet");
@@ -200,9 +200,7 @@ export class SetupWizardModal extends Modal {
 
       // List files in plugin folder
       const listing = await adapter.list(this.pluginPath);
-      const indexFiles = listing.files.filter(
-        (f) => f.includes("/index-") && f.endsWith(".json")
-      );
+      const indexFiles = listing.files.filter((f) => f.includes("/index-") && f.endsWith(".json"));
 
       console.log("[SetupWizard] Found index files:", indexFiles);
 
@@ -222,7 +220,7 @@ export class SetupWizardModal extends Modal {
           // Try to read corresponding state file
           const stateFileName = `state-${modelKey}.json`;
           const statePath = `${this.pluginPath}/${stateFileName}`;
-          
+
           let noteCount = 0;
           let lastIndexedAt: number | null = null;
           let indexingInProgress = false;
@@ -237,9 +235,8 @@ export class SetupWizardModal extends Modal {
 
           // Calculate state
           const vaultNoteCount = this.vaultStats?.noteCount || 0;
-          const completionPercent = vaultNoteCount > 0 
-            ? Math.round((noteCount / vaultNoteCount) * 100) 
-            : 0;
+          const completionPercent =
+            vaultNoteCount > 0 ? Math.round((noteCount / vaultNoteCount) * 100) : 0;
 
           let state: DiskIndex["state"] = "complete";
           if (indexingInProgress) {
@@ -266,7 +263,9 @@ export class SetupWizardModal extends Modal {
             compatibilityReason: "Select model to check compatibility",
           });
 
-          console.log(`[SetupWizard] Found index: ${modelKey}, dim=${dimension}d, chunks=${chunkCount}, notes=${noteCount}, state=${state}`);
+          console.log(
+            `[SetupWizard] Found index: ${modelKey}, dim=${dimension}d, chunks=${chunkCount}, notes=${noteCount}, state=${state}`,
+          );
         } catch (err) {
           console.warn(`[SetupWizard] Failed to read index ${indexPath}:`, err);
         }
@@ -301,7 +300,7 @@ export class SetupWizardModal extends Modal {
 
     return {
       isCompatible: false,
-      reason: `Incompatible: different embedding sizes`
+      reason: "Incompatible: different embedding sizes",
     };
   }
 
@@ -355,22 +354,26 @@ export class SetupWizardModal extends Modal {
    * Auto-select the best compatible index
    */
   private autoSelectBestIndex(): void {
-    const bestCompatible = this.diskIndexes.find(idx => idx.isCompatible && idx.state === "complete");
+    const bestCompatible = this.diskIndexes.find(
+      (idx) => idx.isCompatible && idx.state === "complete",
+    );
     if (bestCompatible) {
       this.selectedIndexKey = bestCompatible.modelKey;
       this.selectedIndexAction = "use_existing";
       console.log(`[SetupWizard] Auto-selected compatible index: ${bestCompatible.modelKey}`);
     } else {
-      const anyCompatible = this.diskIndexes.find(idx => idx.isCompatible);
+      const anyCompatible = this.diskIndexes.find((idx) => idx.isCompatible);
       if (anyCompatible) {
         this.selectedIndexKey = anyCompatible.modelKey;
         this.selectedIndexAction = anyCompatible.state === "incomplete" ? "sync" : "rebuild";
-        console.log(`[SetupWizard] Auto-selected partial index: ${anyCompatible.modelKey} (${anyCompatible.state})`);
+        console.log(
+          `[SetupWizard] Auto-selected partial index: ${anyCompatible.modelKey} (${anyCompatible.state})`,
+        );
       } else {
         // No compatible index - need to build new one
         this.selectedIndexKey = null;
         this.selectedIndexAction = "rebuild";
-        console.log(`[SetupWizard] No compatible index found. Will create new.`);
+        console.log("[SetupWizard] No compatible index found. Will create new.");
       }
     }
   }
@@ -385,10 +388,10 @@ export class SetupWizardModal extends Modal {
   async onOpen(): Promise<void> {
     this.containerEl.addClass("notient-setup");
     this.modalEl.addClass("notient-setup-modal");
-    
+
     // Scan for indexes first
     await this.scanDiskIndexes();
-    
+
     this.render();
 
     setTimeout(() => {
@@ -425,7 +428,10 @@ export class SetupWizardModal extends Modal {
         this.ollama.models = models;
 
         // Auto-select first embedding model if none selected
-        if (!this.ollama.selectedModel || !models.some((m) => m.name === this.ollama.selectedModel)) {
+        if (
+          !this.ollama.selectedModel ||
+          !models.some((m) => m.name === this.ollama.selectedModel)
+        ) {
           const embeddingModels = models.filter((m) => m.capabilities.includes("embedding"));
           this.ollama.selectedModel = embeddingModels[0]?.name || models[0]?.name || "";
         }
@@ -461,7 +467,10 @@ export class SetupWizardModal extends Modal {
         this.lmstudio.status = "connected";
         this.lmstudio.models = models;
 
-        if (!this.lmstudio.selectedModel || !models.some((m) => m.name === this.lmstudio.selectedModel)) {
+        if (
+          !this.lmstudio.selectedModel ||
+          !models.some((m) => m.name === this.lmstudio.selectedModel)
+        ) {
           this.lmstudio.selectedModel = models[0]?.name || "";
         }
       } else {
@@ -497,7 +506,10 @@ export class SetupWizardModal extends Modal {
     this.renderVaultSection(contentEl);
 
     // Index section (always show)
-    const indexSection = contentEl.createDiv({ cls: "notient-index-section", attr: { id: "index-section" } });
+    const indexSection = contentEl.createDiv({
+      cls: "notient-index-section",
+      attr: { id: "index-section" },
+    });
     this.renderIndexSectionContent(indexSection);
 
     // Actions
@@ -516,13 +528,16 @@ export class SetupWizardModal extends Modal {
     const header = card.createDiv({ cls: "notient-card-header" });
     const titleArea = header.createDiv({ cls: "notient-card-title-area" });
     titleArea.createEl("h3", { text: isOllama ? "🦙 Embeddings" : "🤖 Chat & Rerank" });
-    titleArea.createEl("span", { text: isOllama ? "Ollama" : "LM Studio", cls: "notient-card-service-name" });
+    titleArea.createEl("span", {
+      text: isOllama ? "Ollama" : "LM Studio",
+      cls: "notient-card-service-name",
+    });
 
     this.renderStatusBadge(header, config.status);
 
     // Local/Network buttons
     const modeRow = card.createDiv({ cls: "notient-card-mode-row" });
-    
+
     const localBtn = modeRow.createEl("button", {
       text: "🏠 Local",
       cls: `notient-mode-btn-compact ${this.isLocalIP(config.ip, service) ? "active" : ""}`,
@@ -681,7 +696,10 @@ export class SetupWizardModal extends Modal {
     const chunkSection = section.createDiv({ cls: "notient-chunk-section" });
     const chunkHeader = chunkSection.createDiv({ cls: "notient-chunk-header" });
     chunkHeader.createEl("label", { text: "Chunk Size:" });
-    const chunkValue = chunkHeader.createEl("span", { text: `${this.chunkSize} chars`, cls: "notient-chunk-value" });
+    const chunkValue = chunkHeader.createEl("span", {
+      text: `${this.chunkSize} chars`,
+      cls: "notient-chunk-value",
+    });
 
     const slider = chunkSection.createEl("input", {
       type: "range",
@@ -690,7 +708,7 @@ export class SetupWizardModal extends Modal {
     });
 
     slider.addEventListener("input", (e) => {
-      this.chunkSize = parseInt((e.target as HTMLInputElement).value, 10);
+      this.chunkSize = Number.parseInt((e.target as HTMLInputElement).value, 10);
       chunkValue.textContent = `${this.chunkSize} chars`;
     });
 
@@ -726,42 +744,44 @@ export class SetupWizardModal extends Modal {
     // Show selected model info
     if (this.ollama.selectedModel && this.selectedModelDimension) {
       const modelInfo = section.createDiv({ cls: "notient-model-info" });
-      modelInfo.createEl("span", { 
+      modelInfo.createEl("span", {
         text: `Selected: ${this.ollama.selectedModel} (${this.selectedModelDimension}d vectors)`,
-        cls: "notient-model-info-text"
+        cls: "notient-model-info-text",
       });
     }
 
     // Show all found indexes
     if (this.diskIndexes.length === 0) {
       const noIndex = section.createDiv({ cls: "notient-no-index" });
-      noIndex.createEl("span", { text: "🆕 No existing indexes found. A new index will be created." });
+      noIndex.createEl("span", {
+        text: "🆕 No existing indexes found. A new index will be created.",
+      });
       this.selectedIndexAction = "rebuild";
       return;
     }
 
     // List all indexes
     const indexList = section.createDiv({ cls: "notient-index-list" });
-    
+
     for (const idx of this.diskIndexes) {
-      const item = indexList.createDiv({ 
-        cls: `notient-index-item ${idx.isCompatible ? "compatible" : "incompatible"} ${this.selectedIndexKey === idx.modelKey ? "selected" : ""}` 
+      const item = indexList.createDiv({
+        cls: `notient-index-item ${idx.isCompatible ? "compatible" : "incompatible"} ${this.selectedIndexKey === idx.modelKey ? "selected" : ""}`,
       });
 
       // Index info
       const info = item.createDiv({ cls: "notient-index-info" });
-      
+
       const header = info.createDiv({ cls: "notient-index-header" });
       const compatIcon = header.createSpan({ cls: "notient-compat-icon" });
       compatIcon.textContent = idx.isCompatible ? "✓" : "✗";
-      
+
       header.createEl("span", { text: idx.modelKey, cls: "notient-index-model" });
       header.createEl("span", { text: `${idx.dimension}d`, cls: "notient-index-dim" });
 
       const stats = info.createDiv({ cls: "notient-index-stats" });
       stats.createEl("span", { text: `${idx.noteCount} notes` });
       stats.createEl("span", { text: `${idx.chunkCount} passages` });
-      
+
       const stateIcons: Record<DiskIndex["state"], string> = {
         complete: "✅",
         incomplete: "⏳",
@@ -769,7 +789,10 @@ export class SetupWizardModal extends Modal {
         stale: "🔄",
         unknown: "❓",
       };
-      stats.createEl("span", { text: `${stateIcons[idx.state]} ${idx.state}`, cls: `state-${idx.state}` });
+      stats.createEl("span", {
+        text: `${stateIcons[idx.state]} ${idx.state}`,
+        cls: `state-${idx.state}`,
+      });
 
       // Compatibility reason
       if (!idx.isCompatible) {
@@ -788,9 +811,9 @@ export class SetupWizardModal extends Modal {
     }
 
     // Action selection for selected index
-    const compatibleIndexes = this.diskIndexes.filter(idx => idx.isCompatible);
+    const compatibleIndexes = this.diskIndexes.filter((idx) => idx.isCompatible);
     if (compatibleIndexes.length > 0 && this.selectedIndexKey) {
-      const selectedIdx = this.diskIndexes.find(idx => idx.modelKey === this.selectedIndexKey);
+      const selectedIdx = this.diskIndexes.find((idx) => idx.modelKey === this.selectedIndexKey);
       if (selectedIdx) {
         const actionDiv = section.createDiv({ cls: "notient-index-actions" });
         actionDiv.createEl("label", { text: "Action for selected index:" });
@@ -823,17 +846,35 @@ export class SetupWizardModal extends Modal {
     }
   }
 
-  private getIndexOptions(index: DiskIndex): Array<{ value: string; label: string; description: string }> {
+  private getIndexOptions(
+    index: DiskIndex,
+  ): Array<{ value: string; label: string; description: string }> {
     const options: Array<{ value: string; label: string; description: string }> = [];
 
     if (index.state === "complete") {
-      options.push({ value: "use_existing", label: "✅ Use existing", description: "Ready to search" });
+      options.push({
+        value: "use_existing",
+        label: "✅ Use existing",
+        description: "Ready to search",
+      });
       options.push({ value: "sync", label: "🔄 Sync", description: "Index new/changed notes" });
       options.push({ value: "rebuild", label: "🔨 Rebuild", description: "Re-index everything" });
     } else if (index.state === "incomplete" || index.state === "crashed") {
-      options.push({ value: "sync", label: "▶️ Resume", description: `Continue from ${index.completionPercent}%` });
-      options.push({ value: "rebuild", label: "🔨 Start fresh", description: "Clear and re-index" });
-      options.push({ value: "use_existing", label: "⏸️ Use as-is", description: "Keep partial index" });
+      options.push({
+        value: "sync",
+        label: "▶️ Resume",
+        description: `Continue from ${index.completionPercent}%`,
+      });
+      options.push({
+        value: "rebuild",
+        label: "🔨 Start fresh",
+        description: "Clear and re-index",
+      });
+      options.push({
+        value: "use_existing",
+        label: "⏸️ Use as-is",
+        description: "Keep partial index",
+      });
     } else {
       options.push({ value: "rebuild", label: "🔨 Rebuild", description: "Create new index" });
     }
@@ -847,7 +888,10 @@ export class SetupWizardModal extends Modal {
     const cancelBtn = actions.createEl("button", { text: "Cancel", cls: "notient-cancel-btn" });
     cancelBtn.addEventListener("click", () => this.close());
 
-    const startBtn = actions.createEl("button", { cls: "notient-start-btn", attr: { id: "notient-start-btn" } });
+    const startBtn = actions.createEl("button", {
+      cls: "notient-start-btn",
+      attr: { id: "notient-start-btn" },
+    });
 
     const canStart = this.canStart();
 
@@ -912,7 +956,10 @@ export class SetupWizardModal extends Modal {
     this.result.settings.indexing = {
       ...this.currentSettings.indexing,
       chunkSize: this.chunkSize,
-      excludedFolders: this.excludedFolders.split(",").map((s) => s.trim()).filter(Boolean),
+      excludedFolders: this.excludedFolders
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     };
 
     this.result.completed = true;
@@ -927,10 +974,10 @@ export class SetupWizardModal extends Modal {
       chunkSize: this.chunkSize,
       indexAction: this.selectedIndexAction,
       selectedIndexKey: this.selectedIndexKey,
-      diskIndexes: this.diskIndexes.map(i => ({ 
-        modelKey: i.modelKey, 
-        dim: i.dimension, 
-        compatible: i.isCompatible 
+      diskIndexes: this.diskIndexes.map((i) => ({
+        modelKey: i.modelKey,
+        dim: i.dimension,
+        compatible: i.isCompatible,
       })),
     });
 

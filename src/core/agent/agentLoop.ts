@@ -5,27 +5,21 @@
  * This is the "brain" of Notient that coordinates all AI operations.
  */
 
-import type { LLMProvider, ChatMessage } from "../llm";
-import type { SearchPipeline } from "../search/pipeline";
-import type { VaultContextBuilder } from "../context/vaultContextBuilder";
+import { normalizePath } from "obsidian";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
-import type {
-  AgentTask,
-  TaskResult,
-  AgentStreamEvent,
-  NoteContext,
-  PromptParams,
-} from "./types";
-import { NotientPromptBuilder } from "./promptBuilder";
-import { inferTaskType } from "./taskInference";
 import {
-  type ProposedAction,
-  type ActionPlanResponse,
   ACTION_RISK_MAP,
+  type ActionPlanResponse,
   MAX_ACTIONS_PER_RESPONSE,
+  type ProposedAction,
   SUPPORTED_ACTION_TYPES,
 } from "../agentic/types";
-import { normalizePath } from "obsidian";
+import type { VaultContextBuilder } from "../context/vaultContextBuilder";
+import type { ChatMessage, LLMProvider } from "../llm";
+import type { SearchPipeline } from "../search/pipeline";
+import { NotientPromptBuilder } from "./promptBuilder";
+import { inferTaskType } from "./taskInference";
+import type { AgentStreamEvent, AgentTask, NoteContext, PromptParams, TaskResult } from "./types";
 
 /**
  * Core agent that orchestrates LLM, search, and context
@@ -37,7 +31,7 @@ export class NotientAgent {
     private llm: LLMProvider,
     private search: SearchPipeline | null,
     private contextBuilder: VaultContextBuilder | null,
-    private obsidian: ObsidianFacade
+    private obsidian: ObsidianFacade,
   ) {
     this.promptBuilder = new NotientPromptBuilder();
   }
@@ -80,10 +74,7 @@ export class NotientAgent {
    * @param signal - Optional AbortSignal for cancellation
    * @yields Agent stream events
    */
-  async *executeStreaming(
-    task: AgentTask,
-    signal?: AbortSignal
-  ): AsyncIterable<AgentStreamEvent> {
+  async *executeStreaming(task: AgentTask, signal?: AbortSignal): AsyncIterable<AgentStreamEvent> {
     // Get the user query from chat history
     const userMessages = task.chatHistory.filter((m) => m.role === "user");
     const query = userMessages[userMessages.length - 1]?.content;
@@ -111,14 +102,11 @@ export class NotientAgent {
             content: content,
           };
           console.log(
-            `[NotientAgent] Loaded current note: ${task.notePath} (${content.length} chars)`
+            `[NotientAgent] Loaded current note: ${task.notePath} (${content.length} chars)`,
           );
         }
       } catch (error) {
-        console.warn(
-          `[NotientAgent] Failed to load current note ${task.notePath}:`,
-          error
-        );
+        console.warn(`[NotientAgent] Failed to load current note ${task.notePath}:`, error);
       }
     }
 
@@ -132,9 +120,7 @@ export class NotientAgent {
     if (this.search) {
       try {
         // Search using both the query AND the note title for better context
-        const searchQuery = currentNoteData
-          ? `${query} ${currentNoteData.title}`
-          : query;
+        const searchQuery = currentNoteData ? `${query} ${currentNoteData.title}` : query;
 
         const searchResults = await this.search.search(searchQuery, {
           topK: 7,
@@ -172,10 +158,7 @@ export class NotientAgent {
 
         yield { type: "progress", progress: 30 };
       } catch (error) {
-        console.warn(
-          "[NotientAgent] Search failed, continuing with current note only:",
-          error
-        );
+        console.warn("[NotientAgent] Search failed, continuing with current note only:", error);
       }
     }
 
@@ -198,7 +181,7 @@ export class NotientAgent {
 
     console.log(
       `[NotientAgent] Built prompt: ${systemPrompt.length} chars, ` +
-        `currentNote=${!!currentNoteData}, relatedNotes=${relevantNotes.length}`
+        `currentNote=${!!currentNoteData}, relatedNotes=${relevantNotes.length}`,
     );
 
     // Build message list for LLM (last 10 for sliding window)
@@ -345,14 +328,12 @@ export class NotientAgent {
         }
 
         // Normalize and validate target path
-        let target = rawAction.target
-          ? normalizePath(rawAction.target)
-          : normalizedNotePath;
+        let target = rawAction.target ? normalizePath(rawAction.target) : normalizedNotePath;
 
         // Override target if it doesn't match task's note path (safety)
         if (target !== normalizedNotePath) {
           console.warn(
-            `[NotientAgent] Overriding action target from ${target} to ${normalizedNotePath}`
+            `[NotientAgent] Overriding action target from ${target} to ${normalizedNotePath}`,
           );
           target = normalizedNotePath;
         }
@@ -408,10 +389,7 @@ export class NotientAgent {
   private validateActionPayload(action: ProposedAction): boolean {
     switch (action.type) {
       case "frontmatter_set":
-        return (
-          typeof action.payload.key === "string" &&
-          action.payload.key.length > 0
-        );
+        return typeof action.payload.key === "string" && action.payload.key.length > 0;
 
       case "frontmatter_add_tags":
         return (

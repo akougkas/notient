@@ -1,13 +1,13 @@
 /**
  * Runtime Health Monitor
- * 
- * Probes external dependencies (Ollama, LM Studio) and 
+ *
+ * Probes external dependencies (Ollama, LM Studio) and
  * reports health status via events.
  */
 
-import type { Kernel } from "../core/kernel";
-import type { ServiceHealth, AvailableModel } from "../types/services";
 import { PERFORMANCE } from "../core/constants";
+import type { Kernel } from "../core/kernel";
+import type { AvailableModel, ServiceHealth } from "../types/services";
 
 /**
  * Health monitor for external services (Ollama, LM Studio)
@@ -30,10 +30,7 @@ export class HealthMonitor {
     await this.checkAll();
 
     // Periodic checks
-    this.checkInterval = setInterval(
-      () => this.checkAll(),
-      PERFORMANCE.HEALTH_CHECK_INTERVAL_MS
-    );
+    this.checkInterval = setInterval(() => this.checkAll(), PERFORMANCE.HEALTH_CHECK_INTERVAL_MS);
   }
 
   /**
@@ -42,10 +39,7 @@ export class HealthMonitor {
   async checkAll(): Promise<void> {
     if (this.disposed) return;
 
-    await Promise.all([
-      this.checkOllama(),
-      this.checkLMStudio(),
-    ]);
+    await Promise.all([this.checkOllama(), this.checkLMStudio()]);
   }
 
   /**
@@ -53,7 +47,7 @@ export class HealthMonitor {
    */
   async checkOllama(): Promise<ServiceHealth> {
     const settings = this.kernel.settings;
-    
+
     if (!settings.ollama.enabled) {
       const health: ServiceHealth = {
         status: "unknown",
@@ -72,15 +66,15 @@ export class HealthMonitor {
 
     try {
       this.ollamaModels = await this.fetchOllamaModels(settings.ollama.host);
-      
+
       if (this.ollamaModels.length === 0) {
         throw new Error("No models found");
       }
 
       // Verify configured embedding model exists
       const configuredModel = settings.ollama.embeddingModel;
-      const modelExists = !configuredModel || 
-        this.ollamaModels.some(m => m.name === configuredModel);
+      const modelExists =
+        !configuredModel || this.ollamaModels.some((m) => m.name === configuredModel);
 
       const health: ServiceHealth = {
         status: "healthy",
@@ -88,11 +82,11 @@ export class HealthMonitor {
         error: modelExists ? null : `Model "${configuredModel}" not found`,
         details: {
           modelCount: this.ollamaModels.length,
-          models: this.ollamaModels.map(m => m.name),
+          models: this.ollamaModels.map((m) => m.name),
           configuredModelValid: modelExists,
         },
       };
-      
+
       this.kernel.updateServiceHealth("ollama", health);
       return health;
     } catch (error) {
@@ -113,7 +107,7 @@ export class HealthMonitor {
    */
   async checkLMStudio(): Promise<ServiceHealth> {
     const settings = this.kernel.settings;
-    
+
     if (!settings.lmstudio.enabled) {
       const health: ServiceHealth = {
         status: "unknown",
@@ -132,11 +126,11 @@ export class HealthMonitor {
 
     try {
       this.lmstudioModels = await this.fetchLMStudioModels(settings.lmstudio.host);
-      
+
       // Verify configured model exists (if any)
       const configuredModel = settings.lmstudio.reasoningModel;
-      const modelExists = !configuredModel || 
-        this.lmstudioModels.some(m => m.name === configuredModel);
+      const modelExists =
+        !configuredModel || this.lmstudioModels.some((m) => m.name === configuredModel);
 
       const health: ServiceHealth = {
         status: "healthy",
@@ -144,11 +138,11 @@ export class HealthMonitor {
         error: modelExists ? null : `Model "${configuredModel}" not found`,
         details: {
           modelCount: this.lmstudioModels.length,
-          models: this.lmstudioModels.map(m => m.name),
+          models: this.lmstudioModels.map((m) => m.name),
           configuredModelValid: modelExists,
         },
       };
-      
+
       this.kernel.updateServiceHealth("lmstudio", health);
       return health;
     } catch (error) {
@@ -177,14 +171,14 @@ export class HealthMonitor {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const data = await response.json() as { 
-      models?: Array<{ 
-        name: string; 
-        size?: number; 
-        details?: { quantization_level?: string } 
-      }> 
+    const data = (await response.json()) as {
+      models?: Array<{
+        name: string;
+        size?: number;
+        details?: { quantization_level?: string };
+      }>;
     };
-    
+
     return (data.models ?? []).map((m) => ({
       name: m.name,
       displayName: m.name,
@@ -207,8 +201,8 @@ export class HealthMonitor {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const data = await response.json() as { data?: Array<{ id: string }> };
-    
+    const data = (await response.json()) as { data?: Array<{ id: string }> };
+
     return (data.data ?? []).map((m) => ({
       name: m.id,
       displayName: m.id,
@@ -222,7 +216,7 @@ export class HealthMonitor {
   async validateOllamaModel(host: string, modelName: string): Promise<boolean> {
     try {
       const models = await this.fetchOllamaModels(host);
-      return models.some(m => m.name === modelName);
+      return models.some((m) => m.name === modelName);
     } catch {
       return false;
     }
@@ -234,7 +228,7 @@ export class HealthMonitor {
   async validateLMStudioModel(host: string, modelName: string): Promise<boolean> {
     try {
       const models = await this.fetchLMStudioModels(host);
-      return models.some(m => m.name === modelName);
+      return models.some((m) => m.name === modelName);
     } catch {
       return false;
     }
@@ -277,7 +271,7 @@ export class HealthMonitor {
    */
   private inferOllamaCapabilities(modelName: string): ("embedding" | "chat" | "completion")[] {
     const name = modelName.toLowerCase();
-    
+
     // Known embedding models - expanded list
     if (
       name.includes("embed") ||

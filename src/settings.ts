@@ -8,18 +8,18 @@
  * - Multi-index management
  */
 
-import { App, Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
-import {
-  NotientSettings,
-  DEFAULT_SETTINGS,
-  SETTINGS_VERSION,
-  SettingsValidation,
-  SettingsError,
-  SettingsWarning,
-  SearchPreset,
-} from "./types/settings";
-import type { Kernel } from "./core/kernel";
+import { type App, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
 import { MODEL_DEFAULTS } from "./core/constants";
+import type { Kernel } from "./core/kernel";
+import {
+  DEFAULT_SETTINGS,
+  type NotientSettings,
+  SETTINGS_VERSION,
+  type SearchPreset,
+  type SettingsError,
+  type SettingsValidation,
+  type SettingsWarning,
+} from "./types/settings";
 
 // Default IPs per service
 const DEFAULT_IPS = {
@@ -54,10 +54,7 @@ export async function loadSettings(plugin: Plugin): Promise<NotientSettings> {
 /**
  * Save settings to plugin data
  */
-export async function saveSettings(
-  plugin: Plugin,
-  settings: NotientSettings
-): Promise<void> {
+export async function saveSettings(plugin: Plugin, settings: NotientSettings): Promise<void> {
   await plugin.saveData(settings);
 }
 
@@ -144,18 +141,24 @@ export class NotientSettingTab extends PluginSettingTab {
   private onSettingsChange: (settings: NotientSettings) => Promise<void>;
 
   // Network configs per service
-  private ollamaConfig: ServiceNetworkConfig = { ip: DEFAULT_IPS.ollama.local, port: DEFAULT_PORTS.ollama };
-  private lmstudioConfig: ServiceNetworkConfig = { ip: DEFAULT_IPS.lmstudio.local, port: DEFAULT_PORTS.lmstudio };
+  private ollamaConfig: ServiceNetworkConfig = {
+    ip: DEFAULT_IPS.ollama.local,
+    port: DEFAULT_PORTS.ollama,
+  };
+  private lmstudioConfig: ServiceNetworkConfig = {
+    ip: DEFAULT_IPS.lmstudio.local,
+    port: DEFAULT_PORTS.lmstudio,
+  };
 
   // Track original embedding model
-  private originalEmbeddingModel: string = "";
+  private originalEmbeddingModel = "";
 
   constructor(
     app: App,
     plugin: Plugin,
     kernel: Kernel,
     settings: NotientSettings,
-    onSettingsChange: (settings: NotientSettings) => Promise<void>
+    onSettingsChange: (settings: NotientSettings) => Promise<void>,
   ) {
     super(app, plugin);
     this.kernel = kernel;
@@ -239,12 +242,12 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(section)
       .setName("Search Mode")
       .setDesc("Balance between speed and accuracy")
-      .addDropdown(dropdown => {
+      .addDropdown((dropdown) => {
         dropdown
-          .addOption('quick', '⚡ Quick (Fast, no AI rerank)')
-          .addOption('balanced', '⚖️ Balanced (Recommended)')
-          .addOption('thorough', '🧠 Thorough (Deep search)')
-          .addOption('custom', '⚙️ Custom...')
+          .addOption("quick", "⚡ Quick (Fast, no AI rerank)")
+          .addOption("balanced", "⚖️ Balanced (Recommended)")
+          .addOption("thorough", "🧠 Thorough (Deep search)")
+          .addOption("custom", "⚙️ Custom...")
           .setValue(this.settings.search.preset)
           .onChange(async (value: string) => {
             this.settings.search.preset = value as SearchPreset;
@@ -254,7 +257,7 @@ export class NotientSettingTab extends PluginSettingTab {
       });
 
     // Show custom sliders only when preset === 'custom'
-    if (this.settings.search.preset === 'custom') {
+    if (this.settings.search.preset === "custom") {
       this.renderCustomSearchSettings(section);
     }
   }
@@ -266,8 +269,9 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(customDiv)
       .setName("Result Count")
       .setDesc("Number of notes to retrieve (Top-K)")
-      .addSlider(slider => {
-        slider.setLimits(1, 50, 1)
+      .addSlider((slider) => {
+        slider
+          .setLimits(1, 50, 1)
           .setValue(this.settings.search.custom.topK)
           .setDynamicTooltip()
           .onChange(async (value) => {
@@ -280,20 +284,20 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(customDiv)
       .setName("AI Reranking")
       .setDesc("Use LM Studio to reorder results by relevance")
-      .addToggle(toggle => {
-        toggle.setValue(this.settings.search.custom.enableReranking)
-          .onChange(async (value) => {
-            this.settings.search.custom.enableReranking = value;
-            await this.onSettingsChange(this.settings);
-          });
+      .addToggle((toggle) => {
+        toggle.setValue(this.settings.search.custom.enableReranking).onChange(async (value) => {
+          this.settings.search.custom.enableReranking = value;
+          await this.onSettingsChange(this.settings);
+        });
       });
 
     // Min score slider
     new Setting(customDiv)
       .setName("Minimum Similarity")
       .setDesc("Filter out unrelated results (0.0 - 1.0)")
-      .addSlider(slider => {
-        slider.setLimits(0, 1, 0.05)
+      .addSlider((slider) => {
+        slider
+          .setLimits(0, 1, 0.05)
           .setValue(this.settings.search.custom.minScore)
           .setDynamicTooltip()
           .onChange(async (value) => {
@@ -351,12 +355,16 @@ export class NotientSettingTab extends PluginSettingTab {
       // Show capability icons
       const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
       if (caps.search) capIcons.createSpan({ text: "🔍", attr: { title: "Search ready" } });
-      if (caps.reasoning) capIcons.createSpan({ text: "🤖", attr: { title: "Chat & rerank ready" } });
+      if (caps.reasoning)
+        capIcons.createSpan({ text: "🤖", attr: { title: "Chat & rerank ready" } });
       if (caps.indexing) capIcons.createSpan({ text: "📝", attr: { title: "Indexing available" } });
     } else if (this.kernel.isServicesInitializing) {
       capRow.createSpan({ text: "⏳ Connecting to your AI...", cls: "notient-settings-info-dim" });
     } else {
-      capRow.createSpan({ text: "⚠️ Run the setup wizard to get started", cls: "notient-settings-warning" });
+      capRow.createSpan({
+        text: "⚠️ Run the setup wizard to get started",
+        cls: "notient-settings-warning",
+      });
     }
   }
 
@@ -396,22 +404,30 @@ export class NotientSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_IPS.ollama.network)
           .setValue(this.ollamaConfig.ip)
           .onChange(
-            debounce(async (value) => {
-              this.ollamaConfig.ip = value.trim() || DEFAULT_IPS.ollama.local;
-              await this.updateOllamaHost();
-            }, 500, true)
-          )
+            debounce(
+              async (value) => {
+                this.ollamaConfig.ip = value.trim() || DEFAULT_IPS.ollama.local;
+                await this.updateOllamaHost();
+              },
+              500,
+              true,
+            ),
+          ),
       )
       .addText((text) =>
         text
           .setPlaceholder("11434")
           .setValue(this.ollamaConfig.port)
           .onChange(
-            debounce(async (value) => {
-              this.ollamaConfig.port = value.trim() || DEFAULT_PORTS.ollama;
-              await this.updateOllamaHost();
-            }, 500, true)
-          )
+            debounce(
+              async (value) => {
+                this.ollamaConfig.port = value.trim() || DEFAULT_PORTS.ollama;
+                await this.updateOllamaHost();
+              },
+              500,
+              true,
+            ),
+          ),
       );
 
     // Model with dimension display
@@ -428,7 +444,7 @@ export class NotientSettingTab extends PluginSettingTab {
           this.settings.ollama.embeddingModel = value;
           await this.onSettingsChange(this.settings);
           this.display();
-        })
+        }),
     );
 
     // Model change notice
@@ -482,36 +498,42 @@ export class NotientSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_IPS.lmstudio.network)
           .setValue(this.lmstudioConfig.ip)
           .onChange(
-            debounce(async (value) => {
-              this.lmstudioConfig.ip = value.trim() || DEFAULT_IPS.lmstudio.local;
-              await this.updateLMStudioHost();
-            }, 500, true)
-          )
+            debounce(
+              async (value) => {
+                this.lmstudioConfig.ip = value.trim() || DEFAULT_IPS.lmstudio.local;
+                await this.updateLMStudioHost();
+              },
+              500,
+              true,
+            ),
+          ),
       )
       .addText((text) =>
         text
           .setPlaceholder("1234")
           .setValue(this.lmstudioConfig.port)
           .onChange(
-            debounce(async (value) => {
-              this.lmstudioConfig.port = value.trim() || DEFAULT_PORTS.lmstudio;
-              await this.updateLMStudioHost();
-            }, 500, true)
-          )
+            debounce(
+              async (value) => {
+                this.lmstudioConfig.port = value.trim() || DEFAULT_PORTS.lmstudio;
+                await this.updateLMStudioHost();
+              },
+              500,
+              true,
+            ),
+          ),
       );
 
     // Model
-    new Setting(section)
-      .setName("Reasoning Model")
-      .addText((text) =>
-        text
-          .setPlaceholder("ministral-3b-instruct")
-          .setValue(this.settings.lmstudio.reasoningModel)
-          .onChange(async (value) => {
-            this.settings.lmstudio.reasoningModel = value;
-            await this.onSettingsChange(this.settings);
-          })
-      );
+    new Setting(section).setName("Reasoning Model").addText((text) =>
+      text
+        .setPlaceholder("ministral-3b-instruct")
+        .setValue(this.settings.lmstudio.reasoningModel)
+        .onChange(async (value) => {
+          this.settings.lmstudio.reasoningModel = value;
+          await this.onSettingsChange(this.settings);
+        }),
+    );
   }
 
   private async updateLMStudioHost(): Promise<void> {
@@ -545,12 +567,12 @@ export class NotientSettingTab extends PluginSettingTab {
     });
 
     slider.addEventListener("input", (e) => {
-      const value = parseInt((e.target as HTMLInputElement).value, 10);
+      const value = Number.parseInt((e.target as HTMLInputElement).value, 10);
       sliderValue.textContent = `${value} chars`;
     });
 
     slider.addEventListener("change", async (e) => {
-      this.settings.indexing.chunkSize = parseInt((e.target as HTMLInputElement).value, 10);
+      this.settings.indexing.chunkSize = Number.parseInt((e.target as HTMLInputElement).value, 10);
       await this.onSettingsChange(this.settings);
     });
 
@@ -576,25 +598,29 @@ export class NotientSettingTab extends PluginSettingTab {
               .map((s) => s.trim())
               .filter((s) => s.length > 0);
             await this.onSettingsChange(this.settings);
-          })
+          }),
       );
   }
 
   private renderIndexManagement(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv({ cls: "notient-settings-section notient-index-management" });
+    const section = containerEl.createDiv({
+      cls: "notient-settings-section notient-index-management",
+    });
     section.createEl("h2", { text: "Index Management" });
 
     const isReady = this.kernel.isServicesInitialized;
 
-    const indexManager = isReady ? this.kernel.getService<{
-      getIndexedCount(): number;
-      getActiveModelKey(): string;
-      listAvailableIndices(): string[];
-      exportIndex(): Promise<string>;
-      importIndex(json: string): Promise<{ modelKey: string; noteCount: number }>;
-      trimIndex(): Promise<{ removed: number }>;
-      deleteIndex(modelKey: string): Promise<boolean>;
-    }>("indexManager") : null;
+    const indexManager = isReady
+      ? this.kernel.getService<{
+          getIndexedCount(): number;
+          getActiveModelKey(): string;
+          listAvailableIndices(): string[];
+          exportIndex(): Promise<string>;
+          importIndex(json: string): Promise<{ modelKey: string; noteCount: number }>;
+          trimIndex(): Promise<{ removed: number }>;
+          deleteIndex(modelKey: string): Promise<boolean>;
+        }>("indexManager")
+      : null;
 
     // Info box showing current state
     const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
@@ -604,7 +630,7 @@ export class NotientSettingTab extends PluginSettingTab {
         text: this.kernel.isServicesInitializing
           ? "⏳ Services initializing..."
           : "⚠️ Services not ready - complete setup wizard first",
-        cls: "notient-settings-info-dim"
+        cls: "notient-settings-info-dim",
       });
     } else if (indexManager) {
       const activeKey = indexManager.getActiveModelKey() || "none";
@@ -621,7 +647,10 @@ export class NotientSettingTab extends PluginSettingTab {
         });
       }
     } else {
-      infoBox.createEl("div", { text: "No index data available", cls: "notient-settings-info-dim" });
+      infoBox.createEl("div", {
+        text: "No index data available",
+        cls: "notient-settings-info-dim",
+      });
     }
 
     // Actions section
@@ -631,28 +660,33 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(actionsDiv)
       .setName("Sync Index")
       .setDesc("Index new and changed notes")
-      .addButton((btn) => btn.setButtonText("▶️ Sync").onClick(() => {
-        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
-          .commands.executeCommandById("notient:reindex-vault");
-      }));
+      .addButton((btn) =>
+        btn.setButtonText("▶️ Sync").onClick(() => {
+          (
+            this.app as App & { commands: { executeCommandById: (id: string) => void } }
+          ).commands.executeCommandById("notient:reindex-vault");
+        }),
+      );
 
     // Trim button
     new Setting(actionsDiv)
       .setName("Trim Stale Entries")
       .setDesc("Remove vectors for deleted notes")
-      .addButton((btn) => btn.setButtonText("🧹 Trim").onClick(async () => {
-        if (!indexManager) {
-          this.kernel.obsidian.notice("Index manager not ready");
-          return;
-        }
-        try {
-          const result = await indexManager.trimIndex();
-          this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
-          this.display();
-        } catch (error) {
-          this.kernel.obsidian.notice(`Trim failed: ${error}`);
-        }
-      }));
+      .addButton((btn) =>
+        btn.setButtonText("🧹 Trim").onClick(async () => {
+          if (!indexManager) {
+            this.kernel.obsidian.notice("Index manager not ready");
+            return;
+          }
+          try {
+            const result = await indexManager.trimIndex();
+            this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
+            this.display();
+          } catch (error) {
+            this.kernel.obsidian.notice(`Trim failed: ${error}`);
+          }
+        }),
+      );
 
     // Export/Import row
     const ioDiv = section.createDiv({ cls: "notient-settings-index-io" });
@@ -660,53 +694,57 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(ioDiv)
       .setName("Export")
       .setDesc("Backup to file")
-      .addButton((btn) => btn.setButtonText("📤 Export").onClick(async () => {
-        if (!indexManager) {
-          this.kernel.obsidian.notice("Index manager not ready");
-          return;
-        }
-        try {
-          const json = await indexManager.exportIndex();
-          const blob = new Blob([json], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `notient-index-${indexManager.getActiveModelKey()}-${Date.now()}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-          this.kernel.obsidian.notice("Index exported");
-        } catch (error) {
-          this.kernel.obsidian.notice(`Export failed: ${error}`);
-        }
-      }));
+      .addButton((btn) =>
+        btn.setButtonText("📤 Export").onClick(async () => {
+          if (!indexManager) {
+            this.kernel.obsidian.notice("Index manager not ready");
+            return;
+          }
+          try {
+            const json = await indexManager.exportIndex();
+            const blob = new Blob([json], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `notient-index-${indexManager.getActiveModelKey()}-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            this.kernel.obsidian.notice("Index exported");
+          } catch (error) {
+            this.kernel.obsidian.notice(`Export failed: ${error}`);
+          }
+        }),
+      );
 
     new Setting(ioDiv)
       .setName("Import")
       .setDesc("Load from backup")
-      .addButton((btn) => btn.setButtonText("📥 Import").onClick(() => {
-        if (!indexManager) {
-          this.kernel.obsidian.notice("Index manager not ready");
-          return;
-        }
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".json";
-        input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0];
-          if (!file) return;
-          try {
-            const text = await file.text();
-            const result = await indexManager.importIndex(text);
-            this.kernel.obsidian.notice(
-              `Imported ${result.noteCount} notes for ${result.modelKey}`
-            );
-            this.display();
-          } catch (error) {
-            this.kernel.obsidian.notice(`Import failed: ${error}`);
+      .addButton((btn) =>
+        btn.setButtonText("📥 Import").onClick(() => {
+          if (!indexManager) {
+            this.kernel.obsidian.notice("Index manager not ready");
+            return;
           }
-        };
-        input.click();
-      }));
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = ".json";
+          input.onchange = async (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+            try {
+              const text = await file.text();
+              const result = await indexManager.importIndex(text);
+              this.kernel.obsidian.notice(
+                `Imported ${result.noteCount} notes for ${result.modelKey}`,
+              );
+              this.display();
+            } catch (error) {
+              this.kernel.obsidian.notice(`Import failed: ${error}`);
+            }
+          };
+          input.click();
+        }),
+      );
 
     // Danger zone
     const dangerDiv = section.createDiv({ cls: "notient-settings-danger-zone" });
@@ -715,10 +753,16 @@ export class NotientSettingTab extends PluginSettingTab {
     new Setting(dangerDiv)
       .setName("Rebuild Index")
       .setDesc("Clear and re-index everything from scratch")
-      .addButton((btn) => btn.setButtonText("🔄 Rebuild").setWarning().onClick(() => {
-        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
-          .commands.executeCommandById("notient:full-reindex");
-      }));
+      .addButton((btn) =>
+        btn
+          .setButtonText("🔄 Rebuild")
+          .setWarning()
+          .onClick(() => {
+            (
+              this.app as App & { commands: { executeCommandById: (id: string) => void } }
+            ).commands.executeCommandById("notient:full-reindex");
+          }),
+      );
 
     // Delete other indexes (if multiple exist)
     if (indexManager) {
@@ -730,13 +774,18 @@ export class NotientSettingTab extends PluginSettingTab {
         new Setting(dangerDiv)
           .setName("Delete Old Indexes")
           .setDesc(`Other indexes: ${otherIndices.join(", ")}`)
-          .addButton((btn) => btn.setButtonText("🗑️ Delete All Old").setWarning().onClick(async () => {
-            for (const key of otherIndices) {
-              await indexManager.deleteIndex(key);
-            }
-            this.kernel.obsidian.notice(`Deleted ${otherIndices.length} old indexes`);
-            this.display();
-          }));
+          .addButton((btn) =>
+            btn
+              .setButtonText("🗑️ Delete All Old")
+              .setWarning()
+              .onClick(async () => {
+                for (const key of otherIndices) {
+                  await indexManager.deleteIndex(key);
+                }
+                this.kernel.obsidian.notice(`Deleted ${otherIndices.length} old indexes`);
+                this.display();
+              }),
+          );
       }
     }
   }
@@ -767,7 +816,7 @@ export class NotientSettingTab extends PluginSettingTab {
         .setDesc(hint)
         .addText((text) =>
           text
-            .setPlaceholder(`folder1, folder2/subfolder`)
+            .setPlaceholder("folder1, folder2/subfolder")
             .setValue(this.settings.para[key].join(", "))
             .onChange(async (value) => {
               this.settings.para[key] = value
@@ -775,7 +824,7 @@ export class NotientSettingTab extends PluginSettingTab {
                 .map((s) => s.trim())
                 .filter((s) => s.length > 0);
               await this.onSettingsChange(this.settings);
-            })
+            }),
         );
     }
   }
@@ -788,39 +837,45 @@ export class NotientSettingTab extends PluginSettingTab {
       toggle.setValue(this.settings.advanced.debugLogging).onChange(async (value) => {
         this.settings.advanced.debugLogging = value;
         await this.onSettingsChange(this.settings);
-      })
+      }),
     );
 
     new Setting(section).setName("Run setup wizard").addButton((btn) =>
       btn.setButtonText("Open").onClick(() => {
-        (this.app as App & { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById(
-          "notient:run-setup"
-        );
-      })
+        (
+          this.app as App & { commands: { executeCommandById: (id: string) => void } }
+        ).commands.executeCommandById("notient:run-setup");
+      }),
     );
 
     new Setting(section)
       .setName("Full reindex")
       .setDesc("Rebuild current index")
       .addButton((btn) =>
-        btn.setButtonText("Reindex").setWarning().onClick(() => {
-          (this.app as App & { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById(
-            "notient:full-reindex"
-          );
-        })
+        btn
+          .setButtonText("Reindex")
+          .setWarning()
+          .onClick(() => {
+            (
+              this.app as App & { commands: { executeCommandById: (id: string) => void } }
+            ).commands.executeCommandById("notient:full-reindex");
+          }),
       );
 
     new Setting(section)
       .setName("Clear all indexes")
       .setDesc("Delete ALL data")
       .addButton((btn) =>
-        btn.setButtonText("Clear All").setWarning().onClick(async () => {
-          const indexMgr = this.kernel.getService<{ clearAll(): Promise<void> }>("indexManager");
-          if (indexMgr) {
-            await indexMgr.clearAll();
-            this.kernel.obsidian.notice("All indexes cleared");
-          }
-        })
+        btn
+          .setButtonText("Clear All")
+          .setWarning()
+          .onClick(async () => {
+            const indexMgr = this.kernel.getService<{ clearAll(): Promise<void> }>("indexManager");
+            if (indexMgr) {
+              await indexMgr.clearAll();
+              this.kernel.obsidian.notice("All indexes cleared");
+            }
+          }),
       );
   }
 }

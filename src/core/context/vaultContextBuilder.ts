@@ -5,8 +5,8 @@
  * Context is relevant to the specific query/candidates.
  */
 
-import type { Kernel } from "../kernel";
 import type { SearchResult } from "../../types/search";
+import type { Kernel } from "../kernel";
 import { ParaDetector } from "../para/detector";
 
 export interface VaultContext {
@@ -156,20 +156,19 @@ export class VaultContextBuilder {
    */
   private resolveLink(link: string, fromPath: string): string | null {
     // Remove [[]] and #section references
-    const cleanLink = link.replace(/^\[\[|\]\]$/g, "").split("#")[0].split("|")[0];
+    const cleanLink = link
+      .replace(/^\[\[|\]\]$/g, "")
+      .split("#")[0]
+      .split("|")[0];
 
     // Try exact match
     const files = this.kernel.obsidian.getMarkdownFiles();
-    const exact = files.find(
-      (f) => f.path === cleanLink + ".md" || f.basename === cleanLink
-    );
+    const exact = files.find((f) => f.path === `${cleanLink}.md` || f.basename === cleanLink);
     if (exact) return exact.path;
 
     // Try relative path
     const fromDir = fromPath.split("/").slice(0, -1).join("/");
-    const relative = files.find(
-      (f) => f.path === `${fromDir}/${cleanLink}.md`
-    );
+    const relative = files.find((f) => f.path === `${fromDir}/${cleanLink}.md`);
     if (relative) return relative.path;
 
     return null;
@@ -209,7 +208,7 @@ export class VaultContextBuilder {
     const recent: Array<{ path: string; mtime: number }> = [];
 
     for (const file of files) {
-      const inFolder = folders.some((f) => file.path.startsWith(f + "/"));
+      const inFolder = folders.some((f) => file.path.startsWith(`${f}/`));
       if (inFolder) {
         recent.push({ path: file.path, mtime: file.stat.mtime });
       }
@@ -235,7 +234,7 @@ export class VaultContextBuilder {
     const parts: string[] = [];
 
     parts.push(
-      `Found ${params.candidateCount} potentially relevant notes out of ${params.totalNotes} total.`
+      `Found ${params.candidateCount} potentially relevant notes out of ${params.totalNotes} total.`,
     );
 
     if (params.folders.length > 0) {

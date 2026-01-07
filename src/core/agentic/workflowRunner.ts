@@ -14,7 +14,7 @@
 
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { AgentTaskQueue } from "../agent/taskQueue";
-import type { AgentTask, TaskType } from "../agent/types";
+import type { TaskType } from "../agent/types";
 import type { EventBus } from "../events/eventBus";
 import type { Kernel } from "../kernel";
 import type { ParsedCommand } from "./commandParser";
@@ -49,7 +49,6 @@ export class WorkflowRunner {
   private currentWorkflow: WorkflowRun | null = null;
   private currentTaskId: string | null = null;
   private abortController: AbortController | null = null;
-  private taskUnsubscribe: (() => void) | null = null;
 
   constructor(
     private kernel: Kernel,
@@ -57,12 +56,7 @@ export class WorkflowRunner {
     private taskQueue: AgentTaskQueue,
     private obsidian: ObsidianFacade,
     private config: WorkflowConfig,
-  ) {
-    // Subscribe to task updates to track progress
-    this.taskUnsubscribe = this.eventBus.on("agent:task-update", (event) => {
-      this.handleTaskUpdate(event.task);
-    });
-  }
+  ) {}
 
   /**
    * Start a workflow from a parsed command
@@ -339,60 +333,30 @@ export class WorkflowRunner {
     // Build prompt based on command
     const prompt = this.buildPromptForCommand(command, noteTitle);
 
-    // Enqueue task and wait for completion
-    return new Promise((resolve, reject) => {
-      const taskId = this.taskQueue.enqueue({
-        agent: "chat",
-        taskType,
-        notePath,
-        noteTitle,
-        chatHistory: [{ role: "user", content: prompt }],
-      });
-
-      this.currentTaskId = taskId;
-
-      // Set up timeout for task completion
-      const timeout = setTimeout(() => {
-        reject(new Error("Task timeout"));
-      }, 120000); // 2 minute timeout per task
-
-      // Track completion via event
-      const checkCompletion = setInterval(() => {
-        const task = this.taskQueue.getById(taskId);
-        if (!task) {
-          clearInterval(checkCompletion);
-          clearTimeout(timeout);
-          reject(new Error("Task not found"));
-          return;
-        }
-
-        if (task.status === "completed") {
-          clearInterval(checkCompletion);
-          clearTimeout(timeout);
-
-          // Collect medium/high-risk actions into review queue
-          if (task.result?.actions) {
-            const reviewActions = task.result.actions.filter((a) => this.isReviewRequired(a.risk));
-            workflow.reviewQueue.push(...reviewActions);
-          }
-
-          resolve();
-        } else if (task.status === "failed" || task.status === "cancelled") {
-          clearInterval(checkCompletion);
-          clearTimeout(timeout);
-          reject(new Error(task.error || "Task failed"));
-        }
-      }, 100);
+    // Enqueue task
+    const taskId = this.taskQueue.enqueue({
+      agent: "chat",
+      taskType,
+      notePath,
+      noteTitle,
+      chatHistory: [{ role: "user", content: prompt }],
     });
-  }
 
-  /**
-   * Handle task update events
-   */
-  private handleTaskUpdate(task: AgentTask): void {
-    // Only process if this is our current task
-    if (task.id !== this.currentTaskId) return;
-    // Task updates are handled in processNote via interval check
+    this.currentTaskId = taskId;
+
+    // Wait for completion using event-driven approach (no polling)
+    const completedTask = await this.taskQueue.waitForCompletion(taskId, {
+      timeoutMs: 120000, // 2 minute timeout per task
+      signal: this.abortController?.signal,
+    });
+
+    // Collect medium/high-risk actions into review queue
+    if (completedTask.result?.actions) {
+      const reviewActions = completedTask.result.actions.filter((a) =>
+        this.isReviewRequired(a.risk),
+      );
+      workflow.reviewQueue.push(...reviewActions);
+    }
   }
 
   /**
@@ -435,18 +399,29 @@ export class WorkflowRunner {
   }
 
   /**
-   * Delay helper
+   * Delay helper with proper abort cleanup
    */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      const timeout = setTimeout(resolve, ms);
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, ms);
 
-      // Allow abort to cancel the delay
+      const abortHandler = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+
+      const cleanup = () => {
+        if (this.abortController) {
+          this.abortController.signal.removeEventListener("abort", abortHandler);
+        }
+      };
+
+      // Allow abort to cancel the delay (use once: true to avoid leaks)
       if (this.abortController) {
-        this.abortController.signal.addEventListener("abort", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
+        this.abortController.signal.addEventListener("abort", abortHandler, { once: true });
       }
     });
   }
@@ -467,11 +442,5 @@ export class WorkflowRunner {
       this.eventBus.emit("workflow:cancelled", { workflow });
     }
     this.workflowQueue = [];
-
-    // Unsubscribe from events
-    if (this.taskUnsubscribe) {
-      this.taskUnsubscribe();
-      this.taskUnsubscribe = null;
-    }
   }
 }

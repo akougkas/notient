@@ -5,16 +5,12 @@
  * Enables single-click undo for all applied actions.
  */
 
-import * as fs from "fs";
-import type { StoragePaths } from "../../services/storagePaths";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
+import type { StoragePaths } from "../../services/storagePaths";
 import type { EventBus } from "../events/eventBus";
-import type {
-  AppliedActionRecord,
-  UndoPayload,
-  RestoreContentUndo,
-  RenameBackUndo,
-} from "./types";
+import type { AppliedActionRecord, RenameBackUndo, RestoreContentUndo, UndoPayload } from "./types";
 
 /** Schema version for migration support */
 const SCHEMA_VERSION = 1;
@@ -22,6 +18,7 @@ const SCHEMA_VERSION = 1;
 /** Default retention settings */
 const DEFAULT_MAX_ENTRIES = 200;
 const DEFAULT_MAX_AGE_DAYS = 30;
+const DEFAULT_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const FLUSH_DEBOUNCE_MS = 500;
 
 /**
@@ -38,6 +35,8 @@ interface ActionStorage {
 export interface ActionRetentionConfig {
   maxEntries: number;
   maxAgeDays: number;
+  /** Maximum total size in bytes for action history file (default: 10 MB) */
+  maxSizeBytes: number;
 }
 
 /**
@@ -64,7 +63,8 @@ export class ActionHistory {
     private retention: ActionRetentionConfig = {
       maxEntries: DEFAULT_MAX_ENTRIES,
       maxAgeDays: DEFAULT_MAX_AGE_DAYS,
-    }
+      maxSizeBytes: DEFAULT_MAX_SIZE_BYTES,
+    },
   ) {}
 
   /**
@@ -88,7 +88,7 @@ export class ActionHistory {
       // Handle schema migrations here if needed
       if (storage.version !== SCHEMA_VERSION) {
         console.warn(
-          `[ActionHistory] Schema migration needed from v${storage.version} to v${SCHEMA_VERSION}`
+          `[ActionHistory] Schema migration needed from v${storage.version} to v${SCHEMA_VERSION}`,
         );
         // Future: add migration logic
       }
@@ -104,6 +104,7 @@ export class ActionHistory {
 
   /**
    * Flush action history to disk (debounced)
+   * Uses atomic write (temp file + rename) to prevent corruption
    */
   async flush(): Promise<void> {
     if (!this.dirty) return;
@@ -115,6 +116,7 @@ export class ActionHistory {
     }
 
     const filePath = this.storagePaths.actions;
+    const tempPath = `${filePath}.tmp.${Date.now()}`;
 
     try {
       const storage: ActionStorage = {
@@ -122,11 +124,22 @@ export class ActionHistory {
         records: this.records,
       };
 
-      await fs.promises.writeFile(filePath, JSON.stringify(storage, null, 2), "utf-8");
+      const content = JSON.stringify(storage, null, 2);
+
+      // Atomic write: write to temp file first, then rename
+      await fs.promises.writeFile(tempPath, content, "utf-8");
+      await fs.promises.rename(tempPath, filePath);
+
       this.dirty = false;
       console.log(`[ActionHistory] Flushed ${this.records.length} action records`);
     } catch (error) {
       console.error("[ActionHistory] Failed to flush:", error);
+      // Clean up temp file if it exists
+      try {
+        await fs.promises.unlink(tempPath);
+      } catch {
+        // Ignore cleanup errors
+      }
     }
   }
 
@@ -157,9 +170,55 @@ export class ActionHistory {
       this.records.splice(0, excess);
     }
 
+    // Enforce size-based retention
+    this.enforceMaxSize();
+
     this.scheduleFlush();
     this.eventBus.emit("action:applied", { record });
     console.log(`[ActionHistory] Added record: ${record.action.title}`);
+  }
+
+  /**
+   * Enforce maximum size limit by removing oldest records
+   * @private
+   */
+  private enforceMaxSize(): void {
+    // Estimate current size by serializing
+    const estimatedSize = this.estimateStorageSize();
+
+    if (estimatedSize <= this.retention.maxSizeBytes) {
+      return;
+    }
+
+    // Remove oldest records until under limit (keep at least one)
+    let currentSize = estimatedSize;
+    let removedCount = 0;
+
+    while (currentSize > this.retention.maxSizeBytes && this.records.length > 1) {
+      const removed = this.records.shift();
+      if (removed) {
+        // Rough estimate of removed record size
+        currentSize -= JSON.stringify(removed).length;
+        removedCount++;
+      }
+    }
+
+    if (removedCount > 0) {
+      console.log(`[ActionHistory] Removed ${removedCount} old records to meet size limit`);
+    }
+  }
+
+  /**
+   * Estimate the storage size in bytes
+   * @private
+   */
+  private estimateStorageSize(): number {
+    const storage: ActionStorage = {
+      version: SCHEMA_VERSION,
+      records: this.records,
+    };
+    // Estimate size (this is a rough approximation)
+    return JSON.stringify(storage).length;
   }
 
   /**
@@ -181,7 +240,7 @@ export class ActionHistory {
    */
   getRecordsForNote(notePath: string): AppliedActionRecord[] {
     return this.records.filter(
-      (r) => r.action.target === notePath || r.changedPaths.includes(notePath)
+      (r) => r.action.target === notePath || r.changedPaths.includes(notePath),
     );
   }
 
@@ -346,6 +405,9 @@ export class ActionHistory {
     }
     if (config.maxAgeDays !== undefined) {
       this.retention.maxAgeDays = config.maxAgeDays;
+    }
+    if (config.maxSizeBytes !== undefined) {
+      this.retention.maxSizeBytes = config.maxSizeBytes;
     }
   }
 

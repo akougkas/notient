@@ -44,10 +44,7 @@ export interface LLMProvider {
    * @param options - Completion options
    * @returns The complete response text
    */
-  complete(
-    messages: ChatMessage[],
-    options?: CompletionOptions
-  ): Promise<string>;
+  complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string>;
 
   /**
    * Streaming completion
@@ -59,7 +56,7 @@ export interface LLMProvider {
   stream(
     messages: ChatMessage[],
     options?: CompletionOptions,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): AsyncIterable<string>;
 
   /**

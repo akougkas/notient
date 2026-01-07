@@ -8,11 +8,11 @@
  * Phase 2: Integrates with ConversationStore for conversation persistence.
  */
 
-import type { EventBus } from "../events/eventBus";
-import type { AgentTask } from "./types";
-import type { NotientAgent } from "./agentLoop";
 import type { ConversationStore } from "../chat/conversationStore";
 import type { ExtendedChatMessage } from "../chat/types";
+import type { EventBus } from "../events/eventBus";
+import type { NotientAgent } from "./agentLoop";
+import type { AgentTask } from "./types";
 
 /**
  * Callback for task update notifications
@@ -31,7 +31,7 @@ export class AgentTaskQueue {
 
   constructor(
     private agent: NotientAgent,
-    private eventBus: EventBus
+    private eventBus: EventBus,
   ) {}
 
   /**
@@ -46,9 +46,7 @@ export class AgentTaskQueue {
    * @param task - Task data (without id, status, startedAt)
    * @returns The task ID
    */
-  enqueue(
-    task: Omit<AgentTask, "id" | "status" | "startedAt">
-  ): string {
+  enqueue(task: Omit<AgentTask, "id" | "status" | "startedAt">): string {
     const id = crypto.randomUUID();
 
     // Phase 2: Handle conversation persistence
@@ -140,6 +138,95 @@ export class AgentTaskQueue {
   }
 
   /**
+   * Wait for a task to complete, fail, or be cancelled.
+   * Uses event-driven waiting instead of polling.
+   * @param taskId - ID of the task to wait for
+   * @param options - Optional timeout and abort signal
+   * @returns The completed task
+   */
+  waitForCompletion(
+    taskId: string,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<AgentTask> {
+    return new Promise((resolve, reject) => {
+      const task = this.getById(taskId);
+      if (!task) {
+        reject(new Error(`Task not found: ${taskId}`));
+        return;
+      }
+
+      // If already in terminal state, resolve immediately
+      if (task.status === "completed") {
+        resolve(task);
+        return;
+      }
+      if (task.status === "failed" || task.status === "cancelled") {
+        reject(new Error(task.error || `Task ${task.status}`));
+        return;
+      }
+
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let unsubscribe: (() => void) | null = null;
+      let abortHandler: (() => void) | null = null;
+
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
+        if (abortHandler && options?.signal) {
+          options.signal.removeEventListener("abort", abortHandler);
+          abortHandler = null;
+        }
+      };
+
+      // Listen for task updates
+      unsubscribe = this.eventBus.on("agent:task-update", (event) => {
+        if (event.task.id !== taskId) return;
+
+        if (event.task.status === "completed") {
+          cleanup();
+          resolve(event.task);
+        } else if (event.task.status === "failed" || event.task.status === "cancelled") {
+          cleanup();
+          reject(new Error(event.task.error || `Task ${event.task.status}`));
+        }
+      });
+
+      // Set up timeout
+      if (options?.timeoutMs) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          // Cancel the task on timeout
+          this.cancel(taskId);
+          reject(new Error("Task timeout"));
+        }, options.timeoutMs);
+      }
+
+      // Handle abort signal
+      if (options?.signal) {
+        if (options.signal.aborted) {
+          cleanup();
+          this.cancel(taskId);
+          reject(new Error("Task aborted"));
+          return;
+        }
+
+        abortHandler = () => {
+          cleanup();
+          this.cancel(taskId);
+          reject(new Error("Task aborted"));
+        };
+        options.signal.addEventListener("abort", abortHandler, { once: true });
+      }
+    });
+  }
+
+  /**
    * Register a callback for task updates
    */
   onTaskUpdate(callback: TaskUpdateCallback): void {
@@ -150,9 +237,7 @@ export class AgentTaskQueue {
    * Clear all completed/cancelled tasks
    */
   clearCompleted(): void {
-    this.tasks = this.tasks.filter(
-      (t) => t.status === "queued" || t.status === "running"
-    );
+    this.tasks = this.tasks.filter((t) => t.status === "queued" || t.status === "running");
   }
 
   /**
@@ -205,7 +290,7 @@ export class AgentTaskQueue {
     try {
       for await (const event of this.agent.executeStreaming(
         task,
-        this.currentAbortController.signal
+        this.currentAbortController.signal,
       )) {
         if (task.status !== "running") break;
 
@@ -223,7 +308,7 @@ export class AgentTaskQueue {
             // Citations are handled in the complete event
             break;
 
-          case "complete":
+          case "complete": {
             // Add assistant response to chat history
             const assistantContent = event.result.data as string;
             task.chatHistory.push({
@@ -243,6 +328,7 @@ export class AgentTaskQueue {
               this.conversationStore.appendMessage(task.notePath, assistantMessage);
             }
             break;
+          }
 
           case "error":
             throw event.error;

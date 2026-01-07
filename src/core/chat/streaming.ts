@@ -36,7 +36,9 @@ export function createStreamController<T>(): StreamController<T> {
         async next(): Promise<IteratorResult<T>> {
           // Return queued values first
           if (queue.length > 0) {
-            return { value: queue.shift()!, done: false };
+            const value = queue.shift();
+            // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees shift() returns a value
+            return { value: value!, done: false };
           }
 
           // Check if closed or errored
@@ -103,9 +105,7 @@ export function createStreamController<T>(): StreamController<T> {
  * @param streams - The streams to merge
  * @yields Values from all streams as they arrive
  */
-export async function* mergeStreams<T>(
-  streams: AsyncIterable<T>[]
-): AsyncIterable<T> {
+export async function* mergeStreams<T>(streams: AsyncIterable<T>[]): AsyncIterable<T> {
   // Create iterators
   const iterators = streams.map((s) => s[Symbol.asyncIterator]());
 
@@ -131,9 +131,7 @@ export async function* mergeStreams<T>(
 
   // Process until all iterators are done
   while (active.size > 0) {
-    const { iterator, result } = await Promise.race(
-      Array.from(promises.values())
-    );
+    const { iterator, result } = await Promise.race(Array.from(promises.values()));
 
     if (result.done) {
       active.delete(iterator);
@@ -163,9 +161,7 @@ export async function collectStream<T>(stream: AsyncIterable<T>): Promise<T[]> {
  * @param stream - The string stream
  * @returns The concatenated string
  */
-export async function collectStringStream(
-  stream: AsyncIterable<string>
-): Promise<string> {
+export async function collectStringStream(stream: AsyncIterable<string>): Promise<string> {
   let result = "";
   for await (const chunk of stream) {
     result += chunk;

@@ -1,6 +1,6 @@
 /**
  * Kernel / Service Manager
- * 
+ *
  * Central orchestrator for Notient services. Manages:
  * - Service initialization order
  * - Shared cancellation/abort
@@ -9,12 +9,12 @@
  */
 
 import type { App, Plugin } from "obsidian";
-import { EventBus, setGlobalEventBus } from "./events/eventBus";
+import { ObsidianFacade } from "../adapters/obsidianFacade";
 import { StoragePaths } from "../services/storagePaths";
 import { VaultLock } from "../services/vaultLock";
-import { ObsidianFacade } from "../adapters/obsidianFacade";
 import type { CapabilityStatus, ServiceHealth } from "../types/services";
 import type { NotientSettings } from "../types/settings";
+import { EventBus, setGlobalEventBus } from "./events/eventBus";
 
 export interface KernelContext {
   app: App;
@@ -172,7 +172,9 @@ export class Kernel {
       try {
         await Promise.race([
           this._storagePaths.ensureDirectories(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Directory creation timeout")), 5000))
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Directory creation timeout")), 5000),
+          ),
         ]);
         console.log("[Kernel] Step 1: Directories ready");
       } catch (dirError) {
@@ -184,7 +186,7 @@ export class Kernel {
       try {
         const hasLock = await Promise.race([
           this._vaultLock.tryAcquire(),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000))
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
         ]);
         if (!hasLock) {
           console.warn("[Kernel] Could not acquire write lock - running in read-only mode");
@@ -206,10 +208,7 @@ export class Kernel {
   /**
    * Update external service health status
    */
-  updateServiceHealth(
-    service: keyof ServiceState,
-    health: ServiceHealth
-  ): void {
+  updateServiceHealth(service: keyof ServiceState, health: ServiceHealth): void {
     this._serviceHealth[service] = health;
     this.updateCapabilities();
 

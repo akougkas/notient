@@ -6,7 +6,7 @@
  */
 
 import type { ChatMessage } from "../llm/types";
-import type { ChatConfig, ExtendedChatMessage, ChatAttachment } from "./types";
+import type { ChatAttachment, ChatConfig, ExtendedChatMessage } from "./types";
 
 const DEFAULT_CONFIG: Required<ChatConfig> = {
   maxHistoryLength: 100,
@@ -30,10 +30,7 @@ export class ChatSession {
    * @param attachments - Optional attachments
    * @returns The created message
    */
-  addUserMessage(
-    content: string,
-    attachments?: ChatAttachment[]
-  ): ExtendedChatMessage {
+  addUserMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage {
     const message: ExtendedChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -54,10 +51,7 @@ export class ChatSession {
    * @param attachments - Optional attachments (e.g., RAG citations)
    * @returns The created message
    */
-  addAssistantMessage(
-    content: string,
-    attachments?: ChatAttachment[]
-  ): ExtendedChatMessage {
+  addAssistantMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage {
     const message: ExtendedChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",

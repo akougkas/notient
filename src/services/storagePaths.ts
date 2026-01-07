@@ -1,14 +1,14 @@
 /**
  * Storage paths management
- * 
+ *
  * Provides the single source of truth for all disk paths used by Notient.
  * Uses the Obsidian FileSystemAdapter to get the absolute vault path (desktop only).
  */
 
-import { App, FileSystemAdapter } from "obsidian";
-import * as path from "path";
-import * as fs from "fs";
-import { STORAGE_PATHS, PLUGIN_ID } from "../core/constants";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { type App, FileSystemAdapter } from "obsidian";
+import { PLUGIN_ID, STORAGE_PATHS } from "../core/constants";
 
 export interface StoragePathsConfig {
   /** Vault root absolute path */
@@ -38,20 +38,13 @@ export class StoragePaths {
 
   constructor(app: App) {
     const adapter = app.vault.adapter;
-    
+
     if (!(adapter instanceof FileSystemAdapter)) {
-      throw new Error(
-        "Notient requires desktop Obsidian with file system access"
-      );
+      throw new Error("Notient requires desktop Obsidian with file system access");
     }
 
     const vaultRoot = adapter.getBasePath();
-    const pluginRoot = path.join(
-      vaultRoot,
-      ".obsidian",
-      "plugins",
-      PLUGIN_ID
-    );
+    const pluginRoot = path.join(vaultRoot, ".obsidian", "plugins", PLUGIN_ID);
 
     this.config = {
       vaultRoot,
@@ -70,11 +63,7 @@ export class StoragePaths {
    * Ensure all required directories exist
    */
   async ensureDirectories(): Promise<void> {
-    const dirs = [
-      this.config.cache,
-      this.config.locks,
-      this.config.logs,
-    ];
+    const dirs = [this.config.cache, this.config.locks, this.config.logs];
 
     for (const dir of dirs) {
       await fs.promises.mkdir(dir, { recursive: true });

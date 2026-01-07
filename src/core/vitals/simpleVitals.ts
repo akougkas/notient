@@ -5,19 +5,19 @@
  * Works with the simplified IndexManager.
  */
 
-import type { Kernel } from "../kernel";
-import type { EventBus } from "../events/eventBus";
-import type { VectorStore } from "../../services/vectorStore";
 import type { IndexManager } from "../../services/indexManager";
-import { ParaDetector } from "../para/detector";
+import type { VectorStore } from "../../services/vectorStore";
 import type {
-  VaultVitalsData,
-  VaultCounts,
   ConnectivityMetrics,
-  ProcessingStatus,
-  ParaDistribution,
   HealthScore,
+  ParaDistribution,
+  ProcessingStatus,
+  VaultCounts,
+  VaultVitalsData,
 } from "../../types/vitals";
+import type { EventBus } from "../events/eventBus";
+import type { Kernel } from "../kernel";
+import { ParaDetector } from "../para/detector";
 
 /**
  * Vault vitals calculator (simplified version)
@@ -31,7 +31,7 @@ export class SimpleVaultVitals {
     private kernel: Kernel,
     private eventBus: EventBus,
     _vectorStore: VectorStore,
-    private indexManager: IndexManager
+    private indexManager: IndexManager,
   ) {
     this.paraDetector = new ParaDetector(kernel.settings);
   }
@@ -125,9 +125,7 @@ export class SimpleVaultVitals {
   /**
    * Compute connectivity metrics
    */
-  private async computeConnectivity(
-    files: { path: string }[]
-  ): Promise<ConnectivityMetrics> {
+  private async computeConnectivity(files: { path: string }[]): Promise<ConnectivityMetrics> {
     const incomingLinks: Map<string, number> = new Map();
     const outgoingLinks: Map<string, number> = new Map();
 
@@ -147,10 +145,7 @@ export class SimpleVaultVitals {
       for (const link of links) {
         const linkedPath = this.resolveLink(link, files);
         if (linkedPath) {
-          incomingLinks.set(
-            linkedPath,
-            (incomingLinks.get(linkedPath) ?? 0) + 1
-          );
+          incomingLinks.set(linkedPath, (incomingLinks.get(linkedPath) ?? 0) + 1);
         }
       }
     }
@@ -169,14 +164,12 @@ export class SimpleVaultVitals {
       if (outgoing === 0) noOutgoing++;
     }
 
-    const averageLinksPerNote =
-      files.length > 0 ? totalLinks / files.length : 0;
+    const averageLinksPerNote = files.length > 0 ? totalLinks / files.length : 0;
 
     // Find top connected notes
     const combined: { path: string; count: number }[] = files.map((f) => ({
       path: f.path,
-      count:
-        (incomingLinks.get(f.path) ?? 0) + (outgoingLinks.get(f.path) ?? 0),
+      count: (incomingLinks.get(f.path) ?? 0) + (outgoingLinks.get(f.path) ?? 0),
     }));
 
     combined.sort((a, b) => b.count - a.count);
@@ -208,7 +201,7 @@ export class SimpleVaultVitals {
       const filePath = file.path.toLowerCase();
       const fileBase = filePath.replace(/\.md$/, "");
 
-      if (fileBase === normalized || fileBase.endsWith("/" + normalized)) {
+      if (fileBase === normalized || fileBase.endsWith(`/${normalized}`)) {
         return file.path;
       }
     }
@@ -225,8 +218,7 @@ export class SimpleVaultVitals {
     const lastFullIndex = this.indexManager.getLastFullIndexAt();
 
     const pendingCount = Math.max(0, totalFiles - indexedCount);
-    const freshness =
-      totalFiles > 0 ? Math.round((indexedCount / totalFiles) * 100) : 0;
+    const freshness = totalFiles > 0 ? Math.round((indexedCount / totalFiles) * 100) : 0;
 
     return {
       indexedCount,
@@ -240,9 +232,7 @@ export class SimpleVaultVitals {
   /**
    * Compute PARA distribution
    */
-  private computeParaDistribution(
-    files: { path: string }[]
-  ): ParaDistribution {
+  private computeParaDistribution(files: { path: string }[]): ParaDistribution {
     const distribution: ParaDistribution = {
       inbox: 0,
       projects: 0,
@@ -265,10 +255,7 @@ export class SimpleVaultVitals {
    */
   calculateHealthScore(vitals: VaultVitalsData): HealthScore {
     // Connectivity score (0-100)
-    const avgLinksScore = Math.min(
-      vitals.connectivity.averageLinksPerNote * 20,
-      100
-    );
+    const avgLinksScore = Math.min(vitals.connectivity.averageLinksPerNote * 20, 100);
     const orphanPenalty =
       vitals.counts.totalNotes > 0
         ? (vitals.counts.orphanCount / vitals.counts.totalNotes) * 50
@@ -280,24 +267,17 @@ export class SimpleVaultVitals {
 
     // Organization score
     const unknownRatio =
-      vitals.counts.totalNotes > 0
-        ? vitals.paraDistribution.unknown / vitals.counts.totalNotes
-        : 0;
+      vitals.counts.totalNotes > 0 ? vitals.paraDistribution.unknown / vitals.counts.totalNotes : 0;
     const organization = Math.max((1 - unknownRatio) * 100, 0);
 
     // Processing score
     const errorRatio =
-      vitals.counts.totalNotes > 0
-        ? vitals.processing.errorCount / vitals.counts.totalNotes
-        : 0;
+      vitals.counts.totalNotes > 0 ? vitals.processing.errorCount / vitals.counts.totalNotes : 0;
     const processing = Math.max((1 - errorRatio) * 100, 0);
 
     // Overall score (weighted average)
     const overall = Math.round(
-      connectivity * 0.3 +
-        freshness * 0.25 +
-        organization * 0.25 +
-        processing * 0.2
+      connectivity * 0.3 + freshness * 0.25 + organization * 0.25 + processing * 0.2,
     );
 
     return {

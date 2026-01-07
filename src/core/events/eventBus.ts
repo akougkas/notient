@@ -2,21 +2,16 @@
  * Typed event bus for cross-component communication
  */
 
-import type {
-  EventType,
-  EventPayloads,
-  EventListener,
-  Unsubscribe,
-} from "../../types/events";
+import type { EventListener, EventPayloads, EventType, Unsubscribe } from "../../types/events";
 
 /**
  * Typed pub/sub event bus for Notient
- * 
+ *
  * Provides type-safe event emission and subscription across all components.
  * Events are processed synchronously in order of subscription.
  */
 export class EventBus {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: EventBus needs to store listeners of different types
   private listeners: Map<EventType, Set<EventListener<any>>> = new Map();
   private disposed = false;
 
@@ -32,11 +27,12 @@ export class EventBus {
       return () => {};
     }
 
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
+    let listeners = this.listeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      this.listeners.set(event, listeners);
     }
 
-    const listeners = this.listeners.get(event)!;
     listeners.add(listener);
 
     return () => {

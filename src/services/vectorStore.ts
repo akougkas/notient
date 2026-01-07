@@ -1,6 +1,6 @@
 /**
  * Vector Store Interface
- * 
+ *
  * Abstract interface for vector storage operations.
  * Allows for alternative implementations in the future.
  */
@@ -35,10 +35,7 @@ export interface VectorStore {
   /**
    * Search for similar chunks
    */
-  search(
-    embedding: number[],
-    options: SearchOptions
-  ): Promise<ChunkSearchResult[]>;
+  search(embedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]>;
 
   /**
    * Get all chunks for a note

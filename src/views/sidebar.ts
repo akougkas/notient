@@ -12,30 +12,23 @@
  * - RAG-powered context retrieval
  */
 
-import {
-  ItemView,
-  WorkspaceLeaf,
-  TFile,
-  debounce,
-  Notice,
-  setIcon,
-} from "obsidian";
-import type { Kernel } from "../core/kernel";
-import type { SearchPipeline } from "../core/search/pipeline";
-import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
-import type { SearchResult } from "../types/search";
+import { ItemView, Notice, TFile, type WorkspaceLeaf, debounce, setIcon } from "obsidian";
+import type { AgentTaskQueue } from "../core/agent";
 // New architecture imports (Phase 1.8)
 import type { AgentType } from "../core/agent/types";
-import type { AgentTaskQueue } from "../core/agent";
-import type { LLMProvider, ChatMessage } from "../core/llm";
-import { VIEW_TYPE_SIDEBAR } from "../core/constants";
-import { ParaDetector } from "../core/para/detector";
-import type { IndexProgress } from "../types/indexer";
-import { TaskModal } from "./taskModal";
+import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser";
+import type { WorkflowRun } from "../core/agentic/types";
 // Phase 2: Workflow support (Milestone 2.4)
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
-import type { WorkflowRun } from "../core/agentic/types";
-import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser";
+import { VIEW_TYPE_SIDEBAR } from "../core/constants";
+import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
+import type { Kernel } from "../core/kernel";
+import type { ChatMessage, LLMProvider } from "../core/llm";
+import { ParaDetector } from "../core/para/detector";
+import type { SearchPipeline } from "../core/search/pipeline";
+import type { IndexProgress } from "../types/indexer";
+import type { SearchResult } from "../types/search";
+import { TaskModal } from "./taskModal";
 
 // ============ Types ============
 
@@ -100,7 +93,7 @@ export class NotientSidebarView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private kernel: Kernel
+    private kernel: Kernel,
   ) {
     super(leaf);
     this.paraDetector = new ParaDetector(kernel.settings);
@@ -295,7 +288,7 @@ export class NotientSidebarView extends ItemView {
       if (links[activeFile.path]) {
         const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
         if (sourceFile && sourceFile instanceof TFile) {
-          return sourceFile.basename + "...";
+          return `${sourceFile.basename}...`;
         }
       }
     }
@@ -317,7 +310,9 @@ export class NotientSidebarView extends ItemView {
     enrichBtn.createDiv({ cls: "nv2-quick-action-label", text: "Enrich" });
     enrichBtn.addEventListener("click", () => {
       const noteTitle = this.noteVitals?.title || "this note";
-      this.prefillChatAndSwitch(`Enrich and expand "${noteTitle}" with additional context and insights`);
+      this.prefillChatAndSwitch(
+        `Enrich and expand "${noteTitle}" with additional context and insights`,
+      );
     });
 
     // Link action
@@ -337,7 +332,9 @@ export class NotientSidebarView extends ItemView {
     moveBtn.createDiv({ cls: "nv2-quick-action-label", text: "Move" });
     moveBtn.addEventListener("click", () => {
       const noteTitle = this.noteVitals?.title || "this note";
-      this.prefillChatAndSwitch(`Suggest the best folder/category for "${noteTitle}" based on its content`);
+      this.prefillChatAndSwitch(
+        `Suggest the best folder/category for "${noteTitle}" based on its content`,
+      );
     });
   }
 
@@ -370,7 +367,7 @@ export class NotientSidebarView extends ItemView {
         }
       },
       300,
-      true
+      true,
     );
 
     this.omnibarInputEl.addEventListener("input", (e) => {
@@ -426,12 +423,9 @@ export class NotientSidebarView extends ItemView {
     }
     this.clearSearchResults();
 
-    const scopeText =
-      parsed.scope === "vault"
-        ? "entire vault"
-        : `folder "${parsed.target}"`;
+    const scopeText = parsed.scope === "vault" ? "entire vault" : `folder "${parsed.target}"`;
     new Notice(
-      `Started ${parsed.command} workflow on ${scopeText} (${startResult.noteCount} notes)`
+      `Started ${parsed.command} workflow on ${scopeText} (${startResult.noteCount} notes)`,
     );
 
     // Switch to agents view to show progress
@@ -528,7 +522,9 @@ export class NotientSidebarView extends ItemView {
         action: "Find Connections",
         actionIcon: "eye",
         actionCallback: () => {
-          this.prefillChatAndSwitch(`Find notes that could be linked to "${this.noteVitals?.title}"`);
+          this.prefillChatAndSwitch(
+            `Find notes that could be linked to "${this.noteVitals?.title}"`,
+          );
         },
         priority: "high",
       });
@@ -550,7 +546,9 @@ export class NotientSidebarView extends ItemView {
         actionIcon: "check",
         actionPrimary: true,
         actionCallback: () => {
-          this.prefillChatAndSwitch(`Suggest the best PARA category for "${this.noteVitals?.title}" and help me organize it`);
+          this.prefillChatAndSwitch(
+            `Suggest the best PARA category for "${this.noteVitals?.title}" and help me organize it`,
+          );
         },
         priority: "low",
       });
@@ -626,7 +624,7 @@ export class NotientSidebarView extends ItemView {
   private renderWorkflowCard(
     container: HTMLElement,
     workflow: WorkflowRun,
-    isActive: boolean
+    isActive: boolean,
   ): void {
     const card = container.createDiv({
       cls: `nv2-workflow-card ${isActive ? "nv2-workflow-card--active" : ""}`,
@@ -666,9 +664,10 @@ export class NotientSidebarView extends ItemView {
       const progressContainer = card.createDiv({ cls: "nv2-workflow-progress-container" });
 
       const progressBar = progressContainer.createDiv({ cls: "nv2-workflow-progress" });
-      const percent = workflow.progress.total > 0
-        ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
-        : 0;
+      const percent =
+        workflow.progress.total > 0
+          ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
+          : 0;
       progressBar.createDiv({
         cls: "nv2-workflow-progress-fill",
         attr: { style: `width: ${percent}%` },
@@ -676,8 +675,7 @@ export class NotientSidebarView extends ItemView {
 
       const progressText = progressContainer.createDiv({ cls: "nv2-workflow-progress-text" });
       progressText.setText(
-        `${workflow.progress.completed}/${workflow.progress.total} complete` +
-          (workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : "")
+        `${workflow.progress.completed}/${workflow.progress.total} complete${workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : ""}`,
       );
     }
 
@@ -750,8 +748,12 @@ export class NotientSidebarView extends ItemView {
     setIcon(settingsBtn, "sliders");
     settingsBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting.open();
-      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById("notient");
+      (
+        this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }
+      ).setting.open();
+      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById(
+        "notient",
+      );
     });
   }
 
@@ -769,13 +771,16 @@ export class NotientSidebarView extends ItemView {
 
     // Helper to get status
     const getStatus = (type: AgentType) => {
-      const isRunning = tasks.some(t => t.agent === type && t.status === 'running');
-      if (isRunning) return 'working';
+      const isRunning = tasks.some((t) => t.agent === type && t.status === "running");
+      if (isRunning) return "working";
 
       switch (type) {
-        case 'search': return this.kernel.capabilities.search ? 'ready' : 'offline';
-        case 'context': return this.kernel.capabilities.search ? 'idle' : 'offline'; // Context depends on search
-        case 'chat': return this.kernel.capabilities.reasoning ? 'idle' : 'offline';
+        case "search":
+          return this.kernel.capabilities.search ? "ready" : "offline";
+        case "context":
+          return this.kernel.capabilities.search ? "idle" : "offline"; // Context depends on search
+        case "chat":
+          return this.kernel.capabilities.reasoning ? "idle" : "offline";
       }
     };
 
@@ -788,20 +793,20 @@ export class NotientSidebarView extends ItemView {
       card.createDiv({ cls: "nv2-agent-dashboard-card-name", text: name });
 
       const statusEl = card.createDiv({
-        cls: `nv2-agent-dashboard-card-status`,
-        text: status
+        cls: "nv2-agent-dashboard-card-status",
+        text: status,
       });
 
-      if (status === 'working') {
-        statusEl.addClass('nv2-status-pulsing');
-      } else if (status === 'ready' || status === 'idle') {
-        statusEl.addClass('nv2-agent-dashboard-card-status--active');
+      if (status === "working") {
+        statusEl.addClass("nv2-status-pulsing");
+      } else if (status === "ready" || status === "idle") {
+        statusEl.addClass("nv2-agent-dashboard-card-status--active");
       }
     };
 
-    renderCard('search', 'Semantic Search', 'search');
-    renderCard('context', 'Context Builder', 'braces');
-    renderCard('chat', 'Chat Assistant', 'message-square');
+    renderCard("search", "Semantic Search", "search");
+    renderCard("context", "Context Builder", "braces");
+    renderCard("chat", "Chat Assistant", "message-square");
   }
 
   private renderAgentActivityLog(): void {
@@ -842,9 +847,15 @@ export class NotientSidebarView extends ItemView {
 
       let icon = "bot";
       switch (task.agent) {
-        case 'search': icon = "search"; break;
-        case 'context': icon = "file-search"; break;
-        case 'chat': icon = "message-square"; break;
+        case "search":
+          icon = "search";
+          break;
+        case "context":
+          icon = "file-search";
+          break;
+        case "chat":
+          icon = "message-square";
+          break;
       }
       setIcon(agentIcon, icon);
 
@@ -858,23 +869,27 @@ export class NotientSidebarView extends ItemView {
         const progress = item.createDiv({ cls: "nv2-task-progress" });
         progress.createDiv({
           cls: "nv2-task-progress-bar",
-          attr: { style: `width: ${task.progress || 0}%` }
+          attr: { style: `width: ${task.progress || 0}%` },
         });
       }
 
       item.createDiv({
         cls: `nv2-task-status-foot nv2-status-${task.status}`,
-        text: task.status
+        text: task.status,
       });
     }
   }
 
   private getAgentName(type: AgentType): string {
     switch (type) {
-      case 'search': return "Agent Search";
-      case 'context': return "Context Agent";
-      case 'chat': return "Chat Assistant";
-      default: return "Agent";
+      case "search":
+        return "Agent Search";
+      case "context":
+        return "Context Agent";
+      case "chat":
+        return "Chat Assistant";
+      default:
+        return "Agent";
     }
   }
 
@@ -936,8 +951,12 @@ export class NotientSidebarView extends ItemView {
     settingsBtn.setAttr("aria-label", "Open Notient settings");
     setIcon(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => {
-      (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting.open();
-      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById("notient");
+      (
+        this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }
+      ).setting.open();
+      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById(
+        "notient",
+      );
     });
   }
 
@@ -950,7 +969,10 @@ export class NotientSidebarView extends ItemView {
       let text = `${count} notes`;
 
       if (this.lastSyncTime) {
-        const time = this.lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const time = this.lastSyncTime.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
         text += ` • Synced ${time}`;
       }
 
@@ -977,25 +999,27 @@ export class NotientSidebarView extends ItemView {
 
     // Progress bar
     const bar = this.footerProgressEl.createDiv({ cls: "nv2-progress-bar" });
-    const percent = progress.total > 0
-      ? Math.round((progress.completed / progress.total) * 100)
-      : 0;
+    const percent =
+      progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
     bar.createDiv({
       cls: "nv2-progress-fill",
-      attr: { style: `width: ${percent}%` }
+      attr: { style: `width: ${percent}%` },
     });
 
     // Text status
     let text = "";
     switch (progress.phase) {
-      case "scanning": text = "Scanning vault..."; break;
+      case "scanning":
+        text = "Scanning vault...";
+        break;
       case "chunking":
       case "embedding":
       case "storing":
         text = `Indexing: ${progress.completed}/${progress.total} (${percent}%)`;
         break;
-      default: text = "Processing...";
+      default:
+        text = "Processing...";
     }
 
     this.footerProgressEl.createDiv({ cls: "nv2-progress-text", text });
@@ -1079,12 +1103,7 @@ export class NotientSidebarView extends ItemView {
     this.noteVitals = {
       health: {
         score: healthScore,
-        status:
-          healthScore >= 70
-            ? "healthy"
-            : healthScore >= 40
-              ? "attention"
-              : "unhealthy",
+        status: healthScore >= 70 ? "healthy" : healthScore >= 40 ? "attention" : "unhealthy",
       },
       links: {
         backlinks: backlinks.length,
@@ -1108,21 +1127,19 @@ export class NotientSidebarView extends ItemView {
 
   private calculateHealthScore(
     file: TFile,
-    metadata: ReturnType<typeof this.app.metadataCache.getFileCache>
+    metadata: ReturnType<typeof this.app.metadataCache.getFileCache>,
   ): number {
     let score = 50; // Base score
 
     // Freshness factor (up to +20)
-    const daysSinceModified = Math.floor(
-      (Date.now() - file.stat.mtime) / (1000 * 60 * 60 * 24)
-    );
+    const daysSinceModified = Math.floor((Date.now() - file.stat.mtime) / (1000 * 60 * 60 * 24));
     if (daysSinceModified <= 7) score += 20;
     else if (daysSinceModified <= 30) score += 10;
     else if (daysSinceModified > 90) score -= 10;
 
     // Tags factor (up to +10)
-    const tagCount = (metadata?.tags?.length || 0) +
-      ((metadata?.frontmatter?.tags as string[])?.length || 0);
+    const tagCount =
+      (metadata?.tags?.length || 0) + ((metadata?.frontmatter?.tags as string[])?.length || 0);
     if (tagCount >= 3) score += 10;
     else if (tagCount >= 1) score += 5;
 
@@ -1162,17 +1179,19 @@ export class NotientSidebarView extends ItemView {
         return "Just now";
       }
       return `${hours}h ago`;
-    } else if (days === 1) {
+    }
+    if (days === 1) {
       return "Yesterday";
-    } else if (days < 7) {
+    }
+    if (days < 7) {
       return `${days} days ago`;
-    } else if (days < 30) {
+    }
+    if (days < 30) {
       const weeks = Math.floor(days / 7);
       return `${weeks} week${weeks > 1 ? "s" : ""} ago`;
-    } else {
-      const date = new Date(mtime);
-      return date.toLocaleDateString();
     }
+    const date = new Date(mtime);
+    return date.toLocaleDateString();
   }
 
   // ============ Search ============
@@ -1236,7 +1255,7 @@ export class NotientSidebarView extends ItemView {
         const preview = result.chunks[0].text;
         item.createDiv({
           cls: "nv2-search-result-preview",
-          text: preview.length > 150 ? preview.slice(0, 150) + "..." : preview,
+          text: preview.length > 150 ? `${preview.slice(0, 150)}...` : preview,
         });
       }
 
@@ -1322,9 +1341,9 @@ export class NotientSidebarView extends ItemView {
 
       // Build simple messages (prompt building is now in NotientAgent)
       const messages: ChatMessage[] = [
-        { 
-          role: "system", 
-          content: `You are Notient, an AI assistant for an Obsidian vault.\n\nContext: ${context?.contextSummary || "No context available."}` 
+        {
+          role: "system",
+          content: `You are Notient, an AI assistant for an Obsidian vault.\n\nContext: ${context?.contextSummary || "No context available."}`,
         },
         ...this.chatHistory.slice(-10).map((m) => ({
           role: m.role,
@@ -1336,7 +1355,7 @@ export class NotientSidebarView extends ItemView {
       for await (const chunk of llmProvider.stream(
         messages,
         undefined,
-        this.activeAbortController.signal
+        this.activeAbortController.signal,
       )) {
         if (this.activeAbortController.signal.aborted) break;
         this.streamingContent += chunk;
@@ -1392,10 +1411,10 @@ export class NotientSidebarView extends ItemView {
     const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
     if (taskQueue) {
       taskQueue.enqueue({
-        agent: 'chat',
+        agent: "chat",
         notePath: this.noteVitals?.path || "unknown",
         noteTitle: this.noteVitals?.title || "Unknown Note",
-        chatHistory: [{ role: 'user', content: prompt }]
+        chatHistory: [{ role: "user", content: prompt }],
       });
     }
 
@@ -1409,7 +1428,7 @@ export class NotientSidebarView extends ItemView {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", async () => {
         await this.refreshNoteVitals();
-      })
+      }),
     );
 
     // File modifications
@@ -1418,7 +1437,7 @@ export class NotientSidebarView extends ItemView {
         if (this.noteVitals?.path === file.path) {
           await this.refreshNoteVitals();
         }
-      })
+      }),
     );
 
     // Health changes
@@ -1436,16 +1455,19 @@ export class NotientSidebarView extends ItemView {
 
     // Agent Task Updates
     const unsubTask = this.kernel.eventBus.on("agent:task-update", () => {
-      if (this.currentView === 'agents') {
+      if (this.currentView === "agents") {
         this.render(); // Re-render to show progress/status
       }
     });
     this.register(() => unsubTask());
 
     // Index Progress
-    const unsubProgress = this.kernel.eventBus.on("index:progress", (payload: { progress: IndexProgress }) => {
-      this.updateIndexProgress(payload.progress);
-    });
+    const unsubProgress = this.kernel.eventBus.on(
+      "index:progress",
+      (payload: { progress: IndexProgress }) => {
+        this.updateIndexProgress(payload.progress);
+      },
+    );
     this.register(() => unsubProgress());
 
     // Index Complete
@@ -1473,8 +1495,7 @@ export class NotientSidebarView extends ItemView {
     const unsubWorkflowCompleted = this.kernel.eventBus.on("workflow:completed", (event) => {
       const { workflow } = event;
       new Notice(
-        `Workflow complete: ${workflow.progress.completed}/${workflow.progress.total} notes processed` +
-          (workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : "")
+        `Workflow complete: ${workflow.progress.completed}/${workflow.progress.total} notes processed${workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : ""}`,
       );
       if (this.currentView === "agents") {
         this.render();
@@ -1509,17 +1530,17 @@ export class NotientSidebarView extends ItemView {
     switch (metric) {
       case "health":
         this.prefillChatAndSwitch(
-          `Analyze the health of my note "${this.noteVitals.title}" and suggest improvements`
+          `Analyze the health of my note "${this.noteVitals.title}" and suggest improvements`,
         );
         break;
       case "links":
         this.prefillChatAndSwitch(
-          `Show me all the connections for "${this.noteVitals.title}" and suggest new links`
+          `Show me all the connections for "${this.noteVitals.title}" and suggest new links`,
         );
         break;
       case "freshness":
         this.prefillChatAndSwitch(
-          `What has changed in "${this.noteVitals.title}" and what should I review?`
+          `What has changed in "${this.noteVitals.title}" and what should I review?`,
         );
         break;
     }

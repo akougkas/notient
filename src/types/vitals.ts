@@ -6,16 +6,16 @@
 export interface VaultVitalsData {
   /** When vitals were computed */
   computedAt: number;
-  
+
   /** Basic counts */
   counts: VaultCounts;
-  
+
   /** Connectivity metrics */
   connectivity: ConnectivityMetrics;
-  
+
   /** Processing status */
   processing: ProcessingStatus;
-  
+
   /** PARA distribution */
   paraDistribution: ParaDistribution;
 }

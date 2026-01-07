@@ -259,12 +259,7 @@ export interface WorkflowSpec {
 /**
  * Status of a workflow run
  */
-export type WorkflowStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "cancelled"
-  | "failed";
+export type WorkflowStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
 
 /**
  * State of a running or completed workflow
@@ -348,7 +343,4 @@ export const SUPPORTED_ACTION_TYPES: ProposedActionType[] = [
 ];
 
 /** Action types reserved for Phase 3 */
-export const RESERVED_ACTION_TYPES: ProposedActionType[] = [
-  "merge_notes",
-  "trash_note",
-];
+export const RESERVED_ACTION_TYPES: ProposedActionType[] = ["merge_notes", "trash_note"];

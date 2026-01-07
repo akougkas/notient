@@ -12,29 +12,29 @@
  */
 
 import { Plugin } from "obsidian";
-import { Kernel, KernelContext } from "./core/kernel";
-import { HealthMonitor } from "./services/healthMonitor";
-import { OllamaService } from "./services/ollama";
-import { LMStudioService } from "./services/lmstudio";
-import { SimpleVectorStore } from "./services/simpleVectorStore";
-import { IndexManager } from "./services/indexManager";
-import { SimpleIndexer } from "./core/indexer/simpleIndexer";
-import { SearchPipeline } from "./core/search/pipeline";
-import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
-import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
-// New architecture (Phase 1.8)
-import { LMStudioProvider } from "./core/llm";
-import { NotientAgent, AgentTaskQueue } from "./core/agent";
+import { AgentTaskQueue, NotientAgent } from "./core/agent";
+import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
 // Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
-import { ActionHistory, ActionApplier, TrustLevelManager, WorkflowRunner } from "./core/agentic";
-import { NotientSidebarView } from "./views/sidebar";
-import { NotientDashboardView } from "./views/dashboard";
-import { SetupWizardModal } from "./views/setupWizard";
-import { IndexOptionsModal } from "./views/indexOptionsModal";
+import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
+import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
+import { SimpleIndexer } from "./core/indexer/simpleIndexer";
+import { Kernel, type KernelContext } from "./core/kernel";
+// New architecture (Phase 1.8)
+import { LMStudioProvider } from "./core/llm";
+import { SearchPipeline } from "./core/search/pipeline";
+import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
+import { HealthMonitor } from "./services/healthMonitor";
+import { IndexManager } from "./services/indexManager";
+import { LMStudioService } from "./services/lmstudio";
+import { OllamaService } from "./services/ollama";
+import { SimpleVectorStore } from "./services/simpleVectorStore";
 import { NotientSettingTab, loadSettings, saveSettings } from "./settings";
-import { VIEW_TYPE_SIDEBAR, VIEW_TYPE_DASHBOARD } from "./core/constants";
 import type { NotientSettings } from "./types/settings";
+import { NotientDashboardView } from "./views/dashboard";
+import { IndexOptionsModal } from "./views/indexOptionsModal";
+import { SetupWizardModal } from "./views/setupWizard";
+import { NotientSidebarView } from "./views/sidebar";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;
@@ -71,10 +71,7 @@ export default class NotientPlugin extends Plugin {
     try {
       // Load settings first
       this.settings = await loadSettings(this);
-      console.log(
-        "[Notient] Settings loaded, setupComplete =",
-        this.settings.setupComplete
-      );
+      console.log("[Notient] Settings loaded, setupComplete =", this.settings.setupComplete);
 
       // Create kernel (lightweight)
       const context: KernelContext = {
@@ -103,7 +100,7 @@ export default class NotientPlugin extends Plugin {
           this.settings = newSettings;
           await saveSettings(this, newSettings);
           this.kernel.eventBus.emit("settings:changed", { changedFields: [] });
-        }
+        },
       );
       this.addSettingTab(this.settingTab);
 
@@ -199,12 +196,7 @@ export default class NotientPlugin extends Plugin {
       const ollamaEnabled = this.settings.ollama.enabled;
       const lmstudioEnabled = this.settings.lmstudio.enabled;
 
-      if (
-        !hasEmbeddingModel ||
-        !hasReasoningModel ||
-        !ollamaEnabled ||
-        !lmstudioEnabled
-      ) {
+      if (!hasEmbeddingModel || !hasReasoningModel || !ollamaEnabled || !lmstudioEnabled) {
         console.error("[Notient] Missing required configuration:", {
           hasEmbeddingModel,
           hasReasoningModel,
@@ -212,7 +204,7 @@ export default class NotientPlugin extends Plugin {
           lmstudioEnabled,
         });
         this.kernel.obsidian.notice(
-          "Notient requires BOTH Ollama and LM Studio. Run setup wizard."
+          "Notient requires BOTH Ollama and LM Studio. Run setup wizard.",
         );
         return;
       }
@@ -236,7 +228,10 @@ export default class NotientPlugin extends Plugin {
           this.kernel.registerService("lmstudio", this.lmStudioService);
           console.log("[Notient] LM Studio service initialized");
         } catch (lmError) {
-          console.warn("[Notient] LM Studio initialization failed (chat/reranking disabled):", lmError);
+          console.warn(
+            "[Notient] LM Studio initialization failed (chat/reranking disabled):",
+            lmError,
+          );
           // Continue without LM Studio - search still works with vector similarity
         }
 
@@ -255,7 +250,7 @@ export default class NotientPlugin extends Plugin {
           this.kernel,
           eventBus,
           this.indexManager,
-          this.ollamaService
+          this.ollamaService,
         );
         await this.indexer.initialize();
         this.kernel.registerService("indexer", this.indexer);
@@ -265,7 +260,7 @@ export default class NotientPlugin extends Plugin {
           this.kernel,
           eventBus,
           this.ollamaService,
-          this.vectorStore
+          this.vectorStore,
         );
         await this.searchPipeline.initialize();
         this.kernel.registerService("search", this.searchPipeline);
@@ -279,14 +274,14 @@ export default class NotientPlugin extends Plugin {
           this.kernel,
           eventBus,
           this.vectorStore,
-          this.indexManager
+          this.indexManager,
         );
         this.kernel.registerService("vitals", this.vaultVitals);
 
         // New architecture (Phase 1.8): LLM Provider + Notient Agent
         this.llmProvider = new LMStudioProvider(
           this.settings.lmstudio.host,
-          this.settings.lmstudio.reasoningModel
+          this.settings.lmstudio.reasoningModel,
         );
         try {
           await this.llmProvider.initialize();
@@ -298,11 +293,14 @@ export default class NotientPlugin extends Plugin {
         }
 
         // Create NotientAgent (uses LLM provider, search, context)
+        if (!this.llmProvider) {
+          throw new Error("LLM Provider is required for NotientAgent");
+        }
         this.notientAgent = new NotientAgent(
-          this.llmProvider!,
+          this.llmProvider,
           this.searchPipeline,
           this.contextBuilder,
-          this.kernel.obsidian
+          this.kernel.obsidian,
         );
         this.kernel.registerService("agent", this.notientAgent);
 
@@ -311,13 +309,10 @@ export default class NotientPlugin extends Plugin {
         this.kernel.registerService("taskQueue", this.agentTaskQueue);
 
         // Phase 2: Initialize ConversationStore
-        this.conversationStore = new ConversationStore(
-          this.kernel.storagePaths,
-          {
-            maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
-            maxAgeDays: this.settings.chatRetention.maxAgeDays,
-          }
-        );
+        this.conversationStore = new ConversationStore(this.kernel.storagePaths, {
+          maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
+          maxAgeDays: this.settings.chatRetention.maxAgeDays,
+        });
         await this.conversationStore.load();
         this.conversationStore.prune(); // Enforce retention limits on startup
         this.kernel.registerService("conversationStore", this.conversationStore);
@@ -334,9 +329,7 @@ export default class NotientPlugin extends Plugin {
 
         // Phase 2: Initialize Agentic services
         // TrustLevelManager (evaluates action gating)
-        this.trustLevelManager = new TrustLevelManager(
-          this.settings.agent.trustPolicy
-        );
+        this.trustLevelManager = new TrustLevelManager(this.settings.agent.trustPolicy);
         this.kernel.registerService("trustLevelManager", this.trustLevelManager);
 
         // ActionHistory (stores applied actions with undo data)
@@ -347,7 +340,8 @@ export default class NotientPlugin extends Plugin {
           {
             maxEntries: this.settings.agent.history.maxEntries,
             maxAgeDays: this.settings.agent.history.maxAgeDays,
-          }
+            maxSizeBytes: 10 * 1024 * 1024, // 10 MB limit
+          },
         );
         await this.actionHistory.load();
         this.actionHistory.prune(); // Enforce retention limits on startup
@@ -358,7 +352,7 @@ export default class NotientPlugin extends Plugin {
           this.kernel,
           this.kernel.obsidian,
           this.actionHistory,
-          this.trustLevelManager
+          this.trustLevelManager,
         );
         this.kernel.registerService("actionApplier", this.actionApplier);
 
@@ -371,7 +365,7 @@ export default class NotientPlugin extends Plugin {
           {
             maxNotesPerWorkflow: this.settings.agent.bulk.maxNotesPerWorkflow,
             delayBetweenTasksMs: this.settings.agent.bulk.delayBetweenTasksMs,
-          }
+          },
         );
         this.kernel.registerService("workflowRunner", this.workflowRunner);
 
@@ -388,7 +382,7 @@ export default class NotientPlugin extends Plugin {
         console.log("[Notient] Index action decision:", {
           action: indexAction,
           setupComplete: this.settings.setupComplete,
-          hasIndex: await this.indexManager.getIndexedCount() > 0
+          hasIndex: (await this.indexManager.getIndexedCount()) > 0,
         });
 
         if (indexAction !== "none") {
@@ -412,7 +406,7 @@ export default class NotientPlugin extends Plugin {
         console.error("[Notient] Failed to initialize AI services:", error);
         this.kernel.setServicesInitializing(false);
         this.kernel.obsidian.notice(
-          "Failed to connect to AI services. Check that Ollama and LM Studio are running."
+          "Failed to connect to AI services. Check that Ollama and LM Studio are running.",
         );
       }
     } catch (error) {
@@ -455,9 +449,7 @@ export default class NotientPlugin extends Plugin {
       callback: () => {
         this.activateSidebar();
         setTimeout(() => {
-          const input = document.querySelector(
-            ".notient-search-input"
-          ) as HTMLInputElement;
+          const input = document.querySelector(".notient-search-input") as HTMLInputElement;
           input?.focus();
         }, 100);
       },
@@ -469,15 +461,13 @@ export default class NotientPlugin extends Plugin {
       name: "Sync vault index (incremental)",
       callback: async () => {
         if (!this.indexer || !this.kernel.capabilities.indexing) {
-          this.kernel.obsidian.notice(
-            "Cannot index - check service connections"
-          );
+          this.kernel.obsidian.notice("Cannot index - check service connections");
           return;
         }
         this.kernel.obsidian.notice("Starting vault sync...");
         const result = await this.indexer.syncVault();
         this.kernel.obsidian.notice(
-          `Sync complete: ${result.added} added, ${result.updated} updated`
+          `Sync complete: ${result.added} added, ${result.updated} updated`,
         );
       },
     });
@@ -488,15 +478,13 @@ export default class NotientPlugin extends Plugin {
       name: "Full reindex (rebuild everything)",
       callback: async () => {
         if (!this.indexer || !this.kernel.capabilities.indexing) {
-          this.kernel.obsidian.notice(
-            "Cannot index - check service connections"
-          );
+          this.kernel.obsidian.notice("Cannot index - check service connections");
           return;
         }
         this.kernel.obsidian.notice("Starting full reindex...");
         const result = await this.indexer.fullReindex();
         this.kernel.obsidian.notice(
-          `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`
+          `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
         );
       },
     });
@@ -541,11 +529,13 @@ export default class NotientPlugin extends Plugin {
             ollama: health.ollama.status,
             lmstudio: health.lmstudio.status,
           },
-          vectorStore: store ? {
-            ready: store.isReady(),
-            chunkCount: await store.countChunks(),
-            noteCount: await store.countNotes(),
-          } : null,
+          vectorStore: store
+            ? {
+                ready: store.isReady(),
+                chunkCount: await store.countChunks(),
+                noteCount: await store.countNotes(),
+              }
+            : null,
           searchPipeline: search ? "available" : "null",
         };
 
@@ -556,7 +546,7 @@ export default class NotientPlugin extends Plugin {
           ? `${await store.countChunks()} chunks / ${await store.countNotes()} notes`
           : "not ready";
         this.kernel.obsidian.notice(
-          `Notient: Ollama=${health.ollama.status}, Search=${search ? "ready" : "no"}, Store=${storeInfo}`
+          `Notient: Ollama=${health.ollama.status}, Search=${search ? "ready" : "no"}, Store=${storeInfo}`,
         );
       },
     });
@@ -602,11 +592,7 @@ export default class NotientPlugin extends Plugin {
     const wasSetupComplete = this.settings.setupComplete;
     const previousModel = this.settings.ollama.embeddingModel;
 
-    const wizard = new SetupWizardModal(
-      this.app,
-      this.healthMonitor,
-      this.settings
-    );
+    const wizard = new SetupWizardModal(this.app, this.healthMonitor, this.settings);
 
     const result = await wizard.run();
 
@@ -630,7 +616,9 @@ export default class NotientPlugin extends Plugin {
       // Store the index action from wizard
       this._pendingIndexAction = result.indexAction;
 
-      console.log(`[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}, indexAction=${result.indexAction}`);
+      console.log(
+        `[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}, indexAction=${result.indexAction}`,
+      );
 
       if (!wasSetupComplete) {
         this.kernel.obsidian.notice("Notient configured! Initializing...");
@@ -700,9 +688,7 @@ export default class NotientPlugin extends Plugin {
       await this.initializeServicesAsync();
 
       if (this.servicesInitialized) {
-        this.kernel.obsidian.notice(
-          "Notient ready! Starting background indexing..."
-        );
+        this.kernel.obsidian.notice("Notient ready! Starting background indexing...");
       }
     } catch (error) {
       console.error("[Notient] Reinitialization failed:", error);
@@ -784,7 +770,10 @@ export default class NotientPlugin extends Plugin {
     }
 
     if (!this.kernel.capabilities.indexing) {
-      console.log("[Notient] Cannot start indexing - missing capabilities:", this.kernel.capabilities);
+      console.log(
+        "[Notient] Cannot start indexing - missing capabilities:",
+        this.kernel.capabilities,
+      );
       const health = this.kernel.serviceHealth;
       if (health.ollama.status !== "healthy") {
         this.kernel.obsidian.notice("Cannot index: Ollama not connected");
@@ -801,7 +790,7 @@ export default class NotientPlugin extends Plugin {
         const result = await this.indexer.fullReindex();
         this.kernel.obsidian.notice(
           `Indexing complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
-          5000
+          5000,
         );
       } else {
         // Sync - incremental indexing
@@ -810,7 +799,7 @@ export default class NotientPlugin extends Plugin {
         if (result.added > 0 || result.updated > 0) {
           this.kernel.obsidian.notice(
             `Sync complete: ${result.added} new, ${result.updated} updated`,
-            3000
+            3000,
           );
         } else {
           this.kernel.obsidian.notice("Index up to date", 2000);

@@ -1,20 +1,20 @@
 /**
  * Obsidian Facade - Thin wrapper for Obsidian APIs
- * 
+ *
  * Allows core logic to be tested without Obsidian runtime.
  * All vault operations go through this facade.
  */
 
 import {
-  App,
+  type App,
+  type CachedMetadata,
+  type EventRef,
+  type MetadataCache,
+  Notice,
   TFile,
   TFolder,
-  CachedMetadata,
-  Notice,
-  Vault,
-  MetadataCache,
-  Workspace,
-  EventRef,
+  type Vault,
+  type Workspace,
   normalizePath,
 } from "obsidian";
 
@@ -176,7 +176,7 @@ export class ObsidianFacade {
     }
 
     const tags: string[] = [];
-    
+
     // Get frontmatter tags
     if (cache.frontmatter?.tags) {
       const fmTags = cache.frontmatter.tags;
@@ -186,7 +186,7 @@ export class ObsidianFacade {
         tags.push(fmTags);
       }
     }
-    
+
     // Get inline tags
     if (cache.tags) {
       tags.push(...cache.tags.map((t) => t.tag.replace(/^#/, "")));
@@ -200,10 +200,11 @@ export class ObsidianFacade {
       links.push(...cache.embeds.map((e) => e.link));
     }
 
-    const headings = cache.headings?.map((h) => ({
-      level: h.level,
-      heading: h.heading,
-    })) ?? [];
+    const headings =
+      cache.headings?.map((h) => ({
+        level: h.level,
+        heading: h.heading,
+      })) ?? [];
 
     return {
       frontmatter: cache.frontmatter ? { ...cache.frontmatter } : null,
@@ -221,10 +222,7 @@ export class ObsidianFacade {
    * @param path - Normalized path to the file
    * @param fn - Transform function applied to file content
    */
-  async processFile(
-    path: string,
-    fn: (data: string) => string
-  ): Promise<WriteResult> {
+  async processFile(path: string, fn: (data: string) => string): Promise<WriteResult> {
     try {
       const normalizedPath = normalizePath(path);
       const file = this.getFileByPath(normalizedPath);
@@ -298,10 +296,7 @@ export class ObsidianFacade {
    * @param path - Path to the file
    * @param useSystemTrash - If true, uses system trash; otherwise vault trash
    */
-  async trashFile(
-    path: string,
-    useSystemTrash = false
-  ): Promise<WriteResult> {
+  async trashFile(path: string, useSystemTrash = false): Promise<WriteResult> {
     try {
       const normalizedPath = normalizePath(path);
       const file = this.getFileByPath(normalizedPath);
@@ -326,7 +321,7 @@ export class ObsidianFacade {
    */
   async processFrontMatter(
     path: string,
-    updater: (frontmatter: Record<string, unknown>) => void
+    updater: (frontmatter: Record<string, unknown>) => void,
   ): Promise<WriteResult> {
     try {
       const normalizedPath = normalizePath(path);
@@ -416,9 +411,7 @@ export class ObsidianFacade {
   /**
    * Subscribe to file rename events
    */
-  onFileRename(
-    callback: (file: TFile, oldPath: string) => void
-  ): EventRef {
+  onFileRename(callback: (file: TFile, oldPath: string) => void): EventRef {
     return this.app.vault.on("rename", (file, oldPath) => {
       if (file instanceof TFile && file.extension === "md") {
         callback(file, oldPath);

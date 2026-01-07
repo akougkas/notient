@@ -11,12 +11,7 @@
  */
 
 import type { LLMProvider } from "../provider";
-import type {
-  ChatMessage,
-  CompletionOptions,
-  RankedResult,
-  RerankCandidate,
-} from "../types";
+import type { ChatMessage, CompletionOptions, RankedResult, RerankCandidate } from "../types";
 
 const RERANK_SYSTEM_PROMPT = `You rank search results by relevance. Output ONLY valid JSON.
 
@@ -39,7 +34,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   constructor(
     protected baseUrl: string,
     protected model: string,
-    public readonly name: string = "openai-compatible"
+    public readonly name: string = "openai-compatible",
   ) {}
 
   get isReady(): boolean {
@@ -73,10 +68,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return data.data.map((m: { id: string }) => m.id);
   }
 
-  async complete(
-    messages: ChatMessage[],
-    options?: CompletionOptions
-  ): Promise<string> {
+  async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string> {
     if (this.disposed || !this.initialized) {
       throw new Error(`${this.name} not initialized`);
     }
@@ -105,7 +97,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (!content) {
       console.warn(
         `[${this.name}] Empty content in response. Full response:`,
-        JSON.stringify(data).slice(0, 500)
+        JSON.stringify(data).slice(0, 500),
       );
     }
 
@@ -115,7 +107,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async *stream(
     messages: ChatMessage[],
     options?: CompletionOptions,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): AsyncIterable<string> {
     if (this.disposed || !this.initialized) {
       throw new Error(`${this.name} not initialized`);
@@ -189,10 +181,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   /**
    * Rerank search results using LLM
    */
-  async rerank(
-    query: string,
-    candidates: RerankCandidate[]
-  ): Promise<RankedResult[]> {
+  async rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]> {
     if (this.disposed || !this.initialized) {
       // Return original order if service unavailable
       return this.fallbackToVectorScores(candidates);
@@ -210,7 +199,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           { role: "system", content: RERANK_SYSTEM_PROMPT },
           { role: "user", content: prompt },
         ],
-        { temperature: 0.3, maxTokens: 500 }
+        { temperature: 0.3, maxTokens: 500 },
       );
 
       if (!response || response.trim().length < 10) {
@@ -259,10 +248,7 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
   /**
    * Parse LLM reranking response
    */
-  protected parseRerankResponse(
-    response: string,
-    candidates: RerankCandidate[]
-  ): RankedResult[] {
+  protected parseRerankResponse(response: string, candidates: RerankCandidate[]): RankedResult[] {
     try {
       let jsonStr = response.trim();
 
@@ -305,13 +291,13 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
         const idx =
           typeof ranking.index === "number"
             ? ranking.index
-            : parseInt(String(ranking.index), 10);
+            : Number.parseInt(String(ranking.index), 10);
         const score =
           typeof ranking.score === "number"
             ? ranking.score
-            : parseInt(String(ranking.score), 10);
+            : Number.parseInt(String(ranking.score), 10);
 
-        if (isNaN(idx) || isNaN(score)) continue;
+        if (Number.isNaN(idx) || Number.isNaN(score)) continue;
 
         const candidate = candidates[idx];
         if (candidate && score >= 30) {

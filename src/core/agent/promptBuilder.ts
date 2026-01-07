@@ -7,8 +7,8 @@
  * Moved from lmstudio.ts to centralize agent logic.
  */
 
-import type { NoteContext, PromptParams, TaskType } from "./types";
 import { getTaskInstructions } from "./taskInference";
+import type { NoteContext, PromptParams, TaskType } from "./types";
 
 /**
  * Action plan prompt template (JSON-only mode)
@@ -95,7 +95,7 @@ ${params.contextSummary}`);
 
     // Add related notes from RAG (exclude current note to avoid duplication)
     const filteredNotes = params.relatedNotes.filter(
-      (n) => !params.currentNote || n.path !== params.currentNote.path
+      (n) => !params.currentNote || n.path !== params.currentNote.path,
     );
 
     if (filteredNotes.length > 0) {
@@ -111,7 +111,7 @@ ${params.contextSummary}`);
   private formatCurrentNote(note: NoteContext): string {
     const truncatedContent =
       note.content.length > 3000
-        ? note.content.slice(0, 3000) + "\n\n[... content truncated ...]"
+        ? `${note.content.slice(0, 3000)}\n\n[... content truncated ...]`
         : note.content;
 
     return `
@@ -126,13 +126,11 @@ ${truncatedContent}
   /**
    * Format related notes for the prompt
    */
-  private formatRelatedNotes(
-    notes: Array<{ title: string; path: string; text: string }>
-  ): string {
+  private formatRelatedNotes(notes: Array<{ title: string; path: string; text: string }>): string {
     const noteSummaries = notes
       .slice(0, 5)
       .map((n) => {
-        const preview = n.text.length > 400 ? n.text.slice(0, 400) + "..." : n.text;
+        const preview = n.text.length > 400 ? `${n.text.slice(0, 400)}...` : n.text;
         return `### [[${n.title}]] (${n.path})
 ${preview}`;
       })
@@ -164,7 +162,7 @@ ${noteSummaries}`;
    */
   formatNoteForPrompt(note: NoteContext): string {
     return `### [[${note.title}]] (${note.path})
-${note.content.length > 400 ? note.content.slice(0, 400) + "..." : note.content}`;
+${note.content.length > 400 ? `${note.content.slice(0, 400)}...` : note.content}`;
   }
 
   /**
@@ -181,7 +179,7 @@ ${note.content.length > 400 ? note.content.slice(0, 400) + "..." : note.content}
     if (params.currentNote?.content) {
       const truncatedContent =
         params.currentNote.content.length > 2000
-          ? params.currentNote.content.slice(0, 2000) + "\n[... truncated ...]"
+          ? `${params.currentNote.content.slice(0, 2000)}\n[... truncated ...]`
           : params.currentNote.content;
 
       parts.push(`

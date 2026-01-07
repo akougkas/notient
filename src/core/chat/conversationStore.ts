@@ -5,7 +5,7 @@
  * Handles note renames by updating conversation keys.
  */
 
-import * as fs from "fs";
+import * as fs from "node:fs";
 import type { StoragePaths } from "../../services/storagePaths";
 import type { ExtendedChatMessage } from "./types";
 
@@ -74,7 +74,7 @@ export class ConversationStore {
     private retention: ChatRetentionConfig = {
       maxMessagesPerNote: DEFAULT_MAX_MESSAGES_PER_NOTE,
       maxAgeDays: DEFAULT_MAX_AGE_DAYS,
-    }
+    },
   ) {}
 
   /**
@@ -97,7 +97,9 @@ export class ConversationStore {
 
       // Handle schema migrations here if needed
       if (storage.version !== SCHEMA_VERSION) {
-        console.warn(`[ConversationStore] Schema migration needed from v${storage.version} to v${SCHEMA_VERSION}`);
+        console.warn(
+          `[ConversationStore] Schema migration needed from v${storage.version} to v${SCHEMA_VERSION}`,
+        );
         // Future: add migration logic
       }
 

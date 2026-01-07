@@ -34,8 +34,8 @@ Rules:
  * This service is kept for SearchPipeline compatibility.
  */
 export class LMStudioService {
-  private baseUrl: string = "";
-  private model: string = "";
+  private baseUrl = "";
+  private model = "";
   private disposed = false;
   private initialized = false;
 
@@ -106,7 +106,7 @@ export class LMStudioService {
     if (!content) {
       console.warn(
         "[LMStudioService] Empty content in response. Full response:",
-        JSON.stringify(data).slice(0, 500)
+        JSON.stringify(data).slice(0, 500),
       );
     }
 
@@ -118,10 +118,7 @@ export class LMStudioService {
    * @param messages - Chat messages to send
    * @param signal - Optional AbortSignal for cancellation
    */
-  async *chatStream(
-    messages: ChatMessage[],
-    signal?: AbortSignal
-  ): AsyncIterable<string> {
+  async *chatStream(messages: ChatMessage[], signal?: AbortSignal): AsyncIterable<string> {
     if (this.disposed || !this.initialized) {
       throw new Error("LMStudioService not initialized");
     }
@@ -190,10 +187,7 @@ export class LMStudioService {
   /**
    * Rerank search results using LLM
    */
-  async rerank(
-    query: string,
-    candidates: RerankCandidate[]
-  ): Promise<RankedResult[]> {
+  async rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]> {
     if (this.disposed || !this.initialized) {
       return this.fallbackToVectorScores(candidates);
     }
@@ -247,10 +241,7 @@ ${candidateList}
 Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"reason":"best match"}]}`;
   }
 
-  private parseRerankResponse(
-    response: string,
-    candidates: RerankCandidate[]
-  ): RankedResult[] {
+  private parseRerankResponse(response: string, candidates: RerankCandidate[]): RankedResult[] {
     try {
       if (!response || response.trim().length < 10) {
         console.warn("[LMStudioService] Response too short:", response);
@@ -294,13 +285,13 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
         const idx =
           typeof ranking.index === "number"
             ? ranking.index
-            : parseInt(String(ranking.index), 10);
+            : Number.parseInt(String(ranking.index), 10);
         const score =
           typeof ranking.score === "number"
             ? ranking.score
-            : parseInt(String(ranking.score), 10);
+            : Number.parseInt(String(ranking.score), 10);
 
-        if (isNaN(idx) || isNaN(score)) continue;
+        if (Number.isNaN(idx) || Number.isNaN(score)) continue;
 
         const candidate = candidates[idx];
         if (candidate && score >= 30) {

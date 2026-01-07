@@ -2,12 +2,12 @@
  * Typed event definitions for the EventBus
  */
 
-import type { ServiceHealth } from "./services";
-import type { IndexProgress } from "./indexer";
-import type { VaultVitalsData } from "./vitals";
-import type { SearchResult } from "./search";
+import type { AppliedActionRecord, WorkflowRun } from "../core/agentic/types";
 import type { AgentTask } from "./agentTask";
-import type { WorkflowRun, AppliedActionRecord } from "../core/agentic/types";
+import type { IndexProgress } from "./indexer";
+import type { SearchResult } from "./search";
+import type { ServiceHealth } from "./services";
+import type { VaultVitalsData } from "./vitals";
 
 /** All event types supported by the EventBus */
 export type EventType =
@@ -65,9 +65,7 @@ export interface HealthChangedEvent {
   health: ServiceHealth;
 }
 
-export interface ServicesInitializedEvent {
-  // Empty - just signals that all services are ready
-}
+export type ServicesInitializedEvent = Record<string, never>;
 
 export interface IndexProgressEvent {
   progress: IndexProgress;
@@ -146,9 +144,7 @@ export interface ActionUndoneEvent {
 }
 
 /** Event listener function type */
-export type EventListener<T extends EventType> = (
-  payload: EventPayloads[T]
-) => void;
+export type EventListener<T extends EventType> = (payload: EventPayloads[T]) => void;
 
 /** Unsubscribe function returned by subscribe */
 export type Unsubscribe = () => void;
