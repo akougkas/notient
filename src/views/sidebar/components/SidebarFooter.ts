@@ -67,7 +67,7 @@ export class SidebarFooter {
 
     // Determine source
     const activePath = this.settings.indexing.activeIndexPath;
-    const isSystem = !!(activePath && activePath.includes("system/index"));
+    const isSystem = !!activePath?.includes("system/index");
 
     // Index icon + model name
     const indexInfo = this.footerStatsEl.createDiv({ cls: "nv2-footer-index-info" });
@@ -75,7 +75,7 @@ export class SidebarFooter {
     setIcon(iconEl, "database");
 
     // Model name (truncated if long)
-    const modelDisplay = model.length > 20 ? model.slice(0, 18) + "…" : model;
+    const modelDisplay = model.length > 20 ? `${model.slice(0, 18)}…` : model;
     indexInfo.createSpan({ text: modelDisplay, cls: "nv2-footer-index-model" });
 
     // Dimension badge
@@ -109,7 +109,13 @@ export class SidebarFooter {
     this.buildTooltip(model, dimension, count, isSystem, activePath);
   }
 
-  private buildTooltip(model: string, dimension: number, count: number, isSystem: boolean, activePath: string | null): void {
+  private buildTooltip(
+    model: string,
+    dimension: number,
+    count: number,
+    isSystem: boolean,
+    activePath: string | null,
+  ): void {
     if (!this.footerStatsEl) return;
 
     const tooltipLines = [
@@ -172,7 +178,8 @@ export class SidebarFooter {
 
     // Progress bar
     const bar = this.footerProgressEl.createDiv({ cls: "nv2-progress-bar" });
-    const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
+    const percent =
+      progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
     bar.createDiv({
       cls: "nv2-progress-fill",

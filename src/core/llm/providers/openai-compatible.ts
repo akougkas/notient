@@ -85,7 +85,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
         const errorText = await response.text().catch(() => "unknown");
         // Check for "no models loaded" error specifically
         if (errorText.includes("No models loaded")) {
-          throw new Error(`${this.name}: Model '${this.model}' exists but is not loaded. Please load the model in LM Studio.`);
+          throw new Error(
+            `${this.name}: Model '${this.model}' exists but is not loaded. Please load the model in LM Studio.`,
+          );
         }
         throw new Error(`${this.name} model not available: ${response.status}`);
       }
@@ -126,11 +128,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     // Validate response structure
-    if (!data || typeof data !== "object" || !("data" in data) || !Array.isArray((data as { data: unknown }).data)) {
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !("data" in data) ||
+      !Array.isArray((data as { data: unknown }).data)
+    ) {
       throw new Error(`${this.name}: Malformed response from /v1/models - expected {data: [...]}`);
     }
 
-    return ((data as { data: Array<{ id?: string }> }).data)
+    return (data as { data: Array<{ id?: string }> }).data
       .filter((m): m is { id: string } => typeof m?.id === "string")
       .map((m) => m.id);
   }

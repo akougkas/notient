@@ -108,15 +108,18 @@ export class IndexManagementPanel {
     statusRow.createEl("span", { text: `${currentDim}d`, cls: "notient-settings-index-dim" });
     statusRow.createEl("span", {
       text: isUserProvided ? "External (Read-Only)" : "Plugin Managed",
-      cls: `notient-settings-badge ${isUserProvided ? "external" : "plugin"}`
+      cls: `notient-settings-badge ${isUserProvided ? "external" : "plugin"}`,
     });
 
-    statusBox.createEl("div", { text: `📊 ${noteCount} notes indexed`, cls: "notient-settings-info-dim" });
+    statusBox.createEl("div", {
+      text: `📊 ${noteCount} notes indexed`,
+      cls: "notient-settings-info-dim",
+    });
 
     if (isUserProvided) {
       statusBox.createEl("div", {
         text: "ℹ️ External indices are read-only. Sync, Trim, and Rebuild operations are disabled.",
-        cls: "notient-settings-index-readonly"
+        cls: "notient-settings-index-readonly",
       });
     }
   }
@@ -126,7 +129,10 @@ export class IndexManagementPanel {
     const gridContainer = section.createDiv({ cls: "notient-settings-index-grid" });
     gridContainer.createEl("h4", { text: "Available Indices" });
 
-    const loadingEl = gridContainer.createDiv({ text: "Loading indices...", cls: "notient-settings-info-dim" });
+    const loadingEl = gridContainer.createDiv({
+      text: "Loading indices...",
+      cls: "notient-settings-info-dim",
+    });
 
     this.loadAndRenderIndices(gridContainer, loadingEl, indexManager, currentDim);
   }
@@ -141,7 +147,7 @@ export class IndexManagementPanel {
       // Use cached indices if available and not expired
       const now = Date.now();
       let indices: IndexInfo[];
-      if (this.cachedIndices && (now - this.cacheTimestamp) < IndexManagementPanel.CACHE_TTL_MS) {
+      if (this.cachedIndices && now - this.cacheTimestamp < IndexManagementPanel.CACHE_TTL_MS) {
         indices = this.cachedIndices;
       } else {
         indices = await indexManager.discoverIndices();
@@ -186,15 +192,26 @@ export class IndexManagementPanel {
     const isExternal = idx.source === "vault";
 
     const createdStr = idx.createdAt
-      ? idx.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      ? idx.createdAt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
       : "Unknown";
     const updatedStr = idx.updatedAt
-      ? idx.updatedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      ? idx.updatedAt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
       : "Never";
 
     const rowContainer = gridContainer.createDiv({ cls: "notient-settings-index-row-container" });
     const row = rowContainer.createDiv({
-      cls: `notient-settings-index-row ${isActive ? "active" : ""} ${this.expandedPath === idx.path ? "expanded" : ""}`
+      cls: `notient-settings-index-row ${isActive ? "active" : ""} ${this.expandedPath === idx.path ? "expanded" : ""}`,
     });
 
     // Left side: model info
@@ -209,11 +226,18 @@ export class IndexManagementPanel {
     left.createEl("span", { text: `${idx.docCount} chunks`, cls: "notient-settings-index-count" });
 
     if (!isCompatible && !isActive) {
-      left.createEl("span", { text: "⚠️", attr: { title: `Dimension mismatch (needs ${currentDim}d)` } });
+      left.createEl("span", {
+        text: "⚠️",
+        attr: { title: `Dimension mismatch (needs ${currentDim}d)` },
+      });
     }
 
     if (idx.isLegacy) {
-      left.createEl("span", { text: "🔄", cls: "notient-settings-index-legacy", attr: { title: "Legacy format - will be migrated on next save" } });
+      left.createEl("span", {
+        text: "🔄",
+        cls: "notient-settings-index-legacy",
+        attr: { title: "Legacy format - will be migrated on next save" },
+      });
     }
 
     // Right side: badges
@@ -221,18 +245,21 @@ export class IndexManagementPanel {
 
     right.createEl("span", {
       text: isExternal ? "External" : "Plugin",
-      cls: `notient-settings-badge ${isExternal ? "external" : "plugin"}`
+      cls: `notient-settings-badge ${isExternal ? "external" : "plugin"}`,
     });
 
     if (isActive) {
       right.createEl("span", { text: "✓ Active", cls: "notient-settings-index-active-badge" });
     }
 
-    right.createEl("span", { text: this.expandedPath === idx.path ? "▲" : "▼", cls: "notient-settings-index-expand" });
+    right.createEl("span", {
+      text: this.expandedPath === idx.path ? "▲" : "▼",
+      cls: "notient-settings-index-expand",
+    });
 
     // Details panel
     const details = rowContainer.createDiv({
-      cls: `notient-settings-index-details ${this.expandedPath === idx.path ? "" : "hidden"}`
+      cls: `notient-settings-index-details ${this.expandedPath === idx.path ? "" : "hidden"}`,
     });
 
     // Click to expand/collapse
@@ -243,7 +270,17 @@ export class IndexManagementPanel {
 
     // Render details if expanded
     if (this.expandedPath === idx.path) {
-      this.renderIndexDetails(details, idx, isActive, isCompatible, isExternal, currentDim, createdStr, updatedStr, indexManager);
+      this.renderIndexDetails(
+        details,
+        idx,
+        isActive,
+        isCompatible,
+        isExternal,
+        currentDim,
+        createdStr,
+        updatedStr,
+        indexManager,
+      );
     }
   }
 
@@ -294,7 +331,7 @@ export class IndexManagementPanel {
     } else {
       details.createEl("div", {
         text: "🔒 External indices are read-only (search only)",
-        cls: "notient-settings-index-readonly"
+        cls: "notient-settings-index-readonly",
       });
     }
 
@@ -306,7 +343,9 @@ export class IndexManagementPanel {
     const syncBtn = btnRow.createEl("button", { text: "▶️ Sync" });
     syncBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      (this.app as App & { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById("notient:reindex-vault");
+      (
+        this.app as App & { commands: { executeCommandById: (id: string) => void } }
+      ).commands.executeCommandById("notient:reindex-vault");
     });
 
     const trimBtn = btnRow.createEl("button", { text: "🧹 Trim" });
@@ -323,11 +362,17 @@ export class IndexManagementPanel {
     const rebuildBtn = btnRow.createEl("button", { cls: "mod-warning", text: "🔄 Rebuild" });
     rebuildBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      (this.app as App & { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById("notient:full-reindex");
+      (
+        this.app as App & { commands: { executeCommandById: (id: string) => void } }
+      ).commands.executeCommandById("notient:full-reindex");
     });
   }
 
-  private renderInactiveIndexActions(btnRow: HTMLElement, idx: IndexInfo, indexManager: IndexManagerInterface): void {
+  private renderInactiveIndexActions(
+    btnRow: HTMLElement,
+    idx: IndexInfo,
+    indexManager: IndexManagerInterface,
+  ): void {
     const delBtn = btnRow.createEl("button", { cls: "mod-warning", text: "🗑️ Delete" });
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -342,7 +387,12 @@ export class IndexManagementPanel {
     });
   }
 
-  private renderExportButton(btnRow: HTMLElement, idx: IndexInfo, isActive: boolean, indexManager: IndexManagerInterface): void {
+  private renderExportButton(
+    btnRow: HTMLElement,
+    idx: IndexInfo,
+    isActive: boolean,
+    indexManager: IndexManagerInterface,
+  ): void {
     const exportBtn = btnRow.createEl("button", { text: "📤 Export" });
     exportBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -383,7 +433,9 @@ export class IndexManagementPanel {
             try {
               const text = await file.text();
               const result = await indexManager.importIndex(text);
-              this.kernel.obsidian.notice(`Imported ${result.noteCount} notes for ${result.modelKey}`);
+              this.kernel.obsidian.notice(
+                `Imported ${result.noteCount} notes for ${result.modelKey}`,
+              );
               this.clearCache();
               this.onRefresh();
             } catch (error) {

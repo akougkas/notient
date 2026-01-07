@@ -434,7 +434,7 @@ export class WorkflowRunner {
   dismissReviewItem(actionId: string): boolean {
     // Check current workflow
     if (this.currentWorkflow) {
-      const idx = this.currentWorkflow.reviewQueue.findIndex(a => a.id === actionId);
+      const idx = this.currentWorkflow.reviewQueue.findIndex((a) => a.id === actionId);
       if (idx !== -1) {
         this.currentWorkflow.reviewQueue.splice(idx, 1);
         this.eventBus.emit("workflow:reviewDismissed", {
@@ -447,7 +447,7 @@ export class WorkflowRunner {
 
     // Check queued workflows
     for (const workflow of this.workflowQueue) {
-      const idx = workflow.reviewQueue.findIndex(a => a.id === actionId);
+      const idx = workflow.reviewQueue.findIndex((a) => a.id === actionId);
       if (idx !== -1) {
         workflow.reviewQueue.splice(idx, 1);
         this.eventBus.emit("workflow:reviewDismissed", {

@@ -13,6 +13,7 @@ import type { EventBus } from "../events/eventBus";
 import { generateNoteId } from "../indexer/simpleChunker";
 import type { Kernel } from "../kernel";
 import type { LLMProvider } from "../llm/provider";
+import type { SearchPipeline } from "../search/pipeline";
 import { IntelligenceDb } from "./intelligenceDb";
 import type {
   IntelligenceEntity,
@@ -23,7 +24,6 @@ import type {
   IntelligenceSummaryStructured,
   IntelligenceTriageAction,
 } from "./types";
-import type { SearchPipeline } from "../search/pipeline";
 
 const NOTE_TEXT_MAX_CHARS = 12_000;
 
@@ -42,7 +42,7 @@ export class NoteIntelligenceService {
   constructor(
     private kernel: Kernel,
     private eventBus: EventBus,
-  ) { }
+  ) {}
 
   async initialize(): Promise<void> {
     if (this.disposed) return;
@@ -205,11 +205,7 @@ export class NoteIntelligenceService {
     };
 
     // Pass 2: Extract & Suggest (Entities + Tags)
-    const extraction = await this.extractEntitiesAndTags(
-      title,
-      content,
-      metadata?.tags ?? [],
-    );
+    const extraction = await this.extractEntitiesAndTags(title, content, metadata?.tags ?? []);
     record.entities = extraction.entities;
     record.suggestedTags = extraction.suggestedTags;
 
@@ -333,9 +329,9 @@ ${cleaned}`;
         typeof parsed.summaryShort === "string" ? parsed.summaryShort.trim() : "";
       const keyPoints = Array.isArray(parsed.keyPoints)
         ? parsed.keyPoints
-          .filter((p): p is string => typeof p === "string")
-          .map((s) => s.trim())
-          .filter(Boolean)
+            .filter((p): p is string => typeof p === "string")
+            .map((s) => s.trim())
+            .filter(Boolean)
         : [];
       const purpose = typeof parsed.purpose === "string" ? parsed.purpose.trim() : null;
 
@@ -473,19 +469,25 @@ ${cleaned.slice(0, 6000)}`; // limit context window
         suggestedTags?: any[];
       };
 
-      const entities: IntelligenceEntity[] = (data.entities || []).map((e: any) => ({
-        name: String(e.name || "").trim(),
-        type: ["person", "project", "tool", "concept", "org", "other"].includes(e.type)
-          ? e.type
-          : "other",
-        context: e.context ? String(e.context).slice(0, 100) : undefined,
-      })).filter(e => e.name.length > 0);
+      const entities: IntelligenceEntity[] = (data.entities || [])
+        .map((e: any) => ({
+          name: String(e.name || "").trim(),
+          type: ["person", "project", "tool", "concept", "org", "other"].includes(e.type)
+            ? e.type
+            : "other",
+          context: e.context ? String(e.context).slice(0, 100) : undefined,
+        }))
+        .filter((e) => e.name.length > 0);
 
-      const suggestedTags: IntelligenceSuggestedTag[] = (data.suggestedTags || []).map((t: any) => ({
-        tag: String(t.tag || "").replace(/^#/, "").trim(),
-        confidence: Number(t.confidence || 0.5),
-        reason: String(t.reason || ""),
-      })).filter(t => t.tag.length > 0 && t.confidence > 0.4);
+      const suggestedTags: IntelligenceSuggestedTag[] = (data.suggestedTags || [])
+        .map((t: any) => ({
+          tag: String(t.tag || "")
+            .replace(/^#/, "")
+            .trim(),
+          confidence: Number(t.confidence || 0.5),
+          reason: String(t.reason || ""),
+        }))
+        .filter((t) => t.tag.length > 0 && t.confidence > 0.4);
 
       return { entities, suggestedTags };
     } catch {
@@ -505,20 +507,20 @@ ${cleaned.slice(0, 6000)}`; // limit context window
     const related = await search.findRelated(notePath, { topK: 5, minScore: 0.45 });
 
     // Filter down to high value
-    return related.map(r => ({
+    return related.map((r) => ({
       path: r.path,
       title: r.title,
       reason: r.sharedTags.length
         ? `Shared tags: ${r.sharedTags.join(", ")}`
         : `Semantic similarity ${(r.score * 100).toFixed(0)}%`,
-      confidence: r.score
+      confidence: r.score,
     }));
   }
 
   private async inboxTriage(
     notePath: string,
     content: string,
-    tags: string[]
+    tags: string[],
   ): Promise<IntelligenceTriageAction | null> {
     // Only run for "Inbox" or root folders (simple heuristic for now)
     const isInbox = notePath.includes("Inbox") || !notePath.includes("/");
@@ -547,7 +549,7 @@ ${content.slice(0, 2000)}`;
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        { temperature: 0.1, maxTokens: 300 }
+        { temperature: 0.1, maxTokens: 300 },
       );
 
       const jsonStr = response.match(/\{[\s\S]*\}/)?.[0] || extractJsonBlock(response);

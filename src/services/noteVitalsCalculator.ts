@@ -40,10 +40,7 @@ export class NoteVitalsCalculator {
   /**
    * Calculate complete vitals for a given file
    */
-  async calculate(
-    file: TFile,
-    indexManager: IndexManagerLike | null,
-  ): Promise<NoteVitals> {
+  async calculate(file: TFile, indexManager: IndexManagerLike | null): Promise<NoteVitals> {
     const metadata = this.app.metadataCache.getFileCache(file);
     const healthScore = this.calculateHealthScore(file, metadata);
 
@@ -89,10 +86,7 @@ export class NoteVitalsCalculator {
   /**
    * Calculate health score based on various factors
    */
-  calculateHealthScore(
-    file: TFile,
-    metadata: CachedMetadata | null,
-  ): number {
+  calculateHealthScore(file: TFile, metadata: CachedMetadata | null): number {
     let score = 50; // Base score
 
     // Freshness factor (up to +20)

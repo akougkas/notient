@@ -111,8 +111,13 @@ export default class NotientPlugin extends Plugin {
 
       // Listen for LLM settings changes to reinitialize services
       this.kernel.eventBus.on("settings:changed", async ({ changedFields }) => {
-        const llmFields = ["ollama.host", "ollama.embeddingModel", "lmstudio.host", "lmstudio.reasoningModel"];
-        const needsReinit = changedFields.some(f => llmFields.includes(f));
+        const llmFields = [
+          "ollama.host",
+          "ollama.embeddingModel",
+          "lmstudio.host",
+          "lmstudio.reasoningModel",
+        ];
+        const needsReinit = changedFields.some((f) => llmFields.includes(f));
         if (needsReinit && this.servicesInitialized) {
           console.log("[Notient] LLM settings changed, reinitializing services...");
           await this.reinitializeServices();
@@ -559,10 +564,10 @@ export default class NotientPlugin extends Plugin {
           },
           vectorStore: store
             ? {
-              ready: store.isReady(),
-              chunkCount: await store.countChunks(),
-              noteCount: await store.countNotes(),
-            }
+                ready: store.isReady(),
+                chunkCount: await store.countChunks(),
+                noteCount: await store.countNotes(),
+              }
             : null,
           searchPipeline: search ? "available" : "null",
         };
@@ -622,14 +627,9 @@ export default class NotientPlugin extends Plugin {
     const wasSetupComplete = this.settings.setupComplete;
     const previousModel = this.settings.ollama.embeddingModel;
 
-    const wizard = new SetupWizardModal(
-      this.app,
-      this.healthMonitor,
-      this.settings,
-      {
-        discoverIndices: async () => IndexManager.discoverIndices(this.kernel.storagePaths),
-      }
-    );
+    const wizard = new SetupWizardModal(this.app, this.healthMonitor, this.settings, {
+      discoverIndices: async () => IndexManager.discoverIndices(this.kernel.storagePaths),
+    });
 
     const result = await wizard.run();
 

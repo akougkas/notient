@@ -31,14 +31,18 @@ import type { Kernel } from "../core/kernel";
 import type { LLMProvider } from "../core/llm";
 import { ParaDetector } from "../core/para/detector";
 import type { SearchPipeline } from "../core/search/pipeline";
-import { InsightGenerator, type Insight } from "../services/insightGenerator";
-import { NoteVitalsCalculator, type NoteVitals, type IndexManagerLike } from "../services/noteVitalsCalculator";
+import { type Insight, InsightGenerator } from "../services/insightGenerator";
+import {
+  type IndexManagerLike,
+  type NoteVitals,
+  NoteVitalsCalculator,
+} from "../services/noteVitalsCalculator";
 import type { IndexProgress } from "../types/indexer";
 import type { SearchResult } from "../types/search";
+import { InsightStream } from "./sidebar/components/InsightStream";
 import { NoteCard } from "./sidebar/components/NoteCard";
 import { QuickActions, createNoteQuickActions } from "./sidebar/components/QuickActions";
-import { InsightStream } from "./sidebar/components/InsightStream";
-import { SidebarFooter, type IndexManagerStats } from "./sidebar/components/SidebarFooter";
+import { type IndexManagerStats, SidebarFooter } from "./sidebar/components/SidebarFooter";
 import { TaskModal } from "./taskModal";
 
 // ============ Types ============
@@ -246,7 +250,7 @@ export class NotientSidebarView extends ItemView {
     const summaryText = summaryContent.createDiv({ cls: "nv2-insight-text" });
     summaryText.setText(
       record?.summaryShort ??
-      "No AI summary yet. It will generate in the background after indexing, or you can generate it now.",
+        "No AI summary yet. It will generate in the background after indexing, or you can generate it now.",
     );
 
     if (!record?.summaryShort) {
@@ -305,7 +309,7 @@ export class NotientSidebarView extends ItemView {
     for (const entity of entities.slice(0, 8)) {
       const pill = pillContainer.createDiv({
         cls: "nv2-entity-pill",
-        title: `${entity.type}: ${entity.context || "No context"}`
+        title: `${entity.type}: ${entity.context || "No context"}`,
       });
       pill.setText(entity.name);
     }
@@ -314,7 +318,7 @@ export class NotientSidebarView extends ItemView {
   private renderSuggestions(
     container: HTMLElement,
     tags: IntelligenceSuggestedTag[],
-    links: IntelligenceSuggestedLink[]
+    links: IntelligenceSuggestedLink[],
   ): void {
     const item = container.createDiv({ cls: "nv2-insight" });
     item.createDiv({ cls: "nv2-insight-dot" });
@@ -328,15 +332,22 @@ export class NotientSidebarView extends ItemView {
         const btn = row.createEl("button", {
           cls: "nv2-suggestion-btn",
           text: `+ #${t.tag}`,
-          title: `${Math.round(t.confidence * 100)}% - ${t.reason}`
+          title: `${Math.round(t.confidence * 100)}% - ${t.reason}`,
         });
-        btn.addEventListener("click", () => this.applySuggestion(btn, {
-          type: "frontmatter_add_tags",
-          payload: { tags: [t.tag] },
-          risk: "low",
-          title: `Add tag #${t.tag}`,
-          reason: t.reason,
-        }, `Added #${t.tag}`, "add tag"));
+        btn.addEventListener("click", () =>
+          this.applySuggestion(
+            btn,
+            {
+              type: "frontmatter_add_tags",
+              payload: { tags: [t.tag] },
+              risk: "low",
+              title: `Add tag #${t.tag}`,
+              reason: t.reason,
+            },
+            `Added #${t.tag}`,
+            "add tag",
+          ),
+        );
       }
     }
 
@@ -347,13 +358,21 @@ export class NotientSidebarView extends ItemView {
         const row = list.createDiv({ cls: "nv2-suggestion-link-row" });
         row.createSpan({ text: `Link to [[${l.title}]]?`, title: l.reason });
         const applyBtn = row.createEl("button", { cls: "nv2-suggestion-icon-btn", text: "Link" });
-        applyBtn.addEventListener("click", () => this.applySuggestion(applyBtn, {
-          type: "append_related_links",
-          payload: { links: [l.title] },
-          risk: "medium",
-          title: `Link to [[${l.title}]]`,
-          reason: l.reason,
-        }, `Linked to [[${l.title}]]`, "link", row));
+        applyBtn.addEventListener("click", () =>
+          this.applySuggestion(
+            applyBtn,
+            {
+              type: "append_related_links",
+              payload: { links: [l.title] },
+              risk: "medium",
+              title: `Link to [[${l.title}]]`,
+              reason: l.reason,
+            },
+            `Linked to [[${l.title}]]`,
+            "link",
+            row,
+          ),
+        );
       }
     }
   }
@@ -414,7 +433,10 @@ export class NotientSidebarView extends ItemView {
     }
 
     const actions = box.createDiv({ cls: "nv2-triage-actions" });
-    const applyBtn = actions.createEl("button", { cls: "nv2-triage-btn nv2-triage-btn--primary", text: "Apply" });
+    const applyBtn = actions.createEl("button", {
+      cls: "nv2-triage-btn nv2-triage-btn--primary",
+      text: "Apply",
+    });
     applyBtn.addEventListener("click", async () => {
       if (!this.noteVitals) return;
       const applier = this.getActionApplier();
@@ -447,7 +469,7 @@ export class NotientSidebarView extends ItemView {
           target: this.noteVitals.path,
           payload: {
             from: this.noteVitals.path,
-            to: toPath
+            to: toPath,
           },
           risk: "medium",
           title: `Move to ${action.target}`,
@@ -497,7 +519,9 @@ export class NotientSidebarView extends ItemView {
   private renderQuickActionsSection(): void {
     if (!this.contentEl_) return;
     const noteTitle = this.noteVitals?.title || "this note";
-    const actions = createNoteQuickActions(noteTitle, (prompt) => this.prefillChatAndSwitch(prompt));
+    const actions = createNoteQuickActions(noteTitle, (prompt) =>
+      this.prefillChatAndSwitch(prompt),
+    );
     const quickActions = new QuickActions(actions);
     quickActions.render(this.contentEl_);
   }
@@ -514,7 +538,7 @@ export class NotientSidebarView extends ItemView {
     const modes = [
       { key: "quick", icon: "⚡", label: "Quick" },
       { key: "balanced", icon: "⚖️", label: "Balanced" },
-      { key: "thorough", icon: "🧠", label: "Thorough" }
+      { key: "thorough", icon: "🧠", label: "Thorough" },
     ];
 
     // Omnibar Wrapper (Glassmorphism Container)
@@ -532,8 +556,8 @@ export class NotientSidebarView extends ItemView {
       cls: "nv2-omnibar-input",
       attr: {
         "aria-label": "Search your notes or enter a command",
-        "autocomplete": "off",
-        "role": "searchbox",
+        autocomplete: "off",
+        role: "searchbox",
       },
     });
 
@@ -541,11 +565,11 @@ export class NotientSidebarView extends ItemView {
     const right = wrapper.createDiv({ cls: "nv2-omnibar-right" });
 
     // Mode Pills
-    modes.forEach(mode => {
+    modes.forEach((mode) => {
       const isActive = currentMode === mode.key;
       const pill = right.createDiv({
         cls: `nv2-mode-pill nv2-mode--${mode.key}`,
-        attr: { "data-mode": mode.key }
+        attr: { "data-mode": mode.key },
       });
       if (!isActive) pill.style.opacity = "0.5";
       if (isActive) pill.style.transform = "scale(1.05)";
@@ -655,7 +679,13 @@ export class NotientSidebarView extends ItemView {
     container.createSpan({ text: "Searching..." });
   }
 
-  private getSearchModeInfo(): { key: string; icon: string; label: string; description: string; placeholder: string } {
+  private getSearchModeInfo(): {
+    key: string;
+    icon: string;
+    label: string;
+    description: string;
+    placeholder: string;
+  } {
     const preset = this.kernel.settings.search.preset;
     switch (preset) {
       case "quick":
@@ -684,8 +714,6 @@ export class NotientSidebarView extends ItemView {
         };
     }
   }
-
-
 
   /**
    * Handle slash command execution
@@ -909,7 +937,7 @@ export class NotientSidebarView extends ItemView {
     const left = statusBar.createDiv({ cls: "nv2-status-bar-left" });
     // Check if any agents are running by querying the task queue
     const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
-    const hasRunningTasks = taskQueue?.getAll().some(t => t.status === "running") ?? false;
+    const hasRunningTasks = taskQueue?.getAll().some((t) => t.status === "running") ?? false;
     left.createDiv({
       cls: `nv2-status-dot ${hasRunningTasks ? "nv2-status-dot--running" : "nv2-status-dot--idle"}`,
     });
@@ -1095,14 +1123,14 @@ export class NotientSidebarView extends ItemView {
 
     const indexManager = this.kernel.getService<IndexManagerStats>("indexManager");
 
-    this.sidebarFooter = new SidebarFooter(
-      this.kernel.settings,
-      this.kernel.serviceHealth,
-      () => {
-        (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting.open();
-        (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById("notient");
-      },
-    );
+    this.sidebarFooter = new SidebarFooter(this.kernel.settings, this.kernel.serviceHealth, () => {
+      (
+        this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }
+      ).setting.open();
+      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById(
+        "notient",
+      );
+    });
     this.sidebarFooter.render(this.containerEl_, indexManager);
   }
 
@@ -1183,7 +1211,7 @@ export class NotientSidebarView extends ItemView {
   private performQuickSearch(query: string): void {
     const files = this.app.vault.getMarkdownFiles();
     const queryLower = query.toLowerCase();
-    const words = queryLower.split(/\s+/).filter(w => w.length > 0);
+    const words = queryLower.split(/\s+/).filter((w) => w.length > 0);
 
     // Score files by fuzzy match on path and name
     const scored: Array<{ file: TFile; score: number }> = [];
@@ -1221,7 +1249,11 @@ export class NotientSidebarView extends ItemView {
     this.renderSearchResults(this._lastSearchResults, 0, true);
   }
 
-  private renderSearchResults(results: SearchResult[], durationMs: number, isQuickMode = false): void {
+  private renderSearchResults(
+    results: SearchResult[],
+    durationMs: number,
+    isQuickMode = false,
+  ): void {
     if (!this.searchResultsEl) return;
     this.searchResultsEl.empty();
     this.searchResultsEl.removeClass("nv2-hidden");
@@ -1361,7 +1393,9 @@ export class NotientSidebarView extends ItemView {
   }
 
   private navigateResults(dir: number): void {
-    const listLength = this.isShowingHints ? this.currentHints.length : this._lastSearchResults.length;
+    const listLength = this.isShowingHints
+      ? this.currentHints.length
+      : this._lastSearchResults.length;
     if (listLength === 0) return;
 
     this.selectedResultIndex += dir;
@@ -1460,7 +1494,7 @@ export class NotientSidebarView extends ItemView {
 
     // Complete the input with the hint
     // e.g. if typing "/en", and select "/enrich", replace input
-    this.omnibarInputEl.value = hint.command + " ";
+    this.omnibarInputEl.value = `${hint.command} `;
     this.omnibarInputEl.focus();
     this.clearSearchResults(); // Hide hints
     this.isShowingHints = false;
@@ -1484,19 +1518,27 @@ export class NotientSidebarView extends ItemView {
       const allAgents = [
         { command: "@chat", desc: "General chat assistant", example: "@chat how are you?" },
         { command: "@search", desc: "Search web & vault", example: "@search 'latest AI news'" },
-        { command: "@writer", desc: "Content drafting agent", example: "@writer 'blog post about...'" },
-        { command: "@coder", desc: "Code generation agent", example: "@coder 'python script to...'" }
+        {
+          command: "@writer",
+          desc: "Content drafting agent",
+          example: "@writer 'blog post about...'",
+        },
+        {
+          command: "@coder",
+          desc: "Code generation agent",
+          example: "@coder 'python script to...'",
+        },
       ];
-      hints = allAgents.filter(a => a.command.startsWith(query));
+      hints = allAgents.filter((a) => a.command.startsWith(query));
     } else {
       panel.createDiv({ cls: "nv2-hint-header", text: "Workflow Commands" });
       const allCmds = [
         { command: "/enrich", desc: "Add metadata & tags", example: "/enrich properties" },
         { command: "/summarize", desc: "Summarize current note", example: "/summarize" },
         { command: "/link", desc: "Find related connections", example: "/link" },
-        { command: "/classify", desc: "Auto-classify PARA/Tags", example: "/classify" }
+        { command: "/classify", desc: "Auto-classify PARA/Tags", example: "/classify" },
       ];
-      hints = allCmds.filter(c => c.command.startsWith(query));
+      hints = allCmds.filter((c) => c.command.startsWith(query));
     }
 
     this.currentHints = hints; // Store for selection
@@ -1508,7 +1550,7 @@ export class NotientSidebarView extends ItemView {
 
     hints.forEach((h, i) => {
       const item = panel.createDiv({
-        cls: `nv2-hint-item ${i === this.selectedResultIndex ? "nv2-hint-item--selected" : ""}`
+        cls: `nv2-hint-item ${i === this.selectedResultIndex ? "nv2-hint-item--selected" : ""}`,
       });
       item.createDiv({ cls: "nv2-hint-key", text: h.command });
       item.createDiv({ cls: "nv2-hint-desc", text: h.desc });
@@ -1517,7 +1559,9 @@ export class NotientSidebarView extends ItemView {
       item.addEventListener("mouseenter", () => {
         this.selectedResultIndex = i;
         // Update selection visually
-        panel.querySelectorAll(".nv2-hint-item").forEach(el => el.removeClass("nv2-hint-item--selected"));
+        panel
+          .querySelectorAll(".nv2-hint-item")
+          .forEach((el) => el.removeClass("nv2-hint-item--selected"));
         item.addClass("nv2-hint-item--selected");
       });
 
@@ -1543,8 +1587,6 @@ export class NotientSidebarView extends ItemView {
   private isAgentCommand(input: string): boolean {
     return input.trim().startsWith("@");
   }
-
-
 
   /**
    * Handle @agent command - sends task to agent queue

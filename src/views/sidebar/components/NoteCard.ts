@@ -27,7 +27,13 @@ export class NoteCard {
 
     // Links section
     const links = card.createDiv({ cls: "nv2-note-card-links" });
-    this.renderLinkRow(links, "link", this.noteVitals.links.backlinks, "backlink", this.backlinkPreview);
+    this.renderLinkRow(
+      links,
+      "link",
+      this.noteVitals.links.backlinks,
+      "backlink",
+      this.backlinkPreview,
+    );
     this.renderLinkRow(links, "arrow-right", this.noteVitals.links.outlinks, "outlink");
 
     return card;

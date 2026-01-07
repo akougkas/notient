@@ -73,9 +73,11 @@ export class VaultLock {
           if ((err as NodeJS.ErrnoException).code === "EEXIST") {
             // Lock exists - retry with exponential backoff
             if (attempt < LOCK_MAX_RETRIES) {
-              const backoffMs = LOCK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-              console.log(`[VaultLock] Lock held by another process, retrying in ${backoffMs}ms (attempt ${attempt}/${LOCK_MAX_RETRIES})`);
-              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              const backoffMs = LOCK_RETRY_BASE_MS * 2 ** (attempt - 1);
+              console.log(
+                `[VaultLock] Lock held by another process, retrying in ${backoffMs}ms (attempt ${attempt}/${LOCK_MAX_RETRIES})`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
               continue;
             }
             console.warn("[VaultLock] Lock held by another process after all retries");
@@ -89,8 +91,8 @@ export class VaultLock {
           return false;
         }
         // Retry on error too
-        const backoffMs = LOCK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        const backoffMs = LOCK_RETRY_BASE_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
     return false;
@@ -182,7 +184,9 @@ export class VaultLock {
           // Verify we still own the lock before refreshing
           const currentMeta = await this.readLockMetadata();
           if (!currentMeta || currentMeta.pid !== process.pid) {
-            console.error("[VaultLock] Lost lock ownership during refresh - another process took it");
+            console.error(
+              "[VaultLock] Lost lock ownership during refresh - another process took it",
+            );
             this.hasLock = false;
             this.stopRefresh();
             return;

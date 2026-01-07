@@ -54,7 +54,10 @@ export function createNoteQuickActions(
       icon: "sparkles",
       label: "Enrich",
       primary: true,
-      onClick: () => prefillChatAndSwitch(`Enrich and expand "${noteTitle}" with additional context and insights`),
+      onClick: () =>
+        prefillChatAndSwitch(
+          `Enrich and expand "${noteTitle}" with additional context and insights`,
+        ),
     },
     {
       icon: "link",
@@ -66,7 +69,10 @@ export function createNoteQuickActions(
       icon: "arrow-right-circle",
       label: "Move",
       primary: false,
-      onClick: () => prefillChatAndSwitch(`Suggest the best folder/category for "${noteTitle}" based on its content`),
+      onClick: () =>
+        prefillChatAndSwitch(
+          `Suggest the best folder/category for "${noteTitle}" based on its content`,
+        ),
     },
   ];
 }

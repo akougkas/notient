@@ -17,6 +17,39 @@
       }
     }
   },
+  "overrides": [
+    {
+      "include": [
+        "src/core/agent/agentLoop.ts",
+        "src/core/agentic/actionApplier.ts",
+        "src/core/indexer/simpleChunker.ts",
+        "src/core/indexer/tieredSemanticChunker.ts",
+        "src/core/intelligence/noteIntelligence.ts",
+        "src/core/llm/providers/openai-compatible.ts",
+        "src/core/search/pipeline.ts",
+        "src/core/vitals/simpleVitals.ts",
+        "src/services/indexManager.ts",
+        "src/services/lmstudio.ts",
+        "src/services/simpleVectorStore.ts",
+        "src/services/vaultLock.ts",
+        "src/views/sidebar.ts",
+        "src/views/sidebar/**/*.ts",
+        "src/views/setupWizard.ts",
+        "src/views/taskModal.ts",
+        "src/views/dashboard.ts",
+        "src/settings.ts",
+        "src/main.ts"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off",
+            "noForEach": "off"
+          }
+        }
+      }
+    }
+  ],
   "formatter": {
     "enabled": true,
     "indentStyle": "space",

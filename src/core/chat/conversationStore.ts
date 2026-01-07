@@ -6,8 +6,8 @@
  */
 
 import * as fs from "node:fs";
-import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { StoragePaths } from "../../services/storagePaths";
+import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { ExtendedChatMessage } from "./types";
 
 /** Schema version for migration support */

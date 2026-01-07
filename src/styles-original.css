@@ -69,8 +69,10 @@
 }
 
 .theme-dark .notient-grid-bg {
-  background-image: linear-gradient(rgba(255, 255, 255, var(--notient-grid-opacity)) 1px,
-      transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, var(--notient-grid-opacity)) 1px, transparent 1px);
+  background-image: linear-gradient(
+      rgba(255, 255, 255, var(--notient-grid-opacity)) 1px,
+      transparent 1px
+    ), linear-gradient(90deg, rgba(255, 255, 255, var(--notient-grid-opacity)) 1px, transparent 1px);
 }
 
 /* ==========================================================================
@@ -1593,7 +1595,7 @@
   margin-top: var(--notient-space-2);
 }
 
-.notient-index-actions>label {
+.notient-index-actions > label {
   display: block;
   font-size: var(--notient-font-xs);
   color: var(--text-muted);
@@ -2429,7 +2431,6 @@
 
 /* Reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
-
   *,
   *::before,
   *::after {
@@ -2626,7 +2627,6 @@
 }
 
 @keyframes nv2-pulse {
-
   0%,
   100% {
     opacity: 1;
@@ -3741,7 +3741,6 @@
 }
 
 @keyframes nv2-status-pulse {
-
   0%,
   100% {
     opacity: 1;
@@ -4018,7 +4017,6 @@
 /* ============ V2 Reduced Motion ============ */
 
 @media (prefers-reduced-motion: reduce) {
-
   .nv2-status-dot,
   .nv2-typing-cursor,
   .nv2-loading-spinner,

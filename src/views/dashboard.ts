@@ -8,8 +8,8 @@
  */
 
 import { ItemView, Notice, type WorkspaceLeaf, setIcon } from "obsidian";
-import type { ActionHistory } from "../core/agentic/actionHistory";
 import type { ActionApplier } from "../core/agentic/actionApplier";
+import type { ActionHistory } from "../core/agentic/actionHistory";
 import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
 import { VIEW_TYPE_DASHBOARD } from "../core/constants";
@@ -734,7 +734,6 @@ export class NotientDashboardView extends ItemView {
       });
     }
 
-
     if (allReviewItems.length > 20) {
       section.createDiv({
         cls: "notient-message",
@@ -875,7 +874,9 @@ export class NotientDashboardView extends ItemView {
     coverageRow.createSpan({ text: `${coverage}%` });
 
     // Check if index is read-only (external/user-provided)
-    const indexManagerForReadOnly = this.kernel.getService<{ isReadOnly(): boolean }>("indexManager");
+    const indexManagerForReadOnly = this.kernel.getService<{ isReadOnly(): boolean }>(
+      "indexManager",
+    );
     const isReadOnly = indexManagerForReadOnly?.isReadOnly() ?? false;
 
     // Actions - only show if not read-only
@@ -886,7 +887,8 @@ export class NotientDashboardView extends ItemView {
       // Show read-only notice instead of buttons
       const readOnlyNotice = actionsSection.createDiv({ cls: "notient-readonly-notice" });
       readOnlyNotice.createSpan({ text: "🔒 External index is read-only (search only)" });
-      readOnlyNotice.style.cssText = "padding: 12px; background: var(--background-modifier-border); border-radius: 6px; color: var(--text-muted); font-size: 13px;";
+      readOnlyNotice.style.cssText =
+        "padding: 12px; background: var(--background-modifier-border); border-radius: 6px; color: var(--text-muted); font-size: 13px;";
     } else {
       // Show sync/rebuild buttons for plugin-managed indices
       const syncBtn = actionsSection.createEl("button", {

@@ -70,7 +70,7 @@ function parseIndexFilename(filename: string): ParsedIndexName | null {
       timestamp: newMatch[1],
       vaultHash: newMatch[2],
       modelKey: newMatch[3],
-      dimension: parseInt(newMatch[4], 10),
+      dimension: Number.parseInt(newMatch[4], 10),
       isLegacy: false,
     };
   }
@@ -82,7 +82,7 @@ function parseIndexFilename(filename: string): ParsedIndexName | null {
       timestamp: null,
       vaultHash: null,
       modelKey: legacyMatch[1],
-      dimension: parseInt(legacyMatch[2], 10),
+      dimension: Number.parseInt(legacyMatch[2], 10),
       isLegacy: true,
     };
   }
@@ -162,7 +162,7 @@ export class IndexManager {
   constructor(
     private kernel: Kernel,
     private vectorStore: VectorStore,
-  ) { }
+  ) {}
 
   async initialize(): Promise<void> {
     const activePath = this.kernel.settings.indexing.activeIndexPath;
@@ -182,7 +182,9 @@ export class IndexManager {
       if (meta) {
         this.modelKey = meta.modelKey;
         this.dimension = meta.dimension;
-        console.log(`[IndexManager] Identity from index file: modelKey=${this.modelKey}, dim=${this.dimension}, userProvided=${this.isUserProvidedIndex}`);
+        console.log(
+          `[IndexManager] Identity from index file: modelKey=${this.modelKey}, dim=${this.dimension}, userProvided=${this.isUserProvidedIndex}`,
+        );
 
         // Cache the metadata in settings for UI access
         this.kernel.settings.indexing.activeIndexMeta = {
@@ -192,7 +194,9 @@ export class IndexManager {
         };
       } else {
         // Index file unreadable - fall back to Ollama
-        console.warn(`[IndexManager] Could not read index metadata from ${activePath}, falling back to Ollama`);
+        console.warn(
+          `[IndexManager] Could not read index metadata from ${activePath}, falling back to Ollama`,
+        );
         await this.deriveIdentityFromOllama();
       }
 
@@ -215,7 +219,9 @@ export class IndexManager {
     // Load state file (matched to active index)
     await this.loadState();
 
-    console.log(`[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${this.states.size}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`);
+    console.log(
+      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${this.states.size}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`,
+    );
   }
 
   /** Derive identity from Ollama service (default behavior for plugin indices) */
@@ -255,7 +261,8 @@ export class IndexManager {
     }
 
     // User-provided indices (in system/index/) are read-only RAG expansion
-    const isUserProvided = indexPath.includes("system/index") || indexPath.includes("system\\index");
+    const isUserProvided =
+      indexPath.includes("system/index") || indexPath.includes("system\\index");
 
     // Update settings with new active index
     this.kernel.settings.indexing.activeIndexPath = indexPath;
@@ -268,10 +275,7 @@ export class IndexManager {
 
     // Trigger plugin reload for clean state
     const label = isUserProvided ? `${meta.modelKey} (external)` : meta.modelKey;
-    this.kernel.obsidian.notice(
-      `Switching to ${label} index. Reloading plugin...`,
-      5000
-    );
+    this.kernel.obsidian.notice(`Switching to ${label} index. Reloading plugin...`, 5000);
 
     // Give the notice time to display, then reload
     setTimeout(() => {
@@ -544,7 +548,7 @@ export class IndexManager {
      */
     const processIndexFile = async (
       filePath: string,
-      source: "plugin" | "vault"
+      source: "plugin" | "vault",
     ): Promise<DiscoveredIndex | null> => {
       const meta = await IndexManager.readIndexMeta(filePath);
       if (!meta) return null;
@@ -565,7 +569,11 @@ export class IndexManager {
       if (parsed && !parsed.isLegacy) {
         // New format: show human-readable date + model
         const dateStr = createdAt
-          ? createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+          ? createdAt.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
           : "Unknown";
         displayName = `${meta.modelKey} (${dateStr})`;
       } else {
@@ -591,14 +599,18 @@ export class IndexManager {
     try {
       console.log(`[IndexManager] Scanning plugin storage: ${storagePaths.pluginRoot}`);
       const pluginFiles = await fs.promises.readdir(storagePaths.pluginRoot);
-      const indexFiles = pluginFiles.filter(f => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"));
+      const indexFiles = pluginFiles.filter(
+        (f) => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"),
+      );
       console.log(`[IndexManager] Found ${indexFiles.length} potential index files:`, indexFiles);
 
       for (const file of indexFiles) {
         const filePath = path.join(storagePaths.pluginRoot, file);
         const idx = await processIndexFile(filePath, "plugin");
         if (idx) {
-          console.log(`[IndexManager] Loaded index: ${file} (${idx.modelKey}, ${idx.dimension}d, ${idx.docCount} docs)`);
+          console.log(
+            `[IndexManager] Loaded index: ${file} (${idx.modelKey}, ${idx.dimension}d, ${idx.docCount} docs)`,
+          );
           results.push(idx);
         } else {
           console.warn(`[IndexManager] Failed to load index metadata: ${file}`);
@@ -611,7 +623,10 @@ export class IndexManager {
     // 2. Scan Vault System Storage (system/index/*.json)
     try {
       const sysPath = storagePaths.systemIndex;
-      const dirExists = await fs.promises.access(sysPath).then(() => true).catch(() => false);
+      const dirExists = await fs.promises
+        .access(sysPath)
+        .then(() => true)
+        .catch(() => false);
 
       if (dirExists) {
         const vaultFiles = await fs.promises.readdir(sysPath);
@@ -702,7 +717,10 @@ export class IndexManager {
       const baseName = path.basename(indexPath);
       const modelKeyMatch = baseName.match(/^index-(.+)\.json$/);
 
-      const indexExists = await fs.promises.access(indexPath).then(() => true).catch(() => false);
+      const indexExists = await fs.promises
+        .access(indexPath)
+        .then(() => true)
+        .catch(() => false);
 
       if (indexExists) {
         await this.moveToDeleted(indexPath, "deleted");
@@ -712,7 +730,10 @@ export class IndexManager {
       if (modelKeyMatch) {
         const modelKey = modelKeyMatch[1];
         const statePath = path.join(this.kernel.storagePaths.pluginRoot, `state-${modelKey}.json`);
-        const stateExists = await fs.promises.access(statePath).then(() => true).catch(() => false);
+        const stateExists = await fs.promises
+          .access(statePath)
+          .then(() => true)
+          .catch(() => false);
         if (stateExists) {
           await this.moveToDeleted(statePath, "deleted");
         }
@@ -857,7 +878,7 @@ export class IndexManager {
     const vaultHash = this.kernel.storagePaths.vaultHash;
     return path.join(
       this.kernel.storagePaths.pluginRoot,
-      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`
+      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`,
     );
   }
 
@@ -873,7 +894,7 @@ export class IndexManager {
         // New format: mirror the index filename with state_ prefix
         return path.join(
           this.kernel.storagePaths.pluginRoot,
-          `state_${parsed.timestamp}_${parsed.vaultHash}_${parsed.modelKey}_${parsed.dimension}d.json`
+          `state_${parsed.timestamp}_${parsed.vaultHash}_${parsed.modelKey}_${parsed.dimension}d.json`,
         );
       }
     }
@@ -888,12 +909,21 @@ export class IndexManager {
     const newPath = this.getStatePath();
 
     // Check new format first
-    const newExists = await fs.promises.access(newPath).then(() => true).catch(() => false);
+    const newExists = await fs.promises
+      .access(newPath)
+      .then(() => true)
+      .catch(() => false);
     if (newExists) return newPath;
 
     // Check legacy format
-    const legacyPath = path.join(this.kernel.storagePaths.pluginRoot, `state-${this.modelKey}.json`);
-    const legacyExists = await fs.promises.access(legacyPath).then(() => true).catch(() => false);
+    const legacyPath = path.join(
+      this.kernel.storagePaths.pluginRoot,
+      `state-${this.modelKey}.json`,
+    );
+    const legacyExists = await fs.promises
+      .access(legacyPath)
+      .then(() => true)
+      .catch(() => false);
     if (legacyExists) return legacyPath;
 
     return null;

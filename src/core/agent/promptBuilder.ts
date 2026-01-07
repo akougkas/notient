@@ -217,10 +217,7 @@ ${noteList}`);
     return parts.join("\n");
   }
 
-  private extractCitationFromText(
-    title: string,
-    text: string,
-  ): { citation: string; body: string } {
+  private extractCitationFromText(title: string, text: string): { citation: string; body: string } {
     const fallback = `[[${title}]]`;
     const trimmed = (text ?? "").trim();
     if (!trimmed) return { citation: fallback, body: "" };

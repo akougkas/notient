@@ -267,9 +267,9 @@ export class SimpleVectorStore implements VectorStore {
     // Hybrid search: prepare query terms for lexical matching
     const queryTerms = options.queryText
       ? options.queryText
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((t) => t.length >= 2)
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length >= 2)
       : [];
 
     // Score all documents
@@ -545,7 +545,7 @@ export class SimpleVectorStore implements VectorStore {
 
     this.resolvedIndexPath = path.join(
       this.kernel.storagePaths.pluginRoot,
-      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`
+      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`,
     );
     return this.resolvedIndexPath;
   }
@@ -559,21 +559,23 @@ export class SimpleVectorStore implements VectorStore {
     const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const pluginRoot = this.kernel.storagePaths.pluginRoot;
 
-    console.log(`[SimpleVectorStore] Discovering indices for modelKey=${sanitizedKey}, dim=${this.dimension}`);
+    console.log(
+      `[SimpleVectorStore] Discovering indices for modelKey=${sanitizedKey}, dim=${this.dimension}`,
+    );
 
     try {
       const files = await fs.promises.readdir(pluginRoot);
-      const allIndexFiles = files.filter(f => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"));
-      console.log(`[SimpleVectorStore] All index files in storage:`, allIndexFiles);
+      const allIndexFiles = files.filter(
+        (f) => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"),
+      );
+      console.log("[SimpleVectorStore] All index files in storage:", allIndexFiles);
 
       // New format pattern: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
       const newPattern = new RegExp(
-        `^idx_\\d{8}T\\d{6}_[a-f0-9]{4}_${sanitizedKey}_${this.dimension}d\\.json$`
+        `^idx_\\d{8}T\\d{6}_[a-f0-9]{4}_${sanitizedKey}_${this.dimension}d\\.json$`,
       );
       // Legacy pattern: index-{model}-{dim}d.json
-      const legacyPattern = new RegExp(
-        `^index-${sanitizedKey}-${this.dimension}d\\.json$`
-      );
+      const legacyPattern = new RegExp(`^index-${sanitizedKey}-${this.dimension}d\\.json$`);
 
       const matches: Array<{ path: string; isLegacy: boolean; timestamp?: string }> = [];
 
@@ -597,7 +599,7 @@ export class SimpleVectorStore implements VectorStore {
       }
 
       if (matches.length === 0) {
-        console.log(`[SimpleVectorStore] No matching indices found for this model/dimension`);
+        console.log("[SimpleVectorStore] No matching indices found for this model/dimension");
         return null;
       }
 
@@ -611,7 +613,7 @@ export class SimpleVectorStore implements VectorStore {
       console.log(`[SimpleVectorStore] Selected index: ${matches[0].path}`);
       return matches[0].path;
     } catch (e) {
-      console.warn(`[SimpleVectorStore] Discovery failed:`, e);
+      console.warn("[SimpleVectorStore] Discovery failed:", e);
       return null;
     }
   }

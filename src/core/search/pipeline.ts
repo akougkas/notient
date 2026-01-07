@@ -101,7 +101,11 @@ export class SearchPipeline {
     } satisfies Omit<SearchOptions, "topK">;
 
     const startTime = Date.now();
-    const cacheKey = this.getCacheKey(query, { ...baseFilters, topK: requestedTopK }, enableReranking);
+    const cacheKey = this.getCacheKey(
+      query,
+      { ...baseFilters, topK: requestedTopK },
+      enableReranking,
+    );
 
     this.eventBus.emit("search:started", { query });
 
@@ -436,7 +440,7 @@ export class SearchPipeline {
     if (this.queryCache.size >= CACHE_CONFIG.MAX_SEARCH_CACHE_SIZE) {
       // Find the entry with the oldest timestamp (least recently used)
       let oldestKey: string | null = null;
-      let oldestTime = Infinity;
+      let oldestTime = Number.POSITIVE_INFINITY;
       for (const [k, v] of this.queryCache.entries()) {
         if (v.timestamp < oldestTime) {
           oldestTime = v.timestamp;

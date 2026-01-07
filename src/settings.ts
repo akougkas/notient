@@ -314,20 +314,29 @@ export class NotientSettingTab extends PluginSettingTab {
     this.renderConnectionStatus(containerEl);
 
     // Embeddings Service (Ollama)
-    this.renderServiceSection(containerEl, "ollama", "🦙 Embeddings (Ollama)", "Embedding Model", "nomic-embed-text");
+    this.renderServiceSection(
+      containerEl,
+      "ollama",
+      "🦙 Embeddings (Ollama)",
+      "Embedding Model",
+      "nomic-embed-text",
+    );
 
     // Chat Service (LM Studio)
-    this.renderServiceSection(containerEl, "lmstudio", "🤖 Chat (LM Studio)", "Reasoning Model", "ministral-3b-instruct");
+    this.renderServiceSection(
+      containerEl,
+      "lmstudio",
+      "🤖 Chat (LM Studio)",
+      "Reasoning Model",
+      "ministral-3b-instruct",
+    );
 
     // Indexing (with chunk size slider)
     this.renderIndexingSection(containerEl);
 
     // Index Management (using extracted panel)
-    this.indexManagementPanel = new IndexManagementPanel(
-      this.app,
-      this.kernel,
-      this.settings,
-      () => this.display(),
+    this.indexManagementPanel = new IndexManagementPanel(this.app, this.kernel, this.settings, () =>
+      this.display(),
     );
     this.indexManagementPanel.render(containerEl);
 
@@ -534,10 +543,14 @@ export class NotientSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_IPS[service].network)
           .setValue(config.ip)
           .onChange(
-            debounce(async (value) => {
-              config.ip = value.trim() || DEFAULT_IPS[service].local;
-              await this.updateServiceHost(service);
-            }, 500, true),
+            debounce(
+              async (value) => {
+                config.ip = value.trim() || DEFAULT_IPS[service].local;
+                await this.updateServiceHost(service);
+              },
+              500,
+              true,
+            ),
           ),
       )
       .addText((text) =>
@@ -545,10 +558,14 @@ export class NotientSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_PORTS[service])
           .setValue(config.port)
           .onChange(
-            debounce(async (value) => {
-              config.port = value.trim() || DEFAULT_PORTS[service];
-              await this.updateServiceHost(service);
-            }, 500, true),
+            debounce(
+              async (value) => {
+                config.port = value.trim() || DEFAULT_PORTS[service];
+                await this.updateServiceHost(service);
+              },
+              500,
+              true,
+            ),
           ),
       );
 
@@ -563,9 +580,10 @@ export class NotientSettingTab extends PluginSettingTab {
     modelPlaceholder: string,
   ): void {
     const models = service === "ollama" ? this.ollamaModels : this.lmstudioModels;
-    const currentModel = service === "ollama"
-      ? this.settings.ollama.embeddingModel
-      : this.settings.lmstudio.reasoningModel;
+    const currentModel =
+      service === "ollama"
+        ? this.settings.ollama.embeddingModel
+        : this.settings.lmstudio.reasoningModel;
     const changedField = service === "ollama" ? "ollama.embeddingModel" : "lmstudio.reasoningModel";
 
     // Build description
@@ -575,9 +593,7 @@ export class NotientSettingTab extends PluginSettingTab {
       desc = dim ? `Embedding size: ${dim} dimensions` : "Size will be detected when you start";
     }
 
-    const setting = new Setting(section)
-      .setName(modelLabel)
-      .setDesc(desc);
+    const setting = new Setting(section).setName(modelLabel).setDesc(desc);
 
     // Add dropdown if we have models, otherwise text input
     if (models.length > 0) {
@@ -590,17 +606,15 @@ export class NotientSettingTab extends PluginSettingTab {
         for (const model of models) {
           dropdown.addOption(model, model);
         }
-        dropdown
-          .setValue(currentModel)
-          .onChange(async (value) => {
-            if (service === "ollama") {
-              this.settings.ollama.embeddingModel = value;
-            } else {
-              this.settings.lmstudio.reasoningModel = value;
-            }
-            await this.onSettingsChange(this.settings, [changedField]);
-            this.display();
-          });
+        dropdown.setValue(currentModel).onChange(async (value) => {
+          if (service === "ollama") {
+            this.settings.ollama.embeddingModel = value;
+          } else {
+            this.settings.lmstudio.reasoningModel = value;
+          }
+          await this.onSettingsChange(this.settings, [changedField]);
+          this.display();
+        });
       });
     } else {
       // Fall back to text input
@@ -634,7 +648,11 @@ export class NotientSettingTab extends PluginSettingTab {
     );
 
     // Model change notice for Ollama (embedding model change requires new index)
-    if (service === "ollama" && this.originalEmbeddingModel && currentModel !== this.originalEmbeddingModel) {
+    if (
+      service === "ollama" &&
+      this.originalEmbeddingModel &&
+      currentModel !== this.originalEmbeddingModel
+    ) {
       const notice = section.createDiv({ cls: "notient-settings-notice" });
       notice.innerHTML = `ℹ️ New index for <b>${currentModel}</b>. <b>${this.originalEmbeddingModel}</b> preserved.`;
     }

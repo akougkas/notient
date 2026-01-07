@@ -64,7 +64,7 @@ export class SimpleIndexer {
     private eventBus: EventBus,
     private indexManager: IndexManager,
     private ollama: OllamaService,
-  ) { }
+  ) {}
 
   async initialize(): Promise<void> {
     console.log("[SimpleIndexer] Initializing...");
@@ -473,7 +473,7 @@ export class SimpleIndexer {
         // Validate embedding dimension to prevent index corruption
         if (embedding.length !== expectedDimension) {
           console.error(
-            `[SimpleIndexer] Embedding dimension mismatch: got ${embedding.length}, expected ${expectedDimension}. Skipping chunk.`
+            `[SimpleIndexer] Embedding dimension mismatch: got ${embedding.length}, expected ${expectedDimension}. Skipping chunk.`,
           );
           this.eventBus.emit("index:error", {
             path: batch[j].path,

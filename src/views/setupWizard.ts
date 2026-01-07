@@ -94,12 +94,12 @@ export class SetupWizardModal extends Modal {
   };
 
   // Index discovery cache (prevents redundant filesystem scans)
-  private cachedIndices: Awaited<ReturnType<typeof this.indexManager.discoverIndices>> | null = null;
+  private cachedIndices: Awaited<ReturnType<typeof this.indexManager.discoverIndices>> | null =
+    null;
   private cacheTimestamp = 0;
   private static readonly INDEX_CACHE_TTL_MS = 30000; // 30 seconds
 
   // ... (lines 95-364 omitted for brevity, keeping surrounding code intact)
-
 
   private debouncedCheckOllama = debounce(() => this.checkOllama(), 500, true);
   private debouncedCheckLMStudio = debounce(() => this.checkLMStudio(), 500, true);
@@ -110,19 +110,21 @@ export class SetupWizardModal extends Modal {
     private healthMonitor: HealthMonitor,
     private currentSettings: NotientSettings,
     private indexManager: {
-      discoverIndices: () => Promise<Array<{
-        path: string;
-        modelKey: string;
-        dimension: number;
-        docCount: number;
-        source: "plugin" | "vault";
-        createdAt: Date | null;
-        updatedAt: Date | null;
-        vaultHash: string | null;
-        isLegacy: boolean;
-        displayName: string;
-      }>>
-    }
+      discoverIndices: () => Promise<
+        Array<{
+          path: string;
+          modelKey: string;
+          dimension: number;
+          docCount: number;
+          source: "plugin" | "vault";
+          createdAt: Date | null;
+          updatedAt: Date | null;
+          vaultHash: string | null;
+          isLegacy: boolean;
+          displayName: string;
+        }>
+      >;
+    },
   ) {
     super(app);
   }
@@ -242,10 +244,15 @@ export class SetupWizardModal extends Modal {
     });
     icon.setText("✨");
 
-    content.createEl("h2", { text: "Power up your notes", attr: { style: "margin-bottom: 10px;" } });
+    content.createEl("h2", {
+      text: "Power up your notes",
+      attr: { style: "margin-bottom: 10px;" },
+    });
     content.createDiv({
       text: "Notient connects your vault to local AI models to enable semantic search, chat with your notes, and autonomous organization.",
-      attr: { style: "color: var(--nv2-text-muted); max-width: 400px; margin: 0 auto; line-height: 1.6;" },
+      attr: {
+        style: "color: var(--nv2-text-muted); max-width: 400px; margin: 0 auto; line-height: 1.6;",
+      },
     });
   }
 
@@ -255,7 +262,11 @@ export class SetupWizardModal extends Modal {
     this.renderServiceCard(container, this.lmstudio, "lmstudio");
   }
 
-  private renderServiceCard(container: HTMLElement, config: ServiceConfig, type: "ollama" | "lmstudio") {
+  private renderServiceCard(
+    container: HTMLElement,
+    config: ServiceConfig,
+    type: "ollama" | "lmstudio",
+  ) {
     const card = container.createDiv({ cls: "nv2-wizard-service-card" });
 
     // Header
@@ -266,7 +277,12 @@ export class SetupWizardModal extends Modal {
 
     const statusBadge = header.createDiv({
       cls: `nv2-wizard-service-status ${config.status}`,
-      text: config.status === "connected" ? "Connected" : config.status === "checking" ? "Checking..." : "Offline",
+      text:
+        config.status === "connected"
+          ? "Connected"
+          : config.status === "checking"
+            ? "Checking..."
+            : "Offline",
     });
 
     // Inputs
@@ -276,7 +292,10 @@ export class SetupWizardModal extends Modal {
     const hostRow = inputGroup.createDiv({ attr: { style: "display: flex; gap: 8px;" } });
 
     // Helper toggle for Local/Network
-    const toggle = hostRow.createEl("select", { cls: "nv2-wizard-input", attr: { style: "width: 100px;" } });
+    const toggle = hostRow.createEl("select", {
+      cls: "nv2-wizard-input",
+      attr: { style: "width: 100px;" },
+    });
     toggle.createEl("option", { value: "local", text: "Local" });
     toggle.createEl("option", { value: "network", text: "Network" });
     toggle.value = this.isLocal(config.ip) ? "local" : "network";
@@ -294,7 +313,7 @@ export class SetupWizardModal extends Modal {
     const ipInput = hostRow.createEl("input", {
       type: "text",
       cls: "nv2-wizard-input",
-      attr: { placeholder: "127.0.0.1" }
+      attr: { placeholder: "127.0.0.1" },
     });
     ipInput.value = config.ip;
     ipInput.addEventListener("input", (e) => {
@@ -307,7 +326,7 @@ export class SetupWizardModal extends Modal {
     const portInput = hostRow.createEl("input", {
       type: "text",
       cls: "nv2-wizard-input",
-      attr: { placeholder: "Port", style: "width: 80px;" }
+      attr: { placeholder: "Port", style: "width: 80px;" },
     });
     portInput.value = config.port;
     portInput.addEventListener("input", (e) => {
@@ -318,14 +337,20 @@ export class SetupWizardModal extends Modal {
 
     // Model Select
     if (config.status === "connected") {
-      const modelGroup = card.createDiv({ cls: "nv2-wizard-input-group", attr: { style: "margin-top: 10px;" } });
+      const modelGroup = card.createDiv({
+        cls: "nv2-wizard-input-group",
+        attr: { style: "margin-top: 10px;" },
+      });
       modelGroup.createDiv({ cls: "nv2-wizard-label", text: "Model" });
       const select = modelGroup.createEl("select", { cls: "nv2-wizard-input" });
 
       // Filter embedding models for Ollama if possible
-      const models = type === "ollama"
-        ? config.models.filter(m => m.capabilities.includes("embedding") || m.name.includes("embed"))
-        : config.models;
+      const models =
+        type === "ollama"
+          ? config.models.filter(
+              (m) => m.capabilities.includes("embedding") || m.name.includes("embed"),
+            )
+          : config.models;
 
       // Fallback if filtering removes everything
       const displayModels = models.length > 0 ? models : config.models;
@@ -346,7 +371,7 @@ export class SetupWizardModal extends Modal {
     } else if (config.status === "error") {
       card.createDiv({
         text: config.error || "Could not connect. Check if the service is running.",
-        attr: { style: "color: var(--nv2-status-error); font-size: 11px; margin-top: 8px;" }
+        attr: { style: "color: var(--nv2-status-error); font-size: 11px; margin-top: 8px;" },
       });
     }
   }
@@ -359,7 +384,10 @@ export class SetupWizardModal extends Modal {
 
     // Chunk Size
     const chunkGroup = configCard.createDiv({ cls: "nv2-wizard-input-group" });
-    const chunkLabel = chunkGroup.createDiv({ cls: "nv2-wizard-label", text: `Chunk Size: ${this.chunkSize} chars` });
+    const chunkLabel = chunkGroup.createDiv({
+      cls: "nv2-wizard-label",
+      text: `Chunk Size: ${this.chunkSize} chars`,
+    });
 
     const slider = chunkGroup.createEl("input", {
       type: "range",
@@ -398,7 +426,10 @@ export class SetupWizardModal extends Modal {
 
     // Async load all indices
     const indexList = indexCard.createDiv({ cls: "nv2-wizard-index-list" });
-    indexList.createDiv({ text: "Scanning for indices...", attr: { style: "color: var(--nv2-text-muted); font-size: 12px;" } });
+    indexList.createDiv({
+      text: "Scanning for indices...",
+      attr: { style: "color: var(--nv2-text-muted); font-size: 12px;" },
+    });
 
     this.renderIndexList(indexList);
   }
@@ -410,7 +441,7 @@ export class SetupWizardModal extends Modal {
       const now = Date.now();
       let indices: Awaited<ReturnType<typeof this.indexManager.discoverIndices>>;
 
-      if (this.cachedIndices && (now - this.cacheTimestamp) < SetupWizardModal.INDEX_CACHE_TTL_MS) {
+      if (this.cachedIndices && now - this.cacheTimestamp < SetupWizardModal.INDEX_CACHE_TTL_MS) {
         indices = this.cachedIndices;
       } else {
         indices = await this.indexManager.discoverIndices();
@@ -422,7 +453,7 @@ export class SetupWizardModal extends Modal {
       if (indices.length === 0) {
         container.createDiv({
           text: "No existing indices found. A new index will be created.",
-          attr: { style: "color: var(--nv2-text-muted); font-size: 13px; padding: 8px 0;" }
+          attr: { style: "color: var(--nv2-text-muted); font-size: 13px; padding: 8px 0;" },
         });
         this.indexStatus.compatibleFound = false;
         this.indexStatus.decision = "rebuild";
@@ -438,20 +469,26 @@ export class SetupWizardModal extends Modal {
         text: expectedDim
           ? `Select an index to use (${selectedModel} expects ${expectedDim}d):`
           : "Select an index to use:",
-        attr: { style: "color: var(--nv2-text-muted); font-size: 12px; margin-bottom: 8px;" }
+        attr: { style: "color: var(--nv2-text-muted); font-size: 12px; margin-bottom: 8px;" },
       });
 
       // "Create New" option
       const createNewRow = container.createDiv({
         attr: {
-          style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; cursor: pointer; ${this.indexStatus.decision === "rebuild" ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`
-        }
+          style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; cursor: pointer; ${this.indexStatus.decision === "rebuild" ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`,
+        },
       });
 
-      const createNewRadio = createNewRow.createEl("input", { type: "radio", attr: { name: "index-select" } });
+      const createNewRadio = createNewRow.createEl("input", {
+        type: "radio",
+        attr: { name: "index-select" },
+      });
       createNewRadio.checked = this.indexStatus.decision === "rebuild";
       createNewRow.createDiv({ text: "➕ Create New Index", attr: { style: "font-weight: 500;" } });
-      createNewRow.createDiv({ text: `Fresh index for ${selectedModel}`, attr: { style: "color: var(--nv2-text-muted); font-size: 11px; margin-left: auto;" } });
+      createNewRow.createDiv({
+        text: `Fresh index for ${selectedModel}`,
+        attr: { style: "color: var(--nv2-text-muted); font-size: 11px; margin-left: auto;" },
+      });
 
       createNewRow.addEventListener("click", () => {
         this.indexStatus.compatibleFound = false;
@@ -473,18 +510,23 @@ export class SetupWizardModal extends Modal {
       // Render each index
       for (const idx of sortedIndices) {
         const isCompatible = !expectedDim || idx.dimension === expectedDim;
-        const isSelected = this.result.selectedIndexKey === idx.path && this.indexStatus.decision === "resume";
+        const isSelected =
+          this.result.selectedIndexKey === idx.path && this.indexStatus.decision === "resume";
         const isExternal = idx.source === "vault";
 
         // Format creation date
         const createdStr = idx.createdAt
-          ? idx.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+          ? idx.createdAt.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
           : null;
 
         const row = container.createDiv({
           attr: {
-            style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; ${!isCompatible ? "opacity: 0.5;" : "cursor: pointer;"} ${isSelected ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`
-          }
+            style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; ${!isCompatible ? "opacity: 0.5;" : "cursor: pointer;"} ${isSelected ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`,
+          },
         });
 
         const radio = row.createEl("input", { type: "radio", attr: { name: "index-select" } });
@@ -493,9 +535,14 @@ export class SetupWizardModal extends Modal {
 
         const infoCol = row.createDiv({ attr: { style: "flex: 1;" } });
 
-        const titleRow = infoCol.createDiv({ attr: { style: "display: flex; align-items: center; gap: 6px;" } });
+        const titleRow = infoCol.createDiv({
+          attr: { style: "display: flex; align-items: center; gap: 6px;" },
+        });
         titleRow.createSpan({ text: idx.displayName, attr: { style: "font-weight: 500;" } });
-        titleRow.createSpan({ text: `${idx.dimension}d`, attr: { style: "color: var(--nv2-text-muted); font-size: 11px;" } });
+        titleRow.createSpan({
+          text: `${idx.dimension}d`,
+          attr: { style: "color: var(--nv2-text-muted); font-size: 11px;" },
+        });
 
         // Source badge
         const badgeStyle = isExternal
@@ -503,19 +550,26 @@ export class SetupWizardModal extends Modal {
           : "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--interactive-accent); color: var(--text-on-accent);";
         titleRow.createSpan({
           text: isExternal ? "EXTERNAL" : "PLUGIN",
-          attr: { style: badgeStyle }
+          attr: { style: badgeStyle },
         });
 
         // Legacy badge
         if (idx.isLegacy) {
           titleRow.createSpan({
             text: "LEGACY",
-            attr: { style: "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--color-orange); color: white;" }
+            attr: {
+              style:
+                "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--color-orange); color: white;",
+            },
           });
         }
 
         // Secondary info line with date and count
-        const infoLine = infoCol.createDiv({ attr: { style: "display: flex; gap: 8px; color: var(--nv2-text-muted); font-size: 11px;" } });
+        const infoLine = infoCol.createDiv({
+          attr: {
+            style: "display: flex; gap: 8px; color: var(--nv2-text-muted); font-size: 11px;",
+          },
+        });
         infoLine.createSpan({ text: `${idx.docCount} chunks` });
         if (createdStr) {
           infoLine.createSpan({ text: `• Created ${createdStr}` });
@@ -530,8 +584,8 @@ export class SetupWizardModal extends Modal {
             text: `⚠️ ${idx.dimension}d ≠ ${expectedDim}d`,
             attr: {
               style: "color: var(--nv2-status-error); font-size: 11px; white-space: nowrap;",
-              title: `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`
-            }
+              title: `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`,
+            },
           });
         }
 
@@ -539,7 +593,7 @@ export class SetupWizardModal extends Modal {
         if (isExternal && isCompatible) {
           row.createDiv({
             text: "🔒",
-            attr: { style: "font-size: 14px;", title: "External index (read-only)" }
+            attr: { style: "font-size: 14px;", title: "External index (read-only)" },
           });
         }
 
@@ -560,7 +614,10 @@ export class SetupWizardModal extends Modal {
 
       // Action summary
       const actionMsg = container.createDiv({
-        attr: { style: "font-weight: 500; font-size: 13px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--nv2-border-color);" }
+        attr: {
+          style:
+            "font-weight: 500; font-size: 13px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--nv2-border-color);",
+        },
       });
 
       if (this.indexStatus.decision === "rebuild") {
@@ -570,12 +627,11 @@ export class SetupWizardModal extends Modal {
       } else {
         actionMsg.setText("✅ Action: Connect to existing plugin index.");
       }
-
     } catch (e) {
       container.empty();
       container.createDiv({
         text: `Error loading indices: ${e}`,
-        attr: { style: "color: var(--nv2-status-error); font-size: 12px;" }
+        attr: { style: "color: var(--nv2-status-error); font-size: 12px;" },
       });
     }
   }
@@ -622,12 +678,14 @@ export class SetupWizardModal extends Modal {
     const nextText = this.currentStep === WizardStep.INDEXING ? "Finish & Build" : "Next";
     const nextBtn = footer.createEl("button", {
       cls: "nv2-wizard-btn primary",
-      text: nextText
+      text: nextText,
     });
 
     // Validation
-    if (this.currentStep === WizardStep.SERVICES &&
-      (this.ollama.status !== "connected" || this.lmstudio.status !== "connected")) {
+    if (
+      this.currentStep === WizardStep.SERVICES &&
+      (this.ollama.status !== "connected" || this.lmstudio.status !== "connected")
+    ) {
       nextBtn.disabled = true;
       nextBtn.title = "Connect services to proceed";
     }
@@ -674,10 +732,12 @@ export class SetupWizardModal extends Modal {
       const expectedDim = this.getExpectedDimension(currentEmbModel);
 
       // Just log what we found - no auto-selection
-      console.log(`[SetupWizard] Found ${indices.length} indices for model '${currentEmbModel}' (expected dim: ${expectedDim ?? "unknown"})`);
+      console.log(
+        `[SetupWizard] Found ${indices.length} indices for model '${currentEmbModel}' (expected dim: ${expectedDim ?? "unknown"})`,
+      );
 
       // Check if any compatible indices exist (for UI hints)
-      const hasCompatible = indices.some(idx => !expectedDim || idx.dimension === expectedDim);
+      const hasCompatible = indices.some((idx) => !expectedDim || idx.dimension === expectedDim);
       if (hasCompatible) {
         console.log("[SetupWizard] Compatible indices available - user must select explicitly");
       }
@@ -696,7 +756,7 @@ export class SetupWizardModal extends Modal {
         this.ollama.status = "connected";
         this.ollama.models = models;
         if (!this.ollama.selectedModel) {
-          const embed = models.find(m => m.capabilities.includes("embedding"));
+          const embed = models.find((m) => m.capabilities.includes("embedding"));
           this.ollama.selectedModel = embed?.name || models[0].name;
         }
         // Trigger scan once connected
@@ -741,22 +801,25 @@ export class SetupWizardModal extends Modal {
       ollama: {
         host: `http://${this.ollama.ip}:${this.ollama.port}`,
         embeddingModel: this.ollama.selectedModel,
-        enabled: true
+        enabled: true,
       },
       lmstudio: {
         host: `http://${this.lmstudio.ip}:${this.lmstudio.port}`,
         reasoningModel: this.lmstudio.selectedModel,
-        enabled: true
+        enabled: true,
       },
       indexing: {
         chunkSize: this.chunkSize,
-        excludedFolders: this.excludedFolders.split(",").map(s => s.trim()).filter(s => s),
+        excludedFolders: this.excludedFolders
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s),
         batchSize: 4, // default
         debounceMs: 2000, // default
         activeIndexPath: this.result.selectedIndexKey || null,
         activeIndexMeta: null, // Will be populated on plugin init
       },
-      setupComplete: true
+      setupComplete: true,
     };
     // Force rebuild if user didn't select existing
     if (!this.indexStatus.compatibleFound || this.indexStatus.decision === "rebuild") {
