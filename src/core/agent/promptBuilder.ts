@@ -53,7 +53,7 @@ const BASE_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vau
 
 CRITICAL RULES:
 - Always ground your responses in the actual note content provided
-- Cite specific notes using [[Note Title]] format (wiki-links)
+- Cite notes using Obsidian wiki-links. Prefer precise citations when available: [[Note Title#Heading]] and [[Note Title#^blockRef]].
 - Be concise, specific, and actionable
 - If information isn't in the notes, explicitly say so
 - Never invent or hallucinate content that isn't in the provided context`;
@@ -130,8 +130,10 @@ ${truncatedContent}
     const noteSummaries = notes
       .slice(0, 5)
       .map((n) => {
-        const preview = n.text.length > 400 ? `${n.text.slice(0, 400)}...` : n.text;
-        return `### [[${n.title}]] (${n.path})
+        const extracted = this.extractCitationFromText(n.title, n.text);
+        const preview =
+          extracted.body.length > 400 ? `${extracted.body.slice(0, 400)}...` : extracted.body;
+        return `### ${extracted.citation} (${n.path})
 ${preview}`;
       })
       .join("\n\n");
@@ -201,7 +203,10 @@ Task context: User requested "${params.taskType}" operation.`);
     if (params.relatedNotes.length > 0) {
       const noteList = params.relatedNotes
         .slice(0, 5)
-        .map((n) => `- [[${n.title}]] (${n.path})`)
+        .map((n) => {
+          const extracted = this.extractCitationFromText(n.title, n.text);
+          return `- ${extracted.citation} (${n.path})`;
+        })
         .join("\n");
 
       parts.push(`
@@ -210,5 +215,27 @@ ${noteList}`);
     }
 
     return parts.join("\n");
+  }
+
+  private extractCitationFromText(
+    title: string,
+    text: string,
+  ): { citation: string; body: string } {
+    const fallback = `[[${title}]]`;
+    const trimmed = (text ?? "").trim();
+    if (!trimmed) return { citation: fallback, body: "" };
+
+    const lines = trimmed.split("\n");
+    const first = (lines[0] ?? "").trim();
+
+    // If the first line is a wiki-link (possibly with #heading or #^blockRef), treat it as citation.
+    if (/^\[\[[^\]]+\]\]$/.test(first)) {
+      return {
+        citation: first,
+        body: lines.slice(1).join("\n").trim(),
+      };
+    }
+
+    return { citation: fallback, body: trimmed };
   }
 }

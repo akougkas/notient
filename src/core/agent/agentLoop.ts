@@ -144,10 +144,12 @@ export class NotientAgent {
           if (relevantNotes.length >= 5) break;
 
           citations.push(result.path);
+          const bestChunk = result.chunks[0];
+          const citationLink = this.buildCitationLink(result.path, bestChunk);
           relevantNotes.push({
             title: result.title,
             path: result.path,
-            text: result.chunks[0]?.text || "",
+            text: `${citationLink}\n${bestChunk?.text || ""}`.trim(),
           });
         }
 
@@ -414,6 +416,25 @@ export class NotientAgent {
       default:
         return false;
     }
+  }
+
+  private buildCitationLink(
+    notePath: string,
+    chunk?: { headingPath?: string[]; blockRef?: string | null },
+  ): string {
+    const noteName = notePath.split("/").pop()?.replace(/\.md$/, "") || notePath;
+    const blockRef = chunk?.blockRef ?? null;
+    if (blockRef) {
+      return `[[${noteName}#^${blockRef}]]`;
+    }
+
+    const headingPath = chunk?.headingPath ?? [];
+    if (headingPath.length > 0) {
+      // Obsidian supports nested heading links as Note#H1#H2#H3
+      return `[[${noteName}#${headingPath.join("#")}]]`;
+    }
+
+    return `[[${noteName}]]`;
   }
 
   /**
