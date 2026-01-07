@@ -20,6 +20,7 @@ import type { ChatMessage, CompletionOptions, RankedResult, RerankCandidate } fr
 export class OpenAICompatibleProvider implements LLMProvider {
   protected disposed = false;
   protected initialized = false;
+  protected initializationPromise: Promise<void> | null = null;
 
   constructor(
     protected baseUrl: string,
@@ -32,14 +33,37 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async initialize(): Promise<void> {
+    // Return early if already disposed
     if (this.disposed) return;
 
+    // Prevent race condition: if already initializing, wait for that promise
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    // If already initialized, return immediately
+    if (this.initialized) return;
+
+    // Create initialization promise to prevent concurrent initialization
+    this.initializationPromise = this.doInitialize();
+
+    try {
+      await this.initializationPromise;
+    } finally {
+      this.initializationPromise = null;
+    }
+  }
+
+  private async doInitialize(): Promise<void> {
     if (!this.baseUrl || !this.model) {
       throw new Error(`${this.name} not configured: missing baseUrl or model`);
     }
 
     // Verify connectivity by listing models
     await this.listModels();
+
+    // Check disposed state again after async operation
+    if (this.disposed) return;
 
     // Verify model is actually loaded by doing a minimal test completion
     try {
@@ -51,7 +75,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
           messages: [{ role: "user", content: "hi" }],
           max_tokens: 1,
         }),
+        signal: AbortSignal.timeout(30000), // 30s timeout for init test
       });
+
+      // Check disposed state after fetch
+      if (this.disposed) return;
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "unknown");
@@ -70,6 +98,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error(`${this.name}: Cannot use model '${this.model}'. Is it loaded in LM Studio?`);
     }
 
+    // Final disposed check before marking initialized
+    if (this.disposed) return;
+
     this.initialized = true;
     console.log(`[${this.name}] Initialized with model=${this.model}`);
   }
@@ -80,12 +111,28 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/v1/models`);
+    const response = await fetch(`${this.baseUrl}/v1/models`, {
+      signal: AbortSignal.timeout(15000), // 15s timeout
+    });
     if (!response.ok) {
       throw new Error(`${this.name} API error: ${response.status}`);
     }
-    const data = await response.json();
-    return data.data.map((m: { id: string }) => m.id);
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(`${this.name}: Invalid JSON response from /v1/models`);
+    }
+
+    // Validate response structure
+    if (!data || typeof data !== "object" || !("data" in data) || !Array.isArray((data as { data: unknown }).data)) {
+      throw new Error(`${this.name}: Malformed response from /v1/models - expected {data: [...]}`);
+    }
+
+    return ((data as { data: Array<{ id?: string }> }).data)
+      .filter((m): m is { id: string } => typeof m?.id === "string")
+      .map((m) => m.id);
   }
 
   async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string> {
@@ -103,6 +150,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         max_tokens: options?.maxTokens ?? 1500,
         stop: options?.stopSequences,
       }),
+      signal: AbortSignal.timeout(120000), // 2min timeout for completions
     });
 
     if (!response.ok) {
@@ -137,6 +185,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     options?: CompletionOptions,
     signal?: AbortSignal,
   ): AsyncIterable<string> {
+    // Capture disposed state at start to detect mid-stream disposal
     if (this.disposed || !this.initialized) {
       throw new Error(`${this.name} not initialized`);
     }
@@ -146,19 +195,33 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new DOMException("Aborted", "AbortError");
     }
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        temperature: options?.temperature ?? 0.7,
-        max_tokens: options?.maxTokens ?? 1500,
-        stop: options?.stopSequences,
-        stream: true,
-      }),
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          temperature: options?.temperature ?? 0.7,
+          max_tokens: options?.maxTokens ?? 1500,
+          stop: options?.stopSequences,
+          stream: true,
+        }),
+        signal,
+      });
+    } catch (error) {
+      // Handle fetch errors (network, abort, etc.)
+      if ((error as Error).name === "AbortError") {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      throw error;
+    }
+
+    // Check disposed state after fetch completes
+    if (this.disposed) {
+      throw new Error(`${this.name} disposed during request`);
+    }
 
     if (!response.ok) {
       throw new Error(`${this.name} stream error: ${response.status}`);
@@ -357,21 +420,48 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
 
   /**
    * Try to fix incomplete JSON (missing closing brackets)
+   * Uses a stack-based approach to properly close nested structures
    */
   protected tryFixIncompleteJson(jsonStr: string): string | null {
     try {
-      const openBraces = (jsonStr.match(/\{/g) || []).length;
-      const closeBraces = (jsonStr.match(/\}/g) || []).length;
-      const openBrackets = (jsonStr.match(/\[/g) || []).length;
-      const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+      // Track nesting with a stack to handle proper order
+      const stack: string[] = [];
+      let inString = false;
+      let escapeNext = false;
 
-      let fixed = jsonStr;
+      for (const char of jsonStr) {
+        if (escapeNext) {
+          escapeNext = false;
+          continue;
+        }
+        if (char === "\\") {
+          escapeNext = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
 
-      for (let i = 0; i < openBrackets - closeBrackets; i++) {
-        fixed += "]";
+        if (char === "{") stack.push("}");
+        else if (char === "[") stack.push("]");
+        else if (char === "}" || char === "]") {
+          if (stack.length > 0 && stack[stack.length - 1] === char) {
+            stack.pop();
+          }
+        }
       }
-      for (let i = 0; i < openBraces - closeBraces; i++) {
-        fixed += "}";
+
+      // Close any unclosed structures in reverse order
+      let fixed = jsonStr.trimEnd();
+      // Remove trailing comma if present
+      if (fixed.endsWith(",")) {
+        fixed = fixed.slice(0, -1);
+      }
+      // Add missing closing brackets/braces in correct order
+      while (stack.length > 0) {
+        fixed += stack.pop();
       }
 
       JSON.parse(fixed);

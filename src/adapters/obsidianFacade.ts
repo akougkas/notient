@@ -264,7 +264,7 @@ export class ObsidianFacade {
 
   /**
    * Rename or move a file
-   * Note: Destination folder must exist - use createFolderIfNeeded first.
+   * Automatically creates destination folder if it doesn't exist.
    * @param from - Current path
    * @param to - New path
    */
@@ -280,6 +280,12 @@ export class ObsidianFacade {
       // Check if destination already exists
       if (this.getFileByPath(normalizedTo)) {
         return { success: false, error: `Destination already exists: ${normalizedTo}` };
+      }
+
+      // Ensure destination folder exists (create if needed)
+      const destFolder = normalizedTo.split("/").slice(0, -1).join("/");
+      if (destFolder && !this.app.vault.getAbstractFileByPath(destFolder)) {
+        await this.app.vault.createFolder(destFolder);
       }
 
       await this.app.fileManager.renameFile(file, normalizedTo);
@@ -458,11 +464,22 @@ export class ObsidianFacade {
 
   /**
    * Open a file in the workspace
+   * @param path - Path to the file to open
+   * @returns true if file was opened, false if file not found
    */
-  async openFile(path: string): Promise<void> {
+  async openFile(path: string): Promise<boolean> {
     const file = this.getFileByPath(path);
-    if (file) {
+    if (!file) {
+      console.warn(`[ObsidianFacade] Cannot open file - not found: ${path}`);
+      return false;
+    }
+
+    try {
       await this.app.workspace.openLinkText(path, "", true);
+      return true;
+    } catch (error) {
+      console.error(`[ObsidianFacade] Failed to open file ${path}:`, error);
+      return false;
     }
   }
 

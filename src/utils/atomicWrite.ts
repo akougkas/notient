@@ -22,8 +22,20 @@ export async function atomicWriteFile(filePath: string, data: string): Promise<v
   const tempPath = path.join(dir, `.${path.basename(filePath)}.tmp.${Date.now()}`);
 
   try {
+    // Ensure directory exists before writing
+    await fs.promises.mkdir(dir, { recursive: true });
+
     // Write to temp file first
     await fs.promises.writeFile(tempPath, data, "utf-8");
+
+    // Sync to ensure data is flushed to disk before rename
+    // This is important for crash safety
+    const fd = await fs.promises.open(tempPath, "r");
+    try {
+      await fd.sync();
+    } finally {
+      await fd.close();
+    }
 
     // Atomic rename (on same filesystem, this is atomic)
     await fs.promises.rename(tempPath, filePath);

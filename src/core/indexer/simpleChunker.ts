@@ -331,20 +331,29 @@ export function generateNoteId(filePath: string): string {
 }
 
 /**
- * Generate content hash for change detection
+ * Generate content hash for change detection.
+ * Uses normalized content (collapsed whitespace, trimmed) for more stable hashing.
  */
 export function generateContentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+  // Normalize content: collapse multiple whitespace, trim, lowercase for stability
+  const normalized = content
+    .replace(/\r\n/g, "\n") // Normalize line endings
+    .replace(/[\t ]+/g, " ") // Collapse horizontal whitespace
+    .replace(/\n{3,}/g, "\n\n") // Collapse excessive blank lines
+    .trim();
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
 /**
- * Generate chunk ID
+ * Generate chunk ID.
+ * Uses full text hash to avoid collisions on short content.
  */
 function generateChunkId(noteId: string, chunkIndex: number, text: string): string {
+  // Use full text for hashing to avoid collisions on short content
   const hash = createHash("sha256")
-    .update(`${noteId}:${chunkIndex}:${text.slice(0, 100)}`)
+    .update(`${noteId}:${chunkIndex}:${text}`)
     .digest("hex")
-    .slice(0, 8);
+    .slice(0, 12); // Increased from 8 to 12 for lower collision probability
   return `${noteId}-${chunkIndex}-${hash}`;
 }
 

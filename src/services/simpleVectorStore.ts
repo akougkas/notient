@@ -517,7 +517,11 @@ export class SimpleVectorStore implements VectorStore {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.saveToDisk();
+      this.saveToDisk().catch((error) => {
+        console.error("[SimpleVectorStore] Scheduled save failed:", error);
+        // Emit error event so UI can notify user of persistence failure
+        this.kernel.eventBus.emit("index:error", { error: String(error), source: "vectorStore" });
+      });
     }, 10000); // Save 10s after last write
   }
 

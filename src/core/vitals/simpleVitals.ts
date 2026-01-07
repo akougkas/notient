@@ -216,6 +216,7 @@ export class SimpleVaultVitals {
     const totalFiles = this.kernel.obsidian.getMarkdownFiles().length;
     const indexedCount = this.indexManager.getIndexedCount();
     const lastFullIndex = this.indexManager.getLastFullIndexAt();
+    const errorCount = this.indexManager.getErrorCount();
 
     const pendingCount = Math.max(0, totalFiles - indexedCount);
     const freshness = totalFiles > 0 ? Math.round((indexedCount / totalFiles) * 100) : 0;
@@ -223,7 +224,7 @@ export class SimpleVaultVitals {
     return {
       indexedCount,
       pendingCount,
-      errorCount: 0,
+      errorCount,
       lastFullIndexAt: lastFullIndex,
       freshness,
     };

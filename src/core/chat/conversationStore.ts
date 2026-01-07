@@ -6,6 +6,7 @@
  */
 
 import * as fs from "node:fs";
+import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { StoragePaths } from "../../services/storagePaths";
 import type { ExtendedChatMessage } from "./types";
 
@@ -151,7 +152,8 @@ export class ConversationStore {
         };
       }
 
-      await fs.promises.writeFile(filePath, JSON.stringify(storage, null, 2), "utf-8");
+      // Use atomic write for crash safety
+      await atomicWriteFile(filePath, JSON.stringify(storage, null, 2));
       this.dirty = false;
       console.log(`[ConversationStore] Flushed ${this.conversations.size} conversations`);
     } catch (error) {

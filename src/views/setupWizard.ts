@@ -150,6 +150,15 @@ export class SetupWizardModal extends Modal {
   }
 
   onClose(): void {
+    // Cancel any pending debounced functions to prevent memory leaks
+    // and callbacks firing after modal is closed
+    this.debouncedCheckOllama.cancel?.();
+    this.debouncedCheckLMStudio.cancel?.();
+    this.debouncedRender.cancel?.();
+
+    // Clear cached data
+    this.cachedIndices = null;
+
     if (this.resolvePromise) {
       this.resolvePromise(this.result);
       this.resolvePromise = null;

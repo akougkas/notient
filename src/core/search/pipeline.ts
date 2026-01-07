@@ -101,13 +101,15 @@ export class SearchPipeline {
     } satisfies Omit<SearchOptions, "topK">;
 
     const startTime = Date.now();
-    const cacheKey = this.getCacheKey(query, { ...baseFilters, topK: requestedTopK });
+    const cacheKey = this.getCacheKey(query, { ...baseFilters, topK: requestedTopK }, enableReranking);
 
     this.eventBus.emit("search:started", { query });
 
-    // Check cache first
+    // Check cache first (LRU: update timestamp on access)
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_CONFIG.SEARCH_CACHE_TTL_MS) {
+      // LRU: Update timestamp on cache hit to mark as recently used
+      cached.timestamp = Date.now();
       this.eventBus.emit("search:complete", {
         query,
         results: cached.results,
@@ -189,16 +191,23 @@ export class SearchPipeline {
 
   /**
    * Rerank chunk candidates using LLM (chunk-level reranking)
+   *
+   * Strategy: Send top 25 chunks to reranker to avoid missing relevant content.
+   * The reranker returns scores and reasoning for these candidates, while
+   * remaining chunks keep their original vector scores with a small penalty.
    */
   private async rerankChunksWithLLM(
     query: string,
     chunks: ChunkSearchResult[],
     reranker: Reranker,
   ): Promise<ChunkSearchResult[]> {
+    // Increased from 10 to 25 to reduce ranking degradation
+    const RERANK_LIMIT = 25;
+
     try {
       // NOTE: The reranker types are "noteId"-based. For chunk-level reranking, we
       // encode chunkId into the noteId field and map it back afterwards.
-      const candidates: RerankCandidate[] = chunks.slice(0, 10).map((c) => ({
+      const candidates: RerankCandidate[] = chunks.slice(0, RERANK_LIMIT).map((c) => ({
         noteId: c.chunkId,
         path: c.path,
         title: c.headingPath.length ? `${c.title} — ${c.headingPath.join(" > ")}` : c.title,
@@ -221,7 +230,10 @@ export class SearchPipeline {
         if (rr) {
           rerankedChunks.push({ ...c, score: rr.score, reasoning: rr.reasoning });
         } else {
-          rerankedChunks.push(c);
+          // Chunks outside the rerank window keep their vector scores
+          // Apply a small penalty to ensure reranked results are prioritized
+          const penalizedScore = c.score * 0.85;
+          rerankedChunks.push({ ...c, score: penalizedScore, reasoning: "Vector similarity" });
         }
       }
 
@@ -394,9 +406,10 @@ export class SearchPipeline {
   }
 
   /**
-   * Generate cache key for query + options
+   * Generate cache key for query + options.
+   * Includes all options that affect results, including reranking flag.
    */
-  private getCacheKey(query: string, options: SearchOptions): string {
+  private getCacheKey(query: string, options: SearchOptions, enableReranking = false): string {
     return JSON.stringify({
       query: query.toLowerCase().trim(),
       topK: options.topK,
@@ -404,17 +417,33 @@ export class SearchPipeline {
       paraType: options.paraType,
       folderPaths: options.folderPaths?.sort(),
       tags: options.tags?.sort(),
+      // Include reranking flag to avoid cache key collisions
+      enableReranking,
     });
   }
 
   /**
-   * Update result cache
+   * Update result cache with LRU eviction.
+   * LRU: evict least recently USED (not inserted) when capacity is reached.
    */
   private updateCache(key: string, results: SearchResult[], embedding: number[]): void {
-    // LRU management
+    // LRU: If key already exists, delete it first to update its position
+    if (this.queryCache.has(key)) {
+      this.queryCache.delete(key);
+    }
+
+    // LRU eviction: remove oldest entry when at capacity
     if (this.queryCache.size >= CACHE_CONFIG.MAX_SEARCH_CACHE_SIZE) {
-      const firstKey = this.queryCache.keys().next().value;
-      if (firstKey) this.queryCache.delete(firstKey);
+      // Find the entry with the oldest timestamp (least recently used)
+      let oldestKey: string | null = null;
+      let oldestTime = Infinity;
+      for (const [k, v] of this.queryCache.entries()) {
+        if (v.timestamp < oldestTime) {
+          oldestTime = v.timestamp;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey) this.queryCache.delete(oldestKey);
     }
 
     this.queryCache.set(key, {

@@ -34,7 +34,7 @@ const DEFAULT_PORTS = {
 };
 
 /**
- * Load settings from plugin data
+ * Load settings from plugin data and validate
  */
 export async function loadSettings(plugin: Plugin): Promise<NotientSettings> {
   const data = await plugin.loadData();
@@ -43,19 +43,34 @@ export async function loadSettings(plugin: Plugin): Promise<NotientSettings> {
     return { ...DEFAULT_SETTINGS };
   }
 
-  const settings = mergeWithDefaults(data);
+  let settings = mergeWithDefaults(data);
 
   if (settings.version < SETTINGS_VERSION) {
-    return migrateSettings(settings);
+    settings = migrateSettings(settings);
+  }
+
+  // Validate settings and log any issues
+  const validation = validateSettings(settings);
+  if (!validation.valid) {
+    console.error("[Settings] Validation errors:", validation.errors);
+  }
+  if (validation.warnings.length > 0) {
+    console.warn("[Settings] Validation warnings:", validation.warnings);
   }
 
   return settings;
 }
 
 /**
- * Save settings to plugin data
+ * Save settings to plugin data with validation
  */
 export async function saveSettings(plugin: Plugin, settings: NotientSettings): Promise<void> {
+  // Validate before saving
+  const validation = validateSettings(settings);
+  if (!validation.valid) {
+    console.error("[Settings] Cannot save invalid settings:", validation.errors);
+    // Still save, but warn - we don't want to lose user data
+  }
   await plugin.saveData(settings);
 }
 

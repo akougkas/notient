@@ -156,6 +156,8 @@ export class IndexManager {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** Resolved active index path (used to derive state path) */
   private activeIndexPath: string | null = null;
+  /** Track indexing errors for vitals (note paths that failed) */
+  private errorPaths: Set<string> = new Set();
 
   constructor(
     private kernel: Kernel,
@@ -358,12 +360,31 @@ export class IndexManager {
     return this.lastFullIndexAt;
   }
 
+  /** Get count of indexing errors */
+  getErrorCount(): number {
+    return this.errorPaths.size;
+  }
+
+  /** Record an indexing error for a note */
+  recordError(notePath: string): void {
+    this.errorPaths.add(notePath);
+  }
+
+  /** Clear error tracking (called when index is cleared or rebuilt) */
+  clearErrors(): void {
+    this.errorPaths.clear();
+  }
+
   /** Mark that indexing has started (for crash recovery detection) */
   beginIndexing(): void {
     this.indexingInProgress = true;
     this.indexingStartedAt = Date.now();
     this.dirty = true;
-    void this.saveState(); // Save immediately
+    // Save immediately with proper error handling
+    this.saveState().catch((error) => {
+      console.error("[IndexManager] Failed to save indexing start state:", error);
+      this.kernel.eventBus.emit("index:error", { error: String(error), source: "beginIndexing" });
+    });
   }
 
   /** Mark that indexing has completed */
@@ -952,7 +973,11 @@ export class IndexManager {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.saveState();
+      this.saveState().catch((error) => {
+        console.error("[IndexManager] Scheduled save failed:", error);
+        // Emit error event so UI can notify user
+        this.kernel.eventBus.emit("index:error", { error: String(error), source: "save" });
+      });
     }, 2000); // Debounce 2s
   }
 

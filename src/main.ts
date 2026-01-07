@@ -101,6 +101,8 @@ export default class NotientPlugin extends Plugin {
         this.settings,
         async (newSettings, changedFields = []) => {
           this.settings = newSettings;
+          // Update kernel's settings reference to prevent stale state
+          this.kernel.updateSettings(newSettings);
           await saveSettings(this, newSettings);
           this.kernel.eventBus.emit("settings:changed", { changedFields });
         },
@@ -610,8 +612,10 @@ export default class NotientPlugin extends Plugin {
   }
 
   private async showSetupWizard(): Promise<void> {
+    // Reuse existing health monitor or create one (avoids duplicate monitors)
     if (!this.healthMonitor) {
       this.healthMonitor = new HealthMonitor(this.kernel);
+      await this.healthMonitor.initialize();
     }
 
     // Track if this is a fresh setup or reconfiguration

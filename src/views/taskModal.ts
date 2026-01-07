@@ -153,6 +153,8 @@ export class TaskModal extends Modal {
 
     this.inputEl = ta.inputEl;
     this.inputEl.rows = 1;
+    this.inputEl.setAttribute("aria-label", "Chat message input");
+    this.inputEl.setAttribute("role", "textbox");
 
     // Auto-resize
     this.inputEl.addEventListener("input", () => {
@@ -189,11 +191,13 @@ export class TaskModal extends Modal {
         .setTooltip("Stop and discard")
         .onClick(() => this.cancelGeneration());
       stopBtn.buttonEl.addClass("nv2-btn-stop");
+      stopBtn.buttonEl.setAttribute("aria-label", "Stop generation");
     } else {
-      new ButtonComponent(this.sendBtnContainerEl)
+      const sendBtn = new ButtonComponent(this.sendBtnContainerEl)
         .setIcon("send")
         .setTooltip("Send message")
         .onClick(() => this.handleSend());
+      sendBtn.buttonEl.setAttribute("aria-label", "Send message");
     }
   }
 
@@ -273,8 +277,15 @@ export class TaskModal extends Modal {
   private async handleSend(): Promise<void> {
     if (!this.inputEl || this.isStreamActive) return;
 
-    const text = this.inputEl.value.trim();
+    let text = this.inputEl.value.trim();
     if (!text) return;
+
+    // Basic input validation and sanitization
+    // Limit message length to prevent token overflow
+    const MAX_MESSAGE_LENGTH = 4000;
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      text = text.slice(0, MAX_MESSAGE_LENGTH);
+    }
 
     // Clear input
     this.inputEl.value = "";

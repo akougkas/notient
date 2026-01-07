@@ -105,19 +105,21 @@ export class VaultContextBuilder {
   }
 
   /**
-   * Extract unique tags from candidates
+   * Extract unique tags from candidates (optimized: O(unique notes) lookups)
    */
   private extractTags(candidates: SearchResult[]): string[] {
     const tagCounts = new Map<string, number>();
+    const seenPaths = new Set<string>();
 
     for (const c of candidates) {
-      if (c.chunks?.[0]) {
-        // Get tags from the chunk's metadata if available
-        const metadata = this.kernel.obsidian.getMetadataByPath(c.path);
-        const tags = metadata?.tags || [];
-        for (const tag of tags) {
-          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-        }
+      // Only lookup metadata once per unique path
+      if (seenPaths.has(c.path)) continue;
+      seenPaths.add(c.path);
+
+      const metadata = this.kernel.obsidian.getMetadataByPath(c.path);
+      const tags = metadata?.tags || [];
+      for (const tag of tags) {
+        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
       }
     }
 

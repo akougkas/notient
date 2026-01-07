@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { IntelligenceFile, IntelligenceRecord } from "./types";
 
 const INTELLIGENCE_VERSION = 1;
@@ -152,7 +153,8 @@ export class IntelligenceDb {
     };
 
     try {
-      await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2));
+      // Use atomic write for crash safety
+      await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
       this.dirty = false;
     } catch (error) {
       console.error("[IntelligenceDb] Failed to save:", error);

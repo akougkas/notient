@@ -82,8 +82,12 @@ export interface IndexCompleteEvent {
 }
 
 export interface IndexErrorEvent {
-  path: string;
+  /** Path of the file that caused the error (optional for system-level errors) */
+  path?: string;
+  /** Error message */
   error: string;
+  /** Source of the error (e.g., "save", "beginIndexing", "vectorStore") */
+  source?: string;
 }
 
 export interface SearchStartedEvent {

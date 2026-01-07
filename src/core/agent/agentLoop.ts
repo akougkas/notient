@@ -200,7 +200,11 @@ export class NotientAgent {
 
     try {
       for await (const chunk of this.llm.stream(messages, undefined, signal)) {
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          // Yield abort event so UI can properly clean up
+          yield { type: "error", error: new DOMException("Task aborted", "AbortError") };
+          return;
+        }
 
         fullResponse += chunk;
         yield { type: "chunk", content: chunk };
@@ -211,6 +215,8 @@ export class NotientAgent {
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") {
+        // Yield abort event so UI can properly clean up
+        yield { type: "error", error: new DOMException("Task aborted", "AbortError") };
         return;
       }
       yield { type: "error", error: error as Error };
@@ -219,6 +225,7 @@ export class NotientAgent {
 
     // Check if aborted during streaming
     if (signal?.aborted) {
+      yield { type: "error", error: new DOMException("Task aborted", "AbortError") };
       return;
     }
 
@@ -239,11 +246,15 @@ export class NotientAgent {
         });
 
         // Build messages for action plan generation
+        // Sanitize user query to prevent prompt injection
+        const sanitizedQuery = query
+          .replace(/[`"\\]/g, "") // Remove quotes and backticks
+          .slice(0, 500); // Limit length
         const actionMessages: ChatMessage[] = [
           { role: "system", content: actionPlanPrompt },
           {
             role: "user",
-            content: `Based on my request "${query}" and the note content, propose specific actions to improve this note. Output only valid JSON.`,
+            content: `Based on my request: ${sanitizedQuery}\n\nPropose specific actions to improve this note. Output only valid JSON.`,
           },
         ];
 

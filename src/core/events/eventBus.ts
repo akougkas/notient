@@ -110,7 +110,18 @@ export class EventBus {
 let globalEventBus: EventBus | null = null;
 
 export function setGlobalEventBus(bus: EventBus): void {
+  // Clear old event bus to prevent stale references on plugin reload
+  if (globalEventBus && globalEventBus !== bus) {
+    globalEventBus.dispose();
+  }
   globalEventBus = bus;
+}
+
+export function clearGlobalEventBus(): void {
+  if (globalEventBus) {
+    globalEventBus.dispose();
+    globalEventBus = null;
+  }
 }
 
 export function getEventBus(): EventBus {

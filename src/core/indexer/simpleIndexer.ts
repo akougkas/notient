@@ -48,6 +48,8 @@ export class SimpleIndexer {
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private disposed = false;
   private aborted = false;
+  /** Track notes currently being indexed to prevent concurrent processing */
+  private indexingNotes: Set<string> = new Set();
   private progress: IndexProgress = {
     total: 0,
     completed: 0,
@@ -212,20 +214,32 @@ export class SimpleIndexer {
   }
 
   /**
-   * Index a single note
+   * Index a single note.
+   * Protected against concurrent calls for the same note path.
    */
   async indexNote(path: string): Promise<void> {
     if (this.disposed) return;
 
-    const content = await this.kernel.obsidian.readFileByPath(path);
-    if (content === null) return;
+    // Prevent concurrent indexing of the same note (race condition guard)
+    if (this.indexingNotes.has(path)) {
+      console.log(`[SimpleIndexer] Note ${path} already being indexed, skipping`);
+      return;
+    }
 
-    const file = this.kernel.obsidian.getFileByPath(path);
-    if (!file) return;
+    this.indexingNotes.add(path);
+    try {
+      const content = await this.kernel.obsidian.readFileByPath(path);
+      if (content === null) return;
 
-    const mtimeMs = file.stat.mtime;
-    await this.processNote(path, content, mtimeMs);
-    await this.indexManager.save();
+      const file = this.kernel.obsidian.getFileByPath(path);
+      if (!file) return;
+
+      const mtimeMs = file.stat.mtime;
+      await this.processNote(path, content, mtimeMs);
+      await this.indexManager.save();
+    } finally {
+      this.indexingNotes.delete(path);
+    }
   }
 
   /**
@@ -390,6 +404,8 @@ export class SimpleIndexer {
         }
       } catch (error) {
         console.error(`[SimpleIndexer] Error processing ${path}:`, error);
+        // Record error in IndexManager for vitals tracking
+        this.indexManager.recordError(path);
         errors++;
       }
 
@@ -438,6 +454,7 @@ export class SimpleIndexer {
   private async embedChunks(chunks: NoteChunk[]): Promise<EmbeddedChunk[]> {
     const embedded: EmbeddedChunk[] = [];
     const modelKey = this.ollama.getModelKey();
+    const expectedDimension = this.indexManager.getDimension();
 
     for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
       if (this.disposed || this.aborted) break;
@@ -452,6 +469,18 @@ export class SimpleIndexer {
       for (let j = 0; j < batch.length; j++) {
         const embedding = embeddings[j];
         if (!embedding || embedding.length === 0) continue;
+
+        // Validate embedding dimension to prevent index corruption
+        if (embedding.length !== expectedDimension) {
+          console.error(
+            `[SimpleIndexer] Embedding dimension mismatch: got ${embedding.length}, expected ${expectedDimension}. Skipping chunk.`
+          );
+          this.eventBus.emit("index:error", {
+            path: batch[j].path,
+            error: `Embedding dimension mismatch: ${embedding.length} vs ${expectedDimension}`,
+          });
+          continue;
+        }
 
         const chunk = batch[j];
         embedded.push({

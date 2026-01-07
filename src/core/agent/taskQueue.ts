@@ -28,6 +28,8 @@ export class AgentTaskQueue {
   private currentAbortController: AbortController | null = null;
   private onTaskUpdateCallback?: TaskUpdateCallback;
   private conversationStore?: ConversationStore;
+  /** Guard against concurrent processNext() calls */
+  private processing = false;
 
   constructor(
     private agent: NotientAgent,
@@ -61,11 +63,23 @@ export class AgentTaskQueue {
         role: m.role,
         content: m.content,
       }));
-      // Prepend persisted history to any new messages
-      mergedChatHistory = [...simplifiedHistory, ...newMessages];
 
-      // Persist the new user messages (typically just one)
-      for (const msg of newMessages) {
+      // Deduplicate: only add new messages not already in persisted history
+      // Compare by content since new messages don't have IDs yet
+      const existingContents = new Set(simplifiedHistory.map((m) => m.content));
+      const uniqueNewMessages = newMessages.filter((m) => !existingContents.has(m.content));
+
+      // Merge: persisted history + only truly new messages
+      mergedChatHistory = [...simplifiedHistory, ...uniqueNewMessages];
+
+      // Limit total chat history to prevent unbounded growth (keep last 100 messages)
+      const MAX_HISTORY_SIZE = 100;
+      if (mergedChatHistory.length > MAX_HISTORY_SIZE) {
+        mergedChatHistory = mergedChatHistory.slice(-MAX_HISTORY_SIZE);
+      }
+
+      // Persist the new user messages (only truly new ones)
+      for (const msg of uniqueNewMessages) {
         if (msg.role === "user") {
           const userMessage: ExtendedChatMessage = {
             id: crypto.randomUUID(),
@@ -241,39 +255,48 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Process the next task in the queue
+   * Process the next task in the queue.
+   * Protected against concurrent invocations.
    */
   private async processNext(): Promise<void> {
-    if (this.currentTask) return;
-
-    const next = this.tasks.find((t) => t.status === "queued");
-    if (!next) return;
-
-    this.currentTask = next;
-    next.status = "running";
-    this.emitUpdate(next);
+    // Guard against concurrent processing (fixes race condition)
+    if (this.processing || this.currentTask) return;
+    this.processing = true;
 
     try {
-      await this.executeTask(next);
-
-      // Only mark completed if not already cancelled/failed
-      if (next.status === "running") {
-        next.status = "completed";
-        next.completedAt = new Date();
-        next.progress = 100;
+      const next = this.tasks.find((t) => t.status === "queued");
+      if (!next) {
+        this.processing = false;
+        return;
       }
-    } catch (error) {
-      if (next.status === "running") {
-        next.status = "failed";
-        next.error = error instanceof Error ? error.message : String(error);
-        next.completedAt = new Date();
+
+      this.currentTask = next;
+      next.status = "running";
+      this.emitUpdate(next);
+
+      try {
+        await this.executeTask(next);
+
+        // Only mark completed if not already cancelled/failed
+        if (next.status === "running") {
+          next.status = "completed";
+          next.completedAt = new Date();
+          next.progress = 100;
+        }
+      } catch (error) {
+        if (next.status === "running") {
+          next.status = "failed";
+          next.error = error instanceof Error ? error.message : String(error);
+          next.completedAt = new Date();
+        }
+      } finally {
+        this.emitUpdate(next);
+        this.currentTask = null;
+        this.currentAbortController = null;
       }
     } finally {
-      this.emitUpdate(next);
-      this.currentTask = null;
-      this.currentAbortController = null;
-
-      // Process next in queue
+      this.processing = false;
+      // Process next in queue (after releasing the lock)
       void this.processNext();
     }
   }

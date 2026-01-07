@@ -113,6 +113,13 @@ export class NotientSidebarView extends ItemView {
 
   async onClose(): Promise<void> {
     this._lastSearchResults = [];
+    // Clean up DOM references to prevent memory leaks
+    this.containerEl_ = null;
+    this.contentEl_ = null;
+    this.omnibarInputEl = null;
+    this.searchResultsEl = null;
+    this.sidebarFooter = null;
+    this.currentHints = [];
   }
 
   // ============ Service Getters ============
@@ -517,12 +524,17 @@ export class NotientSidebarView extends ItemView {
     const icon = wrapper.createDiv({ cls: "nv2-omnibar-icon" });
     setIcon(icon, "search");
 
-    // Input
+    // Input with accessibility
     const modeInfo = this.getSearchModeInfo();
     this.omnibarInputEl = wrapper.createEl("input", {
       type: "text",
       placeholder: modeInfo.placeholder,
       cls: "nv2-omnibar-input",
+      attr: {
+        "aria-label": "Search your notes or enter a command",
+        "autocomplete": "off",
+        "role": "searchbox",
+      },
     });
 
     // Right side controls (Mode Switcher + Kbd Hint)

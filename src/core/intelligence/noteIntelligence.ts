@@ -36,6 +36,8 @@ export class NoteIntelligenceService {
     backlinks: Map<string, number>;
     outlinks: Map<string, number>;
   } | null = null;
+  /** Track event subscriptions for cleanup */
+  private eventUnsubscribers: (() => void)[] = [];
 
   constructor(
     private kernel: Kernel,
@@ -56,9 +58,11 @@ export class NoteIntelligenceService {
     await this.db.load();
 
     // After indexing completes, refresh stale intelligence records.
-    this.eventBus.on("index:complete", () => {
+    // Store unsubscriber for cleanup on dispose
+    const unsubIndex = this.eventBus.on("index:complete", () => {
       void this.enqueueStaleFromIndex();
     });
+    this.eventUnsubscribers.push(unsubIndex);
 
     // Also kick a best-effort refresh shortly after startup (non-blocking).
     setTimeout(() => {
@@ -70,6 +74,13 @@ export class NoteIntelligenceService {
     this.disposed = true;
     this.queue = [];
     this.running = false;
+
+    // Unsubscribe from all events to prevent memory leaks
+    for (const unsub of this.eventUnsubscribers) {
+      unsub();
+    }
+    this.eventUnsubscribers = [];
+
     void this.db?.dispose();
     this.db = null;
     this.linkStats = null;
