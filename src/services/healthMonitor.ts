@@ -132,14 +132,63 @@ export class HealthMonitor {
       const modelExists =
         !configuredModel || this.lmstudioModels.some((m) => m.name === configuredModel);
 
+      if (!modelExists) {
+        const health: ServiceHealth = {
+          status: "unhealthy",
+          lastChecked: Date.now(),
+          error: `Model "${configuredModel}" not found in LM Studio`,
+          details: {
+            modelCount: this.lmstudioModels.length,
+            models: this.lmstudioModels.map((m) => m.name),
+            configuredModelValid: false,
+          },
+        };
+        this.kernel.updateServiceHealth("lmstudio", health);
+        return health;
+      }
+
+      // Verify model is actually LOADED by doing a minimal test completion
+      // LM Studio can list models in library but fail if none are loaded
+      if (configuredModel) {
+        const testResponse = await fetch(`${settings.lmstudio.host}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: configuredModel,
+            messages: [{ role: "user", content: "hi" }],
+            max_tokens: 1,
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!testResponse.ok) {
+          const errorText = await testResponse.text().catch(() => "");
+          const isNotLoaded = errorText.includes("No models loaded");
+          const health: ServiceHealth = {
+            status: "unhealthy",
+            lastChecked: Date.now(),
+            error: isNotLoaded
+              ? `Model "${configuredModel}" exists but is not loaded. Load it in LM Studio.`
+              : `Model "${configuredModel}" failed: ${testResponse.status}`,
+            details: {
+              modelCount: this.lmstudioModels.length,
+              models: this.lmstudioModels.map((m) => m.name),
+              configuredModelValid: false,
+            },
+          };
+          this.kernel.updateServiceHealth("lmstudio", health);
+          return health;
+        }
+      }
+
       const health: ServiceHealth = {
         status: "healthy",
         lastChecked: Date.now(),
-        error: modelExists ? null : `Model "${configuredModel}" not found`,
+        error: null,
         details: {
           modelCount: this.lmstudioModels.length,
           models: this.lmstudioModels.map((m) => m.name),
-          configuredModelValid: modelExists,
+          configuredModelValid: true,
         },
       };
 

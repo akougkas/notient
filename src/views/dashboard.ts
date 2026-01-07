@@ -9,6 +9,7 @@
 
 import { ItemView, Notice, type WorkspaceLeaf, setIcon } from "obsidian";
 import type { ActionHistory } from "../core/agentic/actionHistory";
+import type { ActionApplier } from "../core/agentic/actionApplier";
 import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
 import { VIEW_TYPE_DASHBOARD } from "../core/constants";
@@ -68,6 +69,10 @@ export class NotientDashboardView extends ItemView {
 
   private getActionHistory(): ActionHistory | null {
     return this.kernel.getService<ActionHistory>("actionHistory");
+  }
+
+  private getActionApplier(): ActionApplier | null {
+    return this.kernel.getService<ActionApplier>("actionApplier");
   }
 
   getViewType(): string {
@@ -672,7 +677,7 @@ export class NotientDashboardView extends ItemView {
     // Info about feature status
     section.createDiv({
       cls: "notient-message notient-message--info",
-      text: "Review queue is read-only in this version. Apply/Dismiss will be available in Phase 3.",
+      text: "Review items in the queue below. Approving items will apply them to your vault.",
     });
 
     const list = section.createDiv({ cls: "notient-review-list" });
@@ -692,21 +697,43 @@ export class NotientDashboardView extends ItemView {
       info.createDiv({ cls: "notient-review-target", text: action.target });
       info.createDiv({ cls: "notient-review-reason", text: action.reason });
 
-      // Action buttons (disabled - feature in development)
+      // Action buttons
       const actions = item.createDiv({ cls: "notient-review-actions" });
 
       const applyBtn = actions.createEl("button", {
-        cls: "notient-btn notient-btn--primary notient-btn--disabled",
+        cls: "notient-btn notient-btn--primary",
         text: "Apply",
-        attr: { disabled: "true", title: "Coming in Phase 3" },
+      });
+      applyBtn.addEventListener("click", async () => {
+        const applier = this.getActionApplier();
+        if (applier) {
+          applyBtn.disabled = true;
+          applyBtn.textContent = "Applying...";
+          const result = await applier.applyConfirmed(action);
+
+          if (result.success) {
+            new Notice(`Applied: ${action.title}`);
+            // Remove from queue
+            workflowRunner.dismissReviewItem(action.id);
+            this.render();
+          } else {
+            new Notice(`Failed: ${result.error}`);
+            applyBtn.disabled = false;
+            applyBtn.textContent = "Apply";
+          }
+        }
       });
 
       const dismissBtn = actions.createEl("button", {
-        cls: "notient-btn notient-btn--disabled",
+        cls: "notient-btn",
         text: "Dismiss",
-        attr: { disabled: "true", title: "Coming in Phase 3" },
+      });
+      dismissBtn.addEventListener("click", () => {
+        workflowRunner.dismissReviewItem(action.id);
+        this.render();
       });
     }
+
 
     if (allReviewItems.length > 20) {
       section.createDiv({
@@ -847,43 +874,55 @@ export class NotientDashboardView extends ItemView {
     const coverage = totalNotes > 0 ? Math.round((indexCount / totalNotes) * 100) : 0;
     coverageRow.createSpan({ text: `${coverage}%` });
 
-    // Actions
+    // Check if index is read-only (external/user-provided)
+    const indexManagerForReadOnly = this.kernel.getService<{ isReadOnly(): boolean }>("indexManager");
+    const isReadOnly = indexManagerForReadOnly?.isReadOnly() ?? false;
+
+    // Actions - only show if not read-only
     const actionsSection = section.createDiv({ cls: "notient-index-actions" });
     actionsSection.createEl("h3", { text: "Index Actions" });
 
-    const syncBtn = actionsSection.createEl("button", {
-      cls: "notient-btn notient-btn--primary",
-      text: "Sync Index",
-    });
-    syncBtn.addEventListener("click", async () => {
-      new Notice("Starting index sync...");
-      const indexer = this.kernel.getService<{
-        syncVault(): Promise<{ added: number; updated: number }>;
-      }>("indexer");
-      if (indexer) {
-        const result = await indexer.syncVault();
-        new Notice(`Sync complete: ${result.added} added, ${result.updated} updated`);
-        this.render();
-      }
-    });
+    if (isReadOnly) {
+      // Show read-only notice instead of buttons
+      const readOnlyNotice = actionsSection.createDiv({ cls: "notient-readonly-notice" });
+      readOnlyNotice.createSpan({ text: "🔒 External index is read-only (search only)" });
+      readOnlyNotice.style.cssText = "padding: 12px; background: var(--background-modifier-border); border-radius: 6px; color: var(--text-muted); font-size: 13px;";
+    } else {
+      // Show sync/rebuild buttons for plugin-managed indices
+      const syncBtn = actionsSection.createEl("button", {
+        cls: "notient-btn notient-btn--primary",
+        text: "Sync Index",
+      });
+      syncBtn.addEventListener("click", async () => {
+        new Notice("Starting index sync...");
+        const indexer = this.kernel.getService<{
+          syncVault(): Promise<{ added: number; updated: number }>;
+        }>("indexer");
+        if (indexer) {
+          const result = await indexer.syncVault();
+          new Notice(`Sync complete: ${result.added} added, ${result.updated} updated`);
+          this.render();
+        }
+      });
 
-    const rebuildBtn = actionsSection.createEl("button", {
-      cls: "notient-btn",
-      text: "Full Rebuild",
-    });
-    rebuildBtn.addEventListener("click", async () => {
-      new Notice("Starting full reindex...");
-      const indexer = this.kernel.getService<{
-        fullReindex(): Promise<{ added: number; updated: number; durationMs: number }>;
-      }>("indexer");
-      if (indexer) {
-        const result = await indexer.fullReindex();
-        new Notice(
-          `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
-        );
-        this.render();
-      }
-    });
+      const rebuildBtn = actionsSection.createEl("button", {
+        cls: "notient-btn",
+        text: "Full Rebuild",
+      });
+      rebuildBtn.addEventListener("click", async () => {
+        new Notice("Starting full reindex...");
+        const indexer = this.kernel.getService<{
+          fullReindex(): Promise<{ added: number; updated: number; durationMs: number }>;
+        }>("indexer");
+        if (indexer) {
+          const result = await indexer.fullReindex();
+          new Notice(
+            `Reindex complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
+          );
+          this.render();
+        }
+      });
+    }
 
     // Service health
     const healthSection = section.createDiv({ cls: "notient-section" });

@@ -14,14 +14,12 @@
 
 import { ItemView, Notice, TFile, type WorkspaceLeaf, debounce, setIcon } from "obsidian";
 import type { AgentTaskQueue } from "../core/agent";
-// New architecture imports (Phase 1.8)
 import type { AgentType } from "../core/agent/types";
+import type { ActionApplier } from "../core/agentic/actionApplier";
 import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser";
-import type { WorkflowRun } from "../core/agentic/types";
-// Phase 2: Workflow support (Milestone 2.4)
+import type { ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
-import { VIEW_TYPE_SIDEBAR } from "../core/constants";
-import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
+import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "../core/constants";
 import type { NoteIntelligenceService } from "../core/intelligence/noteIntelligence";
 import type {
   IntelligenceEntity,
@@ -30,49 +28,22 @@ import type {
   IntelligenceTriageAction,
 } from "../core/intelligence/types";
 import type { Kernel } from "../core/kernel";
-import type { ChatMessage, LLMProvider } from "../core/llm";
+import type { LLMProvider } from "../core/llm";
 import { ParaDetector } from "../core/para/detector";
 import type { SearchPipeline } from "../core/search/pipeline";
+import { InsightGenerator, type Insight } from "../services/insightGenerator";
+import { NoteVitalsCalculator, type NoteVitals, type IndexManagerLike } from "../services/noteVitalsCalculator";
 import type { IndexProgress } from "../types/indexer";
 import type { SearchResult } from "../types/search";
+import { NoteCard } from "./sidebar/components/NoteCard";
+import { QuickActions, createNoteQuickActions } from "./sidebar/components/QuickActions";
+import { InsightStream } from "./sidebar/components/InsightStream";
+import { SidebarFooter, type IndexManagerStats } from "./sidebar/components/SidebarFooter";
 import { TaskModal } from "./taskModal";
 
 // ============ Types ============
 
 type SidebarView = "note" | "agents";
-
-interface NoteVitals {
-  health: {
-    score: number;
-    status: "healthy" | "attention" | "unhealthy";
-  };
-  links: {
-    backlinks: number;
-    outlinks: number;
-  };
-  freshness: {
-    lastModified: Date;
-    displayText: string;
-  };
-  title: string;
-  path: string;
-  paraType: string;
-  tags: string[];
-  isIndexed: boolean;
-}
-
-interface Attachment {
-  id: string;
-  type: "rag-citation" | "user-attached";
-  filename: string;
-  path: string;
-}
-
-interface ExtendedChatMessage extends ChatMessage {
-  id: string;
-  attachments?: Attachment[];
-  timestamp: Date;
-}
 
 // ============ Main Sidebar View ============
 
@@ -80,23 +51,26 @@ export class NotientSidebarView extends ItemView {
   // State
   private currentView: SidebarView = "note";
   private noteVitals: NoteVitals | null = null;
-  private chatHistory: ExtendedChatMessage[] = [];
-  private isStreaming = false;
-  private streamingContent = "";
-  private activeAbortController: AbortController | null = null;
   private _lastSearchResults: SearchResult[] = [];
 
   // DOM references
   private containerEl_: HTMLElement | null = null;
   private contentEl_: HTMLElement | null = null;
+
+  // Search State
   private omnibarInputEl: HTMLInputElement | null = null;
   private searchResultsEl: HTMLElement | null = null;
-  private footerProgressEl: HTMLElement | null = null;
-  private footerStatsEl: HTMLElement | null = null;
-  private lastSyncTime: Date | null = null;
+  private selectedResultIndex = -1;
+  private isSearching = false;
+  private currentSearchMode: "quick" | "balanced" | "thorough" = "balanced";
+  private isShowingHints = false;
+  private currentHints: any[] = [];
 
-  // Utilities
+  // Services (extracted)
   private paraDetector: ParaDetector;
+  private vitalsCalculator: NoteVitalsCalculator;
+  private insightGenerator: InsightGenerator;
+  private sidebarFooter: SidebarFooter | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -104,6 +78,12 @@ export class NotientSidebarView extends ItemView {
   ) {
     super(leaf);
     this.paraDetector = new ParaDetector(kernel.settings);
+    this.vitalsCalculator = new NoteVitalsCalculator(this.app, this.paraDetector);
+    this.insightGenerator = new InsightGenerator({
+      prefillChatAndSwitch: (prompt) => this.prefillChatAndSwitch(prompt),
+      onMetricClick: (metric) => this.onMetricClick(metric),
+      showNotice: (msg) => new Notice(msg),
+    });
   }
 
   getViewType(): string {
@@ -132,8 +112,6 @@ export class NotientSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.cancelStreaming();
-    this.chatHistory = [];
     this._lastSearchResults = [];
   }
 
@@ -147,16 +125,16 @@ export class NotientSidebarView extends ItemView {
     return this.kernel.getService<LLMProvider>("llmProvider");
   }
 
-  private getContextBuilder(): VaultContextBuilder | null {
-    return this.kernel.getService<VaultContextBuilder>("context");
-  }
-
   private getWorkflowRunner(): WorkflowRunner | null {
     return this.kernel.getService<WorkflowRunner>("workflowRunner");
   }
 
   private getNoteIntelligence(): NoteIntelligenceService | null {
     return this.kernel.getService<NoteIntelligenceService>("intelligence");
+  }
+
+  private getActionApplier(): ActionApplier | null {
+    return this.kernel.getService<ActionApplier>("actionApplier");
   }
 
   // ============ Main Render ============
@@ -222,16 +200,11 @@ export class NotientSidebarView extends ItemView {
       this.renderNoteIntelligenceSection();
     }
 
-    // Quick Actions section
-    this.renderQuickActionsSection();
-
-    // Search Bar
+    // Omnibar (search + commands)
     this.renderSearchSection();
 
-    // Search results (hidden by default)
-    this.searchResultsEl = this.contentEl_.createDiv({
-      cls: "nv2-search-results nv2-hidden",
-    });
+    // Quick Actions section
+    this.renderQuickActionsSection();
 
     // Insight Stream section
     this.renderInsightStream();
@@ -239,55 +212,9 @@ export class NotientSidebarView extends ItemView {
 
   private renderNoteCard(): void {
     if (!this.contentEl_ || !this.noteVitals) return;
-
-    const card = this.contentEl_.createDiv({ cls: "nv2-note-card" });
-
-    // Title
-    card.createDiv({
-      cls: "nv2-note-card-title",
-      text: this.noteVitals.title,
-    });
-
-    // Tags
-    const tags = this.noteVitals.tags.map((t) => t.replace(/^#/, "")).filter(Boolean);
-    if (tags.length > 0) {
-      const tagsRow = card.createDiv({ cls: "nv2-note-card-tags" });
-      for (const tag of tags.slice(0, 5)) {
-        tagsRow.createDiv({ cls: "nv2-tag", text: `#${tag}` });
-      }
-      if (tags.length > 5) {
-        tagsRow.createDiv({ cls: "nv2-tag", text: `+${tags.length - 5}` });
-      }
-    }
-
-    // Links section
-    const links = card.createDiv({ cls: "nv2-note-card-links" });
-
-    // Backlinks row
-    const backlinksRow = links.createDiv({ cls: "nv2-link-row" });
-    const blIcon = backlinksRow.createDiv({ cls: "nv2-link-row-icon" });
-    setIcon(blIcon, "link");
-    const blContent = backlinksRow.createDiv({ cls: "nv2-link-row-content" });
-    blContent.createDiv({
-      cls: "nv2-link-row-label",
-      text: `${this.noteVitals.links.backlinks} backlink${this.noteVitals.links.backlinks !== 1 ? "s" : ""}`,
-    });
-    if (this.noteVitals.links.backlinks > 0) {
-      blContent.createDiv({
-        cls: "nv2-link-row-preview",
-        text: this.getBacklinkPreview(),
-      });
-    }
-
-    // Outlinks row
-    const outlinksRow = links.createDiv({ cls: "nv2-link-row" });
-    const olIcon = outlinksRow.createDiv({ cls: "nv2-link-row-icon" });
-    setIcon(olIcon, "arrow-right");
-    const olContent = outlinksRow.createDiv({ cls: "nv2-link-row-content" });
-    olContent.createDiv({
-      cls: "nv2-link-row-label",
-      text: `${this.noteVitals.links.outlinks} outlinks`,
-    });
+    const backlinkPreview = this.getBacklinkPreview();
+    const noteCard = new NoteCard(this.noteVitals, backlinkPreview);
+    noteCard.render(this.contentEl_);
   }
 
   private renderNoteIntelligenceSection(): void {
@@ -383,9 +310,8 @@ export class NotientSidebarView extends ItemView {
     links: IntelligenceSuggestedLink[]
   ): void {
     const item = container.createDiv({ cls: "nv2-insight" });
-    item.createDiv({ cls: "nv2-insight-dot" }); // primary dot
+    item.createDiv({ cls: "nv2-insight-dot" });
     const content = item.createDiv({ cls: "nv2-insight-content" });
-
     content.createDiv({ cls: "nv2-insight-label", text: "Suggestions" });
 
     // Tags
@@ -397,11 +323,13 @@ export class NotientSidebarView extends ItemView {
           text: `+ #${t.tag}`,
           title: `${Math.round(t.confidence * 100)}% - ${t.reason}`
         });
-        btn.addEventListener("click", () => {
-          // TODO: actually apply tag
-          new Notice(`Added #${t.tag} (mock)`);
-          btn.remove();
-        });
+        btn.addEventListener("click", () => this.applySuggestion(btn, {
+          type: "frontmatter_add_tags",
+          payload: { tags: [t.tag] },
+          risk: "low",
+          title: `Add tag #${t.tag}`,
+          reason: t.reason,
+        }, `Added #${t.tag}`, "add tag"));
       }
     }
 
@@ -410,16 +338,51 @@ export class NotientSidebarView extends ItemView {
       const list = content.createDiv({ cls: "nv2-suggestion-list" });
       for (const l of links.slice(0, 3)) {
         const row = list.createDiv({ cls: "nv2-suggestion-link-row" });
-        const text = row.createSpan({ text: `Link to [[${l.title}]]?` });
-        text.setAttribute("title", l.reason);
-
+        row.createSpan({ text: `Link to [[${l.title}]]?`, title: l.reason });
         const applyBtn = row.createEl("button", { cls: "nv2-suggestion-icon-btn", text: "Link" });
-        applyBtn.addEventListener("click", () => {
-          // TODO: actually insert link
-          new Notice(`Linked to [[${l.title}]] (mock)`);
-          row.remove();
-        });
+        applyBtn.addEventListener("click", () => this.applySuggestion(applyBtn, {
+          type: "append_related_links",
+          payload: { links: [l.title] },
+          risk: "medium",
+          title: `Link to [[${l.title}]]`,
+          reason: l.reason,
+        }, `Linked to [[${l.title}]]`, "link", row));
       }
+    }
+  }
+
+  private async applySuggestion(
+    btn: HTMLButtonElement,
+    action: Omit<ProposedAction, "id" | "target" | "requiresWriteLock">,
+    successMsg: string,
+    failLabel: string,
+    removeEl?: HTMLElement,
+  ): Promise<void> {
+    // Disable immediately to prevent double-click
+    btn.disabled = true;
+
+    if (!this.noteVitals) {
+      btn.disabled = false;
+      return;
+    }
+    const applier = this.getActionApplier();
+    if (!applier) {
+      new Notice("Action Applier service not available");
+      btn.disabled = false;
+      return;
+    }
+    const result = await applier.applyConfirmed({
+      ...action,
+      id: window.crypto.randomUUID(),
+      target: this.noteVitals.path,
+      requiresWriteLock: true,
+    } as ProposedAction);
+    if (result.success) {
+      new Notice(successMsg);
+      (removeEl ?? btn).remove();
+    } else {
+      new Notice(`Failed to ${failLabel}: ${result.error}`);
+      btn.disabled = false;
     }
   }
 
@@ -445,9 +408,71 @@ export class NotientSidebarView extends ItemView {
 
     const actions = box.createDiv({ cls: "nv2-triage-actions" });
     const applyBtn = actions.createEl("button", { cls: "nv2-triage-btn nv2-triage-btn--primary", text: "Apply" });
-    applyBtn.addEventListener("click", () => {
-      new Notice(`Applied triage: ${action.type} (mock)`);
-      box.remove();
+    applyBtn.addEventListener("click", async () => {
+      if (!this.noteVitals) return;
+      const applier = this.getActionApplier();
+      if (!applier) return;
+
+      applyBtn.disabled = true;
+      applyBtn.textContent = "Applying...";
+
+      if (!action.target) {
+        new Notice("Triage action missing target");
+        applyBtn.disabled = false;
+        return;
+      }
+
+      let proposed: ProposedAction | null = null;
+      if (action.type === "move") {
+        let toPath = action.target;
+        // Fix up the path if needed (simple heuristic)
+        if (!toPath.endsWith(".md")) {
+          // It's a folder, append current filename
+          const name = this.app.vault.getAbstractFileByPath(this.noteVitals.path)?.name;
+          if (name) {
+            toPath = `${toPath}/${name}`.replace(/\/+/g, "/");
+          }
+        }
+
+        proposed = {
+          id: window.crypto.randomUUID(),
+          type: "move_note",
+          target: this.noteVitals.path,
+          payload: {
+            from: this.noteVitals.path,
+            to: toPath
+          },
+          risk: "medium",
+          title: `Move to ${action.target}`,
+          reason: action.reason,
+          requiresWriteLock: true,
+        };
+      } else if (action.type === "tag") {
+        proposed = {
+          id: window.crypto.randomUUID(),
+          type: "frontmatter_add_tags",
+          target: this.noteVitals.path,
+          payload: { tags: [action.target.replace(/^#/, "")] },
+          risk: "low",
+          title: `Add tag ${action.target}`,
+          reason: action.reason,
+          requiresWriteLock: true,
+        };
+      }
+
+      if (proposed) {
+        const result = await applier.applyConfirmed(proposed);
+        if (result.success) {
+          new Notice("Applied triage action");
+          box.remove();
+        } else {
+          new Notice(`Failed: ${result.error}`);
+          applyBtn.disabled = false;
+        }
+      } else {
+        new Notice("Unsupported triage action type");
+        applyBtn.disabled = false;
+      }
     });
 
     const dismissBtn = actions.createEl("button", { cls: "nv2-triage-btn", text: "Dismiss" });
@@ -457,99 +482,109 @@ export class NotientSidebarView extends ItemView {
   }
 
   private getBacklinkPreview(): string {
-    // Get first backlink title as preview
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) return "";
-
-    const resolvedLinks = this.app.metadataCache.resolvedLinks;
-    for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
-      if (links[activeFile.path]) {
-        const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
-        if (sourceFile && sourceFile instanceof TFile) {
-          return `${sourceFile.basename}...`;
-        }
-      }
-    }
-    return "";
+    return this.vitalsCalculator.getBacklinkPreview(activeFile);
   }
 
   private renderQuickActionsSection(): void {
     if (!this.contentEl_) return;
-
-    const section = this.contentEl_.createDiv({ cls: "nv2-section" });
-    section.createDiv({ cls: "nv2-section-label", text: "Quick Actions" });
-
-    const actions = section.createDiv({ cls: "nv2-quick-actions" });
-
-    // Enrich action (primary)
-    const enrichBtn = actions.createDiv({ cls: "nv2-quick-action nv2-quick-action--primary" });
-    const enrichIcon = enrichBtn.createDiv({ cls: "nv2-quick-action-icon" });
-    setIcon(enrichIcon, "sparkles");
-    enrichBtn.createDiv({ cls: "nv2-quick-action-label", text: "Enrich" });
-    enrichBtn.addEventListener("click", () => {
-      const noteTitle = this.noteVitals?.title || "this note";
-      this.prefillChatAndSwitch(
-        `Enrich and expand "${noteTitle}" with additional context and insights`,
-      );
-    });
-
-    // Link action
-    const linkBtn = actions.createDiv({ cls: "nv2-quick-action" });
-    const linkIcon = linkBtn.createDiv({ cls: "nv2-quick-action-icon" });
-    setIcon(linkIcon, "link");
-    linkBtn.createDiv({ cls: "nv2-quick-action-label", text: "Link" });
-    linkBtn.addEventListener("click", () => {
-      const noteTitle = this.noteVitals?.title || "this note";
-      this.prefillChatAndSwitch(`Find notes that should be linked to "${noteTitle}"`);
-    });
-
-    // Move action
-    const moveBtn = actions.createDiv({ cls: "nv2-quick-action" });
-    const moveIcon = moveBtn.createDiv({ cls: "nv2-quick-action-icon" });
-    setIcon(moveIcon, "arrow-right-circle");
-    moveBtn.createDiv({ cls: "nv2-quick-action-label", text: "Move" });
-    moveBtn.addEventListener("click", () => {
-      const noteTitle = this.noteVitals?.title || "this note";
-      this.prefillChatAndSwitch(
-        `Suggest the best folder/category for "${noteTitle}" based on its content`,
-      );
-    });
+    const noteTitle = this.noteVitals?.title || "this note";
+    const actions = createNoteQuickActions(noteTitle, (prompt) => this.prefillChatAndSwitch(prompt));
+    const quickActions = new QuickActions(actions);
+    quickActions.render(this.contentEl_);
   }
 
   private renderSearchSection(): void {
     if (!this.contentEl_) return;
 
-    const section = this.contentEl_.createDiv({ cls: "nv2-search-section" });
-    const wrapper = section.createDiv({ cls: "nv2-search-wrapper" });
+    const section = this.contentEl_.createDiv({ cls: "nv2-omnibar" });
 
-    const icon = wrapper.createDiv({ cls: "nv2-search-icon" });
+    // Header with Mode Switcher (Interactive Pills)
+    const header = section.createDiv({ cls: "nv2-omnibar-header" });
+    const currentMode = this.currentSearchMode || "balanced"; // Default to balanced if not set
+
+    const modes = [
+      { key: "quick", icon: "⚡", label: "Quick" },
+      { key: "balanced", icon: "⚖️", label: "Balanced" },
+      { key: "thorough", icon: "🧠", label: "Thorough" }
+    ];
+
+    // Omnibar Wrapper (Glassmorphism Container)
+    const wrapper = section.createDiv({ cls: "nv2-omnibar-wrapper" });
+
+    // Icon
+    const icon = wrapper.createDiv({ cls: "nv2-omnibar-icon" });
     setIcon(icon, "search");
 
+    // Input
+    const modeInfo = this.getSearchModeInfo();
     this.omnibarInputEl = wrapper.createEl("input", {
       type: "text",
-      placeholder: "Search or /command...",
-      cls: "nv2-search-input notient-search-input",
+      placeholder: modeInfo.placeholder,
+      cls: "nv2-omnibar-input",
     });
 
+    // Right side controls (Mode Switcher + Kbd Hint)
+    const right = wrapper.createDiv({ cls: "nv2-omnibar-right" });
+
+    // Mode Pills
+    modes.forEach(mode => {
+      const isActive = currentMode === mode.key;
+      const pill = right.createDiv({
+        cls: `nv2-mode-pill nv2-mode--${mode.key}`,
+        attr: { "data-mode": mode.key }
+      });
+      if (!isActive) pill.style.opacity = "0.5";
+      if (isActive) pill.style.transform = "scale(1.05)";
+
+      pill.createSpan({ text: mode.icon });
+      // Only show label for active mode to save space, or show all if plenty of space
+      // For now, sleek icon-only for non-active
+      if (isActive) pill.createSpan({ text: mode.label });
+
+      pill.addEventListener("click", () => {
+        this.setSearchMode(mode.key as any);
+      });
+    });
+
+    const hint = right.createDiv({ cls: "nv2-omnibar-hint" });
+    hint.createSpan({ text: "⌘K", cls: "nv2-omnibar-kbd" });
+
+    // Floating Results Container
+    this.searchResultsEl = section.createDiv({ cls: "nv2-omnibar-results nv2-hidden" });
+
+    // Debounce logic
+    const debounceMs = currentMode === "quick" ? 50 : 150;
     const debouncedSearch = debounce(
       async (query: string) => {
-        // Don't search for slash commands
         if (isSlashCommand(query)) {
-          this.clearSearchResults();
+          // Already handled by input event for hints
           return;
         }
         if (query.length >= 2) {
+          // Show loading state
+          this.renderLoadingState();
           await this.performSearch(query);
         } else {
           this.clearSearchResults();
         }
       },
-      300,
-      true,
+      debounceMs,
+      false,
     );
 
     this.omnibarInputEl.addEventListener("input", (e) => {
+      this.selectedResultIndex = -1;
       const query = (e.target as HTMLInputElement).value;
+
+      // Command / Agent Hints
+      if (query.startsWith("/") || query.startsWith("@")) {
+        this.showCommandHints(query);
+        return;
+      }
+
+      // Normal Search
       debouncedSearch(query);
     });
 
@@ -557,15 +592,88 @@ export class NotientSidebarView extends ItemView {
       if (e.key === "Escape") {
         if (this.omnibarInputEl) this.omnibarInputEl.value = "";
         this.clearSearchResults();
+        this.omnibarInputEl?.blur();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        this.navigateResults(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        this.navigateResults(-1);
       } else if (e.key === "Enter") {
+        e.preventDefault();
         const query = this.omnibarInputEl?.value.trim() || "";
-        if (isSlashCommand(query)) {
-          e.preventDefault();
+
+        // Handle Hint Selection
+        if (this.isShowingHints && this.selectedResultIndex >= 0) {
+          const selectedHint = this.currentHints[this.selectedResultIndex];
+          if (selectedHint) {
+            this.selectHint(selectedHint);
+          }
+          return;
+        }
+
+        if (this.selectedResultIndex >= 0 && this._lastSearchResults[this.selectedResultIndex]) {
+          this.openFile(this._lastSearchResults[this.selectedResultIndex].path);
+          this.clearSearchResults();
+        } else if (isSlashCommand(query)) {
           void this.handleSlashCommand(query);
+        } else if (this.isAgentCommand(query)) {
+          this.handleAgentCommand(query);
+        } else if (query.length >= 2) {
+          void this.performSearch(query);
         }
       }
     });
+
+    // Focus handling
+    this.omnibarInputEl.addEventListener("focus", () => {
+      section.addClass("nv2-omnibar--focused");
+    });
+    this.omnibarInputEl.addEventListener("blur", () => {
+      setTimeout(() => section.removeClass("nv2-omnibar--focused"), 150);
+    });
   }
+
+  private renderLoadingState(): void {
+    if (!this.searchResultsEl) return;
+    this.searchResultsEl.empty();
+    this.searchResultsEl.removeClass("nv2-hidden");
+    const container = this.searchResultsEl.createDiv({ cls: "nv2-loading-container" });
+    container.createDiv({ cls: "nv2-loading-spinner" });
+    container.createSpan({ text: "Searching..." });
+  }
+
+  private getSearchModeInfo(): { key: string; icon: string; label: string; description: string; placeholder: string } {
+    const preset = this.kernel.settings.search.preset;
+    switch (preset) {
+      case "quick":
+        return {
+          key: "quick",
+          icon: "⚡",
+          label: "Quick",
+          description: "Fast file name search (no AI)",
+          placeholder: "Search, /command, or @agent...",
+        };
+      case "thorough":
+        return {
+          key: "thorough",
+          icon: "🧠",
+          label: "Thorough",
+          description: "Deep semantic search with AI reranking",
+          placeholder: "Search, /command, or @agent...",
+        };
+      default:
+        return {
+          key: "balanced",
+          icon: "⚖️",
+          label: "Balanced",
+          description: "Semantic search with vitality scores",
+          placeholder: "Search, /command, or @agent...",
+        };
+    }
+  }
+
+
 
   /**
    * Handle slash command execution
@@ -613,139 +721,9 @@ export class NotientSidebarView extends ItemView {
 
   private renderInsightStream(): void {
     if (!this.contentEl_) return;
-
-    const section = this.contentEl_.createDiv({ cls: "nv2-section" });
-    section.createDiv({ cls: "nv2-section-label", text: "Insight Stream" });
-
-    const stream = section.createDiv({ cls: "nv2-insight-stream" });
-
-    // Generate insights based on note vitals (if available)
-    const insights = this.generateInsights();
-
-    if (insights.length === 0) {
-      const empty = stream.createDiv({ cls: "nv2-empty-state" });
-      empty.createDiv({
-        cls: "nv2-empty-state-text",
-        text: "Open a note to see insights.",
-      });
-      return;
-    }
-
-    for (const insight of insights) {
-      const item = stream.createDiv({ cls: "nv2-insight" });
-      item.createDiv({
-        cls: `nv2-insight-dot ${insight.priority === "low" ? "nv2-insight-dot--secondary" : ""}`,
-      });
-
-      const content = item.createDiv({ cls: "nv2-insight-content" });
-
-      // Parse text for links
-      const textEl = content.createDiv({ cls: "nv2-insight-text" });
-      if (insight.linkText) {
-        const parts = insight.text.split(insight.linkText);
-        textEl.createSpan({ text: parts[0] });
-        const link = textEl.createEl("a", { text: insight.linkText });
-        link.addEventListener("click", () => {
-          if (insight.linkPath) this.openFile(insight.linkPath);
-        });
-        if (parts[1]) textEl.createSpan({ text: parts[1] });
-      } else {
-        textEl.setText(insight.text);
-      }
-
-      // Action button
-      if (insight.action) {
-        const actionBtn = content.createDiv({
-          cls: `nv2-insight-action ${insight.actionPrimary ? "nv2-insight-action--primary" : ""}`,
-        });
-        if (insight.actionIcon) {
-          const actionIcon = actionBtn.createSpan({ cls: "nv2-insight-action-icon" });
-          setIcon(actionIcon, insight.actionIcon);
-        }
-        actionBtn.createSpan({ text: insight.action });
-        actionBtn.addEventListener("click", () => {
-          if (insight.actionCallback) insight.actionCallback();
-        });
-      }
-    }
-  }
-
-  private generateInsights(): Array<{
-    text: string;
-    linkText?: string;
-    linkPath?: string;
-    action?: string;
-    actionIcon?: string;
-    actionPrimary?: boolean;
-    actionCallback?: () => void;
-    priority: "high" | "low";
-  }> {
-    if (!this.noteVitals) return [];
-
-    const insights: Array<{
-      text: string;
-      linkText?: string;
-      linkPath?: string;
-      action?: string;
-      actionIcon?: string;
-      actionPrimary?: boolean;
-      actionCallback?: () => void;
-      priority: "high" | "low";
-    }> = [];
-
-    // Insight about connections
-    if (this.noteVitals.links.backlinks === 0 && this.noteVitals.links.outlinks === 0) {
-      insights.push({
-        text: "This note has no connections. Consider linking it to related notes.",
-        action: "Find Connections",
-        actionIcon: "eye",
-        actionCallback: () => {
-          this.prefillChatAndSwitch(
-            `Find notes that could be linked to "${this.noteVitals?.title}"`,
-          );
-        },
-        priority: "high",
-      });
-    } else if (this.noteVitals.links.backlinks > 0) {
-      insights.push({
-        text: `This note appears strongly related to other notes via ${this.noteVitals.links.backlinks} backlink${this.noteVitals.links.backlinks > 1 ? "s" : ""}.`,
-        action: "Review Links",
-        actionIcon: "eye",
-        actionCallback: () => this.onMetricClick("links"),
-        priority: "high",
-      });
-    }
-
-    // Classification insight
-    if (this.noteVitals.paraType === "inbox" || this.noteVitals.paraType === "unknown") {
-      insights.push({
-        text: `Suggested classification update: Move from #${this.noteVitals.paraType} to #active-projects based on recent edits.`,
-        action: "Apply Change",
-        actionIcon: "check",
-        actionPrimary: true,
-        actionCallback: () => {
-          this.prefillChatAndSwitch(
-            `Suggest the best PARA category for "${this.noteVitals?.title}" and help me organize it`,
-          );
-        },
-        priority: "low",
-      });
-    }
-
-    // Index status insight
-    if (!this.noteVitals.isIndexed) {
-      insights.push({
-        text: "This note is not yet indexed for semantic search.",
-        action: "Index Now",
-        actionIcon: "database",
-        actionCallback: () => {
-          new Notice("Indexing will happen on next sync");
-        },
-        priority: "low",
-      });
-    }
-
-    return insights;
+    const insights = this.insightGenerator.generate(this.noteVitals);
+    const insightStream = new InsightStream(insights, (path) => this.openFile(path));
+    insightStream.render(this.contentEl_);
   }
 
   // ============ Agent Streams View ============
@@ -884,7 +862,13 @@ export class NotientSidebarView extends ItemView {
       });
       reviewBadge.addEventListener("click", (e) => {
         e.stopPropagation();
-        new Notice("Review queue: Open Dashboard to review pending actions");
+        // Open Dashboard view to review pending actions
+        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_DASHBOARD);
+        if (leaves.length > 0) {
+          this.app.workspace.setActiveLeaf(leaves[0], { focus: true });
+        } else {
+          new Notice("Open Dashboard from command palette to review pending actions");
+        }
       });
     }
   }
@@ -911,12 +895,15 @@ export class NotientSidebarView extends ItemView {
     const statusBar = this.contentEl_.createDiv({ cls: "nv2-status-bar" });
 
     const left = statusBar.createDiv({ cls: "nv2-status-bar-left" });
+    // Check if any agents are running by querying the task queue
+    const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
+    const hasRunningTasks = taskQueue?.getAll().some(t => t.status === "running") ?? false;
     left.createDiv({
-      cls: `nv2-status-dot ${this.isStreaming ? "nv2-status-dot--running" : "nv2-status-dot--idle"}`,
+      cls: `nv2-status-dot ${hasRunningTasks ? "nv2-status-dot--running" : "nv2-status-dot--idle"}`,
     });
     left.createSpan({
       cls: "nv2-status-bar-text",
-      text: this.isStreaming ? "Agent working..." : "All agents idle",
+      text: hasRunningTasks ? "Agent working..." : "All agents idle",
     });
 
     const settingsBtn = statusBar.createEl("button", {
@@ -1094,138 +1081,30 @@ export class NotientSidebarView extends ItemView {
   private renderFooter(): void {
     if (!this.containerEl_) return;
 
-    const footer = this.containerEl_.createDiv({ cls: "nv2-footer" });
+    const indexManager = this.kernel.getService<IndexManagerStats>("indexManager");
 
-    // Progress Bar (hidden by default)
-    this.footerProgressEl = footer.createDiv({ cls: "nv2-index-progress nv2-hidden" });
-
-    // Status Row
-    const status = footer.createDiv({ cls: "nv2-footer-status" });
-
-    const health = this.kernel.serviceHealth;
-
-    // Ollama status
-    const ollamaEl = status.createDiv({ cls: "nv2-footer-service" });
-    ollamaEl.createSpan({ text: "Ollama: " });
-    ollamaEl.createSpan({
-      cls: `nv2-footer-service-status ${this.getFooterStatusClass(health.ollama.status)}`,
-      text: this.getStatusText(health.ollama.status),
-    });
-
-    // LM Studio status
-    const lmEl = status.createDiv({ cls: "nv2-footer-service" });
-    lmEl.createSpan({ text: "LM Studio: " });
-    lmEl.createSpan({
-      cls: `nv2-footer-service-status ${this.getFooterStatusClass(health.lmstudio.status)}`,
-      text: this.getStatusText(health.lmstudio.status),
-    });
-
-    // Stats (Note count)
-    this.footerStatsEl = status.createDiv({ cls: "nv2-footer-stats" });
-    this.updateFooterStats();
-
-    // Settings button
-    const settingsBtn = footer.createEl("button", { cls: "nv2-footer-settings" });
-    settingsBtn.setAttr("aria-label", "Open Notient settings");
-    setIcon(settingsBtn, "settings");
-    settingsBtn.addEventListener("click", () => {
-      (
-        this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }
-      ).setting.open();
-      (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById(
-        "notient",
-      );
-    });
+    this.sidebarFooter = new SidebarFooter(
+      this.kernel.settings,
+      this.kernel.serviceHealth,
+      () => {
+        (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting.open();
+        (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById("notient");
+      },
+    );
+    this.sidebarFooter.render(this.containerEl_, indexManager);
   }
 
   private updateFooterStats(): void {
-    if (!this.footerStatsEl) return;
-
-    const indexManager = this.kernel.getService<{ getIndexedCount(): number }>("indexManager");
-    if (indexManager) {
-      const count = indexManager.getIndexedCount();
-      let text = `${count} notes`;
-
-      if (this.lastSyncTime) {
-        const time = this.lastSyncTime.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        text += ` • Synced ${time}`;
-      }
-
-      this.footerStatsEl.setText(text);
-      this.footerStatsEl.setAttr("title", "Indexed notes count");
-    }
+    if (!this.sidebarFooter) return;
+    const indexManager = this.kernel.getService<IndexManagerStats>("indexManager");
+    this.sidebarFooter.updateStats(indexManager);
   }
 
   private updateIndexProgress(progress: IndexProgress): void {
-    if (!this.footerProgressEl) return;
-
-    if (progress.phase === "idle" || progress.phase === "complete") {
-      this.footerProgressEl.addClass("nv2-hidden");
-
-      // Update stats when complete
-      if (progress.phase === "complete") {
-        this.updateFooterStats();
-      }
-      return;
-    }
-
-    this.footerProgressEl.removeClass("nv2-hidden");
-    this.footerProgressEl.empty();
-
-    // Progress bar
-    const bar = this.footerProgressEl.createDiv({ cls: "nv2-progress-bar" });
-    const percent =
-      progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
-
-    bar.createDiv({
-      cls: "nv2-progress-fill",
-      attr: { style: `width: ${percent}%` },
-    });
-
-    // Text status
-    let text = "";
-    switch (progress.phase) {
-      case "scanning":
-        text = "Scanning vault...";
-        break;
-      case "chunking":
-      case "embedding":
-      case "storing":
-        text = `Indexing: ${progress.completed}/${progress.total} (${percent}%)`;
-        break;
-      default:
-        text = "Processing...";
-    }
-
-    this.footerProgressEl.createDiv({ cls: "nv2-progress-text", text });
-  }
-
-  private getFooterStatusClass(status: string): string {
-    switch (status) {
-      case "healthy":
-        return ""; // Default green
-      case "unhealthy":
-        return "nv2-footer-service-status--error";
-      case "checking":
-        return "nv2-footer-service-status--warning";
-      default:
-        return "nv2-footer-service-status--error";
-    }
-  }
-
-  private getStatusText(status: string): string {
-    switch (status) {
-      case "healthy":
-        return "Healthy";
-      case "unhealthy":
-        return "Offline";
-      case "checking":
-        return "Checking...";
-      default:
-        return "Unknown";
+    if (!this.sidebarFooter) return;
+    this.sidebarFooter.updateProgress(progress);
+    if (progress.phase === "complete") {
+      this.updateFooterStats();
     }
   }
 
@@ -1242,208 +1121,250 @@ export class NotientSidebarView extends ItemView {
       return;
     }
 
-    const metadata = this.app.metadataCache.getFileCache(activeFile);
-
-    // Calculate health score (heuristic based on various factors)
-    const healthScore = this.calculateHealthScore(activeFile, metadata);
-
-    // Get backlinks
-    const backlinks: string[] = [];
-    const resolvedLinks = this.app.metadataCache.resolvedLinks;
-    for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
-      if (links[activeFile.path]) {
-        backlinks.push(sourcePath);
-      }
-    }
-
-    // Get outlinks
-    const outlinks: string[] = [];
-    const fileLinks = resolvedLinks[activeFile.path] || {};
-    for (const targetPath of Object.keys(fileLinks)) {
-      outlinks.push(targetPath);
-    }
-
-    // Extract tags
-    const tags = metadata?.tags?.map((t) => t.tag) || [];
-    const frontmatterTags = (metadata?.frontmatter?.tags as string[]) || [];
-    const allTags = [...new Set([...tags, ...frontmatterTags])];
-
-    // Freshness
-    const mtime = activeFile.stat.mtime;
-    const freshness = this.formatFreshness(mtime);
-
-    // Check if indexed
-    const indexManager = this.kernel.getService<{
-      isNoteIndexed(path: string): boolean;
-    }>("indexManager");
-    const isIndexed = indexManager?.isNoteIndexed(activeFile.path) ?? false;
-
-    this.noteVitals = {
-      health: {
-        score: healthScore,
-        status: healthScore >= 70 ? "healthy" : healthScore >= 40 ? "attention" : "unhealthy",
-      },
-      links: {
-        backlinks: backlinks.length,
-        outlinks: outlinks.length,
-      },
-      freshness: {
-        lastModified: new Date(mtime),
-        displayText: freshness,
-      },
-      title: activeFile.basename,
-      path: activeFile.path,
-      paraType: this.paraDetector.detectType(activeFile.path),
-      tags: allTags,
-      isIndexed,
-    };
+    const indexManager = this.kernel.getService<IndexManagerLike>("indexManager");
+    this.noteVitals = await this.vitalsCalculator.calculate(activeFile, indexManager);
 
     if (this.currentView === "note") {
       this.render();
     }
   }
 
-  private calculateHealthScore(
-    file: TFile,
-    metadata: ReturnType<typeof this.app.metadataCache.getFileCache>,
-  ): number {
-    let score = 50; // Base score
-
-    // Freshness factor (up to +20)
-    const daysSinceModified = Math.floor((Date.now() - file.stat.mtime) / (1000 * 60 * 60 * 24));
-    if (daysSinceModified <= 7) score += 20;
-    else if (daysSinceModified <= 30) score += 10;
-    else if (daysSinceModified > 90) score -= 10;
-
-    // Tags factor (up to +10)
-    const tagCount =
-      (metadata?.tags?.length || 0) + ((metadata?.frontmatter?.tags as string[])?.length || 0);
-    if (tagCount >= 3) score += 10;
-    else if (tagCount >= 1) score += 5;
-
-    // Links factor (up to +20)
-    const resolvedLinks = this.app.metadataCache.resolvedLinks;
-    const outlinks = Object.keys(resolvedLinks[file.path] || {}).length;
-    let backlinks = 0;
-    for (const [, links] of Object.entries(resolvedLinks)) {
-      if (links[file.path]) backlinks++;
-    }
-
-    if (backlinks >= 5) score += 10;
-    else if (backlinks >= 1) score += 5;
-
-    if (outlinks >= 5) score += 10;
-    else if (outlinks >= 1) score += 5;
-
-    // Indexed factor
-    const indexManager = this.kernel.getService<{
-      isNoteIndexed(path: string): boolean;
-    }>("indexManager");
-    if (indexManager?.isNoteIndexed(file.path)) {
-      score += 10;
-    }
-
-    return Math.max(0, Math.min(100, score));
-  }
-
-  private formatFreshness(mtime: number): string {
-    const now = Date.now();
-    const diff = now - mtime;
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) {
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      if (hours === 0) {
-        return "Just now";
-      }
-      return `${hours}h ago`;
-    }
-    if (days === 1) {
-      return "Yesterday";
-    }
-    if (days < 7) {
-      return `${days} days ago`;
-    }
-    if (days < 30) {
-      const weeks = Math.floor(days / 7);
-      return `${weeks} week${weeks > 1 ? "s" : ""} ago`;
-    }
-    const date = new Date(mtime);
-    return date.toLocaleDateString();
-  }
-
   // ============ Search ============
 
   private async performSearch(query: string): Promise<void> {
-    const searchPipeline = this.getSearchPipeline();
-    if (!searchPipeline || !this.kernel.capabilities.search) {
-      this.showSearchError("Search unavailable");
+    const preset = this.kernel.settings.search.preset;
+
+    // Quick mode: instant fuzzy search on file names (no embedding)
+    if (preset === "quick") {
+      this.performQuickSearch(query);
       return;
     }
 
+    // Semantic search (balanced/thorough)
+    const searchPipeline = this.getSearchPipeline();
+    if (!searchPipeline || !this.kernel.capabilities.search) {
+      // Fallback to quick search if semantic unavailable
+      this.performQuickSearch(query);
+      return;
+    }
+
+    this.isSearching = true;
     this.showSearchLoading();
 
+    const startTime = Date.now();
     try {
       const results = await searchPipeline.search(query, {
-        topK: 8,
-        enableReranking: this.getLLMProvider()?.isReady ?? false,
+        topK: preset === "thorough" ? 12 : 8,
+        enableReranking: preset === "thorough" && (this.getLLMProvider()?.isReady ?? false),
       });
       this._lastSearchResults = results;
-      this.renderSearchResults(results);
+      this.selectedResultIndex = -1;
+      this.renderSearchResults(results, Date.now() - startTime);
     } catch (error) {
       console.error("[Sidebar] Search error:", error);
       this.showSearchError("Search failed");
+    } finally {
+      this.isSearching = false;
     }
   }
 
-  private renderSearchResults(results: SearchResult[]): void {
+  private performQuickSearch(query: string): void {
+    const files = this.app.vault.getMarkdownFiles();
+    const queryLower = query.toLowerCase();
+    const words = queryLower.split(/\s+/).filter(w => w.length > 0);
+
+    // Score files by fuzzy match on path and name
+    const scored: Array<{ file: TFile; score: number }> = [];
+    for (const file of files) {
+      const pathLower = file.path.toLowerCase();
+      const nameLower = file.basename.toLowerCase();
+
+      let score = 0;
+      for (const word of words) {
+        if (nameLower.includes(word)) score += 0.6;
+        else if (pathLower.includes(word)) score += 0.3;
+      }
+      // Exact name match bonus
+      if (nameLower === queryLower) score += 0.5;
+      else if (nameLower.startsWith(queryLower)) score += 0.3;
+
+      if (score > 0) scored.push({ file, score });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    const topResults = scored.slice(0, 10);
+
+    // Convert to SearchResult format for consistent rendering
+    this._lastSearchResults = topResults.map(({ file, score }) => ({
+      noteId: file.path,
+      path: file.path,
+      title: file.basename,
+      bestScore: Math.min(score, 1),
+      paraType: this.paraDetector.detectType(file.path) as SearchResult["paraType"],
+      chunks: [],
+      mtimeMs: file.stat.mtime,
+    }));
+
+    this.selectedResultIndex = -1;
+    this.renderSearchResults(this._lastSearchResults, 0, true);
+  }
+
+  private renderSearchResults(results: SearchResult[], durationMs: number, isQuickMode = false): void {
     if (!this.searchResultsEl) return;
     this.searchResultsEl.empty();
     this.searchResultsEl.removeClass("nv2-hidden");
 
+    // Update internal state
+    this._lastSearchResults = results;
+    this.isShowingHints = false;
+
     if (results.length === 0) {
       const empty = this.searchResultsEl.createDiv({ cls: "nv2-empty-state" });
-      empty.createDiv({ cls: "nv2-empty-state-icon", text: "🔍" });
-      empty.createDiv({
-        cls: "nv2-empty-state-text",
-        text: "No matches found",
-      });
+      empty.createDiv({ cls: "nv2-empty-icon", text: "🔍" });
+      empty.createDiv({ cls: "nv2-empty-text", text: "No matches found" });
       return;
     }
 
-    for (const result of results) {
-      const item = this.searchResultsEl.createDiv({ cls: "nv2-search-result" });
+    // Results header with count and timing
+    const header = this.searchResultsEl.createDiv({ cls: "nv2-results-meta" });
+    header.createSpan({ text: `${results.length} results found` });
+    if (durationMs > 0) {
+      header.createSpan({ text: `${durationMs}ms` });
+    }
 
-      const header = item.createDiv({ cls: "nv2-search-result-header" });
-      header.createSpan({
-        cls: "nv2-search-result-title",
-        text: result.title,
-      });
-      header.createSpan({
-        cls: "nv2-search-result-score",
-        text: `${Math.round(result.bestScore * 100)}%`,
+    // Results list (scrollable)
+    const list = this.searchResultsEl.createDiv({ cls: "nv2-omnibar-results-list" });
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const item = list.createDiv({
+        cls: `nv2-result-item${i === this.selectedResultIndex ? " nv2-result-item--selected" : ""}`,
       });
 
+      // --- Left Side: Main Info ---
+      const left = item.createDiv({ cls: "nv2-result-main" });
+
+      // Title Row
+      const top = left.createDiv({ cls: "nv2-result-top" });
+      // Optional Icon based on file type? For now just title
+      // setIcon(top.createDiv({cls: "nv2-result-icon"}), "file-text");
+
+      top.createSpan({ cls: "nv2-result-title", text: result.title });
+
+      if (result.paraType && result.paraType !== "unknown") {
+        top.createSpan({
+          cls: `nv2-result-para nv2-para--${result.paraType}`,
+          text: result.paraType,
+        });
+      }
+
+      // Context / Path
       const bestChunk = result.chunks[0];
-      const headingPath = bestChunk?.headingPath?.length ? bestChunk.headingPath.join(" > ") : "";
-
-      item.createDiv({
-        cls: "nv2-search-result-path",
-        text: headingPath ? `${result.path} • ${headingPath}` : result.path,
+      const headingPath = bestChunk?.headingPath?.length ? bestChunk.headingPath.join(" › ") : "";
+      left.createDiv({
+        cls: "nv2-result-context",
+        text: headingPath || result.path.replace(/\.md$/, ""),
       });
 
-      if (bestChunk?.text) {
-        const preview = this.buildChunkPreview(bestChunk.text, 180);
+      // Snippet (Semantic Mode Only)
+      if (!isQuickMode && bestChunk?.text) {
+        const preview = this.buildChunkPreview(bestChunk.text, 120);
         if (preview) {
-          item.createDiv({
-            cls: "nv2-search-result-preview",
-            text: preview,
+          left.createDiv({ cls: "nv2-result-snippet" }, (el) => {
+            el.setText(preview);
           });
         }
       }
 
-      item.addEventListener("click", () => this.openFile(result.path));
+      // --- Right Side: Dual Scores ---
+      const right = item.createDiv({ cls: "nv2-result-scores" });
+
+      // 1. Similarity Score (Percent)
+      if (!isQuickMode) {
+        const simScore = right.createDiv({ cls: "nv2-score-sim" });
+        const simPct = Math.round(result.bestScore * 100);
+        simScore.createSpan({ text: `${simPct}%` });
+        simScore.createSpan({ text: "sim", cls: "nv2-score-sim-label" });
+      }
+
+      // 2. Vitality Score (Ring)
+      const vitality = this.calculateVitalityScore(result.path);
+      if (vitality !== null) {
+        const vitContainer = right.createDiv({ cls: "nv2-score-vit" });
+
+        // Ring Background
+        vitContainer.createDiv({ cls: "nv2-vit-ring-bg" });
+
+        // Ring Fill (Conic Gradient)
+        // Color based on score
+        let color = "var(--nv2-status-error)";
+        if (vitality >= 70) color = "var(--nv2-status-healthy)";
+        else if (vitality >= 40) color = "var(--nv2-status-warning)";
+
+        const fill = vitContainer.createDiv({ cls: "nv2-vit-ring-fill" });
+        fill.style.background = `conic-gradient(${color} ${vitality}%, transparent 0)`;
+
+        // Value
+        vitContainer.createSpan({ cls: "nv2-vit-value", text: `${vitality}` });
+      }
+
+      // Interaction
+      item.addEventListener("click", () => {
+        this.openFile(result.path);
+        this.clearSearchResults();
+      });
+
+      item.addEventListener("mouseenter", () => {
+        this.selectedResultIndex = i;
+        this.updateResultSelection();
+      });
     }
+  }
+
+  private updateResultSelection(): void {
+    const items = this.searchResultsEl?.querySelectorAll(".nv2-result-item");
+    if (!items) return;
+
+    items.forEach((item, index) => {
+      if (index === this.selectedResultIndex) {
+        item.addClass("nv2-result-item--selected");
+        item.scrollIntoView({ block: "nearest" });
+      } else {
+        item.removeClass("nv2-result-item--selected");
+      }
+    });
+
+    // Also handle hints selection update if showing hints
+    const hintItems = this.searchResultsEl?.querySelectorAll(".nv2-hint-item");
+    if (hintItems) {
+      hintItems.forEach((item, index) => {
+        if (index === this.selectedResultIndex) {
+          item.addClass("nv2-hint-item--selected");
+          item.scrollIntoView({ block: "nearest" });
+        } else {
+          item.removeClass("nv2-hint-item--selected");
+        }
+      });
+    }
+  }
+
+  private navigateResults(dir: number): void {
+    const listLength = this.isShowingHints ? this.currentHints.length : this._lastSearchResults.length;
+    if (listLength === 0) return;
+
+    this.selectedResultIndex += dir;
+
+    if (this.selectedResultIndex < 0) this.selectedResultIndex = listLength - 1;
+    if (this.selectedResultIndex >= listLength) this.selectedResultIndex = 0;
+
+    this.updateResultSelection();
+  }
+
+  private calculateVitalityScore(path: string): number | null {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return null;
+    const metadata = this.app.metadataCache.getFileCache(file);
+    return this.vitalsCalculator.calculateHealthScore(file, metadata);
   }
 
   private buildChunkPreview(text: string, maxChars: number): string {
@@ -1473,9 +1394,9 @@ export class NotientSidebarView extends ItemView {
     this.searchResultsEl.empty();
     this.searchResultsEl.removeClass("nv2-hidden");
 
-    const loading = this.searchResultsEl.createDiv({ cls: "nv2-loading" });
-    loading.createDiv({ cls: "nv2-loading-spinner" });
-    loading.createSpan({ text: "Thinking..." });
+    const loading = this.searchResultsEl.createDiv({ cls: "nv2-omnibar-loading" });
+    loading.createDiv({ cls: "nv2-omnibar-spinner" });
+    loading.createSpan({ text: "Searching..." });
   }
 
   private showSearchError(message: string): void {
@@ -1483,8 +1404,115 @@ export class NotientSidebarView extends ItemView {
     this.searchResultsEl.empty();
     this.searchResultsEl.removeClass("nv2-hidden");
 
-    const empty = this.searchResultsEl.createDiv({ cls: "nv2-empty-state" });
-    empty.createDiv({ cls: "nv2-empty-state-text", text: message });
+    const empty = this.searchResultsEl.createDiv({ cls: "nv2-omnibar-empty" });
+    empty.createDiv({ cls: "nv2-omnibar-empty-text", text: message });
+  }
+
+  private setSearchMode(mode: "quick" | "balanced" | "thorough"): void {
+    this.currentSearchMode = mode;
+    // Re-render only the search section to update UI state
+    // In a fuller React/Svelte app we'd just update state, here we manually re-render or update classes
+    // For simplicity in this vanilla TS setup, we'll re-render the whole search section or just update classes
+    // Let's implement a lighter update:
+
+    const pills = this.contentEl_?.querySelectorAll(".nv2-mode-pill");
+    pills?.forEach((p) => {
+      const pill = p as HTMLElement;
+      const pillMode = pill.getAttribute("data-mode");
+      if (pillMode === mode) {
+        pill.style.opacity = "1";
+        pill.style.transform = "scale(1.05)";
+        // Show label
+        if (!pill.querySelector("span:nth-child(2)")) {
+          const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+          pill.createSpan({ text: label });
+        }
+      } else {
+        pill.style.opacity = "0.5";
+        pill.style.transform = "scale(1)";
+        // Hide label if exists (simple remove)
+        const labelSpan = pill.querySelector("span:nth-child(2)");
+        if (labelSpan) labelSpan.remove();
+      }
+    });
+
+    // Update placeholder
+    if (this.omnibarInputEl) {
+      const info = this.getSearchModeInfo();
+      this.omnibarInputEl.placeholder = info.placeholder;
+    }
+  }
+
+  private selectHint(hint: any): void {
+    if (!this.omnibarInputEl) return;
+
+    // Complete the input with the hint
+    // e.g. if typing "/en", and select "/enrich", replace input
+    this.omnibarInputEl.value = hint.command + " ";
+    this.omnibarInputEl.focus();
+    this.clearSearchResults(); // Hide hints
+    this.isShowingHints = false;
+  }
+
+  private showCommandHints(query: string): void {
+    if (!this.searchResultsEl) return;
+
+    this.isShowingHints = true;
+    this.searchResultsEl.empty();
+    this.searchResultsEl.removeClass("nv2-hidden");
+
+    const panel = this.searchResultsEl.createDiv({ cls: "nv2-hints-panel" });
+
+    // Mock data for commands - logic would ideally pull from a registry
+    let hints: any[] = [];
+    const isAgent = query.startsWith("@");
+
+    if (isAgent) {
+      panel.createDiv({ cls: "nv2-hint-header", text: "Available Agents" });
+      const allAgents = [
+        { command: "@chat", desc: "General chat assistant", example: "@chat how are you?" },
+        { command: "@search", desc: "Search web & vault", example: "@search 'latest AI news'" },
+        { command: "@writer", desc: "Content drafting agent", example: "@writer 'blog post about...'" },
+        { command: "@coder", desc: "Code generation agent", example: "@coder 'python script to...'" }
+      ];
+      hints = allAgents.filter(a => a.command.startsWith(query));
+    } else {
+      panel.createDiv({ cls: "nv2-hint-header", text: "Workflow Commands" });
+      const allCmds = [
+        { command: "/enrich", desc: "Add metadata & tags", example: "/enrich properties" },
+        { command: "/summarize", desc: "Summarize current note", example: "/summarize" },
+        { command: "/link", desc: "Find related connections", example: "/link" },
+        { command: "/classify", desc: "Auto-classify PARA/Tags", example: "/classify" }
+      ];
+      hints = allCmds.filter(c => c.command.startsWith(query));
+    }
+
+    this.currentHints = hints; // Store for selection
+
+    if (hints.length === 0) {
+      panel.createDiv({ cls: "nv2-empty-state", text: "No matching commands found" });
+      return;
+    }
+
+    hints.forEach((h, i) => {
+      const item = panel.createDiv({
+        cls: `nv2-hint-item ${i === this.selectedResultIndex ? "nv2-hint-item--selected" : ""}`
+      });
+      item.createDiv({ cls: "nv2-hint-key", text: h.command });
+      item.createDiv({ cls: "nv2-hint-desc", text: h.desc });
+      item.createDiv({ cls: "nv2-hint-example", text: h.example });
+
+      item.addEventListener("mouseenter", () => {
+        this.selectedResultIndex = i;
+        // Update selection visually
+        panel.querySelectorAll(".nv2-hint-item").forEach(el => el.removeClass("nv2-hint-item--selected"));
+        item.addClass("nv2-hint-item--selected");
+      });
+
+      item.addEventListener("click", () => {
+        this.selectHint(h);
+      });
+    });
   }
 
   private clearSearchResults(): void {
@@ -1493,116 +1521,61 @@ export class NotientSidebarView extends ItemView {
       this.searchResultsEl.addClass("nv2-hidden");
     }
     this._lastSearchResults = [];
+    this.selectedResultIndex = -1;
+    this.isShowingHints = false;
   }
 
-  // ============ Chat / AI Actions ============
+  /**
+   * Check if input is an @agent command (e.g., @agent summarize this note)
+   */
+  private isAgentCommand(input: string): boolean {
+    return input.trim().startsWith("@");
+  }
+
+
 
   /**
-   * @deprecated Use prefillChatAndSwitch() instead which routes through the agent task queue.
-   * This method is kept for backward compatibility but is not used in the current flow.
+   * Handle @agent command - sends task to agent queue
    */
-  private async _sendQuery(query: string): Promise<void> {
-    const llmProvider = this.getLLMProvider();
-    if (!llmProvider?.isReady) {
-      new Notice("AI unavailable - LM Studio not connected");
+  private handleAgentCommand(input: string): void {
+    const trimmed = input.trim();
+    const match = trimmed.match(/^@(\w+)\s*(.*)/);
+
+    if (!match) {
+      new Notice("Invalid command. Use: @agent <task description>");
       return;
     }
 
-    // Add user message to history
-    const userMessage: ExtendedChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: query,
-      timestamp: new Date(),
-    };
-    this.chatHistory.push(userMessage);
+    const [, agentType, taskDescription] = match;
+    const validAgents = ["chat", "search", "context", "enrich", "classify", "link"];
 
-    // Start streaming
-    this.isStreaming = true;
-    this.streamingContent = "";
-    this.activeAbortController = new AbortController();
+    // Default to chat agent for general queries
+    const agent = validAgents.includes(agentType.toLowerCase()) ? agentType.toLowerCase() : "chat";
+    const prompt = agent === agentType.toLowerCase() ? taskDescription : trimmed.slice(1); // Remove @ if using default
 
-    this.render();
-
-    try {
-      // Search for context
-      const searchPipeline = this.getSearchPipeline();
-      let searchResults: SearchResult[] = [];
-
-      if (searchPipeline) {
-        try {
-          searchResults = await searchPipeline.search(query, {
-            topK: 5,
-            enableReranking: true,
-          });
-        } catch (error) {
-          console.warn("[Sidebar] Context search failed:", error);
-        }
-      }
-
-      // Build context
-      const contextBuilder = this.getContextBuilder();
-      const context = contextBuilder?.buildForQuery(query, searchResults);
-
-      // Build simple messages (prompt building is now in NotientAgent)
-      const messages: ChatMessage[] = [
-        {
-          role: "system",
-          content: `You are Notient, an AI assistant for an Obsidian vault.\n\nContext: ${context?.contextSummary || "No context available."}`,
-        },
-        ...this.chatHistory.slice(-10).map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-      ];
-
-      // Stream response using new LLM provider
-      for await (const chunk of llmProvider.stream(
-        messages,
-        undefined,
-        this.activeAbortController.signal,
-      )) {
-        if (this.activeAbortController.signal.aborted) break;
-        this.streamingContent += chunk;
-        this.render();
-      }
-
-      // Finalize
-      if (!this.activeAbortController.signal.aborted) {
-        const assistantMessage: ExtendedChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: this.streamingContent,
-          attachments: searchResults.slice(0, 3).map((r) => ({
-            id: crypto.randomUUID(),
-            type: "rag-citation" as const,
-            filename: r.title,
-            path: r.path,
-          })),
-          timestamp: new Date(),
-        };
-        this.chatHistory.push(assistantMessage);
-
-        // Show result in notice
-        const preview = this.streamingContent.slice(0, 100);
-        new Notice(`AI Response: ${preview}${this.streamingContent.length > 100 ? "..." : ""}`);
-      }
-    } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        console.error("[Sidebar] AI query error:", error);
-        new Notice("AI query failed. Try again?");
-      }
-    } finally {
-      this.isStreaming = false;
-      this.streamingContent = "";
-      this.activeAbortController = null;
-      this.render();
+    if (!prompt.trim()) {
+      new Notice("Please provide a task description after @agent");
+      return;
     }
-  }
 
-  private cancelStreaming(): void {
-    if (this.activeAbortController) {
-      this.activeAbortController.abort();
+    // Enqueue task
+    const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
+    if (taskQueue) {
+      taskQueue.enqueue({
+        agent: agent as "chat" | "search" | "context",
+        notePath: this.noteVitals?.path || "unknown",
+        noteTitle: this.noteVitals?.title || "Unknown Note",
+        chatHistory: [{ role: "user", content: prompt }],
+      });
+      new Notice(`Task sent to ${agent} agent`);
+
+      // Clear and switch to agents view
+      if (this.omnibarInputEl) this.omnibarInputEl.value = "";
+      this.clearSearchResults();
+      this.currentView = "agents";
+      this.render();
+    } else {
+      new Notice("Agent system not available");
     }
   }
 
@@ -1677,7 +1650,9 @@ export class NotientSidebarView extends ItemView {
 
     // Index Complete
     const unsubIndexComplete = this.kernel.eventBus.on("index:complete", () => {
-      this.lastSyncTime = new Date();
+      if (this.sidebarFooter) {
+        this.sidebarFooter.setLastSyncTime(new Date());
+      }
       this.updateFooterStats();
     });
     this.register(() => unsubIndexComplete());
@@ -1689,6 +1664,12 @@ export class NotientSidebarView extends ItemView {
       }
     });
     this.register(() => unsubIntelligence());
+
+    // Settings changed (refresh footer when index changes)
+    const unsubSettings = this.kernel.eventBus.on("settings:changed", () => {
+      this.updateFooterStats();
+    });
+    this.register(() => unsubSettings());
 
     // Workflow events (Milestone 2.4)
     const unsubWorkflowStarted = this.kernel.eventBus.on("workflow:started", () => {

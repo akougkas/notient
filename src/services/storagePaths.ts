@@ -5,14 +5,50 @@
  * Uses the Obsidian FileSystemAdapter to get the absolute vault path (desktop only).
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type App, FileSystemAdapter } from "obsidian";
 import { PLUGIN_ID, STORAGE_PATHS } from "../core/constants";
 
+/**
+ * Generate a short vault hash (4 hex chars) for use in index filenames.
+ * Deterministic: same vault path always produces same hash.
+ */
+function computeVaultHash(vaultPath: string): string {
+  return crypto.createHash("sha256").update(vaultPath).digest("hex").slice(0, 4);
+}
+
+/**
+ * Format a timestamp for index filename: YYYYMMDDTHHMMSS
+ * Uses UTC to ensure consistency across timezones.
+ */
+export function formatIndexTimestamp(date: Date = new Date()): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  const h = String(date.getUTCHours()).padStart(2, "0");
+  const min = String(date.getUTCMinutes()).padStart(2, "0");
+  const s = String(date.getUTCSeconds()).padStart(2, "0");
+  return `${y}${m}${d}T${h}${min}${s}`;
+}
+
+/**
+ * Parse index timestamp from filename back to Date.
+ * Returns null if format doesn't match.
+ */
+export function parseIndexTimestamp(ts: string): Date | null {
+  const match = ts.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+  if (!match) return null;
+  const [, y, m, d, h, min, s] = match;
+  return new Date(Date.UTC(+y, +m - 1, +d, +h, +min, +s));
+}
+
 export interface StoragePathsConfig {
   /** Vault root absolute path */
   vaultRoot: string;
+  /** Short vault hash (4 hex chars) for index filenames */
+  vaultHash: string;
   /** Plugin data folder */
   pluginRoot: string;
   /** Cache folder */
@@ -28,6 +64,8 @@ export interface StoragePathsConfig {
   conversations: string;
   /** Action history storage file path */
   actions: string;
+  /** System index directory (vault/system/index) */
+  systemIndex: string;
 }
 
 /**
@@ -44,10 +82,12 @@ export class StoragePaths {
     }
 
     const vaultRoot = adapter.getBasePath();
+    const vaultHash = computeVaultHash(vaultRoot);
     const pluginRoot = path.join(vaultRoot, ".obsidian", "plugins", PLUGIN_ID);
 
     this.config = {
       vaultRoot,
+      vaultHash,
       pluginRoot,
       cache: path.join(pluginRoot, STORAGE_PATHS.CACHE),
       locks: path.join(pluginRoot, STORAGE_PATHS.LOCKS),
@@ -56,6 +96,8 @@ export class StoragePaths {
       // Phase 2 additions
       conversations: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS),
       actions: path.join(pluginRoot, STORAGE_PATHS.ACTIONS),
+      // Indexing
+      systemIndex: path.join(vaultRoot, "system", "index"),
     };
   }
 
@@ -75,6 +117,13 @@ export class StoragePaths {
    */
   get vaultRoot(): string {
     return this.config.vaultRoot;
+  }
+
+  /**
+   * Get the short vault hash (4 hex chars) for index filenames
+   */
+  get vaultHash(): string {
+    return this.config.vaultHash;
   }
 
   /**
@@ -124,6 +173,13 @@ export class StoragePaths {
    */
   get actions(): string {
     return this.config.actions;
+  }
+
+  /**
+   * Get the system index directory path
+   */
+  get systemIndex(): string {
+    return this.config.systemIndex;
   }
 
   /**

@@ -1,18 +1,23 @@
 #!/bin/bash
 # Auto-rebuild and copy to test vault
-# Usage: ./dev.sh [--reset]
+# Usage: ./dev.sh [--reset] [--hard-reset]
+#   --reset       Reset settings only (preserves indices)
+#   --hard-reset  Full wipe including indices
 
 VAULT_PLUGIN="/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient"
 
-# Check for reset flag
-if [[ "$1" == "--reset" || "$1" == "-r" ]]; then
-    echo "🗑️  Resetting plugin data..."
+# Check for reset flags
+if [[ "$1" == "--hard-reset" || "$1" == "-H" ]]; then
+    echo "🗑️  HARD RESET: Wiping ALL plugin data including indices..."
     rm -f "$VAULT_PLUGIN/data.json" 2>/dev/null
     rm -f "$VAULT_PLUGIN/index-*.json" 2>/dev/null
     rm -f "$VAULT_PLUGIN/state-*.json" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/intelligence-*.json" 2>/dev/null
+    rm -f "$VAULT_PLUGIN/conversations.json" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/cache" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/locks" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/logs" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/.deleted" 2>/dev/null
     # Legacy cleanup (pre-0.2.0)
     rm -f "$VAULT_PLUGIN/orama-*.json" 2>/dev/null
     rm -f "$VAULT_PLUGIN/orama-*.orama" 2>/dev/null
@@ -20,7 +25,14 @@ if [[ "$1" == "--reset" || "$1" == "-r" ]]; then
     rm -rf "$VAULT_PLUGIN/processing-queue" 2>/dev/null
     rm -rf "$VAULT_PLUGIN/lancedb" 2>/dev/null
     rm -f "$VAULT_PLUGIN/index-state.json" 2>/dev/null
-    echo "✅ Reset complete"
+    echo "✅ Hard reset complete - indices DELETED"
+elif [[ "$1" == "--reset" || "$1" == "-r" ]]; then
+    echo "🔄 Soft reset: Resetting settings only (indices preserved)..."
+    rm -f "$VAULT_PLUGIN/data.json" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/cache" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/locks" 2>/dev/null
+    rm -rf "$VAULT_PLUGIN/logs" 2>/dev/null
+    echo "✅ Soft reset complete - indices PRESERVED"
 fi
 
 echo "🔨 Building..."

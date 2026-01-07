@@ -23,16 +23,8 @@ export interface NotientSettings {
   };
 
   /** Indexing configuration */
-  indexing: {
-    /** Maximum chunk size in characters */
-    chunkSize: number;
-    /** Debounce delay for vault events (ms) */
-    debounceMs: number;
-    /** Batch size for embedding requests */
-    batchSize: number;
-    /** Excluded folders (relative paths) */
-    excludedFolders: string[];
-  };
+  /** Indexing configuration */
+  indexing: IndexingSettings;
 
   /** PARA folder mappings */
   para: {
@@ -129,6 +121,26 @@ export interface SearchSettings {
   };
 }
 
+export interface IndexingSettings {
+  /** Maximum chunk size in characters */
+  chunkSize: number;
+  /** Debounce delay for vault events (ms) */
+  debounceMs: number;
+  /** Batch size for embedding requests */
+  batchSize: number;
+  /** Excluded folders (relative paths) */
+  excludedFolders: string[];
+  /** Path to the currently active index file (null = use default plugin index) */
+  activeIndexPath: string | null;
+  /** Cached metadata from the active index (derived on load, not user-editable) */
+  activeIndexMeta: {
+    modelKey: string;
+    dimension: number;
+    /** True if this is a user-provided external index (read-only, from system/index/) */
+    isUserProvided: boolean;
+  } | null;
+}
+
 export const SEARCH_PRESETS = {
   quick: { topK: 5, enableReranking: false, minScore: 0.5 },
   balanced: { topK: 10, enableReranking: true, minScore: 0.3 },
@@ -152,6 +164,8 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     debounceMs: 5000,
     batchSize: 4,
     excludedFolders: [".obsidian", ".trash"],
+    activeIndexPath: null,
+    activeIndexMeta: null,
   },
   para: {
     inbox: ["0-inbox", "inbox", "daily"],

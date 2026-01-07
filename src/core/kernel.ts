@@ -120,6 +120,12 @@ export class Kernel {
     this.context.settings = settings;
   }
 
+  /** Save current settings to disk */
+  async saveSettings(): Promise<void> {
+    const { saveSettings } = await import("../settings");
+    await saveSettings(this.context.plugin, this.context.settings);
+  }
+
   get capabilities(): Readonly<CapabilityStatus> {
     return { ...this._capabilities };
   }
@@ -183,12 +189,12 @@ export class Kernel {
         console.warn("[Kernel] Directory creation failed, continuing anyway:", dirError);
       }
 
-      // 2. Try to acquire write lock (with timeout)
+      // 2. Try to acquire write lock (with timeout - allows for 3 retries with backoff)
       console.log("[Kernel] Step 2: Acquiring lock...");
       try {
         const hasLock = await Promise.race([
           this._vaultLock.tryAcquire(),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
         ]);
         if (!hasLock) {
           console.warn("[Kernel] Could not acquire write lock - running in read-only mode");

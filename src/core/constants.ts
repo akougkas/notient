@@ -60,3 +60,18 @@ export const MODEL_DEFAULTS = {
     "snowflake-arctic-embed": 1024,
   } as Record<string, number>,
 } as const;
+
+/** Shared LLM prompts */
+export const LLM_PROMPTS = {
+  /** System prompt for reranking search results */
+  RERANK_SYSTEM: `You rank search results by relevance. Output ONLY valid JSON.
+
+Example output:
+{"rankings":[{"index":0,"score":90,"reason":"exact match"},{"index":2,"score":70,"reason":"related"}]}
+
+Rules:
+- score: 0-100
+- index: candidate number
+- reason: brief (under 30 chars)
+- Only include relevant results (score >= 30)`,
+} as const;

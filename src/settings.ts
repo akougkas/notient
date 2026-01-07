@@ -11,6 +11,7 @@
 import { type App, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
 import { MODEL_DEFAULTS } from "./core/constants";
 import type { Kernel } from "./core/kernel";
+import { IndexManagementPanel } from "./settings/panels/IndexManagementPanel";
 import {
   DEFAULT_SETTINGS,
   type NotientSettings,
@@ -63,7 +64,12 @@ function mergeWithDefaults(data: Partial<NotientSettings>): NotientSettings {
     version: data.version ?? DEFAULT_SETTINGS.version,
     ollama: { ...DEFAULT_SETTINGS.ollama, ...data.ollama },
     lmstudio: { ...DEFAULT_SETTINGS.lmstudio, ...data.lmstudio },
-    indexing: { ...DEFAULT_SETTINGS.indexing, ...data.indexing },
+    indexing: {
+      ...DEFAULT_SETTINGS.indexing,
+      ...data.indexing,
+      // activeIndexMeta is derived at runtime, don't persist stale values
+      activeIndexMeta: null,
+    },
     para: { ...DEFAULT_SETTINGS.para, ...data.para },
     ui: { ...DEFAULT_SETTINGS.ui, ...data.ui },
     search: { ...DEFAULT_SETTINGS.search, ...data.search },
@@ -138,7 +144,7 @@ interface ServiceNetworkConfig {
 export class NotientSettingTab extends PluginSettingTab {
   private kernel: Kernel;
   private settings: NotientSettings;
-  private onSettingsChange: (settings: NotientSettings) => Promise<void>;
+  private onSettingsChange: (settings: NotientSettings, changedFields?: string[]) => Promise<void>;
 
   // Network configs per service
   private ollamaConfig: ServiceNetworkConfig = {
@@ -153,12 +159,20 @@ export class NotientSettingTab extends PluginSettingTab {
   // Track original embedding model
   private originalEmbeddingModel = "";
 
+  // Available models from services
+  private ollamaModels: string[] = [];
+  private lmstudioModels: string[] = [];
+  private modelsFetched = { ollama: false, lmstudio: false };
+
+  // Extracted panel component
+  private indexManagementPanel: IndexManagementPanel | null = null;
+
   constructor(
     app: App,
     plugin: Plugin,
     kernel: Kernel,
     settings: NotientSettings,
-    onSettingsChange: (settings: NotientSettings) => Promise<void>,
+    onSettingsChange: (settings: NotientSettings, changedFields?: string[]) => Promise<void>,
   ) {
     super(app, plugin);
     this.kernel = kernel;
@@ -202,6 +216,75 @@ export class NotientSettingTab extends PluginSettingTab {
     return MODEL_DEFAULTS.EMBEDDING_DIMENSIONS[modelName] ?? null;
   }
 
+  /**
+   * Fetch available models from Ollama
+   */
+  private async fetchOllamaModels(): Promise<string[]> {
+    try {
+      const host = this.buildHost(this.ollamaConfig);
+      const response = await fetch(`${host}/api/tags`, { method: "GET" });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.models || []).map((m: { name: string }) => m.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Fetch available models from LM Studio (OpenAI-compatible endpoint)
+   */
+  private async fetchLMStudioModels(): Promise<string[]> {
+    try {
+      const host = this.buildHost(this.lmstudioConfig);
+      const response = await fetch(`${host}/v1/models`, { method: "GET" });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data || []).map((m: { id: string }) => m.id);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Refresh models for a service
+   */
+  private async refreshModels(service: "ollama" | "lmstudio"): Promise<void> {
+    if (service === "ollama") {
+      this.ollamaModels = await this.fetchOllamaModels();
+      this.modelsFetched.ollama = true;
+    } else {
+      this.lmstudioModels = await this.fetchLMStudioModels();
+      this.modelsFetched.lmstudio = true;
+    }
+  }
+
+  /**
+   * Auto-fetch models on first display (non-blocking)
+   */
+  private autoFetchModels(): void {
+    // Fetch Ollama models if not already fetched
+    if (!this.modelsFetched.ollama && this.settings.ollama.host) {
+      this.fetchOllamaModels().then((models) => {
+        if (models.length > 0 && !this.modelsFetched.ollama) {
+          this.ollamaModels = models;
+          this.modelsFetched.ollama = true;
+          this.display(); // Re-render with dropdown
+        }
+      });
+    }
+    // Fetch LM Studio models if not already fetched
+    if (!this.modelsFetched.lmstudio && this.settings.lmstudio.host) {
+      this.fetchLMStudioModels().then((models) => {
+        if (models.length > 0 && !this.modelsFetched.lmstudio) {
+          this.lmstudioModels = models;
+          this.modelsFetched.lmstudio = true;
+          this.display(); // Re-render with dropdown
+        }
+      });
+    }
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -209,20 +292,29 @@ export class NotientSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h1", { text: "Notient Settings" });
 
+    // Auto-fetch models if not already fetched (async, re-renders on completion)
+    this.autoFetchModels();
+
     // Connection Status
     this.renderConnectionStatus(containerEl);
 
     // Embeddings Service (Ollama)
-    this.renderOllamaSection(containerEl);
+    this.renderServiceSection(containerEl, "ollama", "🦙 Embeddings (Ollama)", "Embedding Model", "nomic-embed-text");
 
     // Chat Service (LM Studio)
-    this.renderLMStudioSection(containerEl);
+    this.renderServiceSection(containerEl, "lmstudio", "🤖 Chat (LM Studio)", "Reasoning Model", "ministral-3b-instruct");
 
     // Indexing (with chunk size slider)
     this.renderIndexingSection(containerEl);
 
-    // Index Management
-    this.renderIndexManagement(containerEl);
+    // Index Management (using extracted panel)
+    this.indexManagementPanel = new IndexManagementPanel(
+      this.app,
+      this.kernel,
+      this.settings,
+      () => this.display(),
+    );
+    this.indexManagementPanel.render(containerEl);
 
     // Search Settings
     this.renderSearchSection(containerEl);
@@ -366,179 +458,186 @@ export class NotientSettingTab extends PluginSettingTab {
         cls: "notient-settings-warning",
       });
     }
+
+    // Add Reconnect button when services are ready or failed
+    if (isReady || (!this.kernel.isServicesInitializing && this.settings.setupComplete)) {
+      const actionRow = statusBox.createDiv({ cls: "notient-settings-action-row" });
+      const reconnectBtn = actionRow.createEl("button", {
+        text: "🔄 Reconnect Services",
+        cls: "notient-settings-reconnect-btn",
+      });
+      reconnectBtn.addEventListener("click", async () => {
+        reconnectBtn.disabled = true;
+        reconnectBtn.textContent = "⏳ Reconnecting...";
+        // Trigger service reinitialization
+        await this.onSettingsChange(this.settings, ["ollama.host", "lmstudio.host"]);
+        setTimeout(() => this.display(), 2000);
+      });
+    }
   }
 
-  private renderOllamaSection(containerEl: HTMLElement): void {
+  private renderServiceSection(
+    containerEl: HTMLElement,
+    service: "ollama" | "lmstudio",
+    title: string,
+    modelLabel: string,
+    modelPlaceholder: string,
+  ): void {
+    const config = service === "ollama" ? this.ollamaConfig : this.lmstudioConfig;
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "🦙 Embeddings (Ollama)" });
+    section.createEl("h2", { text: title });
 
-    // Local/Network buttons
+    // Local/Network toggle buttons
     const toggleRow = section.createDiv({ cls: "notient-settings-toggle-row" });
     const toggle = toggleRow.createDiv({ cls: "notient-settings-toggle" });
 
     const localBtn = toggle.createEl("button", {
       text: "🏠 Local",
-      cls: `notient-settings-toggle-btn ${this.isLocalIP(this.ollamaConfig.ip, "ollama") ? "active" : ""}`,
+      cls: `notient-settings-toggle-btn ${this.isLocalIP(config.ip, service) ? "active" : ""}`,
     });
     localBtn.addEventListener("click", async () => {
-      this.ollamaConfig.ip = DEFAULT_IPS.ollama.local;
-      await this.updateOllamaHost();
+      config.ip = DEFAULT_IPS[service].local;
+      await this.updateServiceHost(service);
       this.display();
     });
 
     const networkBtn = toggle.createEl("button", {
       text: "📡 Network",
-      cls: `notient-settings-toggle-btn ${this.ollamaConfig.ip === DEFAULT_IPS.ollama.network ? "active" : ""}`,
+      cls: `notient-settings-toggle-btn ${config.ip === DEFAULT_IPS[service].network ? "active" : ""}`,
     });
     networkBtn.addEventListener("click", async () => {
-      this.ollamaConfig.ip = DEFAULT_IPS.ollama.network;
-      await this.updateOllamaHost();
+      config.ip = DEFAULT_IPS[service].network;
+      await this.updateServiceHost(service);
       this.display();
     });
 
-    // Host input (always visible)
+    // Host input (IP + port)
     new Setting(section)
       .setName("Host")
       .addText((text) =>
         text
-          .setPlaceholder(DEFAULT_IPS.ollama.network)
-          .setValue(this.ollamaConfig.ip)
+          .setPlaceholder(DEFAULT_IPS[service].network)
+          .setValue(config.ip)
           .onChange(
-            debounce(
-              async (value) => {
-                this.ollamaConfig.ip = value.trim() || DEFAULT_IPS.ollama.local;
-                await this.updateOllamaHost();
-              },
-              500,
-              true,
-            ),
+            debounce(async (value) => {
+              config.ip = value.trim() || DEFAULT_IPS[service].local;
+              await this.updateServiceHost(service);
+            }, 500, true),
           ),
       )
       .addText((text) =>
         text
-          .setPlaceholder("11434")
-          .setValue(this.ollamaConfig.port)
+          .setPlaceholder(DEFAULT_PORTS[service])
+          .setValue(config.port)
           .onChange(
-            debounce(
-              async (value) => {
-                this.ollamaConfig.port = value.trim() || DEFAULT_PORTS.ollama;
-                await this.updateOllamaHost();
-              },
-              500,
-              true,
-            ),
+            debounce(async (value) => {
+              config.port = value.trim() || DEFAULT_PORTS[service];
+              await this.updateServiceHost(service);
+            }, 500, true),
           ),
       );
 
-    // Model with dimension display
-    const dim = this.getModelDimension(this.settings.ollama.embeddingModel);
-    const modelSetting = new Setting(section)
-      .setName("Embedding Model")
-      .setDesc(dim ? `Embedding size: ${dim} dimensions` : "Size will be detected when you start");
+    // Model setting with dropdown + refresh
+    this.renderModelSetting(section, service, modelLabel, modelPlaceholder);
+  }
 
-    modelSetting.addText((text) =>
-      text
-        .setPlaceholder("nomic-embed-text")
-        .setValue(this.settings.ollama.embeddingModel)
-        .onChange(async (value) => {
-          this.settings.ollama.embeddingModel = value;
-          await this.onSettingsChange(this.settings);
+  private renderModelSetting(
+    section: HTMLElement,
+    service: "ollama" | "lmstudio",
+    modelLabel: string,
+    modelPlaceholder: string,
+  ): void {
+    const models = service === "ollama" ? this.ollamaModels : this.lmstudioModels;
+    const currentModel = service === "ollama"
+      ? this.settings.ollama.embeddingModel
+      : this.settings.lmstudio.reasoningModel;
+    const changedField = service === "ollama" ? "ollama.embeddingModel" : "lmstudio.reasoningModel";
+
+    // Build description
+    let desc = "";
+    if (service === "ollama") {
+      const dim = this.getModelDimension(currentModel);
+      desc = dim ? `Embedding size: ${dim} dimensions` : "Size will be detected when you start";
+    }
+
+    const setting = new Setting(section)
+      .setName(modelLabel)
+      .setDesc(desc);
+
+    // Add dropdown if we have models, otherwise text input
+    if (models.length > 0) {
+      setting.addDropdown((dropdown) => {
+        // Add current value if not in list
+        if (currentModel && !models.includes(currentModel)) {
+          dropdown.addOption(currentModel, `${currentModel} (current)`);
+        }
+        // Add all fetched models
+        for (const model of models) {
+          dropdown.addOption(model, model);
+        }
+        dropdown
+          .setValue(currentModel)
+          .onChange(async (value) => {
+            if (service === "ollama") {
+              this.settings.ollama.embeddingModel = value;
+            } else {
+              this.settings.lmstudio.reasoningModel = value;
+            }
+            await this.onSettingsChange(this.settings, [changedField]);
+            this.display();
+          });
+      });
+    } else {
+      // Fall back to text input
+      setting.addText((text) =>
+        text
+          .setPlaceholder(modelPlaceholder)
+          .setValue(currentModel)
+          .onChange(async (value) => {
+            if (service === "ollama") {
+              this.settings.ollama.embeddingModel = value;
+            } else {
+              this.settings.lmstudio.reasoningModel = value;
+            }
+            await this.onSettingsChange(this.settings, [changedField]);
+            if (service === "ollama") this.display();
+          }),
+      );
+    }
+
+    // Add refresh button
+    setting.addExtraButton((btn) =>
+      btn
+        .setIcon("refresh-cw")
+        .setTooltip("Refresh available models")
+        .onClick(async () => {
+          btn.setDisabled(true);
+          await this.refreshModels(service);
+          btn.setDisabled(false);
           this.display();
         }),
     );
 
-    // Model change notice
-    if (
-      this.originalEmbeddingModel &&
-      this.settings.ollama.embeddingModel !== this.originalEmbeddingModel
-    ) {
+    // Model change notice for Ollama (embedding model change requires new index)
+    if (service === "ollama" && this.originalEmbeddingModel && currentModel !== this.originalEmbeddingModel) {
       const notice = section.createDiv({ cls: "notient-settings-notice" });
-      notice.innerHTML = `ℹ️ New index for <b>${this.settings.ollama.embeddingModel}</b>. <b>${this.originalEmbeddingModel}</b> preserved.`;
+      notice.innerHTML = `ℹ️ New index for <b>${currentModel}</b>. <b>${this.originalEmbeddingModel}</b> preserved.`;
     }
   }
 
-  private async updateOllamaHost(): Promise<void> {
-    this.settings.ollama.host = this.buildHost(this.ollamaConfig);
-    await this.onSettingsChange(this.settings);
-  }
-
-  private renderLMStudioSection(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "🤖 Chat (LM Studio)" });
-
-    // Local/Network buttons
-    const toggleRow = section.createDiv({ cls: "notient-settings-toggle-row" });
-    const toggle = toggleRow.createDiv({ cls: "notient-settings-toggle" });
-
-    const localBtn = toggle.createEl("button", {
-      text: "🏠 Local",
-      cls: `notient-settings-toggle-btn ${this.isLocalIP(this.lmstudioConfig.ip, "lmstudio") ? "active" : ""}`,
-    });
-    localBtn.addEventListener("click", async () => {
-      this.lmstudioConfig.ip = DEFAULT_IPS.lmstudio.local;
-      await this.updateLMStudioHost();
-      this.display();
-    });
-
-    const networkBtn = toggle.createEl("button", {
-      text: "📡 Network",
-      cls: `notient-settings-toggle-btn ${this.lmstudioConfig.ip === DEFAULT_IPS.lmstudio.network ? "active" : ""}`,
-    });
-    networkBtn.addEventListener("click", async () => {
-      this.lmstudioConfig.ip = DEFAULT_IPS.lmstudio.network;
-      await this.updateLMStudioHost();
-      this.display();
-    });
-
-    // Host input (always visible)
-    new Setting(section)
-      .setName("Host")
-      .addText((text) =>
-        text
-          .setPlaceholder(DEFAULT_IPS.lmstudio.network)
-          .setValue(this.lmstudioConfig.ip)
-          .onChange(
-            debounce(
-              async (value) => {
-                this.lmstudioConfig.ip = value.trim() || DEFAULT_IPS.lmstudio.local;
-                await this.updateLMStudioHost();
-              },
-              500,
-              true,
-            ),
-          ),
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder("1234")
-          .setValue(this.lmstudioConfig.port)
-          .onChange(
-            debounce(
-              async (value) => {
-                this.lmstudioConfig.port = value.trim() || DEFAULT_PORTS.lmstudio;
-                await this.updateLMStudioHost();
-              },
-              500,
-              true,
-            ),
-          ),
-      );
-
-    // Model
-    new Setting(section).setName("Reasoning Model").addText((text) =>
-      text
-        .setPlaceholder("ministral-3b-instruct")
-        .setValue(this.settings.lmstudio.reasoningModel)
-        .onChange(async (value) => {
-          this.settings.lmstudio.reasoningModel = value;
-          await this.onSettingsChange(this.settings);
-        }),
-    );
-  }
-
-  private async updateLMStudioHost(): Promise<void> {
-    this.settings.lmstudio.host = this.buildHost(this.lmstudioConfig);
-    await this.onSettingsChange(this.settings);
+  private async updateServiceHost(service: "ollama" | "lmstudio"): Promise<void> {
+    const config = service === "ollama" ? this.ollamaConfig : this.lmstudioConfig;
+    this.settings[service].host = this.buildHost(config);
+    const changedField = service === "ollama" ? "ollama.host" : "lmstudio.host";
+    // Clear cached models when host changes
+    if (service === "ollama") {
+      this.ollamaModels = [];
+      this.modelsFetched.ollama = false;
+    } else {
+      this.lmstudioModels = [];
+      this.modelsFetched.lmstudio = false;
+    }
+    await this.onSettingsChange(this.settings, [changedField]);
   }
 
   private renderIndexingSection(containerEl: HTMLElement): void {
@@ -600,194 +699,6 @@ export class NotientSettingTab extends PluginSettingTab {
             await this.onSettingsChange(this.settings);
           }),
       );
-  }
-
-  private renderIndexManagement(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv({
-      cls: "notient-settings-section notient-index-management",
-    });
-    section.createEl("h2", { text: "Index Management" });
-
-    const isReady = this.kernel.isServicesInitialized;
-
-    const indexManager = isReady
-      ? this.kernel.getService<{
-          getIndexedCount(): number;
-          getActiveModelKey(): string;
-          listAvailableIndices(): string[];
-          exportIndex(): Promise<string>;
-          importIndex(json: string): Promise<{ modelKey: string; noteCount: number }>;
-          trimIndex(): Promise<{ removed: number }>;
-          deleteIndex(modelKey: string): Promise<boolean>;
-        }>("indexManager")
-      : null;
-
-    // Info box showing current state
-    const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
-
-    if (!isReady) {
-      infoBox.createEl("div", {
-        text: this.kernel.isServicesInitializing
-          ? "⏳ Services initializing..."
-          : "⚠️ Services not ready - complete setup wizard first",
-        cls: "notient-settings-info-dim",
-      });
-    } else if (indexManager) {
-      const activeKey = indexManager.getActiveModelKey() || "none";
-      const noteCount = indexManager.getIndexedCount();
-
-      infoBox.createEl("div", { text: `🔑 Active Index: ${activeKey}` });
-      infoBox.createEl("div", { text: `📊 Notes: ${noteCount}`, cls: "notient-settings-info-dim" });
-
-      const indices = indexManager.listAvailableIndices();
-      if (indices.length > 1) {
-        infoBox.createEl("div", {
-          text: `📁 All indexes: ${indices.join(", ")}`,
-          cls: "notient-settings-info-dim",
-        });
-      }
-    } else {
-      infoBox.createEl("div", {
-        text: "No index data available",
-        cls: "notient-settings-info-dim",
-      });
-    }
-
-    // Actions section
-    const actionsDiv = section.createDiv({ cls: "notient-settings-index-actions" });
-
-    // Sync button
-    new Setting(actionsDiv)
-      .setName("Sync Index")
-      .setDesc("Index new and changed notes")
-      .addButton((btn) =>
-        btn.setButtonText("▶️ Sync").onClick(() => {
-          (
-            this.app as App & { commands: { executeCommandById: (id: string) => void } }
-          ).commands.executeCommandById("notient:reindex-vault");
-        }),
-      );
-
-    // Trim button
-    new Setting(actionsDiv)
-      .setName("Trim Stale Entries")
-      .setDesc("Remove vectors for deleted notes")
-      .addButton((btn) =>
-        btn.setButtonText("🧹 Trim").onClick(async () => {
-          if (!indexManager) {
-            this.kernel.obsidian.notice("Index manager not ready");
-            return;
-          }
-          try {
-            const result = await indexManager.trimIndex();
-            this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
-            this.display();
-          } catch (error) {
-            this.kernel.obsidian.notice(`Trim failed: ${error}`);
-          }
-        }),
-      );
-
-    // Export/Import row
-    const ioDiv = section.createDiv({ cls: "notient-settings-index-io" });
-
-    new Setting(ioDiv)
-      .setName("Export")
-      .setDesc("Backup to file")
-      .addButton((btn) =>
-        btn.setButtonText("📤 Export").onClick(async () => {
-          if (!indexManager) {
-            this.kernel.obsidian.notice("Index manager not ready");
-            return;
-          }
-          try {
-            const json = await indexManager.exportIndex();
-            const blob = new Blob([json], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `notient-index-${indexManager.getActiveModelKey()}-${Date.now()}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            this.kernel.obsidian.notice("Index exported");
-          } catch (error) {
-            this.kernel.obsidian.notice(`Export failed: ${error}`);
-          }
-        }),
-      );
-
-    new Setting(ioDiv)
-      .setName("Import")
-      .setDesc("Load from backup")
-      .addButton((btn) =>
-        btn.setButtonText("📥 Import").onClick(() => {
-          if (!indexManager) {
-            this.kernel.obsidian.notice("Index manager not ready");
-            return;
-          }
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = ".json";
-          input.onchange = async (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
-            if (!file) return;
-            try {
-              const text = await file.text();
-              const result = await indexManager.importIndex(text);
-              this.kernel.obsidian.notice(
-                `Imported ${result.noteCount} notes for ${result.modelKey}`,
-              );
-              this.display();
-            } catch (error) {
-              this.kernel.obsidian.notice(`Import failed: ${error}`);
-            }
-          };
-          input.click();
-        }),
-      );
-
-    // Danger zone
-    const dangerDiv = section.createDiv({ cls: "notient-settings-danger-zone" });
-    dangerDiv.createEl("h4", { text: "⚠️ Danger Zone" });
-
-    new Setting(dangerDiv)
-      .setName("Rebuild Index")
-      .setDesc("Clear and re-index everything from scratch")
-      .addButton((btn) =>
-        btn
-          .setButtonText("🔄 Rebuild")
-          .setWarning()
-          .onClick(() => {
-            (
-              this.app as App & { commands: { executeCommandById: (id: string) => void } }
-            ).commands.executeCommandById("notient:full-reindex");
-          }),
-      );
-
-    // Delete other indexes (if multiple exist)
-    if (indexManager) {
-      const indices = indexManager.listAvailableIndices();
-      const activeKey = indexManager.getActiveModelKey();
-      const otherIndices = indices.filter((k) => k !== activeKey);
-
-      if (otherIndices.length > 0) {
-        new Setting(dangerDiv)
-          .setName("Delete Old Indexes")
-          .setDesc(`Other indexes: ${otherIndices.join(", ")}`)
-          .addButton((btn) =>
-            btn
-              .setButtonText("🗑️ Delete All Old")
-              .setWarning()
-              .onClick(async () => {
-                for (const key of otherIndices) {
-                  await indexManager.deleteIndex(key);
-                }
-                this.kernel.obsidian.notice(`Deleted ${otherIndices.length} old indexes`);
-                this.display();
-              }),
-          );
-      }
-    }
   }
 
   private renderParaSection(containerEl: HTMLElement): void {

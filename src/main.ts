@@ -99,13 +99,23 @@ export default class NotientPlugin extends Plugin {
         this,
         this.kernel,
         this.settings,
-        async (newSettings) => {
+        async (newSettings, changedFields = []) => {
           this.settings = newSettings;
           await saveSettings(this, newSettings);
-          this.kernel.eventBus.emit("settings:changed", { changedFields: [] });
+          this.kernel.eventBus.emit("settings:changed", { changedFields });
         },
       );
       this.addSettingTab(this.settingTab);
+
+      // Listen for LLM settings changes to reinitialize services
+      this.kernel.eventBus.on("settings:changed", async ({ changedFields }) => {
+        const llmFields = ["ollama.host", "ollama.embeddingModel", "lmstudio.host", "lmstudio.reasoningModel"];
+        const needsReinit = changedFields.some(f => llmFields.includes(f));
+        if (needsReinit && this.servicesInitialized) {
+          console.log("[Notient] LLM settings changed, reinitializing services...");
+          await this.reinitializeServices();
+        }
+      });
 
       // Add ribbon icon
       this.addRibbonIcon("sparkles", "Notient", () => {
@@ -473,6 +483,13 @@ export default class NotientPlugin extends Plugin {
           this.kernel.obsidian.notice("Cannot index - check service connections");
           return;
         }
+        // Block on external read-only indices
+        if (this.indexManager?.isReadOnly()) {
+          this.kernel.obsidian.notice(
+            "Cannot sync: External index is read-only. Switch to a plugin-managed index.",
+          );
+          return;
+        }
         this.kernel.obsidian.notice("Starting vault sync...");
         const result = await this.indexer.syncVault();
         this.kernel.obsidian.notice(
@@ -540,10 +557,10 @@ export default class NotientPlugin extends Plugin {
           },
           vectorStore: store
             ? {
-                ready: store.isReady(),
-                chunkCount: await store.countChunks(),
-                noteCount: await store.countNotes(),
-              }
+              ready: store.isReady(),
+              chunkCount: await store.countChunks(),
+              noteCount: await store.countNotes(),
+            }
             : null,
           searchPipeline: search ? "available" : "null",
         };
@@ -601,7 +618,14 @@ export default class NotientPlugin extends Plugin {
     const wasSetupComplete = this.settings.setupComplete;
     const previousModel = this.settings.ollama.embeddingModel;
 
-    const wizard = new SetupWizardModal(this.app, this.healthMonitor, this.settings);
+    const wizard = new SetupWizardModal(
+      this.app,
+      this.healthMonitor,
+      this.settings,
+      {
+        discoverIndices: async () => IndexManager.discoverIndices(this.kernel.storagePaths),
+      }
+    );
 
     const result = await wizard.run();
 
@@ -618,6 +642,11 @@ export default class NotientPlugin extends Plugin {
         setupComplete: true,
       };
 
+      // If user selected an existing index, save its path as active
+      if (result.indexAction === "use_existing" && result.selectedIndexKey) {
+        this.settings.indexing.activeIndexPath = result.selectedIndexKey;
+      }
+
       await saveSettings(this, this.settings);
       this.settingTab.updateSettings(this.settings);
       this.kernel.updateSettings(this.settings);
@@ -626,7 +655,7 @@ export default class NotientPlugin extends Plugin {
       this._pendingIndexAction = result.indexAction;
 
       console.log(
-        `[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}, indexAction=${result.indexAction}`,
+        `[Notient] Wizard complete: wasSetup=${wasSetupComplete}, modelChanged=${modelChanged}, newModel=${newModel}, indexAction=${result.indexAction}, selectedPath=${result.selectedIndexKey}`,
       );
 
       if (!wasSetupComplete) {
@@ -682,6 +711,8 @@ export default class NotientPlugin extends Plugin {
       }
       this.lmStudioService?.dispose();
       this.ollamaService?.dispose();
+      // Dispose HealthMonitor to stop its polling interval (prevents memory leak)
+      this.healthMonitor?.dispose();
 
       this.llmProvider = null;
       this.noteIntelligence = null;
@@ -692,6 +723,7 @@ export default class NotientPlugin extends Plugin {
       this.vectorStore = null;
       this.lmStudioService = null;
       this.ollamaService = null;
+      this.healthMonitor = null;
       this.agentTaskQueue = null;
       this.servicesInitialized = false;
 

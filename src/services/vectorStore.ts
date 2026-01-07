@@ -9,13 +9,23 @@ import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 
 /**
+ * Options for vector store initialization
+ */
+export interface VectorStoreInitOptions {
+  /** Override path for external/user-provided indices */
+  indexOverridePath?: string;
+  /** Mark index as read-only (no persistence allowed) */
+  isReadOnly?: boolean;
+}
+
+/**
  * Vector store interface for chunk storage and retrieval
  */
 export interface VectorStore {
   /**
    * Initialize the vector store
    */
-  initialize(): Promise<void>;
+  initialize(options?: VectorStoreInitOptions): Promise<void>;
 
   /**
    * Upsert chunks into the store
@@ -60,7 +70,7 @@ export interface VectorStore {
   /**
    * Dispose of the store
    */
-  dispose(): void;
+  dispose(): Promise<void>;
 
   /**
    * Optional: signal the store that a large bulk indexing operation is starting.

@@ -640,7 +640,7 @@ export function chunkNoteTiered(
   const options: TieredChunkerOptions = { ...DEFAULT_OPTIONS, ...(opts ?? {}) };
 
   const noteId = generateNoteId(filePath);
-  const tags = (metadata?.tags ?? []).map((t) => t.replace(/^#/, "")).filter(Boolean);
+  const tags = (metadata?.tags ?? []).filter((t): t is string => typeof t === "string").map((t) => t.replace(/^#/, "")).filter(Boolean);
   const frontmatter = metadata?.frontmatter ?? {};
 
   const { titleFromH1, blocks } = parseBlocks(filePath, content);

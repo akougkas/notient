@@ -10,19 +10,9 @@
  * - Error handling
  */
 
+import { LLM_PROMPTS } from "../../constants";
 import type { LLMProvider } from "../provider";
 import type { ChatMessage, CompletionOptions, RankedResult, RerankCandidate } from "../types";
-
-const RERANK_SYSTEM_PROMPT = `You rank search results by relevance. Output ONLY valid JSON.
-
-Example output:
-{"rankings":[{"index":0,"score":90,"reason":"exact match"},{"index":2,"score":70,"reason":"related"}]}
-
-Rules:
-- score: 0-100
-- index: candidate number
-- reason: brief (under 30 chars)
-- Only include relevant results (score >= 30)`;
 
 /**
  * Base provider for OpenAI-compatible APIs
@@ -48,8 +38,38 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error(`${this.name} not configured: missing baseUrl or model`);
     }
 
-    // Verify connectivity
+    // Verify connectivity by listing models
     await this.listModels();
+
+    // Verify model is actually loaded by doing a minimal test completion
+    try {
+      const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 1,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "unknown");
+        // Check for "no models loaded" error specifically
+        if (errorText.includes("No models loaded")) {
+          throw new Error(`${this.name}: Model '${this.model}' exists but is not loaded. Please load the model in LM Studio.`);
+        }
+        throw new Error(`${this.name} model not available: ${response.status}`);
+      }
+    } catch (error) {
+      // Re-throw with clearer message
+      if (error instanceof Error && error.message.includes("not loaded")) {
+        throw error;
+      }
+      console.warn(`[${this.name}] Model verification failed:`, error);
+      throw new Error(`${this.name}: Cannot use model '${this.model}'. Is it loaded in LM Studio?`);
+    }
+
     this.initialized = true;
     console.log(`[${this.name}] Initialized with model=${this.model}`);
   }
@@ -92,7 +112,15 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    const message = data.choices?.[0]?.message;
+    // Support both regular content and reasoning_content (for thinking models like DeepSeek, Falcon H1R)
+    let content = message?.content || "";
+
+    // If content is empty but reasoning_content exists, use that instead
+    if (!content && message?.reasoning_content) {
+      content = message.reasoning_content;
+      console.log(`[${this.name}] Using reasoning_content from thinking model`);
+    }
 
     if (!content) {
       console.warn(
@@ -165,7 +193,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
             try {
               const json = JSON.parse(data);
-              const content = json.choices?.[0]?.delta?.content;
+              const delta = json.choices?.[0]?.delta;
+              // Support both content and reasoning_content for thinking models
+              const content = delta?.content || delta?.reasoning_content;
               if (content) yield content;
             } catch {
               // Skip malformed JSON
@@ -196,7 +226,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       const response = await this.complete(
         [
-          { role: "system", content: RERANK_SYSTEM_PROMPT },
+          { role: "system", content: LLM_PROMPTS.RERANK_SYSTEM },
           { role: "user", content: prompt },
         ],
         { temperature: 0.3, maxTokens: 500 },

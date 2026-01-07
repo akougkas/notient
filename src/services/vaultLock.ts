@@ -16,11 +16,17 @@ interface LockMetadata {
   hostname: string;
 }
 
-/** Lock staleness threshold (10 seconds) */
-const LOCK_STALE_MS = 10000;
+/** Lock staleness threshold (30 seconds - gives 3x safety margin over refresh) */
+const LOCK_STALE_MS = 30000;
 
-/** Lock refresh interval (5 seconds) */
-const LOCK_REFRESH_MS = 5000;
+/** Lock refresh interval (10 seconds - refreshes 3 times before lock becomes stale) */
+const LOCK_REFRESH_MS = 10000;
+
+/** Max retry attempts for lock acquisition */
+const LOCK_MAX_RETRIES = 3;
+
+/** Base delay for exponential backoff (ms) */
+const LOCK_RETRY_BASE_MS = 200;
 
 export class VaultLock {
   private lockPath: string;
@@ -32,46 +38,62 @@ export class VaultLock {
   }
 
   /**
-   * Try to acquire the writer lock
+   * Try to acquire the writer lock with retry logic
    * @returns true if lock acquired, false if another process holds it
    */
   async tryAcquire(): Promise<boolean> {
-    try {
-      // Ensure locks directory exists
-      await fs.promises.mkdir(this.storagePaths.locks, { recursive: true });
-
-      // Check if lock exists and is stale
-      if (await this.isLockStale()) {
-        await this.removeStaleLock();
-      }
-
-      // Try to create lock file atomically
-      const metadata: LockMetadata = {
-        pid: process.pid,
-        timestamp: Date.now(),
-        hostname: require("node:os").hostname(),
-      };
-
+    for (let attempt = 1; attempt <= LOCK_MAX_RETRIES; attempt++) {
       try {
-        await fs.promises.writeFile(
-          this.lockPath,
-          JSON.stringify(metadata),
-          { flag: "wx" }, // Exclusive create, fails if exists
-        );
-        this.hasLock = true;
-        this.startRefresh();
-        return true;
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-          // Lock exists and is not stale
+        // Ensure locks directory exists
+        await fs.promises.mkdir(this.storagePaths.locks, { recursive: true });
+
+        // Check if lock exists and is stale
+        if (await this.isLockStale()) {
+          await this.removeStaleLock();
+        }
+
+        // Try to create lock file atomically
+        const metadata: LockMetadata = {
+          pid: process.pid,
+          timestamp: Date.now(),
+          hostname: require("node:os").hostname(),
+        };
+
+        try {
+          await fs.promises.writeFile(
+            this.lockPath,
+            JSON.stringify(metadata),
+            { flag: "wx" }, // Exclusive create, fails if exists
+          );
+          this.hasLock = true;
+          this.startRefresh();
+          console.log(`[VaultLock] Lock acquired on attempt ${attempt}`);
+          return true;
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+            // Lock exists - retry with exponential backoff
+            if (attempt < LOCK_MAX_RETRIES) {
+              const backoffMs = LOCK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+              console.log(`[VaultLock] Lock held by another process, retrying in ${backoffMs}ms (attempt ${attempt}/${LOCK_MAX_RETRIES})`);
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              continue;
+            }
+            console.warn("[VaultLock] Lock held by another process after all retries");
+            return false;
+          }
+          throw err;
+        }
+      } catch (error) {
+        console.error(`[VaultLock] Error acquiring lock (attempt ${attempt}):`, error);
+        if (attempt >= LOCK_MAX_RETRIES) {
           return false;
         }
-        throw err;
+        // Retry on error too
+        const backoffMs = LOCK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
-    } catch (error) {
-      console.error("[VaultLock] Error acquiring lock:", error);
-      return false;
     }
+    return false;
   }
 
   /**
@@ -157,6 +179,15 @@ export class VaultLock {
     this.refreshInterval = setInterval(async () => {
       if (this.hasLock) {
         try {
+          // Verify we still own the lock before refreshing
+          const currentMeta = await this.readLockMetadata();
+          if (!currentMeta || currentMeta.pid !== process.pid) {
+            console.error("[VaultLock] Lost lock ownership during refresh - another process took it");
+            this.hasLock = false;
+            this.stopRefresh();
+            return;
+          }
+
           const metadata: LockMetadata = {
             pid: process.pid,
             timestamp: Date.now(),
@@ -165,6 +196,9 @@ export class VaultLock {
           await fs.promises.writeFile(this.lockPath, JSON.stringify(metadata));
         } catch (error) {
           console.error("[VaultLock] Failed to refresh lock:", error);
+          // Clear lock flag on refresh failure to prevent corrupted state
+          this.hasLock = false;
+          this.stopRefresh();
         }
       }
     }, LOCK_REFRESH_MS);

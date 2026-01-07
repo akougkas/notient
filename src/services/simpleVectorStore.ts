@@ -18,7 +18,9 @@ import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
 import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
-import type { VectorStore } from "./vectorStore";
+import { atomicWriteFile } from "../utils/atomicWrite";
+import { formatIndexTimestamp } from "./storagePaths";
+import type { VectorStore, VectorStoreInitOptions } from "./vectorStore";
 
 const INDEX_VERSION = 2;
 const CHUNKER_META = { name: "tiered-semantic", version: 1 } as const;
@@ -94,15 +96,19 @@ export class SimpleVectorStore implements VectorStore {
   private createdAt = Date.now();
   private disposed = false;
   private dirty = false;
-  private bulkMode = false;
+  private bulkDepth = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private paraDetector: ParaDetector;
+  /** Read-only mode: prevents persistence to protect external/user-provided indices */
+  private isReadOnlyIndex = false;
+  /** Resolved index file path (discovered or generated) */
+  private resolvedIndexPath: string | null = null;
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
   }
 
-  async initialize(): Promise<void> {
+  async initialize(options?: VectorStoreInitOptions): Promise<void> {
     if (this.disposed) return;
 
     const ollama = this.kernel.getService<{
@@ -116,15 +122,36 @@ export class SimpleVectorStore implements VectorStore {
 
     this.modelKey = ollama.getModelKey();
     this.dimension = await ollama.getDimension();
+    this.isReadOnlyIndex = options?.isReadOnly ?? false;
 
     console.log(
-      `[SimpleVectorStore] Initializing for modelKey=${this.modelKey}, dim=${this.dimension}`,
+      `[SimpleVectorStore] Initializing for modelKey=${this.modelKey}, dim=${this.dimension}, readOnly=${this.isReadOnlyIndex}`,
     );
 
     // Try to load existing index
-    const loaded = await this.loadFromDisk();
+    let loaded = false;
+
+    // If override path is provided, use that directly
+    if (options?.indexOverridePath) {
+      console.log(`[SimpleVectorStore] Using index override path: ${options.indexOverridePath}`);
+      this.resolvedIndexPath = options.indexOverridePath;
+      loaded = await this.loadFromDisk(options.indexOverridePath);
+    }
+
+    // Otherwise, discover existing index (supports both new and legacy formats)
     if (!loaded) {
+      const existingPath = await this.discoverExistingIndex();
+      if (existingPath) {
+        console.log(`[SimpleVectorStore] Discovered existing index: ${existingPath}`);
+        this.resolvedIndexPath = existingPath;
+        loaded = await this.loadFromDisk(existingPath);
+      }
+    }
+
+    if (!loaded) {
+      // Fresh index - createdAt is already set to Date.now()
       console.log(`[SimpleVectorStore] Created fresh index (${this.dimension}-dim)`);
+      console.log(`[SimpleVectorStore] New index path: ${this.getIndexPath()}`);
     } else {
       console.log(
         `[SimpleVectorStore] Using existing index: ${this.docs.size} chunks, ${this.noteIdToChunkIds.size} notes`,
@@ -140,7 +167,7 @@ export class SimpleVectorStore implements VectorStore {
     if (chunks.length === 0) return;
 
     // Remove existing chunks for affected notes (unless in bulk mode)
-    if (!this.bulkMode) {
+    if (this.bulkDepth === 0) {
       const noteIds = new Set(chunks.map((c) => c.noteId));
       for (const noteId of noteIds) {
         this.removeNoteChunks(noteId);
@@ -187,7 +214,7 @@ export class SimpleVectorStore implements VectorStore {
     }
 
     this.dirty = true;
-    if (!this.bulkMode) {
+    if (this.bulkDepth === 0) {
       this.scheduleSave();
     }
   }
@@ -196,7 +223,7 @@ export class SimpleVectorStore implements VectorStore {
     if (this.disposed) return;
     this.removeNoteChunks(noteId);
     this.dirty = true;
-    if (!this.bulkMode) {
+    if (this.bulkDepth === 0) {
       this.scheduleSave();
     }
   }
@@ -216,7 +243,7 @@ export class SimpleVectorStore implements VectorStore {
     }
 
     this.dirty = true;
-    if (!this.bulkMode) {
+    if (this.bulkDepth === 0) {
       this.scheduleSave();
     }
   }
@@ -240,9 +267,9 @@ export class SimpleVectorStore implements VectorStore {
     // Hybrid search: prepare query terms for lexical matching
     const queryTerms = options.queryText
       ? options.queryText
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((t) => t.length >= 2)
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length >= 2)
       : [];
 
     // Score all documents
@@ -405,12 +432,14 @@ export class SimpleVectorStore implements VectorStore {
   }
 
   beginBulkUpdate(): void {
-    this.bulkMode = true;
+    this.bulkDepth++;
   }
 
   async endBulkUpdate(): Promise<void> {
-    this.bulkMode = false;
-    await this.flush();
+    this.bulkDepth = Math.max(0, this.bulkDepth - 1);
+    if (this.bulkDepth === 0) {
+      await this.flush();
+    }
   }
 
   async clearAll(): Promise<void> {
@@ -420,7 +449,7 @@ export class SimpleVectorStore implements VectorStore {
   }
 
   async flush(): Promise<void> {
-    if (!this.dirty || this.disposed || this.bulkMode) return;
+    if (!this.dirty || this.disposed || this.bulkDepth > 0) return;
 
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -434,7 +463,7 @@ export class SimpleVectorStore implements VectorStore {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }
-    this.bulkMode = false;
+    this.bulkDepth = 0;
     await this.flush();
     this.disposed = true;
     this.docs.clear();
@@ -492,12 +521,99 @@ export class SimpleVectorStore implements VectorStore {
     }, 10000); // Save 10s after last write
   }
 
+  /**
+   * Get the resolved index path. Uses cached path if available,
+   * otherwise generates a new path for a fresh index.
+   *
+   * New format: idx_{YYYYMMDD}T{HHMMSS}_{vaultHash}_{model}_{dim}d.json
+   * Example: idx_20250107T143052_a7f3_nomic_embed_text_768d.json
+   */
   private getIndexPath(): string {
-    return path.join(this.kernel.storagePaths.pluginRoot, `index-${this.modelKey}.json`);
+    // Use cached path if we've already resolved/generated one
+    if (this.resolvedIndexPath) {
+      return this.resolvedIndexPath;
+    }
+
+    // Generate a new path for a fresh index
+    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const timestamp = formatIndexTimestamp(new Date(this.createdAt));
+    const vaultHash = this.kernel.storagePaths.vaultHash;
+
+    this.resolvedIndexPath = path.join(
+      this.kernel.storagePaths.pluginRoot,
+      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`
+    );
+    return this.resolvedIndexPath;
   }
 
-  private async loadFromDisk(): Promise<boolean> {
-    const indexPath = this.getIndexPath();
+  /**
+   * Discover existing index files matching this model/dimension.
+   * Searches for both new format (idx_*) and legacy format (index-*).
+   * Returns the most recently created match, or null if none found.
+   */
+  private async discoverExistingIndex(): Promise<string | null> {
+    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const pluginRoot = this.kernel.storagePaths.pluginRoot;
+
+    console.log(`[SimpleVectorStore] Discovering indices for modelKey=${sanitizedKey}, dim=${this.dimension}`);
+
+    try {
+      const files = await fs.promises.readdir(pluginRoot);
+      const allIndexFiles = files.filter(f => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"));
+      console.log(`[SimpleVectorStore] All index files in storage:`, allIndexFiles);
+
+      // New format pattern: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
+      const newPattern = new RegExp(
+        `^idx_\\d{8}T\\d{6}_[a-f0-9]{4}_${sanitizedKey}_${this.dimension}d\\.json$`
+      );
+      // Legacy pattern: index-{model}-{dim}d.json
+      const legacyPattern = new RegExp(
+        `^index-${sanitizedKey}-${this.dimension}d\\.json$`
+      );
+
+      const matches: Array<{ path: string; isLegacy: boolean; timestamp?: string }> = [];
+
+      for (const file of files) {
+        if (newPattern.test(file)) {
+          // Extract timestamp from new format for sorting
+          const tsMatch = file.match(/^idx_(\d{8}T\d{6})_/);
+          matches.push({
+            path: path.join(pluginRoot, file),
+            isLegacy: false,
+            timestamp: tsMatch?.[1],
+          });
+          console.log(`[SimpleVectorStore] Matched (new format): ${file}`);
+        } else if (legacyPattern.test(file)) {
+          matches.push({
+            path: path.join(pluginRoot, file),
+            isLegacy: true,
+          });
+          console.log(`[SimpleVectorStore] Matched (legacy): ${file}`);
+        }
+      }
+
+      if (matches.length === 0) {
+        console.log(`[SimpleVectorStore] No matching indices found for this model/dimension`);
+        return null;
+      }
+
+      // Prefer non-legacy, sort by timestamp (newest first)
+      matches.sort((a, b) => {
+        if (a.isLegacy !== b.isLegacy) return a.isLegacy ? 1 : -1;
+        if (a.timestamp && b.timestamp) return b.timestamp.localeCompare(a.timestamp);
+        return 0;
+      });
+
+      console.log(`[SimpleVectorStore] Selected index: ${matches[0].path}`);
+      return matches[0].path;
+    } catch (e) {
+      console.warn(`[SimpleVectorStore] Discovery failed:`, e);
+      return null;
+    }
+  }
+
+  private async loadFromDisk(specificPath?: string): Promise<boolean> {
+    const indexPath = specificPath || this.getIndexPath();
     console.log(`[SimpleVectorStore] Looking for index at: ${indexPath}`);
 
     try {
@@ -581,6 +697,12 @@ export class SimpleVectorStore implements VectorStore {
   private async saveToDisk(): Promise<void> {
     if (!this.dirty || this.disposed) return;
 
+    // Protect external/user-provided indices from accidental writes
+    if (this.isReadOnlyIndex) {
+      console.log("[SimpleVectorStore] Skipping save: read-only index");
+      return;
+    }
+
     const indexPath = this.getIndexPath();
 
     try {
@@ -625,7 +747,8 @@ export class SimpleVectorStore implements VectorStore {
         docs: persistedDocs,
       };
 
-      await fs.promises.writeFile(indexPath, JSON.stringify(data));
+      // Atomic write: temp file + rename for crash safety
+      await atomicWriteFile(indexPath, JSON.stringify(data));
       this.dirty = false;
       console.log(`[SimpleVectorStore] Saved ${persistedDocs.length} chunks`);
     } catch (error) {
@@ -634,6 +757,12 @@ export class SimpleVectorStore implements VectorStore {
   }
 
   private async moveToDeleted(filePath: string, reason: string): Promise<void> {
+    // Never move/delete external user-provided indices
+    if (this.isReadOnlyIndex) {
+      console.log("[SimpleVectorStore] Skipping moveToDeleted: read-only index");
+      return;
+    }
+
     try {
       const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
       await fs.promises.mkdir(deletedDir, { recursive: true });

@@ -239,6 +239,14 @@ export class SearchPipeline {
     return `${text.slice(0, MAX).trimEnd()}…`;
   }
 
+  /**
+   * Get file modification time by path
+   */
+  private getFileMtime(path: string): number {
+    const file = this.kernel.obsidian.getFileByPath(path);
+    return file?.stat.mtime ?? 0;
+  }
+
   private aggregateChunksToNotes(
     chunks: ChunkSearchResult[],
     opts: { maxChunksPerNote: number },
@@ -261,7 +269,7 @@ export class SearchPipeline {
           bestScore: chunk.score,
           paraType: chunk.paraType,
           chunks: [chunk],
-          mtimeMs: 0, // TODO: fill from file cache if needed
+          mtimeMs: this.getFileMtime(chunk.path),
           reasoning: chunk.reasoning,
         });
       }
@@ -383,40 +391,6 @@ export class SearchPipeline {
 
     this.embeddingCache.set(query, embedding);
     return embedding;
-  }
-
-  /**
-   * Group chunk results by note
-   */
-  private groupByNote(chunks: ChunkSearchResult[]): SearchResult[] {
-    const noteMap: Map<string, SearchResult> = new Map();
-
-    for (const chunk of chunks) {
-      const existing = noteMap.get(chunk.noteId);
-
-      if (existing) {
-        existing.chunks.push(chunk);
-        if (chunk.score > existing.bestScore) {
-          existing.bestScore = chunk.score;
-        }
-      } else {
-        noteMap.set(chunk.noteId, {
-          noteId: chunk.noteId,
-          path: chunk.path,
-          title: chunk.title,
-          bestScore: chunk.score,
-          paraType: chunk.paraType,
-          chunks: [chunk],
-          mtimeMs: 0, // TODO: get from file
-        });
-      }
-    }
-
-    // Sort by best score
-    const results = Array.from(noteMap.values());
-    results.sort((a, b) => b.bestScore - a.bestScore);
-
-    return results;
   }
 
   /**

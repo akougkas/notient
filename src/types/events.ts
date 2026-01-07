@@ -30,6 +30,7 @@ export type EventType =
   | "workflow:completed"
   | "workflow:cancelled"
   | "workflow:failed"
+  | "workflow:reviewDismissed"
   // Phase 2: Action events
   | "action:applied"
   | "action:undone";
@@ -54,6 +55,7 @@ export interface EventPayloads {
   "workflow:completed": WorkflowCompletedEvent;
   "workflow:cancelled": WorkflowCancelledEvent;
   "workflow:failed": WorkflowFailedEvent;
+  "workflow:reviewDismissed": WorkflowReviewDismissedEvent;
   // Phase 2: Action events
   "action:applied": ActionAppliedEvent;
   "action:undone": ActionUndoneEvent;
@@ -137,6 +139,11 @@ export interface WorkflowCancelledEvent {
 export interface WorkflowFailedEvent {
   workflow: WorkflowRun;
   error: string;
+}
+
+export interface WorkflowReviewDismissedEvent {
+  workflowId: string;
+  actionId: string;
 }
 
 // =============================================================================

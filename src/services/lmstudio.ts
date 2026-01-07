@@ -10,22 +10,12 @@
  * - core/agent/taskInference.ts
  */
 
+import { LLM_PROMPTS } from "../core/constants";
 import type { Kernel } from "../core/kernel";
 
 // Re-export types from new architecture for backward compatibility
 export type { ChatMessage, RankedResult, RerankCandidate } from "../core/llm/types";
 import type { ChatMessage, RankedResult, RerankCandidate } from "../core/llm/types";
-
-const RERANK_SYSTEM_PROMPT = `You rank search results by relevance. Output ONLY valid JSON.
-
-Example output:
-{"rankings":[{"index":0,"score":90,"reason":"exact match"},{"index":2,"score":70,"reason":"related"}]}
-
-Rules:
-- score: 0-100
-- index: candidate number
-- reason: brief (under 30 chars)
-- Only include relevant results (score >= 30)`;
 
 /**
  * LM Studio Service - provides reasoning capabilities
@@ -101,7 +91,14 @@ export class LMStudioService {
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    const message = data.choices?.[0]?.message;
+    let content = message?.content || "";
+
+    // Support reasoning_content from thinking models (DeepSeek, Falcon H1R, etc.)
+    if (!content && message?.reasoning_content) {
+      content = message.reasoning_content;
+      console.log("[LMStudioService] Using reasoning_content from thinking model");
+    }
 
     if (!content) {
       console.warn(
@@ -171,7 +168,9 @@ export class LMStudioService {
 
             try {
               const json = JSON.parse(data);
-              const content = json.choices?.[0]?.delta?.content;
+              const delta = json.choices?.[0]?.delta;
+              // Support both content and reasoning_content for thinking models
+              const content = delta?.content || delta?.reasoning_content;
               if (content) yield content;
             } catch {
               // Skip malformed JSON
@@ -199,7 +198,7 @@ export class LMStudioService {
 
     try {
       const response = await this.chat([
-        { role: "system", content: RERANK_SYSTEM_PROMPT },
+        { role: "system", content: LLM_PROMPTS.RERANK_SYSTEM },
         { role: "user", content: prompt },
       ]);
 

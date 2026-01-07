@@ -248,25 +248,26 @@ export class WorkflowRunner {
 
     this.eventBus.emit("workflow:started", { workflow: this.currentWorkflow });
 
-    try {
-      await this.executeWorkflow(this.currentWorkflow);
+    // CRITICAL: Store workflow in local variable to prevent race condition
+    // when cancelCurrent() nulls this.currentWorkflow while we're still processing
+    const workflow = this.currentWorkflow;
 
-      if (this.currentWorkflow.status === "running") {
-        this.currentWorkflow.status = "completed";
-        this.currentWorkflow.completedAt = Date.now();
-        this.eventBus.emit("workflow:completed", {
-          workflow: this.currentWorkflow,
-        });
+    try {
+      await this.executeWorkflow(workflow);
+
+      // Use local reference, not this.currentWorkflow (may be nulled by cancel)
+      if (workflow.status === "running") {
+        workflow.status = "completed";
+        workflow.completedAt = Date.now();
+        this.eventBus.emit("workflow:completed", { workflow });
       }
     } catch (error) {
-      if (this.currentWorkflow.status === "running") {
-        this.currentWorkflow.status = "failed";
-        this.currentWorkflow.completedAt = Date.now();
+      // Use local reference, not this.currentWorkflow (may be nulled by cancel)
+      if (workflow.status === "running") {
+        workflow.status = "failed";
+        workflow.completedAt = Date.now();
         const errorMessage = error instanceof Error ? error.message : String(error);
-        this.eventBus.emit("workflow:failed", {
-          workflow: this.currentWorkflow,
-          error: errorMessage,
-        });
+        this.eventBus.emit("workflow:failed", { workflow, error: errorMessage });
       }
     } finally {
       this.currentWorkflow = null;
@@ -424,6 +425,40 @@ export class WorkflowRunner {
         this.abortController.signal.addEventListener("abort", abortHandler, { once: true });
       }
     });
+  }
+
+  /**
+   * Remove an action from the review queue (user dismissed it)
+   * Returns true if found and removed, false otherwise
+   */
+  dismissReviewItem(actionId: string): boolean {
+    // Check current workflow
+    if (this.currentWorkflow) {
+      const idx = this.currentWorkflow.reviewQueue.findIndex(a => a.id === actionId);
+      if (idx !== -1) {
+        this.currentWorkflow.reviewQueue.splice(idx, 1);
+        this.eventBus.emit("workflow:reviewDismissed", {
+          workflowId: this.currentWorkflow.id,
+          actionId,
+        });
+        return true;
+      }
+    }
+
+    // Check queued workflows
+    for (const workflow of this.workflowQueue) {
+      const idx = workflow.reviewQueue.findIndex(a => a.id === actionId);
+      if (idx !== -1) {
+        workflow.reviewQueue.splice(idx, 1);
+        this.eventBus.emit("workflow:reviewDismissed", {
+          workflowId: workflow.id,
+          actionId,
+        });
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
