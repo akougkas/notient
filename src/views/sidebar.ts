@@ -1302,21 +1302,48 @@ export class NotientSidebarView extends ItemView {
         text: `${Math.round(result.bestScore * 100)}%`,
       });
 
+      const bestChunk = result.chunks[0];
+      const headingPath = bestChunk?.headingPath?.length ? bestChunk.headingPath.join(" > ") : "";
+
       item.createDiv({
         cls: "nv2-search-result-path",
-        text: result.path,
+        text: headingPath ? `${result.path} • ${headingPath}` : result.path,
       });
 
-      if (result.chunks.length > 0 && result.chunks[0].text) {
-        const preview = result.chunks[0].text;
-        item.createDiv({
-          cls: "nv2-search-result-preview",
-          text: preview.length > 150 ? `${preview.slice(0, 150)}...` : preview,
-        });
+      if (bestChunk?.text) {
+        const preview = this.buildChunkPreview(bestChunk.text, 180);
+        if (preview) {
+          item.createDiv({
+            cls: "nv2-search-result-preview",
+            text: preview,
+          });
+        }
       }
 
       item.addEventListener("click", () => this.openFile(result.path));
     }
+  }
+
+  private buildChunkPreview(text: string, maxChars: number): string {
+    // Tiered chunks include a contextual header (# title / ## heading / Tags:).
+    // For UI previews, strip that and show the most useful body snippet.
+    const lines = text.split("\n");
+    const bodyLines = lines.filter((l) => {
+      const t = l.trim();
+      if (!t) return false;
+      if (t.startsWith("# ")) return false;
+      if (t.startsWith("## ")) return false;
+      if (t.startsWith("Tags:")) return false;
+      if (t.startsWith("Path:")) return false;
+      if (t === "Sketch:" || t === "Outline:") return false;
+      return true;
+    });
+
+    const normalized = bodyLines.join(" ").replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    return normalized.length > maxChars
+      ? `${normalized.slice(0, maxChars).trimEnd()}…`
+      : normalized;
   }
 
   private showSearchLoading(): void {
