@@ -1,14 +1,15 @@
 # MASTER_PLAN.md — Notient (Local-first Obsidian AI Vault Manager)
 
-> **Version 2.2 - Phase 1.6 Complete, Phase 1.7 Scoped**
-> UI/UX overhaul complete. Backend completion phase defined.
+> **Version 2.3 - Phase 1.7 Architecture Refined**
+> Agent Streams = vault-global activity feed. Chat in popup modal. Presets for search.
 
 ## 0) Purpose and scope of this master plan
 
 This document is the canonical plan for building **Notient** across multiple development phases and work sessions.
 
-- **PRD**: `planning/PRD.md` (v2.2)
+- **PRD**: `planning/PRD.md` (v2.3)
 - **UI/UX Spec**: `planning/prompts/ui-ux.md`
+- **Phase 1.7 Spec**: `planning/prompts/phase-1.7-backend-completion.md`
 - **Code repository**: `/home/akougkas/projects/notient`
 
 ## 1) Product definition
@@ -62,9 +63,10 @@ Notient transforms notes from passive files into living entities with health, dy
 ### 2.2 System decomposition (Current State)
 
 ```
-Notient Architecture v2.2
+Notient Architecture v2.3
 ├── UI Layer
 │   ├── Sidebar (Note Vitals + Agent Streams) ✅
+│   ├── TaskModal (popup with chat) ← Phase 1.7
 │   ├── Setup Wizard ✅
 │   ├── Settings Tab ✅
 │   └── Dashboard (Vault Vitals) - basic
@@ -82,7 +84,7 @@ Notient Architecture v2.2
 ├── Storage Services
 │   ├── SimpleVectorStore (brute-force cosine) ✅
 │   ├── IndexManager (state tracking) ✅
-│   └── ConversationStore (chat history) ← Phase 1.7
+│   └── AgentTaskQueue (task queue, session-only) ← Phase 1.7
 │
 └── Agent Services ← Phase 2/3
     ├── ClassificationAgent
@@ -113,6 +115,7 @@ src/
 │
 ├── views/
 │   ├── sidebar.ts              # Two-view (Note Vitals + Agent Streams) ✅
+│   ├── taskModal.ts            # Task popup with chat ← Phase 1.7
 │   ├── dashboard.ts            # Vault Vitals (basic) ✅
 │   ├── setupWizard.ts          # Setup wizard modal ✅
 │   └── indexOptionsModal.ts    # Index action picker ✅
@@ -138,6 +141,7 @@ src/
 │   ├── lmstudio.ts             # Reasoning/chat/streaming ✅
 │   ├── simpleVectorStore.ts    # Vector storage ✅
 │   ├── indexManager.ts         # Index state ✅
+│   ├── agentTaskQueue.ts       # Task queue (session-only) ← Phase 1.7
 │   ├── healthMonitor.ts        # Service health ✅
 │   ├── storagePaths.ts         # File paths ✅
 │   └── vaultLock.ts            # Multi-window safety ✅
@@ -148,7 +152,8 @@ src/
 └── types/
     ├── settings.ts             # Settings types ✅
     ├── events.ts               # Event types ✅
-    └── search.ts               # Search types ✅
+    ├── search.ts               # Search types ✅
+    └── agentTask.ts            # Task/queue types ← Phase 1.7
 ```
 
 ### 3.2 Data layout (on disk)
@@ -216,22 +221,35 @@ interface SearchPipeline {
 }
 ```
 
-## 5) UI architecture (Implemented)
+## 5) UI architecture
 
 ### 5.1 Sidebar Views ✅
 
 **Note Vitals View:**
 - Note card with title, tags, links
-- Quick Actions (Enrich, Link, Move)
+- Quick Actions (Enrich, Link, Move) → fire tasks into Agent Streams
 - Omnibar search with results
 - Insight Stream with dynamic suggestions
 
-**Agent Streams View:**
-- Agent status bar
-- Agent Dashboard (service status cards)
-- Activity Log (from chat history + search events)
+**Agent Streams View (Vault-Global):**
+- Agent Dashboard: 3 capability cards (Search, Context, Chat Assistant)
+  - Combined status: health dot + pulsing when processing
+  - Last activity timestamp per agent
+- Activity Stream: vault-global task feed (many-to-many: agents ↔ notes)
+  - Task cards with: note title, agent, status, progress bar, timestamp
+  - Running/queued tasks show cancel button
+  - **Click card → opens TaskModal**
 
-### 5.2 Design System ✅
+### 5.2 TaskModal (Phase 1.7)
+
+Popup that opens when clicking any task card:
+- Note preview section
+- RAG sources (citations used for context)
+- Task results when complete
+- **Chat section**: message bubbles, Enter sends, streaming with cancel
+- Citations as `[[Note Name]]` links
+
+### 5.3 Design System ✅
 
 CSS classes use `nv2-*` prefix. Key tokens:
 - `--nv2-accent`: Notient green (#10b981)
@@ -271,79 +289,96 @@ CSS classes use `nv2-*` prefix. Key tokens:
 
 ### Phase 1.7: BACKEND COMPLETION (Next Priority)
 
-**Goal:** Achieve UI-backend parity. Every UI element has working backend support.
+**Goal:** Achieve UI-backend parity with hybrid scope.
 
-**Settings Parity:**
-- [ ] Search settings section in settings.ts
-  - [ ] Top-K results slider (1-50, default 10)
-  - [ ] Reranking toggle (default: enabled)
-  - [ ] Minimum similarity threshold (0.0-1.0, default 0.3)
-- [ ] Prompt settings section
-  - [ ] Custom system prompt textarea
-  - [ ] Max context tokens slider
+**Scope:** Foundation now, defer bulk operations to Phase 2.
 
-**Chat Interface Completion:**
-- [ ] Full chat UI in Agent Streams view
-  - [ ] Chat message bubbles (user/assistant styling)
-  - [ ] Chat input textarea with send button
-  - [ ] Visible streaming text during generation
-  - [ ] Cancel button wired to AbortController
-  - [ ] RAG citations as clickable attachments
-- [ ] ConversationStore service
-  - [ ] Persist chat history to data.json
-  - [ ] Load on sidebar open
-  - [ ] Clear conversation button
+**Search Settings with Presets:**
+- [ ] Preset dropdown: Quick / Balanced / Thorough / Custom
+- [ ] Custom mode reveals: top-K slider, reranking toggle, min score
+- [ ] Wire presets to SearchPipeline
 
-**Agent Dashboard Accuracy:**
-- [ ] Replace hardcoded "Research Bot" labels
-- [ ] Show actual service status: Search, Context, Reranker
-- [ ] Activity log from real EventBus events
-- [ ] Processing indicator during operations
+**Agent Task System (Core New Architecture):**
+- [ ] `AgentTask` type with status, progress, per-task chat history
+- [ ] `AgentTaskQueue` service (sequential, one at a time)
+- [ ] Activity stream with full task cards (not just activity log)
+- [ ] Quick Actions fire tasks → appear in stream
+- [ ] Cancel button (always cancelable)
 
-**Index State Feedback:**
-- [ ] Progress bar during indexing
-- [ ] Note count in sidebar header or footer
-- [ ] Last sync timestamp display
+**TaskModal Popup:**
+- [ ] Note preview section
+- [ ] RAG sources (citations)
+- [ ] Task results display
+- [ ] Chat section with message bubbles
+- [ ] Enter sends, Shift+Enter newline
+- [ ] Streaming with cursor, cancel discards partial
+- [ ] Citations as `[[Note Name]]` links (prompt LLM to use format)
+
+**Agent Dashboard Status:**
+- [ ] Three capability cards: Semantic Search, Context Builder, Chat Assistant
+- [ ] Combined status: health dot + pulsing when processing
+- [ ] Last activity timestamp per agent
+
+**Index Progress in Footer:**
+- [ ] Non-blocking progress bar during indexing
+- [ ] Note count: "X notes indexed"
+- [ ] Last sync timestamp
+
+**Key Decisions (from interview):**
+- Chat in popup modal only (not main Agent Streams view)
+- Enter sends, Shift+Enter for newlines
+- Cancel discards partial response entirely
+- Last 10 messages to LLM (sliding window)
+- Inline `[[Note Name]]` citations (prompt LLM)
+- Session-only activity retention
+- Sequential task execution (one at a time)
+
+**Deferred to Phase 2:**
+- Bulk omnibar commands
+- Complex queue management
+- Conversation persistence across sessions
+- Multi-agent orchestration on single note
 
 **Exit criteria:**
-- Chat displays properly with message bubbles
-- User can cancel generation mid-stream
-- Settings UI matches backend capabilities
-- Activity log reflects real agent activity
+- Task cards appear in activity stream
+- TaskModal opens with full context + chat
+- Search presets work correctly
+- Agent dashboard shows real status
 
-### Phase 2: Intelligence
+### Phase 2: AGENTIC
 
-**Capabilities:**
-- Multi-pass processing (classify → enrich → link)
-- Inbox triage workflow
-- Suggested tags/links with preview
-- Background classification
-
-**Exit criteria:**
-- Inbox notes get classification suggestions
-- User can batch-review suggestions
-- Suggestions are previewable and safe
-
-### Phase 3: Agentic
+**Goal:** Trust levels, bulk operations, undo system.
 
 **Capabilities:**
-- Trust-level agent actions
+- Trust-level agent actions (low/medium/high risk)
+- Bulk omnibar commands (`/enrich all in folder/`)
 - Workflow runner (note/folder/vault scope)
 - Action history with undo
+- Conversation persistence across sessions
 - Dashboard as command center
 
 **Exit criteria:**
 - Low-risk actions auto-apply
 - Medium/high-risk actions confirm
 - Undo works for tracked actions
+- Bulk operations show progress
 
-### Phase 4: Polish
+### Phase 3: INTELLIGENCE
+
+**Goal:** Smart classification, suggestions, inbox workflow.
 
 **Capabilities:**
-- Smart Connections migration
-- Performance optimization
-- Community release packaging
-- Advanced visualizations
+- Multi-pass processing (classify → enrich → link)
+- Inbox triage workflow
+- Suggested tags/links with preview
+- Background classification
+- Note health scoring algorithm
+
+**Exit criteria:**
+- Inbox notes get classification suggestions
+- User can batch-review suggestions
+- Suggestions are previewable and safe
+
 
 ## 7) Decision log
 
@@ -361,9 +396,19 @@ CSS classes use `nv2-*` prefix. Key tokens:
 | 2026-01-06 | Omnibar search | Single input for all query types |
 | 2026-01-06 | Streaming responses required | Real-time token display for chat |
 | 2026-01-06 | Phase 1.6 complete | UI/UX overhaul done, backend parity needed |
+| 2026-01-06 | Agent Streams = vault-global | Activity feed aggregates all agent tasks |
+| 2026-01-06 | Chat in popup modal only | TaskModal opens on card click, chat there |
+| 2026-01-06 | Search presets | Quick/Balanced/Thorough + Custom option |
+| 2026-01-06 | Sequential task execution | One agent task at a time (queue) |
+| 2026-01-06 | Session-only activity | Activity stream clears on restart |
+| 2026-01-06 | Enter sends chat | Shift+Enter for newlines |
+| 2026-01-06 | Cancel discards partial | Don't keep partial responses |
+| 2026-01-06 | 10-message sliding window | LLM context limited to recent messages |
+| 2026-01-06 | Prompt LLM for citations | `[[Note Name]]` format in system prompt |
+| 2026-01-06 | Phase order: Agentic then Intelligence | Phase 2 = trust levels, Phase 3 = classification |
 
 ---
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.2 (Phase 1.6 Complete)*
+*Version: 2.3 (Phase 1.7 Architecture Refined)*

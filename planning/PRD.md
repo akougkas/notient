@@ -58,6 +58,7 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 ├── data.json                    # Plugin settings
 ├── index-{modelKey}.json        # Hybrid embeddings (note-level + section-level)
 ├── state-{modelKey}.json        # Index state (per model)
+├── conversations.json           # Per-task chat history (Phase 1.7)
 ├── cache/                       # Search result cache
 └── locks/                       # Multi-window safety
 ```
@@ -131,47 +132,58 @@ The sidebar has two tabs: **Note** (default) and **Agents**. This separates note
 - Notient decides: heuristic vs semantic vs agent
 - Results stream in with AI explanations
 
-#### Tab 2: Agents
+#### Tab 2: Agent Streams (Vault-Global Activity)
 
 ```
 ┌─────────────────────────────────┐
 │ [Note] [Agents]              ☰ │
 ├─────────────────────────────────┤
-│ AGENT ACTIVITY                  │  ← Minimal status overview
-│ ● 2 pending • 5 today • 23 total│
-│ [View History]                  │
+│ ┌─────────────────────────────┐ │
+│ │ AGENT DASHBOARD             │ │  ← Three capability cards
+│ │ ┌───────┐┌───────┐┌───────┐ │ │
+│ │ │Search ││Context││ Chat  │ │ │  ← Health + pulsing when active
+│ │ │  ●    ││  ●    ││  ●    │ │ │
+│ │ └───────┘└───────┘└───────┘ │ │
+│ └─────────────────────────────┘ │
 ├─────────────────────────────────┤
+│ ACTIVITY STREAM                 │  ← Vault-global task feed
 │                                 │
 │ ┌─────────────────────────────┐ │
-│ │ You: What should I do with  │ │  ← User message (right)
-│ │ this note?                  │ │
+│ │ 🔗 Context Builder          │ │  ← Task card (clickable)
+│ │ "API Design Notes"          │ │
+│ │ ████████░░ 80%    2m ago    │ │  ← Progress + timestamp
+│ │                         [✕] │ │  ← Cancel button
 │ └─────────────────────────────┘ │
 │                                 │
 │ ┌─────────────────────────────┐ │
-│ │ Notient: Based on your      │ │  ← Streaming response
-│ │ vault patterns, I suggest   │ │
-│ │ linking to [Project Plan]   │ │
-│ │ and adding #architecture... │ │
-│ │                             │ │
-│ │ 📎 [note.md] [related.md]   │ │  ← Source attachments
+│ │ 💬 Chat Assistant           │ │
+│ │ "Project Roadmap"           │ │
+│ │ ✓ Completed        5m ago   │ │
 │ └─────────────────────────────┘ │
 │                                 │
-├─────────────────────────────────┤
-│ [📎] Ask about this note... [➤]│  ← Input with context toggle
+│ Click any task to view details  │
+│ and chat with the agent         │
 └─────────────────────────────────┘
 ```
 
-**Agent Activity Bar:**
-- Pending actions awaiting review
-- Today's completed actions
-- Quick access to action history
+**Agent Dashboard:**
+- Three capability cards: Semantic Search, Context Builder, Chat Assistant
+- Combined status: service health (dot color) + pulsing indicator when processing
+- Last activity timestamp per agent
 
-**Chat Interface:**
-- Streaming responses from LM Studio
-- Context-aware: always knows current note
-- Citations link to source notes
-- Attachments show referenced files
-- Conversation history per session
+**Activity Stream (Vault-Global):**
+- Shows all agent tasks across the vault (many-to-many: agents ↔ notes)
+- Task cards with: note title, agent type, status, progress bar, timestamp
+- Running/queued tasks show cancel button
+- **Click any card → opens TaskModal popup**
+
+**TaskModal (Popup on Click):**
+- Note preview section
+- RAG sources (citations used for context)
+- Task results when complete
+- **Chat section** with message bubbles (Enter sends, Shift+Enter newline)
+- Streaming with cancel button (discard partial on cancel)
+- Citations as clickable `[[Note Name]]` links
 
 ### Secondary View: COMMAND DASHBOARD
 
@@ -242,43 +254,59 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - [x] Footer with service health status
 
 ### Phase 1.7: BACKEND COMPLETION (Current)
-- [ ] **Settings Parity** - Expose all configuration in settings UI
-  - [ ] Search settings: top-K slider, reranking toggle, min score threshold
-  - [ ] Folder include/exclude patterns with better UI
-  - [ ] Prompt template customization (system prompts)
-- [ ] **Chat Interface** - Full chat experience in Agent Streams view
-  - [ ] Chat message bubbles (user/assistant) instead of activity log only
-  - [ ] Chat input textarea with send button
-  - [ ] Visible streaming text during generation
-  - [ ] Cancel button to abort generation (UI wired to AbortController)
-  - [ ] RAG citations as clickable attachments
-- [ ] **Conversation Persistence** - Optional chat history storage
-  - [ ] ConversationStore service (data.json or separate file)
-  - [ ] Load/save conversation on sidebar open/close
-  - [ ] Clear conversation button
-- [ ] **Agent Status Accuracy** - Real service status in dashboard
-  - [ ] Replace hardcoded "Research Bot" with actual service names
-  - [ ] Show real-time status: idle, processing, error
-  - [ ] Activity log from actual service events, not just chat
-- [ ] **Index State UI** - Better feedback during indexing
-  - [ ] Progress bar during indexing
-  - [ ] Note count display in footer or header
+
+**Scope:** Hybrid approach - foundation now, defer bulk operations to Phase 2.
+
+- [ ] **Search Settings with Presets**
+  - [ ] Preset dropdown: Quick / Balanced / Thorough / Custom
+  - [ ] Custom mode reveals: top-K slider, reranking toggle, min score
+  - [ ] Wire presets to SearchPipeline
+- [ ] **Agent Task System** (Core new architecture)
+  - [ ] `AgentTask` type with status, progress, per-task chat history
+  - [ ] `AgentTaskQueue` service (sequential, one at a time)
+  - [ ] Activity stream with full task cards (not just activity log)
+  - [ ] Quick Actions fire tasks → appear in stream
+  - [ ] Cancel button (always cancelable)
+- [ ] **TaskModal Popup**
+  - [ ] Note preview section
+  - [ ] RAG sources (citations)
+  - [ ] Task results display
+  - [ ] Chat section with message bubbles
+  - [ ] Enter sends, Shift+Enter newline
+  - [ ] Streaming with cursor, cancel discards partial
+  - [ ] Citations as `[[Note Name]]` links (prompt LLM to use format)
+- [ ] **Agent Dashboard Status**
+  - [ ] Three capability cards: Semantic Search, Context Builder, Chat Assistant
+  - [ ] Combined status: health dot + pulsing when processing
+  - [ ] Last activity timestamp per agent
+- [ ] **Index Progress in Footer**
+  - [ ] Non-blocking progress bar during indexing
+  - [ ] Note count: "X notes indexed"
   - [ ] Last sync timestamp
 
-### Phase 2: Intelligence
+**Deferred to Phase 2:**
+- Bulk omnibar commands (`/enrich all in Projects/`)
+- Complex queue management (priority, retry)
+- Conversation persistence across sessions
+- Multi-agent orchestration on single note
+
+### Phase 2: AGENTIC
+- [ ] Trust-level agent actions (low/medium/high risk)
+- [ ] Bulk omnibar commands (`/enrich all in folder/`)
+- [ ] Batch processing with review UI
+- [ ] Action history + undo in dashboard
+- [ ] Workflow automation (opt-in rules)
+- [ ] Conversation persistence across sessions
+
+### Phase 3: INTELLIGENCE
 - [ ] Multi-pass note processing (classify → enrich → link)
 - [ ] Suggested tags and links with preview
 - [ ] Inbox triage workflow
 - [ ] Full Vault Vitals dashboard
 - [ ] Note health scoring algorithm
+- [ ] Background classification
 
-### Phase 3: Agentic
-- [ ] Trust-level agent actions
-- [ ] Batch processing with review UI
-- [ ] Action history + undo in dashboard
-- [ ] Workflow automation (opt-in rules)
-
-### Phase 4: Polish
+### Phase 4: POLISH
 - [ ] Smart Connections migration wizard
 - [ ] Advanced visualizations (knowledge graph)
 - [ ] Performance optimization
@@ -354,17 +382,19 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 
 ### Needed Configuration (Phase 1.7)
 
-**Search Settings:**
-- Top-K results count slider (default: 10)
-- Reranking enabled/disabled toggle
-- Minimum similarity threshold slider
+**Search Settings (Preset-Based):**
+- Preset selector: Quick / Balanced / Thorough / Custom
+  - Quick: 5 results, no reranking, 0.5 min score
+  - Balanced: 10 results, reranking enabled, 0.3 min score (default)
+  - Thorough: 25 results, reranking enabled, 0.2 min score
+- Custom mode reveals individual sliders
 
 **Chat Settings:**
-- Max conversation history length
-- Persist conversations toggle
-- Temperature slider for responses
+- Max conversation history for LLM context: 10 messages (sliding window)
+- Activity retention: session-only (clears on restart)
+- Clear conversation button in TaskModal
 
-**Agent Settings (Phase 2+):**
+**Agent Settings (Phase 2):**
 - Trust level defaults (low/medium/high)
 - Auto-apply for low-risk actions toggle
 - Confirmation dialog preferences
@@ -427,9 +457,14 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 4. ~~Search ranking~~ → **LLM reranking of vector top-50**
 5. ~~Agent autonomy~~ → **Trust levels + batch review + undo**
 6. ~~Debug telemetry~~ → **Remove completely, console-only logging**
+7. ~~Agent Streams scope~~ → **Vault-global activity stream, chat in popup modal**
+8. ~~Search settings UX~~ → **Presets (Quick/Balanced/Thorough) + Custom**
+9. ~~Task concurrency~~ → **Sequential, one at a time**
+10. ~~Activity retention~~ → **Session-only, clears on restart**
+11. ~~Phase order~~ → **Agentic (Phase 2) before Intelligence (Phase 3)**
 
 ---
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.2 (Phase 1.6 Complete, Phase 1.7 Scoped)*
+*Version: 2.3 (Phase 1.7 Architecture Refined)*
