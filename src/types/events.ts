@@ -6,6 +6,7 @@ import type { ServiceHealth } from "./services";
 import type { IndexProgress } from "./indexer";
 import type { VaultVitalsData } from "./vitals";
 import type { SearchResult } from "./search";
+import type { AgentTask } from "./agentTask";
 
 /** All event types supported by the EventBus */
 export type EventType =
@@ -18,7 +19,8 @@ export type EventType =
   | "search:complete"
   | "vitals:updated"
   | "settings:changed"
-  | "note:context-changed";
+  | "note:context-changed"
+  | "agent:task-update";
 
 /** Event payload mapping */
 export interface EventPayloads {
@@ -32,6 +34,11 @@ export interface EventPayloads {
   "vitals:updated": VitalsUpdatedEvent;
   "settings:changed": SettingsChangedEvent;
   "note:context-changed": NoteContextChangedEvent;
+  "agent:task-update": AgentTaskUpdateEvent;
+}
+
+export interface AgentTaskUpdateEvent {
+  task: AgentTask;
 }
 
 export interface HealthChangedEvent {

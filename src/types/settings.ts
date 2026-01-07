@@ -49,6 +49,9 @@ export interface NotientSettings {
     sidebarPosition: "left" | "right";
   };
 
+  /** Search configuration */
+  search: SearchSettings;
+
   /** Advanced options */
   advanced: {
     debugLogging: boolean;
@@ -58,6 +61,23 @@ export interface NotientSettings {
   /** Setup wizard completion flag */
   setupComplete: boolean;
 }
+
+export type SearchPreset = 'quick' | 'balanced' | 'thorough' | 'custom';
+
+export interface SearchSettings {
+  preset: SearchPreset;
+  custom: {
+    topK: number;
+    enableReranking: boolean;
+    minScore: number;
+  };
+}
+
+export const SEARCH_PRESETS = {
+  quick: { topK: 5, enableReranking: false, minScore: 0.5 },
+  balanced: { topK: 10, enableReranking: true, minScore: 0.3 },
+  thorough: { topK: 25, enableReranking: true, minScore: 0.2 },
+};
 
 export const DEFAULT_SETTINGS: NotientSettings = {
   version: SETTINGS_VERSION,
@@ -87,6 +107,10 @@ export const DEFAULT_SETTINGS: NotientSettings = {
   ui: {
     showVitalsOnStartup: true,
     sidebarPosition: "right",
+  },
+  search: {
+    preset: 'balanced',
+    custom: { topK: 10, enableReranking: true, minScore: 0.3 }
   },
   advanced: {
     debugLogging: false,

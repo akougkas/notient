@@ -25,8 +25,12 @@ import type { SearchPipeline } from "../core/search/pipeline";
 import type { LMStudioService, ChatMessage } from "../services/lmstudio";
 import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
 import type { SearchResult } from "../types/search";
+import type { AgentTask, TaskStatus, AgentType } from "../types/agentTask";
+import type { AgentTaskQueue } from "../services/agentTaskQueue";
 import { VIEW_TYPE_SIDEBAR } from "../core/constants";
 import { ParaDetector } from "../core/para/detector";
+import type { IndexProgress } from "../types/indexer";
+import { TaskModal } from "./taskModal";
 
 // ============ Types ============
 
@@ -82,6 +86,9 @@ export class NotientSidebarView extends ItemView {
   private contentEl_: HTMLElement | null = null;
   private omnibarInputEl: HTMLInputElement | null = null;
   private searchResultsEl: HTMLElement | null = null;
+  private footerProgressEl: HTMLElement | null = null;
+  private footerStatsEl: HTMLElement | null = null;
+  private lastSyncTime: Date | null = null;
 
   // Utilities
   private paraDetector: ParaDetector;
@@ -150,7 +157,7 @@ export class NotientSidebarView extends ItemView {
 
     // Content area
     this.contentEl_ = this.containerEl_.createDiv({ cls: "nv2-content" });
-    
+
     if (this.currentView === "note") {
       this.renderNoteVitalsView();
     } else {
@@ -273,7 +280,7 @@ export class NotientSidebarView extends ItemView {
     // Get first backlink title as preview
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) return "";
-    
+
     const resolvedLinks = this.app.metadataCache.resolvedLinks;
     for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
       if (links[activeFile.path]) {
@@ -330,7 +337,7 @@ export class NotientSidebarView extends ItemView {
 
     const section = this.contentEl_.createDiv({ cls: "nv2-search-section" });
     const wrapper = section.createDiv({ cls: "nv2-search-wrapper" });
-    
+
     const icon = wrapper.createDiv({ cls: "nv2-search-icon" });
     setIcon(icon, "search");
 
@@ -375,7 +382,7 @@ export class NotientSidebarView extends ItemView {
 
     // Generate insights based on note vitals (if available)
     const insights = this.generateInsights();
-    
+
     if (insights.length === 0) {
       const empty = stream.createDiv({ cls: "nv2-empty-state" });
       empty.createDiv({
@@ -390,9 +397,9 @@ export class NotientSidebarView extends ItemView {
       item.createDiv({
         cls: `nv2-insight-dot ${insight.priority === "low" ? "nv2-insight-dot--secondary" : ""}`,
       });
-      
+
       const content = item.createDiv({ cls: "nv2-insight-content" });
-      
+
       // Parse text for links
       const textEl = content.createDiv({ cls: "nv2-insight-text" });
       if (insight.linkText) {
@@ -517,7 +524,7 @@ export class NotientSidebarView extends ItemView {
     if (!this.contentEl_) return;
 
     const statusBar = this.contentEl_.createDiv({ cls: "nv2-status-bar" });
-    
+
     const left = statusBar.createDiv({ cls: "nv2-status-bar-left" });
     left.createDiv({
       cls: `nv2-status-dot ${this.isStreaming ? "nv2-status-dot--running" : "nv2-status-dot--idle"}`,
@@ -548,38 +555,44 @@ export class NotientSidebarView extends ItemView {
     const dashboard = section.createDiv({ cls: "nv2-agent-dashboard" });
     const grid = dashboard.createDiv({ cls: "nv2-agent-dashboard-grid" });
 
-    const searchReady = this.kernel.capabilities.search;
-    const lmReady = this.getLMStudio()?.isReady() ?? false;
+    const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
+    const tasks = taskQueue?.getAll() || [];
 
-    // Semantic Search card
-    const searchCard = grid.createDiv({ cls: "nv2-agent-dashboard-card" });
-    const searchIcon = searchCard.createDiv({ cls: "nv2-agent-dashboard-card-icon" });
-    setIcon(searchIcon, "search");
-    searchCard.createDiv({ cls: "nv2-agent-dashboard-card-name", text: "Semantic Search" });
-    searchCard.createDiv({
-      cls: `nv2-agent-dashboard-card-status ${searchReady ? "nv2-agent-dashboard-card-status--active" : ""}`,
-      text: searchReady ? "ready" : "offline",
-    });
+    // Helper to get status
+    const getStatus = (type: AgentType) => {
+      const isRunning = tasks.some(t => t.agent === type && t.status === 'running');
+      if (isRunning) return 'working';
 
-    // Context Builder card
-    const contextCard = grid.createDiv({ cls: "nv2-agent-dashboard-card" });
-    const contextIcon = contextCard.createDiv({ cls: "nv2-agent-dashboard-card-icon" });
-    setIcon(contextIcon, "braces");
-    contextCard.createDiv({ cls: "nv2-agent-dashboard-card-name", text: "Context Builder" });
-    contextCard.createDiv({
-      cls: `nv2-agent-dashboard-card-status ${searchReady ? "nv2-agent-dashboard-card-status--active" : ""}`,
-      text: searchReady ? "idle" : "offline",
-    });
+      switch (type) {
+        case 'search': return this.kernel.capabilities.search ? 'ready' : 'offline';
+        case 'context': return this.kernel.capabilities.search ? 'idle' : 'offline'; // Context depends on search
+        case 'chat': return this.kernel.capabilities.reasoning ? 'idle' : 'offline';
+      }
+    };
 
-    // Result Reranker card
-    const rerankerCard = grid.createDiv({ cls: "nv2-agent-dashboard-card" });
-    const rerankerIcon = rerankerCard.createDiv({ cls: "nv2-agent-dashboard-card-icon" });
-    setIcon(rerankerIcon, "list-ordered");
-    rerankerCard.createDiv({ cls: "nv2-agent-dashboard-card-name", text: "Result Reranker" });
-    rerankerCard.createDiv({
-      cls: `nv2-agent-dashboard-card-status ${lmReady ? "nv2-agent-dashboard-card-status--active" : ""}`,
-      text: lmReady ? "idle" : "offline",
-    });
+    const renderCard = (type: AgentType, name: string, icon: string) => {
+      const status = getStatus(type);
+      const card = grid.createDiv({ cls: "nv2-agent-dashboard-card" });
+      const iconEl = card.createDiv({ cls: "nv2-agent-dashboard-card-icon" });
+      setIcon(iconEl, icon);
+
+      card.createDiv({ cls: "nv2-agent-dashboard-card-name", text: name });
+
+      const statusEl = card.createDiv({
+        cls: `nv2-agent-dashboard-card-status`,
+        text: status
+      });
+
+      if (status === 'working') {
+        statusEl.addClass('nv2-status-pulsing');
+      } else if (status === 'ready' || status === 'idle') {
+        statusEl.addClass('nv2-agent-dashboard-card-status--active');
+      }
+    };
+
+    renderCard('search', 'Semantic Search', 'search');
+    renderCard('context', 'Context Builder', 'braces');
+    renderCard('chat', 'Chat Assistant', 'message-square');
   }
 
   private renderAgentActivityLog(): void {
@@ -590,117 +603,70 @@ export class NotientSidebarView extends ItemView {
 
     const list = section.createDiv({ cls: "nv2-activity-log-list" });
 
-    // Generate activity items from chat history and search activity
-    const activities = this.generateActivityLog();
+    const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
+    const tasks = taskQueue?.getAll() || [];
 
-    if (activities.length === 0) {
+    // Sort by startedAt desc
+    const sortedTasks = [...tasks].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+
+    if (sortedTasks.length === 0) {
       const empty = list.createDiv({ cls: "nv2-empty-state" });
       empty.createDiv({
         cls: "nv2-empty-state-text",
-        text: "No recent agent activity. Use the search or chat to get started.",
+        text: "No recent agent activity. Use Quick Actions or Search to start a task.",
       });
       return;
     }
 
-    for (const activity of activities) {
+    for (const task of sortedTasks) {
       const item = list.createDiv({
-        cls: `nv2-activity-item ${activity.type === "code" ? "nv2-activity-item--blue" : ""}`,
+        cls: `nv2-activity-item nv2-task-card nv2-task-${task.status}`,
+      });
+      // Click to open modal
+      item.addEventListener("click", () => {
+        new TaskModal(this.app, this.kernel, task).open();
       });
 
       const header = item.createDiv({ cls: "nv2-activity-header" });
       const agent = header.createDiv({ cls: "nv2-activity-agent" });
       const agentIcon = agent.createDiv({ cls: "nv2-activity-agent-icon" });
-      setIcon(agentIcon, activity.icon);
-      agent.createDiv({ cls: "nv2-activity-agent-name", text: activity.agentName });
-      header.createDiv({ cls: "nv2-activity-time", text: activity.time });
+
+      let icon = "bot";
+      switch (task.agent) {
+        case 'search': icon = "search"; break;
+        case 'context': icon = "file-search"; break;
+        case 'chat': icon = "message-square"; break;
+      }
+      setIcon(agentIcon, icon);
+
+      agent.createDiv({ cls: "nv2-activity-agent-name", text: this.getAgentName(task.agent) });
+      header.createDiv({ cls: "nv2-activity-time", text: this.formatActivityTime(task.startedAt) });
 
       const body = item.createDiv({ cls: "nv2-activity-body" });
-      body.createSpan({ cls: "nv2-agent-name", text: activity.agentName });
-      body.createSpan({ text: ` ${activity.description} - ` });
-      
-      if (activity.status === "in_progress") {
-        body.createSpan({ cls: "nv2-activity-status", text: "In Progress" });
-      } else {
-        const link = body.createSpan({ cls: "nv2-activity-link", text: activity.action });
-        link.addEventListener("click", () => {
-          if (activity.actionCallback) activity.actionCallback();
+      body.createDiv({ cls: "nv2-task-note", text: task.noteTitle });
+
+      if (task.status === "running") {
+        const progress = item.createDiv({ cls: "nv2-task-progress" });
+        progress.createDiv({
+          cls: "nv2-task-progress-bar",
+          attr: { style: `width: ${task.progress || 0}%` }
         });
       }
+
+      const statusBadge = item.createDiv({
+        cls: `nv2-task-status-foot nv2-status-${task.status}`,
+        text: task.status
+      });
     }
   }
 
-  private generateActivityLog(): Array<{
-    agentName: string;
-    icon: string;
-    type: "research" | "code";
-    time: string;
-    description: string;
-    action: string;
-    status?: "in_progress" | "complete";
-    actionCallback?: () => void;
-  }> {
-    const activities: Array<{
-      agentName: string;
-      icon: string;
-      type: "research" | "code";
-      time: string;
-      description: string;
-      action: string;
-      status?: "in_progress" | "complete";
-      actionCallback?: () => void;
-    }> = [];
-
-    // Generate from chat history
-    const recentChats = this.chatHistory.slice(-5);
-    for (const chat of recentChats) {
-      if (chat.role === "assistant") {
-        const time = this.formatActivityTime(chat.timestamp);
-        activities.push({
-          agentName: "Research Bot",
-          icon: "leaf",
-          type: "research",
-          time,
-          description: `responded to query`,
-          action: "View Response",
-          status: "complete",
-          actionCallback: () => {
-            // Scroll to message
-          },
-        });
-      }
+  private getAgentName(type: AgentType): string {
+    switch (type) {
+      case 'search': return "Agent Search";
+      case 'context': return "Context Agent";
+      case 'chat': return "Chat Assistant";
+      default: return "Agent";
     }
-
-    // Add streaming activity if active
-    if (this.isStreaming) {
-      activities.unshift({
-        agentName: "Research Bot",
-        icon: "leaf",
-        type: "research",
-        time: "Now",
-        description: `processing query`,
-        action: "",
-        status: "in_progress",
-      });
-    }
-
-    // Add recent search activity
-    if (this.lastSearchResults.length > 0) {
-      activities.push({
-        agentName: "Research Bot",
-        icon: "leaf",
-        type: "research",
-        time: "Recently",
-        description: `found ${this.lastSearchResults.length} results`,
-        action: "View Results",
-        status: "complete",
-        actionCallback: () => {
-          this.currentView = "note";
-          this.render();
-        },
-      });
-    }
-
-    return activities.slice(0, 5);
   }
 
   private formatActivityTime(date: Date): string {
@@ -727,13 +693,18 @@ export class NotientSidebarView extends ItemView {
     if (!this.containerEl_) return;
 
     const footer = this.containerEl_.createDiv({ cls: "nv2-footer" });
+
+    // Progress Bar (hidden by default)
+    this.footerProgressEl = footer.createDiv({ cls: "nv2-index-progress nv2-hidden" });
+
+    // Status Row
     const status = footer.createDiv({ cls: "nv2-footer-status" });
 
     const health = this.kernel.serviceHealth;
 
     // Ollama status
     const ollamaEl = status.createDiv({ cls: "nv2-footer-service" });
-    ollamaEl.createSpan({ text: "Connected to Ollama: " });
+    ollamaEl.createSpan({ text: "Ollama: " });
     ollamaEl.createSpan({
       cls: `nv2-footer-service-status ${this.getFooterStatusClass(health.ollama.status)}`,
       text: this.getStatusText(health.ollama.status),
@@ -747,6 +718,10 @@ export class NotientSidebarView extends ItemView {
       text: this.getStatusText(health.lmstudio.status),
     });
 
+    // Stats (Note count)
+    this.footerStatsEl = status.createDiv({ cls: "nv2-footer-stats" });
+    this.updateFooterStats();
+
     // Settings button
     const settingsBtn = footer.createEl("button", { cls: "nv2-footer-settings" });
     settingsBtn.setAttr("aria-label", "Open Notient settings");
@@ -755,6 +730,66 @@ export class NotientSidebarView extends ItemView {
       (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting.open();
       (this.app as unknown as { setting: { openTabById(id: string): void } }).setting.openTabById("notient");
     });
+  }
+
+  private updateFooterStats(): void {
+    if (!this.footerStatsEl) return;
+
+    const indexManager = this.kernel.getService<{ getIndexedCount(): number }>("indexManager");
+    if (indexManager) {
+      const count = indexManager.getIndexedCount();
+      let text = `${count} notes`;
+
+      if (this.lastSyncTime) {
+        const time = this.lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        text += ` • Synced ${time}`;
+      }
+
+      this.footerStatsEl.setText(text);
+      this.footerStatsEl.setAttr("title", "Indexed notes count");
+    }
+  }
+
+  private updateIndexProgress(progress: IndexProgress): void {
+    if (!this.footerProgressEl) return;
+
+    if (progress.phase === "idle" || progress.phase === "complete") {
+      this.footerProgressEl.addClass("nv2-hidden");
+
+      // Update stats when complete
+      if (progress.phase === "complete") {
+        this.updateFooterStats();
+      }
+      return;
+    }
+
+    this.footerProgressEl.removeClass("nv2-hidden");
+    this.footerProgressEl.empty();
+
+    // Progress bar
+    const bar = this.footerProgressEl.createDiv({ cls: "nv2-progress-bar" });
+    const percent = progress.total > 0
+      ? Math.round((progress.completed / progress.total) * 100)
+      : 0;
+
+    bar.createDiv({
+      cls: "nv2-progress-fill",
+      attr: { style: `width: ${percent}%` }
+    });
+
+    // Text status
+    let text = "";
+    switch (progress.phase) {
+      case "scanning": text = "Scanning vault..."; break;
+      case "chunking":
+      case "embedding":
+      case "storing":
+        text = `Indexing: ${progress.completed}/${progress.total} (${percent}%)`;
+        break;
+      default: text = "Processing...";
+    }
+
+    this.footerProgressEl.createDiv({ cls: "nv2-progress-text", text });
   }
 
   private getFooterStatusClass(status: string): string {
@@ -877,7 +912,7 @@ export class NotientSidebarView extends ItemView {
     else if (daysSinceModified > 90) score -= 10;
 
     // Tags factor (up to +10)
-    const tagCount = (metadata?.tags?.length || 0) + 
+    const tagCount = (metadata?.tags?.length || 0) +
       ((metadata?.frontmatter?.tags as string[])?.length || 0);
     if (tagCount >= 3) score += 10;
     else if (tagCount >= 1) score += 5;
@@ -1121,7 +1156,7 @@ export class NotientSidebarView extends ItemView {
           timestamp: new Date(),
         };
         this.chatHistory.push(assistantMessage);
-        
+
         // Show result in notice
         const preview = this.streamingContent.slice(0, 100);
         new Notice(`AI Response: ${preview}${this.streamingContent.length > 100 ? "..." : ""}`);
@@ -1150,10 +1185,19 @@ export class NotientSidebarView extends ItemView {
    */
   private prefillChatAndSwitch(prompt: string): void {
     this.currentView = "agents";
+
+    // Enqueue task
+    const taskQueue = this.kernel.getService<AgentTaskQueue>("taskQueue");
+    if (taskQueue) {
+      taskQueue.enqueue({
+        agent: 'chat',
+        notePath: this.noteVitals?.path || "unknown",
+        noteTitle: this.noteVitals?.title || "Unknown Note",
+        chatHistory: [{ role: 'user', content: prompt }]
+      });
+    }
+
     this.render();
-    
-    // Start the query immediately
-    this.sendQuery(prompt);
   }
 
   // ============ Events ============
@@ -1184,8 +1228,30 @@ export class NotientSidebarView extends ItemView {
     // Services initialized
     const unsubServices = this.kernel.eventBus.on("services:initialized", () => {
       this.render();
+      this.updateFooterStats();
     });
     this.register(() => unsubServices());
+
+    // Agent Task Updates
+    const unsubTask = this.kernel.eventBus.on("agent:task-update", () => {
+      if (this.currentView === 'agents') {
+        this.render(); // Re-render to show progress/status
+      }
+    });
+    this.register(() => unsubTask());
+
+    // Index Progress
+    const unsubProgress = this.kernel.eventBus.on("index:progress", (payload: { progress: IndexProgress }) => {
+      this.updateIndexProgress(payload.progress);
+    });
+    this.register(() => unsubProgress());
+
+    // Index Complete
+    const unsubIndexComplete = this.kernel.eventBus.on("index:complete", () => {
+      this.lastSyncTime = new Date();
+      this.updateFooterStats();
+    });
+    this.register(() => unsubIndexComplete());
   }
 
   // ============ Metric Actions ============

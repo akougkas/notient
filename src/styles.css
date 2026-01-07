@@ -3606,20 +3606,388 @@
   display: none;
 }
 
+/* ============ V2 Task Cards (Agent Activity Stream) ============ */
+
+.nv2-task-card {
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-card);
+  border-radius: var(--nv2-radius-md);
+  border-left: 3px solid var(--nv2-border);
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.nv2-task-card:hover {
+  transform: translateX(2px);
+  border-left-color: var(--nv2-accent);
+}
+
+.nv2-task-running {
+  border-left-color: var(--nv2-accent);
+}
+
+.nv2-task-completed {
+  border-left-color: var(--nv2-status-healthy);
+}
+
+.nv2-task-failed {
+  border-left-color: var(--nv2-status-error);
+}
+
+.nv2-task-cancelled {
+  border-left-color: var(--nv2-text-faint);
+  opacity: 0.7;
+}
+
+.nv2-task-queued {
+  border-left-color: var(--nv2-status-warning);
+}
+
+.nv2-task-note {
+  font-weight: 500;
+  color: var(--nv2-text-primary);
+  margin-bottom: var(--nv2-space-1);
+}
+
+.nv2-task-progress {
+  height: 4px;
+  background: var(--nv2-border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: var(--nv2-space-2);
+}
+
+.nv2-task-progress-bar {
+  height: 100%;
+  background: var(--nv2-accent);
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.nv2-task-status-foot {
+  display: inline-block;
+  font-size: var(--nv2-font-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--nv2-radius-full);
+  margin-top: var(--nv2-space-2);
+}
+
+.nv2-status-running {
+  background: var(--nv2-accent-dim);
+  color: var(--nv2-accent-text);
+}
+
+.nv2-status-completed {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--nv2-status-healthy);
+}
+
+.nv2-status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--nv2-status-error);
+}
+
+.nv2-status-cancelled {
+  background: var(--nv2-bg-tertiary);
+  color: var(--nv2-text-faint);
+}
+
+.nv2-status-queued {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--nv2-status-warning);
+}
+
+/* Pulsing status indicator */
+.nv2-status-pulsing {
+  animation: nv2-status-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes nv2-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ============ V2 Task Modal ============ */
+
+.nv2-task-modal {
+  padding: 0;
+  max-width: 600px;
+}
+
+.nv2-task-modal .modal-content {
+  padding: 0;
+}
+
+.nv2-task-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--nv2-space-4);
+  border-bottom: 1px solid var(--nv2-border);
+  background: var(--nv2-bg-secondary);
+}
+
+.nv2-task-modal-title-section {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-task-modal-title-section h2 {
+  margin: 0;
+  font-size: var(--nv2-font-lg);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-task-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--nv2-accent-dim);
+  border-radius: var(--nv2-radius-md);
+  color: var(--nv2-accent);
+}
+
+.nv2-task-icon .svg-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.nv2-task-status-badge {
+  font-size: var(--nv2-font-sm);
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: var(--nv2-radius-full);
+}
+
+.nv2-task-modal-body {
+  padding: var(--nv2-space-4);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.nv2-task-sources {
+  margin-bottom: var(--nv2-space-4);
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-tertiary);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-task-sources .nv2-label {
+  font-size: var(--nv2-font-sm);
+  font-weight: 500;
+  color: var(--nv2-text-secondary);
+  margin-bottom: var(--nv2-space-2);
+}
+
+.nv2-task-sources ul {
+  margin: 0;
+  padding-left: var(--nv2-space-4);
+}
+
+.nv2-task-sources li {
+  margin-bottom: var(--nv2-space-1);
+}
+
+.nv2-task-sources a {
+  color: var(--nv2-accent-text);
+  cursor: pointer;
+}
+
+.nv2-task-sources a:hover {
+  text-decoration: underline;
+}
+
+/* Note Preview Section */
+.nv2-note-preview {
+  margin-bottom: var(--nv2-space-4);
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-tertiary);
+  border-radius: var(--nv2-radius-md);
+  border-left: 3px solid var(--nv2-accent);
+}
+
+.nv2-note-preview-title {
+  font-size: var(--nv2-font-sm);
+  font-weight: 500;
+  color: var(--nv2-text-secondary);
+  margin-bottom: var(--nv2-space-2);
+}
+
+.nv2-note-preview-content {
+  font-size: var(--nv2-font-md);
+  color: var(--nv2-text-primary);
+  line-height: 1.5;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+/* Chat Container within Modal */
+.nv2-chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-3);
+  min-height: 150px;
+}
+
+.nv2-chat-bubble {
+  padding: var(--nv2-space-3) var(--nv2-space-4);
+  border-radius: var(--nv2-radius-lg);
+  max-width: 85%;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.nv2-bubble-user {
+  align-self: flex-end;
+  background: rgba(var(--nv2-accent-rgb), 0.12);
+  border: 1px solid rgba(var(--nv2-accent-rgb), 0.25);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm) var(--nv2-radius-lg);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-bubble-assistant {
+  align-self: flex-start;
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm);
+  color: var(--nv2-text-primary);
+}
+
+/* Modal Footer */
+.nv2-task-modal-footer {
+  padding: var(--nv2-space-3);
+  border-top: 1px solid var(--nv2-border);
+  background: var(--nv2-bg-secondary);
+}
+
+.nv2-chat-input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-chat-input-container textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 100px;
+  padding: var(--nv2-space-2) var(--nv2-space-3);
+  background: var(--nv2-bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--nv2-radius-md);
+  color: var(--nv2-text-primary);
+  font-size: var(--nv2-font-md);
+  resize: none;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.nv2-chat-input-container textarea:focus {
+  outline: none;
+  border-color: var(--nv2-accent-border);
+}
+
+.nv2-chat-actions {
+  display: flex;
+  gap: var(--nv2-space-1);
+}
+
+.nv2-chat-actions button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-chat-actions button:not(.nv2-btn-stop) {
+  background: var(--nv2-accent);
+  border: none;
+  color: white;
+}
+
+.nv2-chat-actions button:not(.nv2-btn-stop):hover {
+  filter: brightness(1.1);
+  transform: scale(1.05);
+}
+
+.nv2-btn-stop {
+  background: var(--nv2-status-error) !important;
+  border: none;
+  color: white;
+}
+
+.nv2-btn-stop:hover {
+  filter: brightness(1.1);
+}
+
+/* Internal Link styling in chat */
+.internal-link {
+  color: var(--nv2-accent-text);
+  cursor: pointer;
+}
+
+.internal-link:hover {
+  text-decoration: underline;
+}
+
+/* ============ V2 Index Progress (Footer) ============ */
+
+.nv2-index-progress {
+  padding: var(--nv2-space-2) 0;
+  margin-bottom: var(--nv2-space-2);
+}
+
+.nv2-index-progress .nv2-progress-bar {
+  height: 4px;
+  background: var(--nv2-border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: var(--nv2-space-1);
+}
+
+.nv2-index-progress .nv2-progress-fill {
+  height: 100%;
+  background: var(--nv2-accent);
+  transition: width 0.3s ease;
+}
+
+.nv2-index-progress .nv2-progress-text {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-secondary);
+  text-align: center;
+}
+
+.nv2-footer-stats {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-faint);
+  margin-top: var(--nv2-space-1);
+}
+
 /* ============ V2 Reduced Motion ============ */
 
 @media (prefers-reduced-motion: reduce) {
   .nv2-status-dot,
   .nv2-typing-cursor,
   .nv2-loading-spinner,
-  .nv2-health-ring-progress {
+  .nv2-health-ring-progress,
+  .nv2-status-pulsing {
     animation: none;
   }
   
   .nv2-metric-card,
   .nv2-action-btn,
   .nv2-send-btn,
-  .nv2-search-result {
+  .nv2-search-result,
+  .nv2-task-card {
     transition: none;
   }
 }

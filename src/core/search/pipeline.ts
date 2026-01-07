@@ -16,6 +16,7 @@ import type {
   ChunkSearchResult,
   RelatedNote,
 } from "../../types/search";
+import { SEARCH_PRESETS } from "../../types/settings";
 import { CACHE_CONFIG } from "../constants";
 
 interface CacheEntry {
@@ -42,7 +43,7 @@ export class SearchPipeline {
     private eventBus: EventBus,
     private ollamaService: OllamaService,
     private vectorStore: VectorStore
-  ) {}
+  ) { }
 
   /**
    * Get LM Studio service (lazy resolution)
@@ -67,13 +68,21 @@ export class SearchPipeline {
   ): Promise<SearchResult[]> {
     if (this.disposed) return [];
 
-    const enableReranking = options.enableReranking ?? true;
-    const requestedTopK = options.topK ?? 10;
+    // Resolve effective settings from presets vs custom
+    const searchSettings = this.kernel.settings.search;
+    let defaults = searchSettings.custom;
+    if (searchSettings.preset !== 'custom') {
+      defaults = SEARCH_PRESETS[searchSettings.preset];
+    }
+
+    const enableReranking = options.enableReranking ?? defaults.enableReranking;
+    const requestedTopK = options.topK ?? defaults.topK;
+    const minScore = options.minScore ?? defaults.minScore;
 
     const fullOptions: SearchOptions = {
       // Get more candidates for reranking
       topK: enableReranking ? 50 : requestedTopK,
-      minScore: options.minScore ?? 0.3,
+      minScore: minScore,
       includeContent: options.includeContent ?? true,
       paraType: options.paraType,
       folderPaths: options.folderPaths,

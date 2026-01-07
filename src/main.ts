@@ -22,6 +22,7 @@ import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { SearchPipeline } from "./core/search/pipeline";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
+import { AgentTaskQueue } from "./services/agentTaskQueue";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
@@ -45,6 +46,7 @@ export default class NotientPlugin extends Plugin {
   private searchPipeline: SearchPipeline | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
+  private agentTaskQueue: AgentTaskQueue | null = null;
 
   private servicesInitialized = false;
 
@@ -243,6 +245,10 @@ export default class NotientPlugin extends Plugin {
         );
         this.kernel.registerService("vitals", this.vaultVitals);
 
+        // Agent Task Queue
+        this.agentTaskQueue = new AgentTaskQueue(this.kernel);
+        this.kernel.registerService("taskQueue", this.agentTaskQueue);
+
         this.servicesInitialized = true;
         this.kernel.setServicesInitialized();
         console.log("[Notient] Services initialized successfully");
@@ -251,8 +257,8 @@ export default class NotientPlugin extends Plugin {
         const indexAction = this._pendingIndexAction;
         this._pendingIndexAction = "none";
 
-        console.log("[Notient] Index action decision:", { 
-          action: indexAction, 
+        console.log("[Notient] Index action decision:", {
+          action: indexAction,
           setupComplete: this.settings.setupComplete,
           hasIndex: await this.indexManager.getIndexedCount() > 0
         });
@@ -396,10 +402,10 @@ export default class NotientPlugin extends Plugin {
       callback: async () => {
         const search = this.kernel.getService<SearchPipeline>("search");
         const store = this.vectorStore;
-        
+
         const caps = this.kernel.capabilities;
         const health = this.kernel.serviceHealth;
-        
+
         const diagnostics = {
           servicesInitialized: this.servicesInitialized,
           capabilities: caps,
@@ -414,11 +420,11 @@ export default class NotientPlugin extends Plugin {
           } : null,
           searchPipeline: search ? "available" : "null",
         };
-        
+
         console.log("[Notient] Diagnostics:", diagnostics);
-        
+
         // Also show in notice
-        const storeInfo = store 
+        const storeInfo = store
           ? `${await store.countChunks()} chunks / ${await store.countNotes()} notes`
           : "not ready";
         this.kernel.obsidian.notice(
@@ -535,6 +541,7 @@ export default class NotientPlugin extends Plugin {
       this.vectorStore = null;
       this.lmStudioService = null;
       this.ollamaService = null;
+      this.agentTaskQueue = null;
       this.servicesInitialized = false;
 
       // Reinitialize
@@ -646,7 +653,7 @@ export default class NotientPlugin extends Plugin {
       } else {
         // Sync - incremental indexing
         const result = await this.indexer.syncVault();
-        
+
         if (result.added > 0 || result.updated > 0) {
           this.kernel.obsidian.notice(
             `Sync complete: ${result.added} new, ${result.updated} updated`,

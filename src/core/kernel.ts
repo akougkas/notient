@@ -65,6 +65,7 @@ export class Kernel {
   private searchPipeline: unknown = null;
   private contextBuilder: unknown = null;
   private vaultVitals: unknown = null;
+  private agentTaskQueue: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -201,7 +202,7 @@ export class Kernel {
   ): void {
     this._serviceHealth[service] = health;
     this.updateCapabilities();
-    
+
     this._eventBus.emit("health:changed", { service, health });
   }
 
@@ -254,6 +255,9 @@ export class Kernel {
       case "vitals":
         this.vaultVitals = service;
         break;
+      case "taskQueue":
+        this.agentTaskQueue = service;
+        break;
     }
   }
 
@@ -280,6 +284,8 @@ export class Kernel {
         return this.contextBuilder as T;
       case "vitals":
         return this.vaultVitals as T;
+      case "taskQueue":
+        return this.agentTaskQueue as T;
       default:
         return null;
     }

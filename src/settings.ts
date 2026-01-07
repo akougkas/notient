@@ -16,6 +16,7 @@ import {
   SettingsValidation,
   SettingsError,
   SettingsWarning,
+  SearchPreset,
 } from "./types/settings";
 import type { Kernel } from "./core/kernel";
 import { MODEL_DEFAULTS } from "./core/constants";
@@ -68,6 +69,7 @@ function mergeWithDefaults(data: Partial<NotientSettings>): NotientSettings {
     indexing: { ...DEFAULT_SETTINGS.indexing, ...data.indexing },
     para: { ...DEFAULT_SETTINGS.para, ...data.para },
     ui: { ...DEFAULT_SETTINGS.ui, ...data.ui },
+    search: { ...DEFAULT_SETTINGS.search, ...data.search },
     advanced: { ...DEFAULT_SETTINGS.advanced, ...data.advanced },
     setupComplete: data.setupComplete ?? DEFAULT_SETTINGS.setupComplete,
   };
@@ -200,11 +202,86 @@ export class NotientSettingTab extends PluginSettingTab {
     // Index Management
     this.renderIndexManagement(containerEl);
 
+    // Search Settings
+    this.renderSearchSection(containerEl);
+
     // PARA Folders
     this.renderParaSection(containerEl);
 
     // Advanced
     this.renderAdvancedSection(containerEl);
+  }
+
+  private renderSearchSection(containerEl: HTMLElement): void {
+    const section = containerEl.createDiv({ cls: "notient-settings-section" });
+    section.createEl("h2", { text: "🔍 Search Configuration" });
+
+    // Preset dropdown
+    new Setting(section)
+      .setName("Search Mode")
+      .setDesc("Balance between speed and accuracy")
+      .addDropdown(dropdown => {
+        dropdown
+          .addOption('quick', '⚡ Quick (Fast, no AI rerank)')
+          .addOption('balanced', '⚖️ Balanced (Recommended)')
+          .addOption('thorough', '🧠 Thorough (Deep search)')
+          .addOption('custom', '⚙️ Custom...')
+          .setValue(this.settings.search.preset)
+          .onChange(async (value: string) => {
+            this.settings.search.preset = value as SearchPreset;
+            await this.onSettingsChange(this.settings);
+            this.display(); // Re-render to show/hide custom options
+          });
+      });
+
+    // Show custom sliders only when preset === 'custom'
+    if (this.settings.search.preset === 'custom') {
+      this.renderCustomSearchSettings(section);
+    }
+  }
+
+  private renderCustomSearchSettings(containerEl: HTMLElement): void {
+    const customDiv = containerEl.createDiv({ cls: "notient-settings-custom-search" });
+
+    // Top-K slider
+    new Setting(customDiv)
+      .setName("Result Count")
+      .setDesc("Number of notes to retrieve (Top-K)")
+      .addSlider(slider => {
+        slider.setLimits(1, 50, 1)
+          .setValue(this.settings.search.custom.topK)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.settings.search.custom.topK = value;
+            await this.onSettingsChange(this.settings);
+          });
+      });
+
+    // Reranking toggle
+    new Setting(customDiv)
+      .setName("AI Reranking")
+      .setDesc("Use LM Studio to reorder results by relevance")
+      .addToggle(toggle => {
+        toggle.setValue(this.settings.search.custom.enableReranking)
+          .onChange(async (value) => {
+            this.settings.search.custom.enableReranking = value;
+            await this.onSettingsChange(this.settings);
+          });
+      });
+
+    // Min score slider
+    new Setting(customDiv)
+      .setName("Minimum Similarity")
+      .setDesc("Filter out unrelated results (0.0 - 1.0)")
+      .addSlider(slider => {
+        slider.setLimits(0, 1, 0.05)
+          .setValue(this.settings.search.custom.minScore)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.settings.search.custom.minScore = value;
+            await this.onSettingsChange(this.settings);
+          });
+      });
   }
 
   private renderConnectionStatus(containerEl: HTMLElement): void {
@@ -235,14 +312,14 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Capabilities row
     const capRow = statusBox.createDiv({ cls: "notient-settings-cap-row" });
-    
+
     // Index stats
     if (isReady) {
-      const indexManager = this.kernel.getService<{ 
+      const indexManager = this.kernel.getService<{
         getIndexedCount(): number;
         getActiveModelKey(): string;
       }>("indexManager");
-      
+
       if (indexManager) {
         const count = indexManager.getIndexedCount();
         const model = indexManager.getActiveModelKey();
@@ -429,10 +506,10 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Chunk Size Slider
     const sliderSection = section.createDiv({ cls: "notient-settings-slider-section" });
-    
+
     const sliderHeader = sliderSection.createDiv({ cls: "notient-settings-slider-header" });
     sliderHeader.createEl("label", { text: "Chunk Size:" });
-    const sliderValue = sliderHeader.createEl("span", { 
+    const sliderValue = sliderHeader.createEl("span", {
       text: `${this.settings.indexing.chunkSize} chars`,
       cls: "notient-settings-slider-value",
     });
@@ -502,18 +579,18 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Info box showing current state
     const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
-    
+
     if (!isReady) {
-      infoBox.createEl("div", { 
-        text: this.kernel.isServicesInitializing 
-          ? "⏳ Services initializing..." 
+      infoBox.createEl("div", {
+        text: this.kernel.isServicesInitializing
+          ? "⏳ Services initializing..."
           : "⚠️ Services not ready - complete setup wizard first",
-        cls: "notient-settings-info-dim" 
+        cls: "notient-settings-info-dim"
       });
     } else if (indexManager) {
       const activeKey = indexManager.getActiveModelKey() || "none";
       const noteCount = indexManager.getIndexedCount();
-      
+
       infoBox.createEl("div", { text: `🔑 Active Index: ${activeKey}` });
       infoBox.createEl("div", { text: `📊 Notes: ${noteCount}`, cls: "notient-settings-info-dim" });
 
@@ -560,7 +637,7 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Export/Import row
     const ioDiv = section.createDiv({ cls: "notient-settings-index-io" });
-    
+
     new Setting(ioDiv)
       .setName("Export")
       .setDesc("Backup to file")

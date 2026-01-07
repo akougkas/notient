@@ -39,14 +39,14 @@ Rules:
 - reason: brief (under 30 chars)
 - Only include relevant results (score >= 30)`;
 
-const CHAT_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vault. You help users understand and navigate their notes.
+const BASE_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vault. You help users understand, navigate, and improve their notes.
 
-Guidelines:
-- Answer based on the provided notes when possible
-- Cite specific notes using [Note Title] format
-- Be concise but helpful
-- If information isn't in the notes, say so
-- Don't make up information not present in the context`;
+CRITICAL RULES:
+- Always ground your responses in the actual note content provided
+- Cite specific notes using [[Note Title]] format (wiki-links)
+- Be concise, specific, and actionable
+- If information isn't in the notes, explicitly say so
+- Never invent or hallucinate content that isn't in the provided context`;
 
 /**
  * LM Studio Service - provides reasoning capabilities
@@ -399,24 +399,122 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
   }
 
   /**
-   * Build a RAG chat prompt with context
+   * Build a RAG chat prompt with full vault context
+   * This is the main entry point for building LLM prompts
    */
   buildChatSystemPrompt(
     contextSummary: string,
-    relevantNotes: Array<{ title: string; path: string; text: string }>
+    relevantNotes: Array<{ title: string; path: string; text: string }>,
+    currentNote?: { title: string; path: string; content: string },
+    query?: string
   ): string {
-    const noteSummaries = relevantNotes
-      .slice(0, 5)
-      .map((n) => `- **${n.title}** (${n.path}): ${n.text.slice(0, 200)}...`)
-      .join("\n");
+    const parts: string[] = [BASE_SYSTEM_PROMPT];
 
-    return `${CHAT_SYSTEM_PROMPT}
+    // Add the CURRENT NOTE prominently if this is a note-specific task
+    if (currentNote?.content) {
+      const truncatedContent = currentNote.content.length > 3000
+        ? currentNote.content.slice(0, 3000) + "\n\n[... content truncated ...]"
+        : currentNote.content;
 
+      parts.push(`
+=== CURRENT NOTE (FOCUS) ===
+Title: ${currentNote.title}
+Path: ${currentNote.path}
+
+${truncatedContent}
+=== END CURRENT NOTE ===`);
+    }
+
+    // Add task-specific instructions based on query patterns
+    const taskInstructions = this.inferTaskInstructions(query || "");
+    if (taskInstructions) {
+      parts.push(`
+TASK INSTRUCTIONS:
+${taskInstructions}`);
+    }
+
+    // Add vault context summary
+    if (contextSummary && contextSummary !== "No vault context available.") {
+      parts.push(`
 VAULT CONTEXT:
-${contextSummary}
+${contextSummary}`);
+    }
 
-RELEVANT NOTES:
-${noteSummaries}`;
+    // Add related notes from RAG (exclude current note to avoid duplication)
+    const filteredNotes = relevantNotes.filter(n => 
+      !currentNote || n.path !== currentNote.path
+    );
+    
+    if (filteredNotes.length > 0) {
+      const noteSummaries = filteredNotes
+        .slice(0, 5)
+        .map((n) => {
+          const preview = n.text.length > 400 
+            ? n.text.slice(0, 400) + "..." 
+            : n.text;
+          return `### [[${n.title}]] (${n.path})
+${preview}`;
+        })
+        .join("\n\n");
+
+      parts.push(`
+RELATED NOTES FROM VAULT:
+${noteSummaries}`);
+    }
+
+    return parts.join("\n");
+  }
+
+  /**
+   * Infer task-specific instructions from the query
+   */
+  private inferTaskInstructions(query: string): string | null {
+    const q = query.toLowerCase();
+
+    // Enrich/Expand action
+    if (q.includes("enrich") || q.includes("expand") || q.includes("additional context")) {
+      return `The user wants to ENRICH/EXPAND the current note.
+- Analyze the note's content thoroughly
+- Suggest additional sections, details, or context that would improve it
+- Reference related notes from the vault that could provide insights
+- Be specific and provide actionable additions
+- Format suggestions as clear bullet points or sections`;
+    }
+
+    // Link action
+    if (q.includes("link") || q.includes("linked") || q.includes("connections")) {
+      return `The user wants to find LINKING opportunities for this note.
+- Identify concepts, topics, or entities that could connect to other notes
+- Look at the related notes and suggest specific wiki-links to add
+- Explain WHY each link would be valuable (shared concepts, related projects, etc.)
+- Suggest both outgoing links (from this note) and potential backlinks`;
+    }
+
+    // Move/Classify action
+    if (q.includes("move") || q.includes("folder") || q.includes("category") || q.includes("para") || q.includes("classify") || q.includes("organize")) {
+      return `The user wants to CLASSIFY/ORGANIZE this note.
+- Analyze the note's content to understand its purpose
+- Suggest the best folder/category based on PARA methodology:
+  * Projects: Active efforts with clear outcomes
+  * Areas: Ongoing responsibilities  
+  * Resources: Reference material
+  * Archives: Inactive/completed items
+- Provide clear reasoning for your recommendation
+- Consider the note's relationships to other vault content`;
+    }
+
+    // Analyze/Health action
+    if (q.includes("analyze") || q.includes("health") || q.includes("improve") || q.includes("review")) {
+      return `The user wants to ANALYZE and improve this note.
+- Assess the note's completeness, clarity, and structure
+- Identify gaps, unclear sections, or areas needing expansion
+- Check for broken links or missing connections
+- Suggest specific improvements with priorities
+- Rate the note's overall "health" if applicable`;
+    }
+
+    // General chat - no specific instructions needed
+    return null;
   }
 
   /**
