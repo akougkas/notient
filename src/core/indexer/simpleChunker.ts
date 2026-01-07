@@ -12,7 +12,7 @@
  * 5. No overlap - not needed for semantic search on notes
  */
 
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 import type { NoteChunk } from "../../types/indexer";
 
 /** Default maximum chunk size */
@@ -23,6 +23,11 @@ const MIN_CHUNK_SIZE = 50;
 
 /** Small note threshold - single chunk */
 const SMALL_NOTE_THRESHOLD = 500;
+
+/** Deterministic token estimate proxy */
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
 
 /** Parsed note structure */
 interface ParsedNote {
@@ -41,11 +46,7 @@ interface Section {
 /**
  * Chunk a markdown note into pieces for embedding
  */
-export function chunkNote(
-  filePath: string,
-  content: string,
-  mtimeMs: number
-): NoteChunk[] {
+export function chunkNote(filePath: string, content: string, mtimeMs: number): NoteChunk[] {
   const noteId = generateNoteId(filePath);
   const parsed = parseMarkdown(filePath, content);
 
@@ -57,11 +58,9 @@ export function chunkNote(
     const text = buildChunkText(parsed.title, [], totalContent);
     if (text.length < MIN_CHUNK_SIZE) {
       // Too small, just use title
-      return [
-        createChunk(noteId, filePath, parsed, 0, [], parsed.title, mtimeMs),
-      ];
+      return [createChunk(noteId, filePath, parsed, 0, [], "note", "note", parsed.title, mtimeMs)];
     }
-    return [createChunk(noteId, filePath, parsed, 0, [], text, mtimeMs)];
+    return [createChunk(noteId, filePath, parsed, 0, [], "note", "note", text, mtimeMs)];
   }
 
   // Process sections
@@ -75,7 +74,17 @@ export function chunkNote(
     for (const text of sectionChunks) {
       if (text.length >= MIN_CHUNK_SIZE) {
         chunks.push(
-          createChunk(noteId, filePath, parsed, chunkIndex++, headingPath, text, mtimeMs)
+          createChunk(
+            noteId,
+            filePath,
+            parsed,
+            chunkIndex++,
+            headingPath,
+            "section",
+            "section",
+            text,
+            mtimeMs,
+          ),
         );
       }
     }
@@ -84,7 +93,17 @@ export function chunkNote(
   // Fallback if no chunks created
   if (chunks.length === 0) {
     return [
-      createChunk(noteId, filePath, parsed, 0, [], parsed.title || filePath, mtimeMs),
+      createChunk(
+        noteId,
+        filePath,
+        parsed,
+        0,
+        [],
+        "note",
+        "note",
+        parsed.title || filePath,
+        mtimeMs,
+      ),
     ];
   }
 
@@ -115,9 +134,10 @@ function parseMarkdown(filePath: string, content: string): ParsedNote {
 /**
  * Extract YAML frontmatter
  */
-function extractFrontmatter(
-  lines: string[]
-): { frontmatter: Record<string, unknown>; contentStartLine: number } {
+function extractFrontmatter(lines: string[]): {
+  frontmatter: Record<string, unknown>;
+  contentStartLine: number;
+} {
   if (lines[0]?.trim() !== "---") {
     return { frontmatter: {}, contentStartLine: 0 };
   }
@@ -162,11 +182,7 @@ function extractFrontmatter(
 /**
  * Extract title from H1 or filename
  */
-function extractTitle(
-  filePath: string,
-  lines: string[],
-  startLine: number
-): string {
+function extractTitle(filePath: string, lines: string[], startLine: number): string {
   // Look for first H1
   for (let i = startLine; i < lines.length; i++) {
     const line = lines[i];
@@ -185,10 +201,7 @@ function extractTitle(
 /**
  * Extract tags from frontmatter and inline #tags
  */
-function extractTags(
-  frontmatter: Record<string, unknown>,
-  lines: string[]
-): string[] {
+function extractTags(frontmatter: Record<string, unknown>, lines: string[]): string[] {
   const tags = new Set<string>();
 
   // From frontmatter
@@ -205,8 +218,7 @@ function extractTags(
   // Inline #tags
   const tagRegex = /#([a-zA-Z][a-zA-Z0-9_-]*)/g;
   for (const line of lines) {
-    let match;
-    while ((match = tagRegex.exec(line)) !== null) {
+    for (const match of line.matchAll(tagRegex)) {
       tags.add(match[1]);
     }
   }
@@ -292,11 +304,7 @@ function chunkSection(section: Section, maxSize: number): string[] {
 /**
  * Build chunk text with context
  */
-function buildChunkText(
-  title: string,
-  headingPath: string[],
-  content: string
-): string {
+function buildChunkText(title: string, headingPath: string[], content: string): string {
   const parts: string[] = [];
 
   if (title) {
@@ -332,11 +340,7 @@ export function generateContentHash(content: string): string {
 /**
  * Generate chunk ID
  */
-function generateChunkId(
-  noteId: string,
-  chunkIndex: number,
-  text: string
-): string {
+function generateChunkId(noteId: string, chunkIndex: number, text: string): string {
   const hash = createHash("sha256")
     .update(`${noteId}:${chunkIndex}:${text.slice(0, 100)}`)
     .digest("hex")
@@ -353,8 +357,10 @@ function createChunk(
   parsed: ParsedNote,
   chunkIndex: number,
   headingPath: string[],
+  tier: NoteChunk["tier"],
+  kind: NoteChunk["kind"],
   text: string,
-  mtimeMs: number
+  mtimeMs: number,
 ): NoteChunk {
   return {
     chunkId: generateChunkId(noteId, chunkIndex, text),
@@ -362,6 +368,13 @@ function createChunk(
     path: filePath,
     title: parsed.title,
     headingPath,
+    tier,
+    kind,
+    parentChunkId: null,
+    blockRef: null,
+    startLine: null,
+    endLine: null,
+    tokenEstimate: estimateTokens(text),
     chunkIndex,
     text,
     mtimeMs,

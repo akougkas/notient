@@ -1,23 +1,29 @@
 /**
  * Semantic Search Pipeline
- * 
+ *
  * Provides fast semantic search with LLM reranking and caching.
  * Architecture: Vector search (fast) → LLM reranking (smart)
  */
 
-import type { Kernel } from "../kernel";
-import type { EventBus } from "../events/eventBus";
+import type { LMStudioService } from "../../services/lmstudio";
 import type { OllamaService } from "../../services/ollama";
 import type { VectorStore } from "../../services/vectorStore";
-import type { LMStudioService } from "../../services/lmstudio";
 import type {
-  SearchOptions,
-  SearchResult,
   ChunkSearchResult,
   RelatedNote,
+  SearchOptions,
+  SearchResult,
 } from "../../types/search";
 import { SEARCH_PRESETS } from "../../types/settings";
 import { CACHE_CONFIG } from "../constants";
+import type { EventBus } from "../events/eventBus";
+import type { Kernel } from "../kernel";
+import type { LLMProvider } from "../llm/provider";
+import type { RankedResult, RerankCandidate } from "../llm/types";
+
+type Reranker = {
+  rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
+};
 
 interface CacheEntry {
   results: SearchResult[];
@@ -42,14 +48,20 @@ export class SearchPipeline {
     private kernel: Kernel,
     private eventBus: EventBus,
     private ollamaService: OllamaService,
-    private vectorStore: VectorStore
-  ) { }
+    private vectorStore: VectorStore,
+  ) {}
 
   /**
-   * Get LM Studio service (lazy resolution)
+   * Get reranker (prefer new LLMProvider; fall back to legacy LMStudioService)
    */
-  private getLMStudio(): LMStudioService | null {
-    return this.kernel.getService<LMStudioService>("lmstudio");
+  private getReranker(): Reranker | null {
+    const provider = this.kernel.getService<LLMProvider>("llmProvider");
+    if (provider?.isReady) return provider;
+
+    const legacy = this.kernel.getService<LMStudioService>("lmstudio");
+    if (legacy?.isReady()) return legacy;
+
+    return null;
   }
 
   /**
@@ -64,14 +76,14 @@ export class SearchPipeline {
    */
   async search(
     query: string,
-    options: Partial<ExtendedSearchOptions> = {}
+    options: Partial<ExtendedSearchOptions> = {},
   ): Promise<SearchResult[]> {
     if (this.disposed) return [];
 
     // Resolve effective settings from presets vs custom
     const searchSettings = this.kernel.settings.search;
     let defaults = searchSettings.custom;
-    if (searchSettings.preset !== 'custom') {
+    if (searchSettings.preset !== "custom") {
       defaults = SEARCH_PRESETS[searchSettings.preset];
     }
 
@@ -79,18 +91,17 @@ export class SearchPipeline {
     const requestedTopK = options.topK ?? defaults.topK;
     const minScore = options.minScore ?? defaults.minScore;
 
-    const fullOptions: SearchOptions = {
-      // Get more candidates for reranking
-      topK: enableReranking ? 50 : requestedTopK,
-      minScore: minScore,
+    const baseFilters = {
+      minScore,
       includeContent: options.includeContent ?? true,
       paraType: options.paraType,
       folderPaths: options.folderPaths,
       tags: options.tags,
-    };
+      queryText: query,
+    } satisfies Omit<SearchOptions, "topK">;
 
     const startTime = Date.now();
-    const cacheKey = this.getCacheKey(query, { ...fullOptions, topK: requestedTopK });
+    const cacheKey = this.getCacheKey(query, { ...baseFilters, topK: requestedTopK });
 
     this.eventBus.emit("search:started", { query });
 
@@ -107,20 +118,52 @@ export class SearchPipeline {
     }
 
     try {
-      // Phase 1: Vector search (fast, <100ms)
+      // Phase 1: Query embedding (cached)
       const queryEmbedding = await this.getQueryEmbedding(query);
-      const chunkResults = await this.vectorStore.search(
-        queryEmbedding,
-        { ...fullOptions, queryText: query }
-      );
 
-      // Group by note
-      let results = this.groupByNote(chunkResults);
+      // Phase 2: Hierarchical retrieval (TSI v2)
+      // Stage 1: candidate notes (tier=note)
+      const noteCandidateK = enableReranking ? 80 : Math.max(40, requestedTopK * 4);
+      const noteCandidates = await this.vectorStore.search(queryEmbedding, {
+        ...baseFilters,
+        topK: noteCandidateK,
+        includeContent: false,
+        tier: "note",
+      });
 
-      // Phase 2: LLM reranking (smart, adds ~500ms)
-      const lmStudio = this.getLMStudio();
-      if (enableReranking && lmStudio?.isReady() && results.length > 0) {
-        results = await this.rerankWithLLM(query, results, lmStudio);
+      const candidateNoteIds = Array.from(new Set(noteCandidates.map((c) => c.noteId)));
+
+      // Stage 2: candidate chunks within candidate notes (tier=block)
+      const chunkCandidateK = enableReranking ? 120 : Math.max(60, requestedTopK * 6);
+      const chunksPerNote = enableReranking ? 5 : 3;
+      let chunkCandidates = await this.vectorStore.search(queryEmbedding, {
+        ...baseFilters,
+        topK: chunkCandidateK,
+        includeContent: true,
+        tier: "block",
+        noteIds: candidateNoteIds.length ? candidateNoteIds : undefined,
+        maxPerNote: candidateNoteIds.length ? chunksPerNote : undefined,
+      });
+
+      // If the vault isn't reindexed yet (no tiered chunks), fall back to legacy behavior
+      if (candidateNoteIds.length === 0 || chunkCandidates.length === 0) {
+        chunkCandidates = await this.vectorStore.search(queryEmbedding, {
+          ...baseFilters,
+          topK: enableReranking ? 50 : requestedTopK,
+          includeContent: true,
+        });
+      }
+
+      let results: SearchResult[];
+
+      // Phase 3: Chunk-level reranking (smart)
+      const reranker = this.getReranker();
+      if (enableReranking && reranker && chunkCandidates.length > 0) {
+        const rerankedChunks = await this.rerankChunksWithLLM(query, chunkCandidates, reranker);
+        results = this.aggregateChunksToNotes(rerankedChunks, { maxChunksPerNote: 3 });
+      } else {
+        // No reranker: rank by vector similarity, but still aggregate by note
+        results = this.aggregateChunksToNotes(chunkCandidates, { maxChunksPerNote: 3 });
       }
 
       // Limit to requested topK
@@ -134,7 +177,7 @@ export class SearchPipeline {
         results,
         durationMs: Date.now() - startTime,
         cached: false,
-        reranked: enableReranking && lmStudio?.isReady(),
+        reranked: enableReranking && Boolean(reranker),
       });
 
       return results;
@@ -145,44 +188,93 @@ export class SearchPipeline {
   }
 
   /**
-   * Rerank results using LLM
+   * Rerank chunk candidates using LLM (chunk-level reranking)
    */
-  private async rerankWithLLM(
+  private async rerankChunksWithLLM(
     query: string,
-    results: SearchResult[],
-    lmStudio: LMStudioService
-  ): Promise<SearchResult[]> {
+    chunks: ChunkSearchResult[],
+    reranker: Reranker,
+  ): Promise<ChunkSearchResult[]> {
     try {
-      // Build candidates for reranking
-      const candidates = results.map((r) => ({
-        noteId: r.noteId,
-        path: r.path,
-        title: r.title,
-        text: r.chunks[0]?.text || r.title,
-        originalScore: r.bestScore,
+      // NOTE: The reranker types are "noteId"-based. For chunk-level reranking, we
+      // encode chunkId into the noteId field and map it back afterwards.
+      const candidates: RerankCandidate[] = chunks.slice(0, 10).map((c) => ({
+        noteId: c.chunkId,
+        path: c.path,
+        title: c.headingPath.length ? `${c.title} — ${c.headingPath.join(" > ")}` : c.title,
+        text: this.truncateForRerank(c.text),
+        originalScore: c.score,
       }));
 
-      // Get reranked results
-      const reranked = await lmStudio.rerank(query, candidates);
+      const ranked = await reranker.rerank(query, candidates);
 
-      // Map back to SearchResult format
-      const rerankedResults: SearchResult[] = [];
-      for (const ranked of reranked) {
-        const original = results.find((r) => r.noteId === ranked.noteId);
-        if (original) {
-          rerankedResults.push({
-            ...original,
-            bestScore: ranked.score,
-            reasoning: ranked.reasoning,
-          });
+      if (!ranked.length) return chunks;
+
+      const scores = new Map<string, { score: number; reasoning: string }>();
+      for (const r of ranked) {
+        scores.set(r.noteId, { score: r.score, reasoning: r.reasoning });
+      }
+
+      const rerankedChunks: ChunkSearchResult[] = [];
+      for (const c of chunks) {
+        const rr = scores.get(c.chunkId);
+        if (rr) {
+          rerankedChunks.push({ ...c, score: rr.score, reasoning: rr.reasoning });
+        } else {
+          rerankedChunks.push(c);
         }
       }
 
-      return rerankedResults;
+      rerankedChunks.sort((a, b) => b.score - a.score);
+      return rerankedChunks;
     } catch (error) {
       console.warn("[SearchPipeline] LLM reranking failed, using vector scores:", error);
-      return results;
+      return chunks;
     }
+  }
+
+  private truncateForRerank(text: string): string {
+    const MAX = 1200;
+    if (text.length <= MAX) return text;
+    return `${text.slice(0, MAX).trimEnd()}…`;
+  }
+
+  private aggregateChunksToNotes(
+    chunks: ChunkSearchResult[],
+    opts: { maxChunksPerNote: number },
+  ): SearchResult[] {
+    const noteMap: Map<string, SearchResult> = new Map();
+
+    for (const chunk of chunks) {
+      const existing = noteMap.get(chunk.noteId);
+      if (existing) {
+        existing.chunks.push(chunk);
+        if (chunk.score > existing.bestScore) {
+          existing.bestScore = chunk.score;
+          existing.reasoning = chunk.reasoning;
+        }
+      } else {
+        noteMap.set(chunk.noteId, {
+          noteId: chunk.noteId,
+          path: chunk.path,
+          title: chunk.title,
+          bestScore: chunk.score,
+          paraType: chunk.paraType,
+          chunks: [chunk],
+          mtimeMs: 0, // TODO: fill from file cache if needed
+          reasoning: chunk.reasoning,
+        });
+      }
+    }
+
+    const results = Array.from(noteMap.values());
+    for (const r of results) {
+      r.chunks.sort((a, b) => b.score - a.score);
+      r.chunks = r.chunks.slice(0, Math.max(1, opts.maxChunksPerNote));
+    }
+
+    results.sort((a, b) => b.bestScore - a.bestScore);
+    return results;
   }
 
   /**
@@ -190,7 +282,7 @@ export class SearchPipeline {
    */
   async findRelated(
     path: string,
-    options: { topK?: number; minScore?: number } = {}
+    options: { topK?: number; minScore?: number } = {},
   ): Promise<RelatedNote[]> {
     if (this.disposed) return [];
 
@@ -209,11 +301,12 @@ export class SearchPipeline {
       const queryText = content.slice(0, 1000); // First 1000 chars as representative
       const queryEmbedding = await this.getQueryEmbedding(queryText);
 
-      // Search for similar chunks
+      // Search for similar notes (tier=note) when available
       const chunkResults = await this.vectorStore.search(queryEmbedding, {
         topK: topK * 3, // Get more to filter out self
         minScore,
         includeContent: false,
+        tier: "note",
       });
 
       // Filter out the source note and group by note
@@ -243,8 +336,7 @@ export class SearchPipeline {
 
       for (const [, data] of noteScores) {
         // Average score across chunks
-        const avgScore =
-          data.scores.reduce((a, b) => a + b, 0) / data.scores.length;
+        const avgScore = data.scores.reduce((a, b) => a + b, 0) / data.scores.length;
 
         // Get metadata for shared tags
         const relatedMeta = this.kernel.obsidian.getMetadataByPath(data.path);
@@ -253,8 +345,7 @@ export class SearchPipeline {
 
         // Check for direct link
         const hasDirectLink =
-          metadata?.links?.some((l) => l.includes(data.path.replace(".md", ""))) ??
-          false;
+          metadata?.links?.some((l) => l.includes(data.path.replace(".md", ""))) ?? false;
 
         relatedNotes.push({
           path: data.path,
@@ -345,11 +436,7 @@ export class SearchPipeline {
   /**
    * Update result cache
    */
-  private updateCache(
-    key: string,
-    results: SearchResult[],
-    embedding: number[]
-  ): void {
+  private updateCache(key: string, results: SearchResult[], embedding: number[]): void {
     // LRU management
     if (this.queryCache.size >= CACHE_CONFIG.MAX_SEARCH_CACHE_SIZE) {
       const firstKey = this.queryCache.keys().next().value;

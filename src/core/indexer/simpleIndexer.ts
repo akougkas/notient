@@ -11,13 +11,14 @@
  * - File watcher integration
  */
 
-import type { TFile, EventRef } from "obsidian";
-import type { Kernel } from "../kernel";
-import type { EventBus } from "../events/eventBus";
+import type { EventRef, TFile } from "obsidian";
 import type { IndexManager } from "../../services/indexManager";
 import type { OllamaService } from "../../services/ollama";
-import type { IndexProgress, EmbeddedChunk, NoteChunk } from "../../types/indexer";
-import { chunkNote, generateNoteId, generateContentHash } from "./simpleChunker";
+import type { EmbeddedChunk, IndexProgress, NoteChunk } from "../../types/indexer";
+import type { EventBus } from "../events/eventBus";
+import type { Kernel } from "../kernel";
+import { generateContentHash, generateNoteId } from "./simpleChunker";
+import { chunkNoteTiered } from "./tieredSemanticChunker";
 
 /** Batch size for embedding requests */
 const EMBED_BATCH_SIZE = 4;
@@ -60,7 +61,7 @@ export class SimpleIndexer {
     private kernel: Kernel,
     private eventBus: EventBus,
     private indexManager: IndexManager,
-    private ollama: OllamaService
+    private ollama: OllamaService,
   ) {}
 
   async initialize(): Promise<void> {
@@ -99,7 +100,7 @@ export class SimpleIndexer {
     }
 
     console.log(
-      `[SimpleIndexer] Found ${changes.toIndex.length} to index, ${changes.toRemove.length} to remove`
+      `[SimpleIndexer] Found ${changes.toIndex.length} to index, ${changes.toRemove.length} to remove`,
     );
 
     // Remove deleted notes
@@ -139,7 +140,7 @@ export class SimpleIndexer {
 
     const durationMs = Date.now() - startTime;
     console.log(
-      `[SimpleIndexer] Sync complete: ${added} added, ${updated} updated, ${changes.toRemove.length} removed, ${errors} errors in ${durationMs}ms`
+      `[SimpleIndexer] Sync complete: ${added} added, ${updated} updated, ${changes.toRemove.length} removed, ${errors} errors in ${durationMs}ms`,
     );
 
     this.eventBus.emit("index:complete", {
@@ -227,18 +228,10 @@ export class SimpleIndexer {
     const obs = this.kernel.obsidian;
     const debounceMs = this.kernel.settings.indexing.debounceMs;
 
-    this.eventRefs.push(
-      obs.onFileCreate((file) => this.onFileChange(file, debounceMs))
-    );
-    this.eventRefs.push(
-      obs.onFileModify((file) => this.onFileChange(file, debounceMs))
-    );
-    this.eventRefs.push(
-      obs.onFileRename((file, oldPath) => this.onFileRename(file, oldPath))
-    );
-    this.eventRefs.push(
-      obs.onFileDelete((file) => this.onFileDelete(file))
-    );
+    this.eventRefs.push(obs.onFileCreate((file) => this.onFileChange(file, debounceMs)));
+    this.eventRefs.push(obs.onFileModify((file) => this.onFileChange(file, debounceMs)));
+    this.eventRefs.push(obs.onFileRename((file, oldPath) => this.onFileRename(file, oldPath)));
+    this.eventRefs.push(obs.onFileDelete((file) => this.onFileDelete(file)));
   }
 
   private onFileChange(file: TFile, debounceMs: number): void {
@@ -252,7 +245,7 @@ export class SimpleIndexer {
       setTimeout(() => {
         this.debounceTimers.delete(file.path);
         void this.indexNote(file.path);
-      }, debounceMs)
+      }, debounceMs),
     );
   }
 
@@ -282,7 +275,7 @@ export class SimpleIndexer {
 
     const excluded = this.kernel.settings.indexing.excludedFolders;
     for (const folder of excluded) {
-      if (path.startsWith(folder + "/") || path === folder) {
+      if (path.startsWith(`${folder}/`) || path === folder) {
         return false;
       }
     }
@@ -323,7 +316,7 @@ export class SimpleIndexer {
   }
 
   private async processBatch(
-    paths: string[]
+    paths: string[],
   ): Promise<{ added: number; updated: number; errors: number }> {
     let added = 0;
     let updated = 0;
@@ -366,13 +359,17 @@ export class SimpleIndexer {
     return { added, updated, errors };
   }
 
-  private async processNote(
-    path: string,
-    content: string,
-    mtimeMs: number
-  ): Promise<void> {
-    // Chunk the note
-    const chunks = chunkNote(path, content, mtimeMs);
+  private async processNote(path: string, content: string, mtimeMs: number): Promise<void> {
+    // Chunk the note (TSI v2: tiered semantic chunking)
+    const metadata = this.kernel.obsidian.getMetadataByPath(path);
+    const chunkSize = this.kernel.settings.indexing.chunkSize;
+    const chunks = chunkNoteTiered(path, content, mtimeMs, metadata, {
+      // Use the existing "chunkSize" slider as a base signal.
+      // Tier 2 is slightly smaller; Tier 1 + note sketch are larger.
+      blockMaxChars: Math.min(2400, Math.max(600, Math.round(chunkSize * 0.8))),
+      sectionMaxChars: Math.min(6000, Math.max(1200, Math.round(chunkSize * 1.6))),
+      noteSketchMaxChars: Math.min(8000, Math.max(2000, Math.round(chunkSize * 2.2))),
+    });
     if (chunks.length === 0) return;
 
     // Embed chunks
@@ -398,9 +395,7 @@ export class SimpleIndexer {
     });
   }
 
-  private async embedChunks(
-    chunks: NoteChunk[]
-  ): Promise<EmbeddedChunk[]> {
+  private async embedChunks(chunks: NoteChunk[]): Promise<EmbeddedChunk[]> {
     const embedded: EmbeddedChunk[] = [];
     const modelKey = this.ollama.getModelKey();
 

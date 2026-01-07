@@ -12,13 +12,17 @@
  * - Multi-model support via separate index files
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Kernel } from "../core/kernel";
-import type { VectorStore } from "./vectorStore";
+import { ParaDetector } from "../core/para/detector";
 import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
-import { ParaDetector } from "../core/para/detector";
+import type { VectorStore } from "./vectorStore";
+
+const INDEX_VERSION = 2;
+const CHUNKER_META = { name: "tiered-semantic", version: 1 } as const;
+const TIER_FLAGS = { note: true, section: true, block: true } as const;
 
 /** Internal document structure - stored in memory */
 interface StoredDoc {
@@ -27,6 +31,14 @@ interface StoredDoc {
   path: string;
   title: string;
   headingPath: string[];
+  tier: NoteChunk["tier"];
+  kind: NoteChunk["kind"];
+  parentChunkId: string | null;
+  blockRef: string | null;
+  startLine: number | null;
+  endLine: number | null;
+  tokenEstimate: number;
+  importance?: number;
   chunkIndex: number;
   text: string;
   embedding: Float32Array;
@@ -43,6 +55,14 @@ interface PersistedDoc {
   path: string;
   title: string;
   headingPath: string[];
+  tier: NoteChunk["tier"];
+  kind: NoteChunk["kind"];
+  parentChunkId: string | null;
+  blockRef: string | null;
+  startLine: number | null;
+  endLine: number | null;
+  tokenEstimate: number;
+  importance?: number;
   chunkIndex: number;
   text: string;
   embedding: number[];
@@ -59,6 +79,8 @@ interface IndexMetadata {
   docCount: number;
   createdAt: number;
   updatedAt: number;
+  chunker?: { name: string; version: number };
+  tiers?: { note: boolean; section: boolean; block: boolean };
 }
 
 /**
@@ -67,8 +89,9 @@ interface IndexMetadata {
 export class SimpleVectorStore implements VectorStore {
   private docs: Map<string, StoredDoc> = new Map();
   private noteIdToChunkIds: Map<string, Set<string>> = new Map();
-  private dimension: number = 0;
-  private modelKey: string = "";
+  private dimension = 0;
+  private modelKey = "";
+  private createdAt = Date.now();
   private disposed = false;
   private dirty = false;
   private bulkMode = false;
@@ -94,14 +117,18 @@ export class SimpleVectorStore implements VectorStore {
     this.modelKey = ollama.getModelKey();
     this.dimension = await ollama.getDimension();
 
-    console.log(`[SimpleVectorStore] Initializing for modelKey=${this.modelKey}, dim=${this.dimension}`);
+    console.log(
+      `[SimpleVectorStore] Initializing for modelKey=${this.modelKey}, dim=${this.dimension}`,
+    );
 
     // Try to load existing index
     const loaded = await this.loadFromDisk();
     if (!loaded) {
       console.log(`[SimpleVectorStore] Created fresh index (${this.dimension}-dim)`);
     } else {
-      console.log(`[SimpleVectorStore] Using existing index: ${this.docs.size} chunks, ${this.noteIdToChunkIds.size} notes`);
+      console.log(
+        `[SimpleVectorStore] Using existing index: ${this.docs.size} chunks, ${this.noteIdToChunkIds.size} notes`,
+      );
     }
   }
 
@@ -133,6 +160,14 @@ export class SimpleVectorStore implements VectorStore {
         path: chunk.path,
         title: chunk.title,
         headingPath: chunk.headingPath,
+        tier: chunk.tier,
+        kind: chunk.kind,
+        parentChunkId: chunk.parentChunkId,
+        blockRef: chunk.blockRef,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+        tokenEstimate: chunk.tokenEstimate,
+        importance: chunk.importance,
         chunkIndex: chunk.chunkIndex,
         text: chunk.text,
         embedding: new Float32Array(chunk.embedding),
@@ -148,7 +183,7 @@ export class SimpleVectorStore implements VectorStore {
       if (!this.noteIdToChunkIds.has(chunk.noteId)) {
         this.noteIdToChunkIds.set(chunk.noteId, new Set());
       }
-      this.noteIdToChunkIds.get(chunk.noteId)!.add(chunk.chunkId);
+      this.noteIdToChunkIds.get(chunk.noteId)?.add(chunk.chunkId);
     }
 
     this.dirty = true;
@@ -190,19 +225,24 @@ export class SimpleVectorStore implements VectorStore {
    * Search using brute-force cosine similarity with hybrid lexical boost
    * For 50K vectors, this takes ~10-20ms - well within target
    */
-  async search(
-    queryEmbedding: number[],
-    options: SearchOptions
-  ): Promise<ChunkSearchResult[]> {
+  async search(queryEmbedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]> {
     if (this.disposed || this.docs.size === 0) return [];
 
     const query = new Float32Array(queryEmbedding);
     const queryNorm = this.magnitude(query);
     if (queryNorm === 0) return [];
 
+    const allowedTiers = options.tier
+      ? new Set(Array.isArray(options.tier) ? options.tier : [options.tier])
+      : null;
+    const allowedNoteIds = options.noteIds?.length ? new Set(options.noteIds) : null;
+
     // Hybrid search: prepare query terms for lexical matching
     const queryTerms = options.queryText
-      ? options.queryText.toLowerCase().split(/\s+/).filter(t => t.length >= 2)
+      ? options.queryText
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length >= 2)
       : [];
 
     // Score all documents
@@ -211,20 +251,24 @@ export class SimpleVectorStore implements VectorStore {
     // Minimum text length for full score - shorter texts get penalized
     const MIN_TEXT_LENGTH = 50;
     const LENGTH_PENALTY_FACTOR = 0.3; // How much to penalize short texts (0-1)
-    
+
     // Lexical boost for hybrid search
     const LEXICAL_BOOST = 0.15; // Boost for notes containing query terms
-    const TITLE_BOOST = 0.25;  // Extra boost for title matches
+    const TITLE_BOOST = 0.25; // Extra boost for title matches
 
     for (const doc of this.docs.values()) {
+      // Tier + noteId prefilter (fast reject before cosine)
+      if (allowedTiers && !allowedTiers.has(doc.tier)) continue;
+      if (allowedNoteIds && !allowedNoteIds.has(doc.noteId)) continue;
+
       let score = this.cosineSimilarity(query, queryNorm, doc.embedding);
       let lexicalMatch = false;
-      
+
       // Apply length penalty for very short chunks
       // Short texts produce generic embeddings that falsely match many queries
       if (doc.text.length < MIN_TEXT_LENGTH) {
         const lengthRatio = doc.text.length / MIN_TEXT_LENGTH;
-        const penalty = 1 - (LENGTH_PENALTY_FACTOR * (1 - lengthRatio));
+        const penalty = 1 - LENGTH_PENALTY_FACTOR * (1 - lengthRatio);
         score = score * penalty;
       }
 
@@ -234,11 +278,13 @@ export class SimpleVectorStore implements VectorStore {
         const textLower = doc.text.toLowerCase();
         const titleLower = doc.title.toLowerCase();
         const pathLower = doc.path.toLowerCase();
-        
+
         // Check if any query term appears in content/title/path
-        const textMatch = queryTerms.some(term => textLower.includes(term));
-        const titleMatch = queryTerms.some(term => titleLower.includes(term) || pathLower.includes(term));
-        
+        const textMatch = queryTerms.some((term) => textLower.includes(term));
+        const titleMatch = queryTerms.some(
+          (term) => titleLower.includes(term) || pathLower.includes(term),
+        );
+
         if (titleMatch) {
           score = Math.min(0.99, score + TITLE_BOOST); // Title/path match gets biggest boost
           lexicalMatch = true;
@@ -258,6 +304,7 @@ export class SimpleVectorStore implements VectorStore {
 
     // Apply filters and build results
     const results: ChunkSearchResult[] = [];
+    const perNoteCounts: Map<string, number> = new Map();
 
     for (const { doc, score } of scored) {
       if (results.length >= options.topK) break;
@@ -279,12 +326,26 @@ export class SimpleVectorStore implements VectorStore {
         if (!hasTag) continue;
       }
 
+      // Enforce per-note cap (applied after scoring + filters)
+      if (typeof options.maxPerNote === "number" && options.maxPerNote > 0) {
+        const current = perNoteCounts.get(doc.noteId) ?? 0;
+        if (current >= options.maxPerNote) continue;
+        perNoteCounts.set(doc.noteId, current + 1);
+      }
+
       results.push({
         chunkId: doc.chunkId,
         noteId: doc.noteId,
         path: doc.path,
         title: doc.title,
         headingPath: doc.headingPath,
+        tier: doc.tier,
+        kind: doc.kind,
+        parentChunkId: doc.parentChunkId,
+        blockRef: doc.blockRef,
+        startLine: doc.startLine,
+        endLine: doc.endLine,
+        tokenEstimate: doc.tokenEstimate,
         text: options.includeContent ? doc.text : "",
         score,
         paraType,
@@ -310,6 +371,14 @@ export class SimpleVectorStore implements VectorStore {
           path: doc.path,
           title: doc.title,
           headingPath: doc.headingPath,
+          tier: doc.tier,
+          kind: doc.kind,
+          parentChunkId: doc.parentChunkId,
+          blockRef: doc.blockRef,
+          startLine: doc.startLine,
+          endLine: doc.endLine,
+          tokenEstimate: doc.tokenEstimate,
+          importance: doc.importance,
           chunkIndex: doc.chunkIndex,
           text: doc.text,
           mtimeMs: doc.mtimeMs,
@@ -388,15 +457,11 @@ export class SimpleVectorStore implements VectorStore {
     return (
       Array.isArray(embedding) &&
       embedding.length === this.dimension &&
-      embedding.every((n) => typeof n === "number" && !isNaN(n))
+      embedding.every((n) => typeof n === "number" && !Number.isNaN(n))
     );
   }
 
-  private cosineSimilarity(
-    a: Float32Array,
-    aNorm: number,
-    b: Float32Array
-  ): number {
+  private cosineSimilarity(a: Float32Array, aNorm: number, b: Float32Array): number {
     let dot = 0;
     let bNormSq = 0;
 
@@ -428,10 +493,7 @@ export class SimpleVectorStore implements VectorStore {
   }
 
   private getIndexPath(): string {
-    return path.join(
-      this.kernel.storagePaths.pluginRoot,
-      `index-${this.modelKey}.json`
-    );
+    return path.join(this.kernel.storagePaths.pluginRoot, `index-${this.modelKey}.json`);
   }
 
   private async loadFromDisk(): Promise<boolean> {
@@ -443,7 +505,7 @@ export class SimpleVectorStore implements VectorStore {
         .access(indexPath)
         .then(() => true)
         .catch(() => false);
-      
+
       if (!exists) {
         console.log(`[SimpleVectorStore] No index file found for modelKey=${this.modelKey}`);
         return false;
@@ -455,18 +517,35 @@ export class SimpleVectorStore implements VectorStore {
         docs: PersistedDoc[];
       };
 
-      console.log(`[SimpleVectorStore] Found index: fileModelKey=${data.meta.modelKey}, fileDim=${data.meta.dimension}, docCount=${data.meta.docCount}`);
+      console.log(
+        `[SimpleVectorStore] Found index: fileModelKey=${data.meta.modelKey}, fileDim=${data.meta.dimension}, docCount=${data.meta.docCount}`,
+      );
+
+      // Hard migration: only v2 is supported (Tiered Semantic Index)
+      if (data.meta.version !== INDEX_VERSION) {
+        console.log(
+          `[SimpleVectorStore] Index version mismatch: file=${data.meta.version}, expected=${INDEX_VERSION}. Moving aside and creating fresh.`,
+        );
+        await this.moveToDeleted(indexPath, `v${data.meta.version ?? "unknown"}`);
+        return false;
+      }
 
       // Validate model key and dimension
       if (data.meta.modelKey !== this.modelKey) {
-        console.log(`[SimpleVectorStore] Model key mismatch: file=${data.meta.modelKey}, current=${this.modelKey}. Creating fresh.`);
+        console.log(
+          `[SimpleVectorStore] Model key mismatch: file=${data.meta.modelKey}, current=${this.modelKey}. Creating fresh.`,
+        );
         return false;
       }
 
       if (data.meta.dimension !== this.dimension) {
-        console.log(`[SimpleVectorStore] Dimension mismatch: file=${data.meta.dimension}, current=${this.dimension}. Creating fresh.`);
+        console.log(
+          `[SimpleVectorStore] Dimension mismatch: file=${data.meta.dimension}, current=${this.dimension}. Creating fresh.`,
+        );
         return false;
       }
+
+      this.createdAt = typeof data.meta.createdAt === "number" ? data.meta.createdAt : Date.now();
 
       // Load documents
       this.docs.clear();
@@ -482,15 +561,19 @@ export class SimpleVectorStore implements VectorStore {
         if (!this.noteIdToChunkIds.has(doc.noteId)) {
           this.noteIdToChunkIds.set(doc.noteId, new Set());
         }
-        this.noteIdToChunkIds.get(doc.noteId)!.add(doc.chunkId);
+        this.noteIdToChunkIds.get(doc.noteId)?.add(doc.chunkId);
       }
 
-      console.log(
-        `[SimpleVectorStore] Loaded ${this.docs.size} chunks from disk`
-      );
+      console.log(`[SimpleVectorStore] Loaded ${this.docs.size} chunks from disk`);
       return true;
     } catch (error) {
       console.warn("[SimpleVectorStore] Failed to load:", error);
+      // Corrupt file: move aside so we don't keep failing every boot
+      try {
+        await this.moveToDeleted(indexPath, "corrupt");
+      } catch {
+        // ignore
+      }
       return false;
     }
   }
@@ -510,6 +593,14 @@ export class SimpleVectorStore implements VectorStore {
           path: doc.path,
           title: doc.title,
           headingPath: doc.headingPath,
+          tier: doc.tier,
+          kind: doc.kind,
+          parentChunkId: doc.parentChunkId,
+          blockRef: doc.blockRef,
+          startLine: doc.startLine,
+          endLine: doc.endLine,
+          tokenEstimate: doc.tokenEstimate,
+          importance: doc.importance,
           chunkIndex: doc.chunkIndex,
           text: doc.text,
           embedding: Array.from(doc.embedding),
@@ -522,12 +613,14 @@ export class SimpleVectorStore implements VectorStore {
 
       const data = {
         meta: {
-          version: 1,
+          version: INDEX_VERSION,
           modelKey: this.modelKey,
           dimension: this.dimension,
           docCount: persistedDocs.length,
-          createdAt: Date.now(),
+          createdAt: this.createdAt,
           updatedAt: Date.now(),
+          chunker: CHUNKER_META,
+          tiers: TIER_FLAGS,
         } as IndexMetadata,
         docs: persistedDocs,
       };
@@ -537,6 +630,19 @@ export class SimpleVectorStore implements VectorStore {
       console.log(`[SimpleVectorStore] Saved ${persistedDocs.length} chunks`);
     } catch (error) {
       console.error("[SimpleVectorStore] Failed to save:", error);
+    }
+  }
+
+  private async moveToDeleted(filePath: string, reason: string): Promise<void> {
+    try {
+      const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
+      await fs.promises.mkdir(deletedDir, { recursive: true });
+      const base = path.basename(filePath).replace(/\.json$/, "");
+      const target = path.join(deletedDir, `${base}-${reason}-${Date.now()}.json`);
+      await fs.promises.rename(filePath, target);
+      console.log(`[SimpleVectorStore] Moved ${filePath} -> ${target}`);
+    } catch (error) {
+      console.warn("[SimpleVectorStore] Failed to move file to .deleted:", error);
     }
   }
 }

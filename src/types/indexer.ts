@@ -2,6 +2,30 @@
  * Indexer types for the indexing pipeline
  */
 
+/**
+ * Chunk tier in the Tiered Semantic Index (TSI v2)
+ */
+export type ChunkTier = "note" | "section" | "block";
+
+/**
+ * Chunk kind (structural/semantic block type)
+ */
+export type ChunkKind =
+  | "note"
+  | "section"
+  | "heading"
+  | "paragraph"
+  | "list"
+  | "taskList"
+  | "callout"
+  | "quote"
+  | "code"
+  | "table"
+  | "hr"
+  | "embed"
+  | "blank"
+  | "other";
+
 /** Index state for a single note */
 export interface NoteIndexState {
   /** Normalized vault path */
@@ -42,13 +66,7 @@ export interface IndexProgress {
   estimatedRemainingMs: number | null;
 }
 
-export type IndexPhase =
-  | "scanning"
-  | "chunking"
-  | "embedding"
-  | "storing"
-  | "complete"
-  | "idle";
+export type IndexPhase = "scanning" | "chunking" | "embedding" | "storing" | "complete" | "idle";
 
 /** Chunk representation */
 export interface NoteChunk {
@@ -62,6 +80,22 @@ export interface NoteChunk {
   title: string;
   /** Heading hierarchy */
   headingPath: string[];
+  /** Tier (note/section/block) */
+  tier: ChunkTier;
+  /** Block/section kind */
+  kind: ChunkKind;
+  /** Parent chunk ID (block -> section, section -> note) */
+  parentChunkId: string | null;
+  /** Obsidian block reference (e.g. ^abc123) if present */
+  blockRef: string | null;
+  /** Start line in the note (1-based) */
+  startLine: number | null;
+  /** End line in the note (1-based) */
+  endLine: number | null;
+  /** Deterministic token estimate (proxy) */
+  tokenEstimate: number;
+  /** Optional heuristic importance used for weighting */
+  importance?: number;
   /** Chunk index within note */
   chunkIndex: number;
   /** Raw text content */
@@ -83,4 +117,3 @@ export interface EmbeddedChunk extends NoteChunk {
   /** Model key used */
   modelKey: string;
 }
-

@@ -11,13 +11,13 @@
  * - Persistence coordination
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { generateNoteId } from "../core/indexer/simpleChunker";
 import type { Kernel } from "../core/kernel";
-import type { VectorStore } from "./vectorStore";
 import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
-import { generateNoteId } from "../core/indexer/simpleChunker";
+import type { VectorStore } from "./vectorStore";
 
 /** State for a single indexed note */
 export interface NoteState {
@@ -39,12 +39,12 @@ interface StateFile {
 }
 
 /** Index completion state */
-export type IndexState = 
-  | "none"           // No index exists for this model
-  | "complete"       // Index exists and all vault notes are indexed
-  | "incomplete"     // Index exists but some notes missing
-  | "crashed"        // Previous indexing was interrupted
-  | "stale";         // Index exists but may have outdated entries
+export type IndexState =
+  | "none" // No index exists for this model
+  | "complete" // Index exists and all vault notes are indexed
+  | "incomplete" // Index exists but some notes missing
+  | "crashed" // Previous indexing was interrupted
+  | "stale"; // Index exists but may have outdated entries
 
 /** Exported index state for UI */
 export interface IndexStats {
@@ -66,7 +66,7 @@ export interface IndexStats {
  */
 export class IndexManager {
   private states: Map<string, NoteState> = new Map();
-  private modelKey: string = "";
+  private modelKey = "";
   private lastFullIndexAt: number | null = null;
   private indexingInProgress = false;
   private indexingStartedAt: number | null = null;
@@ -75,7 +75,7 @@ export class IndexManager {
 
   constructor(
     private kernel: Kernel,
-    private vectorStore: VectorStore
+    private vectorStore: VectorStore,
   ) {}
 
   async initialize(): Promise<void> {
@@ -177,12 +177,13 @@ export class IndexManager {
   async getStats(): Promise<IndexStats> {
     const chunkCount = await this.countChunks();
     const vaultNoteCount = this.kernel.obsidian.getMarkdownFiles().length;
-    
+
     // Detect crash: indexing was in progress but took > 30 minutes (stuck)
     const CRASH_THRESHOLD_MS = 30 * 60 * 1000;
-    const needsRecovery = this.indexingInProgress && 
+    const needsRecovery =
+      this.indexingInProgress &&
       this.indexingStartedAt !== null &&
-      (Date.now() - this.indexingStartedAt) > CRASH_THRESHOLD_MS;
+      Date.now() - this.indexingStartedAt > CRASH_THRESHOLD_MS;
 
     // Determine index state
     let state: IndexState;
@@ -198,9 +199,8 @@ export class IndexManager {
       state = "stale"; // Has chunks but no state tracking
     }
 
-    const completionPercent = vaultNoteCount > 0 
-      ? Math.round((this.states.size / vaultNoteCount) * 100)
-      : 0;
+    const completionPercent =
+      vaultNoteCount > 0 ? Math.round((this.states.size / vaultNoteCount) * 100) : 0;
 
     return {
       exists: this.states.size > 0 || chunkCount > 0,
@@ -228,10 +228,7 @@ export class IndexManager {
     this.removeNoteState(notePath);
   }
 
-  async search(
-    embedding: number[],
-    options: SearchOptions
-  ): Promise<ChunkSearchResult[]> {
+  async search(embedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]> {
     return this.vectorStore.search(embedding, options);
   }
 
@@ -312,14 +309,8 @@ export class IndexManager {
     }
 
     try {
-      const indexPath = path.join(
-        this.kernel.storagePaths.pluginRoot,
-        `index-${modelKey}.json`
-      );
-      const statePath = path.join(
-        this.kernel.storagePaths.pluginRoot,
-        `state-${modelKey}.json`
-      );
+      const indexPath = path.join(this.kernel.storagePaths.pluginRoot, `index-${modelKey}.json`);
+      const statePath = path.join(this.kernel.storagePaths.pluginRoot, `state-${modelKey}.json`);
 
       const indexExists = await fs.promises
         .access(indexPath)
@@ -331,10 +322,10 @@ export class IndexManager {
         .catch(() => false);
 
       if (indexExists) {
-        await fs.promises.unlink(indexPath);
+        await this.moveToDeleted(indexPath, "deleted");
       }
       if (stateExists) {
-        await fs.promises.unlink(statePath);
+        await this.moveToDeleted(statePath, "deleted");
       }
 
       console.log(`[IndexManager] Deleted index for ${modelKey}`);
@@ -349,10 +340,8 @@ export class IndexManager {
    * Trim stale entries - remove vectors for notes that no longer exist
    */
   async trimIndex(): Promise<{ removed: number }> {
-    const currentPaths = new Set(
-      this.kernel.obsidian.getMarkdownFiles().map((f) => f.path)
-    );
-    
+    const currentPaths = new Set(this.kernel.obsidian.getMarkdownFiles().map((f) => f.path));
+
     let removed = 0;
     const stalePaths: string[] = [];
 
@@ -388,10 +377,7 @@ export class IndexManager {
    * Export index to a portable JSON format
    */
   async exportIndex(): Promise<string> {
-    const indexPath = path.join(
-      this.kernel.storagePaths.pluginRoot,
-      `index-${this.modelKey}.json`
-    );
+    const indexPath = path.join(this.kernel.storagePaths.pluginRoot, `index-${this.modelKey}.json`);
 
     try {
       const indexData = await fs.promises.readFile(indexPath, "utf-8");
@@ -433,14 +419,14 @@ export class IndexManager {
       // Write index file
       const indexPath = path.join(
         this.kernel.storagePaths.pluginRoot,
-        `index-${importedModelKey}.json`
+        `index-${importedModelKey}.json`,
       );
       await fs.promises.writeFile(indexPath, JSON.stringify(data.index));
 
       // Write state file
       const statePath = path.join(
         this.kernel.storagePaths.pluginRoot,
-        `state-${importedModelKey}.json`
+        `state-${importedModelKey}.json`,
       );
       await fs.promises.writeFile(statePath, JSON.stringify(data.state, null, 2));
 
@@ -458,10 +444,7 @@ export class IndexManager {
   // ============ Private Methods ============
 
   private getStatePath(): string {
-    return path.join(
-      this.kernel.storagePaths.pluginRoot,
-      `state-${this.modelKey}.json`
-    );
+    return path.join(this.kernel.storagePaths.pluginRoot, `state-${this.modelKey}.json`);
   }
 
   private async loadState(): Promise<void> {
@@ -473,9 +456,11 @@ export class IndexManager {
         .access(statePath)
         .then(() => true)
         .catch(() => false);
-      
+
       if (!exists) {
-        console.log(`[IndexManager] No state file found for modelKey=${this.modelKey}, starting fresh`);
+        console.log(
+          `[IndexManager] No state file found for modelKey=${this.modelKey}, starting fresh`,
+        );
         return;
       }
 
@@ -484,7 +469,9 @@ export class IndexManager {
 
       // Validate model key
       if (data.modelKey !== this.modelKey) {
-        console.log(`[IndexManager] Model key mismatch: file=${data.modelKey}, current=${this.modelKey}. Starting fresh.`);
+        console.log(
+          `[IndexManager] Model key mismatch: file=${data.modelKey}, current=${this.modelKey}. Starting fresh.`,
+        );
         return;
       }
 
@@ -498,10 +485,14 @@ export class IndexManager {
 
       // Log crash recovery state
       if (this.indexingInProgress) {
-        console.log(`[IndexManager] Detected interrupted indexing from ${new Date(this.indexingStartedAt ?? 0).toISOString()}`);
+        console.log(
+          `[IndexManager] Detected interrupted indexing from ${new Date(this.indexingStartedAt ?? 0).toISOString()}`,
+        );
       }
 
-      console.log(`[IndexManager] Loaded state: ${this.states.size} notes, modelKey=${this.modelKey}`);
+      console.log(
+        `[IndexManager] Loaded state: ${this.states.size} notes, modelKey=${this.modelKey}`,
+      );
     } catch (error) {
       console.warn("[IndexManager] Failed to load state:", error);
     }
@@ -534,5 +525,15 @@ export class IndexManager {
       this.saveTimer = null;
       void this.saveState();
     }, 2000); // Debounce 2s
+  }
+
+  private async moveToDeleted(filePath: string, reason: string): Promise<void> {
+    const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
+    await fs.promises.mkdir(deletedDir, { recursive: true });
+
+    const base = path.basename(filePath);
+    const target = path.join(deletedDir, `${base}.${reason}.${Date.now()}`);
+    await fs.promises.rename(filePath, target);
+    console.log(`[IndexManager] Moved ${filePath} -> ${target}`);
   }
 }
