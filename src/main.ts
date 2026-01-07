@@ -22,11 +22,13 @@ import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { SearchPipeline } from "./core/search/pipeline";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
-import { AgentTaskQueue } from "./services/agentTaskQueue";
+// New architecture (Phase 1.8)
+import { LMStudioProvider } from "./core/llm";
+import { NotientAgent, AgentTaskQueue } from "./core/agent";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
-import { IndexOptionsModal, IndexOption } from "./views/indexOptionsModal";
+import { IndexOptionsModal } from "./views/indexOptionsModal";
 import { NotientSettingTab, loadSettings, saveSettings } from "./settings";
 import { VIEW_TYPE_SIDEBAR, VIEW_TYPE_DASHBOARD } from "./core/constants";
 import type { NotientSettings } from "./types/settings";
@@ -46,6 +48,9 @@ export default class NotientPlugin extends Plugin {
   private searchPipeline: SearchPipeline | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
+  // New architecture (Phase 1.8)
+  private llmProvider: LMStudioProvider | null = null;
+  private notientAgent: NotientAgent | null = null;
   private agentTaskQueue: AgentTaskQueue | null = null;
 
   private servicesInitialized = false;
@@ -115,6 +120,9 @@ export default class NotientPlugin extends Plugin {
 
     try {
       // Dispose services in reverse order
+      this.agentTaskQueue = null;
+      this.notientAgent = null;
+      this.llmProvider?.dispose();
       this.vaultVitals?.dispose();
       this.contextBuilder = null;
       this.searchPipeline?.dispose();
@@ -245,8 +253,31 @@ export default class NotientPlugin extends Plugin {
         );
         this.kernel.registerService("vitals", this.vaultVitals);
 
-        // Agent Task Queue
-        this.agentTaskQueue = new AgentTaskQueue(this.kernel);
+        // New architecture (Phase 1.8): LLM Provider + Notient Agent
+        this.llmProvider = new LMStudioProvider(
+          this.settings.lmstudio.host,
+          this.settings.lmstudio.reasoningModel
+        );
+        try {
+          await this.llmProvider.initialize();
+          this.kernel.registerService("llmProvider", this.llmProvider);
+          console.log("[Notient] LLM Provider initialized (new architecture)");
+        } catch (llmError) {
+          console.warn("[Notient] LLM Provider initialization failed:", llmError);
+          // Fall back to old service for backward compatibility
+        }
+
+        // Create NotientAgent (uses LLM provider, search, context)
+        this.notientAgent = new NotientAgent(
+          this.llmProvider!,
+          this.searchPipeline,
+          this.contextBuilder,
+          this.kernel.obsidian
+        );
+        this.kernel.registerService("agent", this.notientAgent);
+
+        // Agent Task Queue (new architecture)
+        this.agentTaskQueue = new AgentTaskQueue(this.notientAgent, eventBus);
         this.kernel.registerService("taskQueue", this.agentTaskQueue);
 
         this.servicesInitialized = true;
@@ -522,6 +553,9 @@ export default class NotientPlugin extends Plugin {
   private async reinitializeServices(): Promise<void> {
     try {
       // Dispose old services
+      this.agentTaskQueue = null;
+      this.notientAgent = null;
+      this.llmProvider?.dispose();
       this.searchPipeline?.dispose();
       this.contextBuilder = null;
       this.indexer?.dispose();
@@ -534,6 +568,7 @@ export default class NotientPlugin extends Plugin {
       this.lmStudioService?.dispose();
       this.ollamaService?.dispose();
 
+      this.llmProvider = null;
       this.searchPipeline = null;
       this.contextBuilder = null;
       this.indexer = null;
@@ -583,8 +618,9 @@ export default class NotientPlugin extends Plugin {
 
   /**
    * Show index options modal (for manual trigger from settings/commands)
+   * @internal Reserved for future use in settings UI
    */
-  private async showIndexOptionsAndStart(): Promise<void> {
+  private async _showIndexOptionsAndStart(): Promise<void> {
     if (!this.indexManager) return;
 
     const stats = await this.indexManager.getStats();

@@ -1,24 +1,16 @@
-import type { ChatMessage } from "../services/lmstudio";
+/**
+ * Agent Task Types (Legacy)
+ *
+ * @deprecated Use core/agent/types.ts for new code.
+ * This file re-exports from the new location for backward compatibility.
+ */
 
-export type AgentType = 'search' | 'context' | 'chat';
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type {
+  AgentType,
+  TaskStatus,
+  AgentTask,
+  TaskResult,
+} from "../core/agent/types";
 
-export interface AgentTask {
-    id: string;
-    agent: AgentType;
-    notePath: string;
-    noteTitle: string;
-    status: TaskStatus;
-    progress?: number;        // 0-100 for running tasks
-    startedAt: Date;
-    completedAt?: Date;
-    result?: TaskResult;
-    error?: string;
-    chatHistory: ChatMessage[]; // Per-task conversation
-}
-
-export interface TaskResult {
-    type: 'enrichment' | 'links' | 'classification' | 'chat';
-    data: unknown;           // Varies by type
-    citations: string[];     // Note paths used as RAG context
-}
+// Also re-export ChatMessage for files that import it from here
+export type { ChatMessage } from "../core/llm/types";

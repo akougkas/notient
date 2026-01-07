@@ -6,7 +6,7 @@
  */
 
 import type { Kernel } from "../kernel";
-import type { SearchResult, ParaType } from "../../types/search";
+import type { SearchResult } from "../../types/search";
 import { ParaDetector } from "../para/detector";
 
 export interface VaultContext {
@@ -112,8 +112,6 @@ export class VaultContextBuilder {
 
     for (const c of candidates) {
       if (c.chunks?.[0]) {
-        // Tags are stored in chunk metadata via vector store
-        const chunk = c.chunks[0];
         // Get tags from the chunk's metadata if available
         const metadata = this.kernel.obsidian.getMetadataByPath(c.path);
         const tags = metadata?.tags || [];

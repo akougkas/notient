@@ -66,6 +66,9 @@ export class Kernel {
   private contextBuilder: unknown = null;
   private vaultVitals: unknown = null;
   private agentTaskQueue: unknown = null;
+  // New architecture services (Phase 1.8)
+  private llmProvider: unknown = null;
+  private notientAgent: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -258,6 +261,12 @@ export class Kernel {
       case "taskQueue":
         this.agentTaskQueue = service;
         break;
+      case "llmProvider":
+        this.llmProvider = service;
+        break;
+      case "agent":
+        this.notientAgent = service;
+        break;
     }
   }
 
@@ -286,6 +295,10 @@ export class Kernel {
         return this.vaultVitals as T;
       case "taskQueue":
         return this.agentTaskQueue as T;
+      case "llmProvider":
+        return this.llmProvider as T;
+      case "agent":
+        return this.notientAgent as T;
       default:
         return null;
     }

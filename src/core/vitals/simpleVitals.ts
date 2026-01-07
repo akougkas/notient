@@ -30,7 +30,7 @@ export class SimpleVaultVitals {
   constructor(
     private kernel: Kernel,
     private eventBus: EventBus,
-    private vectorStore: VectorStore,
+    _vectorStore: VectorStore,
     private indexManager: IndexManager
   ) {
     this.paraDetector = new ParaDetector(kernel.settings);

@@ -22,11 +22,12 @@ import {
 } from "obsidian";
 import type { Kernel } from "../core/kernel";
 import type { SearchPipeline } from "../core/search/pipeline";
-import type { LMStudioService, ChatMessage } from "../services/lmstudio";
 import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
 import type { SearchResult } from "../types/search";
-import type { AgentTask, TaskStatus, AgentType } from "../types/agentTask";
-import type { AgentTaskQueue } from "../services/agentTaskQueue";
+// New architecture imports (Phase 1.8)
+import type { AgentType } from "../core/agent/types";
+import type { AgentTaskQueue } from "../core/agent";
+import type { LLMProvider, ChatMessage } from "../core/llm";
 import { VIEW_TYPE_SIDEBAR } from "../core/constants";
 import { ParaDetector } from "../core/para/detector";
 import type { IndexProgress } from "../types/indexer";
@@ -79,7 +80,7 @@ export class NotientSidebarView extends ItemView {
   private isStreaming = false;
   private streamingContent = "";
   private activeAbortController: AbortController | null = null;
-  private lastSearchResults: SearchResult[] = [];
+  private _lastSearchResults: SearchResult[] = [];
 
   // DOM references
   private containerEl_: HTMLElement | null = null;
@@ -129,7 +130,7 @@ export class NotientSidebarView extends ItemView {
   async onClose(): Promise<void> {
     this.cancelStreaming();
     this.chatHistory = [];
-    this.lastSearchResults = [];
+    this._lastSearchResults = [];
   }
 
   // ============ Service Getters ============
@@ -138,8 +139,8 @@ export class NotientSidebarView extends ItemView {
     return this.kernel.getService<SearchPipeline>("search");
   }
 
-  private getLMStudio(): LMStudioService | null {
-    return this.kernel.getService<LMStudioService>("lmstudio");
+  private getLLMProvider(): LLMProvider | null {
+    return this.kernel.getService<LLMProvider>("llmProvider");
   }
 
   private getContextBuilder(): VaultContextBuilder | null {
@@ -653,7 +654,7 @@ export class NotientSidebarView extends ItemView {
         });
       }
 
-      const statusBadge = item.createDiv({
+      item.createDiv({
         cls: `nv2-task-status-foot nv2-status-${task.status}`,
         text: task.status
       });
@@ -980,9 +981,9 @@ export class NotientSidebarView extends ItemView {
     try {
       const results = await searchPipeline.search(query, {
         topK: 8,
-        enableReranking: this.getLMStudio()?.isReady() ?? false,
+        enableReranking: this.getLLMProvider()?.isReady ?? false,
       });
-      this.lastSearchResults = results;
+      this._lastSearchResults = results;
       this.renderSearchResults(results);
     } catch (error) {
       console.error("[Sidebar] Search error:", error);
@@ -1059,17 +1060,18 @@ export class NotientSidebarView extends ItemView {
       this.searchResultsEl.empty();
       this.searchResultsEl.addClass("nv2-hidden");
     }
-    this.lastSearchResults = [];
+    this._lastSearchResults = [];
   }
 
   // ============ Chat / AI Actions ============
 
   /**
-   * Send a query to the AI agent and update activity log
+   * @deprecated Use prefillChatAndSwitch() instead which routes through the agent task queue.
+   * This method is kept for backward compatibility but is not used in the current flow.
    */
-  private async sendQuery(query: string): Promise<void> {
-    const lmStudio = this.getLMStudio();
-    if (!lmStudio?.isReady()) {
+  private async _sendQuery(query: string): Promise<void> {
+    const llmProvider = this.getLLMProvider();
+    if (!llmProvider?.isReady) {
       new Notice("AI unavailable - LM Studio not connected");
       return;
     }
@@ -1110,30 +1112,22 @@ export class NotientSidebarView extends ItemView {
       const contextBuilder = this.getContextBuilder();
       const context = contextBuilder?.buildForQuery(query, searchResults);
 
-      // Build system prompt
-      const relevantNotes = searchResults.map((r) => ({
-        title: r.title,
-        path: r.path,
-        text: r.chunks[0]?.text || "",
-      }));
-
-      const systemPrompt = lmStudio.buildChatSystemPrompt(
-        context?.contextSummary || "No vault context available.",
-        relevantNotes
-      );
-
-      // Build messages
+      // Build simple messages (prompt building is now in NotientAgent)
       const messages: ChatMessage[] = [
-        { role: "system", content: systemPrompt },
+        { 
+          role: "system", 
+          content: `You are Notient, an AI assistant for an Obsidian vault.\n\nContext: ${context?.contextSummary || "No context available."}` 
+        },
         ...this.chatHistory.slice(-10).map((m) => ({
           role: m.role,
           content: m.content,
         })),
       ];
 
-      // Stream response
-      for await (const chunk of lmStudio.chatStream(
+      // Stream response using new LLM provider
+      for await (const chunk of llmProvider.stream(
         messages,
+        undefined,
         this.activeAbortController.signal
       )) {
         if (this.activeAbortController.signal.aborted) break;

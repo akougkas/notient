@@ -6,7 +6,7 @@
  */
 
 import { App, Modal } from "obsidian";
-import type { IndexStats, IndexState } from "../services/indexManager";
+import type { IndexStats } from "../services/indexManager";
 
 export type IndexOption = "use_existing" | "resume" | "rebuild" | "cancel";
 

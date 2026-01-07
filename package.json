@@ -3,13 +3,18 @@
   "version": "0.1.0",
   "description": "AI-powered vault management using local LLMs only",
   "main": "main.js",
+  "type": "module",
   "scripts": {
     "dev": "./watch.sh",
-    "build": "bun run esbuild.config.ts",
+    "build": "bun run build:check && bun run build:bundle",
+    "build:check": "tsc --noEmit",
+    "build:bundle": "bun run esbuild.config.ts",
     "deploy": "./dev.sh",
     "test": "bun test",
-    "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write src/"
   },
   "keywords": [
     "obsidian",
@@ -21,13 +26,13 @@
   "author": "Anthony Kougkas",
   "license": "MIT",
   "devDependencies": {
+    "@biomejs/biome": "1.9.0",
     "@types/node": "^20.10.0",
     "bun-types": "^1.0.18",
     "esbuild": "^0.19.8",
-    "eslint": "^8.55.0",
     "obsidian": "^1.4.11",
     "tslib": "^2.6.2",
-    "typescript": "^5.3.2"
+    "typescript": "^5.6.0"
   },
   "dependencies": {
     "@lmstudio/sdk": "^0.3.0",

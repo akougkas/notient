@@ -295,7 +295,7 @@ export class NotientDashboardView extends ItemView {
     for (const item of items) {
       const row = list.createDiv({ cls: "notient-para-row" });
       
-      const label = row.createSpan({ text: item.label, cls: "notient-para-label" });
+      row.createSpan({ text: item.label, cls: "notient-para-label" });
       
       const barContainer = row.createDiv({ cls: "notient-para-bar-container" });
       const bar = barContainer.createDiv({ cls: "notient-para-bar" });

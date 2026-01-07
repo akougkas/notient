@@ -1,20 +1,22 @@
 /**
- * LM Studio Reasoning Service (Legacy)
+ * OpenAI-Compatible Provider
  *
- * @deprecated Use core/llm/providers/lmstudio.ts for new code.
- * This file is kept for backward compatibility with SearchPipeline.
- * Contains ONLY API wrapper logic - NO Notient-specific code.
+ * Base provider for any OpenAI-compatible API (LM Studio, Ollama, vLLM, etc.)
+ * Contains ONLY HTTP/streaming logic - NO Notient-specific code.
  *
- * For prompt building and task inference, use:
- * - core/agent/promptBuilder.ts
- * - core/agent/taskInference.ts
+ * This is a thin wrapper that handles:
+ * - HTTP requests to /v1/chat/completions
+ * - Streaming SSE parsing
+ * - Error handling
  */
 
-import type { Kernel } from "../core/kernel";
-
-// Re-export types from new architecture for backward compatibility
-export type { ChatMessage, RankedResult, RerankCandidate } from "../core/llm/types";
-import type { ChatMessage, RankedResult, RerankCandidate } from "../core/llm/types";
+import type { LLMProvider } from "../provider";
+import type {
+  ChatMessage,
+  CompletionOptions,
+  RankedResult,
+  RerankCandidate,
+} from "../types";
 
 const RERANK_SYSTEM_PROMPT = `You rank search results by relevance. Output ONLY valid JSON.
 
@@ -28,59 +30,55 @@ Rules:
 - Only include relevant results (score >= 30)`;
 
 /**
- * LM Studio Service - provides reasoning capabilities
- *
- * @deprecated Use LMStudioProvider from core/llm for new code.
- * This service is kept for SearchPipeline compatibility.
+ * Base provider for OpenAI-compatible APIs
  */
-export class LMStudioService {
-  private baseUrl: string = "";
-  private model: string = "";
-  private disposed = false;
-  private initialized = false;
+export class OpenAICompatibleProvider implements LLMProvider {
+  protected disposed = false;
+  protected initialized = false;
 
-  constructor(private kernel: Kernel) {}
+  constructor(
+    protected baseUrl: string,
+    protected model: string,
+    public readonly name: string = "openai-compatible"
+  ) {}
+
+  get isReady(): boolean {
+    return this.initialized && !this.disposed;
+  }
 
   async initialize(): Promise<void> {
     if (this.disposed) return;
 
-    const settings = this.kernel.settings;
-    this.baseUrl = settings.lmstudio.host;
-    this.model = settings.lmstudio.reasoningModel;
-
     if (!this.baseUrl || !this.model) {
-      throw new Error("LM Studio not configured");
+      throw new Error(`${this.name} not configured: missing baseUrl or model`);
     }
 
     // Verify connectivity
-    try {
-      await this.listModels();
-      this.initialized = true;
-      console.log(`[LMStudioService] Initialized with model=${this.model}`);
-    } catch (error) {
-      console.error("[LMStudioService] Failed to connect:", error);
-      throw error;
-    }
+    await this.listModels();
+    this.initialized = true;
+    console.log(`[${this.name}] Initialized with model=${this.model}`);
   }
 
-  /**
-   * List available models from LM Studio
-   */
+  dispose(): void {
+    this.disposed = true;
+    this.initialized = false;
+  }
+
   async listModels(): Promise<string[]> {
     const response = await fetch(`${this.baseUrl}/v1/models`);
     if (!response.ok) {
-      throw new Error(`LM Studio API error: ${response.status}`);
+      throw new Error(`${this.name} API error: ${response.status}`);
     }
     const data = await response.json();
     return data.data.map((m: { id: string }) => m.id);
   }
 
-  /**
-   * Simple chat completion (non-streaming)
-   */
-  async chat(messages: ChatMessage[]): Promise<string> {
+  async complete(
+    messages: ChatMessage[],
+    options?: CompletionOptions
+  ): Promise<string> {
     if (this.disposed || !this.initialized) {
-      throw new Error("LMStudioService not initialized");
+      throw new Error(`${this.name} not initialized`);
     }
 
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
@@ -89,15 +87,16 @@ export class LMStudioService {
       body: JSON.stringify({
         model: this.model,
         messages,
-        temperature: 0.7,
-        max_tokens: 1500,
+        temperature: options?.temperature ?? 0.7,
+        max_tokens: options?.maxTokens ?? 1500,
+        stop: options?.stopSequences,
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "unknown");
-      console.error("[LMStudioService] Chat error:", response.status, errorText);
-      throw new Error(`LM Studio chat error: ${response.status}`);
+      console.error(`[${this.name}] Completion error:`, response.status, errorText);
+      throw new Error(`${this.name} completion error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -105,7 +104,7 @@ export class LMStudioService {
 
     if (!content) {
       console.warn(
-        "[LMStudioService] Empty content in response. Full response:",
+        `[${this.name}] Empty content in response. Full response:`,
         JSON.stringify(data).slice(0, 500)
       );
     }
@@ -113,19 +112,16 @@ export class LMStudioService {
     return content;
   }
 
-  /**
-   * Streaming chat completion with optional abort support
-   * @param messages - Chat messages to send
-   * @param signal - Optional AbortSignal for cancellation
-   */
-  async *chatStream(
+  async *stream(
     messages: ChatMessage[],
+    options?: CompletionOptions,
     signal?: AbortSignal
   ): AsyncIterable<string> {
     if (this.disposed || !this.initialized) {
-      throw new Error("LMStudioService not initialized");
+      throw new Error(`${this.name} not initialized`);
     }
 
+    // Check if already aborted before starting
     if (signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
@@ -136,15 +132,16 @@ export class LMStudioService {
       body: JSON.stringify({
         model: this.model,
         messages,
-        temperature: 0.7,
-        max_tokens: 1500,
+        temperature: options?.temperature ?? 0.7,
+        max_tokens: options?.maxTokens ?? 1500,
+        stop: options?.stopSequences,
         stream: true,
       }),
       signal,
     });
 
     if (!response.ok) {
-      throw new Error(`LM Studio stream error: ${response.status}`);
+      throw new Error(`${this.name} stream error: ${response.status}`);
     }
 
     const reader = response.body?.getReader();
@@ -155,6 +152,7 @@ export class LMStudioService {
 
     try {
       while (true) {
+        // Check abort status before each read
         if (signal?.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
@@ -164,6 +162,7 @@ export class LMStudioService {
 
         buffer += decoder.decode(value, { stream: true });
 
+        // Parse SSE format
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
@@ -195,34 +194,41 @@ export class LMStudioService {
     candidates: RerankCandidate[]
   ): Promise<RankedResult[]> {
     if (this.disposed || !this.initialized) {
+      // Return original order if service unavailable
       return this.fallbackToVectorScores(candidates);
     }
 
     if (candidates.length === 0) return [];
 
+    // Limit candidates for efficient reranking
     const topCandidates = candidates.slice(0, 10);
     const prompt = this.buildRerankPrompt(query, topCandidates);
 
     try {
-      const response = await this.chat([
-        { role: "system", content: RERANK_SYSTEM_PROMPT },
-        { role: "user", content: prompt },
-      ]);
+      const response = await this.complete(
+        [
+          { role: "system", content: RERANK_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        { temperature: 0.3, maxTokens: 500 }
+      );
 
-      if (!response || response.trim().length === 0) {
-        console.warn("[LMStudioService] Empty response from LLM, using vector scores");
+      if (!response || response.trim().length < 10) {
+        console.warn(`[${this.name}] Empty rerank response, using vector scores`);
         return this.fallbackToVectorScores(topCandidates);
       }
 
-      console.log("[LMStudioService] Rerank response length:", response.length);
       return this.parseRerankResponse(response, topCandidates);
     } catch (error) {
-      console.error("[LMStudioService] Rerank failed:", error);
+      console.error(`[${this.name}] Rerank failed:`, error);
       return this.fallbackToVectorScores(topCandidates);
     }
   }
 
-  private fallbackToVectorScores(candidates: RerankCandidate[]): RankedResult[] {
+  /**
+   * Fallback to vector similarity scores
+   */
+  protected fallbackToVectorScores(candidates: RerankCandidate[]): RankedResult[] {
     return candidates.map((c) => ({
       noteId: c.noteId,
       path: c.path,
@@ -232,7 +238,10 @@ export class LMStudioService {
     }));
   }
 
-  private buildRerankPrompt(query: string, candidates: RerankCandidate[]): string {
+  /**
+   * Build prompt for reranking
+   */
+  protected buildRerankPrompt(query: string, candidates: RerankCandidate[]): string {
     const candidateList = candidates
       .map((c, i) => {
         const preview = c.text.slice(0, 150).replace(/\n/g, " ").trim();
@@ -247,31 +256,32 @@ ${candidateList}
 Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"reason":"best match"}]}`;
   }
 
-  private parseRerankResponse(
+  /**
+   * Parse LLM reranking response
+   */
+  protected parseRerankResponse(
     response: string,
     candidates: RerankCandidate[]
   ): RankedResult[] {
     try {
-      if (!response || response.trim().length < 10) {
-        console.warn("[LMStudioService] Response too short:", response);
-        return this.fallbackToVectorScores(candidates);
-      }
-
       let jsonStr = response.trim();
 
+      // Remove markdown code blocks
       const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) {
         jsonStr = jsonMatch[1].trim();
       }
 
+      // Try to find JSON object in response
       const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
       if (objectMatch) {
         jsonStr = objectMatch[0];
       } else {
-        console.warn("[LMStudioService] No JSON object found in response");
+        console.warn(`[${this.name}] No JSON object found in rerank response`);
         return this.fallbackToVectorScores(candidates);
       }
 
+      // Try to parse - handle incomplete JSON
       let parsed: { rankings?: Array<{ index: number; score: number; reason?: string }> };
       try {
         parsed = JSON.parse(jsonStr);
@@ -285,10 +295,11 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
       }
 
       if (!parsed.rankings || !Array.isArray(parsed.rankings)) {
-        console.warn("[LMStudioService] No rankings array in response");
+        console.warn(`[${this.name}] No rankings array in response`);
         return this.fallbackToVectorScores(candidates);
       }
 
+      // Map rankings back to candidates
       const results: RankedResult[] = [];
       for (const ranking of parsed.rankings) {
         const idx =
@@ -308,27 +319,30 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
             noteId: candidate.noteId,
             path: candidate.path,
             title: candidate.title,
-            score: score / 100,
+            score: score / 100, // Normalize to 0-1
             reasoning: ranking.reason || "Relevant",
           });
         }
       }
 
       if (results.length === 0) {
-        console.warn("[LMStudioService] No valid rankings extracted");
+        console.warn(`[${this.name}] No valid rankings extracted`);
         return this.fallbackToVectorScores(candidates);
       }
 
       results.sort((a, b) => b.score - a.score);
-      console.log(`[LMStudioService] Reranked ${results.length} results`);
+      console.log(`[${this.name}] Reranked ${results.length} results`);
       return results;
     } catch (error) {
-      console.warn("[LMStudioService] Failed to parse rerank response:", error);
+      console.warn(`[${this.name}] Failed to parse rerank response:`, error);
       return this.fallbackToVectorScores(candidates);
     }
   }
 
-  private tryFixIncompleteJson(jsonStr: string): string | null {
+  /**
+   * Try to fix incomplete JSON (missing closing brackets)
+   */
+  protected tryFixIncompleteJson(jsonStr: string): string | null {
     try {
       const openBraces = (jsonStr.match(/\{/g) || []).length;
       const closeBraces = (jsonStr.match(/\}/g) || []).length;
@@ -349,20 +363,5 @@ Return JSON with rankings array. Example: {"rankings":[{"index":0,"score":90,"re
     } catch {
       return null;
     }
-  }
-
-  /**
-   * Check if service is ready
-   */
-  isReady(): boolean {
-    return this.initialized && !this.disposed;
-  }
-
-  /**
-   * Dispose of the service
-   */
-  dispose(): void {
-    this.disposed = true;
-    this.initialized = false;
   }
 }

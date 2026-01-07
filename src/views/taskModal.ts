@@ -1,9 +1,8 @@
 import { Modal, App, TextAreaComponent, ButtonComponent, setIcon } from "obsidian";
-import type { AgentTask } from "../types/agentTask";
 import type { Kernel } from "../core/kernel";
-import type { LMStudioService, ChatMessage } from "../services/lmstudio";
-import type { SearchPipeline } from "../core/search/pipeline";
-import type { VaultContextBuilder } from "../core/context/vaultContextBuilder";
+import type { AgentTask } from "../core/agent/types";
+import type { NotientAgent } from "../core/agent";
+import { ChatSession } from "../core/chat";
 
 export class TaskModal extends Modal {
     private chatContainerEl: HTMLElement | null = null;
@@ -15,8 +14,14 @@ export class TaskModal extends Modal {
     private streamingContent = "";
     private notePreviewContent: string | null = null;
 
+    // New architecture: ChatSession for history management
+    private session: ChatSession;
+
     constructor(app: App, private kernel: Kernel, private task: AgentTask) {
         super(app);
+        // Initialize chat session with existing task history
+        this.session = new ChatSession({ maxHistoryLength: 100, maxLLMMessages: 10 });
+        this.session.importFromChatMessages(task.chatHistory);
     }
 
     async onOpen(): Promise<void> {
@@ -256,27 +261,26 @@ export class TaskModal extends Modal {
         this.inputEl.value = "";
         this.inputEl.style.height = "auto";
 
-        // Add user message
-        this.task.chatHistory.push({
-            role: 'user',
-            content: text
-        });
+        // Add user message using ChatSession
+        this.session.addUserMessage(text);
+        this.task.chatHistory = this.session.getMessagesForLLM();
 
         // Re-render chat to show user message
         this.renderChatHistory();
         this.scrollToBottom();
 
-        // Call LLM
+        // Call agent for response
         await this.generateResponse();
     }
 
+    /**
+     * Generate AI response using NotientAgent (new architecture)
+     * UI-only: delegates all AI logic to the agent
+     */
     private async generateResponse(): Promise<void> {
-        const lmStudio = this.kernel.getService<LMStudioService>("lmstudio");
-        if (!lmStudio?.isReady()) {
-            this.task.chatHistory.push({
-                role: 'assistant',
-                content: "Error: AI service not available. Please check your LM Studio connection."
-            });
+        const agent = this.kernel.getService<NotientAgent>("agent");
+        if (!agent) {
+            this.addErrorMessage("Error: AI service not available. Please check your LM Studio connection.");
             this.renderChatHistory();
             return;
         }
@@ -292,111 +296,42 @@ export class TaskModal extends Modal {
         }
 
         try {
-            // Build context for the response
-            const searchPipeline = this.kernel.getService<SearchPipeline>("search");
-            const contextBuilder = this.kernel.getService<VaultContextBuilder>("context");
-
-            // Get the last user query
-            const userMessages = this.task.chatHistory.filter(m => m.role === 'user');
-            const query = userMessages[userMessages.length - 1]?.content || "";
-
-            // CRITICAL: Load the current note content (use cached version if we have it)
-            let currentNoteData: { title: string; path: string; content: string } | undefined;
-            
-            if (this.task.notePath && this.task.notePath !== "unknown") {
-                try {
-                    // Use the full note content, not just the truncated preview
-                    const content = await this.kernel.obsidian.readFileByPath(this.task.notePath);
-                    if (content) {
-                        currentNoteData = {
-                            title: this.task.noteTitle,
-                            path: this.task.notePath,
-                            content: content,
-                        };
-                    }
-                } catch {
-                    // Proceed without current note
-                }
-            }
-
-            let contextSummary = "No vault context available.";
-            const relevantNotes: Array<{ title: string; path: string; text: string }> = [];
-
-            // Search for related context
-            if (searchPipeline && query) {
-                try {
-                    // Search using query + note title for better related content
-                    const searchQuery = currentNoteData 
-                        ? `${query} ${currentNoteData.title}` 
-                        : query;
-                        
-                    const results = await searchPipeline.search(searchQuery, { 
-                        topK: 7, 
-                        enableReranking: true 
-                    });
-                    
-                    if (contextBuilder && results.length > 0) {
-                        const ctx = contextBuilder.buildForQuery(query, results);
-                        contextSummary = ctx?.contextSummary || contextSummary;
-                    }
-                    
-                    // Add related notes (exclude current note)
-                    for (const r of results) {
-                        if (currentNoteData && r.path === currentNoteData.path) continue;
-                        if (relevantNotes.length >= 5) break;
-                        
-                        relevantNotes.push({
-                            title: r.title,
-                            path: r.path,
-                            text: r.chunks[0]?.text || "",
-                        });
-                    }
-                } catch {
-                    // Continue without RAG context
-                }
-            }
-
-            // Build system prompt with FULL vault awareness
-            const systemPrompt = lmStudio.buildChatSystemPrompt(
-                contextSummary, 
-                relevantNotes,
-                currentNoteData,  // Include the actual note content!
-                query             // Include query for task instructions
-            );
-
-            // Build messages (last 10 for sliding window)
-            const messages: ChatMessage[] = [
-                { role: 'system', content: systemPrompt },
-                ...this.task.chatHistory.slice(-10).map(m => ({
-                    role: m.role as 'user' | 'assistant' | 'system',
-                    content: m.content,
-                })),
-            ];
-
-            // Stream the response
-            for await (const chunk of lmStudio.chatStream(messages, this.abortController.signal)) {
+            // Use the agent to execute with streaming
+            // The agent handles: context building, search, prompt construction
+            for await (const event of agent.executeStreaming(this.task, this.abortController.signal)) {
                 if (!this.isStreamActive) break;
 
-                this.streamingContent += chunk;
-                this.updateStreamingBubble();
-                this.scrollToBottom();
-            }
+                switch (event.type) {
+                    case "chunk":
+                        this.streamingContent += event.content;
+                        this.updateStreamingBubble();
+                        this.scrollToBottom();
+                        break;
 
-            // If completed successfully (not cancelled), save the response
-            if (this.isStreamActive && this.streamingContent) {
-                this.task.chatHistory.push({
-                    role: 'assistant',
-                    content: this.streamingContent,
-                });
+                    case "citations":
+                        // Update task with citations for display
+                        if (!this.task.result) {
+                            this.task.result = { type: "chat", data: "", citations: [] };
+                        }
+                        this.task.result.citations = event.paths;
+                        break;
+
+                    case "complete":
+                        // Save the complete response
+                        this.session.addAssistantMessage(event.result.data as string);
+                        this.task.chatHistory = this.session.getMessagesForLLM();
+                        this.task.result = event.result;
+                        break;
+
+                    case "error":
+                        throw event.error;
+                }
             }
 
         } catch (error) {
-            if ((error as Error).name !== 'AbortError') {
+            if ((error as Error).name !== "AbortError") {
                 // Real error - add error message
-                this.task.chatHistory.push({
-                    role: 'assistant',
-                    content: `Error: ${(error as Error).message || 'Unknown error'}`,
-                });
+                this.addErrorMessage(`Error: ${(error as Error).message || "Unknown error"}`);
             }
             // If AbortError, we intentionally don't save the partial response
         } finally {
@@ -417,8 +352,16 @@ export class TaskModal extends Modal {
             this.scrollToBottom();
 
             // Emit update so sidebar reflects changes
-            this.kernel.eventBus.emit('agent:task-update', { task: this.task });
+            this.kernel.eventBus.emit("agent:task-update", { task: this.task });
         }
+    }
+
+    /**
+     * Helper to add an error message to chat
+     */
+    private addErrorMessage(content: string): void {
+        this.session.addAssistantMessage(content);
+        this.task.chatHistory = this.session.getMessagesForLLM();
     }
 
     /**
