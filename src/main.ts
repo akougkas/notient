@@ -27,7 +27,7 @@ import { LMStudioProvider } from "./core/llm";
 import { NotientAgent, AgentTaskQueue } from "./core/agent";
 // Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
-import { ActionHistory, ActionApplier, TrustLevelManager } from "./core/agentic";
+import { ActionHistory, ActionApplier, TrustLevelManager, WorkflowRunner } from "./core/agentic";
 import { NotientSidebarView } from "./views/sidebar";
 import { NotientDashboardView } from "./views/dashboard";
 import { SetupWizardModal } from "./views/setupWizard";
@@ -61,6 +61,7 @@ export default class NotientPlugin extends Plugin {
   private actionHistory: ActionHistory | null = null;
   private trustLevelManager: TrustLevelManager | null = null;
   private actionApplier: ActionApplier | null = null;
+  private workflowRunner: WorkflowRunner | null = null;
 
   private servicesInitialized = false;
 
@@ -130,6 +131,10 @@ export default class NotientPlugin extends Plugin {
     try {
       // Dispose services in reverse order
       // Phase 2: Flush agentic services first
+      if (this.workflowRunner) {
+        this.workflowRunner.dispose();
+        this.workflowRunner = null;
+      }
       if (this.actionApplier) {
         this.actionApplier = null;
       }
@@ -314,6 +319,7 @@ export default class NotientPlugin extends Plugin {
           }
         );
         await this.conversationStore.load();
+        this.conversationStore.prune(); // Enforce retention limits on startup
         this.kernel.registerService("conversationStore", this.conversationStore);
 
         // Wire conversation store to task queue
@@ -344,6 +350,7 @@ export default class NotientPlugin extends Plugin {
           }
         );
         await this.actionHistory.load();
+        this.actionHistory.prune(); // Enforce retention limits on startup
         this.kernel.registerService("actionHistory", this.actionHistory);
 
         // ActionApplier (applies actions to notes)
@@ -354,6 +361,19 @@ export default class NotientPlugin extends Plugin {
           this.trustLevelManager
         );
         this.kernel.registerService("actionApplier", this.actionApplier);
+
+        // WorkflowRunner (Milestone 2.4: bulk operations)
+        this.workflowRunner = new WorkflowRunner(
+          this.kernel,
+          eventBus,
+          this.agentTaskQueue,
+          this.kernel.obsidian,
+          {
+            maxNotesPerWorkflow: this.settings.agent.bulk.maxNotesPerWorkflow,
+            delayBetweenTasksMs: this.settings.agent.bulk.delayBetweenTasksMs,
+          }
+        );
+        this.kernel.registerService("workflowRunner", this.workflowRunner);
 
         console.log("[Notient] Phase 2 agentic services initialized");
 
@@ -631,6 +651,10 @@ export default class NotientPlugin extends Plugin {
     try {
       // Dispose old services
       // Phase 2: Flush agentic services first
+      if (this.workflowRunner) {
+        this.workflowRunner.dispose();
+        this.workflowRunner = null;
+      }
       if (this.actionApplier) {
         this.actionApplier = null;
       }

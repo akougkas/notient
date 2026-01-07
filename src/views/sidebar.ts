@@ -32,6 +32,10 @@ import { VIEW_TYPE_SIDEBAR } from "../core/constants";
 import { ParaDetector } from "../core/para/detector";
 import type { IndexProgress } from "../types/indexer";
 import { TaskModal } from "./taskModal";
+// Phase 2: Workflow support (Milestone 2.4)
+import type { WorkflowRunner } from "../core/agentic/workflowRunner";
+import type { WorkflowRun } from "../core/agentic/types";
+import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser";
 
 // ============ Types ============
 
@@ -145,6 +149,10 @@ export class NotientSidebarView extends ItemView {
 
   private getContextBuilder(): VaultContextBuilder | null {
     return this.kernel.getService<VaultContextBuilder>("context");
+  }
+
+  private getWorkflowRunner(): WorkflowRunner | null {
+    return this.kernel.getService<WorkflowRunner>("workflowRunner");
   }
 
   // ============ Main Render ============
@@ -344,12 +352,17 @@ export class NotientSidebarView extends ItemView {
 
     this.omnibarInputEl = wrapper.createEl("input", {
       type: "text",
-      placeholder: "Search Notient...",
+      placeholder: "Search or /command...",
       cls: "nv2-search-input notient-search-input",
     });
 
     const debouncedSearch = debounce(
       async (query: string) => {
+        // Don't search for slash commands
+        if (isSlashCommand(query)) {
+          this.clearSearchResults();
+          return;
+        }
         if (query.length >= 2) {
           await this.performSearch(query);
         } else {
@@ -367,10 +380,63 @@ export class NotientSidebarView extends ItemView {
 
     this.omnibarInputEl.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        this.omnibarInputEl!.value = "";
+        if (this.omnibarInputEl) this.omnibarInputEl.value = "";
         this.clearSearchResults();
+      } else if (e.key === "Enter") {
+        const query = this.omnibarInputEl?.value.trim() || "";
+        if (isSlashCommand(query)) {
+          e.preventDefault();
+          void this.handleSlashCommand(query);
+        }
       }
     });
+  }
+
+  /**
+   * Handle slash command execution
+   */
+  private async handleSlashCommand(input: string): Promise<void> {
+    const workflowRunner = this.getWorkflowRunner();
+    if (!workflowRunner) {
+      new Notice("Workflow system not available. Services may still be initializing.");
+      return;
+    }
+
+    // Parse the command
+    const result = parseSlashCommand(input, this.kernel.obsidian);
+
+    if (!result.success) {
+      new Notice(`Command error: ${result.error.message}`);
+      return;
+    }
+
+    const parsed = result.parsed;
+
+    // Start the workflow
+    const startResult = await workflowRunner.startFromCommand(parsed);
+
+    if (!startResult.success) {
+      new Notice(`Workflow error: ${startResult.error}`);
+      return;
+    }
+
+    // Clear input and show success
+    if (this.omnibarInputEl) {
+      this.omnibarInputEl.value = "";
+    }
+    this.clearSearchResults();
+
+    const scopeText =
+      parsed.scope === "vault"
+        ? "entire vault"
+        : `folder "${parsed.target}"`;
+    new Notice(
+      `Started ${parsed.command} workflow on ${scopeText} (${startResult.noteCount} notes)`
+    );
+
+    // Switch to agents view to show progress
+    this.currentView = "agents";
+    this.render();
   }
 
   private renderInsightStream(): void {
@@ -514,11 +580,153 @@ export class NotientSidebarView extends ItemView {
     // Status bar
     this.renderAgentStatusBar();
 
+    // Active Workflow (if any)
+    this.renderActiveWorkflow();
+
     // Agent Dashboard (service status cards)
     this.renderAgentDashboardSection();
 
     // Agent Activity Log
     this.renderAgentActivityLog();
+  }
+
+  /**
+   * Render the active workflow card (if any)
+   */
+  private renderActiveWorkflow(): void {
+    if (!this.contentEl_) return;
+
+    const workflowRunner = this.getWorkflowRunner();
+    if (!workflowRunner) return;
+
+    const currentWorkflow = workflowRunner.getCurrentWorkflow();
+    const queuedWorkflows = workflowRunner.getQueuedWorkflows();
+
+    if (!currentWorkflow && queuedWorkflows.length === 0) return;
+
+    const section = this.contentEl_.createDiv({ cls: "nv2-section" });
+    section.createDiv({ cls: "nv2-section-label", text: "Active Workflows" });
+
+    const container = section.createDiv({ cls: "nv2-workflow-container" });
+
+    // Render current workflow
+    if (currentWorkflow) {
+      this.renderWorkflowCard(container, currentWorkflow, true);
+    }
+
+    // Render queued workflows
+    for (const workflow of queuedWorkflows) {
+      this.renderWorkflowCard(container, workflow, false);
+    }
+  }
+
+  /**
+   * Render a single workflow card
+   */
+  private renderWorkflowCard(
+    container: HTMLElement,
+    workflow: WorkflowRun,
+    isActive: boolean
+  ): void {
+    const card = container.createDiv({
+      cls: `nv2-workflow-card ${isActive ? "nv2-workflow-card--active" : ""}`,
+    });
+
+    // Header with command name and scope
+    const header = card.createDiv({ cls: "nv2-workflow-header" });
+    const titleEl = header.createDiv({ cls: "nv2-workflow-title" });
+
+    const iconEl = titleEl.createSpan({ cls: "nv2-workflow-icon" });
+    setIcon(iconEl, this.getWorkflowIcon(workflow.spec.command));
+
+    titleEl.createSpan({
+      text: `/${workflow.spec.command}`,
+      cls: "nv2-workflow-command",
+    });
+
+    const scopeText =
+      workflow.spec.scope === "vault"
+        ? "vault"
+        : workflow.spec.targets.length === 1
+          ? workflow.spec.targets[0].split("/").pop() || "note"
+          : `${workflow.spec.targets.length} notes`;
+    titleEl.createSpan({
+      text: ` on ${scopeText}`,
+      cls: "nv2-workflow-scope",
+    });
+
+    // Status badge
+    const statusBadge = header.createDiv({
+      cls: `nv2-workflow-status nv2-workflow-status--${workflow.status}`,
+      text: workflow.status,
+    });
+
+    // Progress section (only for running workflows)
+    if (workflow.status === "running") {
+      const progressContainer = card.createDiv({ cls: "nv2-workflow-progress-container" });
+
+      const progressBar = progressContainer.createDiv({ cls: "nv2-workflow-progress" });
+      const percent = workflow.progress.total > 0
+        ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
+        : 0;
+      progressBar.createDiv({
+        cls: "nv2-workflow-progress-fill",
+        attr: { style: `width: ${percent}%` },
+      });
+
+      const progressText = progressContainer.createDiv({ cls: "nv2-workflow-progress-text" });
+      progressText.setText(
+        `${workflow.progress.completed}/${workflow.progress.total} complete` +
+          (workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : "")
+      );
+    }
+
+    // Actions
+    const actions = card.createDiv({ cls: "nv2-workflow-actions" });
+
+    if (workflow.status === "running" || workflow.status === "queued") {
+      const cancelBtn = actions.createEl("button", {
+        cls: "nv2-workflow-btn nv2-workflow-btn--cancel",
+        text: "Cancel",
+      });
+      cancelBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const workflowRunner = this.getWorkflowRunner();
+        if (workflowRunner) {
+          workflowRunner.cancel(workflow.id);
+          new Notice("Workflow cancelled");
+          this.render();
+        }
+      });
+    }
+
+    // Review queue indicator
+    if (workflow.reviewQueue.length > 0) {
+      const reviewBadge = actions.createDiv({
+        cls: "nv2-workflow-review-badge",
+        text: `${workflow.reviewQueue.length} pending review`,
+      });
+      reviewBadge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        new Notice("Review queue: Open Dashboard to review pending actions");
+      });
+    }
+  }
+
+  /**
+   * Get icon for workflow command
+   */
+  private getWorkflowIcon(command: string): string {
+    switch (command) {
+      case "enrich":
+        return "sparkles";
+      case "classify":
+        return "folder-tree";
+      case "link":
+        return "link";
+      default:
+        return "play";
+    }
   }
 
   private renderAgentStatusBar(): void {
@@ -1246,6 +1454,48 @@ export class NotientSidebarView extends ItemView {
       this.updateFooterStats();
     });
     this.register(() => unsubIndexComplete());
+
+    // Workflow events (Milestone 2.4)
+    const unsubWorkflowStarted = this.kernel.eventBus.on("workflow:started", () => {
+      if (this.currentView === "agents") {
+        this.render();
+      }
+    });
+    this.register(() => unsubWorkflowStarted());
+
+    const unsubWorkflowProgress = this.kernel.eventBus.on("workflow:progress", () => {
+      if (this.currentView === "agents") {
+        this.render();
+      }
+    });
+    this.register(() => unsubWorkflowProgress());
+
+    const unsubWorkflowCompleted = this.kernel.eventBus.on("workflow:completed", (event) => {
+      const { workflow } = event;
+      new Notice(
+        `Workflow complete: ${workflow.progress.completed}/${workflow.progress.total} notes processed` +
+          (workflow.progress.failed > 0 ? ` (${workflow.progress.failed} failed)` : "")
+      );
+      if (this.currentView === "agents") {
+        this.render();
+      }
+    });
+    this.register(() => unsubWorkflowCompleted());
+
+    const unsubWorkflowCancelled = this.kernel.eventBus.on("workflow:cancelled", () => {
+      if (this.currentView === "agents") {
+        this.render();
+      }
+    });
+    this.register(() => unsubWorkflowCancelled());
+
+    const unsubWorkflowFailed = this.kernel.eventBus.on("workflow:failed", (event) => {
+      new Notice(`Workflow failed: ${event.error}`);
+      if (this.currentView === "agents") {
+        this.render();
+      }
+    });
+    this.register(() => unsubWorkflowFailed());
   }
 
   // ============ Metric Actions ============
