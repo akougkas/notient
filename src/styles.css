@@ -2415,3 +2415,1211 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ==========================================================================
+   SIDEBAR V2 - Sentient Notes UI (Phase 1.6)
+   Two-view layout: Note Vitals + Agents Streams
+   Matches exact mockup designs: note-vitals.png & agent-streams.png
+   ========================================================================== */
+
+.notient-sidebar--v2 {
+  /* Design Tokens - Dark Theme (Obsidian-native with Notient accent) */
+  --nv2-bg-primary: var(--background-primary);
+  --nv2-bg-secondary: var(--background-secondary);
+  --nv2-bg-card: var(--background-secondary-alt, var(--background-secondary));
+  --nv2-bg-tertiary: var(--background-modifier-form-field);
+  --nv2-border: var(--background-modifier-border);
+  --nv2-border-subtle: rgba(255, 255, 255, 0.08);
+  --nv2-hover: var(--background-modifier-hover);
+  
+  --nv2-text-primary: var(--text-normal);
+  --nv2-text-secondary: var(--text-muted);
+  --nv2-text-faint: var(--text-faint);
+  
+  /* Notient Brand Accent - Vibrant Green */
+  --nv2-accent: #22c55e;
+  --nv2-accent-rgb: 34, 197, 94;
+  --nv2-accent-dim: rgba(34, 197, 94, 0.12);
+  --nv2-accent-border: rgba(34, 197, 94, 0.45);
+  --nv2-accent-glow: rgba(34, 197, 94, 0.25);
+  --nv2-accent-text: #22c55e;
+  
+  /* Secondary accent - Blue (for Code Assistant etc) */
+  --nv2-blue: #3b82f6;
+  --nv2-blue-border: rgba(59, 130, 246, 0.45);
+  
+  /* Status Colors */
+  --nv2-status-healthy: #22c55e;
+  --nv2-status-warning: #eab308;
+  --nv2-status-error: #ef4444;
+  --nv2-status-idle: var(--text-faint);
+  
+  /* Typography */
+  --nv2-font-xs: 0.6875rem;
+  --nv2-font-sm: 0.75rem;
+  --nv2-font-base: 0.8125rem;
+  --nv2-font-md: 0.875rem;
+  --nv2-font-lg: 1rem;
+  --nv2-font-xl: 1.25rem;
+  --nv2-font-2xl: 1.5rem;
+  --nv2-font-3xl: 1.75rem;
+  
+  /* Spacing */
+  --nv2-space-1: 4px;
+  --nv2-space-2: 8px;
+  --nv2-space-3: 12px;
+  --nv2-space-4: 16px;
+  --nv2-space-5: 20px;
+  --nv2-space-6: 24px;
+  --nv2-space-8: 32px;
+  
+  /* Border Radius */
+  --nv2-radius-sm: 6px;
+  --nv2-radius-md: 10px;
+  --nv2-radius-lg: 14px;
+  --nv2-radius-xl: 18px;
+  --nv2-radius-full: 9999px;
+  
+  /* Layout */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--nv2-bg-primary);
+  font-size: var(--nv2-font-base);
+  color: var(--nv2-text-primary);
+  overflow: hidden;
+}
+
+/* ============ V2 Header ============ */
+
+.nv2-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-1);
+  padding: var(--nv2-space-4) var(--nv2-space-4) var(--nv2-space-3);
+  background: var(--nv2-bg-primary);
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nv2-header-title {
+  font-size: var(--nv2-font-3xl);
+  font-weight: 700;
+  color: var(--nv2-text-primary);
+  line-height: 1.2;
+}
+
+.nv2-header-title .nv2-accent {
+  color: var(--nv2-accent);
+}
+
+.nv2-header-subtitle {
+  font-size: var(--nv2-font-md);
+  color: var(--nv2-text-secondary);
+  font-weight: 400;
+}
+
+/* Hide the tabs in favor of click-to-toggle header */
+.nv2-header-tabs {
+  display: none;
+}
+
+/* Legacy support - hide */
+.nv2-header-left,
+.nv2-header-icon,
+.nv2-header-tab,
+.nv2-header-tab-icon {
+  display: none;
+}
+
+/* ============ V2 Status Bar (Agents view) ============ */
+
+.nv2-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--nv2-space-3) var(--nv2-space-4);
+  background: var(--nv2-bg-card);
+  border-radius: var(--nv2-radius-lg);
+  margin: 0 var(--nv2-space-4) var(--nv2-space-3);
+}
+
+.nv2-status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--nv2-accent);
+  flex-shrink: 0;
+}
+
+.nv2-status-dot--idle {
+  background: var(--nv2-accent);
+}
+
+.nv2-status-dot--running {
+  background: var(--nv2-accent);
+  animation: nv2-pulse 1.5s ease-in-out infinite;
+}
+
+.nv2-status-dot--error {
+  background: var(--nv2-status-error);
+}
+
+.nv2-status-bar-text {
+  font-size: var(--nv2-font-md);
+  color: var(--nv2-text-primary);
+  font-weight: 500;
+}
+
+.nv2-status-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nv2-radius-sm);
+  color: var(--nv2-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nv2-status-bar-btn:hover {
+  background: var(--nv2-hover);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-status-bar-btn .svg-icon {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes nv2-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.95); }
+}
+
+/* ============ V2 Content Area ============ */
+
+.nv2-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: var(--nv2-space-4);
+}
+
+/* ============ V2 Note Context Card (Note Vitals view) ============ */
+
+.nv2-note-card {
+  margin: 0 var(--nv2-space-4) var(--nv2-space-4);
+  padding: var(--nv2-space-4);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-radius: var(--nv2-radius-lg);
+}
+
+.nv2-note-card-title {
+  font-size: var(--nv2-font-lg);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+  margin-bottom: var(--nv2-space-3);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.nv2-note-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nv2-space-2);
+  margin-bottom: var(--nv2-space-4);
+}
+
+.nv2-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--nv2-accent-border);
+  border-radius: var(--nv2-radius-full);
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-accent-text);
+  font-weight: 500;
+}
+
+.nv2-note-card-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-link-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-link-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--nv2-text-secondary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.nv2-link-row-icon .svg-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.nv2-link-row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-link-row-label {
+  font-size: var(--nv2-font-md);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-link-row-preview {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+/* ============ V2 Quick Actions (Note Vitals view) ============ */
+
+.nv2-section {
+  margin: 0 var(--nv2-space-4) var(--nv2-space-4);
+}
+
+.nv2-section-label {
+  font-size: var(--nv2-font-xs);
+  font-weight: 600;
+  color: var(--nv2-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--nv2-space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--nv2-border-subtle);
+}
+
+.nv2-quick-actions {
+  display: flex;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-quick-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-4) var(--nv2-space-3);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-radius: var(--nv2-radius-lg);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nv2-quick-action:hover {
+  border-color: var(--nv2-accent-border);
+  background: var(--nv2-accent-dim);
+}
+
+.nv2-quick-action--primary {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.08) 100%);
+  border-color: var(--nv2-accent-border);
+}
+
+.nv2-quick-action--primary:hover {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3) 0%, rgba(34, 197, 94, 0.12) 100%);
+}
+
+.nv2-quick-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nv2-accent);
+}
+
+.nv2-quick-action-icon .svg-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.nv2-quick-action-label {
+  font-size: var(--nv2-font-md);
+  font-weight: 500;
+  color: var(--nv2-text-primary);
+}
+
+/* ============ V2 Search Bar ============ */
+
+.nv2-search-section {
+  margin: 0 var(--nv2-space-4) var(--nv2-space-4);
+}
+
+.nv2-search-wrapper {
+  position: relative;
+}
+
+.nv2-search-icon {
+  position: absolute;
+  left: var(--nv2-space-4);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--nv2-text-secondary);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nv2-search-icon .svg-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.nv2-search-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--nv2-space-4) 0 48px;
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-radius: var(--nv2-radius-lg);
+  color: var(--nv2-text-primary);
+  font-size: var(--nv2-font-md);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.nv2-search-input::placeholder {
+  color: var(--nv2-text-faint);
+}
+
+.nv2-search-input:focus {
+  outline: none;
+  border-color: var(--nv2-accent-border);
+  box-shadow: 0 0 0 3px var(--nv2-accent-glow);
+}
+
+/* ============ V2 Insight Stream (Note Vitals view) ============ */
+
+.nv2-insight-stream {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-insight {
+  display: flex;
+  gap: var(--nv2-space-3);
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-insight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nv2-accent);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.nv2-insight-dot--secondary {
+  background: var(--nv2-text-faint);
+}
+
+.nv2-insight-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-insight-text {
+  font-size: var(--nv2-font-md);
+  color: var(--nv2-text-primary);
+  line-height: 1.5;
+  margin-bottom: var(--nv2-space-2);
+}
+
+.nv2-insight-text a,
+.nv2-insight-link {
+  color: var(--nv2-accent-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.nv2-insight-text a:hover,
+.nv2-insight-link:hover {
+  text-decoration: none;
+}
+
+.nv2-insight-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nv2-space-1);
+  padding: 4px 10px;
+  background: var(--nv2-bg-tertiary);
+  border: 1px solid var(--nv2-border);
+  border-radius: var(--nv2-radius-full);
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-insight-action:hover {
+  background: var(--nv2-hover);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-insight-action--primary {
+  background: transparent;
+  border-color: transparent;
+  color: var(--nv2-accent-text);
+  padding-left: 0;
+}
+
+.nv2-insight-action--primary:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+
+.nv2-insight-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nv2-insight-action-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* ============ V2 Search Results ============ */
+
+.nv2-search-results {
+  margin: 0 var(--nv2-space-4) var(--nv2-space-4);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.nv2-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-1);
+  padding: var(--nv2-space-3);
+  margin-bottom: var(--nv2-space-2);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-radius: var(--nv2-radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-search-result:hover {
+  border-color: var(--nv2-accent-border);
+  background: var(--nv2-hover);
+}
+
+.nv2-search-result:last-child {
+  margin-bottom: 0;
+}
+
+.nv2-search-result-header {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-search-result-title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-search-result-score {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-accent-text);
+  background: var(--nv2-accent-dim);
+  padding: 3px 8px;
+  border-radius: var(--nv2-radius-full);
+  font-weight: 500;
+}
+
+.nv2-search-result-path {
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-text-faint);
+}
+
+.nv2-search-result-preview {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+  line-height: 1.4;
+}
+
+/* Legacy omnibar/action styles - hide */
+.nv2-omnibar-section,
+.nv2-omnibar-label,
+.nv2-omnibar-wrapper,
+.nv2-omnibar-icon,
+.nv2-omnibar-input,
+.nv2-actions-section,
+.nv2-actions-label,
+.nv2-actions-grid,
+.nv2-action-btn,
+.nv2-action-btn-icon {
+  /* These are replaced by .nv2-search-section and .nv2-quick-actions */
+}
+
+/* ============ V2 Chat Messages (Agents View) ============ */
+
+.nv2-chat-focus {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: var(--nv2-space-2) var(--nv2-space-4) 0;
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-chat-focus-name {
+  color: var(--nv2-accent-text);
+  font-weight: 600;
+}
+
+.nv2-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--nv2-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-2);
+  max-width: 85%;
+}
+
+.nv2-chat-message--user {
+  align-self: flex-end;
+}
+
+.nv2-chat-message--assistant {
+  align-self: flex-start;
+}
+
+.nv2-chat-bubble {
+  padding: var(--nv2-space-3) var(--nv2-space-4);
+  border-radius: var(--nv2-radius-lg);
+  line-height: 1.5;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.nv2-chat-message--user .nv2-chat-bubble {
+  background: rgba(var(--nv2-accent-rgb), 0.10);
+  border: 1px solid rgba(var(--nv2-accent-rgb), 0.25);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm) var(--nv2-radius-lg);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-chat-message--assistant .nv2-chat-bubble {
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm);
+  color: var(--nv2-text-primary);
+}
+
+/* Streaming State */
+.nv2-chat-bubble--streaming {
+  border: 1px solid var(--nv2-accent-border);
+}
+
+.nv2-typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--nv2-text-primary);
+  margin-left: 2px;
+  animation: nv2-blink 1s step-end infinite;
+}
+
+@keyframes nv2-blink {
+  50% { opacity: 0; }
+}
+
+/* Attachments */
+.nv2-chat-attachments {
+  margin-top: var(--nv2-space-2);
+  padding-top: var(--nv2-space-2);
+  border-top: 1px solid var(--nv2-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-1);
+}
+
+.nv2-attachment {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-1) 0;
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-accent-text);
+  cursor: pointer;
+}
+
+.nv2-attachment:hover {
+  text-decoration: underline;
+}
+
+.nv2-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+}
+
+.nv2-attachment-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-attachment-num {
+  font-weight: 600;
+}
+
+/* ============ V2 Chat Input Area ============ */
+
+.nv2-chat-input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-3) var(--nv2-space-4);
+  border-top: 1px solid var(--nv2-border);
+  background: var(--nv2-bg-secondary);
+  flex-shrink: 0;
+}
+
+.nv2-attach-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--nv2-border);
+  border-radius: 50%;
+  color: var(--nv2-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.nv2-attach-btn:hover {
+  background: var(--nv2-hover);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-chat-textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 120px;
+  padding: var(--nv2-space-2) var(--nv2-space-3);
+  background: var(--nv2-bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--nv2-radius-lg);
+  color: var(--nv2-text-primary);
+  font-size: var(--nv2-font-md);
+  resize: none;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.nv2-chat-textarea::placeholder {
+  color: var(--nv2-text-faint);
+}
+
+.nv2-chat-textarea:focus {
+  outline: none;
+  border-color: var(--nv2-accent-border);
+}
+
+.nv2-send-btn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--nv2-accent);
+  border: none;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.nv2-send-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: scale(1.05);
+}
+
+.nv2-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.nv2-send-btn--stop {
+  background: var(--nv2-status-error);
+}
+
+/* Generic icon sizing for Lucide SVGs */
+.nv2-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nv2-icon .svg-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Pending Attachments */
+.nv2-pending-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-2) var(--nv2-space-4);
+  background: var(--nv2-bg-secondary);
+  border-top: 1px solid var(--nv2-border);
+}
+
+.nv2-pending-attachment {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-1);
+  padding: var(--nv2-space-1) var(--nv2-space-2);
+  background: var(--nv2-accent-dim);
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--nv2-font-xs);
+  color: var(--nv2-accent-text);
+}
+
+.nv2-pending-attachment-remove {
+  background: none;
+  border: none;
+  color: var(--nv2-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.nv2-pending-attachment-remove:hover {
+  color: var(--nv2-status-error);
+}
+
+/* ============ V2 Footer (Status Bar) ============ */
+
+.nv2-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--nv2-space-4);
+  background: var(--nv2-bg-primary);
+  border-top: 1px solid var(--nv2-border-subtle);
+  flex-shrink: 0;
+}
+
+.nv2-footer-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-1);
+}
+
+.nv2-footer-service {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-footer-service-status {
+  color: var(--nv2-accent-text);
+  font-weight: 500;
+}
+
+.nv2-footer-service-status--error {
+  color: var(--nv2-status-error);
+}
+
+.nv2-footer-service-status--warning {
+  color: var(--nv2-status-warning);
+}
+
+.nv2-footer-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: none;
+  border: none;
+  color: var(--nv2-text-secondary);
+  cursor: pointer;
+  border-radius: var(--nv2-radius-sm);
+  transition: all 0.15s ease;
+}
+
+.nv2-footer-settings .svg-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.nv2-footer-settings:hover {
+  color: var(--nv2-text-primary);
+  background: var(--nv2-hover);
+}
+
+/* Hide legacy footer dots */
+.nv2-footer-dot {
+  display: none;
+}
+
+/* ============ V2 Empty/Loading States ============ */
+
+.nv2-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--nv2-space-8);
+  text-align: center;
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-empty-state-icon {
+  font-size: 32px;
+  margin-bottom: var(--nv2-space-3);
+  opacity: 0.5;
+}
+
+.nv2-empty-state-text {
+  font-size: var(--nv2-font-sm);
+}
+
+.nv2-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-4);
+  color: var(--nv2-text-secondary);
+}
+
+.nv2-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--nv2-border);
+  border-top-color: var(--nv2-accent);
+  border-radius: 50%;
+  animation: nv2-spin 0.8s linear infinite;
+}
+
+@keyframes nv2-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============ V2 Utility Classes ============ */
+
+.nv2-selectable {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
+}
+
+.nv2-hidden {
+  display: none !important;
+}
+
+/* ============ V2 Attachment Picker Modal ============ */
+
+.nv2-attach-modal {
+  padding: var(--nv2-space-4);
+}
+
+.nv2-attach-modal-title {
+  font-size: var(--nv2-font-lg);
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-4);
+}
+
+.nv2-attach-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-attach-option {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-3);
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border);
+  border-radius: var(--nv2-radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-attach-option:hover {
+  border-color: var(--nv2-accent-border);
+  background: var(--nv2-hover);
+}
+
+.nv2-attach-option-icon {
+  font-size: 24px;
+  color: var(--nv2-accent);
+}
+
+.nv2-attach-option-text {
+  flex: 1;
+}
+
+.nv2-attach-option-title {
+  font-weight: 500;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-attach-option-desc {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-secondary);
+}
+
+/* ============ V2 Agent Dashboard (Agents view) ============ */
+
+.nv2-agent-dashboard {
+  margin: 0 var(--nv2-space-4) var(--nv2-space-4);
+}
+
+.nv2-agent-dashboard-grid {
+  display: flex;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-agent-dashboard-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--nv2-space-2);
+  padding: var(--nv2-space-4) var(--nv2-space-3);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-accent-border);
+  border-radius: var(--nv2-radius-lg);
+  text-align: center;
+}
+
+.nv2-agent-dashboard-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nv2-accent);
+}
+
+.nv2-agent-dashboard-card-icon .svg-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.nv2-agent-dashboard-card-name {
+  font-size: var(--nv2-font-md);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+  line-height: 1.3;
+}
+
+.nv2-agent-dashboard-card-status {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-faint);
+  font-style: italic;
+}
+
+.nv2-agent-dashboard-card-status--active {
+  color: var(--nv2-accent-text);
+  font-style: normal;
+}
+
+/* ============ V2 Agent Activity Log (Agents view) ============ */
+
+.nv2-activity-log {
+  margin: 0 var(--nv2-space-4);
+}
+
+.nv2-activity-log-title {
+  font-size: var(--nv2-font-lg);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+  margin-bottom: var(--nv2-space-3);
+}
+
+.nv2-activity-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-3);
+}
+
+.nv2-activity-item {
+  padding: var(--nv2-space-3);
+  background: var(--nv2-bg-card);
+  border: 1px solid var(--nv2-border-subtle);
+  border-left: 3px solid var(--nv2-accent);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-activity-item--blue {
+  border-left-color: var(--nv2-blue);
+}
+
+.nv2-activity-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nv2-space-2);
+  margin-bottom: var(--nv2-space-2);
+}
+
+.nv2-activity-agent {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-2);
+}
+
+.nv2-activity-agent-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nv2-accent);
+}
+
+.nv2-activity-agent-icon .svg-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.nv2-activity-item--blue .nv2-activity-agent-icon {
+  color: var(--nv2-blue);
+}
+
+.nv2-activity-agent-name {
+  font-size: var(--nv2-font-md);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-activity-time {
+  font-size: var(--nv2-font-sm);
+  color: var(--nv2-text-faint);
+}
+
+.nv2-activity-body {
+  font-size: var(--nv2-font-md);
+  color: var(--nv2-text-primary);
+  line-height: 1.5;
+}
+
+.nv2-activity-body .nv2-agent-name {
+  color: var(--nv2-accent-text);
+}
+
+.nv2-activity-item--blue .nv2-activity-body .nv2-agent-name {
+  color: var(--nv2-blue);
+}
+
+.nv2-activity-body a,
+.nv2-activity-link {
+  color: var(--nv2-accent-text);
+  cursor: pointer;
+}
+
+.nv2-activity-body a:hover,
+.nv2-activity-link:hover {
+  text-decoration: underline;
+}
+
+.nv2-activity-status {
+  color: var(--nv2-accent-text);
+  font-weight: 500;
+}
+
+.nv2-activity-status--warning {
+  color: var(--nv2-status-warning);
+}
+
+/* Legacy agent card styles - keep for compatibility */
+.nv2-agent-list {
+  display: none;
+}
+
+.nv2-agent-card,
+.nv2-agent-card-icon,
+.nv2-agent-card-body,
+.nv2-agent-card-name,
+.nv2-agent-card-desc,
+.nv2-agent-card-status,
+.nv2-agent-dashboard-header,
+.nv2-agent-dashboard-title,
+.nv2-agent-dashboard-title-icon,
+.nv2-agent-dashboard-controls,
+.nv2-agent-dashboard-btn {
+  display: none;
+}
+
+/* ============ V2 Reduced Motion ============ */
+
+@media (prefers-reduced-motion: reduce) {
+  .nv2-status-dot,
+  .nv2-typing-cursor,
+  .nv2-loading-spinner,
+  .nv2-health-ring-progress {
+    animation: none;
+  }
+  
+  .nv2-metric-card,
+  .nv2-action-btn,
+  .nv2-send-btn,
+  .nv2-search-result {
+    transition: none;
+  }
+}

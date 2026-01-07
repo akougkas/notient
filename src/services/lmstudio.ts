@@ -129,11 +129,21 @@ export class LMStudioService {
   }
 
   /**
-   * Streaming chat completion
+   * Streaming chat completion with optional abort support
+   * @param messages - Chat messages to send
+   * @param signal - Optional AbortSignal for cancellation
    */
-  async *chatStream(messages: ChatMessage[]): AsyncIterable<string> {
+  async *chatStream(
+    messages: ChatMessage[],
+    signal?: AbortSignal
+  ): AsyncIterable<string> {
     if (this.disposed || !this.initialized) {
       throw new Error("LMStudioService not initialized");
+    }
+
+    // Check if already aborted before starting
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
     }
 
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
@@ -146,6 +156,7 @@ export class LMStudioService {
         max_tokens: 1500,
         stream: true,
       }),
+      signal, // Pass the AbortSignal to fetch
     });
 
     if (!response.ok) {
@@ -160,6 +171,11 @@ export class LMStudioService {
 
     try {
       while (true) {
+        // Check abort status before each read
+        if (signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+
         const { done, value } = await reader.read();
         if (done) break;
 

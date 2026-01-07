@@ -4,14 +4,23 @@
 
 ## Executive Summary
 
-Notient is a free, open-source Obsidian community plugin that provides AI-powered vault management using local LLMs only. It combines **chat-first semantic search**, **intelligent note processing**, **vault health monitoring**, and an **agentic UI** that performs vault operations within trust levels with universal undo.
+**Notient = Note + Sentient — Sentient Notes for the thinking human.**
+
+Notient is a free, open-source Obsidian community plugin that transforms notes from passive files into living entities with health, dynamics, and agency. Using local LLMs only, it provides **note-centric AI intelligence**, **vault health monitoring**, and **agentic operations** within trust levels.
+
+**The Sentient Notes Philosophy:**
+- Every note has a pulse: health score, freshness, connectivity
+- Every note has context: PARA type, related notes, suggested actions
+- Every note can speak: through the Agents chat, notes become conversational
+- The user steers; Notient amplifies
 
 **Core Differentiators vs Smart Connections v4:**
-1. **Intelligence** - LLM-based search reranking + dynamic vault context (not just vectors)
-2. **UI/UX** - Dual-panel sidebar (search + chat) + command-center dashboard
-3. **Human-centered** - Trust levels for agent autonomy, user always in steering wheel
-4. **Privacy** - Local-only, period. Zero cloud. Zero data leaves machine.
-5. **Speed** - Hybrid embeddings (note-level + section-level) + LRU caching
+1. **Note-Centric** - Dashboard focused on current note, not just vault-wide chat
+2. **Intelligence** - LLM-based search reranking + dynamic vault context (not just vectors)
+3. **UI/UX** - Tabbed sidebar (Note Dashboard + Agents) with omnibar search
+4. **Human-centered** - Trust levels for agent autonomy, user always in steering wheel
+5. **Privacy** - Local-only, period. Zero cloud. Zero data leaves machine.
+6. **Speed** - Hybrid embeddings (note-level + section-level) + LRU caching
 
 ---
 
@@ -73,50 +82,110 @@ Notient is a free, open-source Obsidian community plugin that provides AI-powere
 
 ## User Experience
 
-### Primary Interaction: DUAL-PANEL SIDEBAR
+### Primary Interaction: TABBED SIDEBAR
+
+The sidebar has two tabs: **Note** (default) and **Agents**. This separates note-specific context from conversational AI interactions.
+
+#### Tab 1: Note Dashboard (Default)
 
 ```
 ┌─────────────────────────────────┐
-│ 🔍 Semantic Search              │  ← Top panel: always visible
-│ [Search your vault...]          │
-│                                 │
-│ Results with LLM reranking:     │
-│ • Note A (92% - matched query)  │
-│ • Note B (87% - similar topic)  │
+│ [Note] [Agents]              ☰ │  ← Minimal tab bar
 ├─────────────────────────────────┤
-│ 💬 Chat with Notient            │  ← Bottom panel: always visible
+│ ┌─────────────────────────────┐ │
+│ │ NOTE VITALS                 │ │  ← Compact metric cards
+│ │ ┌──────┐ ┌──────┐ ┌──────┐  │ │
+│ │ │Health│ │Links │ │Fresh │  │ │  ← Glanceable, clickable
+│ │ │ 87%  │ │  12  │ │  3d  │  │ │
+│ │ └──────┘ └──────┘ └──────┘  │ │
+│ │                             │ │
+│ │ PARA: Project • #dev #api   │ │  ← Classification + tags
+│ │ ────────────────────────────│ │
+│ │ ⚡ Quick Actions:           │ │  ← One-click AI actions
+│ │ [Enrich] [Link] [Classify]  │ │
+│ └─────────────────────────────┘ │
+├─────────────────────────────────┤
+│ 🔍 Search your vault...         │  ← THE OMNIBAR
+├─────────────────────────────────┤
 │                                 │
-│ User: What do I know about X?   │
-│ AI: Based on 5 notes, you...    │
-│     [Note A] [Note B] [Note C]  │
+│ Results with AI reasoning       │  ← Clean, scannable results
+│ • Note A - "matches because..." │
+│ • Note B - "similar topic..."   │
 │                                 │
-│ [Ask a follow-up question...]   │
 └─────────────────────────────────┘
 ```
 
-**Search Panel (top):**
-- Semantic search with LLM reranking
-- Results show title, score, preview, reasoning
-- Click to open, drag to link
+**Note Vitals Dashboard:**
+- Health score (connectivity, freshness, completeness)
+- Link count (backlinks + outlinks)
+- Staleness indicator (days since modified)
+- PARA classification with confidence
+- Tags from frontmatter
+- Quick actions based on note state
 
-**Chat Panel (bottom):**
-- Conversational Q&A about vault
-- RAG pipeline: search → context → LM response
+**The Omnibar Experience:**
+- Single input, infinite possibilities
+- Natural language: "notes about API design"
+- Commands: "/find duplicates" or "/enrich"
+- Tag filters: "#project" or "folder:archive"
+- Notient decides: heuristic vs semantic vs agent
+- Results stream in with AI explanations
+
+#### Tab 2: Agents
+
+```
+┌─────────────────────────────────┐
+│ [Note] [Agents]              ☰ │
+├─────────────────────────────────┤
+│ AGENT ACTIVITY                  │  ← Minimal status overview
+│ ● 2 pending • 5 today • 23 total│
+│ [View History]                  │
+├─────────────────────────────────┤
+│                                 │
+│ ┌─────────────────────────────┐ │
+│ │ You: What should I do with  │ │  ← User message (right)
+│ │ this note?                  │ │
+│ └─────────────────────────────┘ │
+│                                 │
+│ ┌─────────────────────────────┐ │
+│ │ Notient: Based on your      │ │  ← Streaming response
+│ │ vault patterns, I suggest   │ │
+│ │ linking to [Project Plan]   │ │
+│ │ and adding #architecture... │ │
+│ │                             │ │
+│ │ 📎 [note.md] [related.md]   │ │  ← Source attachments
+│ └─────────────────────────────┘ │
+│                                 │
+├─────────────────────────────────┤
+│ [📎] Ask about this note... [➤]│  ← Input with context toggle
+└─────────────────────────────────┘
+```
+
+**Agent Activity Bar:**
+- Pending actions awaiting review
+- Today's completed actions
+- Quick access to action history
+
+**Chat Interface:**
+- Streaming responses from LM Studio
+- Context-aware: always knows current note
 - Citations link to source notes
+- Attachments show referenced files
+- Conversation history per session
 
-### Dashboard: COMMAND CENTER
+### Secondary View: COMMAND DASHBOARD
 
-The dashboard is the control surface for vault-wide operations:
+Accessible via ribbon icon or command palette. Vault-wide operations:
 
 1. **Vault Vitals**
-   - Health score (0-100) with sub-metrics
-   - Note freshness, connectivity, coverage gaps
+   - Aggregate health score with breakdown
    - PARA distribution visualization
+   - Orphan notes, stale notes, coverage gaps
 
 2. **Agent Actions**
-   - Available workflows (process inbox, batch classify, find duplicates)
+   - Available workflows (process inbox, batch classify)
    - Action history with undo capability
-   - Pending suggestions for review
+   - Pending suggestions for batch review
 
 3. **Index Management**
    - Sync status, model info, rebuild controls
@@ -148,21 +217,60 @@ The dashboard is the control surface for vault-wide operations:
 
 ## Features
 
-### Phase 1.5: ARCHITECTURAL RESET (Current)
-- [ ] Remove all debug telemetry code
-- [ ] Fix dual note ID generation bug
-- [ ] Implement LMStudioService (actual reasoning calls)
-- [ ] Hybrid embedding storage (note + sections)
-- [ ] Dynamic vault context builder
-- [ ] Dual-panel sidebar UI
-- [ ] LLM-based search reranking
-- [ ] Basic chat interface
+### Phase 1.5: ARCHITECTURAL RESET ✅ COMPLETE
+- [x] Remove all debug telemetry code
+- [x] Fix dual note ID generation bug
+- [x] Implement LMStudioService (actual reasoning calls)
+- [x] Hybrid embedding storage (note + sections)
+- [x] Dynamic vault context builder
+- [x] Basic dual-panel sidebar UI
+- [x] LLM-based search reranking
+- [x] Basic chat interface
+
+### Phase 1.6: UI/UX OVERHAUL ✅ COMPLETE
+- [x] Design system with BEM naming (`nv2-*` prefix)
+- [x] Brand colors and typography tokens (CSS variables)
+- [x] String humanization (no dev jargon)
+- [x] Tabbed sidebar (Note + Agents tabs)
+- [x] Note Vitals dashboard component (health, links, freshness, tags)
+- [x] Omnibar search experience (debounced, with results)
+- [x] Agent chat with streaming UI (via sendQuery)
+- [x] Quick actions based on note state (Enrich, Link, Move)
+- [x] Insight Stream with dynamic suggestions
+- [x] Agent Dashboard (service status cards)
+- [x] Activity Log (generated from chat history)
+- [x] Footer with service health status
+
+### Phase 1.7: BACKEND COMPLETION (Current)
+- [ ] **Settings Parity** - Expose all configuration in settings UI
+  - [ ] Search settings: top-K slider, reranking toggle, min score threshold
+  - [ ] Folder include/exclude patterns with better UI
+  - [ ] Prompt template customization (system prompts)
+- [ ] **Chat Interface** - Full chat experience in Agent Streams view
+  - [ ] Chat message bubbles (user/assistant) instead of activity log only
+  - [ ] Chat input textarea with send button
+  - [ ] Visible streaming text during generation
+  - [ ] Cancel button to abort generation (UI wired to AbortController)
+  - [ ] RAG citations as clickable attachments
+- [ ] **Conversation Persistence** - Optional chat history storage
+  - [ ] ConversationStore service (data.json or separate file)
+  - [ ] Load/save conversation on sidebar open/close
+  - [ ] Clear conversation button
+- [ ] **Agent Status Accuracy** - Real service status in dashboard
+  - [ ] Replace hardcoded "Research Bot" with actual service names
+  - [ ] Show real-time status: idle, processing, error
+  - [ ] Activity log from actual service events, not just chat
+- [ ] **Index State UI** - Better feedback during indexing
+  - [ ] Progress bar during indexing
+  - [ ] Note count display in footer or header
+  - [ ] Last sync timestamp
 
 ### Phase 2: Intelligence
 - [ ] Multi-pass note processing (classify → enrich → link)
 - [ ] Suggested tags and links with preview
 - [ ] Inbox triage workflow
 - [ ] Full Vault Vitals dashboard
+- [ ] Note health scoring algorithm
 
 ### Phase 3: Agentic
 - [ ] Trust-level agent actions
@@ -178,11 +286,30 @@ The dashboard is the control surface for vault-wide operations:
 
 ---
 
-## LM Studio Integration (NEW)
+## LM Studio Integration
+
+### Core Capabilities
+
+**Streaming Responses (✅ Implemented)**
+- All chat responses stream token-by-token via `chatStream()`
+- AbortController support for cancellation
+- Graceful handling of connection drops mid-stream
+
+**Reranking Pipeline (✅ Implemented)**
+- Vector search returns top-50 candidates
+- LM Studio reranks by semantic relevance
+- Returns reasoning for each result
+- Fallback to vector scores if LLM unavailable
+
+**Classification Engine (Phase 2)**
+- PARA type detection with confidence scores
+- Tag suggestions based on content analysis
+- Related note discovery via semantic similarity
+- Batch classification for inbox processing
 
 ### Phased Rollout
 
-**Phase 1.5: Search Orchestrator**
+**Phase 1.5: Search Orchestrator ✅**
 - Rerank vector search results by query relevance
 - Synthesize search results into coherent answers
 - Extract key insights from multiple notes
@@ -201,6 +328,46 @@ The dashboard is the control surface for vault-wide operations:
 - System prompt with vault context (dynamic)
 - RAG query format with retrieved chunks
 - Structured output parsing for classifications
+- Configurable prompt templates in settings
+
+---
+
+## Configuration & Settings
+
+### Exposed Configuration (Current State)
+
+**Service Settings (✅ Implemented):**
+- Ollama URL (local/network toggle)
+- LM Studio URL (local/network toggle)
+- Embedding model selection with dimension display
+- Reasoning model selection
+- Connection timeout values (in HealthMonitor)
+
+**Indexing Settings (✅ Implemented):**
+- Chunk size slider (32-8192)
+- Excluded folders list
+- Index management (sync, rebuild, trim, export/import)
+
+**PARA Settings (✅ Implemented):**
+- Folder mapping for each PARA type
+- Multiple folders per type support
+
+### Needed Configuration (Phase 1.7)
+
+**Search Settings:**
+- Top-K results count slider (default: 10)
+- Reranking enabled/disabled toggle
+- Minimum similarity threshold slider
+
+**Chat Settings:**
+- Max conversation history length
+- Persist conversations toggle
+- Temperature slider for responses
+
+**Agent Settings (Phase 2+):**
+- Trust level defaults (low/medium/high)
+- Auto-apply for low-risk actions toggle
+- Confirmation dialog preferences
 
 ---
 
@@ -265,4 +432,4 @@ The dashboard is the control surface for vault-wide operations:
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.0 (Architectural Reset)*
+*Version: 2.2 (Phase 1.6 Complete, Phase 1.7 Scoped)*

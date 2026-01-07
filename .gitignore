@@ -23,3 +23,5 @@ npm-debug.log*
 
 # Bun
 bun.lockb
+
+.playwright-mcp/

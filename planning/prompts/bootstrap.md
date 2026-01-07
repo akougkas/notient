@@ -1,25 +1,36 @@
 # MASTER_PLAN.md — Notient (Local-first Obsidian AI Vault Manager)
 
-> **Version 2.0 - Architectural Reset**
-> This version reflects strategic decisions made in the January 2026 architecture review.
+> **Version 2.2 - Phase 1.6 Complete, Phase 1.7 Scoped**
+> UI/UX overhaul complete. Backend completion phase defined.
 
 ## 0) Purpose and scope of this master plan
 
 This document is the canonical plan for building **Notient** across multiple development phases and work sessions.
 
-- **PRD**: `planning/PRD.md` (v2.0)
+- **PRD**: `planning/PRD.md` (v2.2)
+- **UI/UX Spec**: `planning/prompts/ui-ux.md`
 - **Code repository**: `/home/akougkas/projects/notient`
 
 ## 1) Product definition
 
 ### 1.1 Vision
-Notient is a free, open-source Obsidian community plugin that provides AI-powered vault management using **local LLMs only**, combining:
-- **Chat-first semantic search** with LLM reranking
+
+**Notient = Note + Sentient — Sentient Notes for the thinking human.**
+
+Notient transforms notes from passive files into living entities with health, dynamics, and agency. Using **local LLMs only**, it provides:
+- **Note-centric dashboard** with vitals, actions, and omnibar search
+- **Agent chat** for conversational AI interactions with streaming
 - **Dynamic vault context** awareness per query
 - **Agentic operations** with trust levels and universal undo
 - **Human-in-steering-wheel** philosophy
 
-### 1.2 Non-negotiables (constraints)
+### 1.2 The Sentient Notes Philosophy
+- Every note has a **pulse**: health score, freshness, connectivity
+- Every note has **context**: PARA type, related notes, suggested actions
+- Every note can **speak**: through Agents chat, notes become conversational
+- The user **steers**; Notient **amplifies**
+
+### 1.3 Non-negotiables (constraints)
 - **Local-only**: No cloud model APIs. No user data leaves the machine.
 - **Bun-only**: Use Bun for install/build/test. No npm/yarn/pnpm workflows.
 - **Language**: TypeScript strict.
@@ -29,14 +40,14 @@ Notient is a free, open-source Obsidian community plugin that provides AI-powere
 - **Target runtime**: Obsidian desktop (Electron). `manifest.json.isDesktopOnly = true`.
 - **No debug cruft**: Console-only logging, no external telemetry.
 
-### 1.3 Non-goals
+### 1.4 Non-goals
 - Mobile support (desktop-first).
 - Cloud API support (OpenAI/Claude/etc).
 - Real-time collaboration.
 - Vault sync.
 - Over-engineered undo beyond Obsidian's capabilities.
 
-### 1.4 Success criteria (product)
+### 1.5 Success criteria (product)
 - Search feels intelligent (LLM-reranked, not just similarity scores).
 - Chat provides useful answers with citations.
 - Agent actions respect trust levels.
@@ -48,31 +59,32 @@ Notient is a free, open-source Obsidian community plugin that provides AI-powere
 - Code runs in Obsidian's plugin environment (Electron renderer with Node APIs available).
 - File system access and vault operations go through Obsidian APIs.
 
-### 2.2 System decomposition (REVISED)
+### 2.2 System decomposition (Current State)
 
 ```
-Notient Architecture v2.0
+Notient Architecture v2.2
 ├── UI Layer
-│   ├── Dual-Panel Sidebar (search + chat)
-│   ├── Command-Center Dashboard
-│   └── Settings Tab
+│   ├── Sidebar (Note Vitals + Agent Streams) ✅
+│   ├── Setup Wizard ✅
+│   ├── Settings Tab ✅
+│   └── Dashboard (Vault Vitals) - basic
 │
 ├── Core Services
-│   ├── Kernel (service orchestration)
-│   ├── EventBus (typed pub/sub)
-│   └── VaultContextBuilder (dynamic, per-query)
+│   ├── Kernel (service orchestration) ✅
+│   ├── EventBus (typed pub/sub) ✅
+│   └── VaultContextBuilder (dynamic, per-query) ✅
 │
 ├── AI Services
-│   ├── OllamaService (embeddings only)
-│   ├── LMStudioService (reasoning, reranking, chat) ← NEW, MUST IMPLEMENT
-│   └── SearchPipeline (vector + LLM rerank)
+│   ├── OllamaService (embeddings) ✅
+│   ├── LMStudioService (reasoning, reranking, chat streaming) ✅
+│   └── SearchPipeline (vector + LLM rerank) ✅
 │
 ├── Storage Services
-│   ├── HybridVectorStore (note + section embeddings) ← REVISED
-│   ├── IndexManager (state tracking)
-│   └── ConversationStore (chat history) ← NEW
+│   ├── SimpleVectorStore (brute-force cosine) ✅
+│   ├── IndexManager (state tracking) ✅
+│   └── ConversationStore (chat history) ← Phase 1.7
 │
-└── Agent Services ← PHASE 2/3
+└── Agent Services ← Phase 2/3
     ├── ClassificationAgent
     ├── WorkflowRunner
     └── ActionHistory (undo support)
@@ -89,106 +101,54 @@ Notient Architecture v2.0
 | Agent autonomy | Trust levels | Balance automation vs control |
 | Observability | Console-only | No debug telemetry, clean code |
 
-### 2.4 Architecture diagram
-
-```mermaid
-flowchart TD
-  subgraph UI
-    Sidebar[Dual-Panel Sidebar]
-    Dashboard[Command Dashboard]
-    Settings[Settings Tab]
-  end
-
-  subgraph Core
-    Kernel[Kernel]
-    Events[EventBus]
-    Context[VaultContextBuilder]
-  end
-
-  subgraph AI
-    Ollama[OllamaService<br/>embeddings]
-    LMStudio[LMStudioService<br/>reasoning/chat]
-    Search[SearchPipeline<br/>vector + rerank]
-  end
-
-  subgraph Storage
-    Vector[HybridVectorStore<br/>note + sections]
-    Index[IndexManager]
-    Conv[ConversationStore]
-  end
-
-  Sidebar --> Events
-  Dashboard --> Events
-  Events --> Kernel
-
-  Kernel --> Ollama
-  Kernel --> LMStudio
-  Kernel --> Context
-
-  Search --> Ollama
-  Search --> LMStudio
-  Search --> Vector
-  Search --> Context
-
-  LMStudio --> Conv
-```
-
 ## 3) Repository layout (code)
 
-### 3.1 Source layout (REVISED)
+### 3.1 Source layout (Current)
 
 ```
 src/
-├── main.ts                     # Plugin entry
-├── settings.ts                 # Settings tab + store
+├── main.ts                     # Plugin entry ✅
+├── settings.ts                 # Settings tab + store ✅
+├── styles.css                  # Design system (nv2-* classes) ✅
 │
 ├── views/
-│   ├── sidebar.ts              # Dual-panel (search + chat)
-│   ├── searchPanel.ts          # Search results component
-│   ├── chatPanel.ts            # Chat interface component ← NEW
-│   └── dashboard.ts            # Command center
+│   ├── sidebar.ts              # Two-view (Note Vitals + Agent Streams) ✅
+│   ├── dashboard.ts            # Vault Vitals (basic) ✅
+│   ├── setupWizard.ts          # Setup wizard modal ✅
+│   └── indexOptionsModal.ts    # Index action picker ✅
 │
 ├── core/
-│   ├── kernel.ts               # Service manager
-│   ├── events/eventBus.ts      # Typed event bus
-│   ├── context/                # Vault context ← NEW
-│   │   └── vaultContextBuilder.ts
+│   ├── kernel.ts               # Service manager ✅
+│   ├── constants.ts            # App constants ✅
+│   ├── events/eventBus.ts      # Typed event bus ✅
+│   ├── context/
+│   │   └── vaultContextBuilder.ts ✅
 │   ├── indexer/
-│   │   ├── hybridIndexer.ts    # Note + section indexing ← REVISED
-│   │   └── simpleChunker.ts    # Section extraction
+│   │   ├── simpleIndexer.ts    # Batch indexing ✅
+│   │   └── simpleChunker.ts    # Section extraction ✅
 │   ├── search/
-│   │   ├── pipeline.ts         # Vector search + LLM rerank ← REVISED
-│   │   └── reranker.ts         # LM Studio reranking ← NEW
-│   ├── chat/                   # Chat system ← NEW
-│   │   ├── chatService.ts
-│   │   └── promptBuilder.ts
-│   ├── vitals/
-│   └── para/
+│   │   └── pipeline.ts         # Vector + LLM rerank ✅
+│   ├── para/
+│   │   └── detector.ts         # PARA classification ✅
+│   └── vitals/
+│       └── simpleVitals.ts     # Vault health metrics ✅
 │
 ├── services/
-│   ├── ollama.ts               # Embeddings
-│   ├── lmstudio.ts             # Reasoning/chat ← MUST IMPLEMENT
-│   ├── hybridVectorStore.ts    # Note + section storage ← REVISED
-│   ├── indexManager.ts
-│   ├── conversationStore.ts    # Chat history ← NEW
-│   ├── healthMonitor.ts
-│   ├── storagePaths.ts
-│   └── vaultLock.ts
-│
-├── agents/                     # Phase 2/3 ← NEW
-│   ├── classifier.ts
-│   ├── workflowRunner.ts
-│   └── actionHistory.ts
+│   ├── ollama.ts               # Embeddings ✅
+│   ├── lmstudio.ts             # Reasoning/chat/streaming ✅
+│   ├── simpleVectorStore.ts    # Vector storage ✅
+│   ├── indexManager.ts         # Index state ✅
+│   ├── healthMonitor.ts        # Service health ✅
+│   ├── storagePaths.ts         # File paths ✅
+│   └── vaultLock.ts            # Multi-window safety ✅
 │
 ├── adapters/
-│   └── obsidianFacade.ts
+│   └── obsidianFacade.ts       # Obsidian API wrapper ✅
 │
 └── types/
-    ├── settings.ts
-    ├── events.ts
-    ├── search.ts
-    ├── chat.ts                 # ← NEW
-    └── agents.ts               # ← NEW
+    ├── settings.ts             # Settings types ✅
+    ├── events.ts               # Event types ✅
+    └── search.ts               # Search types ✅
 ```
 
 ### 3.2 Data layout (on disk)
@@ -198,37 +158,34 @@ src/
 ├── data.json                   # Plugin settings
 ├── index-{modelKey}.json       # Hybrid embeddings (notes + sections)
 ├── state-{modelKey}.json       # Index state
-├── conversations.json          # Chat history (optional persistence)
-├── action-history.json         # Agent action log for undo
+├── conversations.json          # Chat history (Phase 1.7)
 ├── cache/                      # LRU caches
 └── locks/                      # Multi-window safety
 ```
 
-## 4) Core services
+## 4) Core services (Implemented)
 
-### 4.1 LMStudioService (NEW - CRITICAL)
-
-**This service MUST be implemented.** Currently LM Studio is configured but never called.
+### 4.1 LMStudioService ✅
 
 ```typescript
 interface LMStudioService {
   // Health & status
-  isAvailable(): Promise<boolean>;
   listModels(): Promise<string[]>;
+  isReady(): boolean;
 
   // Reasoning operations
-  rerank(query: string, candidates: SearchResult[]): Promise<RankedResult[]>;
-  classify(note: NoteContent): Promise<Classification>;
-  chat(messages: ChatMessage[], context: VaultContext): Promise<ChatResponse>;
+  rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]>;
+  chat(messages: ChatMessage[]): Promise<string>;
 
-  // Streaming support
-  chatStream(messages: ChatMessage[], context: VaultContext): AsyncIterable<string>;
+  // Streaming support ✅
+  chatStream(messages: ChatMessage[], signal?: AbortSignal): AsyncIterable<string>;
+  
+  // Context building
+  buildChatSystemPrompt(context: string, notes: RelevantNote[]): string;
 }
 ```
 
-### 4.2 VaultContextBuilder (NEW)
-
-Builds dynamic context per query (not static scan):
+### 4.2 VaultContextBuilder ✅
 
 ```typescript
 interface VaultContextBuilder {
@@ -241,45 +198,17 @@ interface VaultContextBuilder {
   // - Link graph fragment (1-hop from candidates)
   // - PARA distribution of candidates
   // - Recent modifications in relevant areas
+  // - contextSummary for LLM prompt
 }
 ```
 
-### 4.3 HybridVectorStore (REVISED)
-
-Stores both note-level and section-level embeddings:
-
-```typescript
-interface HybridEmbedding {
-  noteId: string;
-  path: string;
-  title: string;
-
-  // Note-level embedding (whole content)
-  noteEmbedding: number[];
-  noteHash: string;
-
-  // Section-level embeddings (chunks)
-  sections: Array<{
-    sectionId: string;
-    heading: string;
-    text: string;
-    embedding: number[];
-  }>;
-
-  // Metadata
-  mtimeMs: number;
-  tags: string[];
-  frontmatter: Record<string, unknown>;
-}
-```
-
-### 4.4 SearchPipeline (REVISED)
-
-Two-phase search with LLM reranking:
+### 4.3 SearchPipeline ✅
 
 ```typescript
 interface SearchPipeline {
-  search(query: string, options: SearchOptions): Promise<SearchResult[]>;
+  search(query: string, options: ExtendedSearchOptions): Promise<SearchResult[]>;
+  findRelated(path: string, options: RelatedOptions): Promise<RelatedNote[]>;
+  clearCache(): void;
 
   // Phase 1: Vector search (fast, top-50)
   // Phase 2: LLM reranking (smart, final top-K)
@@ -287,116 +216,100 @@ interface SearchPipeline {
 }
 ```
 
-## 5) UI architecture
+## 5) UI architecture (Implemented)
 
-### 5.1 Dual-Panel Sidebar
+### 5.1 Sidebar Views ✅
 
-```
-┌─────────────────────────────────┐
-│ [Search Panel - 40%]            │
-│ ┌─────────────────────────────┐ │
-│ │ 🔍 [Search input...]        │ │
-│ │                             │ │
-│ │ Results (LLM-reranked):     │ │
-│ │ • Note A - "relevant because"│ │
-│ │ • Note B - "matches topic"  │ │
-│ │ • Note C - "similar content"│ │
-│ └─────────────────────────────┘ │
-├─────────────────────────────────┤
-│ [Chat Panel - 60%]              │
-│ ┌─────────────────────────────┐ │
-│ │ 💬 Chat with your vault     │ │
-│ │                             │ │
-│ │ [Message history...]        │ │
-│ │                             │ │
-│ │ AI: Based on your notes...  │ │
-│ │     [Citation 1] [Cite 2]   │ │
-│ │                             │ │
-│ │ [Ask a question...]     [⏎] │ │
-│ └─────────────────────────────┘ │
-└─────────────────────────────────┘
-```
+**Note Vitals View:**
+- Note card with title, tags, links
+- Quick Actions (Enrich, Link, Move)
+- Omnibar search with results
+- Insight Stream with dynamic suggestions
 
-### 5.2 Dashboard (Command Center)
+**Agent Streams View:**
+- Agent status bar
+- Agent Dashboard (service status cards)
+- Activity Log (from chat history + search events)
 
-```
-┌────────────────────────────────────────────────────┐
-│ NOTIENT DASHBOARD                                  │
-├────────────────────────────────────────────────────┤
-│                                                    │
-│ [Vault Vitals]          [Agent Actions]           │
-│ ┌──────────────┐        ┌──────────────────┐      │
-│ │ Health: 87%  │        │ Available:       │      │
-│ │ Notes: 1,234 │        │ • Process Inbox  │      │
-│ │ Orphans: 23  │        │ • Find Duplicates│      │
-│ │ Inbox: 15    │        │ • Batch Classify │      │
-│ └──────────────┘        └──────────────────┘      │
-│                                                    │
-│ [Action History]                                   │
-│ ┌──────────────────────────────────────────┐      │
-│ │ Today:                                   │      │
-│ │ • Tagged 5 notes with #project  [Undo]   │      │
-│ │ • Moved 3 notes to Archive      [Undo]   │      │
-│ │ Yesterday:                               │      │
-│ │ • Linked 12 related notes       [Undo]   │      │
-│ └──────────────────────────────────────────┘      │
-│                                                    │
-│ [Index Status]                                     │
-│ Model: nomic-embed-text (384d) | Notes: 1,234/1,250│
-│ [Sync] [Rebuild] [Export]                         │
-└────────────────────────────────────────────────────┘
-```
+### 5.2 Design System ✅
 
-## 6) Agent autonomy model
+CSS classes use `nv2-*` prefix. Key tokens:
+- `--nv2-accent`: Notient green (#10b981)
+- `--nv2-bg-primary/secondary/tertiary`: Obsidian surface colors
+- `--nv2-text-primary/secondary/muted`: Obsidian text colors
+- `--nv2-font-xs/sm/md/lg/xl`: Typography scale
 
-### 6.1 Trust levels
+## 6) Phased roadmap
 
-| Level | Risk | Actions | Behavior |
-|-------|------|---------|----------|
-| **Low** | Reversible, metadata-only | Add/remove tags, update frontmatter | Auto-apply, log to history |
-| **Medium** | Structural changes | Move notes, create links, rename | Confirm dialog, one-click approve |
-| **High** | Destructive/lossy | Merge, archive, delete | Warning + explicit confirmation |
+### Phase 1.5: ARCHITECTURAL RESET ✅ COMPLETE
 
-### 6.2 Workflow types
+**Completed:**
+- [x] Remove all debug telemetry
+- [x] Fix dual note ID generation bug
+- [x] Implement LMStudioService
+- [x] Hybrid embedding storage
+- [x] LLM-based search reranking
+- [x] Dynamic vault context builder
+- [x] Basic dual-panel sidebar
+- [x] Basic chat interface with RAG
 
-```typescript
-type WorkflowScope =
-  | { type: "note", path: string }           // Process single note
-  | { type: "folder", path: string }         // Process folder (batch)
-  | { type: "vault" }                        // Full vault operation
-  | { type: "selection", paths: string[] };  // Selected notes
-```
+### Phase 1.6: UI/UX OVERHAUL ✅ COMPLETE
 
-### 6.3 Undo philosophy
+**Completed:**
+- [x] Design system with BEM naming (`nv2-*` prefix)
+- [x] Brand colors and typography tokens
+- [x] String humanization (no dev jargon)
+- [x] Tabbed sidebar (Note + Agents views)
+- [x] Note Vitals dashboard (health, links, freshness, tags)
+- [x] Omnibar search experience
+- [x] Agent streaming via sendQuery()
+- [x] Quick actions (Enrich, Link, Move)
+- [x] Insight Stream with suggestions
+- [x] Agent Dashboard cards
+- [x] Activity Log from chat history
+- [x] Footer with service status
 
-- Use Obsidian's native undo where possible (file content changes)
-- Track structural changes (moves, renames) in `action-history.json`
-- Dashboard shows recent actions with undo buttons
-- No over-engineering: if Obsidian can't undo it natively, warn before action
+### Phase 1.7: BACKEND COMPLETION (Next Priority)
 
-## 7) Phased roadmap
+**Goal:** Achieve UI-backend parity. Every UI element has working backend support.
 
-### Phase 1.5: ARCHITECTURAL RESET (Current Priority)
+**Settings Parity:**
+- [ ] Search settings section in settings.ts
+  - [ ] Top-K results slider (1-50, default 10)
+  - [ ] Reranking toggle (default: enabled)
+  - [ ] Minimum similarity threshold (0.0-1.0, default 0.3)
+- [ ] Prompt settings section
+  - [ ] Custom system prompt textarea
+  - [ ] Max context tokens slider
 
-**Goal:** Transform from broken search MVP to intelligent assistant foundation.
+**Chat Interface Completion:**
+- [ ] Full chat UI in Agent Streams view
+  - [ ] Chat message bubbles (user/assistant styling)
+  - [ ] Chat input textarea with send button
+  - [ ] Visible streaming text during generation
+  - [ ] Cancel button wired to AbortController
+  - [ ] RAG citations as clickable attachments
+- [ ] ConversationStore service
+  - [ ] Persist chat history to data.json
+  - [ ] Load on sidebar open
+  - [ ] Clear conversation button
 
-**Critical fixes:**
-1. Remove all debug telemetry (3 locations)
-2. Fix dual note ID generation bug (IndexManager vs Chunker)
-3. Implement LMStudioService (actual API calls, not just config)
+**Agent Dashboard Accuracy:**
+- [ ] Replace hardcoded "Research Bot" labels
+- [ ] Show actual service status: Search, Context, Reranker
+- [ ] Activity log from real EventBus events
+- [ ] Processing indicator during operations
 
-**New capabilities:**
-4. Hybrid embedding storage (note + sections)
-5. LLM-based search reranking
-6. Dynamic vault context builder
-7. Dual-panel sidebar (search + chat)
-8. Basic chat interface with RAG
+**Index State Feedback:**
+- [ ] Progress bar during indexing
+- [ ] Note count in sidebar header or footer
+- [ ] Last sync timestamp display
 
 **Exit criteria:**
-- Search returns LLM-reranked results with reasoning
-- Chat answers questions using retrieved context
-- No debug code in codebase
-- Clean console-only logging
+- Chat displays properly with message bubbles
+- User can cancel generation mid-stream
+- Settings UI matches backend capabilities
+- Activity log reflects real agent activity
 
 ### Phase 2: Intelligence
 
@@ -432,69 +345,7 @@ type WorkflowScope =
 - Community release packaging
 - Advanced visualizations
 
-## 8) Implementation session guide
-
-### Session: ARCHITECTURAL RESET
-
-**Objective:** Execute Phase 1.5 in one comprehensive session.
-
-**Sequence:**
-
-1. **Clean house** (30 min)
-   - Remove debug telemetry from 3 files
-   - Fix note ID generation in IndexManager
-   - Clean up console logging
-
-2. **LMStudioService** (2 hours)
-   - Implement service class with OpenAI-compatible API
-   - Add rerank(), chat(), chatStream() methods
-   - Wire into kernel service registry
-
-3. **Hybrid storage** (1.5 hours)
-   - Modify vector store schema for note + section embeddings
-   - Update indexer to generate both levels
-   - Maintain backward compatibility (migration)
-
-4. **Search reranking** (1 hour)
-   - Modify pipeline to do vector top-50 → LLM rerank
-   - Add reranking prompt template
-   - Return results with reasoning
-
-5. **Vault context** (1 hour)
-   - Implement VaultContextBuilder
-   - Dynamic context from search candidates
-   - Inject into LM prompts
-
-6. **Dual-panel UI** (2 hours)
-   - Redesign sidebar with search + chat panels
-   - Implement chat message history
-   - Wire RAG pipeline (search → context → LM → response)
-
-7. **Testing & polish** (1 hour)
-   - Manual testing on real vault
-   - Fix obvious issues
-   - Update docs
-
-**Total estimated:** 9 hours
-
-## 9) Risk register
-
-### Critical (must address in Phase 1.5)
-- ❌ Debug telemetry shipping to production
-- ❌ LM Studio configured but never used
-- ❌ Dual note ID generation causes data corruption
-
-### High (address soon)
-- ⚠️ Search results are meaningless similarity scores
-- ⚠️ No vault awareness in LLM context
-- ⚠️ No chat interface despite competition having it
-
-### Medium (Phase 2+)
-- Agent actions without trust levels
-- No undo for structural changes
-- Missing inbox triage workflow
-
-## 10) Decision log
+## 7) Decision log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
@@ -505,9 +356,14 @@ type WorkflowScope =
 | 2026-01-06 | Trust levels for agents | Balance automation vs user control |
 | 2026-01-06 | Remove all debug telemetry | Clean code, no data leaks |
 | 2026-01-06 | Full architectural reset | Comprehensive fix over incremental patches |
+| 2026-01-06 | Tabbed sidebar (Note + Agents) | Separate note-centric view from chat |
+| 2026-01-06 | Sentient Notes philosophy | Notes as living entities with health/agency |
+| 2026-01-06 | Omnibar search | Single input for all query types |
+| 2026-01-06 | Streaming responses required | Real-time token display for chat |
+| 2026-01-06 | Phase 1.6 complete | UI/UX overhaul done, backend parity needed |
 
 ---
 
 *Last updated: 2026-01-06*
 *Author: Anthony Kougkas*
-*Version: 2.0 (Architectural Reset)*
+*Version: 2.2 (Phase 1.6 Complete)*
