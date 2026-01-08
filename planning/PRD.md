@@ -367,8 +367,6 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - [ ] Background classification
 
 ### Phase 4: POLISH
-- [ ] Smart Connections migration wizard
-- [ ] Advanced visualizations (knowledge graph)
 - [ ] Performance optimization
 - [ ] Community release packaging
 
@@ -395,7 +393,7 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 - Related note discovery via semantic similarity
 - Batch classification for inbox processing
 
-### Prompt Architecture
+### Prompt Architecture 
 - System prompt with vault context (dynamic via `NotientPromptBuilder`)
 - Current note content prominently included
 - RAG query format with retrieved chunks

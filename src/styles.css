@@ -1,15 +1,48 @@
 /* ==========================================================================
    NOTIENT V2 - SENTIENT DESIGN SYSTEM
-   Theme: Techno-Natural / Millimeter Paper / Forest
+   Theme: Mira + Emerald (shadcn-inspired)
+   Style: Mira | Base: Zinc | Accent: Emerald | Font: Inter
    ========================================================================== */
 
+/* Import Inter font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 :root {
+  /* --- Mira + Emerald Theme --- */
+
+  /* Font Stack */
+  --nv2-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Zinc Base (neutral gray palette) */
+  --nv2-zinc-50: #fafafa;
+  --nv2-zinc-100: #f4f4f5;
+  --nv2-zinc-200: #e4e4e7;
+  --nv2-zinc-300: #d4d4d8;
+  --nv2-zinc-400: #a1a1aa;
+  --nv2-zinc-500: #71717a;
+  --nv2-zinc-600: #52525b;
+  --nv2-zinc-700: #3f3f46;
+  --nv2-zinc-800: #27272a;
+  --nv2-zinc-900: #18181b;
+  --nv2-zinc-950: #09090b;
+
+  /* Emerald Accent */
+  --nv2-emerald-400: #34d399;
+  --nv2-emerald-500: #10b981;
+  --nv2-emerald-600: #059669;
+  --nv2-emerald-700: #047857;
+
   /* --- Design Tokens --- */
 
-  /* Palette - Forest & Stone */
-  --nv2-color-accent: var(--interactive-accent, #2a9d8f);
+  /* Palette - Emerald Accent */
+  --nv2-color-accent: var(--nv2-emerald-500);
   --nv2-color-accent-subtle: color-mix(in srgb, var(--nv2-color-accent), transparent 85%);
-  --nv2-color-accent-hover: color-mix(in srgb, var(--nv2-color-accent), #000 10%);
+  --nv2-color-accent-hover: var(--nv2-emerald-600);
+  --nv2-color-accent-active: var(--nv2-emerald-700);
+
+  /* Muted backgrounds using Zinc */
+  --nv2-bg-muted: var(--nv2-zinc-100);
+  --nv2-bg-muted-dark: var(--nv2-zinc-800);
 
   --nv2-bg-primary: var(--background-primary);
   --nv2-bg-secondary: var(--background-secondary);
@@ -33,7 +66,7 @@
   --nv2-space-xl: 24px;
 
   /* Typography */
-  --nv2-font-ui: var(--font-interface);
+  --nv2-font-ui: var(--nv2-font-sans);
   --nv2-font-mono: var(--font-monospace);
   --nv2-text-xs: 11px;
   --nv2-text-sm: 13px;
@@ -41,10 +74,11 @@
   --nv2-text-lg: 18px;
   --nv2-text-xl: 22px;
 
-  /* Components */
+  /* Components - Mira radius (subtle) */
+  --nv2-radius: 6px;
   --nv2-radius-sm: 4px;
-  --nv2-radius-md: 8px;
-  --nv2-radius-lg: 12px;
+  --nv2-radius-md: 6px;
+  --nv2-radius-lg: 8px;
   --nv2-border-color: var(--background-modifier-border);
   --nv2-grid-color: color-mix(in srgb, var(--text-muted), transparent 92%);
 
@@ -70,7 +104,7 @@
     linear-gradient(90deg, var(--nv2-grid-color) 1px, transparent 1px);
   background-size: 20px 20px;
   color: var(--nv2-text-normal);
-  font-family: var(--nv2-font-ui);
+  font-family: var(--nv2-font-sans);
   overflow: hidden;
 }
 
@@ -87,6 +121,27 @@
 .notient-sidebar--v2 ::-webkit-scrollbar-thumb {
   background-color: var(--nv2-border-color);
   border-radius: 4px;
+}
+
+/* ==========================================================================
+   Mira Font Application
+   Apply Inter font globally to Notient UI surfaces
+   ========================================================================== */
+
+.nv2-section,
+.nv2-quick-action,
+.nv2-footer,
+.nv2-header,
+.nv2-note-card,
+.nv2-omnibar,
+.nv2-insight,
+.nv2-status-bar,
+.nv2-workflow-card,
+.nv2-activity-item,
+.notient-settings,
+.nv2-wizard-modal,
+.nv2-task-modal {
+  font-family: var(--nv2-font-sans);
 }
 
 /* ==========================================================================
@@ -245,8 +300,9 @@
 }
 
 .nv2-quick-action:hover {
-  border-color: var(--nv2-color-accent);
-  background: var(--nv2-color-accent-subtle);
+  /* Subtle menu accent (Mira style) */
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 92%);
+  border-color: color-mix(in srgb, var(--nv2-color-accent), transparent 70%);
   transform: translateY(-1px);
 }
 
@@ -340,7 +396,7 @@
   font-weight: 500;
   color: var(--nv2-text-normal);
   min-width: 0;
-  font-family: var(--nv2-font-ui);
+  font-family: var(--nv2-font-sans);
   letter-spacing: -0.01em;
 }
 

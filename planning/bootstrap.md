@@ -1,17 +1,13 @@
 # MASTER_PLAN.md — Notient (Local-first Obsidian AI Vault Manager)
 
 > **Version 3.2 - Phase 1, 2, and 3 Complete**
-> All core features implemented and integrated. Agentic capabilities (trust levels, workflows, undo) and Intelligence features (classification, suggestions) are fully functional and wired to the UI.
+> All core features implemented but NOT integrated and wired to the UI.
 
 ## 0) Purpose and scope of this master plan
 
 This document is the canonical plan for building **Notient** across multiple development phases and work sessions.
 
 - **PRD**: `planning/PRD.md` (v3.0)
-- **UI/UX Spec**: `planning/prompts/ui-ux.md`
-- **Phase 1.7 Spec**: `planning/prompts/phase-1.7-backend-completion.md`
-- **Phase 1.8 Spec**: `planning/prompts/phase-1.8-architecture-refactor.md`
-- **Audit Report**: `planning/audit_report.md` (v3.1)
 - **Code repository**: `/home/akougkas/projects/notient`
 
 ## 1) Product definition
