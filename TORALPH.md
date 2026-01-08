@@ -1,24 +1,3 @@
-Enhancement Ideas:
-  /* Add CSS custom properties for theming */
-  :root {
-    /* Emerald accent (from your shadcn theme) */
-    --nv2-color-accent: #10b981;
-    --nv2-color-accent-hover: #059669;
-
-    /* Mira-inspired spacing */
-    --nv2-space-unit: 4px;
-    --nv2-radius: 6px;
-  }
-
-  /* Lucide icons (already lightweight) */
-  /* Cronos and other modern crazy cool lokkign fonts (can add via @font-face) */
-
-
-
-🚀 My Recommendation for Notient
-
-  Stick with your current approach BUT enhance it:
-
   Phase 1: CSS Design System (Current + Enhanced)
 
   /* Add shadcn-inspired utilities */
@@ -81,7 +60,6 @@ Enhancement Ideas:
   ---
   ⚡ Quick Wins: Apply Your shadcn Theme
 
-  Based on your configurator link:
   Style: Mira
   Base: Zinc (neutral gray)
   Accent: Emerald (#10b981)
