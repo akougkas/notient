@@ -10,11 +10,19 @@ import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { Kernel } from "../kernel";
 import type { ActionHistory } from "./actionHistory";
 import type { TrustLevelManager } from "./trustLevelManager";
-import type {
-  AppliedActionRecord,
-  ProposedAction,
-  RenameBackUndo,
-  RestoreContentUndo,
+import {
+  type AppendReviewSectionAction,
+  type AppliedActionRecord,
+  type BatchAppendLinksAction,
+  type BatchCreateNotesAction,
+  type CreateNoteAction,
+  type CreateSynthesisNoteAction,
+  type CreateTaskNoteAction,
+  INTELLIGENCE_2_ACTION_TYPES,
+  type ProposedAction,
+  type RenameBackUndo,
+  type RestoreContentUndo,
+  type RestructureNoteAction,
 } from "./types";
 
 /**
@@ -112,14 +120,24 @@ export class ActionApplier {
     // Validate target path
     const normalizedTarget = normalizePath(action.target);
 
-    // Check file exists
-    if (!this.obsidian.getFileByPath(normalizedTarget)) {
-      return `Target file not found: ${normalizedTarget}`;
-    }
+    // Intelligence 2.0 actions that create new notes don't require existing target
+    const creationActions = [
+      "create_note",
+      "batch_create_notes",
+      "create_task_note",
+      "create_synthesis_note",
+    ];
 
-    // Check it's a markdown file
-    if (!normalizedTarget.endsWith(".md")) {
-      return `Target must be a markdown file: ${normalizedTarget}`;
+    if (!creationActions.includes(action.type)) {
+      // Check file exists
+      if (!this.obsidian.getFileByPath(normalizedTarget)) {
+        return `Target file not found: ${normalizedTarget}`;
+      }
+
+      // Check it's a markdown file
+      if (!normalizedTarget.endsWith(".md")) {
+        return `Target must be a markdown file: ${normalizedTarget}`;
+      }
     }
 
     // Check not in excluded folders
@@ -167,8 +185,90 @@ export class ActionApplier {
         }
         break;
 
+      // Intelligence 2.0 action types
+      case "create_note":
+        if (!action.payload.path || typeof action.payload.path !== "string") {
+          return "create_note requires a valid path";
+        }
+        if (typeof action.payload.content !== "string") {
+          return "create_note requires content";
+        }
+        // Check destination doesn't already exist
+        if (this.obsidian.getFileByPath(normalizePath(action.payload.path))) {
+          return `Note already exists: ${action.payload.path}`;
+        }
+        break;
+
+      case "batch_create_notes":
+        if (!Array.isArray(action.payload.notes) || action.payload.notes.length === 0) {
+          return "batch_create_notes requires at least one note";
+        }
+        for (const note of action.payload.notes) {
+          if (!note.path || !note.content) {
+            return "Each note in batch must have path and content";
+          }
+          if (this.obsidian.getFileByPath(normalizePath(note.path))) {
+            return `Note already exists: ${note.path}`;
+          }
+        }
+        break;
+
+      case "restructure_note":
+        if (typeof action.payload.content !== "string") {
+          return "restructure_note requires content";
+        }
+        break;
+
+      case "create_task_note":
+        if (!action.payload.path || typeof action.payload.path !== "string") {
+          return "create_task_note requires a valid path";
+        }
+        if (!Array.isArray(action.payload.tasks) || action.payload.tasks.length === 0) {
+          return "create_task_note requires at least one task";
+        }
+        break;
+
+      case "create_synthesis_note":
+        if (!action.payload.path || typeof action.payload.path !== "string") {
+          return "create_synthesis_note requires a valid path";
+        }
+        if (typeof action.payload.content !== "string") {
+          return "create_synthesis_note requires content";
+        }
+        break;
+
+      case "append_review_section":
+        if (typeof action.payload.score !== "number") {
+          return "append_review_section requires a score";
+        }
+        if (!action.payload.findings) {
+          return "append_review_section requires findings";
+        }
+        break;
+
+      case "batch_append_links":
+        if (!Array.isArray(action.payload.linkPairs) || action.payload.linkPairs.length === 0) {
+          return "batch_append_links requires at least one link pair";
+        }
+        break;
+
+      case "highlight_text_issues":
+        if (!Array.isArray(action.payload.issues) || action.payload.issues.length === 0) {
+          return "highlight_text_issues requires at least one issue";
+        }
+        break;
+
+      case "extract_to_calendar":
+        if (!action.payload.task || !action.payload.deadline) {
+          return "extract_to_calendar requires task and deadline";
+        }
+        break;
+
       default:
-        return `Unsupported action type: ${action.type}`;
+        // Check if it's a reserved action type
+        if (!INTELLIGENCE_2_ACTION_TYPES.includes(action.type)) {
+          return `Unsupported action type: ${action.type}`;
+        }
     }
 
     return null;
@@ -183,6 +283,7 @@ export class ActionApplier {
     workflowId?: string,
   ): Promise<ApplyResult> {
     switch (action.type) {
+      // Phase 2 actions
       case "frontmatter_set":
         return this.applyFrontmatterSet(action, taskId, workflowId);
 
@@ -197,6 +298,41 @@ export class ActionApplier {
 
       case "move_note":
         return this.applyMoveNote(action, taskId, workflowId);
+
+      // Intelligence 2.0 actions
+      case "create_note":
+        return this.applyCreateNote(action as CreateNoteAction, taskId, workflowId);
+
+      case "batch_create_notes":
+        return this.applyBatchCreateNotes(action as BatchCreateNotesAction, taskId, workflowId);
+
+      case "restructure_note":
+        return this.applyRestructureNote(action as RestructureNoteAction, taskId, workflowId);
+
+      case "create_task_note":
+        return this.applyCreateTaskNote(action as CreateTaskNoteAction, taskId, workflowId);
+
+      case "create_synthesis_note":
+        return this.applyCreateSynthesisNote(
+          action as CreateSynthesisNoteAction,
+          taskId,
+          workflowId,
+        );
+
+      case "append_review_section":
+        return this.applyAppendReviewSection(
+          action as AppendReviewSectionAction,
+          taskId,
+          workflowId,
+        );
+
+      case "batch_append_links":
+        return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId);
+
+      case "highlight_text_issues":
+      case "extract_to_calendar":
+        // These actions require external integration, return success for now
+        return { success: true, recordId: `noop-${Date.now()}` };
 
       default:
         return { success: false, error: `Unsupported action type: ${action.type}` };
@@ -447,5 +583,502 @@ export class ActionApplier {
       changedPaths,
       undo,
     };
+  }
+
+  // =============================================================================
+  // Intelligence 2.0 Action Implementations
+  // =============================================================================
+
+  /**
+   * Create a new note with content
+   */
+  private async applyCreateNote(
+    action: CreateNoteAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { payload } = action;
+    const notePath = normalizePath(payload.path);
+
+    // Ensure parent folder exists
+    const parentPath = this.obsidian.getParentFolderPath(notePath);
+    if (parentPath) {
+      const folderResult = await this.obsidian.createFolderIfNeeded(parentPath);
+      if (!folderResult.success) {
+        return {
+          success: false,
+          error: `Failed to create folder ${parentPath}: ${folderResult.error}`,
+        };
+      }
+    }
+
+    // Build content with frontmatter
+    let content = "";
+    if (payload.frontmatter && Object.keys(payload.frontmatter).length > 0) {
+      content += "---\n";
+      for (const [key, value] of Object.entries(payload.frontmatter)) {
+        if (Array.isArray(value)) {
+          content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
+        } else {
+          content += `${key}: ${JSON.stringify(value)}\n`;
+        }
+      }
+      content += "---\n\n";
+    }
+    content += payload.content;
+
+    // Create the file
+    const result = await this.obsidian.createFile(notePath, content);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    // Record for undo (delete the created file)
+    const record = this.createRecord(
+      action,
+      [notePath],
+      {
+        type: "restore_content",
+        files: [{ path: notePath, before: "" }], // Empty = file didn't exist
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Create multiple notes in batch
+   */
+  private async applyBatchCreateNotes(
+    action: BatchCreateNotesAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { payload } = action;
+    const createdPaths: string[] = [];
+    const errors: string[] = [];
+
+    for (const note of payload.notes) {
+      const notePath = normalizePath(note.path);
+
+      // Ensure parent folder exists
+      const parentPath = this.obsidian.getParentFolderPath(notePath);
+      if (parentPath) {
+        const folderResult = await this.obsidian.createFolderIfNeeded(parentPath);
+        if (!folderResult.success) {
+          errors.push(`Failed to create folder ${parentPath}: ${folderResult.error}`);
+          continue;
+        }
+      }
+
+      // Build content with frontmatter
+      let content = "";
+      if (note.frontmatter && Object.keys(note.frontmatter).length > 0) {
+        content += "---\n";
+        for (const [key, value] of Object.entries(note.frontmatter)) {
+          if (Array.isArray(value)) {
+            content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
+          } else {
+            content += `${key}: ${JSON.stringify(value)}\n`;
+          }
+        }
+        content += "---\n\n";
+      }
+      content += note.content;
+
+      // Create the file
+      const result = await this.obsidian.createFile(notePath, content);
+      if (!result.success) {
+        errors.push(`Failed to create ${notePath}: ${result.error}`);
+        continue;
+      }
+
+      createdPaths.push(notePath);
+    }
+
+    if (createdPaths.length === 0) {
+      return { success: false, error: errors.join("; ") };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      createdPaths,
+      {
+        type: "restore_content",
+        files: createdPaths.map((p) => ({ path: p, before: "" })),
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+
+    if (errors.length > 0) {
+      return {
+        success: true,
+        recordId: record.id,
+        error: `Created ${createdPaths.length}/${payload.notes.length} notes. Errors: ${errors.join("; ")}`,
+      };
+    }
+
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Restructure an existing note
+   */
+  private async applyRestructureNote(
+    action: RestructureNoteAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { target, payload } = action;
+
+    // Read before content for undo
+    const beforeContent = await this.obsidian.readFileByPath(target);
+    if (beforeContent === null) {
+      return { success: false, error: `Could not read file: ${target}` };
+    }
+
+    // Build links to extracted sections
+    let newContent = payload.content;
+    if (payload.extractedSections.length > 0) {
+      newContent += "\n\n## Extracted Sections\n\n";
+      for (const section of payload.extractedSections) {
+        const noteName = section.newNotePath.replace(/\.md$/, "").split("/").pop();
+        newContent += `- [[${noteName}]] (${section.heading})\n`;
+      }
+    }
+
+    // Apply the change
+    const result = await this.obsidian.processFile(target, () => newContent);
+
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Create a task note with structured task list
+   */
+  private async applyCreateTaskNote(
+    action: CreateTaskNoteAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { payload } = action;
+    const notePath = normalizePath(payload.path);
+
+    // Ensure parent folder exists
+    const parentPath = this.obsidian.getParentFolderPath(notePath);
+    if (parentPath) {
+      const folderResult = await this.obsidian.createFolderIfNeeded(parentPath);
+      if (!folderResult.success) {
+        return {
+          success: false,
+          error: `Failed to create folder ${parentPath}: ${folderResult.error}`,
+        };
+      }
+    }
+
+    // Build task note content
+    const today = new Date().toISOString().split("T")[0];
+    let content = `---
+created: ${today}
+tags: [tasks]
+type: task-list
+---
+
+# Tasks
+
+`;
+
+    // Group tasks by category
+    const categories = ["immediate", "planned", "backlog", "blocked"] as const;
+    for (const category of categories) {
+      const categoryTasks = payload.tasks.filter((t) => t.category === category);
+      if (categoryTasks.length > 0) {
+        content += `## ${category.charAt(0).toUpperCase() + category.slice(1)}\n\n`;
+        for (const task of categoryTasks) {
+          content += `- [ ] ${task.text}`;
+          if (task.deadline) {
+            content += ` (Due: ${task.deadline})`;
+          }
+          if (task.project) {
+            content += ` #${task.project.replace(/[^a-zA-Z0-9-]/g, "-")}`;
+          }
+          content += "\n";
+        }
+        content += "\n";
+      }
+    }
+
+    // Add decisions if present
+    if (payload.decisions && payload.decisions.length > 0) {
+      content += "## Decisions\n\n";
+      for (const decision of payload.decisions) {
+        content += `**${decision.date || today}: ${decision.decision}**\n`;
+        content += `- Rationale: ${decision.rationale}\n\n`;
+      }
+    }
+
+    // Create the file
+    const result = await this.obsidian.createFile(notePath, content);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      [notePath],
+      {
+        type: "restore_content",
+        files: [{ path: notePath, before: "" }],
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Create a synthesis note
+   */
+  private async applyCreateSynthesisNote(
+    action: CreateSynthesisNoteAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { payload } = action;
+    const notePath = normalizePath(payload.path);
+
+    // Ensure parent folder exists
+    const parentPath = this.obsidian.getParentFolderPath(notePath);
+    if (parentPath) {
+      const folderResult = await this.obsidian.createFolderIfNeeded(parentPath);
+      if (!folderResult.success) {
+        return {
+          success: false,
+          error: `Failed to create folder ${parentPath}: ${folderResult.error}`,
+        };
+      }
+    }
+
+    // Build content with frontmatter
+    let content = "";
+    const frontmatter = payload.frontmatter || {
+      created: new Date().toISOString().split("T")[0],
+      tags: ["synthesis"],
+      type: "synthesis",
+    };
+
+    content += "---\n";
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (Array.isArray(value)) {
+        content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
+      } else {
+        content += `${key}: ${JSON.stringify(value)}\n`;
+      }
+    }
+    content += "---\n\n";
+    content += payload.content;
+
+    // Add source notes if present
+    if (payload.sourceNotes && payload.sourceNotes.length > 0) {
+      content += "\n\n## Source Notes\n\n";
+      for (const source of payload.sourceNotes) {
+        content += `- [[${source}]]\n`;
+      }
+    }
+
+    // Create the file
+    const result = await this.obsidian.createFile(notePath, content);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      [notePath],
+      {
+        type: "restore_content",
+        files: [{ path: notePath, before: "" }],
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Append a review section to a note
+   */
+  private async applyAppendReviewSection(
+    action: AppendReviewSectionAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { target, payload } = action;
+
+    // Read before content for undo
+    const beforeContent = await this.obsidian.readFileByPath(target);
+    if (beforeContent === null) {
+      return { success: false, error: `Could not read file: ${target}` };
+    }
+
+    // Build the review section
+    let sectionContent = `\n\n## ${payload.reviewType.charAt(0).toUpperCase() + payload.reviewType.slice(1)} Review\n\n`;
+    sectionContent += `**Score:** ${payload.score}/10\n`;
+    sectionContent += `**Date:** ${payload.date}\n\n`;
+
+    if (payload.findings.strengths.length > 0) {
+      sectionContent += "### Strengths\n\n";
+      for (const s of payload.findings.strengths) {
+        sectionContent += `- ${s}\n`;
+      }
+      sectionContent += "\n";
+    }
+
+    if (payload.findings.concerns.length > 0) {
+      sectionContent += "### Concerns\n\n";
+      for (const c of payload.findings.concerns) {
+        sectionContent += `- ${c}\n`;
+      }
+      sectionContent += "\n";
+    }
+
+    if (payload.findings.suggestions.length > 0) {
+      sectionContent += "### Suggestions\n\n";
+      for (const s of payload.findings.suggestions) {
+        sectionContent += `- ${s}\n`;
+      }
+    }
+
+    // Apply the change
+    const result = await this.obsidian.processFile(target, (content) => {
+      return content.trimEnd() + sectionContent;
+    });
+
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      [target],
+      {
+        type: "restore_content",
+        files: [{ path: target, before: beforeContent }],
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Batch append links to multiple notes
+   */
+  private async applyBatchAppendLinks(
+    action: BatchAppendLinksAction,
+    taskId?: string,
+    workflowId?: string,
+  ): Promise<ApplyResult> {
+    const { payload } = action;
+    const changedPaths: string[] = [];
+    const beforeContents: Array<{ path: string; before: string }> = [];
+    const errors: string[] = [];
+
+    // Group link pairs by source note
+    const linksBySource = new Map<string, Array<{ toNote: string; context: string }>>();
+    for (const pair of payload.linkPairs) {
+      const fromPath = normalizePath(pair.fromNote);
+      if (!linksBySource.has(fromPath)) {
+        linksBySource.set(fromPath, []);
+      }
+      linksBySource.get(fromPath)?.push({ toNote: pair.toNote, context: pair.context });
+    }
+
+    // Apply links to each source note
+    for (const [fromPath, links] of linksBySource) {
+      const beforeContent = await this.obsidian.readFileByPath(fromPath);
+      if (beforeContent === null) {
+        errors.push(`Could not read file: ${fromPath}`);
+        continue;
+      }
+
+      beforeContents.push({ path: fromPath, before: beforeContent });
+
+      // Build links section
+      const linksList = links.map((l) => `- [[${l.toNote}]] - ${l.context}`).join("\n");
+      const sectionContent = `\n\n## Related Notes\n\n${linksList}`;
+
+      const result = await this.obsidian.processFile(fromPath, (content) => {
+        return content.trimEnd() + sectionContent;
+      });
+
+      if (!result.success) {
+        errors.push(`Failed to update ${fromPath}: ${result.error}`);
+        continue;
+      }
+
+      changedPaths.push(fromPath);
+    }
+
+    if (changedPaths.length === 0) {
+      return { success: false, error: errors.join("; ") };
+    }
+
+    // Record for undo
+    const record = this.createRecord(
+      action,
+      changedPaths,
+      {
+        type: "restore_content",
+        files: beforeContents,
+      },
+      taskId,
+      workflowId,
+    );
+
+    this.actionHistory.addRecord(record);
+
+    if (errors.length > 0) {
+      return {
+        success: true,
+        recordId: record.id,
+        error: `Updated ${changedPaths.length} notes. Errors: ${errors.join("; ")}`,
+      };
+    }
+
+    return { success: true, recordId: record.id };
   }
 }

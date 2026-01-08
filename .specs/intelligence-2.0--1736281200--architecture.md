@@ -5,6 +5,7 @@
 **Interview Session:** vision-reality-gap-analysis
 **Type:** architecture
 **Status:** specification
+**Build:** 2.0 uses ONLY `bun run lint` and `bun run build` commands
 
 ---
 
@@ -2501,3 +2502,19 @@ function applyAction(action: ProposedAction): Promise<ActionResult> {
 **Status:** Ready for Implementation
 **Estimated Effort:** 6-8 weeks (phased rollout)
 **License:** MIT
+
+---
+
+## Ralph-Loop Execution Marker
+
+<promise>NOTIENT INTELLIGENCE 2.0 COMPLETE</promise>
+
+**This marker appears when:**
+- All core infrastructure implemented (ActionOrchestrator, ActionPipeline, BatchOperationEngine)
+- All 7 specialized prompts ported to `src/core/intelligence/prompts/`
+- All 9 new action types implemented in ActionApplier
+- At least 1 new action fully working end-to-end (Atomic Split recommended)
+- All TypeScript checks pass (`bun run typecheck`)
+- All lint checks pass (`bun run lint`)
+- Plugin builds successfully (`bun run build`)
+- No runtime errors in dev mode (`bun run dev`)

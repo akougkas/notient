@@ -51,11 +51,22 @@ export interface TrustDecision {
  * Types of actions the LLM can propose
  */
 export type ProposedActionType =
+  // Phase 2 (Existing)
   | "frontmatter_set"
   | "frontmatter_add_tags"
   | "append_section"
   | "append_related_links"
   | "move_note"
+  // Intelligence 2.0 (NEW)
+  | "create_note"
+  | "batch_create_notes"
+  | "restructure_note"
+  | "create_task_note"
+  | "extract_to_calendar"
+  | "append_review_section"
+  | "highlight_text_issues"
+  | "batch_append_links"
+  | "create_synthesis_note"
   // Reserved for Phase 3 (schema stability):
   | "merge_notes"
   | "trash_note";
@@ -160,17 +171,192 @@ export interface TrashNoteAction extends ProposedActionBase {
   };
 }
 
+// =============================================================================
+// Intelligence 2.0 Action Types (NEW)
+// =============================================================================
+
+/**
+ * Create a new note with content
+ */
+export interface CreateNoteAction extends ProposedActionBase {
+  type: "create_note";
+  payload: {
+    /** Path where note should be created */
+    path: string;
+    /** Note content (markdown) */
+    content: string;
+    /** Frontmatter to include */
+    frontmatter?: Record<string, unknown>;
+  };
+}
+
+/**
+ * Create multiple notes in batch (atomic split, clipping)
+ */
+export interface BatchCreateNotesAction extends ProposedActionBase {
+  type: "batch_create_notes";
+  payload: {
+    /** Notes to create */
+    notes: Array<{
+      path: string;
+      content: string;
+      frontmatter?: Record<string, unknown>;
+    }>;
+    /** Whether to create bidirectional links between notes */
+    createBidirectionalLinks: boolean;
+  };
+}
+
+/**
+ * Restructure existing note (keep overview, extract sections)
+ */
+export interface RestructureNoteAction extends ProposedActionBase {
+  type: "restructure_note";
+  payload: {
+    /** New content structure */
+    content: string;
+    /** Sections that were extracted (for linking) */
+    extractedSections: Array<{
+      heading: string;
+      newNotePath: string;
+    }>;
+  };
+}
+
+/**
+ * Create a task note with deadline tracking
+ */
+export interface CreateTaskNoteAction extends ProposedActionBase {
+  type: "create_task_note";
+  payload: {
+    /** Path for task note */
+    path: string;
+    /** Structured task list */
+    tasks: Array<{
+      text: string;
+      category: "immediate" | "planned" | "backlog" | "blocked";
+      deadline?: string; // YYYY-MM-DD
+      project?: string;
+    }>;
+    /** Decisions extracted */
+    decisions?: Array<{
+      decision: string;
+      rationale: string;
+      date?: string;
+    }>;
+  };
+}
+
+/**
+ * Extract deadline to calendar integration
+ */
+export interface ExtractToCalendarAction extends ProposedActionBase {
+  type: "extract_to_calendar";
+  payload: {
+    /** Task description */
+    task: string;
+    /** Deadline in YYYY-MM-DD format */
+    deadline: string;
+    /** Project context */
+    project?: string;
+  };
+}
+
+/**
+ * Append review results (brand check, quality check)
+ */
+export interface AppendReviewSectionAction extends ProposedActionBase {
+  type: "append_review_section";
+  payload: {
+    /** Review type */
+    reviewType: "brand" | "quality" | "technical";
+    /** Score (0-10) */
+    score: number;
+    /** Structured findings */
+    findings: {
+      strengths: string[];
+      concerns: string[];
+      suggestions: string[];
+    };
+    /** Review date */
+    date: string;
+  };
+}
+
+/**
+ * Highlight specific text issues (inline annotations)
+ */
+export interface HighlightTextIssuesAction extends ProposedActionBase {
+  type: "highlight_text_issues";
+  payload: {
+    /** Issues to highlight */
+    issues: Array<{
+      /** Line number or text snippet to find */
+      location: string;
+      /** Issue type */
+      type: "accuracy" | "tone" | "clarity" | "evidence";
+      /** Description of issue */
+      issue: string;
+      /** Suggested fix */
+      suggestion: string;
+    }>;
+  };
+}
+
+/**
+ * Batch append links to multiple notes (bidirectional)
+ */
+export interface BatchAppendLinksAction extends ProposedActionBase {
+  type: "batch_append_links";
+  payload: {
+    /** Links to add */
+    linkPairs: Array<{
+      fromNote: string;
+      toNote: string;
+      context: string; // Why these should be linked
+    }>;
+  };
+}
+
+/**
+ * Create synthesis note from related concepts
+ */
+export interface CreateSynthesisNoteAction extends ProposedActionBase {
+  type: "create_synthesis_note";
+  payload: {
+    /** Path for synthesis note */
+    path: string;
+    /** Note content */
+    content: string;
+    /** Frontmatter */
+    frontmatter?: Record<string, unknown>;
+    /** Source notes used for synthesis */
+    sourceNotes?: string[];
+  };
+}
+
 /**
  * Union of all proposed action types
  */
 export type ProposedAction =
+  // Phase 2 (Existing)
   | FrontmatterSetAction
   | FrontmatterAddTagsAction
   | AppendSectionAction
   | AppendRelatedLinksAction
   | MoveNoteAction
   | MergeNotesAction
-  | TrashNoteAction;
+  | TrashNoteAction
+  // Intelligence 2.0 (NEW)
+  | CreateNoteAction
+  | BatchCreateNotesAction
+  | RestructureNoteAction
+  | CreateTaskNoteAction
+  | ExtractToCalendarAction
+  | AppendReviewSectionAction
+  | HighlightTextIssuesAction
+  | BatchAppendLinksAction
+  | CreateSynthesisNoteAction;
 
 // =============================================================================
 // Action Results / Undo Records
@@ -317,6 +503,7 @@ export interface ActionPlanResponse {
  * Used to override any incorrect risk declared by LLM
  */
 export const ACTION_RISK_MAP: Record<ProposedActionType, RiskLevel> = {
+  // Phase 2 (Existing)
   frontmatter_set: "low",
   frontmatter_add_tags: "low",
   append_section: "low",
@@ -324,6 +511,16 @@ export const ACTION_RISK_MAP: Record<ProposedActionType, RiskLevel> = {
   move_note: "medium",
   merge_notes: "high",
   trash_note: "high",
+  // Intelligence 2.0 (NEW)
+  create_note: "low",
+  batch_create_notes: "medium",
+  restructure_note: "medium",
+  create_task_note: "low",
+  extract_to_calendar: "low",
+  append_review_section: "low",
+  highlight_text_issues: "low",
+  batch_append_links: "medium",
+  create_synthesis_note: "low",
 };
 
 // =============================================================================
@@ -340,6 +537,19 @@ export const SUPPORTED_ACTION_TYPES: ProposedActionType[] = [
   "append_section",
   "append_related_links",
   "move_note",
+];
+
+/** Intelligence 2.0 action types */
+export const INTELLIGENCE_2_ACTION_TYPES: ProposedActionType[] = [
+  "create_note",
+  "batch_create_notes",
+  "restructure_note",
+  "create_task_note",
+  "extract_to_calendar",
+  "append_review_section",
+  "highlight_text_issues",
+  "batch_append_links",
+  "create_synthesis_note",
 ];
 
 /** Action types reserved for Phase 3 */

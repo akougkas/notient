@@ -390,6 +390,39 @@ export class ObsidianFacade {
     return normalized.substring(0, lastSlash);
   }
 
+  /**
+   * Create a new file with content
+   * @param path - Path for the new file
+   * @param content - Content to write
+   */
+  async createFile(path: string, content: string): Promise<WriteResult> {
+    try {
+      const normalizedPath = normalizePath(path);
+
+      // Check if file already exists
+      if (this.getFileByPath(normalizedPath)) {
+        return { success: false, error: `File already exists: ${normalizedPath}` };
+      }
+
+      // Ensure parent folder exists
+      const parentPath = this.getParentFolderPath(normalizedPath);
+      if (parentPath) {
+        const folderResult = await this.createFolderIfNeeded(parentPath);
+        if (!folderResult.success) {
+          return folderResult;
+        }
+      }
+
+      // Create the file
+      await this.app.vault.create(normalizedPath, content);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[ObsidianFacade] createFile error:", message);
+      return { success: false, error: message };
+    }
+  }
+
   // ============ Event Subscriptions ============
 
   /**
