@@ -44,6 +44,12 @@ export class IndexManagementPanel {
   private cacheTimestamp = 0;
   private static readonly CACHE_TTL_MS = 30000; // 30 seconds
 
+  // Track in-progress operations to maintain button state across re-renders
+  private operationInProgress: {
+    type: "switch" | "trim" | "delete" | "import" | null;
+    path?: string; // For operations on specific indices
+  } = { type: null };
+
   constructor(
     private app: App,
     private kernel: Kernel,
@@ -308,15 +314,37 @@ export class IndexManagementPanel {
 
     // Switch button (for non-active)
     if (!isActive) {
-      const switchBtn = btnRow.createEl("button", { cls: "mod-cta", text: "Switch To" });
+      const isSwitchingThis =
+        this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
+      const switchBtn = btnRow.createEl("button", {
+        cls: "mod-cta",
+        text: isSwitchingThis ? "Switching..." : "Switch To",
+      });
       if (!isCompatible) {
         switchBtn.disabled = true;
         switchBtn.title = `Dimension mismatch: Index is ${idx.dimension}d, current model is ${currentDim}d`;
         switchBtn.classList.add("mod-muted");
+      } else if (isSwitchingThis || this.operationInProgress.type !== null) {
+        switchBtn.disabled = true;
       } else {
         switchBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
-          await indexManager.switchToIndex(idx.path);
+          try {
+            this.operationInProgress = { type: "switch", path: idx.path };
+            switchBtn.disabled = true;
+            switchBtn.textContent = "Switching...";
+            await indexManager.switchToIndex(idx.path);
+            this.kernel.obsidian.notice(`Switched to index: ${idx.modelKey}`);
+            this.clearCache();
+          } catch (error) {
+            console.error("[IndexManagementPanel] Failed to switch index:", error);
+            this.kernel.obsidian.notice(
+              `Failed to switch index: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          } finally {
+            this.operationInProgress = { type: null };
+            this.onRefresh();
+          }
         });
       }
     }
@@ -340,32 +368,57 @@ export class IndexManagementPanel {
   }
 
   private renderActiveIndexActions(btnRow: HTMLElement, indexManager: IndexManagerInterface): void {
-    const syncBtn = btnRow.createEl("button", { text: "▶️ Sync" });
-    syncBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      (
-        this.app as App & { commands: { executeCommandById: (id: string) => void } }
-      ).commands.executeCommandById("notient:reindex-vault");
-    });
+    const isTrimming = this.operationInProgress.type === "trim";
+    const anyOpInProgress = this.operationInProgress.type !== null;
 
-    const trimBtn = btnRow.createEl("button", { text: "🧹 Trim" });
-    trimBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
+    const syncBtn = btnRow.createEl("button", { text: "▶️ Sync" });
+    if (anyOpInProgress) {
+      syncBtn.disabled = true;
+    } else {
+      syncBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        (
+          this.app as App & { commands: { executeCommandById: (id: string) => void } }
+        ).commands.executeCommandById("notient:reindex-vault");
+      });
+    }
+
+    const trimBtn = btnRow.createEl("button", { text: isTrimming ? "Trimming..." : "🧹 Trim" });
+    if (anyOpInProgress) {
       trimBtn.disabled = true;
-      trimBtn.textContent = "Trimming...";
-      const result = await indexManager.trimIndex();
-      this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
-      this.clearCache();
-      this.onRefresh();
-    });
+    } else {
+      trimBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          this.operationInProgress = { type: "trim" };
+          trimBtn.disabled = true;
+          trimBtn.textContent = "Trimming...";
+          const result = await indexManager.trimIndex();
+          this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
+          this.clearCache();
+        } catch (error) {
+          console.error("[IndexManagementPanel] Failed to trim index:", error);
+          this.kernel.obsidian.notice(
+            `Failed to trim index: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        } finally {
+          this.operationInProgress = { type: null };
+          this.onRefresh();
+        }
+      });
+    }
 
     const rebuildBtn = btnRow.createEl("button", { cls: "mod-warning", text: "🔄 Rebuild" });
-    rebuildBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      (
-        this.app as App & { commands: { executeCommandById: (id: string) => void } }
-      ).commands.executeCommandById("notient:full-reindex");
-    });
+    if (anyOpInProgress) {
+      rebuildBtn.disabled = true;
+    } else {
+      rebuildBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        (
+          this.app as App & { commands: { executeCommandById: (id: string) => void } }
+        ).commands.executeCommandById("notient:full-reindex");
+      });
+    }
   }
 
   private renderInactiveIndexActions(
@@ -373,18 +426,40 @@ export class IndexManagementPanel {
     idx: IndexInfo,
     indexManager: IndexManagerInterface,
   ): void {
-    const delBtn = btnRow.createEl("button", { cls: "mod-warning", text: "🗑️ Delete" });
-    delBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (confirm(`Permanently delete index for ${idx.modelKey}?`)) {
-        delBtn.disabled = true;
-        delBtn.textContent = "Deleting...";
-        await indexManager.deleteIndexByPath(idx.path);
-        this.kernel.obsidian.notice(`Deleted index: ${idx.modelKey}`);
-        this.clearCache();
-        this.onRefresh();
-      }
+    const isDeletingThis =
+      this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
+    const anyOpInProgress = this.operationInProgress.type !== null;
+
+    const delBtn = btnRow.createEl("button", {
+      cls: "mod-warning",
+      text: isDeletingThis ? "Deleting..." : "🗑️ Delete",
     });
+
+    if (anyOpInProgress) {
+      delBtn.disabled = true;
+    } else {
+      delBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (confirm(`Permanently delete index for ${idx.modelKey}?`)) {
+          try {
+            this.operationInProgress = { type: "delete", path: idx.path };
+            delBtn.disabled = true;
+            delBtn.textContent = "Deleting...";
+            await indexManager.deleteIndexByPath(idx.path);
+            this.kernel.obsidian.notice(`Deleted index: ${idx.modelKey}`);
+            this.clearCache();
+          } catch (error) {
+            console.error("[IndexManagementPanel] Failed to delete index:", error);
+            this.kernel.obsidian.notice(
+              `Failed to delete index: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          } finally {
+            this.operationInProgress = { type: null };
+            this.onRefresh();
+          }
+        }
+      });
+    }
   }
 
   private renderExportButton(
@@ -393,57 +468,73 @@ export class IndexManagementPanel {
     isActive: boolean,
     indexManager: IndexManagerInterface,
   ): void {
+    const anyOpInProgress = this.operationInProgress.type !== null;
     const exportBtn = btnRow.createEl("button", { text: "📤 Export" });
-    exportBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (!isActive) {
-        this.kernel.obsidian.notice("Switch to this index first to export it");
-        return;
-      }
-      try {
-        const json = await indexManager.exportIndex();
-        const blob = new Blob([json], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `notient-index-${idx.modelKey}-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        this.kernel.obsidian.notice("Index exported");
-      } catch (error) {
-        this.kernel.obsidian.notice(`Export failed: ${error}`);
-      }
-    });
+
+    if (anyOpInProgress) {
+      exportBtn.disabled = true;
+    } else {
+      exportBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!isActive) {
+          this.kernel.obsidian.notice("Switch to this index first to export it");
+          return;
+        }
+        try {
+          const json = await indexManager.exportIndex();
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `notient-index-${idx.modelKey}-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          this.kernel.obsidian.notice("Index exported");
+        } catch (error) {
+          this.kernel.obsidian.notice(`Export failed: ${error}`);
+        }
+      });
+    }
   }
 
   private renderImportSection(section: HTMLElement, indexManager: IndexManagerInterface): void {
     const importSection = section.createDiv({ cls: "notient-settings-section" });
+    const isImporting = this.operationInProgress.type === "import";
+    const anyOpInProgress = this.operationInProgress.type !== null;
 
     new Setting(importSection)
       .setName("Import Index")
       .setDesc("Load an index from a backup file")
-      .addButton((btn) =>
-        btn.setButtonText("📥 Import").onClick(() => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = ".json";
-          input.onchange = async (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
-            if (!file) return;
-            try {
-              const text = await file.text();
-              const result = await indexManager.importIndex(text);
-              this.kernel.obsidian.notice(
-                `Imported ${result.noteCount} notes for ${result.modelKey}`,
-              );
-              this.clearCache();
-              this.onRefresh();
-            } catch (error) {
-              this.kernel.obsidian.notice(`Import failed: ${error}`);
-            }
-          };
-          input.click();
-        }),
-      );
+      .addButton((btn) => {
+        btn.setButtonText(isImporting ? "Importing..." : "📥 Import");
+        btn.setDisabled(anyOpInProgress);
+        if (!anyOpInProgress) {
+          btn.onClick(() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".json";
+            input.onchange = async (e) => {
+              const file = (e.target as HTMLInputElement).files?.[0];
+              if (!file) return;
+              try {
+                this.operationInProgress = { type: "import" };
+                this.onRefresh(); // Update UI to show importing state
+                const text = await file.text();
+                const result = await indexManager.importIndex(text);
+                this.kernel.obsidian.notice(
+                  `Imported ${result.noteCount} notes for ${result.modelKey}`,
+                );
+                this.clearCache();
+              } catch (error) {
+                this.kernel.obsidian.notice(`Import failed: ${error}`);
+              } finally {
+                this.operationInProgress = { type: null };
+                this.onRefresh();
+              }
+            };
+            input.click();
+          });
+        }
+      });
   }
 }

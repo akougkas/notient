@@ -14,11 +14,13 @@ export type {
 } from "./actionOrchestrator";
 
 // Action Pipeline
-export { createActionPipeline } from "./actionPipeline";
+export { createActionPipeline, executeBatchesInOrder } from "./actionPipeline";
 export type {
+  ActionApplierFn,
   ActionBatch,
   ActionPipeline,
   ActionPipelineConfig,
+  BatchExecutionResult,
   PipelineEvent,
   PipelinePhase,
   PipelineResult,

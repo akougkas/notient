@@ -26,3 +26,4 @@ npm-debug.log*
 bun.lockb
 
 .playwright-mcp/
+repomix-output.xml

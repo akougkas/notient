@@ -45,6 +45,143 @@ export interface ActionBatch {
 }
 
 /**
+ * Result of executing a single batch
+ */
+export interface BatchExecutionResult {
+  batchId: string;
+  success: boolean;
+  appliedCount: number;
+  failedCount: number;
+  errors: string[];
+}
+
+/**
+ * Callback type for applying a single action
+ */
+export type ActionApplierFn = (
+  action: ProposedAction,
+) => Promise<{ success: boolean; error?: string }>;
+
+/**
+ * Execute batches in dependency order (topological sort)
+ * Ensures create actions run before update actions, which run before link actions
+ *
+ * @param batches - Array of ActionBatch objects with dependencies
+ * @param applyAction - Callback function to apply a single action
+ * @returns Results for each batch in execution order
+ */
+export async function executeBatchesInOrder(
+  batches: ActionBatch[],
+  applyAction: ActionApplierFn,
+): Promise<BatchExecutionResult[]> {
+  const results: BatchExecutionResult[] = [];
+  const completed = new Set<string>();
+
+  // Build a map for quick lookup
+  const batchMap = new Map(batches.map((b) => [b.id, b]));
+
+  // Topological sort using Kahn's algorithm
+  const sortedBatches = topologicalSort(batches);
+
+  for (const batch of sortedBatches) {
+    // Verify all dependencies are completed
+    const missingDeps = batch.dependencies.filter(
+      (dep) => batchMap.has(dep) && !completed.has(dep),
+    );
+
+    if (missingDeps.length > 0) {
+      // This shouldn't happen with correct topological sort, but be defensive
+      results.push({
+        batchId: batch.id,
+        success: false,
+        appliedCount: 0,
+        failedCount: batch.actions.length,
+        errors: [`Missing dependencies: ${missingDeps.join(", ")}`],
+      });
+      continue;
+    }
+
+    // Execute all actions in this batch
+    const batchResult: BatchExecutionResult = {
+      batchId: batch.id,
+      success: true,
+      appliedCount: 0,
+      failedCount: 0,
+      errors: [],
+    };
+
+    for (const action of batch.actions) {
+      const result = await applyAction(action);
+      if (result.success) {
+        batchResult.appliedCount++;
+      } else {
+        batchResult.failedCount++;
+        batchResult.errors.push(result.error || `Failed to apply action: ${action.id}`);
+      }
+    }
+
+    // Batch is successful if at least one action succeeded
+    batchResult.success = batchResult.appliedCount > 0;
+    results.push(batchResult);
+    completed.add(batch.id);
+  }
+
+  return results;
+}
+
+/**
+ * Topological sort of batches based on dependencies
+ * Uses Kahn's algorithm for deterministic ordering
+ */
+function topologicalSort(batches: ActionBatch[]): ActionBatch[] {
+  const batchMap = new Map(batches.map((b) => [b.id, b]));
+  const inDegree = new Map<string, number>();
+  const result: ActionBatch[] = [];
+
+  // Initialize in-degree for all batches
+  for (const batch of batches) {
+    inDegree.set(batch.id, 0);
+  }
+
+  // Calculate in-degree (count of dependencies that exist in our batch set)
+  for (const batch of batches) {
+    for (const dep of batch.dependencies) {
+      if (batchMap.has(dep)) {
+        inDegree.set(batch.id, (inDegree.get(batch.id) || 0) + 1);
+      }
+    }
+  }
+
+  // Start with batches that have no dependencies (in-degree = 0)
+  const queue: ActionBatch[] = batches.filter((b) => (inDegree.get(b.id) || 0) === 0);
+
+  while (queue.length > 0) {
+    const batch = queue.shift();
+    if (!batch) break; // Shouldn't happen, but satisfy the linter
+    result.push(batch);
+
+    // Reduce in-degree for batches that depend on this one
+    for (const other of batches) {
+      if (other.dependencies.includes(batch.id)) {
+        const newDegree = (inDegree.get(other.id) || 0) - 1;
+        inDegree.set(other.id, newDegree);
+        if (newDegree === 0) {
+          queue.push(other);
+        }
+      }
+    }
+  }
+
+  // If result doesn't contain all batches, there's a cycle (shouldn't happen with our batch types)
+  if (result.length !== batches.length) {
+    console.warn("[ActionPipeline] Cycle detected in batch dependencies, returning original order");
+    return batches;
+  }
+
+  return result;
+}
+
+/**
  * Result of pipeline execution
  */
 export interface PipelineResult {

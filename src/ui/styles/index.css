@@ -19,6 +19,7 @@
 @import "./components/activity-log.css";
 @import "./components/workflow-card.css";
 @import "./components/chat-view.css";
+@import "./components/agent-streams.css";
 
 /* Views */
 @import "./views/modals.css";

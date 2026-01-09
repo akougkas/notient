@@ -186,6 +186,40 @@ ${note.content.length > 400 ? `${note.content.slice(0, 400)}...` : note.content}
   buildActionPlanPrompt(params: PromptParams): string {
     const parts: string[] = [ACTION_PLAN_PROMPT];
 
+    // Add profile context for personalized action suggestions
+    if (this.profile?.domain?.primary) {
+      const domainLines: string[] = [`\nUser expertise: ${this.profile.domain.primary}`];
+      if (this.profile.domain.secondary?.length) {
+        domainLines.push(`Related areas: ${this.profile.domain.secondary.join(", ")}`);
+      }
+      if (this.profile.domain.keywords?.length) {
+        domainLines.push(`Key concepts: ${this.profile.domain.keywords.join(", ")}`);
+      }
+      domainLines.push("Adapt tag suggestions and link recommendations to this domain.");
+      parts.push(domainLines.join("\n"));
+    }
+
+    // Add PARA folder context for move_note suggestions
+    if (this.profile?.para) {
+      const paraLines: string[] = ["\nPARA folders:"];
+      if (this.profile.para.projects.length) {
+        paraLines.push(`- Projects: ${this.profile.para.projects.join(", ")}`);
+      }
+      if (this.profile.para.areas.length) {
+        paraLines.push(`- Areas: ${this.profile.para.areas.join(", ")}`);
+      }
+      if (this.profile.para.resources.length) {
+        paraLines.push(`- Resources: ${this.profile.para.resources.join(", ")}`);
+      }
+      if (this.profile.para.archives.length) {
+        paraLines.push(`- Archives: ${this.profile.para.archives.join(", ")}`);
+      }
+      if (paraLines.length > 1) {
+        paraLines.push("Use these folders for move_note suggestions.");
+        parts.push(paraLines.join("\n"));
+      }
+    }
+
     // Add current note context for accurate targeting
     if (params.currentNote?.content) {
       const truncatedContent =

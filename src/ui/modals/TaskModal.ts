@@ -3,7 +3,7 @@ import type { NotientAgent } from "../../core/agent";
 import type { AgentTask } from "../../core/agent/types";
 import type { ActionApplier, ActionHistory, TrustLevelManager } from "../../core/agentic";
 import type { ProposedAction, RiskLevel } from "../../core/agentic/types";
-import { ChatSession } from "../../core/chat";
+import { ChatSession, type ConversationStore } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
 
 export class TaskModal extends Modal {
@@ -39,6 +39,9 @@ export class TaskModal extends Modal {
     contentEl.empty();
     contentEl.addClass("nv2-task-modal");
 
+    // Load persisted conversation history from ConversationStore
+    await this.loadPersistedHistory();
+
     // Load note preview content
     await this.loadNotePreview();
 
@@ -48,6 +51,28 @@ export class TaskModal extends Modal {
 
     // Scroll to bottom of chat
     setTimeout(() => this.scrollToBottom(), 100);
+  }
+
+  /**
+   * Load persisted conversation history for the current note
+   */
+  private async loadPersistedHistory(): Promise<void> {
+    if (!this.task.notePath || this.task.notePath === "unknown") {
+      return;
+    }
+
+    const conversationStore = this.kernel.getService<ConversationStore>("conversationStore");
+    if (!conversationStore) {
+      return;
+    }
+
+    const persistedHistory = conversationStore.getHistory(this.task.notePath);
+    if (persistedHistory.length > 0) {
+      // Use persisted history (ExtendedChatMessage[]) instead of task.chatHistory
+      this.session.importMessages(persistedHistory);
+      // Sync back to task.chatHistory for compatibility
+      this.task.chatHistory = this.session.getMessages();
+    }
   }
 
   onClose(): void {

@@ -11,15 +11,15 @@
 
 import type { App } from "obsidian";
 import { createContext } from "preact";
-import { useCallback, useContext, useEffect, useMemo } from "preact/hooks";
-import type { EventListener, EventPayloads, EventType } from "../../../types/events";
+import { useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Kernel } from "../../../core/kernel";
+import type { EventListener, EventPayloads, EventType } from "../../../types/events";
 
 // ============ Context ============
 
 interface KernelContextValue {
-	kernel: Kernel;
-	app: App;
+  kernel: Kernel;
+  app: App;
 }
 
 const KernelContext = createContext<KernelContextValue | null>(null);
@@ -27,16 +27,14 @@ const KernelContext = createContext<KernelContextValue | null>(null);
 // ============ Provider ============
 
 interface KernelProviderProps {
-	kernel: Kernel;
-	app: App;
-	children: preact.ComponentChildren;
+  kernel: Kernel;
+  app: App;
+  children: preact.ComponentChildren;
 }
 
 export function KernelProvider({ kernel, app, children }: KernelProviderProps) {
-	const value = useMemo(() => ({ kernel, app }), [kernel, app]);
-	return (
-		<KernelContext.Provider value={value}>{children}</KernelContext.Provider>
-	);
+  const value = useMemo(() => ({ kernel, app }), [kernel, app]);
+  return <KernelContext.Provider value={value}>{children}</KernelContext.Provider>;
 }
 
 // ============ Hooks ============
@@ -46,11 +44,11 @@ export function KernelProvider({ kernel, app, children }: KernelProviderProps) {
  * @throws if used outside KernelProvider
  */
 export function useKernel(): Kernel {
-	const ctx = useContext(KernelContext);
-	if (!ctx) {
-		throw new Error("useKernel must be used within a KernelProvider");
-	}
-	return ctx.kernel;
+  const ctx = useContext(KernelContext);
+  if (!ctx) {
+    throw new Error("useKernel must be used within a KernelProvider");
+  }
+  return ctx.kernel;
 }
 
 /**
@@ -58,11 +56,11 @@ export function useKernel(): Kernel {
  * @throws if used outside KernelProvider
  */
 export function useApp(): App {
-	const ctx = useContext(KernelContext);
-	if (!ctx) {
-		throw new Error("useApp must be used within a KernelProvider");
-	}
-	return ctx.app;
+  const ctx = useContext(KernelContext);
+  if (!ctx) {
+    throw new Error("useApp must be used within a KernelProvider");
+  }
+  return ctx.app;
 }
 
 /**
@@ -71,8 +69,8 @@ export function useApp(): App {
  * @returns Service instance or null if not registered
  */
 export function useService<T>(name: string): T | null {
-	const kernel = useKernel();
-	return kernel.getService<T>(name);
+  const kernel = useKernel();
+  return kernel.getService<T>(name);
 }
 
 /**
@@ -80,17 +78,50 @@ export function useService<T>(name: string): T | null {
  * @param event - Event type to subscribe to
  * @param callback - Handler function called with event payload
  */
-export function useEventBus<T extends EventType>(
-	event: T,
-	callback: EventListener<T>,
-): void {
-	const kernel = useKernel();
+export function useEventBus<T extends EventType>(event: T, callback: EventListener<T>): void {
+  const kernel = useKernel();
 
-	// Memoize callback to prevent unnecessary resubscriptions
-	const stableCallback = useCallback(callback, [callback]);
+  // Use ref to hold latest callback - avoids circular dependency from useCallback([callback])
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
 
-	useEffect(() => {
-		const unsubscribe = kernel.eventBus.on(event, stableCallback);
-		return () => unsubscribe();
-	}, [kernel.eventBus, event, stableCallback]);
+  useEffect(() => {
+    const handler: EventListener<T> = (payload) => callbackRef.current(payload);
+    const unsubscribe = kernel.eventBus.on(event, handler);
+    return () => unsubscribe();
+  }, [kernel.eventBus, event]);
+}
+
+/**
+ * Track whether services have been initialized
+ * @returns Object with isInitialized boolean and optional error
+ */
+export function useServicesInitialized(): { isInitialized: boolean; error: string | null } {
+  const kernel = useKernel();
+  const [isInitialized, setIsInitialized] = useState(kernel.isServicesInitialized);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Check current state in case we missed the event
+    if (kernel.isServicesInitialized) {
+      setIsInitialized(true);
+    }
+
+    const unsubInit = kernel.eventBus.on("services:initialized", () => {
+      setIsInitialized(true);
+      setError(null);
+    });
+
+    const unsubFail = kernel.eventBus.on("services:failed", (payload) => {
+      setIsInitialized(false);
+      setError(payload.reason);
+    });
+
+    return () => {
+      unsubInit();
+      unsubFail();
+    };
+  }, [kernel]);
+
+  return { isInitialized, error };
 }

@@ -44,7 +44,13 @@ export interface ActionRetentionConfig {
  */
 export interface UndoResult {
   success: boolean;
+  /** True if some but not all operations succeeded */
+  partial?: boolean;
   error?: string;
+  /** Paths that were successfully restored (for partial failures) */
+  restoredPaths?: string[];
+  /** Paths that failed to restore (for partial failures) */
+  failedPaths?: string[];
 }
 
 /**
@@ -278,6 +284,30 @@ export class ActionHistory {
         this.scheduleFlush();
         this.eventBus.emit("action:undone", { recordId });
         console.log(`[ActionHistory] Undone action: ${record.action.title}`);
+      } else if (undoResult.partial && record.undo.type === "restore_content") {
+        // Partial success: update the record to only contain files that still need undoing
+        const remainingFiles = record.undo.files.filter((f) =>
+          undoResult.failedPaths?.includes(f.path),
+        );
+
+        if (remainingFiles.length > 0) {
+          // Update the undo payload to only contain failed files
+          record.undo = {
+            type: "restore_content",
+            files: remainingFiles,
+          };
+          // Update changedPaths to reflect remaining files
+          record.changedPaths = remainingFiles.map((f) => f.path);
+          this.scheduleFlush();
+          console.log(
+            `[ActionHistory] Partial undo: ${undoResult.restoredPaths?.length ?? 0} files restored, ${remainingFiles.length} files remaining`,
+          );
+        } else {
+          // All files are now restored (edge case: failedPaths was empty)
+          this.records.splice(recordIndex, 1);
+          this.scheduleFlush();
+          this.eventBus.emit("action:undone", { recordId });
+        }
       }
 
       return undoResult;
@@ -307,19 +337,35 @@ export class ActionHistory {
    */
   private async undoRestoreContent(payload: RestoreContentUndo): Promise<UndoResult> {
     const errors: string[] = [];
+    const restoredPaths: string[] = [];
+    const failedPaths: string[] = [];
 
     for (const file of payload.files) {
       const result = await this.obsidian.modifyFile(file.path, file.before);
       if (!result.success) {
         errors.push(`Failed to restore ${file.path}: ${result.error}`);
+        failedPaths.push(file.path);
+      } else {
+        restoredPaths.push(file.path);
       }
     }
 
     if (errors.length > 0) {
-      return { success: false, error: errors.join("; ") };
+      // Partial success: some files restored, some failed
+      if (restoredPaths.length > 0) {
+        return {
+          success: false,
+          partial: true,
+          error: errors.join("; "),
+          restoredPaths,
+          failedPaths,
+        };
+      }
+      // Complete failure: no files restored
+      return { success: false, error: errors.join("; "), failedPaths };
     }
 
-    return { success: true };
+    return { success: true, restoredPaths };
   }
 
   /**

@@ -202,6 +202,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new DOMException("Aborted", "AbortError");
     }
 
+    // Create a combined abort signal with default 5-minute timeout for streaming
+    // This protects against LLM hangs while allowing long responses
+    const STREAM_TIMEOUT_MS = 300000; // 5 minutes
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      timeoutController.abort(new Error("LLM stream timeout after 5 minutes"));
+    }, STREAM_TIMEOUT_MS);
+
+    // If caller provided a signal, abort our timeout controller when it aborts
+    if (signal) {
+      signal.addEventListener("abort", () => timeoutController.abort(signal.reason), {
+        once: true,
+      });
+    }
+
+    const effectiveSignal = timeoutController.signal;
+
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
@@ -215,9 +232,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
           stop: options?.stopSequences,
           stream: true,
         }),
-        signal,
+        signal: effectiveSignal,
       });
     } catch (error) {
+      clearTimeout(timeoutId);
       // Handle fetch errors (network, abort, etc.)
       if ((error as Error).name === "AbortError") {
         throw new DOMException("Aborted", "AbortError");
@@ -227,23 +245,28 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     // Check disposed state after fetch completes
     if (this.disposed) {
+      clearTimeout(timeoutId);
       throw new Error(`${this.name} disposed during request`);
     }
 
     if (!response.ok) {
+      clearTimeout(timeoutId);
       throw new Error(`${this.name} stream error: ${response.status}`);
     }
 
     const reader = response.body?.getReader();
-    if (!reader) return;
+    if (!reader) {
+      clearTimeout(timeoutId);
+      return;
+    }
 
     const decoder = new TextDecoder();
     let buffer = "";
 
     try {
       while (true) {
-        // Check abort status before each read
-        if (signal?.aborted) {
+        // Check abort status before each read (includes timeout)
+        if (effectiveSignal.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
 
@@ -274,6 +297,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         }
       }
     } finally {
+      clearTimeout(timeoutId);
       reader.releaseLock();
     }
   }

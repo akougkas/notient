@@ -12,11 +12,22 @@
   border-left-color: var(--nv2-color-accent);
 }
 
-.nv2-task-running { border-left-color: var(--nv2-color-accent); }
-.nv2-task-completed { border-left-color: var(--nv2-status-healthy); }
-.nv2-task-failed { border-left-color: var(--nv2-status-error); }
-.nv2-task-cancelled { border-left-color: var(--nv2-text-muted); opacity: 0.7; }
-.nv2-task-queued { border-left-color: var(--nv2-status-warning); }
+.nv2-task-running {
+  border-left-color: var(--nv2-color-accent);
+}
+.nv2-task-completed {
+  border-left-color: var(--nv2-status-healthy);
+}
+.nv2-task-failed {
+  border-left-color: var(--nv2-status-error);
+}
+.nv2-task-cancelled {
+  border-left-color: var(--nv2-text-muted);
+  opacity: 0.7;
+}
+.nv2-task-queued {
+  border-left-color: var(--nv2-status-warning);
+}
 
 .nv2-task-note {
   font-weight: 500;
@@ -73,17 +84,28 @@
 }
 
 /* Status Indicators */
-.nv2-status-healthy { color: var(--nv2-status-healthy); }
-.nv2-status-warning { color: var(--nv2-status-warning); }
-.nv2-status-error { color: var(--nv2-status-error); }
+.nv2-status-healthy {
+  color: var(--nv2-status-healthy);
+}
+.nv2-status-warning {
+  color: var(--nv2-status-warning);
+}
+.nv2-status-error {
+  color: var(--nv2-status-error);
+}
 
 .nv2-status-pulsing {
   animation: nv2-pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes nv2-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* Buttons */

@@ -330,16 +330,18 @@ export class ActionApplier {
         return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId);
 
       case "highlight_text_issues":
-        // Phase 3: Requires editor annotation API integration
-        // Would add inline highlights in the note editor for text issues
-        console.log("[ActionApplier] highlight_text_issues is a Phase 3 feature (no-op)");
-        return { success: true, recordId: `noop-${Date.now()}` };
+        console.warn("[ActionApplier] Action type 'highlight_text_issues' is not yet implemented");
+        return {
+          success: false,
+          error: "Action type 'highlight_text_issues' is not yet implemented",
+        };
 
       case "extract_to_calendar":
-        // Phase 3: Requires calendar plugin integration (Tasks, FullCalendar, etc.)
-        // Would create calendar entries from extracted deadlines
-        console.log("[ActionApplier] extract_to_calendar is a Phase 3 feature (no-op)");
-        return { success: true, recordId: `noop-${Date.now()}` };
+        console.warn("[ActionApplier] Action type 'extract_to_calendar' is not yet implemented");
+        return {
+          success: false,
+          error: "Action type 'extract_to_calendar' is not yet implemented",
+        };
 
       default:
         return { success: false, error: `Unsupported action type: ${action.type}` };

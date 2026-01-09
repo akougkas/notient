@@ -26,6 +26,7 @@ import type {
 } from "./types";
 
 const NOTE_TEXT_MAX_CHARS = 12_000;
+const MAX_QUEUE_SIZE = 1000;
 
 export class NoteIntelligenceService {
   private db: IntelligenceDb | null = null;
@@ -98,6 +99,10 @@ export class NoteIntelligenceService {
 
   private enqueue(path: string): void {
     if (this.queue.includes(path)) return;
+    // Drop oldest items if queue is at capacity
+    while (this.queue.length >= MAX_QUEUE_SIZE) {
+      this.queue.shift();
+    }
     this.queue.push(path);
   }
 

@@ -10,11 +10,33 @@
 
 import type { App, Plugin } from "obsidian";
 import { ObsidianFacade } from "../adapters/obsidianFacade";
+import type { HealthMonitor } from "../services/healthMonitor";
+import type { IndexManager } from "../services/indexManager";
+import type { LMStudioService } from "../services/lmstudio";
+import type { OllamaService } from "../services/ollama";
 import { StoragePaths } from "../services/storagePaths";
 import { VaultLock } from "../services/vaultLock";
+import type { VectorStore } from "../services/vectorStore";
 import type { CapabilityStatus, ServiceHealth } from "../types/services";
 import type { NotientSettings } from "../types/settings";
+import type { ProfileManager } from "./agent/profileManager";
+import type { AgentTaskQueue } from "./agent/taskQueue";
+import type { ActionApplier } from "./agentic/actionApplier";
+import type { ActionHistory } from "./agentic/actionHistory";
+import type { TrustLevelManager } from "./agentic/trustLevelManager";
+import type { WorkflowRunner } from "./agentic/workflowRunner";
+import type { ConversationStore } from "./chat/conversationStore";
+import type { VaultContextBuilder } from "./context/vaultContextBuilder";
 import { EventBus, setGlobalEventBus } from "./events/eventBus";
+import type { SimpleIndexer } from "./indexer/simpleIndexer";
+import type { ActionOrchestrator } from "./intelligence/actionOrchestrator";
+import type { NoteIntelligenceService } from "./intelligence/noteIntelligence";
+import type { LLMProvider } from "./llm/provider";
+import type { SearchPipeline } from "./search/pipeline";
+import type { SimpleVaultVitals } from "./vitals/simpleVitals";
+
+// Forward declaration for NotientAgent to avoid circular dependency
+import type { NotientAgent } from "./agent/agentLoop";
 
 export interface KernelContext {
   app: App;
@@ -27,6 +49,36 @@ interface ServiceState {
   ollama: ServiceHealth;
   lmstudio: ServiceHealth;
 }
+
+/**
+ * Service registry type map - maps service names to their types.
+ * Used by getService() for type-safe service retrieval.
+ */
+export interface ServiceRegistry {
+  healthMonitor: HealthMonitor;
+  ollama: OllamaService;
+  lmstudio: LMStudioService;
+  vectorStore: VectorStore;
+  indexManager: IndexManager;
+  indexer: SimpleIndexer;
+  search: SearchPipeline;
+  context: VaultContextBuilder;
+  vitals: SimpleVaultVitals;
+  intelligence: NoteIntelligenceService;
+  taskQueue: AgentTaskQueue;
+  llmProvider: LLMProvider;
+  agent: NotientAgent;
+  conversationStore: ConversationStore;
+  actionHistory: ActionHistory;
+  workflowRunner: WorkflowRunner;
+  trustLevelManager: TrustLevelManager;
+  actionApplier: ActionApplier;
+  actionOrchestrator: ActionOrchestrator;
+  profileManager: ProfileManager;
+}
+
+/** Valid service names */
+export type ServiceName = keyof ServiceRegistry;
 
 /**
  * Main kernel class managing all services
@@ -56,32 +108,32 @@ export class Kernel {
   };
 
   // Service references (set during initialization)
-  private healthMonitor: unknown = null;
-  private ollamaService: unknown = null;
-  private lmStudioService: unknown = null;
-  private vectorStore: unknown = null;
-  private indexManager: unknown = null;
-  private indexer: unknown = null;
-  private searchPipeline: unknown = null;
-  private contextBuilder: unknown = null;
-  private vaultVitals: unknown = null;
-  private agentTaskQueue: unknown = null;
+  private healthMonitor: HealthMonitor | null = null;
+  private ollamaService: OllamaService | null = null;
+  private lmStudioService: LMStudioService | null = null;
+  private vectorStore: VectorStore | null = null;
+  private indexManager: IndexManager | null = null;
+  private indexer: SimpleIndexer | null = null;
+  private searchPipeline: SearchPipeline | null = null;
+  private contextBuilder: VaultContextBuilder | null = null;
+  private vaultVitals: SimpleVaultVitals | null = null;
+  private agentTaskQueue: AgentTaskQueue | null = null;
   // Phase 3 services (Intelligence)
-  private intelligence: unknown = null;
+  private intelligence: NoteIntelligenceService | null = null;
   // New architecture services (Phase 1.8)
-  private llmProvider: unknown = null;
-  private notientAgent: unknown = null;
+  private llmProvider: LLMProvider | null = null;
+  private notientAgent: NotientAgent | null = null;
 
   // Phase 2 services (Agentic)
-  private conversationStore: unknown = null;
-  private actionHistory: unknown = null;
-  private workflowRunner: unknown = null;
-  private trustLevelManager: unknown = null;
-  private actionApplier: unknown = null;
+  private conversationStore: ConversationStore | null = null;
+  private actionHistory: ActionHistory | null = null;
+  private workflowRunner: WorkflowRunner | null = null;
+  private trustLevelManager: TrustLevelManager | null = null;
+  private actionApplier: ActionApplier | null = null;
   // Intelligence 2.0
-  private actionOrchestrator: unknown = null;
+  private actionOrchestrator: ActionOrchestrator | null = null;
   // Identity system
-  private profileManager: unknown = null;
+  private profileManager: ProfileManager | null = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -246,119 +298,132 @@ export class Kernel {
 
   /**
    * Register a service with the kernel
+   * @param name - The service name (must be a valid ServiceName)
+   * @param service - The service instance
    */
-  registerService(name: string, service: unknown): void {
+  registerService<K extends ServiceName>(name: K, service: ServiceRegistry[K]): void {
     switch (name) {
       case "healthMonitor":
-        this.healthMonitor = service;
+        this.healthMonitor = service as HealthMonitor;
         break;
       case "ollama":
-        this.ollamaService = service;
+        this.ollamaService = service as OllamaService;
         break;
       case "lmstudio":
-        this.lmStudioService = service;
+        this.lmStudioService = service as LMStudioService;
         break;
       case "vectorStore":
-        this.vectorStore = service;
+        this.vectorStore = service as VectorStore;
         break;
       case "indexManager":
-        this.indexManager = service;
+        this.indexManager = service as IndexManager;
         break;
       case "indexer":
-        this.indexer = service;
+        this.indexer = service as SimpleIndexer;
         break;
       case "search":
-        this.searchPipeline = service;
+        this.searchPipeline = service as SearchPipeline;
         break;
       case "context":
-        this.contextBuilder = service;
+        this.contextBuilder = service as VaultContextBuilder;
         break;
       case "vitals":
-        this.vaultVitals = service;
+        this.vaultVitals = service as SimpleVaultVitals;
         break;
       case "intelligence":
-        this.intelligence = service;
+        this.intelligence = service as NoteIntelligenceService;
         break;
       case "taskQueue":
-        this.agentTaskQueue = service;
+        this.agentTaskQueue = service as AgentTaskQueue;
         break;
       case "llmProvider":
-        this.llmProvider = service;
+        this.llmProvider = service as LLMProvider;
         break;
       case "agent":
-        this.notientAgent = service;
+        this.notientAgent = service as NotientAgent;
         break;
       // Phase 2 services
       case "conversationStore":
-        this.conversationStore = service;
+        this.conversationStore = service as ConversationStore;
         break;
       case "actionHistory":
-        this.actionHistory = service;
+        this.actionHistory = service as ActionHistory;
         break;
       case "workflowRunner":
-        this.workflowRunner = service;
+        this.workflowRunner = service as WorkflowRunner;
         break;
       case "trustLevelManager":
-        this.trustLevelManager = service;
+        this.trustLevelManager = service as TrustLevelManager;
         break;
       case "actionApplier":
-        this.actionApplier = service;
+        this.actionApplier = service as ActionApplier;
         break;
       case "actionOrchestrator":
-        this.actionOrchestrator = service;
+        this.actionOrchestrator = service as ActionOrchestrator;
         break;
       case "profileManager":
-        this.profileManager = service;
+        this.profileManager = service as ProfileManager;
         break;
     }
   }
 
   /**
-   * Get a registered service
+   * Get a registered service with type safety.
+   *
+   * Preferred usage (type-safe):
+   *   const search = kernel.getService("search"); // Returns SearchPipeline | null
+   *
+   * Legacy usage (backward compatible):
+   *   const search = kernel.getService<SearchPipeline>("search"); // Returns SearchPipeline | null
+   *
+   * @param name - The service name
+   * @returns The service instance or null if not registered
    */
-  getService<T>(name: string): T | null {
+  getService<K extends ServiceName>(name: K): ServiceRegistry[K] | null;
+  getService<T>(name: string): T | null;
+  getService<K extends ServiceName | string>(name: K): unknown {
     switch (name) {
       case "healthMonitor":
-        return this.healthMonitor as T;
+        return this.healthMonitor;
       case "ollama":
-        return this.ollamaService as T;
+        return this.ollamaService;
       case "lmstudio":
-        return this.lmStudioService as T;
+        return this.lmStudioService;
       case "vectorStore":
-        return this.vectorStore as T;
+        return this.vectorStore;
       case "indexManager":
-        return this.indexManager as T;
+        return this.indexManager;
       case "indexer":
-        return this.indexer as T;
+        return this.indexer;
       case "search":
-        return this.searchPipeline as T;
+        return this.searchPipeline;
       case "context":
-        return this.contextBuilder as T;
+        return this.contextBuilder;
       case "vitals":
-        return this.vaultVitals as T;
+        return this.vaultVitals;
       case "intelligence":
-        return this.intelligence as T;
+        return this.intelligence;
       case "taskQueue":
-        return this.agentTaskQueue as T;
+        return this.agentTaskQueue;
       case "llmProvider":
-        return this.llmProvider as T;
+        return this.llmProvider;
       case "agent":
-        return this.notientAgent as T;
+        return this.notientAgent;
       // Phase 2 services
       case "conversationStore":
-        return this.conversationStore as T;
+        return this.conversationStore;
       case "actionHistory":
-        return this.actionHistory as T;
+        return this.actionHistory;
       case "workflowRunner":
-        return this.workflowRunner as T;
+        return this.workflowRunner;
       case "trustLevelManager":
-        return this.trustLevelManager as T;
+        return this.trustLevelManager;
       case "actionApplier":
-        return this.actionApplier as T;
+        return this.actionApplier;
       case "actionOrchestrator":
-        return this.actionOrchestrator as T;
+        return this.actionOrchestrator;
       case "profileManager":
-        return this.profileManager as T;
+        return this.profileManager;
       default:
         return null;
     }

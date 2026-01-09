@@ -14,11 +14,14 @@ import type { VaultVitalsData } from "./vitals";
 export type EventType =
   | "health:changed"
   | "services:initialized"
+  | "services:failed"
   | "index:progress"
   | "index:complete"
   | "index:error"
   | "search:started"
+  | "search:progress"
   | "search:complete"
+  | "search:error"
   | "vitals:updated"
   | "intelligence:updated"
   | "settings:changed"
@@ -33,17 +36,22 @@ export type EventType =
   | "workflow:reviewDismissed"
   // Phase 2: Action events
   | "action:applied"
-  | "action:undone";
+  | "action:undone"
+  // Identity system events
+  | "profile:updated";
 
 /** Event payload mapping */
 export interface EventPayloads {
   "health:changed": HealthChangedEvent;
   "services:initialized": ServicesInitializedEvent;
+  "services:failed": ServicesFailedEvent;
   "index:progress": IndexProgressEvent;
   "index:complete": IndexCompleteEvent;
   "index:error": IndexErrorEvent;
   "search:started": SearchStartedEvent;
+  "search:progress": SearchProgressEvent;
   "search:complete": SearchCompleteEvent;
+  "search:error": SearchErrorEvent;
   "vitals:updated": VitalsUpdatedEvent;
   "intelligence:updated": IntelligenceUpdatedEvent;
   "settings:changed": SettingsChangedEvent;
@@ -59,6 +67,8 @@ export interface EventPayloads {
   // Phase 2: Action events
   "action:applied": ActionAppliedEvent;
   "action:undone": ActionUndoneEvent;
+  // Identity system events
+  "profile:updated": ProfileUpdatedEvent;
 }
 
 export interface AgentTaskUpdateEvent {
@@ -71,6 +81,10 @@ export interface HealthChangedEvent {
 }
 
 export type ServicesInitializedEvent = Record<string, never>;
+
+export interface ServicesFailedEvent {
+  reason: "missing_config" | "connection_failed" | "unknown";
+}
 
 export interface IndexProgressEvent {
   progress: IndexProgress;
@@ -94,6 +108,16 @@ export interface SearchStartedEvent {
   query: string;
 }
 
+/** Search progress stages */
+export type SearchStage = "embedding" | "vector-search" | "reranking" | "aggregating";
+
+export interface SearchProgressEvent {
+  query: string;
+  stage: SearchStage;
+  /** Optional detail about the current stage */
+  detail?: string;
+}
+
 export interface SearchCompleteEvent {
   query: string;
   results: SearchResult[];
@@ -101,6 +125,13 @@ export interface SearchCompleteEvent {
   cached: boolean;
   /** Whether LLM reranking was applied */
   reranked?: boolean;
+}
+
+export interface SearchErrorEvent {
+  query: string;
+  error: string;
+  /** Operation that failed: "search" or "findRelated" */
+  operation: "search" | "findRelated";
 }
 
 export interface VitalsUpdatedEvent {
@@ -160,6 +191,15 @@ export interface ActionAppliedEvent {
 
 export interface ActionUndoneEvent {
   recordId: string;
+}
+
+// =============================================================================
+// Identity System Events
+// =============================================================================
+
+export interface ProfileUpdatedEvent {
+  /** The updated profile (undefined if profile was reset/cleared) */
+  profile: import("./profile").UserProfile | undefined;
 }
 
 /** Event listener function type */

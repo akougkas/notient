@@ -43,6 +43,7 @@ export class SearchPipeline {
   private queryCache: Map<string, CacheEntry> = new Map();
   private embeddingCache: Map<string, number[]> = new Map();
   private disposed = false;
+  private abortController: AbortController | null = null;
 
   constructor(
     private kernel: Kernel,
@@ -79,6 +80,10 @@ export class SearchPipeline {
     options: Partial<ExtendedSearchOptions> = {},
   ): Promise<SearchResult[]> {
     if (this.disposed) return [];
+
+    // Create abort controller for this search operation
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
     // Resolve effective settings from presets vs custom
     const searchSettings = this.kernel.settings.search;
@@ -125,9 +130,12 @@ export class SearchPipeline {
 
     try {
       // Phase 1: Query embedding (cached)
+      this.eventBus.emit("search:progress", { query, stage: "embedding" });
       const queryEmbedding = await this.getQueryEmbedding(query);
+      if (signal.aborted) return [];
 
       // Phase 2: Hierarchical retrieval (TSI v2)
+      this.eventBus.emit("search:progress", { query, stage: "vector-search" });
       // Stage 1: candidate notes (tier=note)
       const noteCandidateK = enableReranking ? 80 : Math.max(40, requestedTopK * 4);
       const noteCandidates = await this.vectorStore.search(queryEmbedding, {
@@ -160,15 +168,24 @@ export class SearchPipeline {
         });
       }
 
+      if (signal.aborted) return [];
+
       let results: SearchResult[];
 
       // Phase 3: Chunk-level reranking (smart)
       const reranker = this.getReranker();
       if (enableReranking && reranker && chunkCandidates.length > 0) {
+        this.eventBus.emit("search:progress", {
+          query,
+          stage: "reranking",
+          detail: `${chunkCandidates.length} chunks`,
+        });
         const rerankedChunks = await this.rerankChunksWithLLM(query, chunkCandidates, reranker);
+        this.eventBus.emit("search:progress", { query, stage: "aggregating" });
         results = this.aggregateChunksToNotes(rerankedChunks, { maxChunksPerNote: 3 });
       } else {
         // No reranker: rank by vector similarity, but still aggregate by note
+        this.eventBus.emit("search:progress", { query, stage: "aggregating" });
         results = this.aggregateChunksToNotes(chunkCandidates, { maxChunksPerNote: 3 });
       }
 
@@ -188,7 +205,13 @@ export class SearchPipeline {
 
       return results;
     } catch (error) {
-      console.error("[SearchPipeline] Search failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[SearchPipeline] Search failed:", message);
+      this.eventBus.emit("search:error", {
+        query,
+        error: message,
+        operation: "search",
+      });
       return [];
     }
   }
@@ -310,6 +333,10 @@ export class SearchPipeline {
   ): Promise<RelatedNote[]> {
     if (this.disposed) return [];
 
+    // Create abort controller for this operation
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
+
     const topK = options.topK ?? 5;
     const minScore = options.minScore ?? 0.4;
 
@@ -324,6 +351,7 @@ export class SearchPipeline {
       // Use the note content as the query (or a summary)
       const queryText = content.slice(0, 1000); // First 1000 chars as representative
       const queryEmbedding = await this.getQueryEmbedding(queryText);
+      if (signal.aborted) return [];
 
       // Search for similar notes (tier=note) when available
       const chunkResults = await this.vectorStore.search(queryEmbedding, {
@@ -385,7 +413,13 @@ export class SearchPipeline {
       relatedNotes.sort((a, b) => b.score - a.score);
       return relatedNotes.slice(0, topK);
     } catch (error) {
-      console.error("[SearchPipeline] findRelated failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[SearchPipeline] findRelated failed:", message);
+      this.eventBus.emit("search:error", {
+        query: path,
+        error: message,
+        operation: "findRelated",
+      });
       return [];
     }
   }
@@ -419,8 +453,9 @@ export class SearchPipeline {
       topK: options.topK,
       minScore: options.minScore,
       paraType: options.paraType,
-      folderPaths: options.folderPaths?.sort(),
-      tags: options.tags?.sort(),
+      // Create copies before sorting to avoid mutating caller's arrays
+      folderPaths: options.folderPaths?.slice().sort(),
+      tags: options.tags?.slice().sort(),
       // Include reranking flag to avoid cache key collisions
       enableReranking,
     });
@@ -466,10 +501,12 @@ export class SearchPipeline {
   }
 
   /**
-   * Dispose of the pipeline
+   * Dispose of the pipeline and abort any pending operations
    */
   dispose(): void {
     this.disposed = true;
+    this.abortController?.abort();
+    this.abortController = null;
     this.clearCache();
   }
 }
