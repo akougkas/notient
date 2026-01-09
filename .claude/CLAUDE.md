@@ -141,13 +141,35 @@ src/
 - ✅ Dashboard (vitals/actions/index tabs)
 - ✅ Setup wizard + settings
 
-### Intelligence 2.0 (Core Ready, UI Pending)
+### Intelligence 2.0 (Core Ready, UI Redesign Planned)
 - ✅ ActionOrchestrator - 7 action types dispatched
 - ✅ ActionPipeline - 5-phase execution with events
 - ✅ All 7 prompt templates defined
 - ✅ Action converters (atomic, synthesis, clipping, task, brand, connection, enhance)
 - ✅ Review queue → ActionApplier flow connected
-- ⏳ **UI event consumers** - Sidebar doesn't yet render PipelineEvents
+- ⏳ **Sidebar v2.0** - Preact, embedding-based filtering, adaptive layouts (see `planning/UI-UX.md`)
+
+### Sidebar v2.0 Redesign (Designed, Implementation Pending)
+- ✅ Design spec complete in `planning/UI-UX.md`
+- ⏳ **Preact migration** - Declarative components replacing imperative DOM
+- ⏳ **Smart filtering** - Show 2-3 relevant actions via embedding similarity
+- ⏳ **Single adaptive view** - Remove Note/Agents toggle, auto-switch layouts
+- ⏳ **Insight Stream** - Rolling feed with Apply/Dismiss inline
+- ⏳ **CSS simplification** - 3000 → ~1000 lines (function over form)
+
+### Dashboard (Deferred to v0.3+)
+- Current primitive dashboard kept for workflows/history
+- Full redesign planned as external web app
+
+### Identity System (Designed, Implementation Pending)
+- ✅ Complete specification in `docs/IDENTITY_AND_PROMPTS.md`
+- ✅ Research Chief of Staff persona defined
+- ✅ User profile schema (minimal MVP: domain + PARA)
+- ✅ Two-tier prompt architecture (base + specialized overlays)
+- ⏳ **ProfileManager** - Load, save, infer from vault embeddings
+- ⏳ **Two-tier prompts** - Refactor all prompts to use base identity + overlays
+- ⏳ **Settings UI** - Identity section for profile generation/editing
+- ⏳ **Silent integration** - Profile influences prompts invisibly (no UI badges)
 
 ---
 
@@ -191,6 +213,9 @@ Trigger action → ActionOrchestrator.execute() → 5-phase pipeline → Pipelin
 ### 7. Reinit
 Change LLM settings → Services reinitialize → No leaks → Index preserved
 
+### 8. Profile Generation (Designed)
+Settings > Identity > "Generate from Vault" → Check index exists → Cluster embeddings → LLM analyzes clusters → Infer domain → Detect PARA folders → Preview → User edits → Save to `.obsidian/plugins/notient/profile.json` → Silently influences all prompts
+
 ---
 
 ## Tech Stack
@@ -223,6 +248,9 @@ Change LLM settings → Services reinitialize → No leaks → Index preserved
 2. **Human-in-steering-wheel** - Trust levels, universal undo
 3. **Theme-aware** - Respects Obsidian themes
 4. **Simplicity** - Clean abstractions, no debug cruft
+5. **Research Chief of Staff** - Analytical, grounded, proactive persona (not generic chatbot)
+6. **Silent Intelligence** - Profile influences behavior without UI chrome/badges
+7. **Two-Tier Prompts** - Base identity (persona + profile) + specialized overlays (task/agent-specific)
 
 ---
 
@@ -261,7 +289,9 @@ Production build: **~290KB**
 ## Planning Documents
 
 - `planning/PRD.md` - Product requirements
-- `planning/prompts/bootstrap.md` - Architecture spec
+- `planning/bootstrap.md` - Architecture master plan
+- `docs/IDENTITY_AND_PROMPTS.md` - **Identity system specification (NEW)**
+- `planning/coding_tasks/notient-system-prompts.md` - System prompt design notes
 
 ---
 
