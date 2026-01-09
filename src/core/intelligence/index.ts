@@ -31,6 +31,7 @@ export { AGENT_PROMPTS, getPrompt } from "./prompts";
 export type { AgentPrompt, IntelligenceActionType } from "./prompts";
 
 // Re-export prompt modules
+export { ANTAGONIST_PROMPT, buildAntagonistPrompt } from "./prompts/antagonist";
 export { ATOMIC_SPLIT_PROMPT } from "./prompts/atomic";
 export { BRAND_CHECK_PROMPT } from "./prompts/brand";
 export { CLIPPING_PROMPT } from "./prompts/clipping";

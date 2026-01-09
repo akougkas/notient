@@ -136,8 +136,15 @@ export class ProfileManager {
 
     report("clustering", `Analyzing ${indexedCount} indexed notes...`);
 
-    // Get sample notes for inference
-    const sampleNotes = await this.getSampleNotesForInference();
+    // Get sample notes for inference (with error handling per PART 2.4)
+    let sampleNotes: Awaited<ReturnType<typeof this.getSampleNotesForInference>>;
+    try {
+      sampleNotes = await this.getSampleNotesForInference();
+    } catch (sampleError) {
+      console.error("[ProfileManager] Failed to get sample notes:", sampleError);
+      throw new Error("Could not read vault notes. Check file permissions.");
+    }
+
     if (sampleNotes.length === 0) {
       throw new Error("No notes available for inference");
     }

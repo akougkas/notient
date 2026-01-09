@@ -198,11 +198,12 @@ export class VaultContextBuilder {
    * Get PARA distribution of candidates
    */
   private getParaDistribution(candidates: SearchResult[]): Record<string, number> {
+    // Note: ParaType uses singular "archive" not "archives" (PART 2.5 fix)
     const dist: Record<string, number> = {
       projects: 0,
       areas: 0,
       resources: 0,
-      archives: 0,
+      archive: 0,
       unknown: 0,
     };
 

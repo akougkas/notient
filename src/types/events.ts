@@ -2,17 +2,18 @@
  * Typed event definitions for the EventBus
  */
 
-import type { AppliedActionRecord, WorkflowRun } from "../core/agentic/types";
+import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { IntelligenceRecord } from "../core/intelligence/types";
 import type { AgentTask } from "./agentTask";
 import type { IndexProgress } from "./indexer";
 import type { SearchResult } from "./search";
-import type { ServiceHealth } from "./services";
+import type { InitializationContext, InitializationState, ServiceHealth } from "./services";
 import type { VaultVitalsData } from "./vitals";
 
 /** All event types supported by the EventBus */
 export type EventType =
   | "health:changed"
+  | "init:state-changed"
   | "services:initialized"
   | "services:failed"
   | "index:progress"
@@ -35,6 +36,7 @@ export type EventType =
   | "workflow:failed"
   | "workflow:reviewDismissed"
   // Phase 2: Action events
+  | "action:proposed"
   | "action:applied"
   | "action:undone"
   | "action:apply-requested"
@@ -45,6 +47,7 @@ export type EventType =
 /** Event payload mapping */
 export interface EventPayloads {
   "health:changed": HealthChangedEvent;
+  "init:state-changed": InitStateChangedEvent;
   "services:initialized": ServicesInitializedEvent;
   "services:failed": ServicesFailedEvent;
   "index:progress": IndexProgressEvent;
@@ -67,6 +70,7 @@ export interface EventPayloads {
   "workflow:failed": WorkflowFailedEvent;
   "workflow:reviewDismissed": WorkflowReviewDismissedEvent;
   // Phase 2: Action events
+  "action:proposed": ActionProposedEvent;
   "action:applied": ActionAppliedEvent;
   "action:undone": ActionUndoneEvent;
   "action:apply-requested": ActionApplyRequestedEvent;
@@ -82,6 +86,12 @@ export interface AgentTaskUpdateEvent {
 export interface HealthChangedEvent {
   service: "ollama" | "lmstudio";
   health: ServiceHealth;
+}
+
+export interface InitStateChangedEvent {
+  previousState: InitializationState;
+  currentState: InitializationState;
+  context: InitializationContext;
 }
 
 export type ServicesInitializedEvent = Record<string, never>;
@@ -189,6 +199,18 @@ export interface WorkflowReviewDismissedEvent {
 // Phase 2: Action Events
 // =============================================================================
 
+export interface ActionProposedEvent {
+  /** The proposed action awaiting user review */
+  action: ProposedAction;
+  /** Context about the target note */
+  noteContext: {
+    path: string;
+    title: string;
+  };
+  /** Source of the proposal (workflow, agent, etc.) */
+  source?: string;
+}
+
 export interface ActionAppliedEvent {
   record: AppliedActionRecord;
 }
@@ -198,10 +220,14 @@ export interface ActionUndoneEvent {
 }
 
 export interface ActionApplyRequestedEvent {
+  /** ID of the action to apply */
   actionId: string;
+  /** The action to apply (included to avoid need for central lookup) */
+  action?: ProposedAction;
 }
 
 export interface ActionUndoRequestedEvent {
+  /** ID of the action record to undo */
   actionId: string;
 }
 

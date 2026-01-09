@@ -518,6 +518,7 @@ class ActionPipelineImpl implements ActionPipeline {
       brand: () => this.convertBrandActions(parsed),
       connection: () => this.convertConnectionActions(parsed),
       enhance: () => this.convertEnhanceActions(parsed),
+      antagonist: () => this.convertAntagonistActions(parsed),
     };
 
     const converter = converters[this.config.actionType];
@@ -828,6 +829,64 @@ class ActionPipelineImpl implements ActionPipeline {
     }
 
     return actions;
+  }
+
+  /**
+   * Convert antagonist critique response to actions (PART 1.2)
+   *
+   * Antagonist agent provides:
+   * - claims_analyzed: Key claims identified in the note
+   * - critique: Array of {claim, weakness, counterpoint, severity}
+   * - probing_questions: Questions that challenge assumptions
+   * - steelman_argument: Best possible version of the argument
+   */
+  private convertAntagonistActions(parsed: Record<string, unknown>): ProposedAction[] {
+    const { context } = this.config;
+    const critique = parsed.critique as
+      | Array<{ claim: string; weakness: string; counterpoint: string; severity: string }>
+      | undefined;
+    const probingQuestions = parsed.probing_questions as string[] | undefined;
+    const steelmanArgument = parsed.steelman_argument as string | undefined;
+
+    // Need at least some critique to generate an action
+    if (!critique || critique.length === 0) {
+      return [];
+    }
+
+    // Count high-severity critiques to determine overall rating
+    const highSeverityCount = critique.filter((c) => c.severity === "high").length;
+    const mediumSeverityCount = critique.filter((c) => c.severity === "medium").length;
+
+    // Calculate a score (10 = no issues, 0 = all high severity)
+    const baseScore = 10;
+    const score = Math.max(
+      0,
+      baseScore - highSeverityCount * 3 - mediumSeverityCount * 1,
+    );
+
+    return [
+      {
+        id: this.genId("antagonist"),
+        type: "append_review_section",
+        risk: "low" as RiskLevel,
+        title: `Devil's Advocate: ${score}/10`,
+        reason: `Critical analysis: ${critique.length} weaknesses identified`,
+        target: context.notePath,
+        requiresWriteLock: true,
+        payload: {
+          reviewType: "antagonist",
+          score,
+          findings: {
+            strengths: steelmanArgument ? [steelmanArgument] : [],
+            concerns: critique.map(
+              (c) => `**${c.claim}**: ${c.weakness} (Counter: ${c.counterpoint})`,
+            ),
+            suggestions: probingQuestions || [],
+          },
+          date: this.today(),
+        },
+      } as ProposedAction,
+    ];
   }
 
   /**

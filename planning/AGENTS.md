@@ -94,16 +94,16 @@ Anthony (the human leader) will review and decide. The decision is **FINAL**.
 | Part | Title | Agent | Status |
 |------|-------|-------|--------|
 | 1.1 | Sidebar Stuck on Initializing | `[AGENT-2]` Sage | ⬜ Not Started |
-| 1.2 | Antagonist Agent Non-Functional | `[AGENT-1]` Archie | ⬜ Not Started |
-| 1.3 | UserEvolutionService Never Instantiated | `[AGENT-1]` Archie | ⬜ Not Started |
+| 1.2 | Antagonist Agent Non-Functional | `[AGENT-1]` Archie | ✅ Complete |
+| 1.3 | UserEvolutionService Never Instantiated | `[AGENT-1]` Archie | ✅ Complete |
 | 1.4 | ChatView Uses Fake Mock | `[AGENT-2]` Sage | ⬜ Not Started |
 | 1.5 | TaskModal History Not Persisted | `[AGENT-2]` Sage | ⬜ Not Started |
 | 1.6 | AgentStreamsView No Events | `[AGENT-2]` Sage | ⬜ Not Started |
-| 2.1 | Action Types Not Implemented | `[AGENT-1]` Archie | ⬜ Not Started |
-| 2.2 | action:proposed Missing | `[AGENT-1]` Archie | ⬜ Not Started |
-| 2.3 | action:apply-requested Unhandled | `[AGENT-1]` Archie | ⬜ Not Started |
-| 2.4 | ProfileManager Crash | `[AGENT-1]` Archie | ⬜ Not Started |
-| 2.5 | PARA Type Mismatch | `[AGENT-1]` Archie | ⬜ Not Started |
+| 2.1 | Action Types Not Implemented | `[AGENT-1]` Archie | ⏭️ Deferred (in INTELLIGENCE_2_ACTION_TYPES) |
+| 2.2 | action:proposed Missing | `[AGENT-1]` Archie | ✅ Complete |
+| 2.3 | action:apply-requested Unhandled | `[AGENT-1]` Archie | ✅ Complete |
+| 2.4 | ProfileManager Crash | `[AGENT-1]` Archie | ✅ Complete |
+| 2.5 | PARA Type Mismatch | `[AGENT-1]` Archie | ✅ Complete |
 | 3.1 | Omnibar Unused | `[AGENT-2]` Sage | ⬜ Not Started |
 | 3.2 | QuickActions Not Connected | `[AGENT-2]` Sage | ⬜ Not Started |
 | 3.3 | InsightStream Actions Unwired | `[AGENT-2]` Sage | ⬜ Not Started |
@@ -116,7 +116,7 @@ Anthony (the human leader) will review and decide. The decision is **FINAL**.
 | 7.1 | Universal Undo UI | `[AGENT-2]` Sage | ⬜ Not Started |
 | 7.2 | Search Mode Selection | `[AGENT-2]` Sage | ⬜ Not Started |
 | 7.3 | Dashboard History Tab | `[AGENT-2]` Sage | ⬜ Not Started |
-| 9.* | Initialization State Machine | `[AGENT-1]` Archie | ⬜ Not Started |
+| 9.* | Initialization State Machine | `[AGENT-1]` Archie | ✅ Complete |
 
 ---
 
@@ -150,10 +150,57 @@ Anthony (the human leader) will review and decide. The decision is **FINAL**.
 
 ### AGENT-1 (Archie) Session
 ```
-Status: ⬜ Not Started
+Status: 🟢 Active
 Branch: archie/backend-fixes
-Last Activity: -
-Current Task: -
+Last Activity: 2026-01-09
+Current Task: Session Complete - Ready for Merge
+
+Completed Tasks:
+
+✅ PART 9 - Initialization State Machine (HIGH PRIORITY)
+  - Created InitializationState types (src/types/services.ts)
+  - Created InitializationStateMachine class (src/core/services/)
+  - Integrated into main.ts with 4-phase flow:
+    CHECKING_PROVIDERS → LOADING_INDEX → WARMING_SERVICES → READY
+  - Handled canonical scenarios: P1-P11, I1-I11, C1-C9
+  - Added init:state-changed event
+
+✅ PART 2 - Backend Wiring
+  - 2.2: Added action:proposed event type
+  - 2.3: Created handlers for action:apply-requested, action:undo-requested
+  - 2.4: Fixed ProfileManager.infer() null checks
+  - 2.5: Fixed PARA type mismatch ("archives" → "archive")
+
+✅ PART 1.2 - Antagonist Agent
+  - Added "antagonist" to converters map in actionPipeline.ts
+  - Created convertAntagonistActions() method
+  - Added reviewType "antagonist" to AppendReviewSectionAction
+  - Exported ANTAGONIST_PROMPT in intelligence/index.ts
+
+✅ PART 1.3 - UserEvolutionService
+  - Created barrel export (src/core/evolution/index.ts)
+  - Instantiated in main.ts after ProfileManager
+  - Registered with kernel
+  - Added cleanup in onunload
+
+Files Modified:
+- src/main.ts
+- src/types/services.ts
+- src/types/events.ts
+- src/core/services/initializationStateMachine.ts (new)
+- src/core/services/index.ts (new)
+- src/core/evolution/index.ts (new)
+- src/core/intelligence/actionPipeline.ts
+- src/core/intelligence/index.ts
+- src/core/agentic/types.ts
+- src/core/agent/profileManager.ts
+- src/core/context/vaultContextBuilder.ts
+
+Notes for Sage:
+- init:state-changed event ready for Settings UI (Task 3.5)
+- ActionApplyRequestedEvent now includes optional `action` field
+  → Update App.tsx line 307 to pass action in event
+- TypeScript clean ✅
 ```
 
 ### AGENT-2 (Sage) Session

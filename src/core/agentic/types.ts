@@ -269,7 +269,7 @@ export interface AppendReviewSectionAction extends ProposedActionBase {
   type: "append_review_section";
   payload: {
     /** Review type */
-    reviewType: "brand" | "quality" | "technical";
+    reviewType: "brand" | "quality" | "technical" | "antagonist";
     /** Score (0-10) */
     score: number;
     /** Structured findings */

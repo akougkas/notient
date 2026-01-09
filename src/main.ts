@@ -15,10 +15,12 @@ import { Notice, Plugin } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
 import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
+import { InitializationStateMachine } from "./core/services";
 // Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
+import { UserEvolutionService } from "./core/evolution";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
 import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
@@ -74,6 +76,12 @@ export default class NotientPlugin extends Plugin {
   // Identity system
   private profileManager: ProfileManager | null = null;
 
+  // Evolution system (PART 1.3)
+  private userEvolution: UserEvolutionService | null = null;
+
+  // State machine for initialization
+  private initStateMachine: InitializationStateMachine | null = null;
+
   private servicesInitialized = false;
 
   async onload(): Promise<void> {
@@ -94,6 +102,14 @@ export default class NotientPlugin extends Plugin {
 
       // Initialize kernel
       await this.kernel.initialize();
+
+      // Create initialization state machine
+      this.initStateMachine = new InitializationStateMachine({
+        eventBus: this.kernel.eventBus,
+        onStateChange: (ctx) => {
+          console.log("[Notient] Init state:", ctx.state, ctx.capabilities);
+        },
+      });
 
       // Register views
       this.registerViews();
@@ -182,6 +198,11 @@ export default class NotientPlugin extends Plugin {
       this.notientAgent = null;
       this.llmProvider?.dispose();
       this.noteIntelligence?.dispose();
+      // Unload evolution service
+      if (this.userEvolution) {
+        await this.userEvolution.unload();
+        this.userEvolution = null;
+      }
       this.vaultVitals?.dispose();
       this.contextBuilder = null;
       this.searchPipeline?.dispose();
@@ -196,6 +217,10 @@ export default class NotientPlugin extends Plugin {
       this.ollamaService?.dispose();
       this.healthMonitor?.dispose();
 
+      // Dispose state machine
+      this.initStateMachine?.dispose();
+      this.initStateMachine = null;
+
       // Dispose kernel last
       this.kernel?.dispose();
     } catch (error) {
@@ -206,213 +231,317 @@ export default class NotientPlugin extends Plugin {
   }
 
   /**
-   * Initialize services asynchronously
+   * Initialize services asynchronously using the state machine
    */
   private async initializeServicesAsync(): Promise<void> {
     if (this.servicesInitialized) return;
+    if (!this.initStateMachine) {
+      console.error("[Notient] State machine not initialized");
+      return;
+    }
 
     console.log("[Notient] Initializing services...");
     this.kernel.setServicesInitializing(true);
 
-    try {
-      const eventBus = this.kernel.eventBus;
+    const eventBus = this.kernel.eventBus;
+    let lmStudioFailed = false;
 
-      // Health monitor
+    try {
+      // =========================================================================
+      // PHASE 1: CHECKING_PROVIDERS
+      // =========================================================================
+      this.initStateMachine.transition("CHECKING_PROVIDERS", {
+        progress: { stage: "providers", percent: 0, message: "Checking configuration..." },
+      });
+
+      // Create health monitor first
       this.healthMonitor = new HealthMonitor(this.kernel);
       await this.healthMonitor.initialize();
       this.kernel.registerService("healthMonitor", this.healthMonitor);
 
-      // Validate required configuration
+      // Validate required configuration (Scenario C1-C9)
       const hasEmbeddingModel = Boolean(this.settings.ollama.embeddingModel);
       const hasReasoningModel = Boolean(this.settings.lmstudio.reasoningModel);
       const ollamaEnabled = this.settings.ollama.enabled;
       const lmstudioEnabled = this.settings.lmstudio.enabled;
 
-      if (!hasEmbeddingModel || !hasReasoningModel || !ollamaEnabled || !lmstudioEnabled) {
-        console.error("[Notient] Missing required configuration:", {
-          hasEmbeddingModel,
-          hasReasoningModel,
-          ollamaEnabled,
-          lmstudioEnabled,
+      if (!hasEmbeddingModel || !ollamaEnabled) {
+        // Scenario P3: Ollama required but not configured → FAILED
+        this.initStateMachine.transition("FAILED", {
+          errorMessage: "Ollama embedding model not configured. Run setup wizard.",
+          failedReason: "missing_config",
         });
-        this.kernel.obsidian.notice(
-          "Notient requires BOTH Ollama and LM Studio. Run setup wizard.",
-        );
-        // Reset initializing flag and emit failure event for UI
         this.kernel.setServicesInitializing(false);
-        this.kernel.eventBus.emit("services:failed", { reason: "missing_config" });
+        this.kernel.obsidian.notice("Notient requires Ollama for embeddings. Run setup wizard.");
         return;
       }
 
-      console.log("[Notient] Required services configured:", {
-        embeddingModel: this.settings.ollama.embeddingModel,
-        reasoningModel: this.settings.lmstudio.reasoningModel,
+      this.initStateMachine.updateProgress({
+        stage: "providers",
+        percent: 20,
+        message: "Connecting to Ollama...",
       });
 
-      // Initialize AI services
+      // Initialize Ollama (required for embeddings - Scenario P1-P11)
       try {
-        // Ollama service (embeddings)
         this.ollamaService = new OllamaService(this.kernel);
         await this.ollamaService.initialize();
         this.kernel.registerService("ollama", this.ollamaService);
+      } catch (ollamaError) {
+        // Scenario P3/P6: Ollama down → FAILED
+        const errorMsg = ollamaError instanceof Error ? ollamaError.message : "Connection failed";
+        const isNetworkError = errorMsg.includes("fetch") || errorMsg.includes("ECONNREFUSED");
 
-        // LM Studio service (reasoning/chat)
-        this.lmStudioService = new LMStudioService(this.kernel);
+        this.initStateMachine.transition("FAILED", {
+          errorMessage: isNetworkError
+            ? "Cannot connect to Ollama. Is it running?"
+            : `Ollama error: ${errorMsg}`,
+          failedReason: isNetworkError ? "connection_failed" : "critical_error",
+        });
+        this.kernel.setServicesInitializing(false);
+        this.kernel.obsidian.notice("Cannot connect to Ollama. Is it running on port 11434?");
+        return;
+      }
+
+      this.initStateMachine.updateProgress({
+        stage: "providers",
+        percent: 40,
+        message: "Connecting to LM Studio...",
+      });
+
+      // Initialize LM Studio (optional - Scenario P2)
+      if (hasReasoningModel && lmstudioEnabled) {
         try {
+          this.lmStudioService = new LMStudioService(this.kernel);
           await this.lmStudioService.initialize();
           this.kernel.registerService("lmstudio", this.lmStudioService);
           console.log("[Notient] LM Studio service initialized");
         } catch (lmError) {
-          console.warn(
-            "[Notient] LM Studio initialization failed (chat/reranking disabled):",
-            lmError,
-          );
-          // Continue without LM Studio - search still works with vector similarity
+          // Scenario P2: LM Studio down → continue in degraded mode
+          console.warn("[Notient] LM Studio initialization failed (chat/reranking disabled):", lmError);
+          lmStudioFailed = true;
         }
+      } else {
+        lmStudioFailed = true;
+      }
 
-        // Vector store (simple brute-force implementation)
+      // =========================================================================
+      // PHASE 2: LOADING_INDEX
+      // =========================================================================
+      this.initStateMachine.transition("LOADING_INDEX", {
+        progress: { stage: "index", percent: 50, message: "Loading vector store..." },
+      });
+
+      // Initialize vector store (Scenario I1-I11)
+      try {
         this.vectorStore = new SimpleVectorStore(this.kernel);
         await this.vectorStore.initialize();
         this.kernel.registerService("vectorStore", this.vectorStore);
-
-        // Index manager (coordinates store and state)
-        this.indexManager = new IndexManager(this.kernel, this.vectorStore);
-        await this.indexManager.initialize();
-        this.kernel.registerService("indexManager", this.indexManager);
-
-        // Simple indexer (no JobQueue)
-        this.indexer = new SimpleIndexer(
-          this.kernel,
-          eventBus,
-          this.indexManager,
-          this.ollamaService,
-        );
-        await this.indexer.initialize();
-        this.kernel.registerService("indexer", this.indexer);
-
-        // Search pipeline
-        this.searchPipeline = new SearchPipeline(
-          this.kernel,
-          eventBus,
-          this.ollamaService,
-          this.vectorStore,
-        );
-        await this.searchPipeline.initialize();
-        this.kernel.registerService("search", this.searchPipeline);
-
-        // Vault context builder (for RAG)
-        this.contextBuilder = new VaultContextBuilder(this.kernel);
-        this.kernel.registerService("context", this.contextBuilder);
-
-        // Vault vitals (simplified)
-        this.vaultVitals = new SimpleVaultVitals(
-          this.kernel,
-          eventBus,
-          this.vectorStore,
-          this.indexManager,
-        );
-        this.kernel.registerService("vitals", this.vaultVitals);
-
-        // New architecture (Phase 1.8): LLM Provider + Notient Agent
-        this.llmProvider = new LMStudioProvider(
-          this.settings.lmstudio.host,
-          this.settings.lmstudio.reasoningModel,
-        );
-        try {
-          await this.llmProvider.initialize();
-          this.kernel.registerService("llmProvider", this.llmProvider);
-          console.log("[Notient] LLM Provider initialized (new architecture)");
-        } catch (llmError) {
-          console.warn("[Notient] LLM Provider initialization failed:", llmError);
-          // Fall back to old service for backward compatibility
+      } catch (storeError) {
+        // Scenario I2: Corrupt index file
+        const errorMsg = storeError instanceof Error ? storeError.message : "Store init failed";
+        if (errorMsg.includes("JSON") || errorMsg.includes("parse")) {
+          console.error("[Notient] Index file appears corrupt, will rebuild");
+          // Continue - IndexManager will handle recovery
+        } else {
+          this.initStateMachine.transition("FAILED", {
+            errorMessage: `Vector store failed: ${errorMsg}`,
+            failedReason: "index_corrupt",
+          });
+          this.kernel.setServicesInitializing(false);
+          return;
         }
+      }
 
-        // Identity system: ProfileManager
-        this.profileManager = new ProfileManager(this.app.vault, this.kernel);
-        await this.profileManager.load(); // Load profile on startup (may be undefined)
-        this.kernel.registerService("profileManager", this.profileManager);
-        console.log(
-          "[Notient] ProfileManager initialized:",
-          this.profileManager.get()?.domain?.primary || "(no profile)",
-        );
+      this.initStateMachine.updateProgress({
+        stage: "index",
+        percent: 60,
+        message: "Loading index state...",
+      });
 
-        // Phase 3: Note intelligence (background summaries + health)
-        this.noteIntelligence = new NoteIntelligenceService(this.kernel, eventBus);
-        await this.noteIntelligence.initialize();
-        this.kernel.registerService("intelligence", this.noteIntelligence);
+      // Initialize index manager
+      this.indexManager = new IndexManager(this.kernel, this.vectorStore!);
+      await this.indexManager.initialize();
+      this.kernel.registerService("indexManager", this.indexManager);
 
-        // Create NotientAgent (uses LLM provider, search, context, profile)
-        if (!this.llmProvider) {
-          throw new Error("LLM Provider is required for NotientAgent");
-        }
+      // Check for crash recovery (Scenario I9: indexingInProgress = true on load)
+      const indexStats = await this.indexManager.getStats();
+      if (indexStats.state === "crashed" || indexStats.indexingInProgress) {
+        console.warn("[Notient] Detected interrupted indexing - recovery needed");
+        this.initStateMachine.transition("CRASHED", {
+          crashedReason: "indexing_interrupted",
+          errorMessage: "Previous indexing was interrupted. Recovery options available.",
+        });
+        // Don't return - let UI show recovery options
+      }
+
+      this.initStateMachine.updateProgress({
+        stage: "index",
+        percent: 70,
+        message: "Initializing indexer...",
+      });
+
+      // Initialize indexer
+      this.indexer = new SimpleIndexer(
+        this.kernel,
+        eventBus,
+        this.indexManager,
+        this.ollamaService!,
+      );
+      await this.indexer.initialize();
+      this.kernel.registerService("indexer", this.indexer);
+
+      // =========================================================================
+      // PHASE 3: WARMING_SERVICES
+      // =========================================================================
+      // Only transition if not in CRASHED state
+      if (this.initStateMachine.state !== "CRASHED") {
+        this.initStateMachine.transition("WARMING_SERVICES", {
+          progress: { stage: "services", percent: 75, message: "Initializing search..." },
+        });
+      }
+
+      // Initialize search pipeline
+      this.searchPipeline = new SearchPipeline(
+        this.kernel,
+        eventBus,
+        this.ollamaService!,
+        this.vectorStore!,
+      );
+      await this.searchPipeline.initialize();
+      this.kernel.registerService("search", this.searchPipeline);
+
+      // Vault context builder (for RAG)
+      this.contextBuilder = new VaultContextBuilder(this.kernel);
+      this.kernel.registerService("context", this.contextBuilder);
+
+      // Vault vitals (simplified)
+      this.vaultVitals = new SimpleVaultVitals(
+        this.kernel,
+        eventBus,
+        this.vectorStore!,
+        this.indexManager,
+      );
+      this.kernel.registerService("vitals", this.vaultVitals);
+
+      if (this.initStateMachine.state !== "CRASHED") {
+        this.initStateMachine.updateProgress({
+          stage: "services",
+          percent: 80,
+          message: "Initializing LLM provider...",
+        });
+      }
+
+      // LLM Provider for agent
+      this.llmProvider = new LMStudioProvider(
+        this.settings.lmstudio.host,
+        this.settings.lmstudio.reasoningModel,
+      );
+      try {
+        await this.llmProvider.initialize();
+        this.kernel.registerService("llmProvider", this.llmProvider);
+      } catch (llmError) {
+        console.warn("[Notient] LLM Provider initialization failed:", llmError);
+        lmStudioFailed = true;
+      }
+
+      // Identity system: ProfileManager
+      this.profileManager = new ProfileManager(this.app.vault, this.kernel);
+      await this.profileManager.load();
+      this.kernel.registerService("profileManager", this.profileManager);
+      console.log(
+        "[Notient] ProfileManager initialized:",
+        this.profileManager.get()?.domain?.primary || "(no profile)",
+      );
+
+      // Evolution system: UserEvolutionService (PART 1.3)
+      this.userEvolution = new UserEvolutionService(eventBus);
+      await this.userEvolution.load();
+      this.kernel.registerService("userEvolution", this.userEvolution);
+      console.log("[Notient] UserEvolutionService initialized");
+
+      // Note intelligence service
+      this.noteIntelligence = new NoteIntelligenceService(this.kernel, eventBus);
+      await this.noteIntelligence.initialize();
+      this.kernel.registerService("intelligence", this.noteIntelligence);
+
+      if (this.initStateMachine.state !== "CRASHED") {
+        this.initStateMachine.updateProgress({
+          stage: "services",
+          percent: 90,
+          message: "Initializing agent system...",
+        });
+      }
+
+      // Create NotientAgent if LLM Provider available
+      if (this.llmProvider) {
         const currentProfile = this.profileManager?.get();
         this.notientAgent = new NotientAgent(
           this.llmProvider,
           this.searchPipeline,
           this.contextBuilder,
           this.kernel.obsidian,
-          currentProfile, // Pass profile for prompt personalization
+          currentProfile,
         );
         this.kernel.registerService("agent", this.notientAgent);
 
-        // Subscribe to profile updates to propagate to agent
+        // Subscribe to profile updates
         eventBus.on("profile:updated", (event) => {
           this.notientAgent?.setProfile(event.profile);
         });
 
-        // Agent Task Queue (new architecture)
+        // Agent Task Queue
         this.agentTaskQueue = new AgentTaskQueue(this.notientAgent, eventBus);
         this.kernel.registerService("taskQueue", this.agentTaskQueue);
+      }
 
-        // Phase 2: Initialize ConversationStore
-        this.conversationStore = new ConversationStore(this.kernel.storagePaths, {
-          maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
-          maxAgeDays: this.settings.chatRetention.maxAgeDays,
-        });
-        await this.conversationStore.load();
-        this.conversationStore.prune(); // Enforce retention limits on startup
-        this.kernel.registerService("conversationStore", this.conversationStore);
+      // ConversationStore
+      this.conversationStore = new ConversationStore(this.kernel.storagePaths, {
+        maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
+        maxAgeDays: this.settings.chatRetention.maxAgeDays,
+      });
+      await this.conversationStore.load();
+      this.conversationStore.prune();
+      this.kernel.registerService("conversationStore", this.conversationStore);
 
-        // Wire conversation store to task queue
+      if (this.agentTaskQueue) {
         this.agentTaskQueue.setConversationStore(this.conversationStore);
+      }
 
-        // Subscribe to file renames to update conversation keys
-        this.kernel.obsidian.onFileRename((file, oldPath) => {
-          if (this.conversationStore) {
-            this.conversationStore.handleRename(oldPath, file.path);
-          }
-        });
+      // File rename handler
+      this.kernel.obsidian.onFileRename((file, oldPath) => {
+        if (this.conversationStore) {
+          this.conversationStore.handleRename(oldPath, file.path);
+        }
+      });
 
-        // Phase 2: Initialize Agentic services
-        // TrustLevelManager (evaluates action gating)
-        this.trustLevelManager = new TrustLevelManager(this.settings.agent.trustPolicy);
-        this.kernel.registerService("trustLevelManager", this.trustLevelManager);
+      // Agentic services
+      this.trustLevelManager = new TrustLevelManager(this.settings.agent.trustPolicy);
+      this.kernel.registerService("trustLevelManager", this.trustLevelManager);
 
-        // ActionHistory (stores applied actions with undo data)
-        this.actionHistory = new ActionHistory(
-          this.kernel.storagePaths,
-          this.kernel.obsidian,
-          this.kernel.eventBus,
-          {
-            maxEntries: this.settings.agent.history.maxEntries,
-            maxAgeDays: this.settings.agent.history.maxAgeDays,
-            maxSizeBytes: 10 * 1024 * 1024, // 10 MB limit
-          },
-        );
-        await this.actionHistory.load();
-        this.actionHistory.prune(); // Enforce retention limits on startup
-        this.kernel.registerService("actionHistory", this.actionHistory);
+      this.actionHistory = new ActionHistory(
+        this.kernel.storagePaths,
+        this.kernel.obsidian,
+        this.kernel.eventBus,
+        {
+          maxEntries: this.settings.agent.history.maxEntries,
+          maxAgeDays: this.settings.agent.history.maxAgeDays,
+          maxSizeBytes: 10 * 1024 * 1024,
+        },
+      );
+      await this.actionHistory.load();
+      this.actionHistory.prune();
+      this.kernel.registerService("actionHistory", this.actionHistory);
 
-        // ActionApplier (applies actions to notes)
-        this.actionApplier = new ActionApplier(
-          this.kernel,
-          this.kernel.obsidian,
-          this.actionHistory,
-          this.trustLevelManager,
-        );
-        this.kernel.registerService("actionApplier", this.actionApplier);
+      this.actionApplier = new ActionApplier(
+        this.kernel,
+        this.kernel.obsidian,
+        this.actionHistory,
+        this.trustLevelManager,
+      );
+      this.kernel.registerService("actionApplier", this.actionApplier);
 
-        // WorkflowRunner (Milestone 2.4: bulk operations)
+      if (this.agentTaskQueue) {
         this.workflowRunner = new WorkflowRunner(
           this.kernel,
           eventBus,
@@ -424,63 +553,85 @@ export default class NotientPlugin extends Plugin {
           },
         );
         this.kernel.registerService("workflowRunner", this.workflowRunner);
+      }
 
-        // Intelligence 2.0: ActionOrchestrator (requires lmstudio + search + profile)
-        if (this.lmStudioService && this.searchPipeline) {
-          // Profile provider returns current profile dynamically
-          const profileProvider = () => this.profileManager?.get();
-          this.actionOrchestrator = new ActionOrchestrator(
-            this.lmStudioService,
-            this.searchPipeline,
-            profileProvider, // Profile injected into Intelligence 2.0 prompts
-          );
-          this.kernel.registerService("actionOrchestrator", this.actionOrchestrator);
-          console.log("[Notient] ActionOrchestrator initialized (profile-aware)");
-        }
+      // ActionOrchestrator (requires lmstudio + search)
+      if (this.lmStudioService && this.searchPipeline) {
+        const profileProvider = () => this.profileManager?.get();
+        this.actionOrchestrator = new ActionOrchestrator(
+          this.lmStudioService,
+          this.searchPipeline,
+          profileProvider,
+        );
+        this.kernel.registerService("actionOrchestrator", this.actionOrchestrator);
+      }
 
-        console.log("[Notient] Phase 2 agentic services initialized");
+      // Register action event handlers (PART 2.3)
+      this.registerActionEventHandlers(eventBus);
 
-        this.servicesInitialized = true;
-        this.kernel.setServicesInitialized();
-        console.log("[Notient] Services initialized successfully");
+      // =========================================================================
+      // PHASE 4: READY or DEGRADED
+      // =========================================================================
+      this.servicesInitialized = true;
 
-        // Handle index action from wizard or default behavior
-        const indexAction = this._pendingIndexAction;
-        this._pendingIndexAction = "none";
+      if (this.initStateMachine.state === "CRASHED") {
+        // Stay in CRASHED state - let user choose recovery
+        this.kernel.setServicesInitializing(false);
+        this.kernel.obsidian.notice("Previous indexing interrupted. Check settings for recovery options.");
+        return;
+      }
 
-        console.log("[Notient] Index action decision:", {
-          action: indexAction,
-          setupComplete: this.settings.setupComplete,
-          hasIndex: (await this.indexManager.getIndexedCount()) > 0,
+      if (lmStudioFailed) {
+        // Scenario P2: LM Studio down → DEGRADED
+        this.initStateMachine.transition("DEGRADED", {
+          degradedReason: "lmstudio_down",
+          errorMessage: "LM Studio unavailable. Chat and reranking disabled.",
         });
+        this.kernel.obsidian.notice("Notient ready (limited mode - LM Studio not connected)");
+      } else {
+        // All good → READY
+        this.initStateMachine.transition("READY");
+      }
 
-        if (indexAction !== "none") {
-          // Execute the action explicitly requested by wizard
-          setTimeout(() => this.executeIndexAction(indexAction), 500);
-        } else if (this.settings.setupComplete) {
-          // For returning users with setup complete: check if index exists
-          const indexCount = await this.indexManager.getIndexedCount();
-          if (indexCount === 0) {
-            // No index at all - need to build
-            console.log("[Notient] No index found, starting initial indexing");
-            setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
-          } else {
-            // Has index - don't auto-sync, let user trigger it
-            console.log("[Notient] Existing index found with", indexCount, "notes. Ready to use.");
+      this.kernel.setServicesInitialized();
+
+      // Handle index action from wizard or default behavior
+      const indexAction = this._pendingIndexAction;
+      this._pendingIndexAction = "none";
+
+      console.log("[Notient] Index action decision:", {
+        action: indexAction,
+        setupComplete: this.settings.setupComplete,
+        hasIndex: (await this.indexManager.getIndexedCount()) > 0,
+      });
+
+      if (indexAction !== "none") {
+        setTimeout(() => this.executeIndexAction(indexAction), 500);
+      } else if (this.settings.setupComplete) {
+        const indexCount = await this.indexManager.getIndexedCount();
+        if (indexCount === 0) {
+          console.log("[Notient] No index found, starting initial indexing");
+          setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
+        } else {
+          console.log("[Notient] Existing index found with", indexCount, "notes. Ready to use.");
+          if (!lmStudioFailed) {
             this.kernel.obsidian.notice(`Notient ready! ${indexCount} notes indexed.`);
           }
         }
-        // If setup not complete and no wizard action, don't do anything
-      } catch (error) {
-        console.error("[Notient] Failed to initialize AI services:", error);
-        this.kernel.setServicesInitializing(false);
-        this.kernel.obsidian.notice(
-          "Failed to connect to AI services. Check that Ollama and LM Studio are running.",
-        );
       }
     } catch (error) {
       console.error("[Notient] Service initialization failed:", error);
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+
+      if (this.initStateMachine.state !== "CRASHED") {
+        this.initStateMachine.transition("FAILED", {
+          errorMessage: `Initialization failed: ${errorMsg}`,
+          failedReason: "critical_error",
+        });
+      }
+
       this.kernel.setServicesInitializing(false);
+      this.kernel.obsidian.notice("Notient initialization failed. Check console for details.");
     }
   }
 
@@ -832,6 +983,15 @@ export default class NotientPlugin extends Plugin {
       this.agentTaskQueue = null;
       this.servicesInitialized = false;
 
+      // Reset state machine to UNINITIALIZED for fresh start
+      this.initStateMachine?.dispose();
+      this.initStateMachine = new InitializationStateMachine({
+        eventBus: this.kernel.eventBus,
+        onStateChange: (ctx) => {
+          console.log("[Notient] Init state:", ctx.state, ctx.capabilities);
+        },
+      });
+
       // Reinitialize
       await this.initializeServicesAsync();
 
@@ -957,5 +1117,86 @@ export default class NotientPlugin extends Plugin {
       console.error("[Notient] Indexing failed:", error);
       this.kernel.obsidian.notice("Indexing failed. Check console for details.");
     }
+  }
+
+  /**
+   * Register handlers for action events from UI
+   * PART 2.3: Connect action:apply-requested and action:undo-requested
+   */
+  private registerActionEventHandlers(eventBus: typeof this.kernel.eventBus): void {
+    // Handle action apply requests from UI
+    eventBus.on("action:apply-requested", async ({ actionId, action }) => {
+      console.log("[Notient] Action apply requested:", actionId);
+
+      if (!this.actionApplier) {
+        console.error("[Notient] ActionApplier not available");
+        this.kernel.obsidian.notice("Cannot apply action - services not ready");
+        return;
+      }
+
+      // If action not provided in event, try workflow runner's review queue
+      let actionToApply = action;
+      if (!actionToApply && this.workflowRunner) {
+        // Check current and queued workflows for the action
+        const currentWorkflow = this.workflowRunner.getCurrentWorkflow();
+        const queuedWorkflows = this.workflowRunner.getQueuedWorkflows();
+        const workflows = currentWorkflow
+          ? [currentWorkflow, ...queuedWorkflows]
+          : queuedWorkflows;
+
+        for (const wf of workflows) {
+          const found = wf.reviewQueue.find((a: { id: string }) => a.id === actionId);
+          if (found) {
+            actionToApply = found;
+            break;
+          }
+        }
+      }
+
+      if (!actionToApply) {
+        console.warn("[Notient] Could not find action:", actionId);
+        this.kernel.obsidian.notice("Action not found. It may have expired.");
+        return;
+      }
+
+      try {
+        const result = await this.actionApplier.apply(actionToApply);
+        if (result.success) {
+          this.kernel.obsidian.notice(`Applied: ${actionToApply.title}`);
+          // Remove from workflow review queue if applicable
+          this.workflowRunner?.dismissReviewItem(actionId);
+        } else {
+          this.kernel.obsidian.notice(`Failed: ${result.error}`);
+        }
+      } catch (error) {
+        console.error("[Notient] Action apply failed:", error);
+        this.kernel.obsidian.notice("Action failed. Check console for details.");
+      }
+    });
+
+    // Handle action undo requests from UI
+    eventBus.on("action:undo-requested", async ({ actionId }) => {
+      console.log("[Notient] Action undo requested:", actionId);
+
+      if (!this.actionHistory) {
+        console.error("[Notient] ActionHistory not available");
+        this.kernel.obsidian.notice("Cannot undo - services not ready");
+        return;
+      }
+
+      try {
+        const success = await this.actionHistory.undo(actionId);
+        if (success) {
+          this.kernel.obsidian.notice("Action undone successfully");
+        } else {
+          this.kernel.obsidian.notice("Could not undo action. It may have already been undone.");
+        }
+      } catch (error) {
+        console.error("[Notient] Action undo failed:", error);
+        this.kernel.obsidian.notice("Undo failed. Check console for details.");
+      }
+    });
+
+    console.log("[Notient] Action event handlers registered");
   }
 }
