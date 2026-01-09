@@ -6,15 +6,13 @@
 
 ```bash
 # Development
-bun run dev              # Build + copy to test vault
+bun run dev              # Dev build + copy to test vault
 bun run dev:watch        # Watch mode with auto-copy
-bun run dev:reset        # Soft reset (clear settings, keep index)
-bun run dev:hard-reset   # Hard reset (wipe everything)
+bun run dev:clean        # Wipe all plugin data + fresh build
 
 # Production
 bun run build            # Typecheck + production build (minified)
-bun run build:dev        # Development build (with sourcemaps)
-bun run build:analyze    # Bundle analysis
+bun run analyze          # Bundle size analysis
 
 # Quality
 bun run typecheck        # TypeScript check

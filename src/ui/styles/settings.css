@@ -132,9 +132,7 @@
   animation: nv2-spin 1s linear infinite;
 }
 
-@keyframes nv2-spin {
-  to { transform: rotate(360deg); }
-}
+/* Note: @keyframes nv2-spin is defined in base.css */
 
 .notient-settings-info-dim {
   font-size: var(--font-smaller);

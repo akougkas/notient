@@ -29,12 +29,20 @@ export async function atomicWriteFile(filePath: string, data: string): Promise<v
     await fs.promises.writeFile(tempPath, data, "utf-8");
 
     // Sync to ensure data is flushed to disk before rename
-    // This is important for crash safety
-    const fd = await fs.promises.open(tempPath, "r");
+    // This is important for crash safety, but we gracefully degrade on EPERM
+    // (common on WSL2 with Windows-mounted filesystems)
     try {
-      await fd.sync();
-    } finally {
-      await fd.close();
+      const fd = await fs.promises.open(tempPath, "r+");
+      try {
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
+    } catch (syncError) {
+      // EPERM on fsync is common on WSL2 - data is likely already flushed
+      if ((syncError as NodeJS.ErrnoException).code !== "EPERM") {
+        throw syncError;
+      }
     }
 
     // Atomic rename (on same filesystem, this is atomic)

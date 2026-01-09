@@ -132,7 +132,7 @@ export class AgentTaskQueue {
       // If it was running, clear currentTask to proceed
       if (this.currentTask?.id === taskId) {
         this.currentTask = null;
-        void this.processNext();
+        queueMicrotask(() => this.processNext());
       }
     }
   }
@@ -296,8 +296,8 @@ export class AgentTaskQueue {
       }
     } finally {
       this.processing = false;
-      // Process next in queue (after releasing the lock)
-      void this.processNext();
+      // Process next in queue (deferred to let call stack unwind)
+      queueMicrotask(() => this.processNext());
     }
   }
 

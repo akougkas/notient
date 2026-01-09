@@ -18,6 +18,7 @@
 @import "./components/omnibar.css";
 @import "./components/intelligence-actions.css";
 @import "./components/index-status.css";
+@import "./components/pulse-timeline.css";
 
 /* Views */
 @import "./views/modals.css";

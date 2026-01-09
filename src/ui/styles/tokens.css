@@ -19,6 +19,9 @@
   --nv2-status-warning: var(--color-orange);
   --nv2-status-error: var(--color-red);
 
+  /* Text on accent (for buttons with accent background) */
+  --nv2-text-on-accent: var(--text-on-accent, #ffffff);
+
   /* Spacing scale */
   --nv2-space-xs: 4px;
   --nv2-space-sm: 8px;

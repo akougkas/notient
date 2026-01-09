@@ -302,6 +302,8 @@ export class TaskModal extends Modal {
       this.streamingBubbleEl = this.chatContainerEl.createDiv({
         cls: "nv2-chat-bubble nv2-bubble-assistant nv2-chat-bubble--streaming",
       });
+      this.streamingBubbleEl.setAttribute("aria-live", "polite");
+      this.streamingBubbleEl.setAttribute("aria-label", "Assistant is typing");
       this.renderMessageContent(this.streamingBubbleEl, this.streamingContent);
       // Add typing cursor
       this.streamingBubbleEl.createSpan({ cls: "nv2-typing-cursor" });
@@ -571,7 +573,7 @@ export class TaskModal extends Modal {
 
       // Risk badge
       const riskBadge = actionEl.createSpan({
-        cls: `nv2-risk-badge nv2-risk-${action.risk}`,
+        cls: `nv2-risk-badge nv2-risk-badge--${action.risk}`,
         text: action.risk.toUpperCase(),
       });
       riskBadge.setAttribute("aria-label", this.getRiskDescription(action.risk));
@@ -736,7 +738,10 @@ export class TaskModal extends Modal {
         );
 
       if (action.risk === "high") {
-        content.createDiv({ cls: "nv2-confirm-warning" }).setText("⚠️ This is a high-risk action.");
+        const warningDiv = content.createDiv({ cls: "nv2-confirm-warning" });
+        const warningIcon = warningDiv.createSpan({ cls: "nv2-confirm-warning-icon" });
+        setIcon(warningIcon, "alert-triangle");
+        warningDiv.createSpan({ text: "This is a high-risk action." });
       }
 
       const buttons = content.createDiv({ cls: "nv2-confirm-buttons" });

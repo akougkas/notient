@@ -242,7 +242,7 @@
 }
 
 .nv2-agent-pending:hover {
-  background: rgba(var(--color-orange-rgb), 0.1);
+  background: color-mix(in srgb, var(--color-orange) 10%, transparent);
   color: var(--color-orange);
 }
 

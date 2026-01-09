@@ -884,6 +884,7 @@ function SearchResultsView({
 							type="button"
 							class="nv2-search-result-item"
 							onClick={() => onOpenNote(result.path)}
+							aria-label={`Open note: ${result.title || result.path.split("/").pop()?.replace(".md", "") || result.path}`}
 						>
 							<div class="nv2-search-result-title">
 								{result.title || result.path.split("/").pop()?.replace(".md", "") || result.path}

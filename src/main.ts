@@ -332,26 +332,9 @@ export default class NotientPlugin extends Plugin {
         progress: { stage: "index", percent: 50, message: "Loading vector store..." },
       });
 
-      // Initialize vector store (Scenario I1-I11)
-      try {
-        this.vectorStore = new SimpleVectorStore(this.kernel);
-        await this.vectorStore.initialize();
-        this.kernel.registerService("vectorStore", this.vectorStore);
-      } catch (storeError) {
-        // Scenario I2: Corrupt index file
-        const errorMsg = storeError instanceof Error ? storeError.message : "Store init failed";
-        if (errorMsg.includes("JSON") || errorMsg.includes("parse")) {
-          console.error("[Notient] Index file appears corrupt, will rebuild");
-          // Continue - IndexManager will handle recovery
-        } else {
-          this.initStateMachine.transition("FAILED", {
-            errorMessage: `Vector store failed: ${errorMsg}`,
-            failedReason: "index_corrupt",
-          });
-          this.kernel.setServicesInitializing(false);
-          return;
-        }
-      }
+      // Create vector store (initialization happens in IndexManager.initialize)
+      this.vectorStore = new SimpleVectorStore(this.kernel);
+      this.kernel.registerService("vectorStore", this.vectorStore);
 
       this.initStateMachine.updateProgress({
         stage: "index",

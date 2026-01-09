@@ -185,9 +185,7 @@
   animation: nv2-spin 1s linear infinite;
 }
 
-@keyframes nv2-spin {
-  to { transform: rotate(360deg); }
-}
+/* Note: @keyframes nv2-spin is defined in base.css */
 
 /* Inputs */
 .nv2-wizard-input-group {
@@ -278,6 +276,27 @@
 
 .nv2-wizard-slider::-webkit-slider-thumb:hover {
   transform: scale(1.15);
+}
+
+/* Firefox slider styling */
+.nv2-wizard-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  transition: transform var(--nv2-transition-fast);
+}
+
+.nv2-wizard-slider::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+
+.nv2-wizard-slider::-moz-range-track {
+  height: 4px;
+  background: var(--background-modifier-border);
+  border-radius: 2px;
 }
 
 .nv2-wizard-chunk-visual {
@@ -586,6 +605,173 @@
   }
 }
 
+/* ===== TaskModal Actions Panel ===== */
+.nv2-actions-header {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+  margin-bottom: var(--nv2-space-sm);
+  padding-top: var(--nv2-space-md);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.nv2-actions-header h3 {
+  margin: 0;
+  font-size: var(--font-smaller);
+  font-weight: 600;
+}
+
+.nv2-actions-count {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+.nv2-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-action-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-sm);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.nv2-action-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-action-title {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  font-weight: 500;
+  font-size: var(--font-smaller);
+}
+
+.nv2-action-applied-icon {
+  color: var(--color-green);
+  display: flex;
+}
+
+.nv2-action-applied-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-action-meta {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.nv2-action-type {
+  color: var(--interactive-accent);
+}
+
+.nv2-action-target {
+  font-family: var(--font-monospace);
+}
+
+.nv2-action-reason {
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  font-style: italic;
+  margin-top: var(--nv2-space-xs);
+}
+
+.nv2-action-buttons {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  flex-shrink: 0;
+}
+
+.nv2-btn-undo {
+  background: none;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: var(--nv2-space-xs);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+
+.nv2-btn-undo:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.nv2-btn-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nv2-actions-info {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  margin-top: var(--nv2-space-sm);
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+}
+
+.nv2-info-icon {
+  display: flex;
+}
+
+.nv2-info-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-info-icon.nv2-warning {
+  color: var(--color-orange);
+}
+
+/* Confirmation Dialog */
+.nv2-confirm-message {
+  white-space: pre-wrap;
+  margin-bottom: var(--nv2-space-md);
+}
+
+.nv2-confirm-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-sm);
+  background: color-mix(in srgb, var(--color-red) 10%, transparent);
+  border: 1px solid var(--color-red);
+  border-radius: var(--radius-s);
+  color: var(--color-red);
+  font-size: var(--font-smaller);
+  margin-bottom: var(--nv2-space-md);
+}
+
+.nv2-confirm-warning-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.nv2-confirm-warning-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nv2-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--nv2-space-sm);
+}
+
 /* Index Management */
 .notient-index-management h4 {
   margin-top: var(--nv2-space-lg);
@@ -664,4 +850,190 @@
 .notient-settings-btn-row button.mod-warning {
   color: var(--color-red);
   border-color: var(--color-red);
+}
+
+/* ===== Index Options Modal ===== */
+.notient-index-options-modal {
+  width: 420px;
+  max-width: 90vw;
+}
+
+.notient-index-options-modal h2 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-md);
+  color: var(--text-normal);
+}
+
+/* Info Section */
+.notient-index-info {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--nv2-space-md);
+  margin-bottom: var(--nv2-space-lg);
+}
+
+.notient-index-info p {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  margin: 0;
+  padding: var(--nv2-space-xs) 0;
+  font-size: var(--font-smaller);
+  color: var(--text-normal);
+}
+
+.notient-index-info p:first-child {
+  padding-top: 0;
+}
+
+.notient-index-info p:last-child {
+  padding-bottom: 0;
+}
+
+.notient-index-info-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.notient-index-info-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notient-index-info-model {
+  color: var(--text-muted);
+}
+
+.notient-index-info-model .notient-index-info-icon {
+  color: var(--interactive-accent);
+}
+
+.notient-index-info-dim {
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+  padding-left: calc(16px + var(--nv2-space-xs));
+}
+
+.notient-index-info-warning {
+  color: var(--color-orange);
+}
+
+.notient-index-info-warning .notient-index-info-icon {
+  color: var(--color-orange);
+}
+
+/* Options Container */
+.notient-index-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+
+/* Option Buttons */
+.notient-index-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--nv2-space-xs);
+  width: 100%;
+  padding: var(--nv2-space-md);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--nv2-transition-fast), background var(--nv2-transition-fast);
+}
+
+.notient-index-option:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+
+.notient-index-option-primary {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+  border-color: var(--interactive-accent);
+}
+
+.notient-index-option-primary:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+}
+
+.notient-index-option-label {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  font-weight: 600;
+  font-size: var(--font-smaller);
+  color: var(--text-normal);
+}
+
+.notient-index-option-icon {
+  display: flex;
+  align-items: center;
+  color: var(--interactive-accent);
+}
+
+.notient-index-option-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notient-index-option-desc {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Cancel Button */
+.notient-index-option-cancel {
+  width: 100%;
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  margin-top: var(--nv2-space-sm);
+  background: none;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  cursor: pointer;
+  transition: background var(--nv2-transition-fast), color var(--nv2-transition-fast);
+}
+
+.notient-index-option-cancel:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* ===== Profile Preview Modal ===== */
+.notient-profile-preview-modal {
+  width: 500px;
+  max-width: 90vw;
+}
+
+.notient-profile-preview-modal h2 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.notient-profile-section {
+  margin-top: var(--nv2-space-lg);
+  padding-top: var(--nv2-space-md);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.notient-profile-section:first-of-type {
+  margin-top: var(--nv2-space-md);
+  padding-top: 0;
+  border-top: none;
+}
+
+.notient-profile-section h3 {
+  font-size: var(--font-smaller);
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-sm);
+  color: var(--text-normal);
 }

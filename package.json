@@ -5,19 +5,16 @@
   "main": "main.js",
   "type": "module",
   "scripts": {
-    "dev": "bun scripts/dev.ts",
-    "dev:watch": "bun scripts/dev.ts --watch",
-    "dev:reset": "bun scripts/dev.ts --reset",
-    "dev:hard-reset": "bun scripts/dev.ts --hard-reset",
-    "build": "bun run typecheck && bun scripts/build.ts",
-    "build:dev": "bun scripts/build.ts --dev",
-    "build:analyze": "bun scripts/build.ts --analyze",
+    "build": "bun run typecheck && bun scripts/build.ts build",
+    "dev": "bun scripts/build.ts dev",
+    "dev:watch": "bun scripts/build.ts dev --watch",
+    "dev:clean": "bun scripts/build.ts dev --clean",
+    "analyze": "bun scripts/build.ts analyze",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
-    "format": "biome format --write src/",
-    "clean": "rm -f main.js main.js.map"
+    "format": "biome format --write src/"
   },
   "keywords": [
     "obsidian",

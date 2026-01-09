@@ -219,6 +219,9 @@ export class IndexManager {
     // Load state file (matched to active index)
     await this.loadState();
 
+    // Clean up old files from .deleted folder (runs in background)
+    this.cleanupDeletedFolder().catch(() => {});
+
     console.log(
       `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${this.states.size}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`,
     );
@@ -707,13 +710,7 @@ export class IndexManager {
     }
 
     try {
-      // Derive state path from index path
-      // New format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json -> state-{model}_{dim}d.json
-      // Legacy format: index-{model}-{dim}d.json -> state-{model}-{dim}d.json
-      const baseName = path.basename(indexPath);
-      const newMatch = baseName.match(NEW_INDEX_PATTERN);
-      const legacyMatch = baseName.match(LEGACY_INDEX_PATTERN);
-
+      // Delete the index file
       const indexExists = await fs.promises
         .access(indexPath)
         .then(() => true)
@@ -723,18 +720,14 @@ export class IndexManager {
         await this.moveToDeleted(indexPath, "deleted");
       }
 
-      // Also delete the state file if it follows the naming convention
-      let modelKey: string | null = null;
-      if (newMatch) {
-        // New format: model is group 3, dim is group 4
-        modelKey = `${newMatch[3]}_d${newMatch[4]}`;
-      } else if (legacyMatch) {
-        // Legacy format: model is group 1, dim is group 2
-        modelKey = `${legacyMatch[1]}-${legacyMatch[2]}d`;
-      }
-
-      if (modelKey) {
-        const statePath = path.join(this.kernel.storagePaths.pluginRoot, `state-${modelKey}.json`);
+      // Delete associated state file
+      // Extract modelKey from index filename and look for state-{modelKey}.json
+      const parsed = parseIndexFilename(indexPath);
+      if (parsed) {
+        const statePath = path.join(
+          this.kernel.storagePaths.pluginRoot,
+          `state-${parsed.modelKey}.json`,
+        );
         const stateExists = await fs.promises
           .access(statePath)
           .then(() => true)
@@ -890,57 +883,23 @@ export class IndexManager {
   }
 
   /**
-   * Get state file path. Derives from active index path when available.
-   * New format: state_{timestamp}_{vaultHash}_{model}_{dim}d.json
-   * Falls back to legacy format: state-{modelKey}.json
+   * Get state file path.
+   * Simple format: state-{modelKey}.json
+   * One state file per model key - simpler and avoids orphans.
    */
   private getStatePath(): string {
-    if (this.activeIndexPath) {
-      const parsed = parseIndexFilename(this.activeIndexPath);
-      if (parsed && !parsed.isLegacy) {
-        // New format: mirror the index filename with state_ prefix
-        return path.join(
-          this.kernel.storagePaths.pluginRoot,
-          `state_${parsed.timestamp}_${parsed.vaultHash}_${parsed.modelKey}_${parsed.dimension}d.json`,
-        );
-      }
-    }
-    // Legacy fallback
     return path.join(this.kernel.storagePaths.pluginRoot, `state-${this.modelKey}.json`);
   }
 
-  /**
-   * Find existing state file, checking both new and legacy patterns.
-   */
-  private async findExistingStatePath(): Promise<string | null> {
-    const newPath = this.getStatePath();
-
-    // Check new format first
-    const newExists = await fs.promises
-      .access(newPath)
-      .then(() => true)
-      .catch(() => false);
-    if (newExists) return newPath;
-
-    // Check legacy format
-    const legacyPath = path.join(
-      this.kernel.storagePaths.pluginRoot,
-      `state-${this.modelKey}.json`,
-    );
-    const legacyExists = await fs.promises
-      .access(legacyPath)
-      .then(() => true)
-      .catch(() => false);
-    if (legacyExists) return legacyPath;
-
-    return null;
-  }
-
   private async loadState(): Promise<void> {
-    // Find existing state file (supports both new and legacy formats)
-    const statePath = await this.findExistingStatePath();
+    const statePath = this.getStatePath();
 
-    if (!statePath) {
+    const exists = await fs.promises
+      .access(statePath)
+      .then(() => true)
+      .catch(() => false);
+
+    if (!exists) {
       console.log(
         `[IndexManager] No state file found for modelKey=${this.modelKey}, starting fresh`,
       );
@@ -1026,5 +985,47 @@ export class IndexManager {
     const target = path.join(deletedDir, `${base}.${reason}.${Date.now()}`);
     await fs.promises.rename(filePath, target);
     console.log(`[IndexManager] Moved ${filePath} -> ${target}`);
+  }
+
+  /**
+   * Clean up old files from .deleted folder.
+   * Removes files older than maxAgeDays (default 7 days).
+   */
+  private async cleanupDeletedFolder(maxAgeDays = 7): Promise<void> {
+    const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
+
+    try {
+      const exists = await fs.promises
+        .access(deletedDir)
+        .then(() => true)
+        .catch(() => false);
+
+      if (!exists) return;
+
+      const files = await fs.promises.readdir(deletedDir);
+      const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      let cleaned = 0;
+
+      for (const file of files) {
+        const filePath = path.join(deletedDir, file);
+        try {
+          const stat = await fs.promises.stat(filePath);
+          if (now - stat.mtimeMs > maxAgeMs) {
+            await fs.promises.unlink(filePath);
+            cleaned++;
+          }
+        } catch {
+          // Ignore individual file errors
+        }
+      }
+
+      if (cleaned > 0) {
+        console.log(`[IndexManager] Cleaned ${cleaned} old files from .deleted`);
+      }
+    } catch (error) {
+      // Don't fail initialization on cleanup errors
+      console.warn("[IndexManager] Failed to cleanup .deleted folder:", error);
+    }
   }
 }

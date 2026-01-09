@@ -20,6 +20,13 @@ export interface NoteVitals {
     lastModified: Date;
     displayText: string;
   };
+  /** Note lifecycle timestamps for Pulse Timeline */
+  lifecycle: {
+    createdAt: Date;
+    modifiedAt: Date;
+    /** Age in days since creation */
+    ageDays: number;
+  };
   title: string;
   path: string;
   paraType: string;
@@ -57,7 +64,13 @@ export class NoteVitalsCalculator {
 
     // Freshness
     const mtime = file.stat.mtime;
+    const ctime = file.stat.ctime;
     const freshness = this.formatFreshness(mtime);
+
+    // Lifecycle data for Pulse Timeline
+    const createdAt = new Date(ctime);
+    const modifiedAt = new Date(mtime);
+    const ageDays = Math.floor((Date.now() - ctime) / (1000 * 60 * 60 * 24));
 
     // Check if indexed
     const isIndexed = indexManager?.isNoteIndexed(file.path) ?? false;
@@ -72,8 +85,13 @@ export class NoteVitalsCalculator {
         outlinks: outlinks.length,
       },
       freshness: {
-        lastModified: new Date(mtime),
+        lastModified: modifiedAt,
         displayText: freshness,
+      },
+      lifecycle: {
+        createdAt,
+        modifiedAt,
+        ageDays,
       },
       title: file.basename,
       path: file.path,

@@ -6,14 +6,14 @@
 
 import { type Signal, signal } from "@preact/signals";
 import type { TFile } from "obsidian";
-import { useEffect, useMemo } from "preact/hooks";
+import { useEffect, useMemo, useRef } from "preact/hooks";
 import { ParaDetector } from "../../../core/para/detector";
 import {
   type IndexManagerLike,
   type NoteVitals,
   NoteVitalsCalculator,
 } from "../../../services/noteVitalsCalculator";
-import { useApp, useKernel } from "../context/KernelContext";
+import { useApp, useEventBus, useKernel } from "../context/KernelContext";
 
 // Shared signal for note vitals (singleton per sidebar instance)
 const noteVitalsSignal: Signal<NoteVitals | null> = signal(null);
@@ -36,8 +36,16 @@ export function useNoteVitals(): UseNoteVitalsResult {
     return new NoteVitalsCalculator(app, paraDetector);
   }, [app, kernel.settings]);
 
+  // Track refresh function in ref for event subscription
+  const refreshRef = useRef<() => Promise<void>>();
+
   // Refresh function
   const refresh = async () => {
+    // Wait for services to initialize - silently skip if not ready
+    if (!kernel.isServicesInitialized) {
+      return;
+    }
+
     const activeFile = app.workspace.getActiveFile();
 
     if (!activeFile || activeFile.extension !== "md") {
@@ -49,7 +57,7 @@ export function useNoteVitals(): UseNoteVitalsResult {
     try {
       const indexManager = kernel.getService<IndexManagerLike>("indexManager");
       if (!indexManager) {
-        console.warn("[useNoteVitals] IndexManager not available");
+        // Services initialized but IndexManager not registered - unexpected
         noteVitalsSignal.value = null;
         return;
       }
@@ -63,9 +71,17 @@ export function useNoteVitals(): UseNoteVitalsResult {
     }
   };
 
+  // Keep refresh ref updated
+  refreshRef.current = refresh;
+
+  // Trigger refresh when services become ready
+  useEventBus("services:initialized", () => {
+    void refreshRef.current?.();
+  });
+
   // Subscribe to workspace changes
   useEffect(() => {
-    // Initial load
+    // Initial load (will be skipped if services not ready, then triggered by event above)
     void refresh();
 
     // Subscribe to active leaf changes

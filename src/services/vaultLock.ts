@@ -148,10 +148,17 @@ export class VaultLock {
       return true;
     }
 
-    // Could also check if PID is still running, but that's platform-specific
-    // For now, rely on timestamp staleness
-
-    return false;
+    // Check if the process that holds the lock is still running
+    // process.kill(pid, 0) throws if process doesn't exist
+    try {
+      process.kill(metadata.pid, 0);
+      // Process exists - lock is not stale
+      return false;
+    } catch {
+      // Process doesn't exist - lock is stale
+      console.log(`[VaultLock] Process ${metadata.pid} no longer running, lock is stale`);
+      return true;
+    }
   }
 
   /**

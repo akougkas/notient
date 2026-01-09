@@ -10,7 +10,7 @@
   align-items: center;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
+  border-radius: var(--nv2-radius-md);
   padding: var(--nv2-space-xs) var(--nv2-space-sm);
 }
 
@@ -224,11 +224,9 @@
   border-radius: 50%;
   animation: nv2-spin 0.6s linear infinite;
 }
-@keyframes nv2-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+
+/* Note: @keyframes nv2-spin is defined in base.css */
+
 .nv2-empty-text,
 .nv2-empty-state-text,
 .nv2-omnibar-empty-text {

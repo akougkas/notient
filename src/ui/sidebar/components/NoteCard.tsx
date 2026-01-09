@@ -8,6 +8,7 @@
 import { setIcon } from "obsidian";
 import { useEffect, useRef } from "preact/hooks";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
+import { PulseTimeline } from "./PulseTimeline";
 
 interface NoteCardProps {
 	noteVitals: NoteVitals;
@@ -94,6 +95,15 @@ export function NoteCard({ noteVitals }: NoteCardProps) {
 
 			{/* Tags - The note's "interests" */}
 			<TagsRow tags={noteVitals.tags} />
+
+			{/* Pulse Timeline - The note's "heartbeat" */}
+			<PulseTimeline
+				createdAt={noteVitals.lifecycle.createdAt}
+				modifiedAt={noteVitals.lifecycle.modifiedAt}
+				totalLinks={noteVitals.links.backlinks + noteVitals.links.outlinks}
+				isIndexed={noteVitals.isIndexed}
+				healthStatus={noteVitals.health.status}
+			/>
 		</article>
 	);
 }
