@@ -1401,6 +1401,74 @@
   cursor: pointer;
 }
 
+/* Workflow Errors */
+.nv2-workflow-errors {
+  margin-top: 8px;
+  background: rgba(var(--color-red-rgb), 0.1);
+  border-radius: var(--nv2-radius-sm);
+  overflow: hidden;
+}
+
+.nv2-workflow-errors-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--nv2-status-error);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.nv2-workflow-errors-icon {
+  display: flex;
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-workflow-errors-title {
+  flex: 1;
+}
+
+.nv2-workflow-errors-toggle {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.nv2-workflow-errors-list {
+  padding: 0 10px 8px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.nv2-workflow-errors-list--collapsed {
+  display: none;
+}
+
+.nv2-workflow-error-item {
+  padding: 4px 0;
+  border-top: 1px solid var(--nv2-border-color);
+}
+
+.nv2-workflow-error-item:first-child {
+  border-top: none;
+}
+
+.nv2-workflow-error-text {
+  font-size: 11px;
+  color: var(--nv2-text-muted);
+  word-break: break-word;
+}
+
+.nv2-workflow-errors-more {
+  font-size: 11px;
+  color: var(--nv2-text-faint);
+  padding-top: 4px;
+  font-style: italic;
+}
+
 /* ==========================================================================
    Footer
    ========================================================================== */

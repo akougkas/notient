@@ -911,6 +911,50 @@ export class NotientSidebarView extends ItemView {
         }
       });
     }
+
+    // Error display (collapsible)
+    if (workflow.errors.length > 0) {
+      const errorsContainer = card.createDiv({ cls: "nv2-workflow-errors" });
+      const errorHeader = errorsContainer.createDiv({ cls: "nv2-workflow-errors-header" });
+
+      const errorIcon = errorHeader.createSpan({ cls: "nv2-workflow-errors-icon" });
+      setIcon(errorIcon, "alert-triangle");
+
+      errorHeader.createSpan({
+        cls: "nv2-workflow-errors-title",
+        text: `${workflow.errors.length} error${workflow.errors.length > 1 ? "s" : ""}`,
+      });
+
+      const toggleIcon = errorHeader.createSpan({ cls: "nv2-workflow-errors-toggle" });
+      setIcon(toggleIcon, "chevron-down");
+
+      const errorList = errorsContainer.createDiv({
+        cls: "nv2-workflow-errors-list nv2-workflow-errors-list--collapsed",
+      });
+
+      for (const err of workflow.errors.slice(0, 5)) {
+        const errorItem = errorList.createDiv({ cls: "nv2-workflow-error-item" });
+        errorItem.createDiv({
+          cls: "nv2-workflow-error-text",
+          text: err.error,
+        });
+      }
+
+      if (workflow.errors.length > 5) {
+        errorList.createDiv({
+          cls: "nv2-workflow-errors-more",
+          text: `...and ${workflow.errors.length - 5} more`,
+        });
+      }
+
+      // Toggle expand/collapse
+      errorHeader.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isCollapsed = errorList.classList.contains("nv2-workflow-errors-list--collapsed");
+        errorList.classList.toggle("nv2-workflow-errors-list--collapsed");
+        setIcon(toggleIcon, isCollapsed ? "chevron-up" : "chevron-down");
+      });
+    }
   }
 
   /**

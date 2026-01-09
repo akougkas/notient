@@ -176,10 +176,10 @@ export class ActionOrchestrator {
   }
 
   /**
-   * Check if an action type requires multiple notes
+   * Check if an action type creates multiple notes
    */
   requiresMultipleNotes(actionType: IntelligenceActionType): boolean {
-    return actionType === "synthesis";
+    return actionType === "synthesis" || actionType === "atomic" || actionType === "clipping";
   }
 
   /**

@@ -33,7 +33,7 @@ bun run format           # Format code
 src/
 ├── main.ts                    # Plugin entry point (30KB)
 ├── settings.ts                # Settings tab UI (27KB)
-├── styles.css                 # Design system (59KB)
+├── styles.css                 # Design system (61KB)
 ├── adapters/
 │   └── obsidianFacade.ts      # Obsidian API wrapper
 ├── core/
@@ -59,16 +59,29 @@ src/
 │   │   ├── trustLevelManager.ts
 │   │   ├── actionApplier.ts
 │   │   ├── actionHistory.ts
-│   │   └── workflowRunner.ts
+│   │   ├── workflowRunner.ts
+│   │   ├── commandParser.ts   # Slash command parsing
+│   │   └── types.ts           # ProposedAction, WorkflowRun types
 │   ├── context/vaultContextBuilder.ts
 │   ├── search/pipeline.ts     # LLM-reranked search
 │   ├── indexer/
 │   │   ├── simpleIndexer.ts   # Batch processing
-│   │   ├── simpleChunker.ts
-│   │   └── tieredSemanticChunker.ts
-│   ├── intelligence/
-│   │   ├── noteIntelligence.ts
-│   │   └── intelligenceDb.ts
+│   │   ├── simpleChunker.ts   # Legacy chunker
+│   │   └── tieredSemanticChunker.ts  # 3-tier chunking (note/section/block)
+│   ├── intelligence/          # Intelligence 2.0
+│   │   ├── noteIntelligence.ts      # Background note analysis
+│   │   ├── intelligenceDb.ts        # Persistence layer
+│   │   ├── actionOrchestrator.ts    # Dispatches 7 action types
+│   │   ├── actionPipeline.ts        # 5-phase execution pipeline
+│   │   ├── types.ts                 # IntelligenceRecord types
+│   │   └── prompts/                 # 7 specialized LLM prompts
+│   │       ├── atomic.ts            # Split into atomic notes
+│   │       ├── synthesis.ts         # Create synthesis notes
+│   │       ├── clipping.ts          # Process web clippings
+│   │       ├── task.ts              # Extract tasks/deadlines
+│   │       ├── brand.ts             # Brand alignment check
+│   │       ├── connection.ts        # Find semantic connections
+│   │       └── enhance.ts           # Enhance informal notes
 │   ├── para/detector.ts       # PARA classification
 │   └── vitals/simpleVitals.ts # Vault health metrics
 ├── services/
@@ -80,14 +93,14 @@ src/
 │   ├── vaultLock.ts           # Multi-window safety
 │   └── storagePaths.ts        # Data file paths
 ├── views/
-│   ├── sidebar.ts             # Main sidebar (59KB - largest)
+│   ├── sidebar.ts             # Main sidebar (60KB - largest)
 │   ├── dashboard.ts           # Vault vitals dashboard (31KB)
 │   ├── taskModal.ts           # Chat modal (23KB)
 │   ├── setupWizard.ts         # First-run setup (27KB)
 │   └── indexOptionsModal.ts
 └── types/
     ├── settings.ts            # NotientSettings
-    ├── events.ts              # Event types
+    ├── events.ts              # Event types (includes workflow events)
     ├── indexer.ts
     ├── search.ts
     └── vitals.ts
@@ -100,14 +113,41 @@ src/
 | Check | Status | Notes |
 |-------|--------|-------|
 | TypeScript | PASS | `bun run typecheck` |
-| ESBuild | PASS | 278KB minified, 1.8MB dev |
-| Biome Lint | WARN | Complexity warnings in agentLoop.ts, actionApplier.ts |
+| ESBuild | PASS | 290KB minified, ~1.9MB dev |
+| Biome Lint | WARN | Complexity warnings (expected), `any` in noteIntelligence.ts |
 
 ### Known Lint Warnings
 
 - `agentLoop.ts:77` - `executeStreaming()` complexity 44 (max 15)
 - `agentLoop.ts:298` - `parseActionPlan()` complexity 24 (max 15)
 - `actionApplier.ts:111` - `validateAction()` complexity warning
+- `noteIntelligence.ts` - `any` type warnings in JSON parsing (expected)
+
+---
+
+## Implementation Status
+
+### Fully Complete
+- ✅ Kernel & service orchestration
+- ✅ Agent loop + task queue + streaming
+- ✅ Trust levels + action history (undo)
+- ✅ LLM abstraction layer (providers)
+- ✅ Search pipeline (3 modes: quick/balanced/thorough)
+- ✅ Chat sessions + conversation store
+- ✅ TieredSemanticChunker (3-tier: note/section/block)
+- ✅ NoteIntelligenceService (summaries, entities, tags, health)
+- ✅ WorkflowRunner (queue, progress, review queue, error tracking)
+- ✅ Dual-view sidebar + omnibar
+- ✅ Dashboard (vitals/actions/index tabs)
+- ✅ Setup wizard + settings
+
+### Intelligence 2.0 (Core Ready, UI Pending)
+- ✅ ActionOrchestrator - 7 action types dispatched
+- ✅ ActionPipeline - 5-phase execution with events
+- ✅ All 7 prompt templates defined
+- ✅ Action converters (atomic, synthesis, clipping, task, brand, connection, enhance)
+- ✅ Review queue → ActionApplier flow connected
+- ⏳ **UI event consumers** - Sidebar doesn't yet render PipelineEvents
 
 ---
 
@@ -116,13 +156,14 @@ src/
 Stored in `.obsidian/plugins/notient/`:
 
 ```
-data.json                # Plugin settings
-index-{modelKey}.json    # Hybrid embeddings
-state-{modelKey}.json    # Index state per model
-intelligence-*.json      # Note intelligence data
-conversations.json       # Chat history
-cache/                   # Search result cache
-locks/                   # Multi-window safety
+data.json                      # Plugin settings
+idx_*_{modelKey}_Xd.json       # Vector index (new format)
+state-{modelKey}.json          # Index state per model
+intelligence-{modelKey}.json   # Note intelligence data
+conversations.json             # Chat history
+action-history.json            # Applied actions for undo
+cache/                         # Search result cache
+locks/                         # Multi-window safety
 ```
 
 ---
@@ -141,10 +182,13 @@ Omnibar → Vector search (top-50) → LLM reranking → Results with reasoning
 ### 4. Chat
 TaskModal → Send message → Streaming response → Citations as [[links]]
 
-### 5. Workflow
+### 5. Workflow (Bulk Operations)
 `/enrich folder` → Progress updates → Review queue → Apply/Reject → Undo
 
-### 6. Reinit
+### 6. Intelligence 2.0 Actions
+Trigger action → ActionOrchestrator.execute() → 5-phase pipeline → PipelineEvents → Actions proposed → Apply/Dismiss
+
+### 7. Reinit
 Change LLM settings → Services reinitialize → No leaks → Index preserved
 
 ---
@@ -200,16 +244,17 @@ Change LLM settings → Services reinitialize → No leaks → Index preserved
 
 ## Bundle Composition
 
-Production build: **278.9KB**
+Production build: **~290KB**
 
 | Category | Size | % |
 |----------|------|---|
-| Views (UI) | ~76KB | 27% |
+| Views (UI) | ~78KB | 27% |
 | Services | ~35KB | 12% |
-| Core logic | ~65KB | 23% |
+| Core logic | ~75KB | 26% |
+| Intelligence 2.0 | ~20KB | 7% |
 | Settings | ~14KB | 5% |
-| Dependencies | ~16KB | 6% |
-| Other | ~70KB | 25% |
+| Dependencies | ~16KB | 5% |
+| Other | ~52KB | 18% |
 
 ---
 

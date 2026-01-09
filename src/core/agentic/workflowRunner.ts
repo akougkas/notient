@@ -100,6 +100,7 @@ export class WorkflowRunner {
         failed: 0,
       },
       reviewQueue: [],
+      appliedActionIds: [],
       errors: [],
     };
 
@@ -459,6 +460,55 @@ export class WorkflowRunner {
     }
 
     return false;
+  }
+
+  /**
+   * Mark an action as applied (user approved it)
+   * Removes from review queue and adds to appliedActionIds
+   * Returns the workflow ID if found, null otherwise
+   */
+  markActionApplied(actionId: string): string | null {
+    // Check current workflow
+    if (this.currentWorkflow) {
+      const idx = this.currentWorkflow.reviewQueue.findIndex((a) => a.id === actionId);
+      if (idx !== -1) {
+        this.currentWorkflow.reviewQueue.splice(idx, 1);
+        this.currentWorkflow.appliedActionIds.push(actionId);
+        // Emit progress event to update UI
+        this.eventBus.emit("workflow:progress", { workflow: this.currentWorkflow });
+        return this.currentWorkflow.id;
+      }
+    }
+
+    // Check queued workflows
+    for (const workflow of this.workflowQueue) {
+      const idx = workflow.reviewQueue.findIndex((a) => a.id === actionId);
+      if (idx !== -1) {
+        workflow.reviewQueue.splice(idx, 1);
+        workflow.appliedActionIds.push(actionId);
+        this.eventBus.emit("workflow:progress", { workflow });
+        return workflow.id;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find which workflow (if any) contains an action in its review queue
+   */
+  findWorkflowForAction(actionId: string): WorkflowRun | null {
+    if (this.currentWorkflow) {
+      const found = this.currentWorkflow.reviewQueue.some((a) => a.id === actionId);
+      if (found) return this.currentWorkflow;
+    }
+
+    for (const workflow of this.workflowQueue) {
+      const found = workflow.reviewQueue.some((a) => a.id === actionId);
+      if (found) return workflow;
+    }
+
+    return null;
   }
 
   /**

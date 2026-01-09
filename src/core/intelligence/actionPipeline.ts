@@ -76,6 +76,8 @@ export interface ActionPipelineConfig {
   triggerConfig?: Record<string, unknown>;
   llm: LMStudioService;
   search: SearchPipeline;
+  /** Set of existing vault paths for duplicate detection */
+  existingPaths?: Set<string>;
 }
 
 /**
@@ -263,15 +265,15 @@ class ActionPipelineImpl implements ActionPipeline {
     let parsedAnalysis = "";
 
     try {
-      // Try to extract JSON from response
-      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
+      // Extract JSON using multiple strategies
+      const jsonStr = this.extractJson(rawResponse);
+      if (!jsonStr) {
         return { parsedAnalysis: rawResponse, actions: [] };
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonStr);
 
-      // Extract analysis
+      // Extract analysis - standardized field lookup
       parsedAnalysis =
         parsed.analysis ||
         parsed.synthesis_overview ||
@@ -288,6 +290,83 @@ class ActionPipelineImpl implements ActionPipeline {
     }
 
     return { parsedAnalysis, actions };
+  }
+
+  /**
+   * Extract JSON from LLM response with multiple strategies
+   */
+  private extractJson(response: string): string | null {
+    // Strategy 1: Check for markdown code fences (```json ... ```)
+    const fenceMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) {
+      const fenceContent = fenceMatch[1].trim();
+      // Verify it looks like JSON
+      if (fenceContent.startsWith("{") || fenceContent.startsWith("[")) {
+        // Try to parse to validate, return if valid
+        try {
+          JSON.parse(fenceContent);
+          return fenceContent;
+        } catch {
+          // Continue to other strategies
+        }
+      }
+    }
+
+    // Strategy 2: Find balanced JSON object braces
+    const jsonStart = response.indexOf("{");
+    if (jsonStart !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+
+      for (let i = jsonStart; i < response.length; i++) {
+        const char = response[i];
+
+        if (escape) {
+          escape = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escape = true;
+          continue;
+        }
+
+        if (char === '"' && !escape) {
+          inString = !inString;
+          continue;
+        }
+
+        if (!inString) {
+          if (char === "{") depth++;
+          if (char === "}") {
+            depth--;
+            if (depth === 0) {
+              const candidate = response.slice(jsonStart, i + 1);
+              try {
+                JSON.parse(candidate);
+                return candidate;
+              } catch {
+                // Continue looking for another valid JSON
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Strategy 3: Simple regex fallback (greedy match)
+    const simpleMatch = response.match(/\{[\s\S]*\}/);
+    if (simpleMatch) {
+      try {
+        JSON.parse(simpleMatch[0]);
+        return simpleMatch[0];
+      } catch {
+        // Failed
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -318,6 +397,15 @@ class ActionPipelineImpl implements ActionPipeline {
     return new Date().toISOString().split("T")[0];
   }
 
+  /** Check if a path already exists in vault (for duplicate detection) */
+  private pathExists(path: string): boolean {
+    const existing = this.config.existingPaths;
+    if (!existing) return false;
+    // Normalize path for comparison (remove leading slash, ensure .md)
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+    return existing.has(normalizedPath) || existing.has(normalizedPath.replace(/\.md$/, ""));
+  }
+
   /** Convert atomic split response to actions */
   private convertAtomicActions(parsed: Record<string, unknown>): ProposedAction[] {
     const actions: ProposedAction[] = [];
@@ -335,6 +423,13 @@ class ActionPipelineImpl implements ActionPipeline {
     if (!atomicNotes) return actions;
 
     for (const note of atomicNotes) {
+      const proposedPath = `${note.title}.md`;
+
+      // Skip if note already exists in vault
+      if (this.pathExists(proposedPath)) {
+        continue;
+      }
+
       actions.push({
         id: this.genId("create"),
         type: "create_note",
@@ -344,7 +439,7 @@ class ActionPipelineImpl implements ActionPipeline {
         target: context.notePath,
         requiresWriteLock: true,
         payload: {
-          path: `${note.title}.md`,
+          path: proposedPath,
           content: this.buildAtomicContent(note),
           frontmatter: { created: this.today(), tags: ["atomic"], type: "atomic" },
         },
@@ -420,6 +515,13 @@ class ActionPipelineImpl implements ActionPipeline {
     if (!atomicConcepts) return actions;
 
     for (const concept of atomicConcepts) {
+      const proposedPath = `${parsed.folder_recommendation || "3-resources"}/${concept.title}.md`;
+
+      // Skip if note already exists in vault
+      if (this.pathExists(proposedPath)) {
+        continue;
+      }
+
       actions.push({
         id: this.genId("clipping"),
         type: "create_note",
@@ -429,7 +531,7 @@ class ActionPipelineImpl implements ActionPipeline {
         target: context.notePath,
         requiresWriteLock: true,
         payload: {
-          path: `${parsed.folder_recommendation || "3-resources"}/${concept.title}.md`,
+          path: proposedPath,
           content: concept.content,
           frontmatter: concept.frontmatter || {
             created: this.today(),

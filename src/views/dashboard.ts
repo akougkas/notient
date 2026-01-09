@@ -713,8 +713,8 @@ export class NotientDashboardView extends ItemView {
 
           if (result.success) {
             new Notice(`Applied: ${action.title}`);
-            // Remove from queue
-            workflowRunner.dismissReviewItem(action.id);
+            // Mark as applied (removes from review queue and tracks in appliedActionIds)
+            workflowRunner.markActionApplied(action.id);
             this.render();
           } else {
             new Notice(`Failed: ${result.error}`);

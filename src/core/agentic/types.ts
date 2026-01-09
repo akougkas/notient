@@ -469,6 +469,8 @@ export interface WorkflowRun {
   completedAt?: number;
   /** Medium/high-risk actions awaiting review */
   reviewQueue: ProposedAction[];
+  /** IDs of actions that have been approved and applied */
+  appliedActionIds: string[];
   /** Errors that occurred during execution */
   errors: Array<{
     taskId: string;
