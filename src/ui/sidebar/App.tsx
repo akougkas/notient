@@ -169,15 +169,82 @@ interface FooterProps {
 }
 
 function Footer({ isReady }: FooterProps) {
+	// Provider health status
+	const [lmStudioHealthy, setLmStudioHealthy] = useState(true);
+	const [ollamaHealthy, setOllamaHealthy] = useState(true);
+
+	// Index status
+	const [indexedCount, setIndexedCount] = useState(0);
+	const [indexProgress, setIndexProgress] = useState<number | null>(null);
+
+	// Agent status
+	const [activeWorkflows, setActiveWorkflows] = useState(0);
+
+	// Subscribe to health events
+	useEventBus("health:changed", (payload) => {
+		const isHealthy = payload.health.status === "healthy";
+		if (payload.service === "lmstudio") {
+			setLmStudioHealthy(isHealthy);
+		} else if (payload.service === "ollama") {
+			setOllamaHealthy(isHealthy);
+		}
+	});
+
+	// Subscribe to index events
+	useEventBus("index:complete", (payload) => {
+		setIndexedCount(payload.totalIndexed || 0);
+		setIndexProgress(null);
+	});
+
+	useEventBus("index:progress", (payload) => {
+		const percent = payload.progress.total > 0
+			? (payload.progress.completed / payload.progress.total) * 100
+			: 0;
+		setIndexProgress(percent);
+	});
+
+	// Subscribe to workflow events
+	useEventBus("workflow:started", () => {
+		setActiveWorkflows((prev) => prev + 1);
+	});
+
+	useEventBus("workflow:completed", () => {
+		setActiveWorkflows((prev) => Math.max(0, prev - 1));
+	});
+
+	const providerStatus = lmStudioHealthy && ollamaHealthy ? "healthy" : "warning";
+
 	return (
 		<div class="nv2-footer">
 			<div class="nv2-footer-content">
-				<span class="nv2-footer-text">Notient v0.2.0-alpha</span>
+				{/* Providers Status */}
+				<span class={`nv2-footer-zone nv2-status-${providerStatus}`}>
+					<span class="nv2-footer-label">Providers</span>
+					<span class="nv2-footer-value">
+						{lmStudioHealthy && ollamaHealthy ? "✓" : "⚠"}
+					</span>
+				</span>
+
 				<span class="nv2-footer-separator">|</span>
-				<span
-					class={`nv2-footer-text ${isReady ? "nv2-status-healthy" : "nv2-status-warning"}`}
-				>
-					{isReady ? "Ready" : "Initializing"}
+
+				{/* Index Status */}
+				<span class="nv2-footer-zone">
+					<span class="nv2-footer-label">Index</span>
+					<span class="nv2-footer-value">
+						{indexProgress !== null
+							? `${Math.round(indexProgress)}%`
+							: `${indexedCount} notes`}
+					</span>
+				</span>
+
+				<span class="nv2-footer-separator">|</span>
+
+				{/* Agents Status */}
+				<span class="nv2-footer-zone">
+					<span class="nv2-footer-label">Agents</span>
+					<span class="nv2-footer-value">
+						{activeWorkflows > 0 ? `${activeWorkflows} active` : "idle"}
+					</span>
 				</span>
 			</div>
 		</div>
