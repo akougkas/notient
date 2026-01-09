@@ -202,37 +202,6 @@
   color: var(--interactive-accent);
 }
 
-/* Legacy placeholder support */
-.nv2-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: var(--nv2-space-xl);
-  text-align: center;
-  color: var(--text-muted);
-  min-height: 200px;
-}
-
-.nv2-placeholder-icon {
-  font-size: 48px;
-  margin-bottom: var(--nv2-space-md);
-  opacity: 0.6;
-}
-
-.nv2-placeholder-title {
-  font-size: var(--font-text-size);
-  font-weight: 600;
-  color: var(--text-normal);
-  margin-bottom: var(--nv2-space-sm);
-}
-
-.nv2-placeholder-text {
-  font-size: var(--font-smaller);
-  color: var(--text-faint);
-  max-width: 200px;
-}
-
 /* =============================================================================
    Responsive Adjustments
    ============================================================================= */

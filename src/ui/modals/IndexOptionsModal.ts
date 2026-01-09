@@ -5,7 +5,7 @@
  * Gives user clear choices about how to proceed.
  */
 
-import { type App, Modal } from "obsidian";
+import { type App, Modal, setIcon } from "obsidian";
 import type { IndexStats } from "../../services/indexManager";
 
 export type IndexOption = "use_existing" | "resume" | "rebuild" | "cancel";
@@ -59,10 +59,10 @@ export class IndexOptionsModal extends Modal {
     const infoBox = containerEl.createDiv({ cls: "notient-index-info" });
 
     if (modelChanged) {
-      infoBox.createEl("p", {
-        text: `📌 Model: ${stats.modelKey}`,
-        cls: "notient-index-info-model",
-      });
+      const modelRow = infoBox.createEl("p", { cls: "notient-index-info-model" });
+      const modelIcon = modelRow.createSpan({ cls: "notient-index-info-icon" });
+      setIcon(modelIcon, "pin");
+      modelRow.createSpan({ text: ` Model: ${stats.modelKey}` });
     }
 
     // State-specific message
@@ -71,10 +71,11 @@ export class IndexOptionsModal extends Modal {
         infoBox.createEl("p", { text: "No index found. Ready to create one." });
         break;
 
-      case "complete":
-        infoBox.createEl("p", {
-          text: `✅ Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} passages`,
-        });
+      case "complete": {
+        const completeRow = infoBox.createEl("p");
+        const completeIcon = completeRow.createSpan({ cls: "notient-index-info-icon" });
+        setIcon(completeIcon, "check-circle");
+        completeRow.createSpan({ text: ` Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} passages` });
         if (stats.lastFullIndexAt) {
           const date = new Date(stats.lastFullIndexAt).toLocaleDateString();
           infoBox.createEl("p", {
@@ -83,38 +84,43 @@ export class IndexOptionsModal extends Modal {
           });
         }
         break;
+      }
 
-      case "incomplete":
-        infoBox.createEl("p", {
-          text: `⏳ Found incomplete index: ${stats.noteCount}/${stats.vaultNoteCount} notes (${stats.completionPercent}%)`,
-        });
+      case "incomplete": {
+        const incompleteRow = infoBox.createEl("p");
+        const incompleteIcon = incompleteRow.createSpan({ cls: "notient-index-info-icon" });
+        setIcon(incompleteIcon, "clock");
+        incompleteRow.createSpan({ text: ` Found incomplete index: ${stats.noteCount}/${stats.vaultNoteCount} notes (${stats.completionPercent}%)` });
         infoBox.createEl("p", {
           text: `${stats.vaultNoteCount - stats.noteCount} notes remaining`,
           cls: "notient-index-info-dim",
         });
         break;
+      }
 
-      case "crashed":
-        infoBox.createEl("p", {
-          text: "⚠️ Previous indexing was interrupted",
-          cls: "notient-index-info-warning",
-        });
+      case "crashed": {
+        const crashedRow = infoBox.createEl("p", { cls: "notient-index-info-warning" });
+        const crashedIcon = crashedRow.createSpan({ cls: "notient-index-info-icon" });
+        setIcon(crashedIcon, "alert-triangle");
+        crashedRow.createSpan({ text: " Previous indexing was interrupted" });
         infoBox.createEl("p", {
           text: `${stats.noteCount}/${stats.vaultNoteCount} notes were indexed before interruption`,
           cls: "notient-index-info-dim",
         });
         break;
+      }
 
-      case "stale":
-        infoBox.createEl("p", {
-          text: "🔄 Found index data but state is unclear",
-          cls: "notient-index-info-warning",
-        });
+      case "stale": {
+        const staleRow = infoBox.createEl("p", { cls: "notient-index-info-warning" });
+        const staleIcon = staleRow.createSpan({ cls: "notient-index-info-icon" });
+        setIcon(staleIcon, "refresh-cw");
+        staleRow.createSpan({ text: " Found index data but state is unclear" });
         infoBox.createEl("p", {
           text: `${stats.chunkCount} passages found. Rebuilding recommended.`,
           cls: "notient-index-info-dim",
         });
         break;
+      }
     }
   }
 
@@ -128,9 +134,10 @@ export class IndexOptionsModal extends Modal {
         this.addOption(
           optionsDiv,
           "rebuild",
-          "🚀 Start Indexing",
+          "Start Indexing",
           "Index all notes in your vault",
           true,
+          "rocket",
         );
         break;
 
@@ -138,15 +145,18 @@ export class IndexOptionsModal extends Modal {
         this.addOption(
           optionsDiv,
           "use_existing",
-          "✅ Use Existing Index",
+          "Use Existing Index",
           "Keep current index, sync new changes only",
           true,
+          "check-circle",
         );
         this.addOption(
           optionsDiv,
           "rebuild",
-          "🔄 Rebuild From Scratch",
+          "Rebuild From Scratch",
           "Delete and re-index everything",
+          false,
+          "refresh-cw",
         );
         break;
 
@@ -155,16 +165,19 @@ export class IndexOptionsModal extends Modal {
         this.addOption(
           optionsDiv,
           "resume",
-          "▶️ Resume Indexing",
+          "Resume Indexing",
           `Continue from where it stopped (${stats.completionPercent}% done)`,
           true,
+          "play",
         );
-        this.addOption(optionsDiv, "rebuild", "🔄 Start Fresh", "Clear and re-index everything");
+        this.addOption(optionsDiv, "rebuild", "Start Fresh", "Clear and re-index everything", false, "refresh-cw");
         this.addOption(
           optionsDiv,
           "use_existing",
-          "⏸️ Use As-Is",
+          "Use As-Is",
           "Keep partial index, don't index more now",
+          false,
+          "pause",
         );
         break;
 
@@ -172,15 +185,18 @@ export class IndexOptionsModal extends Modal {
         this.addOption(
           optionsDiv,
           "rebuild",
-          "🔄 Rebuild Index",
+          "Rebuild Index",
           "Clear stale data and re-index",
           true,
+          "refresh-cw",
         );
         this.addOption(
           optionsDiv,
           "use_existing",
-          "🤔 Try Using Anyway",
+          "Try Using Anyway",
           "Attempt to use existing data",
+          false,
+          "help-circle",
         );
         break;
     }
@@ -202,12 +218,18 @@ export class IndexOptionsModal extends Modal {
     label: string,
     description: string,
     isPrimary = false,
+    icon?: string,
   ): void {
     const btn = container.createEl("button", {
       cls: `notient-index-option ${isPrimary ? "notient-index-option-primary" : ""}`,
     });
 
-    btn.createEl("span", { text: label, cls: "notient-index-option-label" });
+    const labelEl = btn.createEl("span", { cls: "notient-index-option-label" });
+    if (icon) {
+      const iconEl = labelEl.createSpan({ cls: "notient-index-option-icon" });
+      setIcon(iconEl, icon);
+    }
+    labelEl.createSpan({ text: label });
     btn.createEl("span", { text: description, cls: "notient-index-option-desc" });
 
     btn.addEventListener("click", () => {

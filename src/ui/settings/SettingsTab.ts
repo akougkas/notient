@@ -8,7 +8,7 @@
  * - Multi-index management
  */
 
-import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
+import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce, setIcon } from "obsidian";
 import type { NotientAgent } from "../../core/agent/agentLoop";
 import type { ProfileManager } from "../../core/agent/profileManager";
 import { MODEL_DEFAULTS } from "../../core/constants";
@@ -412,7 +412,8 @@ export class NotientSettingTab extends PluginSettingTab {
     this.renderServiceSection(
       containerEl,
       "ollama",
-      "🦙 Embeddings (Ollama)",
+      "Embeddings (Ollama)",
+      "database",
       "Embedding Model",
       "nomic-embed-text",
     );
@@ -421,7 +422,8 @@ export class NotientSettingTab extends PluginSettingTab {
     this.renderServiceSection(
       containerEl,
       "lmstudio",
-      "🤖 Chat (LM Studio)",
+      "Chat (LM Studio)",
+      "message-square",
       "Reasoning Model",
       "ministral-3b-instruct",
     );
@@ -450,7 +452,10 @@ export class NotientSettingTab extends PluginSettingTab {
 
   private renderSearchSection(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "🔍 Search Configuration" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "search");
+    header.createSpan({ text: "Search Configuration" });
 
     // Preset dropdown
     new Setting(section)
@@ -458,10 +463,10 @@ export class NotientSettingTab extends PluginSettingTab {
       .setDesc("Balance between speed and accuracy")
       .addDropdown((dropdown) => {
         dropdown
-          .addOption("quick", "⚡ Quick (Fast, no AI rerank)")
-          .addOption("balanced", "⚖️ Balanced (Recommended)")
-          .addOption("thorough", "🧠 Thorough (Deep search)")
-          .addOption("custom", "⚙️ Custom...")
+          .addOption("quick", "Quick — Fast, no AI rerank")
+          .addOption("balanced", "Balanced (Recommended)")
+          .addOption("thorough", "Thorough — Deep search")
+          .addOption("custom", "Custom...")
           .setValue(this.settings.search.preset)
           .onChange(async (value: string) => {
             this.settings.search.preset = value as SearchPreset;
@@ -560,7 +565,10 @@ export class NotientSettingTab extends PluginSettingTab {
       if (indexManager) {
         const count = indexManager.getIndexedCount();
         const model = indexManager.getActiveModelKey();
-        capRow.createSpan({ text: `📊 ${count} notes ready for search` });
+        const statsEl = capRow.createSpan({ cls: "notient-settings-stats" });
+        const statsIcon = statsEl.createSpan({ cls: "notient-settings-stats-icon" });
+        setIcon(statsIcon, "bar-chart-2");
+        statsEl.createSpan({ text: `${count} notes ready for search` });
         if (model) {
           capRow.createSpan({ text: `(${model})`, cls: "notient-settings-model-tag" });
         }
@@ -568,30 +576,43 @@ export class NotientSettingTab extends PluginSettingTab {
 
       // Show capability icons
       const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
-      if (caps.search) capIcons.createSpan({ text: "🔍", attr: { title: "Search ready" } });
-      if (caps.reasoning)
-        capIcons.createSpan({ text: "🤖", attr: { title: "Chat & rerank ready" } });
-      if (caps.indexing) capIcons.createSpan({ text: "📝", attr: { title: "Indexing available" } });
+      if (caps.search) {
+        const searchIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Search ready" } });
+        setIcon(searchIcon, "search");
+      }
+      if (caps.reasoning) {
+        const chatIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Chat & rerank ready" } });
+        setIcon(chatIcon, "bot");
+      }
+      if (caps.indexing) {
+        const indexIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Indexing available" } });
+        setIcon(indexIcon, "file-text");
+      }
     } else if (this.kernel.isServicesInitializing) {
-      capRow.createSpan({ text: "⏳ Connecting to your AI...", cls: "notient-settings-info-dim" });
+      const initEl = capRow.createSpan({ cls: "notient-settings-info-dim notient-settings-init" });
+      const spinnerIcon = initEl.createSpan({ cls: "notient-settings-spinner" });
+      setIcon(spinnerIcon, "loader-2");
+      initEl.createSpan({ text: "Connecting to your AI..." });
     } else {
-      capRow.createSpan({
-        text: "⚠️ Run the setup wizard to get started",
-        cls: "notient-settings-warning",
-      });
+      const warnEl = capRow.createSpan({ cls: "notient-settings-warning" });
+      const warnIcon = warnEl.createSpan({ cls: "notient-settings-warning-icon" });
+      setIcon(warnIcon, "alert-triangle");
+      warnEl.createSpan({ text: "Run the setup wizard to get started" });
     }
 
     // Add Reconnect button when services are ready or failed
     if (isReady || (!this.kernel.isServicesInitializing && this.settings.setupComplete)) {
       const actionRow = statusBox.createDiv({ cls: "notient-settings-action-row" });
-      const reconnectBtn = actionRow.createEl("button", {
-        text: "🔄 Reconnect Services",
-        cls: "notient-settings-reconnect-btn",
-      });
+      const reconnectBtn = actionRow.createEl("button", { cls: "notient-settings-reconnect-btn" });
+      const reconnectIcon = reconnectBtn.createSpan({ cls: "notient-settings-btn-icon" });
+      setIcon(reconnectIcon, "refresh-cw");
+      reconnectBtn.createSpan({ text: "Reconnect Services" });
       reconnectBtn.addEventListener("click", async () => {
         reconnectBtn.disabled = true;
-        reconnectBtn.textContent = "⏳ Reconnecting...";
-        // Trigger service reinitialization
+        reconnectBtn.empty();
+        const spinnerIcon = reconnectBtn.createSpan({ cls: "notient-settings-spinner" });
+        setIcon(spinnerIcon, "loader-2");
+        reconnectBtn.createSpan({ text: "Reconnecting..." });
         await this.onSettingsChange(this.settings, ["ollama.host", "lmstudio.host"]);
         setTimeout(() => this.display(), 2000);
       });
@@ -602,21 +623,27 @@ export class NotientSettingTab extends PluginSettingTab {
     containerEl: HTMLElement,
     service: "ollama" | "lmstudio",
     title: string,
+    iconName: string,
     modelLabel: string,
     modelPlaceholder: string,
   ): void {
     const config = service === "ollama" ? this.ollamaConfig : this.lmstudioConfig;
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: title });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, iconName);
+    header.createSpan({ text: title });
 
     // Local/Network toggle buttons
     const toggleRow = section.createDiv({ cls: "notient-settings-toggle-row" });
     const toggle = toggleRow.createDiv({ cls: "notient-settings-toggle" });
 
     const localBtn = toggle.createEl("button", {
-      text: "🏠 Local",
       cls: `notient-settings-toggle-btn ${this.isLocalIP(config.ip, service) ? "active" : ""}`,
     });
+    const localIcon = localBtn.createSpan({ cls: "notient-settings-toggle-icon" });
+    setIcon(localIcon, "home");
+    localBtn.createSpan({ text: "Local" });
     localBtn.addEventListener("click", async () => {
       config.ip = DEFAULT_IPS[service].local;
       await this.updateServiceHost(service);
@@ -624,9 +651,11 @@ export class NotientSettingTab extends PluginSettingTab {
     });
 
     const networkBtn = toggle.createEl("button", {
-      text: "📡 Network",
       cls: `notient-settings-toggle-btn ${config.ip === DEFAULT_IPS[service].network ? "active" : ""}`,
     });
+    const networkIcon = networkBtn.createSpan({ cls: "notient-settings-toggle-icon" });
+    setIcon(networkIcon, "wifi");
+    networkBtn.createSpan({ text: "Network" });
     networkBtn.addEventListener("click", async () => {
       config.ip = DEFAULT_IPS[service].network;
       await this.updateServiceHost(service);
@@ -821,9 +850,9 @@ export class NotientSettingTab extends PluginSettingTab {
     // Tooltip
     const tooltip = sliderSection.createDiv({ cls: "notient-settings-tooltip" });
     tooltip.innerHTML = `
-      <span class="notient-tooltip-small">⚡ Smaller passages</span> = precise search
+      <span class="notient-tooltip-small">Smaller passages</span> = precise search
       <span class="notient-tooltip-sep">|</span>
-      <span class="notient-tooltip-large">📚 Larger</span> = more context
+      <span class="notient-tooltip-large">Larger</span> = more context
     `;
 
     // Excluded folders
@@ -846,7 +875,10 @@ export class NotientSettingTab extends PluginSettingTab {
 
   private renderIdentitySection(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "🎭 Identity" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "user");
+    header.createSpan({ text: "Identity" });
 
     // Description
     section.createEl("p", {
@@ -1108,7 +1140,10 @@ export class NotientSettingTab extends PluginSettingTab {
 
   private renderParaSection(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "IPARA Folder Mapping" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "folder-tree");
+    header.createSpan({ text: "IPARA Folder Mapping" });
 
     // Description
     const desc = section.createDiv({ cls: "notient-settings-para-desc" });
@@ -1118,36 +1153,42 @@ export class NotientSettingTab extends PluginSettingTab {
       <p class="notient-settings-info-dim">Subfolders are automatically included when matching.</p>
     `;
 
-    const paraTypes: Array<{ key: keyof NotientSettings["para"]; label: string; hint: string }> = [
-      { key: "inbox", label: "📥 Inbox", hint: "Unsorted notes, daily captures" },
-      { key: "projects", label: "🎯 Projects", hint: "Active work with deadlines" },
-      { key: "areas", label: "🏠 Areas", hint: "Ongoing responsibilities" },
-      { key: "resources", label: "📚 Resources", hint: "Reference material, knowledge" },
-      { key: "archive", label: "📦 Archive", hint: "Completed/inactive items" },
+    const paraTypes: Array<{ key: keyof NotientSettings["para"]; label: string; icon: string; hint: string }> = [
+      { key: "inbox", label: "Inbox", icon: "inbox", hint: "Unsorted notes, daily captures" },
+      { key: "projects", label: "Projects", icon: "target", hint: "Active work with deadlines" },
+      { key: "areas", label: "Areas", icon: "home", hint: "Ongoing responsibilities" },
+      { key: "resources", label: "Resources", icon: "book-open", hint: "Reference material, knowledge" },
+      { key: "archive", label: "Archive", icon: "archive", hint: "Completed/inactive items" },
     ];
 
-    for (const { key, label, hint } of paraTypes) {
-      new Setting(section)
-        .setName(label)
-        .setDesc(hint)
-        .addText((text) =>
-          text
-            .setPlaceholder("folder1, folder2/subfolder")
-            .setValue(this.settings.para[key].join(", "))
-            .onChange(async (value) => {
-              this.settings.para[key] = value
-                .split(",")
-                .map((s) => s.trim())
-                .filter((s) => s.length > 0);
-              await this.onSettingsChange(this.settings);
-            }),
-        );
+    for (const { key, label, icon, hint } of paraTypes) {
+      const setting = new Setting(section).setDesc(hint);
+      // Add icon to name
+      const nameEl = setting.nameEl;
+      const iconSpan = nameEl.createSpan({ cls: "notient-settings-para-icon" });
+      setIcon(iconSpan, icon);
+      nameEl.createSpan({ text: label });
+      setting.addText((text) =>
+        text
+          .setPlaceholder("folder1, folder2/subfolder")
+          .setValue(this.settings.para[key].join(", "))
+          .onChange(async (value) => {
+            this.settings.para[key] = value
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+            await this.onSettingsChange(this.settings);
+          }),
+      );
     }
   }
 
   private renderAdvancedSection(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({ cls: "notient-settings-section" });
-    section.createEl("h2", { text: "Advanced" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "settings-2");
+    header.createSpan({ text: "Advanced" });
 
     new Setting(section).setName("Debug logging").addToggle((toggle) =>
       toggle.setValue(this.settings.advanced.debugLogging).onChange(async (value) => {

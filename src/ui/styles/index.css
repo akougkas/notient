@@ -18,9 +18,6 @@
 @import "./components/omnibar.css";
 @import "./components/intelligence-actions.css";
 @import "./components/index-status.css";
-@import "./components/status-bar.css";
-@import "./components/activity-log.css";
-@import "./components/workflow-card.css";
 
 /* Views */
 @import "./views/modals.css";

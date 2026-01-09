@@ -12,6 +12,22 @@
   margin-bottom: var(--nv2-space-md);
 }
 
+/* Section Headers with Icons */
+.notient-settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+}
+
+.notient-settings-header-icon {
+  color: var(--text-muted);
+}
+
+.notient-settings-header-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 .notient-settings-section {
   margin-bottom: var(--nv2-space-xl);
   padding-bottom: var(--nv2-space-lg);
@@ -22,6 +38,7 @@
   border-bottom: none;
 }
 
+/* Status Box */
 .notient-settings-status-box {
   padding: var(--nv2-space-md);
   background: var(--background-secondary);
@@ -57,11 +74,125 @@
   background: var(--color-red);
 }
 
+/* Stats with Icon */
+.notient-settings-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+}
+
+.notient-settings-stats-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Capability Icons */
+.notient-settings-cap-icons {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  margin-left: auto;
+}
+
+.notient-settings-cap-icon {
+  color: var(--color-green);
+}
+
+.notient-settings-cap-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Warning */
+.notient-settings-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  color: var(--color-orange);
+}
+
+.notient-settings-warning-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Init spinner */
+.notient-settings-init {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+}
+
+.notient-settings-spinner {
+  display: inline-flex;
+}
+
+.notient-settings-spinner svg {
+  width: 14px;
+  height: 14px;
+  animation: nv2-spin 1s linear infinite;
+}
+
+@keyframes nv2-spin {
+  to { transform: rotate(360deg); }
+}
+
 .notient-settings-info-dim {
   font-size: var(--font-smaller);
   color: var(--text-muted);
 }
 
+/* Action Row */
+.notient-settings-action-row {
+  margin-top: var(--nv2-space-sm);
+}
+
+/* Buttons */
+.notient-settings-reconnect-btn,
+.notient-settings-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-xs) var(--nv2-space-md);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-smaller);
+  cursor: pointer;
+  transition: all var(--nv2-transition-fast);
+}
+
+.notient-settings-reconnect-btn:hover,
+.notient-settings-action-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.notient-settings-action-btn.mod-cta {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.notient-settings-action-btn.mod-warning {
+  color: var(--color-red);
+  border-color: var(--color-red);
+}
+
+.notient-settings-action-btn.mod-warning:hover {
+  background: color-mix(in srgb, var(--color-red) 10%, transparent);
+}
+
+.notient-settings-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notient-settings-btn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Toggle Buttons */
 .notient-settings-toggle {
   display: inline-flex;
   border: 1px solid var(--background-modifier-border);
@@ -70,23 +201,37 @@
 }
 
 .notient-settings-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
   padding: var(--nv2-space-xs) var(--nv2-space-md);
   border: none;
   background: none;
   color: var(--text-muted);
   cursor: pointer;
+  transition: all var(--nv2-transition-fast);
+}
+
+.notient-settings-toggle-btn:hover {
+  background: var(--background-modifier-hover);
 }
 
 .notient-settings-toggle-btn.active {
   background: var(--interactive-accent);
-  color: white;
+  color: var(--text-on-accent);
 }
 
+.notient-settings-toggle-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Slider */
 .notient-settings-slider {
   width: 100%;
   height: 4px;
   -webkit-appearance: none;
-  background: var(--background-secondary);
+  background: var(--background-modifier-border);
   border-radius: 2px;
 }
 
@@ -97,6 +242,11 @@
   border-radius: 50%;
   background: var(--interactive-accent);
   cursor: pointer;
+  transition: transform var(--nv2-transition-fast);
+}
+
+.notient-settings-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
 }
 
 .notient-settings-slider-header {
@@ -108,4 +258,92 @@
 .notient-settings-slider-value {
   font-weight: 500;
   color: var(--interactive-accent);
+}
+
+/* Inline Icons */
+.notient-settings-icon-inline {
+  display: inline-flex;
+  margin-right: var(--nv2-space-xs);
+  color: var(--text-muted);
+}
+
+.notient-settings-icon-inline svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* PARA Icons */
+.notient-settings-para-icon {
+  display: inline-flex;
+  margin-right: var(--nv2-space-xs);
+  color: var(--text-muted);
+}
+
+.notient-settings-para-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Index Management */
+.notient-settings-index-warn-icon {
+  color: var(--color-orange);
+}
+
+.notient-settings-index-warn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notient-settings-index-legacy {
+  color: var(--color-orange);
+}
+
+.notient-settings-index-legacy svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notient-settings-index-expand {
+  color: var(--text-muted);
+}
+
+.notient-settings-index-expand svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notient-settings-index-readonly {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  margin-top: var(--nv2-space-sm);
+}
+
+/* Import Section */
+.notient-settings-import-section {
+  margin-top: var(--nv2-space-lg);
+  padding-top: var(--nv2-space-lg);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Badge */
+.notient-settings-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.notient-settings-badge.plugin {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.notient-settings-badge.external {
+  background: var(--color-purple);
+  color: white;
 }

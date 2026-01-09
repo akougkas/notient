@@ -5,6 +5,8 @@
  * Shows: title, path/folder, tags, note type, PARA classification
  */
 
+import { setIcon } from "obsidian";
+import { useEffect, useRef } from "preact/hooks";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
 
 interface NoteCardProps {
@@ -12,24 +14,35 @@ interface NoteCardProps {
 	backlinkPreview?: string;
 }
 
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
+
 // Note type icons for the "Sentient Note" personality
 const NOTE_TYPE_CONFIG: Record<string, { icon: string; label: string; color: string }> = {
-	research: { icon: "🔬", label: "Research", color: "var(--color-purple)" },
-	journal: { icon: "📔", label: "Journal", color: "var(--color-blue)" },
-	project: { icon: "🎯", label: "Project", color: "var(--color-green)" },
-	meeting: { icon: "👥", label: "Meeting", color: "var(--color-orange)" },
-	reference: { icon: "📚", label: "Reference", color: "var(--text-muted)" },
-	inbox: { icon: "📥", label: "Inbox", color: "var(--color-yellow)" },
-	unknown: { icon: "📄", label: "Note", color: "var(--text-muted)" },
+	research: { icon: "flask-conical", label: "Research", color: "var(--color-purple)" },
+	journal: { icon: "book-open", label: "Journal", color: "var(--color-blue)" },
+	project: { icon: "target", label: "Project", color: "var(--color-green)" },
+	meeting: { icon: "users", label: "Meeting", color: "var(--color-orange)" },
+	reference: { icon: "library", label: "Reference", color: "var(--text-muted)" },
+	inbox: { icon: "inbox", label: "Inbox", color: "var(--color-yellow)" },
+	unknown: { icon: "file-text", label: "Note", color: "var(--text-muted)" },
 };
 
 const PARA_CONFIG: Record<string, { icon: string; label: string }> = {
-	projects: { icon: "🎯", label: "Projects" },
-	areas: { icon: "🏠", label: "Areas" },
-	resources: { icon: "📚", label: "Resources" },
-	archive: { icon: "🗄️", label: "Archive" },
-	inbox: { icon: "📥", label: "Inbox" },
-	unknown: { icon: "❓", label: "" },
+	projects: { icon: "target", label: "Projects" },
+	areas: { icon: "home", label: "Areas" },
+	resources: { icon: "book-open", label: "Resources" },
+	archive: { icon: "archive", label: "Archive" },
+	inbox: { icon: "inbox", label: "Inbox" },
+	unknown: { icon: "help-circle", label: "" },
 };
 
 export function NoteCard({ noteVitals }: NoteCardProps) {
@@ -51,7 +64,7 @@ export function NoteCard({ noteVitals }: NoteCardProps) {
 					style={{ "--type-color": noteType.color }}
 					title={noteType.label}
 				>
-					<span class="nv2-note-type-icon">{noteType.icon}</span>
+					<Icon name={noteType.icon} className="nv2-note-type-icon" />
 					<span class="nv2-note-type-label">{noteType.label}</span>
 				</span>
 				{noteVitals.isIndexed && (
@@ -68,12 +81,12 @@ export function NoteCard({ noteVitals }: NoteCardProps) {
 			{/* Location & Classification */}
 			<div class="nv2-note-card-meta">
 				<span class="nv2-meta-item nv2-meta-folder" title={noteVitals.path}>
-					<span class="nv2-meta-icon">📁</span>
+					<Icon name="folder" className="nv2-meta-icon" />
 					<span class="nv2-meta-text">{folder}</span>
 				</span>
 				{paraType.label && (
 					<span class="nv2-meta-item nv2-meta-para">
-						<span class="nv2-meta-icon">{paraType.icon}</span>
+						<Icon name={paraType.icon} className="nv2-meta-icon" />
 						<span class="nv2-meta-text">{paraType.label}</span>
 					</span>
 				)}

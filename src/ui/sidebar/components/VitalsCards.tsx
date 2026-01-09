@@ -3,7 +3,7 @@
  *
  * Per spec layout:
  * ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
- * │   ❤️   │ │   🔗   │ │   📅   │ │   📊   │
+ * │  heart │ │  link  │ │calendar│ │  chart │
  * │  85%   │ │   12   │ │   3d   │ │   A    │
  * │ Health │ │ Links  │ │ Fresh  │ │ Grade  │
  * └────────┘ └────────┘ └────────┘ └────────┘
@@ -11,6 +11,8 @@
  * Each card is clickable and sends the user to chat for more details.
  */
 
+import { setIcon } from "obsidian";
+import { useEffect, useRef } from "preact/hooks";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
 
 interface VitalsCardsProps {
@@ -19,6 +21,17 @@ interface VitalsCardsProps {
 }
 
 type VitalStatus = "healthy" | "attention" | "unhealthy";
+
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
 
 export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
 	const grade = calculateGrade(vitals);
@@ -39,7 +52,7 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
 			<div class="nv2-vitals-cards">
 				<VitalCard
 					metric="health"
-					icon="❤️"
+					icon="heart"
 					value={`${vitals.health.score}%`}
 					label="Health"
 					status={vitals.health.status}
@@ -48,7 +61,7 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
 				/>
 				<VitalCard
 					metric="links"
-					icon="🔗"
+					icon="link"
 					value={formatLinkCount(totalLinks)}
 					label="Links"
 					status={getLinkStatus(totalLinks)}
@@ -57,7 +70,7 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
 				/>
 				<VitalCard
 					metric="freshness"
-					icon="📅"
+					icon="calendar"
 					value={vitals.freshness.displayText}
 					label="Fresh"
 					status={freshnessStatus}
@@ -66,7 +79,7 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
 				/>
 				<VitalCard
 					metric="grade"
-					icon="📊"
+					icon="bar-chart-2"
 					value={grade}
 					label="Grade"
 					status={getGradeStatus(grade)}
@@ -103,7 +116,7 @@ function VitalCard({ metric, icon, value, label, status, hint, onClick }: VitalC
 			aria-label={`${label}: ${value}. ${hint}. Click for details.`}
 			data-metric={metric}
 		>
-			<span class="nv2-vital-icon" aria-hidden="true">{icon}</span>
+			<Icon name={icon} className="nv2-vital-icon" />
 			<span class="nv2-vital-value">{value}</span>
 			<span class="nv2-vital-label">{label}</span>
 			<span class="nv2-vital-ring" />

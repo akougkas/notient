@@ -235,25 +235,36 @@ export class SetupWizardModal extends Modal {
 
   // --- Step 1: Intro ---
   private renderIntro(container: HTMLElement): void {
-    const content = container.createDiv({
-      cls: "nv2-wizard-intro",
-      attr: { style: "text-align: center; margin-top: 40px;" },
-    }); // Inline style for simplicity, convert to CSS class if repeated
-    const icon = content.createDiv({
-      attr: { style: "font-size: 48px; margin-bottom: 20px;" },
-    });
-    icon.setText("✨");
+    const content = container.createDiv({ cls: "nv2-wizard-intro" });
+
+    // Hero icon
+    const iconWrapper = content.createDiv({ cls: "nv2-wizard-hero-icon" });
+    setIcon(iconWrapper, "sparkles");
 
     content.createEl("h2", {
       text: "Power up your notes",
-      attr: { style: "margin-bottom: 10px;" },
+      cls: "nv2-wizard-intro-title",
     });
     content.createDiv({
-      text: "Notient connects your vault to local AI models to enable semantic search, chat with your notes, and autonomous organization.",
-      attr: {
-        style: "color: var(--nv2-text-muted); max-width: 400px; margin: 0 auto; line-height: 1.6;",
-      },
+      text: "Notient connects your vault to local AI models. No data leaves your machine.",
+      cls: "nv2-wizard-intro-desc",
     });
+
+    // Feature highlights
+    const features = content.createDiv({ cls: "nv2-wizard-features" });
+
+    const featureData = [
+      { icon: "search", text: "Semantic search across your vault" },
+      { icon: "bot", text: "AI agents that help you connect ideas" },
+      { icon: "brain", text: "Intelligence that learns from your notes" },
+    ];
+
+    for (const f of featureData) {
+      const item = features.createDiv({ cls: "nv2-wizard-feature" });
+      const iconEl = item.createSpan({ cls: "nv2-wizard-feature-icon" });
+      setIcon(iconEl, f.icon);
+      item.createSpan({ text: f.text });
+    }
   }
 
   // --- Step 2: Services ---
@@ -272,11 +283,18 @@ export class SetupWizardModal extends Modal {
     // Header
     const header = card.createDiv({ cls: "nv2-wizard-service-header" });
     const title = header.createDiv({ cls: "nv2-wizard-service-title" });
-    setIcon(title.createSpan(), type === "ollama" ? "database" : "message-square");
+    const iconEl = title.createSpan({ cls: "nv2-wizard-service-icon" });
+    setIcon(iconEl, type === "ollama" ? "database" : "message-square");
     title.createSpan({ text: config.label });
 
     const statusBadge = header.createDiv({
       cls: `nv2-wizard-service-status ${config.status}`,
+    });
+    if (config.status === "checking") {
+      const spinnerEl = statusBadge.createSpan({ cls: "nv2-wizard-spinner" });
+      setIcon(spinnerEl, "loader-2");
+    }
+    statusBadge.createSpan({
       text:
         config.status === "connected"
           ? "Connected"
@@ -289,12 +307,11 @@ export class SetupWizardModal extends Modal {
     const inputGroup = card.createDiv({ cls: "nv2-wizard-input-group" });
     inputGroup.createDiv({ cls: "nv2-wizard-label", text: "Connection URL" });
 
-    const hostRow = inputGroup.createDiv({ attr: { style: "display: flex; gap: 8px;" } });
+    const hostRow = inputGroup.createDiv({ cls: "nv2-wizard-host-row" });
 
     // Helper toggle for Local/Network
     const toggle = hostRow.createEl("select", {
-      cls: "nv2-wizard-input",
-      attr: { style: "width: 100px;" },
+      cls: "nv2-wizard-input nv2-wizard-input--select",
     });
     toggle.createEl("option", { value: "local", text: "Local" });
     toggle.createEl("option", { value: "network", text: "Network" });
@@ -304,7 +321,7 @@ export class SetupWizardModal extends Modal {
       const mode = toggle.value as "local" | "network";
       const defaults = DEFAULT_IPS[type];
       config.ip = defaults[mode];
-      this.render(); // Re-render to update inputs
+      this.render();
       if (type === "ollama") this.debouncedCheckOllama();
       else this.debouncedCheckLMStudio();
     });
@@ -312,7 +329,7 @@ export class SetupWizardModal extends Modal {
     // IP Input
     const ipInput = hostRow.createEl("input", {
       type: "text",
-      cls: "nv2-wizard-input",
+      cls: "nv2-wizard-input nv2-wizard-input--ip",
       attr: { placeholder: "127.0.0.1" },
     });
     ipInput.value = config.ip;
@@ -325,8 +342,8 @@ export class SetupWizardModal extends Modal {
     // Port Input
     const portInput = hostRow.createEl("input", {
       type: "text",
-      cls: "nv2-wizard-input",
-      attr: { placeholder: "Port", style: "width: 80px;" },
+      cls: "nv2-wizard-input nv2-wizard-input--port",
+      attr: { placeholder: "Port" },
     });
     portInput.value = config.port;
     portInput.addEventListener("input", (e) => {
@@ -337,10 +354,7 @@ export class SetupWizardModal extends Modal {
 
     // Model Select
     if (config.status === "connected") {
-      const modelGroup = card.createDiv({
-        cls: "nv2-wizard-input-group",
-        attr: { style: "margin-top: 10px;" },
-      });
+      const modelGroup = card.createDiv({ cls: "nv2-wizard-input-group nv2-wizard-input-group--model" });
       modelGroup.createDiv({ cls: "nv2-wizard-label", text: "Model" });
       const select = modelGroup.createEl("select", { cls: "nv2-wizard-input" });
 
@@ -362,17 +376,16 @@ export class SetupWizardModal extends Modal {
 
       select.addEventListener("change", (e) => {
         config.selectedModel = (e.target as HTMLSelectElement).value;
-        // Re-scan when model changes
         if (type === "ollama") {
           this.scanForIndexes();
-          this.render(); // force re-render if scan finishes fast or state updates
+          this.render();
         }
       });
     } else if (config.status === "error") {
-      card.createDiv({
-        text: config.error || "Could not connect. Check if the service is running.",
-        attr: { style: "color: var(--nv2-status-error); font-size: 11px; margin-top: 8px;" },
-      });
+      const errorEl = card.createDiv({ cls: "nv2-wizard-service-error" });
+      const errorIcon = errorEl.createSpan({ cls: "nv2-wizard-error-icon" });
+      setIcon(errorIcon, "alert-circle");
+      errorEl.createSpan({ text: config.error || "Could not connect. Check if the service is running." });
     }
   }
 
@@ -380,7 +393,10 @@ export class SetupWizardModal extends Modal {
   private renderIndexing(container: HTMLElement): void {
     // 1. Vault Config Card
     const configCard = container.createDiv({ cls: "nv2-wizard-service-card" });
-    configCard.createDiv({ cls: "nv2-wizard-service-title", text: "Vault Configuration" });
+    const configTitle = configCard.createDiv({ cls: "nv2-wizard-service-title" });
+    const configIcon = configTitle.createSpan({ cls: "nv2-wizard-service-icon" });
+    setIcon(configIcon, "settings");
+    configTitle.createSpan({ text: "Vault Configuration" });
 
     // Chunk Size
     const chunkGroup = configCard.createDiv({ cls: "nv2-wizard-input-group" });
@@ -391,13 +407,12 @@ export class SetupWizardModal extends Modal {
 
     const slider = chunkGroup.createEl("input", {
       type: "range",
-      cls: "nv2-wizard-input",
-      attr: { min: 200, max: 2000, step: 100 },
+      cls: "nv2-wizard-slider",
+      attr: { min: "200", max: "2000", step: "100" },
     });
     slider.value = String(this.chunkSize);
     slider.addEventListener("input", (e) => {
       this.chunkSize = Number.parseInt((e.target as HTMLInputElement).value, 10);
-      // Update label inline instead of full re-render
       chunkLabel.setText(`Chunk Size: ${this.chunkSize} chars`);
     });
 
@@ -418,18 +433,18 @@ export class SetupWizardModal extends Modal {
     });
 
     // 2. Existing Index Detection - Show ALL indices
-    const indexCard = container.createDiv({
-      cls: "nv2-wizard-service-card",
-      attr: { style: "margin-top: 20px;" },
-    });
-    indexCard.createDiv({ cls: "nv2-wizard-service-title", text: "Available Indices" });
+    const indexCard = container.createDiv({ cls: "nv2-wizard-service-card nv2-wizard-index-card" });
+    const indexTitle = indexCard.createDiv({ cls: "nv2-wizard-service-title" });
+    const indexIcon = indexTitle.createSpan({ cls: "nv2-wizard-service-icon" });
+    setIcon(indexIcon, "database");
+    indexTitle.createSpan({ text: "Available Indices" });
 
     // Async load all indices
     const indexList = indexCard.createDiv({ cls: "nv2-wizard-index-list" });
-    indexList.createDiv({
-      text: "Scanning for indices...",
-      attr: { style: "color: var(--nv2-text-muted); font-size: 12px;" },
-    });
+    const loadingEl = indexList.createDiv({ cls: "nv2-wizard-loading" });
+    const spinnerEl = loadingEl.createSpan({ cls: "nv2-wizard-spinner" });
+    setIcon(spinnerEl, "loader-2");
+    loadingEl.createSpan({ text: "Scanning for indices..." });
 
     this.renderIndexList(indexList);
   }
@@ -451,10 +466,10 @@ export class SetupWizardModal extends Modal {
       container.empty();
 
       if (indices.length === 0) {
-        container.createDiv({
-          text: "No existing indices found. A new index will be created.",
-          attr: { style: "color: var(--nv2-text-muted); font-size: 13px; padding: 8px 0;" },
-        });
+        const emptyEl = container.createDiv({ cls: "nv2-wizard-index-empty" });
+        const emptyIcon = emptyEl.createSpan({ cls: "nv2-wizard-empty-icon" });
+        setIcon(emptyIcon, "file-plus");
+        emptyEl.createSpan({ text: "No existing indices found. A new index will be created." });
         this.indexStatus.compatibleFound = false;
         this.indexStatus.decision = "rebuild";
         this.result.indexAction = "rebuild";
@@ -466,17 +481,15 @@ export class SetupWizardModal extends Modal {
       const expectedDim = this.getExpectedDimension(selectedModel);
 
       container.createDiv({
+        cls: "nv2-wizard-index-hint",
         text: expectedDim
           ? `Select an index to use (${selectedModel} expects ${expectedDim}d):`
           : "Select an index to use:",
-        attr: { style: "color: var(--nv2-text-muted); font-size: 12px; margin-bottom: 8px;" },
       });
 
       // "Create New" option
       const createNewRow = container.createDiv({
-        attr: {
-          style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; cursor: pointer; ${this.indexStatus.decision === "rebuild" ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`,
-        },
+        cls: `nv2-wizard-index-row ${this.indexStatus.decision === "rebuild" ? "selected" : ""}`,
       });
 
       const createNewRadio = createNewRow.createEl("input", {
@@ -484,10 +497,15 @@ export class SetupWizardModal extends Modal {
         attr: { name: "index-select" },
       });
       createNewRadio.checked = this.indexStatus.decision === "rebuild";
-      createNewRow.createDiv({ text: "➕ Create New Index", attr: { style: "font-weight: 500;" } });
+
+      const createNewLabel = createNewRow.createDiv({ cls: "nv2-wizard-index-row-label" });
+      const createNewIcon = createNewLabel.createSpan({ cls: "nv2-wizard-index-icon" });
+      setIcon(createNewIcon, "plus-circle");
+      createNewLabel.createSpan({ text: "Create New Index", cls: "nv2-wizard-index-name" });
+
       createNewRow.createDiv({
+        cls: "nv2-wizard-index-meta",
         text: `Fresh index for ${selectedModel}`,
-        attr: { style: "color: var(--nv2-text-muted); font-size: 11px; margin-left: auto;" },
       });
 
       createNewRow.addEventListener("click", () => {
@@ -524,77 +542,51 @@ export class SetupWizardModal extends Modal {
           : null;
 
         const row = container.createDiv({
-          attr: {
-            style: `display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--nv2-border-color); border-radius: 6px; margin-bottom: 6px; ${!isCompatible ? "opacity: 0.5;" : "cursor: pointer;"} ${isSelected ? "background: color-mix(in srgb, var(--interactive-accent), transparent 90%); border-color: var(--interactive-accent);" : ""}`,
-          },
+          cls: `nv2-wizard-index-row ${isSelected ? "selected" : ""} ${!isCompatible ? "incompatible" : ""}`,
         });
 
         const radio = row.createEl("input", { type: "radio", attr: { name: "index-select" } });
         radio.checked = isSelected;
         radio.disabled = !isCompatible;
 
-        const infoCol = row.createDiv({ attr: { style: "flex: 1;" } });
+        const infoCol = row.createDiv({ cls: "nv2-wizard-index-info" });
 
-        const titleRow = infoCol.createDiv({
-          attr: { style: "display: flex; align-items: center; gap: 6px;" },
-        });
-        titleRow.createSpan({ text: idx.displayName, attr: { style: "font-weight: 500;" } });
-        titleRow.createSpan({
-          text: `${idx.dimension}d`,
-          attr: { style: "color: var(--nv2-text-muted); font-size: 11px;" },
-        });
+        const titleRow = infoCol.createDiv({ cls: "nv2-wizard-index-title-row" });
+        titleRow.createSpan({ text: idx.displayName, cls: "nv2-wizard-index-name" });
+        titleRow.createSpan({ text: `${idx.dimension}d`, cls: "nv2-wizard-index-dim" });
 
         // Source badge
-        const badgeStyle = isExternal
-          ? "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--color-purple); color: white;"
-          : "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--interactive-accent); color: var(--text-on-accent);";
         titleRow.createSpan({
           text: isExternal ? "EXTERNAL" : "PLUGIN",
-          attr: { style: badgeStyle },
+          cls: `nv2-wizard-badge ${isExternal ? "external" : "plugin"}`,
         });
 
         // Legacy badge
         if (idx.isLegacy) {
-          titleRow.createSpan({
-            text: "LEGACY",
-            attr: {
-              style:
-                "font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--color-orange); color: white;",
-            },
-          });
+          titleRow.createSpan({ text: "LEGACY", cls: "nv2-wizard-badge legacy" });
         }
 
         // Secondary info line with date and count
-        const infoLine = infoCol.createDiv({
-          attr: {
-            style: "display: flex; gap: 8px; color: var(--nv2-text-muted); font-size: 11px;",
-          },
-        });
+        const infoLine = infoCol.createDiv({ cls: "nv2-wizard-index-details" });
         infoLine.createSpan({ text: `${idx.docCount} chunks` });
         if (createdStr) {
-          infoLine.createSpan({ text: `• Created ${createdStr}` });
-        }
-        if (idx.vaultHash) {
-          infoLine.createSpan({ text: `• Vault ${idx.vaultHash}` });
+          infoLine.createSpan({ text: `Created ${createdStr}` });
         }
 
         // Compatibility indicator
         if (!isCompatible && expectedDim) {
-          row.createDiv({
-            text: `⚠️ ${idx.dimension}d ≠ ${expectedDim}d`,
-            attr: {
-              style: "color: var(--nv2-status-error); font-size: 11px; white-space: nowrap;",
-              title: `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`,
-            },
-          });
+          const warnEl = row.createDiv({ cls: "nv2-wizard-index-warning" });
+          const warnIcon = warnEl.createSpan();
+          setIcon(warnIcon, "alert-triangle");
+          warnEl.createSpan({ text: `${idx.dimension}d ≠ ${expectedDim}d` });
+          warnEl.title = `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`;
         }
 
         // External index notice
         if (isExternal && isCompatible) {
-          row.createDiv({
-            text: "🔒",
-            attr: { style: "font-size: 14px;", title: "External index (read-only)" },
-          });
+          const lockEl = row.createDiv({ cls: "nv2-wizard-index-lock" });
+          setIcon(lockEl, "lock");
+          lockEl.title = "External index (read-only)";
         }
 
         if (isCompatible) {
@@ -613,26 +605,25 @@ export class SetupWizardModal extends Modal {
       }
 
       // Action summary
-      const actionMsg = container.createDiv({
-        attr: {
-          style:
-            "font-weight: 500; font-size: 13px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--nv2-border-color);",
-        },
-      });
+      const actionMsg = container.createDiv({ cls: "nv2-wizard-index-action" });
+      const actionIcon = actionMsg.createSpan({ cls: "nv2-wizard-action-icon" });
 
       if (this.indexStatus.decision === "rebuild") {
-        actionMsg.setText("✨ Action: Create new index and scan vault.");
+        setIcon(actionIcon, "sparkles");
+        actionMsg.createSpan({ text: "Action: Create new index and scan vault." });
       } else if (this.indexStatus.source === "vault") {
-        actionMsg.setText("🔒 Action: Connect to external index (read-only).");
+        setIcon(actionIcon, "lock");
+        actionMsg.createSpan({ text: "Action: Connect to external index (read-only)." });
       } else {
-        actionMsg.setText("✅ Action: Connect to existing plugin index.");
+        setIcon(actionIcon, "check-circle");
+        actionMsg.createSpan({ text: "Action: Connect to existing plugin index." });
       }
     } catch (e) {
       container.empty();
-      container.createDiv({
-        text: `Error loading indices: ${e}`,
-        attr: { style: "color: var(--nv2-status-error); font-size: 12px;" },
-      });
+      const errorEl = container.createDiv({ cls: "nv2-wizard-index-error" });
+      const errorIcon = errorEl.createSpan();
+      setIcon(errorIcon, "alert-circle");
+      errorEl.createSpan({ text: `Error loading indices: ${e}` });
     }
   }
 

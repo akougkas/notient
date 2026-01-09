@@ -9,6 +9,17 @@ import { setIcon } from "obsidian";
 import { useCallback, useEffect, useRef } from "preact/hooks";
 import type { Insight } from "../../../services/insightGenerator";
 
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
+
 interface InsightStreamProps {
 	insights: Insight[];
 	onOpenFile: (path: string) => void;
@@ -59,7 +70,7 @@ export function InsightStream({ insights, onOpenFile }: InsightStreamProps) {
 function InsightEmptyState() {
 	return (
 		<div class="nv2-insight-empty">
-			<span class="nv2-insight-empty-icon">💡</span>
+			<Icon name="lightbulb" className="nv2-insight-empty-icon" />
 			<span class="nv2-insight-empty-text">
 				AI insights will appear here as Notient analyzes your note.
 			</span>

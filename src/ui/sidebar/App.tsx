@@ -7,9 +7,9 @@
  * - Footer: Three-zone status (Providers | Index | Agents)
  */
 
-import { Notice } from "obsidian";
+import { Notice, setIcon } from "obsidian";
 import { signal } from "@preact/signals";
-import { useCallback, useEffect, useMemo } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
 import type { ActionApplier, ActionHistory, WorkflowRunner } from "../../core/agentic";
 import { InsightGenerator } from "../../services/insightGenerator";
@@ -825,9 +825,16 @@ function NoteVitalsSkeleton() {
 }
 
 function EmptyState() {
+	const iconRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, "file-text");
+		}
+	}, []);
+
 	return (
 		<div class="nv2-empty-state" role="status">
-			<div class="nv2-empty-state-icon" aria-hidden="true">📝</div>
+			<div class="nv2-empty-state-icon" ref={iconRef} aria-hidden="true" />
 			<div class="nv2-empty-state-title">No Note Open</div>
 			<div class="nv2-empty-state-text">
 				Open a markdown file to see its vitals and work with the AI assistant.
@@ -879,16 +886,16 @@ function SearchResultsView({
 							onClick={() => onOpenNote(result.path)}
 						>
 							<div class="nv2-search-result-title">
-								{result.path.split("/").pop()?.replace(".md", "") || result.path}
+								{result.title || result.path.split("/").pop()?.replace(".md", "") || result.path}
 							</div>
-							{result.snippet && (
+							{result.chunks?.[0]?.text && (
 								<div class="nv2-search-result-snippet">
-									{result.snippet}
+									{result.chunks[0].text.slice(0, 150)}...
 								</div>
 							)}
 							<div class="nv2-search-result-meta">
 								<span class="nv2-search-result-score">
-									{Math.round(result.score * 100)}% match
+									{Math.round(result.bestScore * 100)}% match
 								</span>
 							</div>
 						</button>

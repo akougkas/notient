@@ -6,6 +6,8 @@
  */
 
 import type { Signal } from "@preact/signals";
+import { setIcon } from "obsidian";
+import { useEffect, useRef } from "preact/hooks";
 
 export type SidebarView = "note" | "agents" | "chat";
 
@@ -21,10 +23,32 @@ const TABS: Array<{
 	icon: string;
 	ariaLabel: string;
 }> = [
-	{ id: "note", label: "Note", icon: "📝", ariaLabel: "Note Vitals view" },
-	{ id: "agents", label: "Agents", icon: "🤖", ariaLabel: "Agent Streams view" },
-	{ id: "chat", label: "Chat", icon: "💬", ariaLabel: "Chat with Notient" },
+	{ id: "note", label: "Note", icon: "file-text", ariaLabel: "Note Vitals view" },
+	{ id: "agents", label: "Agents", icon: "bot", ariaLabel: "Agent Streams view" },
+	{ id: "chat", label: "Chat", icon: "message-circle", ariaLabel: "Chat with Notient" },
 ];
+
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
+
+// Brand icon component
+function BrandIcon() {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, "sparkles");
+		}
+	}, []);
+	return <span ref={iconRef} class="nv2-brand-mark" aria-hidden="true" />;
+}
 
 export function Header({
 	activeView,
@@ -35,7 +59,7 @@ export function Header({
 		<header class="nv2-header" role="banner">
 			<div class="nv2-header-row">
 				<div class="nv2-header-brand">
-					<span class="nv2-brand-mark" aria-hidden="true">◆</span>
+					<BrandIcon />
 					<span class="nv2-brand-name">Notient</span>
 				</div>
 				<nav class="nv2-tabs" role="tablist" aria-label="Sidebar views">
@@ -54,7 +78,7 @@ export function Header({
 								class={`nv2-tab ${isActive ? "nv2-tab--active" : ""} ${showPulse ? "nv2-tab--pulse" : ""}`}
 								onClick={() => (activeView.value = tab.id)}
 							>
-								<span class="nv2-tab-icon" aria-hidden="true">{tab.icon}</span>
+								<Icon name={tab.icon} className="nv2-tab-icon" />
 								<span class="nv2-tab-label">{tab.label}</span>
 								{showBadge && (
 									<span

@@ -7,8 +7,20 @@
  * 3. Chat Input - text input with send button
  */
 
+import { setIcon } from "obsidian";
 import { useRef, useEffect } from "preact/hooks";
 import type { Signal } from "@preact/signals";
+
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
 
 export interface ChatContext {
 	notePath: string | null;
@@ -90,7 +102,7 @@ export function ChatView({
 			<header class="nv2-chat-context" role="status">
 				{hasContext ? (
 					<>
-						<span class="nv2-chat-context-icon" aria-hidden="true">📝</span>
+						<Icon name="file-text" className="nv2-chat-context-icon" />
 						<button
 							type="button"
 							class="nv2-chat-context-note"
@@ -111,7 +123,7 @@ export function ChatView({
 					</>
 				) : (
 					<span class="nv2-chat-context-empty">
-						<span class="nv2-chat-context-icon" aria-hidden="true">📝</span>
+						<Icon name="file-text" className="nv2-chat-context-icon" />
 						<span>Open a note to chat about it</span>
 					</span>
 				)}
@@ -121,7 +133,7 @@ export function ChatView({
 			<main class="nv2-chat-messages" role="log" aria-live="polite">
 				{!hasMessages && !isStreaming.value ? (
 					<div class="nv2-chat-empty">
-						<div class="nv2-chat-empty-avatar">🤖</div>
+						<Icon name="bot" className="nv2-chat-empty-avatar" />
 						<div class="nv2-chat-empty-title">Chat with Notient</div>
 						<div class="nv2-chat-empty-text">
 							{hasContext
@@ -181,7 +193,7 @@ export function ChatView({
 					{isStreaming.value ? (
 						<span class="nv2-chat-send-spinner" />
 					) : (
-						<span aria-hidden="true">↑</span>
+						<Icon name="arrow-up" />
 					)}
 				</button>
 			</footer>
@@ -202,7 +214,7 @@ function SuggestionChip({ text, onClick }: { text: string; onClick: () => void }
 function StreamingBubble({ content }: { content: string }) {
 	return (
 		<div class="nv2-chat-bubble nv2-chat-bubble--assistant nv2-chat-bubble--streaming">
-			<div class="nv2-chat-bubble-avatar">🤖</div>
+			<Icon name="bot" className="nv2-chat-bubble-avatar" />
 			<div class="nv2-chat-bubble-body">
 				{content ? (
 					<div class="nv2-chat-bubble-content">
@@ -237,7 +249,7 @@ function MessageBubble({ message, onOpenNote }: MessageBubbleProps) {
 		>
 			{/* Avatar for assistant messages */}
 			{!isUser && (
-				<div class="nv2-chat-bubble-avatar" aria-hidden="true">🤖</div>
+				<Icon name="bot" className="nv2-chat-bubble-avatar" />
 			)}
 
 			<div class="nv2-chat-bubble-wrapper">

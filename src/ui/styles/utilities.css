@@ -1,38 +1,325 @@
-/* Utilities */
-
-.nv2-empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--nv2-space-xl);
-  text-align: center;
-  color: var(--text-muted);
-}
-
-.nv2-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--nv2-space-sm);
-  padding: var(--nv2-space-lg);
-  color: var(--text-muted);
-}
-
-.nv2-loading-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--background-modifier-border);
-  border-top-color: var(--interactive-accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* Utilities
+   Note: .nv2-empty-state, .nv2-loading, .nv2-loading-spinner are defined in base.css */
 
 .nv2-hidden {
   display: none !important;
+}
+
+/* =============================================================================
+   Toggle Button Groups (Segmented Controls)
+   Per VISUALS.md Prompt 12: "Local | Network" style toggles
+   ============================================================================= */
+
+.nv2-toggle-group {
+  display: inline-flex;
+  background: var(--background-secondary);
+  border-radius: var(--nv2-radius-md);
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.nv2-toggle-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--font-smaller);
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nv2-toggle-btn:hover:not(.nv2-toggle-btn--active) {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.nv2-toggle-btn--active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.nv2-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--nv2-focus-ring);
+}
+
+.nv2-toggle-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+}
+
+/* =============================================================================
+   Notification Badges
+   Per VISUALS.md Prompt 12: Red badge with scale pop animation
+   ============================================================================= */
+
+.nv2-notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--color-red);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: var(--nv2-radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: badge-pop 0.3s ease; /* keyframe defined in header.css */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.nv2-notification-badge--pulse {
+  animation: badge-pop 0.3s ease, badge-pulse 2s ease-in-out infinite 0.3s;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-red) 40%, transparent); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+
+/* Status badges (Connected/Offline pills) */
+.nv2-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--nv2-radius-full);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.nv2-status-badge--connected {
+  background: color-mix(in srgb, var(--color-green) 15%, transparent);
+  color: var(--color-green);
+}
+
+.nv2-status-badge--offline {
+  background: color-mix(in srgb, var(--color-red) 15%, transparent);
+  color: var(--color-red);
+}
+
+.nv2-status-badge--checking {
+  background: color-mix(in srgb, var(--color-orange) 15%, transparent);
+  color: var(--color-orange);
+}
+
+.nv2-status-badge-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.nv2-status-badge--checking .nv2-status-badge-icon {
+  animation: spin 1s linear infinite;
+}
+
+/* =============================================================================
+   Ghost/Text Buttons
+   Per VISUALS.md Prompt 12: No border or fill, just text
+   ============================================================================= */
+
+.nv2-btn-ghost {
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
+  font-size: var(--font-smaller);
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--nv2-radius-sm);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nv2-btn-ghost:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.nv2-btn-ghost:active {
+  background: var(--background-modifier-border);
+}
+
+.nv2-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-btn-ghost--accent {
+  color: var(--interactive-accent);
+}
+
+.nv2-btn-ghost--accent:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+  color: var(--interactive-accent);
+}
+
+.nv2-btn-ghost--danger {
+  color: var(--color-red);
+}
+
+.nv2-btn-ghost--danger:hover {
+  background: color-mix(in srgb, var(--color-red) 10%, transparent);
+  color: var(--color-red);
+}
+
+/* =============================================================================
+   Error State Boxes
+   Per VISUALS.md Prompt 11: Component-level error states
+   ============================================================================= */
+
+.nv2-error-box {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-md);
+  background: color-mix(in srgb, var(--color-red) 8%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--color-red) 30%, transparent);
+  border-radius: var(--nv2-radius-md);
+  animation: error-in 0.3s ease;
+}
+
+@keyframes error-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nv2-error-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--color-red);
+}
+
+.nv2-error-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-error-title {
+  font-size: var(--font-smaller);
+  font-weight: 600;
+  color: var(--color-red);
+  margin-bottom: 2px;
+}
+
+.nv2-error-message {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.nv2-error-details {
+  margin-top: var(--nv2-space-xs);
+  padding: var(--nv2-space-xs);
+  background: var(--background-primary);
+  border-radius: var(--nv2-radius-sm);
+  font-size: 10px;
+  font-family: var(--font-monospace);
+  color: var(--text-faint);
+  max-height: 60px;
+  overflow: auto;
+}
+
+.nv2-error-actions {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  margin-top: var(--nv2-space-sm);
+}
+
+/* =============================================================================
+   Warning State Boxes
+   ============================================================================= */
+
+.nv2-warning-box {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-md);
+  background: color-mix(in srgb, var(--color-orange) 8%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--color-orange) 30%, transparent);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-warning-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--color-orange);
+}
+
+.nv2-warning-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-warning-title {
+  font-size: var(--font-smaller);
+  font-weight: 600;
+  color: var(--color-orange);
+  margin-bottom: 2px;
+}
+
+.nv2-warning-message {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* =============================================================================
+   Info State Boxes
+   ============================================================================= */
+
+.nv2-info-box {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-md);
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-info-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--interactive-accent);
+}
+
+.nv2-info-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-info-title {
+  font-size: var(--font-smaller);
+  font-weight: 600;
+  color: var(--interactive-accent);
+  margin-bottom: 2px;
+}
+
+.nv2-info-message {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  line-height: 1.4;
 }

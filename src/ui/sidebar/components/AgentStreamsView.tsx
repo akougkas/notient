@@ -7,7 +7,20 @@
  * 3. Recent Activity - completed/failed actions with undo
  */
 
+import { setIcon } from "obsidian";
 import type { Signal } from "@preact/signals";
+import { useEffect, useRef } from "preact/hooks";
+
+// Icon component for Lucide icons in Preact
+function Icon({ name, className }: { name: string; className?: string }) {
+	const iconRef = useRef<HTMLSpanElement>(null);
+	useEffect(() => {
+		if (iconRef.current) {
+			setIcon(iconRef.current, name);
+		}
+	}, [name]);
+	return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
 
 export interface ActiveAgent {
 	id: string;
@@ -72,7 +85,7 @@ export function AgentStreamsView({
 					{/* Section 1: Active Agents */}
 					<section class="nv2-agent-section" aria-label="Active agents">
 						<h3 class="nv2-section-title">
-							<span class="nv2-section-title-icon">🤖</span>
+							<Icon name="bot" className="nv2-section-title-icon" />
 							Active
 							{hasActiveAgents && (
 								<span class="nv2-count-badge nv2-count-badge--active">
@@ -99,7 +112,7 @@ export function AgentStreamsView({
 					{/* Section 2: Pending Review */}
 					<section class="nv2-agent-section" aria-label="Pending review">
 						<h3 class="nv2-section-title">
-							<span class="nv2-section-title-icon">⚠️</span>
+							<Icon name="alert-circle" className="nv2-section-title-icon" />
 							Pending Review
 							{hasPendingActions && (
 								<span class="nv2-count-badge nv2-count-badge--pending">
@@ -126,7 +139,7 @@ export function AgentStreamsView({
 					{/* Section 3: Recent Activity */}
 					<section class="nv2-agent-section" aria-label="Recent activity">
 						<h3 class="nv2-section-title">
-							<span class="nv2-section-title-icon">📋</span>
+							<Icon name="clipboard-list" className="nv2-section-title-icon" />
 							Recent
 						</h3>
 						{!hasRecentActivity ? (
@@ -152,7 +165,7 @@ export function AgentStreamsView({
 function AgentEmptyState() {
 	return (
 		<div class="nv2-agent-empty">
-			<div class="nv2-agent-empty-icon">🤖</div>
+			<Icon name="bot" className="nv2-agent-empty-icon" />
 			<div class="nv2-agent-empty-title">No Agent Activity</div>
 			<div class="nv2-agent-empty-text">
 				Use Quick Actions from the Note view to start agents
@@ -187,8 +200,8 @@ function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
 			{/* Status Indicator */}
 			<div class="nv2-agent-status-indicator">
 				{isRunning && <span class="nv2-agent-spinner" aria-hidden="true" />}
-				{isPaused && <span class="nv2-agent-paused-icon" aria-hidden="true">⏸</span>}
-				{isQueued && <span class="nv2-agent-queued-icon" aria-hidden="true">⏳</span>}
+				{isPaused && <Icon name="pause" className="nv2-agent-paused-icon" />}
+				{isQueued && <Icon name="clock" className="nv2-agent-queued-icon" />}
 			</div>
 
 			<div class="nv2-agent-body">
@@ -273,9 +286,9 @@ interface PendingActionCardProps {
 }
 
 const RISK_CONFIG = {
-	high: { icon: "⚠️", label: "High Risk", className: "nv2-risk-high" },
-	medium: { icon: "⚡", label: "Medium Risk", className: "nv2-risk-medium" },
-	low: { icon: "✓", label: "Safe", className: "nv2-risk-low" },
+	high: { icon: "alert-triangle", label: "High Risk", className: "nv2-risk-high" },
+	medium: { icon: "zap", label: "Medium Risk", className: "nv2-risk-medium" },
+	low: { icon: "check", label: "Safe", className: "nv2-risk-low" },
 };
 
 function PendingActionCard({ action, onApply, onDismiss }: PendingActionCardProps) {
@@ -289,7 +302,7 @@ function PendingActionCard({ action, onApply, onDismiss }: PendingActionCardProp
 		>
 			<div class="nv2-pending-header">
 				<span class="nv2-pending-risk" title={risk.label}>
-					<span class="nv2-risk-icon" aria-hidden="true">{risk.icon}</span>
+					<Icon name={risk.icon} className="nv2-risk-icon" />
 					<span class="nv2-risk-label">{risk.label}</span>
 				</span>
 			</div>
@@ -329,9 +342,9 @@ interface RecentActivityCardProps {
 }
 
 const STATUS_CONFIG = {
-	success: { icon: "✓", label: "Completed", className: "nv2-activity--success" },
-	failed: { icon: "✗", label: "Failed", className: "nv2-activity--failed" },
-	undone: { icon: "↩", label: "Undone", className: "nv2-activity--undone" },
+	success: { icon: "check", label: "Completed", className: "nv2-activity--success" },
+	failed: { icon: "x", label: "Failed", className: "nv2-activity--failed" },
+	undone: { icon: "undo", label: "Undone", className: "nv2-activity--undone" },
 };
 
 function RecentActivityCard({ activity, onUndo }: RecentActivityCardProps) {
@@ -345,9 +358,7 @@ function RecentActivityCard({ activity, onUndo }: RecentActivityCardProps) {
 			aria-label={`${status.label}: ${activity.summary}`}
 		>
 			<div class="nv2-activity-main">
-				<span class={`nv2-activity-icon nv2-activity-icon--${activity.status}`} aria-hidden="true">
-					{status.icon}
-				</span>
+				<Icon name={status.icon} className={`nv2-activity-icon nv2-activity-icon--${activity.status}`} />
 				<div class="nv2-activity-content">
 					<span class="nv2-activity-summary">{activity.summary}</span>
 					<span class="nv2-activity-meta">

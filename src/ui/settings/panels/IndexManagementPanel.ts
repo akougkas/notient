@@ -5,7 +5,7 @@
  * Handles index discovery, switching, export/import, and maintenance operations.
  */
 
-import { type App, Setting } from "obsidian";
+import { type App, Setting, setIcon } from "obsidian";
 import type { Kernel } from "../../../core/kernel";
 import type { NotientSettings } from "../../../types/settings";
 
@@ -68,7 +68,10 @@ export class IndexManagementPanel {
     const section = containerEl.createDiv({
       cls: "notient-settings-section notient-index-management",
     });
-    section.createEl("h2", { text: "Index Management" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "database");
+    header.createSpan({ text: "Index Management" });
 
     const isReady = this.kernel.isServicesInitialized;
     const indexManager = isReady
@@ -109,23 +112,27 @@ export class IndexManagementPanel {
     const statusBox = section.createDiv({ cls: "notient-settings-status-box" });
     const statusRow = statusBox.createDiv({ cls: "notient-settings-status-row" });
 
-    statusRow.createEl("span", { text: `🔑 ${activeKey}`, cls: "notient-settings-index-model" });
+    const modelEl = statusRow.createEl("span", { cls: "notient-settings-index-model" });
+    const keyIcon = modelEl.createSpan({ cls: "notient-settings-icon-inline" });
+    setIcon(keyIcon, "key");
+    modelEl.createSpan({ text: activeKey });
+
     statusRow.createEl("span", { text: `${currentDim}d`, cls: "notient-settings-index-dim" });
     statusRow.createEl("span", {
       text: isUserProvided ? "External (Read-Only)" : "Plugin Managed",
       cls: `notient-settings-badge ${isUserProvided ? "external" : "plugin"}`,
     });
 
-    statusBox.createEl("div", {
-      text: `📊 ${noteCount} notes indexed`,
-      cls: "notient-settings-info-dim",
-    });
+    const statsEl = statusBox.createEl("div", { cls: "notient-settings-info-dim notient-settings-stats" });
+    const statsIcon = statsEl.createSpan({ cls: "notient-settings-icon-inline" });
+    setIcon(statsIcon, "bar-chart-2");
+    statsEl.createSpan({ text: `${noteCount} notes indexed` });
 
     if (isUserProvided) {
-      statusBox.createEl("div", {
-        text: "ℹ️ External indices are read-only. Sync, Trim, and Rebuild operations are disabled.",
-        cls: "notient-settings-index-readonly",
-      });
+      const readonlyEl = statusBox.createEl("div", { cls: "notient-settings-index-readonly" });
+      const infoIcon = readonlyEl.createSpan({ cls: "notient-settings-icon-inline" });
+      setIcon(infoIcon, "info");
+      readonlyEl.createSpan({ text: "External indices are read-only. Sync, Trim, and Rebuild operations are disabled." });
     }
   }
 
@@ -231,18 +238,19 @@ export class IndexManagementPanel {
     left.createEl("span", { text: `${idx.docCount} chunks`, cls: "notient-settings-index-count" });
 
     if (!isCompatible && !isActive) {
-      left.createEl("span", {
-        text: "⚠️",
+      const warnIcon = left.createEl("span", {
+        cls: "notient-settings-index-warn-icon",
         attr: { title: `Dimension mismatch (needs ${currentDim}d)` },
       });
+      setIcon(warnIcon, "alert-triangle");
     }
 
     if (idx.isLegacy) {
-      left.createEl("span", {
-        text: "🔄",
+      const legacyIcon = left.createEl("span", {
         cls: "notient-settings-index-legacy",
         attr: { title: "Legacy format - will be migrated on next save" },
       });
+      setIcon(legacyIcon, "refresh-cw");
     }
 
     // Right side: badges
@@ -257,10 +265,8 @@ export class IndexManagementPanel {
       right.createEl("span", { text: "✓ Active", cls: "notient-settings-index-active-badge" });
     }
 
-    right.createEl("span", {
-      text: this.expandedPath === idx.path ? "▲" : "▼",
-      cls: "notient-settings-index-expand",
-    });
+    const expandIcon = right.createEl("span", { cls: "notient-settings-index-expand" });
+    setIcon(expandIcon, this.expandedPath === idx.path ? "chevron-up" : "chevron-down");
 
     // Details panel
     const details = rowContainer.createDiv({
@@ -356,10 +362,10 @@ export class IndexManagementPanel {
         this.renderInactiveIndexActions(btnRow, idx, indexManager);
       }
     } else {
-      details.createEl("div", {
-        text: "🔒 External indices are read-only (search only)",
-        cls: "notient-settings-index-readonly",
-      });
+      const readonlyEl = details.createEl("div", { cls: "notient-settings-index-readonly" });
+      const lockIcon = readonlyEl.createSpan({ cls: "notient-settings-icon-inline" });
+      setIcon(lockIcon, "lock");
+      readonlyEl.createSpan({ text: "External indices are read-only (search only)" });
     }
 
     // Export (available for all)
@@ -370,7 +376,11 @@ export class IndexManagementPanel {
     const isTrimming = this.operationInProgress.type === "trim";
     const anyOpInProgress = this.operationInProgress.type !== null;
 
-    const syncBtn = btnRow.createEl("button", { text: "▶️ Sync" });
+    // Sync button
+    const syncBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
+    const syncIcon = syncBtn.createSpan({ cls: "notient-settings-btn-icon" });
+    setIcon(syncIcon, "play");
+    syncBtn.createSpan({ text: "Sync" });
     if (anyOpInProgress) {
       syncBtn.disabled = true;
     } else {
@@ -382,7 +392,17 @@ export class IndexManagementPanel {
       });
     }
 
-    const trimBtn = btnRow.createEl("button", { text: isTrimming ? "Trimming..." : "🧹 Trim" });
+    // Trim button
+    const trimBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
+    if (isTrimming) {
+      const spinnerIcon = trimBtn.createSpan({ cls: "notient-settings-spinner" });
+      setIcon(spinnerIcon, "loader-2");
+      trimBtn.createSpan({ text: "Trimming..." });
+    } else {
+      const trimIcon = trimBtn.createSpan({ cls: "notient-settings-btn-icon" });
+      setIcon(trimIcon, "scissors");
+      trimBtn.createSpan({ text: "Trim" });
+    }
     if (anyOpInProgress) {
       trimBtn.disabled = true;
     } else {
@@ -391,7 +411,10 @@ export class IndexManagementPanel {
         try {
           this.operationInProgress = { type: "trim" };
           trimBtn.disabled = true;
-          trimBtn.textContent = "Trimming...";
+          trimBtn.empty();
+          const spinnerIcon = trimBtn.createSpan({ cls: "notient-settings-spinner" });
+          setIcon(spinnerIcon, "loader-2");
+          trimBtn.createSpan({ text: "Trimming..." });
           const result = await indexManager.trimIndex();
           this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
           this.clearCache();
@@ -407,7 +430,11 @@ export class IndexManagementPanel {
       });
     }
 
-    const rebuildBtn = btnRow.createEl("button", { cls: "mod-warning", text: "🔄 Rebuild" });
+    // Rebuild button
+    const rebuildBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn mod-warning" });
+    const rebuildIcon = rebuildBtn.createSpan({ cls: "notient-settings-btn-icon" });
+    setIcon(rebuildIcon, "refresh-cw");
+    rebuildBtn.createSpan({ text: "Rebuild" });
     if (anyOpInProgress) {
       rebuildBtn.disabled = true;
     } else {
@@ -429,10 +456,16 @@ export class IndexManagementPanel {
       this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
     const anyOpInProgress = this.operationInProgress.type !== null;
 
-    const delBtn = btnRow.createEl("button", {
-      cls: "mod-warning",
-      text: isDeletingThis ? "Deleting..." : "🗑️ Delete",
-    });
+    const delBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn mod-warning" });
+    if (isDeletingThis) {
+      const spinnerIcon = delBtn.createSpan({ cls: "notient-settings-spinner" });
+      setIcon(spinnerIcon, "loader-2");
+      delBtn.createSpan({ text: "Deleting..." });
+    } else {
+      const delIcon = delBtn.createSpan({ cls: "notient-settings-btn-icon" });
+      setIcon(delIcon, "trash-2");
+      delBtn.createSpan({ text: "Delete" });
+    }
 
     if (anyOpInProgress) {
       delBtn.disabled = true;
@@ -443,7 +476,10 @@ export class IndexManagementPanel {
           try {
             this.operationInProgress = { type: "delete", path: idx.path };
             delBtn.disabled = true;
-            delBtn.textContent = "Deleting...";
+            delBtn.empty();
+            const spinnerIcon = delBtn.createSpan({ cls: "notient-settings-spinner" });
+            setIcon(spinnerIcon, "loader-2");
+            delBtn.createSpan({ text: "Deleting..." });
             await indexManager.deleteIndexByPath(idx.path);
             this.kernel.obsidian.notice(`Deleted index: ${idx.modelKey}`);
             this.clearCache();
@@ -468,7 +504,10 @@ export class IndexManagementPanel {
     indexManager: IndexManagerInterface,
   ): void {
     const anyOpInProgress = this.operationInProgress.type !== null;
-    const exportBtn = btnRow.createEl("button", { text: "📤 Export" });
+    const exportBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
+    const exportIcon = exportBtn.createSpan({ cls: "notient-settings-btn-icon" });
+    setIcon(exportIcon, "download");
+    exportBtn.createSpan({ text: "Export" });
 
     if (anyOpInProgress) {
       exportBtn.disabled = true;
@@ -497,43 +536,58 @@ export class IndexManagementPanel {
   }
 
   private renderImportSection(section: HTMLElement, indexManager: IndexManagerInterface): void {
-    const importSection = section.createDiv({ cls: "notient-settings-section" });
+    const importSection = section.createDiv({ cls: "notient-settings-import-section" });
     const isImporting = this.operationInProgress.type === "import";
     const anyOpInProgress = this.operationInProgress.type !== null;
 
-    new Setting(importSection)
+    const setting = new Setting(importSection)
       .setName("Import Index")
-      .setDesc("Load an index from a backup file")
-      .addButton((btn) => {
-        btn.setButtonText(isImporting ? "Importing..." : "📥 Import");
-        btn.setDisabled(anyOpInProgress);
-        if (!anyOpInProgress) {
-          btn.onClick(() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".json";
-            input.onchange = async (e) => {
-              const file = (e.target as HTMLInputElement).files?.[0];
-              if (!file) return;
-              try {
-                this.operationInProgress = { type: "import" };
-                this.onRefresh(); // Update UI to show importing state
-                const text = await file.text();
-                const result = await indexManager.importIndex(text);
-                this.kernel.obsidian.notice(
-                  `Imported ${result.noteCount} notes for ${result.modelKey}`,
-                );
-                this.clearCache();
-              } catch (error) {
-                this.kernel.obsidian.notice(`Import failed: ${error}`);
-              } finally {
-                this.operationInProgress = { type: null };
-                this.onRefresh();
-              }
-            };
-            input.click();
-          });
-        }
-      });
+      .setDesc("Load an index from a backup file");
+
+    setting.addButton((btn) => {
+      btn.setDisabled(anyOpInProgress);
+      // Set icon manually since Setting API doesn't support it
+      const buttonEl = btn.buttonEl;
+      buttonEl.empty();
+      buttonEl.addClass("notient-settings-action-btn");
+
+      if (isImporting) {
+        const spinnerIcon = buttonEl.createSpan({ cls: "notient-settings-spinner" });
+        setIcon(spinnerIcon, "loader-2");
+        buttonEl.createSpan({ text: "Importing..." });
+      } else {
+        const importIcon = buttonEl.createSpan({ cls: "notient-settings-btn-icon" });
+        setIcon(importIcon, "upload");
+        buttonEl.createSpan({ text: "Import" });
+      }
+
+      if (!anyOpInProgress) {
+        btn.onClick(() => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = ".json";
+          input.onchange = async (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+            try {
+              this.operationInProgress = { type: "import" };
+              this.onRefresh();
+              const text = await file.text();
+              const result = await indexManager.importIndex(text);
+              this.kernel.obsidian.notice(
+                `Imported ${result.noteCount} notes for ${result.modelKey}`,
+              );
+              this.clearCache();
+            } catch (error) {
+              this.kernel.obsidian.notice(`Import failed: ${error}`);
+            } finally {
+              this.operationInProgress = { type: null };
+              this.onRefresh();
+            }
+          };
+          input.click();
+        });
+      }
+    });
   }
 }
