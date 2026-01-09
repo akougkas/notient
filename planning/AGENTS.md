@@ -6,49 +6,6 @@ This file coordinates parallel development between AI agents working on separate
 
 ---
 
-## Active Session: 2026-01-09
-
-| Agent | Branch | Worktree | Focus |
-|-------|--------|----------|-------|
-| **Claude** | `fix/critical-bugs` | `/home/akougkas/projects/notient` | Bug fixes, core issues |
-| **Gemini** | `feat/sidebar-v2-ui` | `/home/akougkas/projects/_worktrees/notient-gemini` | UI/UX implementation |
-
-**Base commit:** `879424e` (both branches stem from here)
-
----
-
-## File Ownership Rules
-
-### Claude EXCLUSIVELY owns:
-
-```
-src/core/**/*                           # All core logic
-src/services/**/*                       # All services
-src/ui/modals/TaskModal.ts              # Chat modal fixes
-src/core/intelligence/noteIntelligence.ts  # Service key fix
-src/core/agent/profileManager.ts        # Async fix
-```
-
-### Gemini EXCLUSIVELY owns:
-
-```
-src/ui/sidebar/components/*.tsx         # New UI components
-src/ui/styles/components/*.css          # Component CSS
-src/ui/sidebar/views/*.tsx              # New view components (create)
-```
-
-### SHARED (coordinate before editing):
-
-```
-src/ui/sidebar/App.tsx                  # Both need to touch this
-```
-
-**App.tsx Coordination:**
-- **Claude**: Fix line 91 (add `services:initialized` event subscription) - DO THIS FIRST
-- **Gemini**: After Claude's fix is committed, restructure for tabs/views
-
----
-
 ## Communication Protocol
 
 ### Before editing a shared file:
@@ -67,24 +24,9 @@ src/ui/sidebar/App.tsx                  # Both need to touch this
 
 ---
 
-## Active Edits
+## Historical Edits
 
 <!-- Add entries here when working on shared files -->
-
-| Agent | File | What | Status |
-|-------|------|------|--------|
-| Claude | `Omnibar.tsx` | Created search component (Gemini's area) | NEEDS MERGE |
-| Claude | `AgentStreamsView.tsx` | Created review queue view (Gemini's area) | NEEDS MERGE |
-| Claude | `agent-streams.css` | Created styles (Gemini's area) | NEEDS MERGE |
-| Gemini | `Header.tsx` | Created tab-based header | COMPLETE |
-| Gemini | `Footer.tsx` | Created three-zone status footer | COMPLETE |
-| Gemini | `VitalsCards.tsx` | Created 4-metric vitals cards | COMPLETE |
-| Gemini | `AgentStreamsView.tsx` | Created agent streams view (3 sections) | CONFLICT with Claude |
-| Gemini | `ChatView.tsx` | Created chat interface | COMPLETE |
-| Gemini | `App.tsx` | Full restructure with tabs, views, signals | COMPLETE |
-| Gemini | `agent-streams.css` | Created styles | CONFLICT with Claude |
-
-**WARNING:** Both Claude and Gemini created AgentStreamsView.tsx and agent-streams.css independently. Manual merge required.
 
 ---
 
