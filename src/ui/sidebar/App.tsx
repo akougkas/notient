@@ -8,7 +8,7 @@
  */
 
 import { Notice } from "obsidian";
-import { useCallback, useMemo } from "preact/hooks";
+import { useCallback, useMemo, useState } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
 import { InsightGenerator } from "../../services/insightGenerator";
 import { NoteCard } from "./components/NoteCard";
@@ -17,7 +17,7 @@ import {
 	createNoteQuickActions,
 } from "./components/QuickActions";
 import { InsightStream } from "./components/InsightStream";
-import { useApp, useKernel, useService } from "./context/KernelContext";
+import { useApp, useEventBus, useKernel, useService } from "./context/KernelContext";
 import { useBacklinkPreview, useNoteVitals } from "./hooks/useNoteVitals";
 
 export function App() {
@@ -88,7 +88,10 @@ export function App() {
 		[noteVitals.value?.title, prefillChatAndSwitch],
 	);
 
-	const isReady = kernel.isServicesInitialized;
+	// Subscribe to services:initialized event (fixes stuck "Initializing services..." bug)
+	const [isReady, setIsReady] = useState(kernel.isServicesInitialized);
+	useEventBus("services:initialized", () => setIsReady(true));
+
 	const hasNote = noteVitals.value !== null;
 
 	return (

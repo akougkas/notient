@@ -293,7 +293,7 @@ export class TaskModal extends Modal {
 
     // Add user message using ChatSession
     this.session.addUserMessage(text);
-    this.task.chatHistory = this.session.getMessagesForLLM();
+    this.task.chatHistory = this.session.getMessages();
 
     // Re-render chat to show user message
     this.renderChatHistory();
@@ -357,7 +357,7 @@ export class TaskModal extends Modal {
           case "complete":
             // Save the complete response
             this.session.addAssistantMessage(event.result.data as string);
-            this.task.chatHistory = this.session.getMessagesForLLM();
+            this.task.chatHistory = this.session.getMessages();
             this.task.result = event.result;
             // Update pending actions from result if available
             if (event.result.actions) {
@@ -403,7 +403,7 @@ export class TaskModal extends Modal {
    */
   private addErrorMessage(content: string): void {
     this.session.addAssistantMessage(content);
-    this.task.chatHistory = this.session.getMessagesForLLM();
+    this.task.chatHistory = this.session.getMessages();
   }
 
   /**
