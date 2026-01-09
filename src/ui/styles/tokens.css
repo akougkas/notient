@@ -1,4 +1,4 @@
-/* Notient Design Tokens - Native Obsidian */
+/* Notient Design Tokens - Native Obsidian Integration */
 
 :root {
   /* Map to Obsidian's native variables */
@@ -19,12 +19,13 @@
   --nv2-status-warning: var(--color-orange);
   --nv2-status-error: var(--color-red);
 
-  /* Spacing */
+  /* Spacing scale */
   --nv2-space-xs: 4px;
   --nv2-space-sm: 8px;
   --nv2-space-md: 12px;
   --nv2-space-lg: 16px;
   --nv2-space-xl: 24px;
+  --nv2-space-2xl: 32px;
 
   /* Typography - use Obsidian fonts */
   --nv2-font-ui: var(--font-interface);
@@ -42,4 +43,79 @@
   /* Shadows - minimal */
   --nv2-shadow-sm: var(--shadow-s);
   --nv2-shadow-lg: var(--shadow-l);
+
+  /* Transitions */
+  --nv2-transition-fast: 0.1s ease;
+  --nv2-transition-normal: 0.15s ease;
+  --nv2-transition-slow: 0.25s ease;
+
+  /* Focus ring */
+  --nv2-focus-ring: 0 0 0 2px var(--interactive-accent);
+}
+
+/* Focus styles for accessibility */
+.notient-sidebar--v2 button:focus-visible,
+.notient-sidebar--v2 [role="tab"]:focus-visible,
+.notient-sidebar--v2 a:focus-visible,
+.notient-sidebar--v2 textarea:focus-visible,
+.notient-sidebar--v2 input:focus-visible {
+  outline: none;
+  box-shadow: var(--nv2-focus-ring);
+}
+
+/* Focus-within for input containers */
+.notient-sidebar--v2 .nv2-chat-input-area:focus-within {
+  border-color: var(--interactive-accent);
+}
+
+/* Interactive elements base styles */
+.notient-sidebar--v2 button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.notient-sidebar--v2 button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Selection styling */
+.notient-sidebar--v2 ::selection {
+  background: color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
+
+/* Link styling */
+.notient-sidebar--v2 a {
+  color: var(--interactive-accent);
+  text-decoration: none;
+}
+
+.notient-sidebar--v2 a:hover {
+  text-decoration: underline;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .notient-sidebar--v2 *,
+  .notient-sidebar--v2 *::before,
+  .notient-sidebar--v2 *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High contrast mode adjustments */
+@media (prefers-contrast: high) {
+  .notient-sidebar--v2 {
+    --nv2-border-color: var(--text-muted);
+  }
+
+  .notient-sidebar--v2 .nv2-vital-card,
+  .notient-sidebar--v2 .nv2-note-card,
+  .notient-sidebar--v2 .nv2-insight,
+  .notient-sidebar--v2 .nv2-agent-card,
+  .notient-sidebar--v2 .nv2-pending-card {
+    border-width: 2px;
+  }
 }

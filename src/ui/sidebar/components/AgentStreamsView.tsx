@@ -1,378 +1,413 @@
 /**
- * AgentStreamsView - Preact component for Agent Streams tab
+ * AgentStreamsView - View showing agent activity (View 2)
  *
- * Displays:
- * - Section 1: Active agents/workflows (running + queued)
- * - Section 2: Pending review items from WorkflowRunner.reviewQueue
- * - Section 3: Recent activity (applied actions)
+ * Per spec layout:
+ * 1. Active Agents - running/queued agents with progress
+ * 2. Pending Review - actions awaiting approval with risk levels
+ * 3. Recent Activity - completed/failed actions with undo
  */
 
-import { Notice } from "obsidian";
-import { useCallback, useState } from "preact/hooks";
-import type { ActionApplier } from "../../../core/agentic/actionApplier";
-import type { ActionHistory } from "../../../core/agentic/actionHistory";
-import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../../../core/agentic/types";
-import type { WorkflowRunner } from "../../../core/agentic/workflowRunner";
-import { useEventBus, useService } from "../context/KernelContext";
+import type { Signal } from "@preact/signals";
 
-export function AgentStreamsView() {
-  // Get services
-  const workflowRunner = useService<WorkflowRunner>("workflowRunner");
-  const actionApplier = useService<ActionApplier>("actionApplier");
-  const actionHistory = useService<ActionHistory>("actionHistory");
-
-  // State for workflows
-  const [currentWorkflow, setCurrentWorkflow] = useState<WorkflowRun | null>(
-    workflowRunner?.getCurrentWorkflow() ?? null,
-  );
-  const [queuedWorkflows, setQueuedWorkflows] = useState<WorkflowRun[]>(
-    workflowRunner?.getQueuedWorkflows() ?? [],
-  );
-
-  // State for pending review items (aggregated from all workflows)
-  const [pendingReview, setPendingReview] = useState<ProposedAction[]>(() => {
-    const items: ProposedAction[] = [];
-    if (workflowRunner) {
-      const current = workflowRunner.getCurrentWorkflow();
-      if (current) items.push(...current.reviewQueue);
-      for (const wf of workflowRunner.getQueuedWorkflows()) {
-        items.push(...wf.reviewQueue);
-      }
-    }
-    return items;
-  });
-
-  // State for recent activity
-  const [recentActivity, setRecentActivity] = useState<AppliedActionRecord[]>(
-    () => actionHistory?.getRecentRecords(5) ?? [],
-  );
-
-  // Subscribe to workflow events
-  useEventBus("workflow:started", (payload) => {
-    setCurrentWorkflow(payload.workflow);
-  });
-
-  useEventBus("workflow:progress", (payload) => {
-    setCurrentWorkflow({ ...payload.workflow });
-    // Update pending review when progress changes
-    const items: ProposedAction[] = [...payload.workflow.reviewQueue];
-    for (const wf of workflowRunner?.getQueuedWorkflows() ?? []) {
-      items.push(...wf.reviewQueue);
-    }
-    setPendingReview(items);
-  });
-
-  useEventBus("workflow:completed", (payload) => {
-    setCurrentWorkflow(null);
-    setQueuedWorkflows(workflowRunner?.getQueuedWorkflows() ?? []);
-    // Refresh recent activity
-    setRecentActivity(actionHistory?.getRecentRecords(5) ?? []);
-  });
-
-  useEventBus("workflow:cancelled", () => {
-    setCurrentWorkflow(workflowRunner?.getCurrentWorkflow() ?? null);
-    setQueuedWorkflows(workflowRunner?.getQueuedWorkflows() ?? []);
-  });
-
-  useEventBus("action:applied", (payload) => {
-    setRecentActivity(actionHistory?.getRecentRecords(5) ?? []);
-    // Remove from pending review
-    setPendingReview((prev) => prev.filter((a) => a.id !== payload.record.action.id));
-  });
-
-  useEventBus("action:undone", () => {
-    setRecentActivity(actionHistory?.getRecentRecords(5) ?? []);
-  });
-
-  // Handlers
-  const handleCancelWorkflow = useCallback(
-    (workflowId: string) => {
-      if (workflowRunner?.cancel(workflowId)) {
-        new Notice("Workflow cancelled");
-      }
-    },
-    [workflowRunner],
-  );
-
-  const handleApplyAction = useCallback(
-    async (action: ProposedAction) => {
-      if (!actionApplier) {
-        new Notice("Action applier not available");
-        return;
-      }
-      try {
-        await actionApplier.apply(action);
-        new Notice(`Applied: ${action.title}`);
-      } catch (error) {
-        new Notice(`Failed to apply: ${error instanceof Error ? error.message : "Unknown error"}`);
-      }
-    },
-    [actionApplier],
-  );
-
-  const handleDismissAction = useCallback(
-    (actionId: string) => {
-      if (workflowRunner?.dismissReviewItem(actionId)) {
-        setPendingReview((prev) => prev.filter((a) => a.id !== actionId));
-        new Notice("Action dismissed");
-      }
-    },
-    [workflowRunner],
-  );
-
-  const handleUndoAction = useCallback(
-    async (recordId: string) => {
-      if (!actionHistory) {
-        new Notice("Action history not available");
-        return;
-      }
-      try {
-        await actionHistory.undo(recordId);
-        new Notice("Action undone");
-      } catch (error) {
-        new Notice(`Failed to undo: ${error instanceof Error ? error.message : "Unknown error"}`);
-      }
-    },
-    [actionHistory],
-  );
-
-  return (
-    <div class="nv2-agent-streams">
-      {/* Section 1: Active Agents */}
-      <ActiveAgentsSection
-        currentWorkflow={currentWorkflow}
-        queuedWorkflows={queuedWorkflows}
-        onCancel={handleCancelWorkflow}
-      />
-
-      {/* Section 2: Pending Review */}
-      <PendingReviewSection
-        items={pendingReview}
-        onApply={handleApplyAction}
-        onDismiss={handleDismissAction}
-      />
-
-      {/* Section 3: Recent Activity */}
-      <RecentActivitySection items={recentActivity} onUndo={handleUndoAction} />
-    </div>
-  );
+export interface ActiveAgent {
+	id: string;
+	type: string;
+	targetNote: string;
+	status: "running" | "paused" | "queued";
+	progress?: number;
+	startedAt?: Date;
 }
 
-// ============ Section Components ============
-
-interface ActiveAgentsSectionProps {
-  currentWorkflow: WorkflowRun | null;
-  queuedWorkflows: WorkflowRun[];
-  onCancel: (workflowId: string) => void;
+export interface PendingAction {
+	id: string;
+	actionType: string;
+	targetNote: string;
+	summary: string;
+	riskLevel: "low" | "medium" | "high";
 }
 
-function ActiveAgentsSection({
-  currentWorkflow,
-  queuedWorkflows,
-  onCancel,
-}: ActiveAgentsSectionProps) {
-  const hasActivity = currentWorkflow || queuedWorkflows.length > 0;
-
-  return (
-    <div class="nv2-section">
-      <div class="nv2-section-label">Active Agents</div>
-      {!hasActivity ? (
-        <div class="nv2-empty-state">
-          <div class="nv2-empty-state-text">No active agents</div>
-        </div>
-      ) : (
-        <div class="nv2-workflow-container">
-          {currentWorkflow && (
-            <WorkflowCard workflow={currentWorkflow} isActive={true} onCancel={onCancel} />
-          )}
-          {queuedWorkflows.map((wf) => (
-            <WorkflowCard key={wf.id} workflow={wf} isActive={false} onCancel={onCancel} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+export interface RecentActivity {
+	id: string;
+	status: "success" | "failed" | "undone";
+	actionType: string;
+	targetNote: string;
+	summary: string;
+	completedAt: Date;
+	canUndo: boolean;
+	error?: string;
 }
 
-interface WorkflowCardProps {
-  workflow: WorkflowRun;
-  isActive: boolean;
-  onCancel: (workflowId: string) => void;
+interface AgentStreamsViewProps {
+	activeAgents: Signal<ActiveAgent[]>;
+	pendingActions: Signal<PendingAction[]>;
+	recentActivity: Signal<RecentActivity[]>;
+	onPauseAgent?: (id: string) => void;
+	onStopAgent?: (id: string) => void;
+	onApplyAction?: (id: string) => void;
+	onDismissAction?: (id: string) => void;
+	onUndoAction?: (id: string) => void;
 }
 
-function WorkflowCard({ workflow, isActive, onCancel }: WorkflowCardProps) {
-  const progress =
-    workflow.progress.total > 0
-      ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
-      : 0;
+export function AgentStreamsView({
+	activeAgents,
+	pendingActions,
+	recentActivity,
+	onPauseAgent,
+	onStopAgent,
+	onApplyAction,
+	onDismissAction,
+	onUndoAction,
+}: AgentStreamsViewProps) {
+	const hasActiveAgents = activeAgents.value.length > 0;
+	const hasPendingActions = pendingActions.value.length > 0;
+	const hasRecentActivity = recentActivity.value.length > 0;
+	const isEmpty = !hasActiveAgents && !hasPendingActions && !hasRecentActivity;
 
-  const statusLabel = isActive ? "Running" : "Queued";
-  const icon = isActive ? "⟳" : "⏳";
+	return (
+		<div class="nv2-agent-streams" role="region" aria-label="Agent activity">
+			{isEmpty ? (
+				<AgentEmptyState />
+			) : (
+				<>
+					{/* Section 1: Active Agents */}
+					<section class="nv2-agent-section" aria-label="Active agents">
+						<h3 class="nv2-section-title">
+							<span class="nv2-section-title-icon">🤖</span>
+							Active
+							{hasActiveAgents && (
+								<span class="nv2-count-badge nv2-count-badge--active">
+									{activeAgents.value.length}
+								</span>
+							)}
+						</h3>
+						{!hasActiveAgents ? (
+							<div class="nv2-empty-section">All agents idle</div>
+						) : (
+							<div class="nv2-agent-list">
+								{activeAgents.value.map((agent) => (
+									<ActiveAgentCard
+										key={agent.id}
+										agent={agent}
+										onPause={() => onPauseAgent?.(agent.id)}
+										onStop={() => onStopAgent?.(agent.id)}
+									/>
+								))}
+							</div>
+						)}
+					</section>
 
-  return (
-    <div class={`nv2-workflow-card ${isActive ? "nv2-workflow-card--active" : ""}`}>
-      <div class="nv2-workflow-header">
-        <span class="nv2-workflow-title">
-          {icon} <span class="nv2-workflow-command">{workflow.spec.command}</span>
-        </span>
-        <span class="nv2-workflow-status">{statusLabel}</span>
-      </div>
+					{/* Section 2: Pending Review */}
+					<section class="nv2-agent-section" aria-label="Pending review">
+						<h3 class="nv2-section-title">
+							<span class="nv2-section-title-icon">⚠️</span>
+							Pending Review
+							{hasPendingActions && (
+								<span class="nv2-count-badge nv2-count-badge--pending">
+									{pendingActions.value.length}
+								</span>
+							)}
+						</h3>
+						{!hasPendingActions ? (
+							<div class="nv2-empty-section">No actions need review</div>
+						) : (
+							<div class="nv2-pending-list">
+								{pendingActions.value.map((action) => (
+									<PendingActionCard
+										key={action.id}
+										action={action}
+										onApply={() => onApplyAction?.(action.id)}
+										onDismiss={() => onDismissAction?.(action.id)}
+									/>
+								))}
+							</div>
+						)}
+					</section>
 
-      {isActive && (
-        <>
-          <div class="nv2-workflow-progress-container">
-            <div class="nv2-workflow-progress-fill" style={{ width: `${progress}%` }} />
-          </div>
-          <div class="nv2-workflow-progress-text">
-            {workflow.progress.completed}/{workflow.progress.total} notes
-            {workflow.progress.failed > 0 && ` (${workflow.progress.failed} failed)`}
-          </div>
-        </>
-      )}
-
-      <div class="nv2-workflow-actions">
-        {workflow.reviewQueue.length > 0 && (
-          <span class="nv2-workflow-review-badge">{workflow.reviewQueue.length} pending</span>
-        )}
-        <button
-          type="button"
-          class="nv2-workflow-btn--cancel"
-          onClick={() => onCancel(workflow.id)}
-        >
-          {isActive ? "Stop" : "Cancel"}
-        </button>
-      </div>
-    </div>
-  );
+					{/* Section 3: Recent Activity */}
+					<section class="nv2-agent-section" aria-label="Recent activity">
+						<h3 class="nv2-section-title">
+							<span class="nv2-section-title-icon">📋</span>
+							Recent
+						</h3>
+						{!hasRecentActivity ? (
+							<div class="nv2-empty-section">No recent activity</div>
+						) : (
+							<div class="nv2-activity-list">
+								{recentActivity.value.slice(0, 8).map((activity) => (
+									<RecentActivityCard
+										key={activity.id}
+										activity={activity}
+										onUndo={() => onUndoAction?.(activity.id)}
+									/>
+								))}
+							</div>
+						)}
+					</section>
+				</>
+			)}
+		</div>
+	);
 }
 
-interface PendingReviewSectionProps {
-  items: ProposedAction[];
-  onApply: (action: ProposedAction) => void;
-  onDismiss: (actionId: string) => void;
+function AgentEmptyState() {
+	return (
+		<div class="nv2-agent-empty">
+			<div class="nv2-agent-empty-icon">🤖</div>
+			<div class="nv2-agent-empty-title">No Agent Activity</div>
+			<div class="nv2-agent-empty-text">
+				Use Quick Actions from the Note view to start agents
+			</div>
+		</div>
+	);
 }
 
-function PendingReviewSection({ items, onApply, onDismiss }: PendingReviewSectionProps) {
-  return (
-    <div class="nv2-section">
-      <div class="nv2-section-label">
-        Pending Review
-        {items.length > 0 && <span class="nv2-badge">{items.length}</span>}
-      </div>
-      {items.length === 0 ? (
-        <div class="nv2-empty-state">
-          <div class="nv2-empty-state-text">No actions pending review</div>
-        </div>
-      ) : (
-        <div class="nv2-review-list">
-          {items.map((action) => (
-            <ReviewItem key={action.id} action={action} onApply={onApply} onDismiss={onDismiss} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+interface ActiveAgentCardProps {
+	agent: ActiveAgent;
+	onPause?: () => void;
+	onStop?: () => void;
 }
 
-interface ReviewItemProps {
-  action: ProposedAction;
-  onApply: (action: ProposedAction) => void;
-  onDismiss: (actionId: string) => void;
+function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
+	const isRunning = agent.status === "running";
+	const isPaused = agent.status === "paused";
+	const isQueued = agent.status === "queued";
+
+	const elapsed = agent.startedAt
+		? formatElapsed(Date.now() - agent.startedAt.getTime())
+		: "";
+
+	const statusLabel = isRunning ? "Running" : isPaused ? "Paused" : "Queued";
+
+	return (
+		<article
+			class={`nv2-agent-card nv2-agent-card--${agent.status}`}
+			role="article"
+			aria-label={`${formatAgentType(agent.type)} agent ${statusLabel}`}
+		>
+			{/* Status Indicator */}
+			<div class="nv2-agent-status-indicator">
+				{isRunning && <span class="nv2-agent-spinner" aria-hidden="true" />}
+				{isPaused && <span class="nv2-agent-paused-icon" aria-hidden="true">⏸</span>}
+				{isQueued && <span class="nv2-agent-queued-icon" aria-hidden="true">⏳</span>}
+			</div>
+
+			<div class="nv2-agent-body">
+				<div class="nv2-agent-header">
+					<span class="nv2-agent-type">{formatAgentType(agent.type)}</span>
+					{elapsed && <span class="nv2-agent-elapsed">{elapsed}</span>}
+				</div>
+
+				<div class="nv2-agent-target" title={agent.targetNote}>
+					{truncate(agent.targetNote, 28)}
+				</div>
+
+				{/* Progress bar for running agents */}
+				{isRunning && agent.progress !== undefined && (
+					<div class="nv2-agent-progress">
+						<div class="nv2-progress-bar">
+							<div
+								class="nv2-progress-fill nv2-progress-fill--animated"
+								style={{ width: `${agent.progress}%` }}
+								role="progressbar"
+								aria-valuenow={agent.progress}
+								aria-valuemin={0}
+								aria-valuemax={100}
+							/>
+						</div>
+						<span class="nv2-agent-progress-text">{agent.progress}%</span>
+					</div>
+				)}
+
+				{/* Action buttons */}
+				<div class="nv2-agent-actions">
+					{isRunning && (
+						<>
+							<button
+								type="button"
+								class="nv2-btn-sm"
+								onClick={onPause}
+								aria-label="Pause agent"
+							>
+								Pause
+							</button>
+							<button
+								type="button"
+								class="nv2-btn-sm nv2-btn-danger"
+								onClick={onStop}
+								aria-label="Stop agent"
+							>
+								Stop
+							</button>
+						</>
+					)}
+					{isPaused && (
+						<button
+							type="button"
+							class="nv2-btn-sm nv2-btn-primary"
+							onClick={onPause}
+							aria-label="Resume agent"
+						>
+							Resume
+						</button>
+					)}
+					{isQueued && (
+						<button
+							type="button"
+							class="nv2-btn-sm"
+							onClick={onStop}
+							aria-label="Cancel queued agent"
+						>
+							Cancel
+						</button>
+					)}
+				</div>
+			</div>
+		</article>
+	);
 }
 
-function ReviewItem({ action, onApply, onDismiss }: ReviewItemProps) {
-  const riskClass =
-    action.risk === "high" ? "nv2-risk--high" : action.risk === "medium" ? "nv2-risk--medium" : "";
-  const riskIcon = action.risk === "high" ? "⚠️" : action.risk === "medium" ? "⚠" : "";
-
-  return (
-    <div class={`nv2-review-item ${riskClass}`}>
-      <div class="nv2-review-header">
-        <span class="nv2-review-title">
-          {riskIcon} {action.title}
-        </span>
-        <span class="nv2-review-type">{action.type.replace(/_/g, " ")}</span>
-      </div>
-      <div class="nv2-review-target">Target: {action.target}</div>
-      <div class="nv2-review-reason">{action.reason}</div>
-      <div class="nv2-review-actions">
-        <button type="button" class="nv2-btn nv2-btn--primary" onClick={() => onApply(action)}>
-          Apply
-        </button>
-        <button
-          type="button"
-          class="nv2-btn nv2-btn--secondary"
-          onClick={() => onDismiss(action.id)}
-        >
-          Dismiss
-        </button>
-      </div>
-    </div>
-  );
+interface PendingActionCardProps {
+	action: PendingAction;
+	onApply?: () => void;
+	onDismiss?: () => void;
 }
 
-interface RecentActivitySectionProps {
-  items: AppliedActionRecord[];
-  onUndo: (recordId: string) => void;
+const RISK_CONFIG = {
+	high: { icon: "⚠️", label: "High Risk", className: "nv2-risk-high" },
+	medium: { icon: "⚡", label: "Medium Risk", className: "nv2-risk-medium" },
+	low: { icon: "✓", label: "Safe", className: "nv2-risk-low" },
+};
+
+function PendingActionCard({ action, onApply, onDismiss }: PendingActionCardProps) {
+	const risk = RISK_CONFIG[action.riskLevel];
+
+	return (
+		<article
+			class={`nv2-pending-card ${risk.className}`}
+			role="article"
+			aria-label={`${action.actionType}: ${action.summary}`}
+		>
+			<div class="nv2-pending-header">
+				<span class="nv2-pending-risk" title={risk.label}>
+					<span class="nv2-risk-icon" aria-hidden="true">{risk.icon}</span>
+					<span class="nv2-risk-label">{risk.label}</span>
+				</span>
+			</div>
+
+			<div class="nv2-pending-summary">{action.summary}</div>
+
+			<div class="nv2-pending-target" title={action.targetNote}>
+				<span class="nv2-pending-target-icon" aria-hidden="true">→</span>
+				{truncate(action.targetNote, 30)}
+			</div>
+
+			<div class="nv2-pending-actions">
+				<button
+					type="button"
+					class="nv2-btn-sm nv2-btn-primary"
+					onClick={onApply}
+					aria-label={`Apply: ${action.summary}`}
+				>
+					Apply
+				</button>
+				<button
+					type="button"
+					class="nv2-btn-sm"
+					onClick={onDismiss}
+					aria-label={`Dismiss: ${action.summary}`}
+				>
+					Dismiss
+				</button>
+			</div>
+		</article>
+	);
 }
 
-function RecentActivitySection({ items, onUndo }: RecentActivitySectionProps) {
-  return (
-    <div class="nv2-section">
-      <div class="nv2-section-label">Recent Activity</div>
-      {items.length === 0 ? (
-        <div class="nv2-empty-state">
-          <div class="nv2-empty-state-text">No recent activity</div>
-        </div>
-      ) : (
-        <div class="nv2-activity-log-list">
-          {items.map((record) => (
-            <ActivityItem key={record.id} record={record} onUndo={onUndo} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+interface RecentActivityCardProps {
+	activity: RecentActivity;
+	onUndo?: () => void;
 }
 
-interface ActivityItemProps {
-  record: AppliedActionRecord;
-  onUndo: (recordId: string) => void;
+const STATUS_CONFIG = {
+	success: { icon: "✓", label: "Completed", className: "nv2-activity--success" },
+	failed: { icon: "✗", label: "Failed", className: "nv2-activity--failed" },
+	undone: { icon: "↩", label: "Undone", className: "nv2-activity--undone" },
+};
+
+function RecentActivityCard({ activity, onUndo }: RecentActivityCardProps) {
+	const status = STATUS_CONFIG[activity.status];
+	const timeAgo = formatTimeAgo(activity.completedAt);
+
+	return (
+		<article
+			class={`nv2-activity-card ${status.className}`}
+			role="article"
+			aria-label={`${status.label}: ${activity.summary}`}
+		>
+			<div class="nv2-activity-main">
+				<span class={`nv2-activity-icon nv2-activity-icon--${activity.status}`} aria-hidden="true">
+					{status.icon}
+				</span>
+				<div class="nv2-activity-content">
+					<span class="nv2-activity-summary">{activity.summary}</span>
+					<span class="nv2-activity-meta">
+						<span class="nv2-activity-target">{truncate(activity.targetNote, 20)}</span>
+						<span class="nv2-activity-dot">·</span>
+						<span class="nv2-activity-time">{timeAgo}</span>
+					</span>
+				</div>
+				{activity.canUndo && activity.status === "success" && (
+					<button
+						type="button"
+						class="nv2-btn-sm nv2-btn-undo"
+						onClick={onUndo}
+						aria-label={`Undo: ${activity.summary}`}
+					>
+						Undo
+					</button>
+				)}
+			</div>
+			{activity.error && (
+				<div class="nv2-activity-error" role="alert">
+					{activity.error}
+				</div>
+			)}
+		</article>
+	);
 }
 
-function ActivityItem({ record, onUndo }: ActivityItemProps) {
-  const timeAgo = formatTimeAgo(record.timestamp);
-
-  return (
-    <div class="nv2-activity-item">
-      <div class="nv2-activity-header">
-        <span class="nv2-activity-agent">
-          <span class="nv2-activity-icon">✓</span>
-          <span class="nv2-activity-agent-name">{record.action.title}</span>
-        </span>
-        <span class="nv2-activity-time">{timeAgo}</span>
-      </div>
-      <div class="nv2-task-note">{record.action.target}</div>
-      <div class="nv2-activity-actions">
-        <button
-          type="button"
-          class="nv2-btn nv2-btn--secondary nv2-btn--small"
-          onClick={() => onUndo(record.id)}
-        >
-          Undo
-        </button>
-      </div>
-    </div>
-  );
+// Helper functions
+function formatAgentType(type: string): string {
+	const labels: Record<string, string> = {
+		enrich: "Enriching",
+		link: "Linking",
+		atomic: "Atomizing",
+		synthesis: "Synthesizing",
+		task: "Task",
+		classify: "Classifying",
+		chat: "Chatting",
+	};
+	return labels[type] || type;
 }
 
-// ============ Helpers ============
+function formatElapsed(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return `${seconds}s ago`;
+	const minutes = Math.floor(seconds / 60);
+	return `${minutes}m ago`;
+}
 
-function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+function formatTimeAgo(date: Date): string {
+	const ms = Date.now() - date.getTime();
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return "just now";
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	return `${hours}h ago`;
+}
 
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+function truncate(str: string, len: number): string {
+	if (str.length <= len) return str;
+	return `${str.slice(0, len)}...`;
 }

@@ -1,0 +1,153 @@
+/* Vitals Cards - Four metric cards showing note health */
+
+.nv2-vitals-section {
+  /* Section wrapper for proper spacing */
+}
+
+.nv2-vitals-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-vital-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--nv2-space-sm) var(--nv2-space-xs);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nv2-radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 72px;
+  overflow: hidden;
+}
+
+.nv2-vital-card:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  transform: translateY(-1px);
+}
+
+.nv2-vital-card:active {
+  transform: translateY(0);
+}
+
+/* Status-based styling */
+.nv2-vital-card--healthy {
+  --vital-color: var(--nv2-status-healthy, var(--color-green));
+}
+
+.nv2-vital-card--attention {
+  --vital-color: var(--nv2-status-warning, var(--color-orange));
+}
+
+.nv2-vital-card--unhealthy {
+  --vital-color: var(--nv2-status-error, var(--color-red));
+}
+
+.nv2-vital-card--healthy .nv2-vital-value {
+  color: var(--nv2-status-healthy, var(--color-green));
+}
+
+.nv2-vital-card--attention .nv2-vital-value {
+  color: var(--nv2-status-warning, var(--color-orange));
+}
+
+.nv2-vital-card--unhealthy .nv2-vital-value {
+  color: var(--nv2-status-error, var(--color-red));
+}
+
+/* Hover ring effect */
+.nv2-vital-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  box-shadow: inset 0 0 0 2px var(--vital-color);
+}
+
+.nv2-vital-card:hover .nv2-vital-ring {
+  opacity: 0.3;
+}
+
+/* Icon */
+.nv2-vital-icon {
+  font-size: 18px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+/* Value - the main metric display */
+.nv2-vital-value {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Label */
+.nv2-vital-label {
+  font-size: 9px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+/* Health Summary below cards (per spec) */
+.nv2-vitals-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  margin-top: var(--nv2-space-sm);
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  background: var(--background-secondary);
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--font-smallest);
+}
+
+.nv2-vitals-summary-label {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.nv2-vitals-summary-text {
+  color: var(--text-muted);
+}
+
+.nv2-vitals-summary--healthy .nv2-vitals-summary-label {
+  color: var(--nv2-status-healthy, var(--color-green));
+}
+
+.nv2-vitals-summary--attention .nv2-vitals-summary-label {
+  color: var(--nv2-status-warning, var(--color-orange));
+}
+
+.nv2-vitals-summary--unhealthy .nv2-vitals-summary-label {
+  color: var(--nv2-status-error, var(--color-red));
+}
+
+/* Responsive: stack 2x2 on narrow sidebars */
+@media (max-width: 260px) {
+  .nv2-vitals-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .nv2-vital-card {
+    min-height: 64px;
+  }
+
+  .nv2-vital-icon {
+    font-size: 16px;
+  }
+
+  .nv2-vital-value {
+    font-size: 14px;
+  }
+}

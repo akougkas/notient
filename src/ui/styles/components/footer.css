@@ -1,31 +1,274 @@
-/* Footer */
+/* Footer - Locked Chrome Status Bar */
 
 .nv2-footer {
   padding: var(--nv2-space-sm) var(--nv2-space-md);
   border-top: 1px solid var(--background-modifier-border);
   font-size: var(--font-smallest);
   color: var(--text-muted);
+  flex-shrink: 0;
+  background: var(--background-primary);
+  position: relative;
 }
 
-.nv2-footer-content {
+/* Subtle gradient line at top */
+.nv2-footer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--interactive-accent), transparent);
+  opacity: 0.2;
+}
+
+/* Initializing State */
+.nv2-footer-initializing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--nv2-space-sm);
+  color: var(--text-muted);
+}
+
+.nv2-footer-init-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  animation: init-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes init-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* Three-Zone Footer Layout */
+.nv2-footer--zones {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: var(--nv2-space-md);
+  align-items: center;
+}
+
+.nv2-footer-zone {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+}
+
+.nv2-footer-zone--providers {
+  justify-content: flex-start;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-footer-zone--index {
+  justify-content: center;
+}
+
+.nv2-footer-zone--agents {
+  justify-content: flex-end;
+}
+
+/* Provider Indicator */
+.nv2-provider-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: var(--nv2-radius-sm);
+  transition: background 0.15s ease;
+}
+
+.nv2-provider-indicator:hover {
+  background: var(--background-modifier-hover);
+}
+
+.nv2-provider-name {
+  color: var(--text-faint);
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.nv2-provider-indicator:hover .nv2-provider-name {
+  color: var(--text-muted);
+}
+
+/* Status Dot */
+.nv2-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.nv2-status-dot--healthy {
+  background: var(--nv2-status-healthy, var(--color-green));
+  box-shadow: 0 0 4px var(--nv2-status-healthy, var(--color-green));
+}
+
+.nv2-status-dot--warning {
+  background: var(--nv2-status-warning, var(--color-orange));
+  animation: dot-blink 1s ease-in-out infinite;
+}
+
+.nv2-status-dot--error {
+  background: var(--nv2-status-error, var(--color-red));
+}
+
+/* Connecting state */
+.nv2-status-dot--connecting {
+  background: var(--nv2-status-warning, var(--color-orange));
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.7; }
+}
+
+/* Index Status */
+.nv2-index-ready,
+.nv2-index-indexing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: var(--nv2-radius-sm);
+  transition: background 0.15s ease;
+}
+
+.nv2-index-ready:hover,
+.nv2-index-indexing:hover {
+  background: var(--background-modifier-hover);
+}
+
+.nv2-index-count {
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.nv2-index-sync {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-faint);
+}
+
+.nv2-index-sync .nv2-status-dot {
+  width: 4px;
+  height: 4px;
+}
+
+.nv2-index-label {
+  color: var(--interactive-accent);
+  font-weight: 500;
+}
+
+.nv2-index-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  width: 100%;
+  max-width: 80px;
+}
+
+.nv2-index-percent {
+  color: var(--text-faint);
+  font-size: 10px;
+  min-width: 28px;
+}
+
+/* Agent Indicator */
+.nv2-agent-indicator {
   display: flex;
   align-items: center;
   gap: var(--nv2-space-sm);
 }
 
-.nv2-footer-separator {
-  opacity: 0.3;
+.nv2-agent-running {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--interactive-accent);
+  font-weight: 500;
 }
 
-/* Progress */
+.nv2-agent-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  animation: agent-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--interactive-accent); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 4px transparent; }
+}
+
+.nv2-agent-pending {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--color-orange);
+  font-size: inherit;
+  font-weight: 500;
+  border-radius: var(--nv2-radius-sm);
+  transition: all 0.15s ease;
+}
+
+.nv2-agent-pending:hover {
+  background: rgba(var(--color-orange-rgb), 0.1);
+  color: var(--color-orange);
+}
+
+.nv2-agent-idle {
+  color: var(--text-faint);
+}
+
+/* Progress Bar */
 .nv2-progress-bar {
-  height: 2px;
+  flex: 1;
+  height: 3px;
   background: var(--background-secondary);
-  border-radius: 1px;
+  border-radius: 2px;
   overflow: hidden;
 }
 
 .nv2-progress-fill {
   height: 100%;
   background: var(--interactive-accent);
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.nv2-progress-fill--animated {
+  background: linear-gradient(
+    90deg,
+    var(--interactive-accent),
+    color-mix(in srgb, var(--interactive-accent), white 30%),
+    var(--interactive-accent)
+  );
+  background-size: 200% 100%;
+  animation: progress-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

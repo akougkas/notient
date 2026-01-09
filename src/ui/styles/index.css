@@ -10,8 +10,11 @@
 @import "./components/header.css";
 @import "./components/footer.css";
 @import "./components/note-card.css";
+@import "./components/vitals-cards.css";
 @import "./components/quick-actions.css";
 @import "./components/insight-stream.css";
+@import "./components/agent-streams.css";
+@import "./components/chat-view.css";
 @import "./components/omnibar.css";
 @import "./components/intelligence-actions.css";
 @import "./components/index-status.css";

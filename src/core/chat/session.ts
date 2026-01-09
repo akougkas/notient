@@ -94,10 +94,22 @@ export class ChatSession {
 
   /**
    * Get messages for sending to the LLM (sliding window)
-   * @returns ChatMessages without extended metadata
+   * @returns ChatMessages without extended metadata, truncated to maxLLMMessages
    */
   getMessagesForLLM(): ChatMessage[] {
     return this.history.slice(-this.config.maxLLMMessages).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+  }
+
+  /**
+   * Export full history as simple ChatMessage array (no truncation)
+   * Use this for persisting chat history, not for LLM calls
+   * @returns Full chat history as ChatMessage[]
+   */
+  exportAsChatMessages(): ChatMessage[] {
+    return this.history.map((m) => ({
       role: m.role,
       content: m.content,
     }));
