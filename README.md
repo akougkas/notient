@@ -37,7 +37,8 @@ Imagine a research assistant who:
 - Adapts to your domain expertise (HPC, law, biology, business—you name it)
 - Never hallucinates, always cites sources
 - Respects your autonomy through trust levels and universal undo
-
+- User is always evolving so Notient must be able to adapt to your changing needs
+- Create a antagonist agent that can challenge your ideas and provide counterpoints
 That's Notient. It's the **Research Chief of Staff** you didn't know you needed.
 
 ### The Sentient Notes Philosophy

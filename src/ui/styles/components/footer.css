@@ -80,11 +80,16 @@
   padding: 2px 4px;
   margin: -2px -4px;
   border-radius: var(--nv2-radius-sm);
-  transition: background 0.15s ease;
+  transition: all 0.15s ease;
 }
 
 .nv2-provider-indicator:hover {
   background: var(--background-modifier-hover);
+  transform: translateY(-1px);
+}
+
+.nv2-provider-indicator:active {
+  transform: translateY(0);
 }
 
 .nv2-provider-name {
@@ -94,7 +99,11 @@
 }
 
 .nv2-provider-indicator:hover .nv2-provider-name {
-  color: var(--text-muted);
+  color: var(--text-normal);
+}
+
+.nv2-provider-indicator:hover .nv2-status-dot--healthy {
+  transform: scale(1.3);
 }
 
 /* Status Dot */

@@ -50,10 +50,23 @@
   border-radius: var(--nv2-radius-md);
   border-left: 3px solid var(--text-faint);
   transition: all 0.15s ease;
+  animation: insight-slide-in 0.25s ease;
+}
+
+@keyframes insight-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .nv2-insight:hover {
   background: var(--background-modifier-hover);
+  transform: translateX(2px);
 }
 
 /* Priority-based styling */
@@ -62,8 +75,16 @@
   background: color-mix(in srgb, var(--color-orange) 5%, var(--background-secondary));
 }
 
+.nv2-insight--high:hover {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-orange) 20%, transparent);
+}
+
 .nv2-insight--medium {
   border-left-color: var(--interactive-accent);
+}
+
+.nv2-insight--medium:hover {
+  box-shadow: 0 0 6px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
 }
 
 .nv2-insight--low {

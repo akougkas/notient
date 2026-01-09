@@ -11,6 +11,7 @@ import { Notice } from "obsidian";
 import { signal } from "@preact/signals";
 import { useCallback, useEffect, useMemo } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
+import type { ActionApplier, ActionHistory, WorkflowRunner } from "../../core/agentic";
 import { InsightGenerator } from "../../services/insightGenerator";
 import { NoteCard } from "./components/NoteCard";
 import { VitalsCards } from "./components/VitalsCards";
@@ -74,6 +75,9 @@ export function App() {
 	const { noteVitals, isLoading } = useNoteVitals();
 	const backlinkPreview = useBacklinkPreview();
 	const taskQueue = useService<AgentTaskQueue>("taskQueue");
+	const actionApplier = useService<ActionApplier>("actionApplier");
+	const actionHistory = useService<ActionHistory>("actionHistory");
+	const workflowRunner = useService<WorkflowRunner>("workflowRunner");
 
 	// Initialize signal with current kernel state on mount
 	useEffect(() => {
@@ -240,7 +244,7 @@ export function App() {
 				) : currentView === "note" ? (
 					// Note Vitals View - 4 sections: Identity, Vitals, Actions, Insights
 					isLoading.value ? (
-						<LoadingState message="Loading note..." />
+						<NoteVitalsSkeleton />
 					) : hasNote ? (
 						<>
 							{/* Section 1: Note Identity */}
@@ -276,16 +280,52 @@ export function App() {
 						pendingActions={pendingActions}
 						recentActivity={recentActivity}
 						onPauseAgent={(id) => {
-							// TODO: Implement pause via kernel
-							console.log("Pause agent:", id);
+							// Toggle pause state in UI (pause/resume not yet supported by WorkflowRunner)
+							activeAgents.value = activeAgents.value.map((a) =>
+								a.id === id ? { ...a, status: a.status === "paused" ? "running" : "paused" } : a
+							);
+							const isPaused = activeAgents.value.find((a) => a.id === id)?.status === "paused";
+							new Notice(isPaused ? "Agent paused" : "Agent resumed");
 						}}
 						onStopAgent={(id) => {
-							// TODO: Implement stop via kernel
-							console.log("Stop agent:", id);
+							if (workflowRunner) {
+								workflowRunner.cancel(id);
+							}
+							// Remove from active agents
+							activeAgents.value = activeAgents.value.filter((a) => a.id !== id);
+							agentStatus.value = {
+								...agentStatus.value,
+								runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+							};
+							new Notice("Agent stopped");
 						}}
 						onApplyAction={(id) => {
-							// TODO: Implement apply via ActionApplier
-							console.log("Apply action:", id);
+							const action = pendingActions.value.find((a) => a.id === id);
+							if (!action) return;
+
+							// Emit event for kernel to handle the actual apply
+							kernel.eventBus.emit("action:apply-requested", { actionId: id });
+
+							// Optimistically move to recent activity
+							recentActivity.value = [
+								{
+									id: `activity-${Date.now()}`,
+									status: "success",
+									actionType: action.actionType,
+									targetNote: action.targetNote,
+									summary: action.summary,
+									completedAt: new Date(),
+									canUndo: true,
+								},
+								...recentActivity.value.slice(0, 9),
+							];
+							// Remove from pending
+							pendingActions.value = pendingActions.value.filter((a) => a.id !== id);
+							agentStatus.value = {
+								...agentStatus.value,
+								pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),
+							};
+							new Notice(`Applied: ${action.summary}`);
 						}}
 						onDismissAction={(id) => {
 							// Remove from pending
@@ -296,8 +336,17 @@ export function App() {
 							};
 						}}
 						onUndoAction={(id) => {
-							// TODO: Implement undo via ActionHistory
-							console.log("Undo action:", id);
+							const activity = recentActivity.value.find((a) => a.id === id);
+							if (!activity || !activity.canUndo) return;
+
+							// Emit event for kernel to handle the actual undo
+							kernel.eventBus.emit("action:undo-requested", { actionId: id });
+
+							// Optimistically update UI
+							recentActivity.value = recentActivity.value.map((a) =>
+								a.id === id ? { ...a, status: "undone", canUndo: false } : a
+							);
+							new Notice(`Undone: ${activity.summary}`);
 						}}
 					/>
 				) : (

@@ -81,6 +81,11 @@
   font-size: 18px;
   line-height: 1;
   margin-bottom: 4px;
+  transition: transform 0.2s ease;
+}
+
+.nv2-vital-card:hover .nv2-vital-icon {
+  transform: scale(1.15);
 }
 
 /* Value - the main metric display */
@@ -89,6 +94,11 @@
   font-weight: 700;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  transition: transform 0.2s ease;
+}
+
+.nv2-vital-card:hover .nv2-vital-value {
+  transform: scale(1.05);
 }
 
 /* Label */

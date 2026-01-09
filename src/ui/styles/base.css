@@ -58,12 +58,30 @@
   padding: var(--nv2-space-xl);
   text-align: center;
   height: 100%;
+  animation: empty-state-in 0.3s ease;
+}
+
+@keyframes empty-state-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .nv2-empty-state-icon {
   font-size: 48px;
   margin-bottom: var(--nv2-space-md);
   opacity: 0.5;
+  animation: icon-float 3s ease-in-out infinite;
+}
+
+@keyframes icon-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
 .nv2-empty-state-title {

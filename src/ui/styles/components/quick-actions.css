@@ -35,6 +35,28 @@
   transform: translateY(0);
 }
 
+/* Ripple effect on click */
+.nv2-quick-action {
+  position: relative;
+  overflow: hidden;
+}
+
+.nv2-quick-action::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, var(--interactive-accent) 10%, transparent 10%);
+  transform: scale(10);
+  opacity: 0;
+  transition: transform 0.4s ease, opacity 0.4s ease;
+}
+
+.nv2-quick-action:active::after {
+  transform: scale(0);
+  opacity: 0.15;
+  transition: 0s;
+}
+
 /* Primary action highlight */
 .nv2-quick-action--primary {
   border-color: var(--interactive-accent);

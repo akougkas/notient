@@ -39,8 +39,11 @@ export function NoteCard({ noteVitals }: NoteCardProps) {
 	const noteType = NOTE_TYPE_CONFIG[noteTypeKey] || NOTE_TYPE_CONFIG.unknown;
 	const paraType = PARA_CONFIG[noteVitals.paraType || "unknown"] || PARA_CONFIG.unknown;
 
+	// Health state class for "Sentient Note" breathing animation
+	const healthState = noteVitals.health?.status || "healthy";
+
 	return (
-		<article class="nv2-note-card" aria-label="Note identity">
+		<article class={`nv2-note-card nv2-note-card--${healthState}`} aria-label="Note identity">
 			{/* Note Type Badge - The "personality" indicator */}
 			<div class="nv2-note-card-header">
 				<span

@@ -37,6 +37,8 @@ export type EventType =
   // Phase 2: Action events
   | "action:applied"
   | "action:undone"
+  | "action:apply-requested"
+  | "action:undo-requested"
   // Identity system events
   | "profile:updated";
 
@@ -67,6 +69,8 @@ export interface EventPayloads {
   // Phase 2: Action events
   "action:applied": ActionAppliedEvent;
   "action:undone": ActionUndoneEvent;
+  "action:apply-requested": ActionApplyRequestedEvent;
+  "action:undo-requested": ActionUndoRequestedEvent;
   // Identity system events
   "profile:updated": ProfileUpdatedEvent;
 }
@@ -191,6 +195,14 @@ export interface ActionAppliedEvent {
 
 export interface ActionUndoneEvent {
   recordId: string;
+}
+
+export interface ActionApplyRequestedEvent {
+  actionId: string;
+}
+
+export interface ActionUndoRequestedEvent {
+  actionId: string;
 }
 
 // =============================================================================

@@ -26,6 +26,28 @@
   opacity: 1;
 }
 
+/* Subtle "breathing" animation when note is healthy - Sentient Note philosophy */
+@keyframes note-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
+.nv2-note-card--healthy::before {
+  animation: note-breathe 4s ease-in-out infinite;
+}
+
+/* Attention state - faster pulse */
+.nv2-note-card--attention::before {
+  background: var(--color-orange);
+  animation: note-breathe 2s ease-in-out infinite;
+}
+
+/* Unhealthy state - static dim */
+.nv2-note-card--unhealthy::before {
+  background: var(--color-red);
+  opacity: 0.3;
+}
+
 /* Header row with type badge and index status */
 .nv2-note-card-header {
   display: flex;
@@ -126,11 +148,13 @@
   padding: 2px 8px;
   border-radius: var(--nv2-radius-sm);
   transition: all 0.15s ease;
+  cursor: default;
 }
 
 .nv2-tag:hover {
   background: var(--background-modifier-hover);
-  color: var(--text-normal);
+  color: var(--interactive-accent);
+  transform: translateY(-1px);
 }
 
 .nv2-tag--placeholder {
