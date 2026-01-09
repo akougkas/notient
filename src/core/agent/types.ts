@@ -77,10 +77,16 @@ export type AgentStreamEvent =
 /**
  * Parameters for building agent prompts
  */
+import type { UserEvolutionState } from "../evolution/userEvolutionService";
+
+/**
+ * Parameters for building agent prompts
+ */
 export interface PromptParams {
   currentNote?: NoteContext;
   relatedNotes: Array<{ title: string; path: string; text: string }>;
   contextSummary: string;
   taskType?: TaskType;
   query?: string;
+  evolutionState?: UserEvolutionState;
 }

@@ -171,6 +171,9 @@ export class ActionOrchestrator {
       case "connection":
         return "simple"; // Single-note operation
 
+      case "antagonist":
+        return "simple"; // Single-phase analysis
+
       default:
         return "simple";
     }
@@ -192,6 +195,7 @@ export class ActionOrchestrator {
 
       case "enhance":
       case "connection":
+      case "antagonist":
         return "~15-30s";
 
       default:
@@ -262,6 +266,13 @@ export class ActionOrchestrator {
           icon: "sparkles",
           label: "Enhance",
           description: "Transform informal → structured",
+        };
+
+      case "antagonist":
+        return {
+          icon: "flame",
+          label: "Challenge",
+          description: "Review with Antagonist Agent",
         };
 
       default:

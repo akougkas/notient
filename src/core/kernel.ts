@@ -37,6 +37,7 @@ import type { SimpleVaultVitals } from "./vitals/simpleVitals";
 
 // Forward declaration for NotientAgent to avoid circular dependency
 import type { NotientAgent } from "./agent/agentLoop";
+import type { UserEvolutionService } from "./evolution/userEvolutionService";
 
 export interface KernelContext {
   app: App;
@@ -75,6 +76,7 @@ export interface ServiceRegistry {
   actionApplier: ActionApplier;
   actionOrchestrator: ActionOrchestrator;
   profileManager: ProfileManager;
+  userEvolution: UserEvolutionService;
 }
 
 /** Valid service names */
@@ -134,6 +136,8 @@ export class Kernel {
   private actionOrchestrator: ActionOrchestrator | null = null;
   // Identity system
   private profileManager: ProfileManager | null = null;
+  // Evolution system
+  private userEvolution: UserEvolutionService | null = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -364,6 +368,9 @@ export class Kernel {
       case "profileManager":
         this.profileManager = service as ProfileManager;
         break;
+      case "userEvolution":
+        this.userEvolution = service as UserEvolutionService;
+        break;
     }
   }
 
@@ -424,6 +431,8 @@ export class Kernel {
         return this.actionOrchestrator;
       case "profileManager":
         return this.profileManager;
+      case "userEvolution":
+        return this.userEvolution;
       default:
         return null;
     }

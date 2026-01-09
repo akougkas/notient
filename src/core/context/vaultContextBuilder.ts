@@ -8,6 +8,7 @@
 import type { SearchResult } from "../../types/search";
 import type { Kernel } from "../kernel";
 import { ParaDetector } from "../para/detector";
+import type { UserEvolutionService, UserEvolutionState } from "../evolution/userEvolutionService";
 
 export interface VaultContext {
   // Structural context
@@ -20,6 +21,9 @@ export interface VaultContext {
 
   // Temporal context
   recentlyModified: string[];
+
+  // User Evolution Context
+  userEvolution: UserEvolutionState;
 
   // Stats
   totalNotes: number;
@@ -34,9 +38,12 @@ export interface VaultContext {
  */
 export class VaultContextBuilder {
   private paraDetector: ParaDetector;
+  private userEvolution: UserEvolutionService;
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
+    // @ts-ignore - Service injection in v0.1
+    this.userEvolution = kernel.getService("user-evolution") as UserEvolutionService;
   }
 
   /**
@@ -61,6 +68,15 @@ export class VaultContextBuilder {
     // Total vault stats
     const totalNotes = this.kernel.obsidian.getMarkdownFiles().length;
 
+    // Get user evolution state
+    // Check if service is available (might be lazy loaded)
+    const evolutionState = this.userEvolution ? this.userEvolution.getState() : {
+      currentFocus: "General",
+      sentiment: "neutral",
+      evolutionaryStage: "gathering",
+      recentTopics: []
+    } as UserEvolutionState;
+
     // Build summary
     const summary = this.buildSummary({
       folders,
@@ -69,6 +85,7 @@ export class VaultContextBuilder {
       candidateCount: candidates.length,
       totalNotes,
       query,
+      evolutionState
     });
 
     return {
@@ -77,6 +94,7 @@ export class VaultContextBuilder {
       paraDistribution: para,
       linkedNotes: linked,
       recentlyModified: recent,
+      userEvolution: evolutionState,
       totalNotes,
       candidateCount: candidates.length,
       contextSummary: summary,
@@ -232,8 +250,14 @@ export class VaultContextBuilder {
     candidateCount: number;
     totalNotes: number;
     query: string;
+    evolutionState?: UserEvolutionState;
   }): string {
     const parts: string[] = [];
+
+    // Evolution context
+    if (params.evolutionState) {
+      parts.push(`User Context: Currently in '${params.evolutionState.evolutionaryStage}' stage, focusing on '${params.evolutionState.currentFocus}'.`);
+    }
 
     parts.push(
       `Found ${params.candidateCount} potentially relevant notes out of ${params.totalNotes} total.`,

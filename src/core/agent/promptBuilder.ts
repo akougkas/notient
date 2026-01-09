@@ -61,7 +61,7 @@ export class NotientPromptBuilder {
    * Create a prompt builder with optional user profile for domain adaptation
    * @param profile - Optional user profile for personalizing prompts
    */
-  constructor(private profile?: UserProfile) {}
+  constructor(private profile?: UserProfile) { }
 
   /**
    * Update the profile (e.g., after profile changes)
@@ -100,6 +100,16 @@ export class NotientPromptBuilder {
       parts.push(`
 VAULT CONTEXT:
 ${params.contextSummary}`);
+    }
+
+    // Add Evolution Context (Adaptive)
+    if (params.evolutionState) {
+      parts.push(`
+USER EVOLUTION CONTEXT:
+Current Focus: ${params.evolutionState.currentFocus}
+Evolutionary Stage: ${params.evolutionState.evolutionaryStage}
+Sentiment: ${params.evolutionState.sentiment}
+ADAPTATION INSTRUCTION: Adapt your tone and suggestions to match the user's current focus and stage. For example, if 'gathering', focus on breadth. If 'synthesizing', focus on connections.`);
     }
 
     // Add related notes from RAG (exclude current note to avoid duplication)

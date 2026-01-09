@@ -17,6 +17,7 @@ import { CONNECTION_PROMPT, buildConnectionPrompt } from "./connection";
 import { ENHANCE_PROMPT, buildEnhancePrompt } from "./enhance";
 import { SYNTHESIS_PROMPT, buildSynthesisPrompt } from "./synthesis";
 import { TASK_EXTRACTION_PROMPT, buildTaskExtractionPrompt } from "./task";
+import { ANTAGONIST_PROMPT, buildAntagonistPrompt } from "./antagonist";
 
 /**
  * Intelligence 2.0 action types
@@ -28,7 +29,8 @@ export type IntelligenceActionType =
   | "task"
   | "brand"
   | "connection"
-  | "enhance";
+  | "enhance"
+  | "antagonist";
 
 /**
  * Structure for agent prompts
@@ -62,6 +64,7 @@ export const AGENT_PROMPTS: Record<IntelligenceActionType, AgentPrompt> = {
   brand: BRAND_CHECK_PROMPT,
   connection: CONNECTION_PROMPT,
   enhance: ENHANCE_PROMPT,
+  antagonist: ANTAGONIST_PROMPT,
 };
 
 /**
@@ -123,6 +126,8 @@ function buildProfileAwareSystemPrompt(
       return buildConnectionPrompt(profile);
     case "enhance":
       return buildEnhancePrompt(profile);
+    case "antagonist":
+      return buildAntagonistPrompt(profile);
   }
   // TypeScript exhaustiveness check - this should never be reached
   const _exhaustiveCheck: never = actionType;
