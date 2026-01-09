@@ -2,12 +2,15 @@
  * Notient Prompt Builder
  *
  * Builds Notient-specific prompts with vault context.
- * THIS is where the Notient personality and RAG formatting lives.
+ * Uses a two-tier prompt architecture:
+ * - Tier 1: Base identity (Research Chief of Staff persona + user profile)
+ * - Tier 2: Task overlays (task-specific instructions)
  *
  * Moved from lmstudio.ts to centralize agent logic.
  */
 
-import { getTaskInstructions } from "./taskInference";
+import type { UserProfile } from "../../types/profile";
+import { buildBaseIdentity, getTaskOverlay } from "./identity";
 import type { NoteContext, PromptParams, TaskType } from "./types";
 
 /**
@@ -49,41 +52,47 @@ Rules:
 - Paths must be relative to vault root
 - If no actions are appropriate, return { "actions": [] }`;
 
-const BASE_SYSTEM_PROMPT = `You are Notient, an AI assistant for an Obsidian vault. You help users understand, navigate, and improve their notes.
-
-CRITICAL RULES:
-- Always ground your responses in the actual note content provided
-- Cite notes using Obsidian wiki-links. Prefer precise citations when available: [[Note Title#Heading]] and [[Note Title#^blockRef]].
-- Be concise, specific, and actionable
-- If information isn't in the notes, explicitly say so
-- Never invent or hallucinate content that isn't in the provided context`;
-
 /**
  * Builds Notient-specific prompts with vault context
+ * Uses two-tier prompt architecture: base identity + task overlays
  */
 export class NotientPromptBuilder {
   /**
+   * Create a prompt builder with optional user profile for domain adaptation
+   * @param profile - Optional user profile for personalizing prompts
+   */
+  constructor(private profile?: UserProfile) {}
+
+  /**
+   * Update the profile (e.g., after profile changes)
+   */
+  setProfile(profile: UserProfile | undefined): void {
+    this.profile = profile;
+  }
+
+  /**
    * Build a complete system prompt for the LLM
+   * Uses two-tier architecture: base identity + task overlay
+   *
    * @param params - Parameters for building the prompt
    * @returns The complete system prompt
    */
   buildSystemPrompt(params: PromptParams): string {
-    const parts: string[] = [BASE_SYSTEM_PROMPT];
+    const parts: string[] = [];
+
+    // Tier 1: Base identity (Research Chief of Staff + user profile)
+    parts.push(buildBaseIdentity(this.profile));
+
+    // Tier 2: Task overlay (task-specific instructions)
+    const taskType = params.taskType ?? this.inferTaskTypeFromQuery(params.query);
+    const taskOverlay = getTaskOverlay(taskType);
+    if (taskOverlay) {
+      parts.push(taskOverlay);
+    }
 
     // Add the CURRENT NOTE prominently if this is a note-specific task
     if (params.currentNote?.content) {
       parts.push(this.formatCurrentNote(params.currentNote));
-    }
-
-    // Add task-specific instructions based on task type
-    const taskType = params.taskType ?? this.inferTaskTypeFromQuery(params.query);
-    if (taskType) {
-      const instructions = getTaskInstructions(taskType);
-      if (instructions) {
-        parts.push(`
-TASK INSTRUCTIONS:
-${instructions}`);
-      }
     }
 
     // Add vault context summary

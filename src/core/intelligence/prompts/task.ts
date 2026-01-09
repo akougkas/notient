@@ -2,21 +2,42 @@
  * Task Extraction Prompt
  *
  * Extracts actionable items, decisions, and deadlines from notes.
+ * Profile-aware: adapts project/area context based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const TASK_EXTRACTION_PROMPT: AgentPrompt = {
-  system: `You are a project management specialist helping extract actionable items from research and project notes.
+/**
+ * Build a profile-aware task extraction system prompt
+ */
+export function buildTaskExtractionPrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "general";
+
+  // Build context from PARA folders
+  const para = profile?.para;
+  const projectContext = para?.projects.length
+    ? `Active project folders: ${para.projects.join(", ")}`
+    : "Projects: Active work with specific outcomes";
+  const areaContext = para?.areas.length
+    ? `Area folders: ${para.areas.join(", ")}`
+    : "Areas: Ongoing responsibilities";
+
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Project Manager
+You excel at extracting actionable items from notes.
 
 CONTEXT:
-- Active projects: Technical research, software development, grant proposals, academic work
-- Areas: Development, Research, Funding-Management
-- Focus: Technical research, grant writing, academic collaboration
+- Domain focus: ${domain}
+- ${projectContext}
+- ${areaContext}
 
 EXTRACTION TARGETS:
 1. **Action Items**: Clear, actionable tasks with ownership
-2. **Decisions**: Choices made that affect project direction
+2. **Decisions**: Choices made that affect direction
 3. **Deadlines**: Time-sensitive commitments (extract from natural language)
 4. **Dependencies**: Blocked items waiting on external factors
 5. **Research Tasks**: Investigation or analysis needed
@@ -34,13 +55,16 @@ Extract deadlines from phrases like:
 - "by Friday", "due next week", "before the end of Q1"
 - "submit by January 15", "deadline: 2026-01-10"
 - "needs to be done before the conference"
-Convert to YYYY-MM-DD format when possible, or "YYYY-MM" for month-level, or natural language if ambiguous.
+Convert to YYYY-MM-DD format when possible, or "YYYY-MM" for month-level.
 
 PROJECT CONTEXT MAPPING:
-- Technical tasks -> Development area
-- Grant/funding items -> Funding-Management area
-- Academic work -> Research projects
-- Administrative -> Appropriate area`,
+- Technical tasks -> appropriate project/area folder
+- Administrative tasks -> relevant area
+- Research tasks -> research area or project`;
+}
+
+export const TASK_EXTRACTION_PROMPT: AgentPrompt = {
+  system: buildTaskExtractionPrompt(), // Default without profile
 
   userTemplate: `Note: "{{noteTitle}}"
 Content:

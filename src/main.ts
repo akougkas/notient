@@ -11,8 +11,9 @@
  * - SearchPipeline: Cached semantic search
  */
 
-import { Plugin } from "obsidian";
+import { Notice, Plugin } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
+import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
 // Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
@@ -35,6 +36,7 @@ import { NotientSettingTab, loadSettings, saveSettings } from "./settings";
 import type { NotientSettings } from "./types/settings";
 import { NotientDashboardView } from "./views/dashboard";
 import { IndexOptionsModal } from "./views/indexOptionsModal";
+import { ProfilePreviewModal } from "./views/profilePreviewModal";
 import { SetupWizardModal } from "./views/setupWizard";
 import { NotientSidebarView } from "./views/sidebar";
 
@@ -68,6 +70,9 @@ export default class NotientPlugin extends Plugin {
   private workflowRunner: WorkflowRunner | null = null;
   // Intelligence 2.0
   private actionOrchestrator: ActionOrchestrator | null = null;
+
+  // Identity system
+  private profileManager: ProfileManager | null = null;
 
   private servicesInitialized = false;
 
@@ -319,12 +324,21 @@ export default class NotientPlugin extends Plugin {
           // Fall back to old service for backward compatibility
         }
 
+        // Identity system: ProfileManager
+        this.profileManager = new ProfileManager(this.app.vault, this.kernel);
+        await this.profileManager.load(); // Load profile on startup (may be undefined)
+        this.kernel.registerService("profileManager", this.profileManager);
+        console.log(
+          "[Notient] ProfileManager initialized:",
+          this.profileManager.get()?.domain?.primary || "(no profile)",
+        );
+
         // Phase 3: Note intelligence (background summaries + health)
         this.noteIntelligence = new NoteIntelligenceService(this.kernel, eventBus);
         await this.noteIntelligence.initialize();
         this.kernel.registerService("intelligence", this.noteIntelligence);
 
-        // Create NotientAgent (uses LLM provider, search, context)
+        // Create NotientAgent (uses LLM provider, search, context, profile)
         if (!this.llmProvider) {
           throw new Error("LLM Provider is required for NotientAgent");
         }
@@ -597,6 +611,59 @@ export default class NotientPlugin extends Plugin {
         this.kernel.obsidian.notice(
           `Notient: Ollama=${health.ollama.status}, Search=${search ? "ready" : "no"}, Store=${storeInfo}`,
         );
+      },
+    });
+
+    // Generate profile from vault
+    this.addCommand({
+      id: "generate-profile",
+      name: "Generate Profile from Vault",
+      callback: async () => {
+        if (!this.profileManager) {
+          new Notice("Profile manager not available. Complete setup first.");
+          return;
+        }
+
+        // Check if index exists
+        if (!this.indexManager || (await this.indexManager.getIndexedCount()) === 0) {
+          new Notice("Please build the vault index first (Settings > Index > Rebuild)");
+          return;
+        }
+
+        // Show progress notice
+        const notice = new Notice("Analyzing vault...", 0); // 0 = don't auto-dismiss
+
+        try {
+          const profile = await this.profileManager.infer((status, message) => {
+            notice.setMessage(message);
+          });
+
+          notice.hide();
+
+          // Show preview modal
+          const modal = new ProfilePreviewModal(this.app, profile);
+          const editedProfile = await modal.run();
+
+          if (editedProfile) {
+            await this.profileManager.save(editedProfile);
+            new Notice("Profile saved successfully");
+          }
+        } catch (error) {
+          notice.hide();
+          new Notice(`Profile generation failed: ${(error as Error).message}`);
+        }
+      },
+    });
+
+    // Edit profile (opens settings)
+    this.addCommand({
+      id: "edit-profile",
+      name: "Edit Profile",
+      callback: () => {
+        // Open settings tab - using the Obsidian API pattern
+        // biome-ignore lint/suspicious/noExplicitAny: Obsidian internal API
+        (this.app as any).setting?.open?.();
+        // Note: Cannot scroll to specific section easily, user will see Identity section
       },
     });
   }

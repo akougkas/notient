@@ -66,6 +66,9 @@ export interface StoragePathsConfig {
   actions: string;
   /** System index directory (vault/system/index) */
   systemIndex: string;
+  // Identity system
+  /** User profile storage file path */
+  profile: string;
 }
 
 /**
@@ -98,6 +101,8 @@ export class StoragePaths {
       actions: path.join(pluginRoot, STORAGE_PATHS.ACTIONS),
       // Indexing
       systemIndex: path.join(vaultRoot, "system", "index"),
+      // Identity system
+      profile: path.join(pluginRoot, STORAGE_PATHS.PROFILE),
     };
   }
 
@@ -180,6 +185,13 @@ export class StoragePaths {
    */
   get systemIndex(): string {
     return this.config.systemIndex;
+  }
+
+  /**
+   * Get the user profile file path (Identity system)
+   */
+  get profile(): string {
+    return this.config.profile;
   }
 
   /**

@@ -8,10 +8,12 @@
  * - Multi-index management
  */
 
-import { type App, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
+import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
+import type { ProfileManager } from "./core/agent/profileManager";
 import { MODEL_DEFAULTS } from "./core/constants";
 import type { Kernel } from "./core/kernel";
 import { IndexManagementPanel } from "./settings/panels/IndexManagementPanel";
+import type { UserProfile } from "./types/profile";
 import {
   DEFAULT_SETTINGS,
   type NotientSettings,
@@ -21,6 +23,7 @@ import {
   type SettingsValidation,
   type SettingsWarning,
 } from "./types/settings";
+import { ProfilePreviewModal } from "./views/profilePreviewModal";
 
 // Default IPs per service
 const DEFAULT_IPS = {
@@ -342,6 +345,9 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Search Settings
     this.renderSearchSection(containerEl);
+
+    // Identity (Profile)
+    this.renderIdentitySection(containerEl);
 
     // PARA Folders
     this.renderParaSection(containerEl);
@@ -732,6 +738,252 @@ export class NotientSettingTab extends PluginSettingTab {
             await this.onSettingsChange(this.settings);
           }),
       );
+  }
+
+  private renderIdentitySection(containerEl: HTMLElement): void {
+    const section = containerEl.createDiv({ cls: "notient-settings-section" });
+    section.createEl("h2", { text: "🎭 Identity" });
+
+    // Description
+    section.createEl("p", {
+      text: "Configure Notient's persona and domain expertise. Profile influences prompts silently (no UI badges).",
+      cls: "setting-item-description",
+    });
+
+    // Get profile manager if available
+    const profileManager = this.kernel.getService<ProfileManager>("profileManager");
+
+    // Show current profile status
+    this.renderCurrentProfileStatus(section, profileManager);
+
+    // Generate from Vault button
+    new Setting(section)
+      .setName("Generate Profile")
+      .setDesc("Analyze your vault to detect your domain expertise")
+      .addButton((button) =>
+        button.setButtonText("Generate from Vault").onClick(async () => {
+          if (!profileManager) {
+            new Notice("Profile manager not available. Complete setup first.");
+            return;
+          }
+
+          // Check if index exists
+          const indexManager = this.kernel.getService<{
+            getIndexedCount(): number;
+          }>("indexManager");
+
+          if (!indexManager || (await indexManager.getIndexedCount()) === 0) {
+            new Notice("Please build the vault index first (Settings > Index > Rebuild)");
+            return;
+          }
+
+          // Show loading state
+          button.setDisabled(true);
+          button.setButtonText("Analyzing vault...");
+
+          try {
+            // Run inference with progress callback
+            const profile = await profileManager.infer((status, message) => {
+              button.setButtonText(message);
+            });
+
+            // Show preview modal
+            const modal = new ProfilePreviewModal(this.app, profile);
+            const editedProfile = await modal.run();
+
+            if (editedProfile) {
+              await profileManager.save(editedProfile);
+              new Notice("Profile saved successfully");
+              this.display(); // Refresh settings
+            }
+          } catch (error) {
+            new Notice(`Profile generation failed: ${(error as Error).message}`);
+          } finally {
+            button.setDisabled(false);
+            button.setButtonText("Generate from Vault");
+          }
+        }),
+      );
+
+    // Manual edit section (show if profile exists)
+    this.renderManualProfileEdit(section, profileManager);
+
+    // Reset button
+    new Setting(section)
+      .setName("Reset Profile")
+      .setDesc("Clear all profile data and use generic Notient identity")
+      .addButton((button) =>
+        button
+          .setButtonText("Reset")
+          .setWarning()
+          .onClick(async () => {
+            if (!profileManager) {
+              new Notice("Profile manager not available");
+              return;
+            }
+
+            const hasProfile = await profileManager.exists();
+            if (!hasProfile) {
+              new Notice("No profile to reset");
+              return;
+            }
+
+            // Confirm reset
+            if (confirm("Are you sure? This will delete your profile.")) {
+              await profileManager.reset();
+              new Notice("Profile reset");
+              this.display(); // Refresh settings
+            }
+          }),
+      );
+  }
+
+  private renderCurrentProfileStatus(
+    containerEl: HTMLElement,
+    profileManager: ProfileManager | null,
+  ): void {
+    const statusDiv = containerEl.createDiv({ cls: "notient-profile-status" });
+
+    if (!profileManager) {
+      statusDiv.createEl("p", {
+        text: "⚠️ Profile manager not initialized. Complete setup first.",
+        cls: "notient-settings-warning",
+      });
+      return;
+    }
+
+    const profile = profileManager.get();
+
+    if (profile?.domain?.primary) {
+      const statusBox = statusDiv.createDiv({ cls: "notient-profile-current" });
+      statusBox.createEl("strong", { text: "Current Profile: " });
+      statusBox.createSpan({ text: profile.domain.primary });
+
+      if (profile.domain.secondary?.length) {
+        statusBox.createEl("br");
+        statusBox.createEl("small", {
+          text: `Related: ${profile.domain.secondary.join(", ")}`,
+          cls: "notient-settings-info-dim",
+        });
+      }
+    } else {
+      statusDiv.createEl("p", {
+        text: "No profile configured. Generate from vault or enter manually.",
+        cls: "notient-settings-info-dim",
+      });
+    }
+  }
+
+  private renderManualProfileEdit(
+    containerEl: HTMLElement,
+    profileManager: ProfileManager | null,
+  ): void {
+    if (!profileManager) return;
+
+    const profile = profileManager.get();
+    const editDiv = containerEl.createDiv({ cls: "notient-profile-manual-edit" });
+
+    editDiv.createEl("h4", { text: "Manual Configuration" });
+
+    // Primary domain
+    new Setting(editDiv)
+      .setName("Primary Domain")
+      .setDesc("Your main field of expertise")
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g., High-Performance Computing")
+          .setValue(profile?.domain?.primary || "")
+          .onChange(
+            debounce(
+              async (value) => {
+                await this.updateProfileField(profileManager, "domain.primary", value);
+              },
+              1000,
+              true,
+            ),
+          ),
+      );
+
+    // Secondary domains
+    new Setting(editDiv)
+      .setName("Secondary Domains")
+      .setDesc("Related fields (comma-separated)")
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g., AI/ML, Distributed Systems")
+          .setValue(profile?.domain?.secondary?.join(", ") || "")
+          .onChange(
+            debounce(
+              async (value) => {
+                const values = value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0);
+                await this.updateProfileField(profileManager, "domain.secondary", values);
+              },
+              1000,
+              true,
+            ),
+          ),
+      );
+
+    // Keywords
+    new Setting(editDiv)
+      .setName("Domain Keywords")
+      .setDesc("Key concepts in your field (comma-separated)")
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g., NSF grants, supercomputing, MPI")
+          .setValue(profile?.domain?.keywords?.join(", ") || "")
+          .onChange(
+            debounce(
+              async (value) => {
+                const values = value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0);
+                await this.updateProfileField(profileManager, "domain.keywords", values);
+              },
+              1000,
+              true,
+            ),
+          ),
+      );
+  }
+
+  private async updateProfileField(
+    profileManager: ProfileManager,
+    path: string,
+    value: string | string[],
+  ): Promise<void> {
+    try {
+      let profile = profileManager.get();
+
+      // Create empty profile if none exists
+      if (!profile) {
+        profile = {
+          version: "1.0",
+          domain: { primary: "" },
+          para: { projects: [], areas: [], resources: [], archives: [] },
+        };
+      }
+
+      // Update the specific field
+      const parts = path.split(".");
+      // biome-ignore lint/suspicious/noExplicitAny: Dynamic field access
+      let target: any = profile;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!target[parts[i]]) {
+          target[parts[i]] = {};
+        }
+        target = target[parts[i]];
+      }
+      target[parts[parts.length - 1]] = value;
+
+      await profileManager.save(profile);
+    } catch (error) {
+      console.error("[Settings] Failed to update profile field:", error);
+    }
   }
 
   private renderParaSection(containerEl: HTMLElement): void {

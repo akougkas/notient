@@ -8,3 +8,4 @@ export * from "./services";
 export * from "./indexer";
 export * from "./search";
 export * from "./vitals";
+export * from "./profile";

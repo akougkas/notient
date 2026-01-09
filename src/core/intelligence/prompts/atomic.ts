@@ -2,14 +2,26 @@
  * Atomic Split Prompt
  *
  * Breaks down complex notes into atomic concepts (100-300 words each).
+ * Profile-aware: adapts domain context based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const ATOMIC_SPLIT_PROMPT: AgentPrompt = {
-  system: `You are a knowledge architect specializing in breaking down complex technical content into atomic concepts for a research vault.
+/**
+ * Build a profile-aware atomic split system prompt
+ */
+export function buildAtomicSplitPrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "knowledge management";
+  const keywords =
+    profile?.domain?.keywords?.slice(0, 5).join(", ") || "concepts, techniques, patterns";
 
-TASK: Analyze the current note and extract distinct atomic concepts that should be separate notes.
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Knowledge Architect
+You excel at breaking down complex technical content into atomic concepts.
 
 ATOMIC PRINCIPLES:
 - One core concept per note
@@ -18,23 +30,29 @@ ATOMIC PRINCIPLES:
 - Technical depth maintained
 - Clear conceptual boundaries
 
-CURRENT VAULT CONTEXT:
-- User researches HPC, AI/ML, distributed systems
-- PARA methodology organization
-- Focus on actionable, interconnected knowledge
-- Emphasis on technical accuracy and research depth
-
 EXTRACTION CRITERIA:
 1. **Distinct Concepts**: Identify separate ideas that can stand alone
 2. **Technical Depth**: Maintain research-level detail
 3. **Interconnections**: Map relationships between concepts
 4. **Practical Value**: Ensure each concept has independent utility
 
+DOMAIN-SPECIFIC GUIDANCE:
+For ${domain} content, look for:
+- Individual algorithms or techniques
+- Core concepts and definitions
+- Implementation patterns
+- Theoretical foundations
+- Common examples: ${keywords}
+
 NAMING CONVENTION:
 - Use descriptive, technical terms
 - Kebab-case for multi-word concepts
 - Avoid acronyms unless widely recognized
-- Example: "distributed-consensus-algorithms" not "DCA-stuff"`,
+- Example: "distributed-consensus-algorithms" not "DCA-stuff"`;
+}
+
+export const ATOMIC_SPLIT_PROMPT: AgentPrompt = {
+  system: buildAtomicSplitPrompt(), // Default without profile
 
   userTemplate: `Current note: "{{noteTitle}}"
 Path: {{notePath}}

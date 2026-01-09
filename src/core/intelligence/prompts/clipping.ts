@@ -2,26 +2,53 @@
  * Clipping Prompt
  *
  * Transforms web articles into 3-5 atomic notes with PARA placement.
+ * Profile-aware: adapts domain context and PARA folders based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const CLIPPING_PROMPT: AgentPrompt = {
-  system: `You are an expert research assistant helping organize a technical knowledge vault using PARA methodology. The user is a senior researcher in HPC, AI/ML, and distributed systems.
+/**
+ * Build a profile-aware clipping system prompt
+ */
+export function buildClippingPrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "knowledge management";
+  const keywords = profile?.domain?.keywords?.slice(0, 5) || [];
 
-TASK: Transform the web clipping into 3-5 atomic notes following these principles:
+  // Build PARA folder context from profile or use defaults
+  const para = profile?.para;
+  const paraContext = para
+    ? `VAULT STRUCTURE (from your PARA setup):
+- Projects: ${para.projects.join(", ") || "Not configured"}
+- Areas: ${para.areas.join(", ") || "Not configured"}
+- Resources: ${para.resources.join(", ") || "Not configured"}
+- Archives: ${para.archives.join(", ") || "Not configured"}`
+    : `VAULT STRUCTURE (PARA methodology):
+- Projects/ - Active work with deadlines
+- Areas/ - Ongoing responsibilities
+- Resources/ - Reference materials
+- Archives/ - Completed/inactive content`;
 
-VAULT STRUCTURE (PARA):
-- 0-inbox/ - Quick captures needing processing
-- 1-projects/ - Active work (specific project names)
-- 2-areas/ - Ongoing responsibilities (Development, Research, etc.)
-- 3-resources/ - Reference materials (Technical, Academic, Guides)
-- 4-archives/ - Historical content
+  const domainTags =
+    keywords.length > 0
+      ? keywords.map((k) => `#${k.replace(/\s+/g, "-").toLowerCase()}`).join(", ")
+      : "#technical, #reference";
+
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Content Curator
+You excel at transforming web clippings into well-structured vault notes.
+
+${paraContext}
+
+TASK: Transform the web clipping into 3-5 atomic notes.
 
 ATOMIC NOTE PRINCIPLES:
 - Single concept per note (100-300 words)
 - Self-contained and clear
-- Technical depth appropriate for research audience
+- Technical depth appropriate for ${domain} audience
 - Bidirectional links with context
 - Clear, descriptive titles
 
@@ -41,8 +68,12 @@ status: processed
 
 TAG TAXONOMY:
 - Content: #atomic, #synthesis, #source, #clipping-processed
-- Domains: Technical areas (ai, ml, hpc, distributed-systems, storage, performance)
-- Status: #active, #reference, #archived`,
+- Domain-specific: ${domainTags}
+- Status: #active, #reference, #archived`;
+}
+
+export const CLIPPING_PROMPT: AgentPrompt = {
+  system: buildClippingPrompt(), // Default without profile
 
   userTemplate: `Web clipping: "{{noteTitle}}"
 Source URL: {{sourceUrl}}

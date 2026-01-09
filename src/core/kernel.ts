@@ -80,6 +80,8 @@ export class Kernel {
   private actionApplier: unknown = null;
   // Intelligence 2.0
   private actionOrchestrator: unknown = null;
+  // Identity system
+  private profileManager: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -305,6 +307,9 @@ export class Kernel {
       case "actionOrchestrator":
         this.actionOrchestrator = service;
         break;
+      case "profileManager":
+        this.profileManager = service;
+        break;
     }
   }
 
@@ -352,6 +357,8 @@ export class Kernel {
         return this.actionApplier as T;
       case "actionOrchestrator":
         return this.actionOrchestrator as T;
+      case "profileManager":
+        return this.profileManager as T;
       default:
         return null;
     }

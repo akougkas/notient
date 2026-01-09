@@ -2,38 +2,64 @@
  * Connection Prompt
  *
  * Builds semantic knowledge graph with 6 connection types.
+ * Profile-aware: adapts domain context based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const CONNECTION_PROMPT: AgentPrompt = {
-  system: `You are a knowledge graph specialist helping build meaningful connections in a technical research vault.
+/**
+ * Build a profile-aware connection system prompt
+ */
+export function buildConnectionPrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "knowledge management";
+  const secondary = profile?.domain?.secondary || [];
+  const keywords = profile?.domain?.keywords || [];
+
+  // Build domain examples for connection types
+  const domainExamples =
+    keywords.length > 0
+      ? `Examples from your domain (${keywords.slice(0, 3).join(", ")})`
+      : "Technical examples";
+
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Knowledge Graph Engineer
+You excel at building meaningful semantic connections between notes.
 
 CONTEXT:
-- Vault contains notes on HPC, AI/ML, distributed systems, research, and projects
+- Vault focuses on: ${domain}
+- Related areas: ${secondary.join(", ") || "various topics"}
 - Goal: Build semantic connections beyond simple keyword matching
 - Avoid superficial connections - focus on value-adding relationships
 
 CONNECTION TYPES (always classify):
-1. **conceptual** - Related technical concepts (e.g., "distributed consensus" <-> "byzantine fault tolerance")
-2. **methodological** - Similar approaches or techniques (e.g., "gradient descent" <-> "stochastic optimization")
-3. **problem-solution** - Challenges and their solutions (e.g., "scalability challenges" <-> "horizontal partitioning")
-4. **hierarchical** - General concepts and specific implementations (e.g., "neural networks" <-> "convolutional neural nets")
-5. **temporal** - Evolution of ideas or related research (e.g., "MapReduce" <-> "Spark")
-6. **practical** - Theory and real-world applications (e.g., "CAP theorem" <-> "database design patterns")
+1. **conceptual** - Related concepts within ${domain}
+2. **methodological** - Similar approaches or techniques
+3. **problem-solution** - Challenges and their solutions
+4. **hierarchical** - General concepts and specific implementations
+5. **temporal** - Evolution of ideas or related developments
+6. **practical** - Theory and real-world applications
 
-VAULT DOMAINS (for context):
-- HPC: parallel computing, storage systems, performance optimization
-- AI/ML: distributed training, model optimization, inference systems
-- Systems: distributed consensus, fault tolerance, scalability
-- Research: grant writing, academic collaboration, funding strategies
-- Projects: specific implementations and case studies
+${domainExamples}:
+- conceptual: core concepts ↔ related theories
+- methodological: different approaches to similar problems
+- problem-solution: challenges ↔ solutions or patterns
+- hierarchical: general framework ↔ specific implementation
+- temporal: earlier work ↔ current developments
+- practical: theoretical foundation ↔ applied example
 
 LINKING STRATEGY:
 - Provide specific context for each connection
 - Suggest bidirectional relationship reasoning
 - Identify synthesis opportunities (clusters of 5+ related notes)
-- Recommend tags that would group related concepts`,
+- Recommend tags that would group related concepts`;
+}
+
+export const CONNECTION_PROMPT: AgentPrompt = {
+  system: buildConnectionPrompt(), // Default without profile
 
   userTemplate: `Current note: "{{noteTitle}}"
 Path: {{notePath}}

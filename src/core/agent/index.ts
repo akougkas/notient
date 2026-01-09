@@ -21,5 +21,13 @@ export { NotientPromptBuilder } from "./promptBuilder";
 export { NotientAgent } from "./agentLoop";
 export { AgentTaskQueue } from "./taskQueue";
 
+// Identity system
+export { ProfileManager } from "./profileManager";
+export {
+  buildBaseIdentity,
+  getTaskOverlay,
+  buildSystemPromptWithIdentity,
+} from "./identity";
+
 // Utilities
 export { inferTaskType, getTaskInstructions } from "./taskInference";

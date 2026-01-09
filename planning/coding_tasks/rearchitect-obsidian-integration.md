@@ -1,21 +1,13 @@
-I have drafted a comprehensive Technical Implementation Plan designed for your Coding AI.
-
-This plan focuses on the **"Sidecar Architecture."** It answers your core question: **Yes, you can run a full web application inside Obsidian.** We will use a `CustomView` wrapper to host a persistent `iframe` (or a webview tag) that points to your local high-performance web app.
-
-This allows you to decouple your complex Agentic UI (React/Vite) and your Python/Go backend from the limitations of the Obsidian API, while maintaining a high-speed bridge for file operations.
-
----
-
-# Technical Specification: Project "Notion" (Sentient Note)
+# Technical Specification: Project "Notient" (Sentient Note)
 
 ## Architecture: The "Sidecar" Web-Integration Model
 
 ### 1. Executive Summary
 
-This document outlines the technical architecture for **"Notion,"** an agentic UI layer sitting on top of an Obsidian Vault.
+This document outlines the technical architecture for **"Notient,"** an agentic UI layer sitting on top of an Obsidian Vault.
 
 * **Goal:** Decouple the UI/Agent logic from Obsidian's plugin API limitations while maintaining seamless, low-latency access to the Note Vault.
-* **Core Solution:** A **Hybrid Sidecar Architecture**. We will run a standalone React/Vite web application (The "Notion" Dashboard) and embed it inside Obsidian using a lightweight Plugin Wrapper.
+* **Core Solution:** A **Hybrid Sidecar Architecture**. We will run a standalone React/Vite web application (The "Notient" Dashboard) and embed it inside Obsidian using a lightweight Plugin Wrapper.
 * **Communication:** A bi-directional bridge using `window.postMessage` (for UI  Plugin) and WebSockets (for UI  Python/Go Backend).
 
 ---
@@ -26,14 +18,14 @@ This document outlines the technical architecture for **"Notion,"** an agentic U
 graph TD
     subgraph "Obsidian (Electron Host)"
         A[Obsidian App Core]
-        B[Notion Plugin Wrapper]
+        B[Notient Plugin Wrapper]
         C[Markdown Files (Vault)]
         
         A <-->|Obsidian API| B
         B <-->|File I/O| C
     end
 
-    subgraph "The Notion Layer (Localhost)"
+    subgraph "The Notient Layer (Localhost)"
         D[Iframe / Webview]
         E[React/Vite Web App]
         F[Agent Backend (Python/Go)]
@@ -59,7 +51,7 @@ graph TD
 
 We will use an **Iframe** within the Plugin View. This provides the best balance of isolation and integration.
 
-* **Why not just React inside the Plugin?** You want to decouple the backend and use complex frameworks. An Iframe allows the "Notion" app to run independently. If Obsidian crashes, your agent state survives. If you update the Web App, you don't need to reload the Obsidian plugin.
+* **Why not just React inside the Plugin?** You want to decouple the backend and use complex frameworks. An Iframe allows the "Notient" app to run independently. If Obsidian crashes, your agent state survives. If you update the Web App, you don't need to reload the Obsidian plugin.
 
 ---
 
@@ -117,21 +109,21 @@ We need to solve the "Split Brain" problem (State in Obsidian vs. State in Agent
 
 ### 6. Step-by-Step Implementation Plan for the Coding AI
 
-**Prompt to AI:** "Execute Phase 1 of the Notion Sidecar Plan."
+**Prompt to AI:** "Execute Phase 1 of the Notient Sidecar Plan."
 
 #### Phase 1: The Plugin Wrapper (TypeScript)
 
 * **Goal:** Create an Obsidian Plugin that opens a generic View containing an Iframe.
 * **Key Files:**
 * `main.ts`: Registers the View.
-* `view.ts`: Creates the DOM element `<iframe src="http://localhost:4000" />`.
+* `view.ts`: Creates the DOM element `<iframe src="http://localhost:3002" />`.
 * **Crucial Logic:** Implement the `on('active-leaf-change')` listener to send the current file name to the Iframe.
 
 
 
 #### Phase 2: The Web Host (React/Vite)
 
-* **Goal:** A standalone React app running on Port 4000.
+* **Goal:** A standalone React app running on Port 3002.
 * **Key Logic:**
 * Create a `useObsidianBridge` hook.
 * This hook listens for `message` events from the parent window.
@@ -157,7 +149,7 @@ We need to solve the "Split Brain" problem (State in Obsidian vs. State in Agent
 
 ### 7. Known Limitations & Workarounds
 
-* **CORS:** The React App (Port 4000) and Obsidian (Local File Protocol) have different origins.
+* **CORS:** The React App (Port 3002) and Obsidian (Local File Protocol) have different origins.
 * *Fix:* The Plugin creates the Iframe. We will need to ensure the `postMessage` target origin is set correctly (or `*` for local dev).
 
 
@@ -174,4 +166,4 @@ We need to solve the "Split Brain" problem (State in Obsidian vs. State in Agent
 
 Ask the Coding AI to:
 
-> "Scaffold an Obsidian Plugin named 'Notion-Bridge' that registers a Custom ItemView. This view must render an Iframe pointing to `http://localhost:4000`. Implement a `postMessage` handshake that logs to the console when the Obsidian Plugin successfully talks to the Iframe."
+> "Scaffold an Obsidian Plugin named 'Notient-Bridge' that registers a Custom ItemView. This view must render an Iframe pointing to `http://localhost:3002`. Implement a `postMessage` handshake that logs to the console when the Obsidian Plugin successfully talks to the Iframe."

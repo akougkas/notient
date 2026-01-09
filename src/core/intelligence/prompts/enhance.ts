@@ -2,14 +2,43 @@
  * Enhance Prompt
  *
  * Transforms informal captures into well-structured vault notes.
+ * Profile-aware: adapts PARA placement and tags based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const ENHANCE_PROMPT: AgentPrompt = {
-  system: `You are a knowledge management specialist helping transform quick captures into well-structured vault notes.
+/**
+ * Build a profile-aware enhance system prompt
+ */
+export function buildEnhancePrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "knowledge management";
 
-TASK: Enhance informal captures with proper structure, metadata, and organization cues.
+  // Build PARA folder context from profile or use defaults
+  const para = profile?.para;
+  const paraFolders = para
+    ? `- Projects: ${para.projects.join(", ") || "your projects folder"}
+- Areas: ${para.areas.join(", ") || "your areas folder"}
+- Resources: ${para.resources.join(", ") || "your resources folder"}
+- Archives: ${para.archives.join(", ") || "your archives folder"}`
+    : `- Projects: active work with deadlines
+- Areas: ongoing responsibilities
+- Resources: reference material
+- Archives: completed/inactive items`;
+
+  // Build tag suggestions from profile keywords
+  const keywords = profile?.domain?.keywords || [];
+  const tagSuggestions =
+    keywords.length > 0
+      ? keywords.map((k) => k.replace(/\s+/g, "-").toLowerCase()).join(", ")
+      : "appropriate domain tags";
+
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Editor
+You excel at transforming quick captures into well-structured vault notes.
 
 INPUT TYPES:
 - Meeting notes or quick jots
@@ -26,13 +55,15 @@ ENHANCEMENT GOALS:
 5. **Actionability**: Extract tasks or follow-ups
 6. **Clarity**: Improve readability and comprehension
 
-VAULT INTEGRATION:
-- PARA folder suggestion (0-inbox, 1-projects, 2-areas, 3-resources)
-- Appropriate tags from established taxonomy
-- Connection opportunities with existing notes
-- Next action recommendations
+PARA FOLDER MAPPING:
+${paraFolders}
 
-FRONTMATTER ENHANCEMENT:
+TAG TAXONOMY:
+- Domain tags: ${tagSuggestions}
+- Content type: #capture, #meeting, #idea, #draft
+- Status: #processed, #active, #reference
+
+FRONTMATTER TEMPLATE:
 ---
 created: YYYY-MM-DD
 tags: [appropriate-tags]
@@ -42,12 +73,16 @@ project: [if relevant]
 area: [if relevant]
 ---
 
-NOTE TYPES:
+NOTE TYPES TO RECOGNIZE:
 - **Meeting Notes**: Structure with attendees, decisions, actions
 - **Ideas**: Develop into actionable concepts
-- **Technical Notes**: Add context and connections
+- **Technical Notes**: Add context and connections to ${domain}
 - **Random Captures**: Organize and categorize
-- **Drafts**: Improve structure and clarity`,
+- **Drafts**: Improve structure and clarity`;
+}
+
+export const ENHANCE_PROMPT: AgentPrompt = {
+  system: buildEnhancePrompt(), // Default without profile
 
   userTemplate: `Note: "{{noteTitle}}"
 Path: {{notePath}}

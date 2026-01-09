@@ -18,6 +18,8 @@ export const STORAGE_PATHS = {
   // Phase 2 additions
   CONVERSATIONS: "conversations.json",
   ACTIONS: "actions.json",
+  // Identity system
+  PROFILE: "profile.json",
 } as const;
 
 /** Lock file names */

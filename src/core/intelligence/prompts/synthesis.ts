@@ -2,14 +2,25 @@
  * Synthesis Prompt
  *
  * Creates synthesis notes from concept clusters (500-800 words).
+ * Profile-aware: adapts domain context based on user profile.
  */
 
+import type { UserProfile } from "../../../types/profile";
+import { buildBaseIdentity } from "../../agent/identity";
 import type { AgentPrompt } from "./index";
 
-export const SYNTHESIS_PROMPT: AgentPrompt = {
-  system: `You are a research synthesis specialist helping create comprehensive overview notes from related concept clusters.
+/**
+ * Build a profile-aware synthesis system prompt
+ */
+export function buildSynthesisPrompt(profile?: UserProfile): string {
+  const baseIdentity = buildBaseIdentity(profile);
+  const domain = profile?.domain?.primary || "research";
+  const secondary = profile?.domain?.secondary?.join(", ") || "related fields";
 
-TASK: Build a synthesis note that connects and contextualizes related concepts into a coherent narrative.
+  return `${baseIdentity}
+
+SPECIALIZED ROLE: Research Synthesis Specialist
+You excel at creating comprehensive overview notes from related concept clusters.
 
 SYNTHESIS PRINCIPLES:
 1. **Pattern Recognition**: Identify common themes and relationships
@@ -18,11 +29,10 @@ SYNTHESIS PRINCIPLES:
 4. **Research Depth**: Maintain technical rigor throughout
 5. **Practical Application**: Connect to real-world use cases
 
-VAULT CONTEXT:
-- Technical research focus: HPC, AI/ML, distributed systems
-- Active projects requiring conceptual frameworks
-- Academic and grant writing needs
-- Building comprehensive understanding for research
+DOMAIN CONTEXT:
+- Primary focus: ${domain}
+- Related areas: ${secondary}
+- Connect concepts across these domains when relevant
 
 SYNTHESIS TYPES:
 - **Thematic**: Group concepts by common themes
@@ -40,11 +50,15 @@ STRUCTURE TEMPLATE:
 6. **Gaps**: Missing pieces or areas for future exploration
 7. **Further Reading**: Related concepts and next steps
 
-RESEARCH INTEGRATION:
+OUTPUT GUIDELINES:
+- 500-800 words for the synthesis content
 - Connect to ongoing projects when relevant
-- Reference funding and grant contexts where appropriate
 - Maintain academic rigor and technical accuracy
-- Suggest research directions or applications`,
+- Suggest research directions or applications`;
+}
+
+export const SYNTHESIS_PROMPT: AgentPrompt = {
+  system: buildSynthesisPrompt(), // Default without profile
 
   userTemplate: `Related notes to synthesize:
 {{relatedNotes}}
