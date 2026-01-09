@@ -115,22 +115,6 @@ export class NoteVitalsCalculator {
   }
 
   /**
-   * Calculate vitality score for search results
-   */
-  calculateVitalityScore(path: string): number | null {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof this.app.vault.adapter.constructor)) {
-      // Check if it's a TFile
-      const tfile = this.app.vault.getAbstractFileByPath(path);
-      if (!tfile || !("stat" in tfile)) return null;
-
-      const metadata = this.app.metadataCache.getFileCache(tfile as TFile);
-      return this.calculateHealthScore(tfile as TFile, metadata);
-    }
-    return null;
-  }
-
-  /**
    * Get all backlinks for a file
    */
   private getBacklinks(file: TFile): string[] {

@@ -686,11 +686,6 @@ export class IndexManager {
     return null;
   }
 
-  listAvailableIndices(): string[] {
-    // Legacy wrapper - deprecate later
-    return [];
-  }
-
   /**
    * Delete a specific index by its file path.
    * Only plugin-created indices can be deleted (not user-provided external indices).
@@ -712,10 +707,12 @@ export class IndexManager {
     }
 
     try {
-      // Derive state path from index path (same naming convention)
-      // index-{modelKey}.json -> state-{modelKey}.json
+      // Derive state path from index path
+      // New format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json -> state-{model}_{dim}d.json
+      // Legacy format: index-{model}-{dim}d.json -> state-{model}-{dim}d.json
       const baseName = path.basename(indexPath);
-      const modelKeyMatch = baseName.match(/^index-(.+)\.json$/);
+      const newMatch = baseName.match(NEW_INDEX_PATTERN);
+      const legacyMatch = baseName.match(LEGACY_INDEX_PATTERN);
 
       const indexExists = await fs.promises
         .access(indexPath)
@@ -727,8 +724,16 @@ export class IndexManager {
       }
 
       // Also delete the state file if it follows the naming convention
-      if (modelKeyMatch) {
-        const modelKey = modelKeyMatch[1];
+      let modelKey: string | null = null;
+      if (newMatch) {
+        // New format: model is group 3, dim is group 4
+        modelKey = `${newMatch[3]}_d${newMatch[4]}`;
+      } else if (legacyMatch) {
+        // Legacy format: model is group 1, dim is group 2
+        modelKey = `${legacyMatch[1]}-${legacyMatch[2]}d`;
+      }
+
+      if (modelKey) {
         const statePath = path.join(this.kernel.storagePaths.pluginRoot, `state-${modelKey}.json`);
         const stateExists = await fs.promises
           .access(statePath)
@@ -745,15 +750,6 @@ export class IndexManager {
       console.error(`[IndexManager] Failed to delete index at ${indexPath}:`, error);
       return false;
     }
-  }
-
-  /**
-   * Delete a specific model's index files (legacy method - use deleteIndexByPath)
-   * @deprecated Use deleteIndexByPath instead
-   */
-  async deleteIndex(modelKey: string): Promise<boolean> {
-    const indexPath = path.join(this.kernel.storagePaths.pluginRoot, `index-${modelKey}.json`);
-    return this.deleteIndexByPath(indexPath);
   }
 
   /**

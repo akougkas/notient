@@ -108,19 +108,3 @@ export interface RelatedNote {
   /** Direct link exists */
   hasDirectLink: boolean;
 }
-
-/** Cache entry for search results */
-export interface SearchCacheEntry {
-  /** Query string */
-  query: string;
-  /** Options hash */
-  optionsHash: string;
-  /** Model key */
-  modelKey: string;
-  /** Results */
-  results: SearchResult[];
-  /** Cache timestamp */
-  cachedAt: number;
-  /** Time to live (ms) */
-  ttlMs: number;
-}

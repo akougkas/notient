@@ -89,6 +89,62 @@ export class TaskModal extends Modal {
     this.isStreamActive = false;
     this.streamingContent = "";
     this.streamingBubbleEl = null;
+
+    // Persist conversation history on close
+    this.saveConversationHistory();
+  }
+
+  /**
+   * Save conversation history to ConversationStore
+   */
+  private saveConversationHistory(): void {
+    if (!this.task.notePath || this.task.notePath === "unknown") {
+      return;
+    }
+
+    const conversationStore = this.kernel.getService<ConversationStore>("conversationStore");
+    if (!conversationStore) {
+      return;
+    }
+
+    // Get all messages from the session
+    const messages = this.session.getMessages();
+
+    // Get existing persisted history to find new messages
+    const persistedHistory = conversationStore.getHistory(this.task.notePath);
+    const existingIds = new Set(persistedHistory.map(m => m.id));
+
+    // Append only new messages (ones that don't have a matching ID)
+    for (const msg of messages) {
+      // Skip system messages
+      if (msg.role === "system") continue;
+
+      // Generate a stable ID based on content if not present
+      const msgId = `${msg.role}-${this.hashContent(msg.content)}`;
+
+      if (!existingIds.has(msgId)) {
+        conversationStore.appendMessage(this.task.notePath, {
+          id: msgId,
+          role: msg.role,
+          content: msg.content,
+          timestamp: new Date(),
+        });
+        existingIds.add(msgId);
+      }
+    }
+  }
+
+  /**
+   * Simple hash for content-based deduplication
+   */
+  private hashContent(content: string): string {
+    let hash = 0;
+    for (let i = 0; i < Math.min(content.length, 100); i++) {
+      const char = content.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(36);
   }
 
   /**

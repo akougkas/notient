@@ -40,9 +40,15 @@ import {
 } from "./components/ChatView";
 import { useApp, useEventBus, useKernel, useService } from "./context/KernelContext";
 import { useBacklinkPreview, useNoteVitals } from "./hooks/useNoteVitals";
+import { Omnibar } from "./components/Omnibar";
+import type { SearchResult } from "../../types/search";
+
+import type { InitializationContext, InitializationState } from "../../types/services";
 
 // Global signals for sidebar state
 const isServicesReady = signal(false);
+const initState = signal<InitializationState>("UNINITIALIZED");
+const initContext = signal<InitializationContext | null>(null);
 const activeView = signal<SidebarView>("note");
 const providerStatus = signal<ProviderStatus>({
 	lmstudio: { connected: false, model: null },
@@ -68,6 +74,10 @@ const chatContext = signal<ChatContext>({ notePath: null, noteTitle: null });
 const chatMessages = signal<ChatMessage[]>([]);
 const isChatStreaming = signal(false);
 const chatStreamingContent = signal("");
+
+// Search state
+const searchResults = signal<SearchResult[]>([]);
+const searchQuery = signal<string>("");
 
 export function App() {
 	const kernel = useKernel();
@@ -97,6 +107,16 @@ export function App() {
 	// Subscribe to services:initialized event
 	useEventBus("services:initialized", () => {
 		isServicesReady.value = true;
+	});
+
+	// Subscribe to initialization state changes
+	useEventBus("init:state-changed", (data) => {
+		initState.value = data.currentState;
+		initContext.value = data.context;
+
+		// Update isServicesReady based on state machine
+		const isOperational = data.currentState === "READY" || data.currentState === "DEGRADED";
+		isServicesReady.value = isOperational;
 	});
 
 	// Subscribe to provider health events
@@ -138,29 +158,205 @@ export function App() {
 		};
 	});
 
-	// Subscribe to agent/workflow events
-	useEventBus("workflow:started", () => {
+	// Subscribe to agent/workflow events for AgentStreamsView
+	useEventBus("workflow:started", (data) => {
+		const workflow = data.workflow;
 		agentStatus.value = {
 			...agentStatus.value,
 			runningCount: agentStatus.value.runningCount + 1,
 		};
+		// Add to active agents
+		activeAgents.value = [
+			...activeAgents.value,
+			{
+				id: workflow.id,
+				type: workflow.spec.command || "workflow",
+				targetNote: workflow.spec.targets[0] || "vault",
+				status: "running",
+				progress: 0,
+				startedAt: workflow.startedAt ? new Date(workflow.startedAt) : new Date(),
+			},
+		];
 	});
 
-	useEventBus("workflow:completed", () => {
+	useEventBus("workflow:progress", (data) => {
+		const workflow = data.workflow;
+		// Update progress for active agent
+		activeAgents.value = activeAgents.value.map((agent) =>
+			agent.id === workflow.id
+				? {
+						...agent,
+						progress: workflow.progress.total > 0
+							? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
+							: 0,
+				  }
+				: agent
+		);
+	});
+
+	useEventBus("workflow:completed", (data) => {
+		const workflow = data.workflow;
+		const agent = activeAgents.value.find((a) => a.id === workflow.id);
 		agentStatus.value = {
 			...agentStatus.value,
 			runningCount: Math.max(0, agentStatus.value.runningCount - 1),
 		};
+		// Remove from active agents
+		activeAgents.value = activeAgents.value.filter((a) => a.id !== workflow.id);
+		// Add to recent activity if we had the agent tracked
+		if (agent) {
+			recentActivity.value = [
+				{
+					id: `activity-${Date.now()}`,
+					status: "success",
+					actionType: "workflow",
+					targetNote: agent.targetNote,
+					summary: `${agent.type} completed`,
+					completedAt: new Date(),
+					canUndo: false,
+				},
+				...recentActivity.value.slice(0, 9),
+			];
+		}
 	});
 
-	// Note: action:proposed not in event types, increment pending on workflow:completed for now
-	// In production, this would listen to a proper action proposal event
+	useEventBus("workflow:failed", (data) => {
+		const workflow = data.workflow;
+		const agent = activeAgents.value.find((a) => a.id === workflow.id);
+		agentStatus.value = {
+			...agentStatus.value,
+			runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+		};
+		// Remove from active agents
+		activeAgents.value = activeAgents.value.filter((a) => a.id !== workflow.id);
+		// Add to recent activity with error
+		if (agent) {
+			recentActivity.value = [
+				{
+					id: `activity-${Date.now()}`,
+					status: "failed",
+					actionType: "workflow",
+					targetNote: agent.targetNote,
+					summary: `${agent.type} failed`,
+					completedAt: new Date(),
+					canUndo: false,
+					error: data.error,
+				},
+				...recentActivity.value.slice(0, 9),
+			];
+		}
+	});
 
-	useEventBus("action:applied", () => {
+	useEventBus("workflow:cancelled", (data) => {
+		const workflow = data.workflow;
+		agentStatus.value = {
+			...agentStatus.value,
+			runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+		};
+		// Remove from active agents
+		activeAgents.value = activeAgents.value.filter((a) => a.id !== workflow.id);
+	});
+
+	// Subscribe to action proposed events
+	useEventBus("action:proposed", (data) => {
+		const action = data.action;
+		agentStatus.value = {
+			...agentStatus.value,
+			pendingReviewCount: agentStatus.value.pendingReviewCount + 1,
+		};
+		// Add to pending actions
+		pendingActions.value = [
+			...pendingActions.value,
+			{
+				id: action.id,
+				actionType: action.type,
+				targetNote: data.noteContext.title || action.target,
+				summary: action.title,
+				riskLevel: action.risk,
+			},
+		];
+	});
+
+	useEventBus("action:applied", (data) => {
+		const record = data.record;
 		agentStatus.value = {
 			...agentStatus.value,
 			pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),
 		};
+		// Remove from pending actions
+		pendingActions.value = pendingActions.value.filter((a) => a.id !== record.action.id);
+		// Add to recent activity
+		recentActivity.value = [
+			{
+				id: record.id,
+				status: "success",
+				actionType: record.action.type,
+				targetNote: record.action.target.split("/").pop() || record.action.target,
+				summary: record.action.title,
+				completedAt: new Date(record.timestamp),
+				canUndo: true,
+			},
+			...recentActivity.value.slice(0, 9),
+		];
+	});
+
+	useEventBus("action:undone", (data) => {
+		// Update recent activity to show undone status
+		recentActivity.value = recentActivity.value.map((a) =>
+			a.id === data.recordId ? { ...a, status: "undone" as const, canUndo: false } : a
+		);
+	});
+
+	// Subscribe to agent task updates for real chat streaming
+	useEventBus("agent:task-update", (data) => {
+		const task = data.task;
+
+		// Only process chat agent tasks for the current context
+		if (task.agent !== "chat") return;
+		if (task.notePath !== chatContext.value.notePath) return;
+
+		switch (task.status) {
+			case "running":
+				// Show streaming indicator
+				isChatStreaming.value = true;
+				break;
+
+			case "completed":
+				// Extract assistant response from task result
+				isChatStreaming.value = false;
+				chatStreamingContent.value = "";
+
+				if (task.result?.data) {
+					const assistantContent = task.result.data as string;
+					const assistantMsg: ChatMessage = {
+						id: `assistant-${Date.now()}`,
+						role: "assistant",
+						content: assistantContent,
+						timestamp: new Date(),
+						citations: task.result.citations,
+					};
+					chatMessages.value = [...chatMessages.value, assistantMsg];
+				}
+				break;
+
+			case "failed":
+				isChatStreaming.value = false;
+				chatStreamingContent.value = "";
+				// Show error as a system message
+				const errorMsg: ChatMessage = {
+					id: `error-${Date.now()}`,
+					role: "assistant",
+					content: `Sorry, something went wrong: ${task.error || "Unknown error"}`,
+					timestamp: new Date(),
+				};
+				chatMessages.value = [...chatMessages.value, errorMsg];
+				break;
+
+			case "cancelled":
+				isChatStreaming.value = false;
+				chatStreamingContent.value = "";
+				break;
+		}
 	});
 
 	// Callback for quick actions - sends to agent queue
@@ -240,39 +436,64 @@ export function App() {
 			{/* Content - View Specific */}
 			<div class="nv2-content" key={currentView}>
 				{!isReady ? (
-					<LoadingState message="Initializing services..." />
+					<InitializationStateView state={initState.value} context={initContext.value} />
 				) : currentView === "note" ? (
 					// Note Vitals View - 4 sections: Identity, Vitals, Actions, Insights
-					isLoading.value ? (
-						<NoteVitalsSkeleton />
-					) : hasNote ? (
-						<>
-							{/* Section 1: Note Identity */}
-							<NoteCard
-								noteVitals={noteVitals.value!}
-								backlinkPreview={backlinkPreview}
-							/>
-							{/* Section 2: Vitals Cards (4 metrics) */}
-							<VitalsCards
-								vitals={noteVitals.value!}
-								onCardClick={(metric) => {
-									const prompts: Record<string, string> = {
-										health: `Analyze the health of "${noteVitals.value!.title}" and suggest improvements`,
-										links: `Show me connections for "${noteVitals.value!.title}" and suggest new links`,
-										freshness: `What has changed in "${noteVitals.value!.title}" recently?`,
-										grade: `How can I improve the quality grade of "${noteVitals.value!.title}"?`,
-									};
-									prefillChatAndSwitch(prompts[metric]);
+					<>
+						{/* Omnibar for vault-wide search */}
+						<Omnibar
+							placeholder="Search notes..."
+							onResults={(results, query) => {
+								searchResults.value = results;
+								searchQuery.value = query;
+							}}
+						/>
+						{/* Search Results (when available) */}
+						{searchResults.value.length > 0 && (
+							<SearchResultsView
+								results={searchResults.value}
+								query={searchQuery.value}
+								onOpenNote={openFile}
+								onClear={() => {
+									searchResults.value = [];
+									searchQuery.value = "";
 								}}
 							/>
-							{/* Section 3: Quick Actions */}
-							<QuickActions actions={quickActions} />
-							{/* Section 4: AI Insights */}
-							<InsightStream insights={insights} onOpenFile={openFile} />
-						</>
-					) : (
-						<EmptyState />
-					)
+						)}
+						{/* Note content (hidden when search results shown) */}
+						{searchResults.value.length === 0 && (
+							isLoading.value ? (
+								<NoteVitalsSkeleton />
+							) : hasNote ? (
+								<>
+									{/* Section 1: Note Identity */}
+									<NoteCard
+										noteVitals={noteVitals.value!}
+										backlinkPreview={backlinkPreview}
+									/>
+									{/* Section 2: Vitals Cards (4 metrics) */}
+									<VitalsCards
+										vitals={noteVitals.value!}
+										onCardClick={(metric) => {
+											const prompts: Record<string, string> = {
+												health: `Analyze the health of "${noteVitals.value!.title}" and suggest improvements`,
+												links: `Show me connections for "${noteVitals.value!.title}" and suggest new links`,
+												freshness: `What has changed in "${noteVitals.value!.title}" recently?`,
+												grade: `How can I improve the quality grade of "${noteVitals.value!.title}"?`,
+											};
+											prefillChatAndSwitch(prompts[metric]);
+										}}
+									/>
+									{/* Section 3: Quick Actions */}
+									<QuickActions actions={quickActions} />
+									{/* Section 4: AI Insights */}
+									<InsightStream insights={insights} onOpenFile={openFile} />
+								</>
+							) : (
+								<EmptyState />
+							)
+						)}
+					</>
 				) : currentView === "agents" ? (
 					// Agent Streams View
 					<AgentStreamsView
@@ -357,7 +578,7 @@ export function App() {
 						isStreaming={isChatStreaming}
 						streamingContent={chatStreamingContent}
 						onSendMessage={(message) => {
-							// Add user message
+							// Add user message to UI immediately
 							const userMsg: ChatMessage = {
 								id: `user-${Date.now()}`,
 								role: "user",
@@ -367,6 +588,7 @@ export function App() {
 							chatMessages.value = [...chatMessages.value, userMsg];
 
 							// Send to agent queue for processing
+							// The agent:task-update event handler will update streaming state and add assistant response
 							if (taskQueue && chatContext.value.notePath) {
 								taskQueue.enqueue({
 									agent: "chat",
@@ -377,20 +599,16 @@ export function App() {
 										content: m.content,
 									})),
 								});
-							}
-
-							// Simulate assistant response (actual integration would stream from agent)
-							isChatStreaming.value = true;
-							setTimeout(() => {
-								const assistantMsg: ChatMessage = {
-									id: `assistant-${Date.now()}`,
+							} else {
+								// No task queue available - show error
+								const errorMsg: ChatMessage = {
+									id: `error-${Date.now()}`,
 									role: "assistant",
-									content: `I've received your message about "${chatContext.value.noteTitle}". The full chat integration with the agent system is coming soon!`,
+									content: "Chat service is not available. Please wait for initialization to complete.",
 									timestamp: new Date(),
 								};
-								chatMessages.value = [...chatMessages.value, assistantMsg];
-								isChatStreaming.value = false;
-							}, 1000);
+								chatMessages.value = [...chatMessages.value, errorMsg];
+							}
 						}}
 						onClearContext={() => {
 							chatContext.value = { notePath: null, noteTitle: null };
@@ -421,6 +639,158 @@ function LoadingState({ message }: { message: string }) {
 			<div class="nv2-loading-text">{message}</div>
 		</div>
 	);
+}
+
+/**
+ * Displays initialization state with appropriate messaging for each state
+ */
+function InitializationStateView({
+	state,
+	context,
+}: {
+	state: InitializationState;
+	context: InitializationContext | null;
+}) {
+	const getStateDisplay = (): { icon: string; title: string; message: string; isError: boolean } => {
+		switch (state) {
+			case "UNINITIALIZED":
+				return {
+					icon: "hourglass",
+					title: "Starting Up",
+					message: "Preparing Notient...",
+					isError: false,
+				};
+			case "CHECKING_PROVIDERS":
+				return {
+					icon: "hourglass",
+					title: "Connecting",
+					message: context?.progress?.message || "Checking Ollama and LM Studio connections...",
+					isError: false,
+				};
+			case "LOADING_INDEX":
+				return {
+					icon: "hourglass",
+					title: "Loading Index",
+					message: context?.progress
+						? `${context.progress.message} (${context.progress.percent}%)`
+						: "Loading vector index...",
+					isError: false,
+				};
+			case "WARMING_SERVICES":
+				return {
+					icon: "hourglass",
+					title: "Almost Ready",
+					message: context?.progress?.message || "Warming up services...",
+					isError: false,
+				};
+			case "DEGRADED":
+				return {
+					icon: "alert-triangle",
+					title: "Limited Mode",
+					message: getDegradedMessage(context?.degradedReason),
+					isError: false,
+				};
+			case "FAILED":
+				return {
+					icon: "x-circle",
+					title: "Connection Failed",
+					message: context?.errorMessage || getFailedMessage(context?.failedReason),
+					isError: true,
+				};
+			case "CRASHED":
+				return {
+					icon: "alert-octagon",
+					title: "Recovery Needed",
+					message: context?.errorMessage || getCrashedMessage(context?.crashedReason),
+					isError: true,
+				};
+			case "READY":
+				// Should not typically display this (isReady = true bypasses this component)
+				return {
+					icon: "check-circle",
+					title: "Ready",
+					message: "Notient is ready to use.",
+					isError: false,
+				};
+			default:
+				return {
+					icon: "hourglass",
+					title: "Initializing",
+					message: "Please wait...",
+					isError: false,
+				};
+		}
+	};
+
+	const display = getStateDisplay();
+	const showSpinner = !display.isError && state !== "READY";
+
+	return (
+		<div
+			class={`nv2-init-state ${display.isError ? "nv2-init-state--error" : ""}`}
+			role="status"
+			aria-live="polite"
+		>
+			{showSpinner && <div class="nv2-loading-spinner" aria-hidden="true" />}
+			{display.isError && (
+				<div class="nv2-init-state-icon nv2-init-state-icon--error" aria-hidden="true">
+					{display.icon === "x-circle" ? "!" : "!!"}
+				</div>
+			)}
+			<div class="nv2-init-state-title">{display.title}</div>
+			<div class="nv2-init-state-message">{display.message}</div>
+			{context?.capabilities && (
+				<div class="nv2-init-state-capabilities">
+					{context.capabilities.search && <span class="nv2-capability nv2-capability--active">Search</span>}
+					{context.capabilities.chat && <span class="nv2-capability nv2-capability--active">Chat</span>}
+					{context.capabilities.indexing && <span class="nv2-capability nv2-capability--active">Indexing</span>}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function getDegradedMessage(reason?: string): string {
+	switch (reason) {
+		case "lmstudio_down":
+			return "LM Studio is not connected. Search works, but chat is unavailable.";
+		case "index_stale":
+			return "Index may be outdated. Consider rebuilding for best results.";
+		case "embedding_mismatch":
+			return "Embedding model changed. Rebuild index for accurate search.";
+		case "partial_init":
+			return "Some services failed to initialize. Limited functionality available.";
+		default:
+			return "Running with limited capabilities.";
+	}
+}
+
+function getFailedMessage(reason?: string): string {
+	switch (reason) {
+		case "ollama_down":
+			return "Cannot connect to Ollama. Please ensure Ollama is running.";
+		case "missing_config":
+			return "Missing configuration. Please check your settings.";
+		case "connection_failed":
+			return "Connection failed. Check that Ollama and LM Studio are running.";
+		case "index_corrupt":
+			return "Index appears corrupted. Try rebuilding from settings.";
+		case "critical_error":
+			return "A critical error occurred. Please restart Obsidian.";
+		default:
+			return "Initialization failed. Check settings and try again.";
+	}
+}
+
+function getCrashedMessage(reason?: string): string {
+	switch (reason) {
+		case "indexing_interrupted":
+			return "Indexing was interrupted. Resume or rebuild the index.";
+		case "recovery_needed":
+			return "Recovery is needed. Try reopening Obsidian.";
+		default:
+			return "An unexpected error occurred. Restart may be required.";
+	}
 }
 
 // Skeleton loading for Note Vitals
@@ -462,6 +832,69 @@ function EmptyState() {
 			<div class="nv2-empty-state-text">
 				Open a markdown file to see its vitals and work with the AI assistant.
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Display search results from the Omnibar
+ */
+function SearchResultsView({
+	results,
+	query,
+	onOpenNote,
+	onClear,
+}: {
+	results: SearchResult[];
+	query: string;
+	onOpenNote: (path: string) => void;
+	onClear: () => void;
+}) {
+	return (
+		<div class="nv2-search-results" role="region" aria-label="Search results">
+			<div class="nv2-search-results-header">
+				<span class="nv2-search-results-title">
+					Results for "{query}"
+				</span>
+				<button
+					type="button"
+					class="nv2-search-results-clear"
+					onClick={onClear}
+					aria-label="Clear search results"
+				>
+					Clear
+				</button>
+			</div>
+			{results.length === 0 ? (
+				<div class="nv2-search-no-results">
+					No notes found matching your query.
+				</div>
+			) : (
+				<div class="nv2-search-results-list">
+					{results.map((result) => (
+						<button
+							key={result.path}
+							type="button"
+							class="nv2-search-result-item"
+							onClick={() => onOpenNote(result.path)}
+						>
+							<div class="nv2-search-result-title">
+								{result.path.split("/").pop()?.replace(".md", "") || result.path}
+							</div>
+							{result.snippet && (
+								<div class="nv2-search-result-snippet">
+									{result.snippet}
+								</div>
+							)}
+							<div class="nv2-search-result-meta">
+								<span class="nv2-search-result-score">
+									{Math.round(result.score * 100)}% match
+								</span>
+							</div>
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }

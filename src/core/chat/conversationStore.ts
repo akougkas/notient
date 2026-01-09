@@ -123,7 +123,7 @@ export class ConversationStore {
   }
 
   /**
-   * Flush conversations to disk (debounced)
+   * Flush conversations to disk with retry logic
    */
   async flush(): Promise<void> {
     if (!this.dirty) return;
@@ -135,29 +135,42 @@ export class ConversationStore {
     }
 
     const filePath = this.storagePaths.conversations;
+    const storage: ConversationStorage = {
+      version: SCHEMA_VERSION,
+      conversations: {},
+    };
 
-    try {
-      const storage: ConversationStorage = {
-        version: SCHEMA_VERSION,
-        conversations: {},
+    for (const [notePath, messages] of this.conversations.entries()) {
+      const meta = this.conversationMeta.get(notePath);
+      storage.conversations[notePath] = {
+        notePath,
+        messages: messages.map(this.serializeMessage),
+        createdAt: meta?.createdAt.toISOString() ?? new Date().toISOString(),
+        lastAccessedAt: meta?.lastAccessedAt.toISOString() ?? new Date().toISOString(),
       };
+    }
 
-      for (const [notePath, messages] of this.conversations.entries()) {
-        const meta = this.conversationMeta.get(notePath);
-        storage.conversations[notePath] = {
-          notePath,
-          messages: messages.map(this.serializeMessage),
-          createdAt: meta?.createdAt.toISOString() ?? new Date().toISOString(),
-          lastAccessedAt: meta?.lastAccessedAt.toISOString() ?? new Date().toISOString(),
-        };
+    // Retry with exponential backoff: 100ms, 200ms, 400ms
+    const maxRetries = 3;
+    const baseDelayMs = 100;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await atomicWriteFile(filePath, JSON.stringify(storage, null, 2));
+        this.dirty = false;
+        console.log(`[ConversationStore] Flushed ${this.conversations.size} conversations`);
+        return;
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries;
+        if (isLastAttempt) {
+          console.error("[ConversationStore] Failed to flush after 3 attempts:", error);
+          return;
+        }
+        // Exponential backoff
+        const delayMs = baseDelayMs * 2 ** (attempt - 1);
+        console.warn(`[ConversationStore] Flush attempt ${attempt} failed, retrying in ${delayMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-
-      // Use atomic write for crash safety
-      await atomicWriteFile(filePath, JSON.stringify(storage, null, 2));
-      this.dirty = false;
-      console.log(`[ConversationStore] Flushed ${this.conversations.size} conversations`);
-    } catch (error) {
-      console.error("[ConversationStore] Failed to flush:", error);
     }
   }
 

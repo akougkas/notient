@@ -31,7 +31,6 @@ export interface IndexManagerInterface {
   exportIndex(): Promise<string>;
   importIndex(json: string): Promise<{ modelKey: string; noteCount: number }>;
   trimIndex(): Promise<{ removed: number }>;
-  deleteIndex(modelKey: string): Promise<boolean>;
   deleteIndexByPath(path: string): Promise<boolean>;
   switchToIndex(path: string): Promise<void>;
   clearAll(): Promise<void>;

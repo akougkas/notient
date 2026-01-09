@@ -9,7 +9,17 @@ import { setIcon } from "obsidian";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { SearchPipeline } from "../../../core/search/pipeline";
 import type { SearchResult } from "../../../types/search";
+import type { SearchPreset } from "../../../types/settings";
 import { useEventBus, useKernel } from "../context/KernelContext";
+
+const PRESET_DISPLAY: Record<SearchPreset, { icon: string; label: string; tooltip: string }> = {
+  quick: { icon: "zap", label: "Quick", tooltip: "Fast search, no AI reranking" },
+  balanced: { icon: "scale", label: "Balanced", tooltip: "Recommended - vector search with AI reranking" },
+  thorough: { icon: "brain", label: "Deep", tooltip: "Thorough search with extensive reranking" },
+  custom: { icon: "settings", label: "Custom", tooltip: "Custom search settings" },
+};
+
+const PRESET_CYCLE: SearchPreset[] = ["quick", "balanced", "thorough"];
 
 interface OmnibarProps {
   /** Callback when search results are returned */
@@ -28,9 +38,13 @@ export function Omnibar({
   const kernel = useKernel();
   const inputRef = useRef<HTMLInputElement>(null);
   const iconRef = useRef<HTMLDivElement>(null);
+  const modeIconRef = useRef<HTMLSpanElement>(null);
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchPreset, setSearchPreset] = useState<SearchPreset>(
+    kernel.settings?.search?.preset || "balanced"
+  );
 
   // Set up the search icon
   useEffect(() => {
@@ -38,6 +52,29 @@ export function Omnibar({
       setIcon(iconRef.current, "search");
     }
   }, []);
+
+  // Set up the mode icon
+  useEffect(() => {
+    if (modeIconRef.current) {
+      const display = PRESET_DISPLAY[searchPreset];
+      setIcon(modeIconRef.current, display.icon);
+    }
+  }, [searchPreset]);
+
+  // Cycle through search presets
+  const cyclePreset = useCallback(async () => {
+    const currentIndex = PRESET_CYCLE.indexOf(searchPreset);
+    const nextIndex = (currentIndex + 1) % PRESET_CYCLE.length;
+    const nextPreset = PRESET_CYCLE[nextIndex];
+
+    setSearchPreset(nextPreset);
+
+    // Update kernel settings
+    if (kernel.settings) {
+      kernel.settings.search.preset = nextPreset;
+      // Note: Settings save is handled by kernel.onSettingsChange
+    }
+  }, [searchPreset, kernel]);
 
   // Handle search execution
   const executeSearch = useCallback(
@@ -110,6 +147,17 @@ export function Omnibar({
           disabled={isSearching}
         />
         <div class="nv2-omnibar-right">
+          {/* Search mode toggle */}
+          <button
+            type="button"
+            class="nv2-mode-pill"
+            onClick={cyclePreset}
+            title={PRESET_DISPLAY[searchPreset].tooltip}
+            aria-label={`Search mode: ${PRESET_DISPLAY[searchPreset].label}. Click to change.`}
+          >
+            <span class="nv2-mode-pill-icon" ref={modeIconRef} aria-hidden="true" />
+            <span class="nv2-mode-pill-label">{PRESET_DISPLAY[searchPreset].label}</span>
+          </button>
           {isSearching ? (
             <div class="nv2-omnibar-spinner" />
           ) : (

@@ -145,7 +145,9 @@ export class Kernel {
 
     this._obsidian = new ObsidianFacade(context.app);
     this._storagePaths = new StoragePaths(context.app);
-    this._vaultLock = new VaultLock(this._storagePaths);
+    this._vaultLock = new VaultLock(this._storagePaths, (reason, error) => {
+      this._eventBus.emit("lock:lost", { reason, error });
+    });
     this._abortController = new AbortController();
   }
 

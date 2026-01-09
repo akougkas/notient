@@ -26,7 +26,6 @@ export type EventType =
   | "vitals:updated"
   | "intelligence:updated"
   | "settings:changed"
-  | "note:context-changed"
   | "agent:task-update"
   // Phase 2: Workflow events
   | "workflow:started"
@@ -42,7 +41,9 @@ export type EventType =
   | "action:apply-requested"
   | "action:undo-requested"
   // Identity system events
-  | "profile:updated";
+  | "profile:updated"
+  // Lock management events
+  | "lock:lost";
 
 /** Event payload mapping */
 export interface EventPayloads {
@@ -60,7 +61,6 @@ export interface EventPayloads {
   "vitals:updated": VitalsUpdatedEvent;
   "intelligence:updated": IntelligenceUpdatedEvent;
   "settings:changed": SettingsChangedEvent;
-  "note:context-changed": NoteContextChangedEvent;
   "agent:task-update": AgentTaskUpdateEvent;
   // Phase 2: Workflow events
   "workflow:started": WorkflowStartedEvent;
@@ -77,6 +77,8 @@ export interface EventPayloads {
   "action:undo-requested": ActionUndoRequestedEvent;
   // Identity system events
   "profile:updated": ProfileUpdatedEvent;
+  // Lock management events
+  "lock:lost": LockLostEvent;
 }
 
 export interface AgentTaskUpdateEvent {
@@ -161,10 +163,6 @@ export interface SettingsChangedEvent {
   changedFields: string[];
 }
 
-export interface NoteContextChangedEvent {
-  path: string | null;
-}
-
 // =============================================================================
 // Phase 2: Workflow Events
 // =============================================================================
@@ -238,6 +236,17 @@ export interface ActionUndoRequestedEvent {
 export interface ProfileUpdatedEvent {
   /** The updated profile (undefined if profile was reset/cleared) */
   profile: import("./profile").UserProfile | undefined;
+}
+
+// =============================================================================
+// Lock Management Events
+// =============================================================================
+
+export interface LockLostEvent {
+  /** Reason for lock loss */
+  reason: "refresh_failed" | "stale_detected" | "manual_release";
+  /** Original error message if applicable */
+  error?: string;
 }
 
 /** Event listener function type */

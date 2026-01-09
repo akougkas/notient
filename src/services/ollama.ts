@@ -226,6 +226,12 @@ export class OllamaService {
    */
   getModelKey(): string {
     const model = this.kernel.settings.ollama.embeddingModel;
+    if (!model) {
+      throw new Error(
+        "Cannot generate model key: no embedding model configured. " +
+          "Please set an embedding model in Notient settings.",
+      );
+    }
     const dim = this.modelDimension ?? "unknown";
     // Sanitize for filesystem
     return `${model.replace(/[^a-zA-Z0-9-]/g, "_")}_d${dim}`;

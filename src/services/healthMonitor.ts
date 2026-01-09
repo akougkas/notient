@@ -35,11 +35,19 @@ export class HealthMonitor {
 
   /**
    * Check all external services
+   * Uses Promise.allSettled to ensure all checks run even if one fails
    */
   async checkAll(): Promise<void> {
     if (this.disposed) return;
 
-    await Promise.all([this.checkOllama(), this.checkLMStudio()]);
+    const results = await Promise.allSettled([this.checkOllama(), this.checkLMStudio()]);
+
+    // Log any unexpected failures (check methods should handle their own errors)
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.error("[HealthMonitor] Unexpected error during health check:", result.reason);
+      }
+    }
   }
 
   /**

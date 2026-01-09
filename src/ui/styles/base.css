@@ -125,6 +125,83 @@
   color: var(--text-muted);
 }
 
+/* =============================================================================
+   Initialization State View
+   ============================================================================= */
+
+.nv2-init-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--nv2-space-xl);
+  gap: var(--nv2-space-sm);
+  text-align: center;
+  height: 100%;
+  animation: empty-state-in 0.3s ease;
+}
+
+.nv2-init-state--error {
+  color: var(--text-error);
+}
+
+.nv2-init-state-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: bold;
+  border-radius: 50%;
+}
+
+.nv2-init-state-icon--error {
+  background: color-mix(in srgb, var(--color-red) 15%, transparent);
+  color: var(--color-red);
+}
+
+.nv2-init-state-title {
+  font-size: var(--font-text-size);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.nv2-init-state--error .nv2-init-state-title {
+  color: var(--color-red);
+}
+
+.nv2-init-state-message {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  max-width: 240px;
+  line-height: 1.4;
+}
+
+.nv2-init-state-capabilities {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--nv2-space-sm);
+}
+
+.nv2-capability {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: var(--nv2-radius-sm);
+  background: var(--background-secondary);
+  color: var(--text-faint);
+}
+
+.nv2-capability--active {
+  background: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+  color: var(--interactive-accent);
+}
+
 /* Legacy placeholder support */
 .nv2-placeholder {
   display: flex;

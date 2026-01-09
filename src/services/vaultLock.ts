@@ -28,13 +28,18 @@ const LOCK_MAX_RETRIES = 3;
 /** Base delay for exponential backoff (ms) */
 const LOCK_RETRY_BASE_MS = 200;
 
+/** Callback invoked when lock is lost */
+export type OnLockLostCallback = (reason: "refresh_failed" | "stale_detected", error?: string) => void;
+
 export class VaultLock {
   private lockPath: string;
   private refreshInterval: ReturnType<typeof setInterval> | null = null;
   private hasLock = false;
+  private onLockLost?: OnLockLostCallback;
 
-  constructor(private storagePaths: StoragePaths) {
+  constructor(private storagePaths: StoragePaths, onLockLost?: OnLockLostCallback) {
     this.lockPath = path.join(storagePaths.locks, LOCK_FILES.WRITER);
+    this.onLockLost = onLockLost;
   }
 
   /**
@@ -199,10 +204,13 @@ export class VaultLock {
           };
           await fs.promises.writeFile(this.lockPath, JSON.stringify(metadata));
         } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
           console.error("[VaultLock] Failed to refresh lock:", error);
           // Clear lock flag on refresh failure to prevent corrupted state
           this.hasLock = false;
           this.stopRefresh();
+          // Notify listeners about lock loss
+          this.onLockLost?.("refresh_failed", errorMessage);
         }
       }
     }, LOCK_REFRESH_MS);
