@@ -9,12 +9,12 @@
  */
 
 import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
-import type { NotientAgent } from "./core/agent/agentLoop";
-import type { ProfileManager } from "./core/agent/profileManager";
-import { MODEL_DEFAULTS } from "./core/constants";
-import type { Kernel } from "./core/kernel";
-import { IndexManagementPanel } from "./settings/panels/IndexManagementPanel";
-import type { UserProfile } from "./types/profile";
+import type { NotientAgent } from "../../core/agent/agentLoop";
+import type { ProfileManager } from "../../core/agent/profileManager";
+import { MODEL_DEFAULTS } from "../../core/constants";
+import type { Kernel } from "../../core/kernel";
+import { IndexManagementPanel } from "./panels/IndexManagementPanel";
+import type { UserProfile } from "../../types/profile";
 import {
   DEFAULT_SETTINGS,
   type NotientSettings,
@@ -23,8 +23,8 @@ import {
   type SettingsError,
   type SettingsValidation,
   type SettingsWarning,
-} from "./types/settings";
-import { ProfilePreviewModal } from "./views/profilePreviewModal";
+} from "../../types/settings";
+import { ProfilePreviewModal } from "../modals/ProfilePreviewModal";
 
 // Default IPs per service
 const DEFAULT_IPS = {

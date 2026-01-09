@@ -6,10 +6,10 @@
  */
 
 import { type App, Modal, debounce, setIcon } from "obsidian";
-import { MODEL_DEFAULTS } from "../core/constants";
-import type { HealthMonitor } from "../services/healthMonitor";
-import type { AvailableModel } from "../types/services";
-import type { NotientSettings } from "../types/settings";
+import { MODEL_DEFAULTS } from "../../core/constants";
+import type { HealthMonitor } from "../../services/healthMonitor";
+import type { AvailableModel } from "../../types/services";
+import type { NotientSettings } from "../../types/settings";
 
 export interface SetupWizardResult {
   completed: boolean;

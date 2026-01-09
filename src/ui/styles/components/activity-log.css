@@ -1,0 +1,100 @@
+/* ==========================================================================
+   Activity Log
+   ========================================================================== */
+
+.nv2-activity-log {
+  margin-top: var(--nv2-space-md);
+}
+
+.nv2-activity-log-title {
+  font-size: var(--nv2-text-sm);
+  font-weight: 600;
+  color: var(--nv2-text-muted);
+  margin-bottom: var(--nv2-space-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.nv2-activity-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-activity-item {
+  display: block;
+  /* It's a div, make sure it behaves */
+  background: var(--nv2-bg-primary);
+  /* Card in bg-secondary usually? */
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-md);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+}
+
+.nv2-activity-item:hover {
+  border-color: var(--nv2-color-accent);
+  box-shadow: var(--nv2-shadow-sm);
+}
+
+.nv2-activity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.nv2-activity-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nv2-activity-agent-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--nv2-color-accent);
+}
+
+.nv2-activity-agent-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-activity-agent-name {
+  font-size: var(--nv2-text-xs);
+  font-weight: 600;
+  color: var(--nv2-text-normal);
+}
+
+.nv2-activity-body {
+  margin-top: var(--nv2-space-xs);
+}
+
+.nv2-activity-time {
+  font-size: 10px;
+  color: var(--nv2-text-muted);
+}
+
+.nv2-task-note {
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Status footers for task items */
+.nv2-task-status-foot {
+  margin-top: 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--nv2-text-muted);
+  display: flex;
+  /* Align if needed */
+}
+

@@ -1,0 +1,54 @@
+/* ==========================================================================
+   Layout & Reset
+   ========================================================================== */
+
+.notient-sidebar--v2 {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background-color: var(--nv2-bg-primary);
+  /* Millimeter Paper Effect - Subtle Grid */
+  background-image: linear-gradient(var(--nv2-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--nv2-grid-color) 1px, transparent 1px);
+  background-size: 20px 20px;
+  color: var(--nv2-text-normal);
+  font-family: var(--nv2-font-sans);
+  overflow: hidden;
+}
+
+.notient-sidebar--v2 * {
+  box-sizing: border-box;
+}
+
+/* Scrollbar refinement */
+.notient-sidebar--v2 ::-webkit-scrollbar {
+  width: 4px;
+  background: transparent;
+}
+
+.notient-sidebar--v2 ::-webkit-scrollbar-thumb {
+  background-color: var(--nv2-border-color);
+  border-radius: 4px;
+}
+
+/* ==========================================================================
+   Mira Font Application
+   Apply Inter font globally to Notient UI surfaces
+   ========================================================================== */
+
+.nv2-section,
+.nv2-quick-action,
+.nv2-footer,
+.nv2-header,
+.nv2-note-card,
+.nv2-omnibar,
+.nv2-insight,
+.nv2-status-bar,
+.nv2-workflow-card,
+.nv2-activity-item,
+.notient-settings,
+.nv2-wizard-modal,
+.nv2-task-modal {
+  font-family: var(--nv2-font-sans);
+}

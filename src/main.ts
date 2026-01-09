@@ -32,13 +32,13 @@ import { IndexManager } from "./services/indexManager";
 import { LMStudioService } from "./services/lmstudio";
 import { OllamaService } from "./services/ollama";
 import { SimpleVectorStore } from "./services/simpleVectorStore";
-import { NotientSettingTab, loadSettings, saveSettings } from "./settings";
 import type { NotientSettings } from "./types/settings";
-import { NotientDashboardView } from "./views/dashboard";
-import { IndexOptionsModal } from "./views/indexOptionsModal";
-import { ProfilePreviewModal } from "./views/profilePreviewModal";
-import { SetupWizardModal } from "./views/setupWizard";
-import { NotientSidebarView } from "./views/sidebar";
+import { NotientDashboardView } from "./ui/dashboard/DashboardView";
+import { IndexOptionsModal } from "./ui/modals/IndexOptionsModal";
+import { ProfilePreviewModal } from "./ui/modals/ProfilePreviewModal";
+import { SetupWizardModal } from "./ui/modals/SetupWizard";
+import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
+import { NotientSidebarView } from "./ui/sidebar";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;

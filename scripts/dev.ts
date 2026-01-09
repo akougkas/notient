@@ -74,16 +74,14 @@ async function resetVault(hard: boolean) {
 }
 
 async function copyToVault() {
-  const files = ["main.js", "manifest.json", "src/styles.css"];
+  const files = ["main.js", "manifest.json", "styles.css"];
 
   // Ensure target directory exists
   await mkdir(VAULT_PLUGIN, { recursive: true });
 
   for (const file of files) {
     const src = join(PROJECT_ROOT, file);
-    const dest = file === "src/styles.css"
-      ? join(VAULT_PLUGIN, "styles.css")
-      : join(VAULT_PLUGIN, file);
+    const dest = join(VAULT_PLUGIN, file);
 
     if (existsSync(src)) {
       await cp(src, dest);

@@ -65,6 +65,22 @@ const buildOptions: esbuild.BuildOptions = {
   minifyWhitespace: false, // Keep readable for debugging in Obsidian
   // Metafile for bundle analysis
   metafile: isAnalyze,
+  // JSX support for Preact
+  jsx: "automatic",
+  jsxImportSource: "preact",
+  loader: {
+    ".tsx": "tsx",
+    ".ts": "ts",
+  },
+};
+
+// CSS build options (bundles @import statements)
+const cssBuildOptions: esbuild.BuildOptions = {
+  entryPoints: ["src/ui/styles/index.css"],
+  bundle: true,
+  outfile: "styles.css",
+  logLevel: "info",
+  minify: !isDev && !isWatch,
 };
 
 async function build() {
@@ -72,19 +88,25 @@ async function build() {
 
   try {
     if (isWatch) {
-      const ctx = await esbuild.context(buildOptions);
-      await ctx.watch();
+      const [jsCtx, cssCtx] = await Promise.all([
+        esbuild.context(buildOptions),
+        esbuild.context(cssBuildOptions),
+      ]);
+      await Promise.all([jsCtx.watch(), cssCtx.watch()]);
       console.log(`\n🔄 Watch mode started (${mode})`);
       console.log("   Watching src/ for changes...\n");
     } else {
-      const result = await esbuild.build(buildOptions);
+      const [jsResult, _cssResult] = await Promise.all([
+        esbuild.build(buildOptions),
+        esbuild.build(cssBuildOptions),
+      ]);
       const elapsed = Date.now() - startTime;
 
       console.log(`\n✅ Build complete (${mode}) in ${elapsed}ms`);
 
       // Bundle analysis
-      if (isAnalyze && result.metafile) {
-        const analysis = await esbuild.analyzeMetafile(result.metafile);
+      if (isAnalyze && jsResult.metafile) {
+        const analysis = await esbuild.analyzeMetafile(jsResult.metafile);
         console.log("\n📊 Bundle Analysis:\n");
         console.log(analysis);
       }

@@ -1,0 +1,303 @@
+/* ==========================================================================
+   Intelligence 2.0 Actions
+   ========================================================================== */
+
+.nv2-intelligence-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--nv2-space-xs);
+}
+
+.nv2-intelligence-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--nv2-space-sm);
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+  min-height: 56px;
+}
+
+.nv2-intelligence-btn:hover {
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 92%);
+  border-color: color-mix(in srgb, var(--nv2-color-accent), transparent 70%);
+  transform: translateY(-1px);
+}
+
+.nv2-intelligence-btn--primary {
+  border-color: var(--nv2-color-accent-subtle);
+}
+
+.nv2-intelligence-btn-icon {
+  margin-bottom: 2px;
+  color: var(--nv2-text-muted);
+}
+
+.nv2-intelligence-btn:hover .nv2-intelligence-btn-icon {
+  color: var(--nv2-color-accent);
+}
+
+.nv2-intelligence-btn-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* --- Pipeline Container --- */
+
+.nv2-pipeline-container {
+  margin-top: var(--nv2-space-md);
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-lg);
+  padding: var(--nv2-space-md);
+}
+
+.nv2-pipeline-container.nv2-hidden {
+  display: none;
+}
+
+.nv2-pipeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-pipeline-title {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  font-weight: 600;
+}
+
+.nv2-pipeline-icon {
+  color: var(--nv2-color-accent);
+}
+
+.nv2-pipeline-close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--nv2-text-muted);
+  border-radius: var(--nv2-radius-sm);
+}
+
+.nv2-pipeline-close:hover {
+  background: var(--nv2-bg-tertiary);
+  color: var(--nv2-text-primary);
+}
+
+/* --- Progress --- */
+
+.nv2-pipeline-progress-container {
+  margin-bottom: var(--nv2-space-md);
+}
+
+.nv2-pipeline-progress {
+  height: 4px;
+  background: var(--nv2-bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-pipeline-progress-fill {
+  height: 100%;
+  background: var(--nv2-color-accent);
+  transition: width 0.3s ease;
+}
+
+.nv2-pipeline-phase {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+}
+
+/* --- Stream & Analysis --- */
+
+.nv2-pipeline-stream {
+  background: var(--nv2-bg-tertiary);
+  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-sm);
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-secondary);
+  max-height: 120px;
+  overflow-y: auto;
+  margin-bottom: var(--nv2-space-sm);
+  font-family: var(--font-monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nv2-pipeline-analysis {
+  margin-bottom: var(--nv2-space-md);
+}
+
+.nv2-pipeline-analysis-label {
+  font-size: var(--nv2-text-xs);
+  font-weight: 600;
+  color: var(--nv2-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-pipeline-analysis-text {
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-secondary);
+  line-height: 1.5;
+}
+
+/* --- Error --- */
+
+.nv2-pipeline-error {
+  background: color-mix(in srgb, var(--nv2-status-error), transparent 90%);
+  border: 1px solid var(--nv2-status-error);
+  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-sm);
+}
+
+.nv2-pipeline-error-title {
+  font-weight: 600;
+  color: var(--nv2-status-error);
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-pipeline-error-text {
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-secondary);
+}
+
+/* --- Proposed Actions --- */
+
+.nv2-pipeline-actions {
+  margin-top: var(--nv2-space-md);
+}
+
+.nv2-pipeline-actions-header {
+  font-size: var(--nv2-text-sm);
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-pipeline-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-pipeline-action-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-sm);
+  background: var(--nv2-bg-tertiary);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-pipeline-action-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-pipeline-action-title {
+  font-size: var(--nv2-text-sm);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.nv2-pipeline-action-reason {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nv2-pipeline-action-buttons {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  flex-shrink: 0;
+}
+
+.nv2-pipeline-bulk-actions {
+  display: flex;
+  gap: var(--nv2-space-sm);
+  margin-top: var(--nv2-space-md);
+  padding-top: var(--nv2-space-sm);
+  border-top: 1px solid var(--nv2-border-color);
+}
+
+/* --- Risk Badges --- */
+
+.nv2-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+
+.nv2-risk-badge--low {
+  background: color-mix(in srgb, var(--nv2-status-healthy), transparent 85%);
+  color: var(--nv2-status-healthy);
+}
+
+.nv2-risk-badge--medium {
+  background: color-mix(in srgb, var(--nv2-status-warning), transparent 85%);
+  color: var(--nv2-status-warning);
+}
+
+.nv2-risk-badge--high {
+  background: color-mix(in srgb, var(--nv2-status-error), transparent 85%);
+  color: var(--nv2-status-error);
+}
+
+/* --- Button styles --- */
+
+.nv2-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  font-size: var(--nv2-text-sm);
+  font-weight: 500;
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  background: var(--nv2-bg-secondary);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+}
+
+.nv2-btn:hover {
+  background: var(--nv2-bg-tertiary);
+}
+
+.nv2-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-btn--primary {
+  background: var(--nv2-color-accent);
+  border-color: var(--nv2-color-accent);
+  color: white;
+}
+
+.nv2-btn--primary:hover {
+  background: color-mix(in srgb, var(--nv2-color-accent), black 10%);
+}
+
+.nv2-btn--small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+

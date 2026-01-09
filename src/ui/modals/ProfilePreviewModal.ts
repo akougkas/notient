@@ -5,7 +5,7 @@
  */
 
 import { type App, Modal, Setting } from "obsidian";
-import { type UserProfile, createEmptyProfile } from "../types/profile";
+import { type UserProfile, createEmptyProfile } from "../../types/profile";
 
 /**
  * Modal for previewing and editing inferred profile

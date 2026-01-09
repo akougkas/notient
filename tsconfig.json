@@ -19,11 +19,15 @@
     "paths": {
       "@/*": ["src/*"],
       "@core/*": ["src/core/*"],
-      "@views/*": ["src/views/*"],
-      "@types/*": ["src/types/*"]
+      "@ui/*": ["src/ui/*"],
+      "@services/*": ["src/services/*"],
+      "@types/*": ["src/types/*"],
+      "@views/*": ["src/views/*"]
     },
-    "types": ["bun-types", "node"]
+    "types": ["bun-types", "node"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
 }

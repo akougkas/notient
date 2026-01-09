@@ -1,0 +1,237 @@
+/* ==========================================================================
+   Insight Stream
+   ========================================================================== */
+
+.nv2-insight-stream {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-md);
+  position: relative;
+  /* Dotted line guide */
+  padding-left: var(--nv2-space-sm);
+}
+
+.nv2-insight-stream::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 1px;
+  background: var(--nv2-border-color);
+  z-index: 0;
+}
+
+.nv2-insight {
+  position: relative;
+  padding-left: var(--nv2-space-lg);
+}
+
+.nv2-insight-dot {
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--nv2-color-accent);
+  border: 2px solid var(--nv2-bg-primary);
+  z-index: 1;
+}
+
+.nv2-insight-dot--secondary {
+  background: var(--nv2-text-muted);
+  width: 7px;
+  height: 7px;
+  left: 3px;
+}
+
+.nv2-insight-dot--action {
+  background: var(--nv2-status-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nv2-status-warning), transparent 80%);
+}
+
+.nv2-insight-content {
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-md);
+}
+
+.nv2-insight-text {
+  font-size: var(--nv2-text-sm);
+  line-height: 1.5;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-insight-label {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  text-transform: uppercase;
+  margin-bottom: var(--nv2-space-xs);
+  font-weight: 600;
+}
+
+/* Actions in Stream */
+.nv2-insight-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  background: var(--nv2-bg-primary);
+  border: 1px solid var(--nv2-border-color);
+  font-size: var(--nv2-text-xs);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+}
+
+.nv2-insight-action:hover {
+  border-color: var(--nv2-color-accent);
+  color: var(--nv2-color-accent);
+}
+
+.nv2-insight-action--primary {
+  background: var(--nv2-color-accent);
+  color: white;
+  border-color: var(--nv2-color-accent);
+}
+
+.nv2-insight-action--primary:hover {
+  background: var(--nv2-color-accent-hover);
+  color: white;
+  /* Ensure text remains white */
+}
+
+/* Entity Cloud */
+.nv2-entity-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nv2-entity-pill {
+  padding: 2px 8px;
+  background: var(--nv2-bg-primary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: 4px;
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-normal);
+  cursor: help;
+}
+
+/* Suggestions */
+.nv2-suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nv2-suggestion-btn {
+  /* Reset button style */
+  background: none;
+  font: inherit;
+  outline: inherit;
+
+  padding: 4px 8px;
+  border: 1px dashed var(--nv2-color-accent);
+  border-radius: 4px;
+  color: var(--nv2-color-accent);
+  font-size: var(--nv2-text-xs);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+}
+
+.nv2-suggestion-btn:hover {
+  background: var(--nv2-color-accent-subtle);
+}
+
+.nv2-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-xs);
+  margin-top: var(--nv2-space-xs);
+}
+
+.nv2-suggestion-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--nv2-text-sm);
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--nv2-border-color);
+}
+
+.nv2-suggestion-link-row:last-child {
+  border-bottom: none;
+}
+
+.nv2-suggestion-icon-btn {
+  background: none;
+  border: none;
+  color: var(--nv2-color-accent);
+  font-size: var(--nv2-text-xs);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.nv2-suggestion-icon-btn:hover {
+  background: var(--nv2-color-accent-subtle);
+}
+
+/* Triage Box */
+.nv2-triage-box {
+  border-left: 3px solid var(--nv2-status-warning);
+  padding-left: var(--nv2-space-sm);
+}
+
+.nv2-triage-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--nv2-status-warning);
+  margin-bottom: 4px;
+  font-size: var(--nv2-text-xs);
+  text-transform: uppercase;
+}
+
+.nv2-triage-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nv2-triage-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.nv2-triage-message {
+  font-size: var(--nv2-text-sm);
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-triage-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.nv2-triage-btn {
+  background: none;
+  border: 1px solid var(--nv2-border-color);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: var(--nv2-text-xs);
+  cursor: pointer;
+}
+
+.nv2-triage-btn--primary {
+  background: var(--nv2-status-warning);
+  color: var(--background-primary);
+  /* Contrast */
+  border-color: var(--nv2-status-warning);
+  font-weight: 600;
+}
+

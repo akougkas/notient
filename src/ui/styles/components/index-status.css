@@ -1,0 +1,342 @@
+/* ==========================================================================
+   Task Modal (Chat Interface)
+   ========================================================================== */
+
+.nv2-task-modal {
+  padding: 0;
+  max-width: 600px;
+}
+
+.nv2-task-modal .modal-content {
+  padding: 0;
+}
+
+.nv2-task-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--nv2-space-lg);
+  border-bottom: 1px solid var(--nv2-border-color);
+  background: var(--nv2-bg-secondary);
+}
+
+.nv2-task-modal-title-section {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-md);
+}
+
+.nv2-task-modal-title-section h2 {
+  margin: 0;
+  font-size: var(--nv2-text-lg);
+  font-weight: 600;
+  color: var(--nv2-text-primary);
+}
+
+.nv2-task-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 85%);
+  border-radius: var(--nv2-radius-md);
+  color: var(--nv2-color-accent);
+}
+
+.nv2-task-icon .svg-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.nv2-task-status-badge {
+  font-size: var(--nv2-text-sm);
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 9999px;
+}
+
+.nv2-task-modal-body {
+  padding: var(--nv2-space-lg);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Chat Container */
+.nv2-chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-md);
+  min-height: 150px;
+}
+
+.nv2-chat-bubble {
+  padding: var(--nv2-space-md) var(--nv2-space-lg);
+  border-radius: var(--nv2-radius-lg);
+  max-width: 85%;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.nv2-bubble-user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 88%);
+  border: 1px solid color-mix(in srgb, var(--nv2-color-accent), transparent 75%);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm) var(--nv2-radius-lg);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-bubble-assistant {
+  align-self: flex-start;
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-lg) var(--nv2-radius-sm);
+  color: var(--nv2-text-primary);
+}
+
+.nv2-task-modal-footer {
+  padding: var(--nv2-space-md);
+  border-top: 1px solid var(--nv2-border-color);
+  background: var(--nv2-bg-secondary);
+}
+
+.nv2-chat-input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-chat-input-container textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 100px;
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  background: var(--nv2-bg-primary);
+  border: 1px solid transparent;
+  border-radius: var(--nv2-radius-md);
+  color: var(--nv2-text-primary);
+  font-size: var(--nv2-text-md);
+  resize: none;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.nv2-chat-input-container textarea:focus {
+  outline: none;
+  border-color: var(--nv2-color-accent);
+}
+
+.nv2-chat-actions {
+  display: flex;
+  gap: var(--nv2-space-xs);
+}
+
+.nv2-chat-actions button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: var(--nv2-transition);
+}
+
+.nv2-chat-actions button:not(.nv2-btn-stop) {
+  background: var(--nv2-color-accent);
+  border: none;
+  color: white;
+}
+
+.nv2-chat-actions button:not(.nv2-btn-stop):hover {
+  filter: brightness(1.1);
+  transform: scale(1.05);
+}
+
+.nv2-btn-stop {
+  background: var(--nv2-status-error);
+  border: none;
+  color: white;
+}
+
+.nv2-btn-stop:hover {
+  filter: brightness(1.1);
+}
+
+/* Task Sources */
+.nv2-task-sources {
+  margin-bottom: var(--nv2-space-lg);
+  padding: var(--nv2-space-md);
+  background: var(--nv2-bg-primary);
+  border-radius: var(--nv2-radius-md);
+}
+
+.nv2-task-sources .nv2-label {
+  font-size: var(--nv2-text-sm);
+  font-weight: 500;
+  color: var(--nv2-text-muted);
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-task-sources ul {
+  margin: 0;
+  padding-left: var(--nv2-space-lg);
+}
+
+.nv2-task-sources li {
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-task-sources a {
+  color: var(--nv2-color-accent);
+  cursor: pointer;
+}
+
+.nv2-task-sources a:hover {
+  text-decoration: underline;
+}
+
+/* Typing Cursor Animation */
+.nv2-typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--nv2-color-accent);
+  animation: nv2-blink 1s step-end infinite;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+}
+
+@keyframes nv2-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Dashboard */
+.notient-dashboard {
+  padding: var(--nv2-space-lg);
+  background: var(--nv2-bg-primary);
+}
+
+.notient-dashboard-header {
+  margin-bottom: var(--nv2-space-lg);
+}
+
+.notient-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--nv2-space-lg);
+}
+
+/* Task Cards (Agent Activity Stream) */
+.nv2-task-card {
+  padding: var(--nv2-space-md);
+  background: var(--nv2-bg-primary);
+  border-radius: var(--nv2-radius-md);
+  border-left: 3px solid var(--nv2-border-color);
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.nv2-task-card:hover {
+  transform: translateX(2px);
+  border-left-color: var(--nv2-color-accent);
+}
+
+.nv2-task-running {
+  border-left-color: var(--nv2-color-accent);
+}
+
+.nv2-task-completed {
+  border-left-color: var(--nv2-status-healthy);
+}
+
+.nv2-task-failed {
+  border-left-color: var(--nv2-status-error);
+}
+
+.nv2-task-cancelled {
+  border-left-color: var(--nv2-text-muted);
+  opacity: 0.7;
+}
+
+.nv2-task-queued {
+  border-left-color: var(--nv2-status-warning);
+}
+
+/* Status Badge Colors */
+.nv2-status-running {
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 85%);
+  color: var(--nv2-color-accent);
+}
+
+.nv2-status-completed {
+  background: color-mix(in srgb, var(--nv2-status-healthy), transparent 85%);
+  color: var(--nv2-status-healthy);
+}
+
+.nv2-status-failed {
+  background: color-mix(in srgb, var(--nv2-status-error), transparent 85%);
+  color: var(--nv2-status-error);
+}
+
+.nv2-status-cancelled {
+  background: var(--nv2-bg-secondary);
+  color: var(--nv2-text-muted);
+}
+
+.nv2-status-queued {
+  background: color-mix(in srgb, var(--nv2-status-warning), transparent 85%);
+  color: var(--nv2-status-warning);
+}
+
+/* Action Buttons */
+.nv2-btn-apply {
+  background: var(--nv2-status-healthy);
+  color: white;
+  border: none;
+}
+
+.nv2-btn-apply:hover:not(.nv2-btn-disabled) {
+  filter: brightness(1.1);
+}
+
+.nv2-btn-undo {
+  background: var(--nv2-status-warning);
+  color: white;
+  border: none;
+}
+
+.nv2-btn-undo:hover {
+  filter: brightness(1.1);
+}
+
+.nv2-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  .nv2-status-dot,
+  .nv2-typing-cursor,
+  .nv2-loading-spinner,
+  .nv2-status-pulsing {
+    animation: none;
+  }
+
+  .nv2-metric-card,
+  .nv2-action-btn,
+  .nv2-send-btn,
+  .nv2-search-result,
+  .nv2-task-card {
+    transition: none;
+  }
+}

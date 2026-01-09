@@ -1,0 +1,224 @@
+/* ==========================================================================
+   Setup Wizard
+   ========================================================================== */
+
+.nv2-wizard-modal {
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--background-primary);
+  /* Ensure solid background */
+  width: 600px;
+  max-width: 90vw;
+  height: 600px;
+  max-height: 90vh;
+  border-radius: var(--nv2-radius-lg);
+  box-shadow: var(--nv2-shadow-md);
+  border: 1px solid var(--nv2-border-color);
+  display: flex;
+  flex-direction: column;
+  z-index: 1000;
+}
+
+.nv2-wizard-modal .modal-content {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  width: 100%;
+}
+
+.nv2-wizard-header {
+  padding: var(--nv2-space-md);
+  text-align: center;
+  background: var(--nv2-bg-glass);
+  border-bottom: 1px solid var(--nv2-border-color);
+  flex-shrink: 0;
+}
+
+.nv2-wizard-title {
+  font-size: var(--nv2-text-lg);
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.nv2-wizard-subtitle {
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-muted);
+}
+
+/* Stepper */
+.nv2-wizard-steps {
+  display: flex;
+  justify-content: center;
+  gap: var(--nv2-space-sm);
+  margin-top: var(--nv2-space-sm);
+}
+
+.nv2-wizard-step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nv2-border-color);
+  transition: var(--nv2-transition);
+}
+
+.nv2-wizard-step-dot.active {
+  background: var(--nv2-color-accent);
+  transform: scale(1.2);
+}
+
+.nv2-wizard-step-dot.completed {
+  background: var(--nv2-color-accent);
+  opacity: 0.5;
+}
+
+/* Content Area */
+.nv2-wizard-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--nv2-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-md);
+}
+
+/* Service Cards */
+.nv2-wizard-service-card {
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-md);
+  transition: var(--nv2-transition);
+}
+
+.nv2-wizard-service-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-wizard-service-title {
+  font-weight: 600;
+  font-size: var(--nv2-text-base);
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-wizard-service-status {
+  font-size: var(--nv2-text-xs);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--nv2-bg-primary);
+  border: 1px solid var(--nv2-border-color);
+}
+
+.nv2-wizard-service-status.connected {
+  color: var(--nv2-status-healthy);
+  border-color: var(--nv2-status-healthy);
+}
+
+.nv2-wizard-service-status.error {
+  color: var(--nv2-status-error);
+  border-color: var(--nv2-status-error);
+}
+
+.nv2-wizard-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Tight gap */
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-wizard-label {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  font-weight: 500;
+}
+
+.nv2-wizard-input {
+  background: var(--nv2-bg-primary);
+  border: 1px solid var(--nv2-border-color);
+  padding: 6px 8px;
+  /* Slightly reduced padding */
+  border-radius: 4px;
+  color: var(--nv2-text-normal);
+  width: 100%;
+}
+
+.nv2-wizard-input:focus {
+  border-color: var(--nv2-color-accent);
+  outline: none;
+}
+
+/* Footer Buttons */
+.nv2-wizard-footer {
+  padding: var(--nv2-space-md) var(--nv2-space-lg);
+  border-top: 1px solid var(--nv2-border-color);
+  display: flex;
+  justify-content: space-between;
+  background: var(--nv2-bg-glass);
+  flex-shrink: 0;
+}
+
+.nv2-wizard-btn {
+  padding: 8px 16px;
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--nv2-text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--nv2-border-color);
+  background: transparent;
+  color: var(--nv2-text-normal);
+  transition: var(--nv2-transition);
+}
+
+.nv2-wizard-btn:hover {
+  background: var(--nv2-bg-secondary);
+}
+
+.nv2-wizard-btn.primary {
+  background: var(--nv2-color-accent);
+  color: white;
+  /* Always white for primary btn */
+  border-color: var(--nv2-color-accent);
+}
+
+.nv2-wizard-btn.primary:hover {
+  background: var(--nv2-color-accent-hover);
+}
+
+.nv2-wizard-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-wizard-intro {
+  font-size: var(--nv2-text-md);
+  color: var(--nv2-text-muted);
+  line-height: 1.5;
+  margin-bottom: var(--nv2-space-lg);
+  text-align: center;
+}
+
+.nv2-wizard-index-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Indexing specific */
+.nv2-wizard-chunk-visual {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  margin-top: var(--nv2-space-xs);
+}
+

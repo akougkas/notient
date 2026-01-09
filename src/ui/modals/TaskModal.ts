@@ -1,10 +1,10 @@
 import { type App, ButtonComponent, Modal, TextAreaComponent, setIcon } from "obsidian";
-import type { NotientAgent } from "../core/agent";
-import type { AgentTask } from "../core/agent/types";
-import type { ActionApplier, ActionHistory, TrustLevelManager } from "../core/agentic";
-import type { ProposedAction, RiskLevel } from "../core/agentic/types";
-import { ChatSession } from "../core/chat";
-import type { Kernel } from "../core/kernel";
+import type { NotientAgent } from "../../core/agent";
+import type { AgentTask } from "../../core/agent/types";
+import type { ActionApplier, ActionHistory, TrustLevelManager } from "../../core/agentic";
+import type { ProposedAction, RiskLevel } from "../../core/agentic/types";
+import { ChatSession } from "../../core/chat";
+import type { Kernel } from "../../core/kernel";
 
 export class TaskModal extends Modal {
   private chatContainerEl: HTMLElement | null = null;

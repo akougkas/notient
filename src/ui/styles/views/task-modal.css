@@ -1,0 +1,230 @@
+/* ==========================================================================
+   Index Management
+   ========================================================================== */
+
+.notient-index-management h4 {
+  font-size: var(--nv2-text-base);
+  font-weight: 500;
+  margin-top: var(--nv2-space-lg);
+  margin-bottom: var(--nv2-space-sm);
+  color: var(--nv2-text-normal);
+}
+
+/* Index Grid */
+.notient-settings-index-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-xs);
+}
+
+.notient-settings-index-row-container {
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.notient-settings-index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--nv2-radius-md);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+  background: var(--nv2-bg-primary);
+}
+
+.notient-settings-index-row:hover {
+  border-color: var(--nv2-color-accent);
+  background: var(--nv2-bg-secondary);
+}
+
+.notient-settings-index-row.active {
+  border-color: var(--nv2-color-accent);
+  background: color-mix(in srgb, var(--nv2-color-accent), transparent 95%);
+}
+
+.notient-settings-index-row.expanded {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Index Row Content */
+.notient-settings-index-left {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+}
+
+.notient-settings-index-right {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+}
+
+.notient-settings-index-model {
+  font-weight: 500;
+}
+
+.notient-settings-index-dim {
+  color: var(--nv2-text-muted);
+  font-size: var(--nv2-text-xs);
+}
+
+.notient-settings-index-count {
+  color: var(--nv2-text-faint);
+  font-size: var(--nv2-text-xs);
+}
+
+.notient-settings-index-active-dot {
+  color: var(--nv2-color-accent);
+}
+
+.notient-settings-index-active-badge {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-color-accent);
+  font-weight: 500;
+}
+
+.notient-settings-index-expand {
+  color: var(--nv2-text-muted);
+  font-size: var(--nv2-text-xs);
+}
+
+/* Source Badges */
+.notient-settings-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: var(--nv2-radius-sm);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.notient-settings-badge.plugin {
+  border: 1px solid var(--nv2-text-muted);
+  color: var(--nv2-text-muted);
+}
+
+.notient-settings-badge.external {
+  background: #9333ea;
+  color: white;
+}
+
+/* Details Panel */
+.notient-settings-index-details {
+  padding: var(--nv2-space-md);
+  background: var(--nv2-bg-secondary);
+  border: 1px solid var(--nv2-border-color);
+  border-top: none;
+  border-radius: 0 0 var(--nv2-radius-md) var(--nv2-radius-md);
+  margin-top: -1px;
+}
+
+.notient-settings-index-details.hidden {
+  display: none;
+}
+
+.notient-settings-index-path {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  word-break: break-all;
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.notient-settings-index-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--nv2-space-xs) var(--nv2-space-md);
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  margin-bottom: var(--nv2-space-sm);
+  padding-bottom: var(--nv2-space-sm);
+  border-bottom: 1px solid var(--nv2-border-color);
+}
+
+.notient-settings-index-legacy {
+  font-size: var(--nv2-text-xs);
+  color: var(--color-orange);
+  margin-left: var(--nv2-space-xs);
+}
+
+.notient-settings-index-readonly {
+  font-size: var(--nv2-text-xs);
+  color: var(--nv2-text-muted);
+  font-style: italic;
+  margin-top: var(--nv2-space-sm);
+}
+
+/* Action Buttons */
+.notient-settings-btn-row {
+  display: flex;
+  gap: var(--nv2-space-sm);
+  flex-wrap: wrap;
+}
+
+.notient-settings-btn-row button {
+  padding: var(--nv2-space-xs) var(--nv2-space-md);
+  border-radius: var(--nv2-radius-sm);
+  font-size: var(--nv2-text-sm);
+  cursor: pointer;
+  transition: var(--nv2-transition);
+  border: 1px solid var(--nv2-border-color);
+  background: var(--nv2-bg-primary);
+  color: var(--nv2-text-normal);
+}
+
+.notient-settings-btn-row button:hover {
+  background: var(--nv2-bg-secondary);
+  border-color: var(--nv2-color-accent);
+}
+
+.notient-settings-btn-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notient-settings-btn-row button.mod-cta {
+  background: var(--nv2-color-accent);
+  border-color: var(--nv2-color-accent);
+  color: white;
+}
+
+.notient-settings-btn-row button.mod-cta:hover {
+  background: var(--nv2-color-accent-hover);
+}
+
+.notient-settings-btn-row button.mod-warning {
+  border-color: var(--nv2-status-error);
+  color: var(--nv2-status-error);
+}
+
+.notient-settings-btn-row button.mod-warning:hover {
+  background: color-mix(in srgb, var(--nv2-status-error), transparent 90%);
+}
+
+.notient-settings-btn-row button.mod-muted {
+  opacity: 0.5;
+}
+
+/* PARA Section */
+.notient-settings-para-desc {
+  font-size: var(--nv2-text-sm);
+  color: var(--nv2-text-muted);
+  margin-bottom: var(--nv2-space-md);
+}
+
+.notient-settings-para-desc code {
+  background: var(--nv2-bg-secondary);
+  padding: 1px 4px;
+  border-radius: var(--nv2-radius-sm);
+  font-family: var(--nv2-font-mono);
+  font-size: var(--nv2-text-xs);
+}
+
+/* Custom Search */
+.notient-settings-custom-search {
+  margin-top: var(--nv2-space-md);
+  padding: var(--nv2-space-md);
+  background: var(--nv2-bg-secondary);
+  border-radius: var(--nv2-radius-md);
+}
+

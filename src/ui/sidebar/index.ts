@@ -5,7 +5,7 @@
  */
 
 // Main view
-export { NotientSidebarView } from "../sidebar";
+export { NotientSidebarView } from "./SidebarView";
 
 // Components
 export { NoteCard } from "./components/NoteCard";
@@ -16,7 +16,7 @@ export { SidebarFooter } from "./components/SidebarFooter";
 export type { ServiceHealth, IndexManagerStats } from "./components/SidebarFooter";
 
 // Services (re-export for convenience)
-export { NoteVitalsCalculator } from "../../services/noteVitalsCalculator";
-export type { NoteVitals, IndexManagerLike } from "../../services/noteVitalsCalculator";
-export { InsightGenerator } from "../../services/insightGenerator";
-export type { Insight, InsightGeneratorCallbacks } from "../../services/insightGenerator";
+export { NoteVitalsCalculator } from "@services/noteVitalsCalculator";
+export type { NoteVitals, IndexManagerLike } from "@services/noteVitalsCalculator";
+export { InsightGenerator } from "@services/insightGenerator";
+export type { Insight, InsightGeneratorCallbacks } from "@services/insightGenerator";

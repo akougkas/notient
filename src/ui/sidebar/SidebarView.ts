@@ -13,42 +13,42 @@
  */
 
 import { ItemView, Notice, TFile, type WorkspaceLeaf, debounce, setIcon } from "obsidian";
-import type { AgentTaskQueue } from "../core/agent";
-import type { AgentType } from "../core/agent/types";
-import type { ActionApplier } from "../core/agentic/actionApplier";
-import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser";
-import type { ProposedAction, WorkflowRun } from "../core/agentic/types";
-import type { WorkflowRunner } from "../core/agentic/workflowRunner";
-import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "../core/constants";
-import type { ActionOrchestrator } from "../core/intelligence/actionOrchestrator";
-import type { NoteIntelligenceService } from "../core/intelligence/noteIntelligence";
+import type { AgentTaskQueue } from "../../core/agent";
+import type { AgentType } from "../../core/agent/types";
+import type { ActionApplier } from "../../core/agentic/actionApplier";
+import { isSlashCommand, parseSlashCommand } from "../../core/agentic/commandParser";
+import type { ProposedAction, WorkflowRun } from "../../core/agentic/types";
+import type { WorkflowRunner } from "../../core/agentic/workflowRunner";
+import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "../../core/constants";
+import type { ActionOrchestrator } from "../../core/intelligence/actionOrchestrator";
+import type { NoteIntelligenceService } from "../../core/intelligence/noteIntelligence";
 import type {
   IntelligenceEntity,
   IntelligenceSuggestedLink,
   IntelligenceSuggestedTag,
   IntelligenceTriageAction,
-} from "../core/intelligence/types";
-import type { Kernel } from "../core/kernel";
-import type { LLMProvider } from "../core/llm";
-import { ParaDetector } from "../core/para/detector";
-import type { SearchPipeline } from "../core/search/pipeline";
-import { type Insight, InsightGenerator } from "../services/insightGenerator";
+} from "../../core/intelligence/types";
+import type { Kernel } from "../../core/kernel";
+import type { LLMProvider } from "../../core/llm";
+import { ParaDetector } from "../../core/para/detector";
+import type { SearchPipeline } from "../../core/search/pipeline";
+import { type Insight, InsightGenerator } from "../../services/insightGenerator";
 import {
   type IndexManagerLike,
   type NoteVitals,
   NoteVitalsCalculator,
-} from "../services/noteVitalsCalculator";
-import type { IndexProgress } from "../types/indexer";
-import type { SearchResult } from "../types/search";
-import { InsightStream } from "./sidebar/components/InsightStream";
+} from "../../services/noteVitalsCalculator";
+import type { IndexProgress } from "../../types/indexer";
+import type { SearchResult } from "../../types/search";
+import { InsightStream } from "./components/InsightStream";
 import {
   IntelligenceActions,
   type IntelligenceActionsConfig,
-} from "./sidebar/components/IntelligenceActions";
-import { NoteCard } from "./sidebar/components/NoteCard";
-import { QuickActions, createNoteQuickActions } from "./sidebar/components/QuickActions";
-import { type IndexManagerStats, SidebarFooter } from "./sidebar/components/SidebarFooter";
-import { TaskModal } from "./taskModal";
+} from "./components/IntelligenceActions";
+import { NoteCard } from "./components/NoteCard";
+import { QuickActions, createNoteQuickActions } from "./components/QuickActions";
+import { type IndexManagerStats, SidebarFooter } from "./components/SidebarFooter";
+import { TaskModal } from "../modals/TaskModal";
 
 // ============ Types ============
 

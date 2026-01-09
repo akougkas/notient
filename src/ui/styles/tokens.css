@@ -1,0 +1,90 @@
+/* ==========================================================================
+   NOTIENT V2 - SENTIENT DESIGN SYSTEM
+   Theme: Mira + Emerald (shadcn-inspired)
+   Style: Mira | Base: Zinc | Accent: Emerald | Font: Inter
+   ========================================================================== */
+
+/* Import Inter font */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  /* --- Mira + Emerald Theme --- */
+
+  /* Font Stack */
+  --nv2-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Zinc Base (neutral gray palette) */
+  --nv2-zinc-50: #fafafa;
+  --nv2-zinc-100: #f4f4f5;
+  --nv2-zinc-200: #e4e4e7;
+  --nv2-zinc-300: #d4d4d8;
+  --nv2-zinc-400: #a1a1aa;
+  --nv2-zinc-500: #71717a;
+  --nv2-zinc-600: #52525b;
+  --nv2-zinc-700: #3f3f46;
+  --nv2-zinc-800: #27272a;
+  --nv2-zinc-900: #18181b;
+  --nv2-zinc-950: #09090b;
+
+  /* Emerald Accent */
+  --nv2-emerald-400: #34d399;
+  --nv2-emerald-500: #10b981;
+  --nv2-emerald-600: #059669;
+  --nv2-emerald-700: #047857;
+
+  /* --- Design Tokens --- */
+
+  /* Palette - Emerald Accent */
+  --nv2-color-accent: var(--nv2-emerald-500);
+  --nv2-color-accent-subtle: color-mix(in srgb, var(--nv2-color-accent), transparent 85%);
+  --nv2-color-accent-hover: var(--nv2-emerald-600);
+  --nv2-color-accent-active: var(--nv2-emerald-700);
+
+  /* Muted backgrounds using Zinc */
+  --nv2-bg-muted: var(--nv2-zinc-100);
+  --nv2-bg-muted-dark: var(--nv2-zinc-800);
+
+  --nv2-bg-primary: var(--background-primary);
+  --nv2-bg-secondary: var(--background-secondary);
+  --nv2-bg-glass: color-mix(in srgb, var(--background-primary), transparent 20%);
+
+  --nv2-text-normal: var(--text-normal);
+  --nv2-text-muted: var(--text-muted);
+  --nv2-text-faint: var(--text-faint);
+
+  /* Status Colors (Semantic) */
+  --nv2-status-healthy: #4caf50;
+  --nv2-status-warning: #ff9800;
+  --nv2-status-error: #f44336;
+  --nv2-status-working: #2196f3;
+
+  /* Spacing Scale */
+  --nv2-space-xs: 4px;
+  --nv2-space-sm: 8px;
+  --nv2-space-md: 12px;
+  --nv2-space-lg: 16px;
+  --nv2-space-xl: 24px;
+
+  /* Typography */
+  --nv2-font-ui: var(--nv2-font-sans);
+  --nv2-font-mono: var(--font-monospace);
+  --nv2-text-xs: 11px;
+  --nv2-text-sm: 13px;
+  --nv2-text-base: 15px;
+  --nv2-text-lg: 18px;
+  --nv2-text-xl: 22px;
+
+  /* Components - Mira radius (subtle) */
+  --nv2-radius: 6px;
+  --nv2-radius-sm: 4px;
+  --nv2-radius-md: 6px;
+  --nv2-radius-lg: 8px;
+  --nv2-border-color: var(--background-modifier-border);
+  --nv2-grid-color: color-mix(in srgb, var(--text-muted), transparent 92%);
+
+  /* Effects */
+  --nv2-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --nv2-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --nv2-glass-filter: blur(8px);
+  --nv2-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}

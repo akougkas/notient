@@ -8,13 +8,13 @@
  */
 
 import { ItemView, Notice, type WorkspaceLeaf, setIcon } from "obsidian";
-import type { ActionApplier } from "../core/agentic/actionApplier";
-import type { ActionHistory } from "../core/agentic/actionHistory";
-import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
-import type { WorkflowRunner } from "../core/agentic/workflowRunner";
-import { VIEW_TYPE_DASHBOARD } from "../core/constants";
-import type { Kernel } from "../core/kernel";
-import type { HealthScore, VaultVitalsData } from "../types/vitals";
+import type { ActionApplier } from "../../core/agentic/actionApplier";
+import type { ActionHistory } from "../../core/agentic/actionHistory";
+import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../../core/agentic/types";
+import type { WorkflowRunner } from "../../core/agentic/workflowRunner";
+import { VIEW_TYPE_DASHBOARD } from "../../core/constants";
+import type { Kernel } from "../../core/kernel";
+import type { HealthScore, VaultVitalsData } from "../../types/vitals";
 
 type DashboardTab = "vitals" | "actions" | "index";
 
