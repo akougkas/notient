@@ -830,6 +830,7 @@ export class IndexManager {
   /**
    * Import index from exported JSON
    * Returns model key of imported index (may differ from current)
+   * Validates that imported index dimensions match current model dimensions
    */
   async importIndex(jsonData: string): Promise<{ modelKey: string; noteCount: number }> {
     try {
@@ -840,6 +841,16 @@ export class IndexManager {
       };
 
       const importedModelKey = data.index.meta.modelKey;
+      const importedDimension = data.index.meta.dimension;
+
+      // Validate embedding dimensions match current model
+      if (importedDimension && this.dimension && importedDimension !== this.dimension) {
+        throw new Error(
+          `Dimension mismatch: imported index has ${importedDimension}d embeddings, ` +
+            `but current model uses ${this.dimension}d. ` +
+            `Import an index with matching dimensions or switch to a compatible embedding model.`,
+        );
+      }
 
       // Write index file (atomic for crash safety)
       const indexPath = path.join(

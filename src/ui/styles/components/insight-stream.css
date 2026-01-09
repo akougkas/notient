@@ -1,37 +1,159 @@
 /* Insight Stream */
 
-.nv2-insight-stream { display: flex; flex-direction: column; gap: var(--nv2-space-sm); }
-.nv2-insight { display: flex; gap: var(--nv2-space-sm); align-items: flex-start; }
-.nv2-insight-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--interactive-accent); flex-shrink: 0; margin-top: 6px; }
-.nv2-insight-dot--secondary { background: var(--text-muted); }
-.nv2-insight-dot--action { background: var(--color-orange); }
-.nv2-insight-content { flex: 1; min-width: 0; }
-.nv2-insight-text { font-size: var(--font-smaller); line-height: 1.5; }
-.nv2-insight-text a { color: var(--interactive-accent); cursor: pointer; }
-.nv2-insight-label { font-size: var(--font-smallest); color: var(--text-muted); font-weight: 600; margin-bottom: var(--nv2-space-xs); }
+.nv2-insight-stream {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+.nv2-insight {
+  display: flex;
+  gap: var(--nv2-space-sm);
+  align-items: flex-start;
+}
+.nv2-insight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+.nv2-insight-dot--secondary {
+  background: var(--text-muted);
+}
+.nv2-insight-dot--action {
+  background: var(--color-orange);
+}
+.nv2-insight-content {
+  flex: 1;
+  min-width: 0;
+}
+.nv2-insight-text {
+  font-size: var(--font-smaller);
+  line-height: 1.5;
+}
+.nv2-insight-text a {
+  color: var(--interactive-accent);
+  cursor: pointer;
+}
+.nv2-insight-label {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: var(--nv2-space-xs);
+}
 
 /* Actions */
-.nv2-insight-action { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; margin-top: var(--nv2-space-xs); border-radius: var(--radius-s); background: var(--background-modifier-hover); border: 1px solid var(--background-modifier-border); font-size: var(--font-smallest); cursor: pointer; }
-.nv2-insight-action:hover { border-color: var(--interactive-accent); color: var(--interactive-accent); }
-.nv2-insight-action--primary { background: var(--interactive-accent); color: white; border-color: var(--interactive-accent); }
-.nv2-insight-action-icon { display: flex; width: 12px; height: 12px; }
+.nv2-insight-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin-top: var(--nv2-space-xs);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+.nv2-insight-action:hover {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+.nv2-insight-action--primary {
+  background: var(--interactive-accent);
+  color: white;
+  border-color: var(--interactive-accent);
+}
+.nv2-insight-action-icon {
+  display: flex;
+  width: 12px;
+  height: 12px;
+}
 
 /* Entity Cloud */
-.nv2-entity-cloud { display: flex; flex-wrap: wrap; gap: 4px; }
-.nv2-entity-pill { padding: 2px 8px; background: var(--background-modifier-hover); border-radius: var(--radius-s); font-size: var(--font-smallest); }
+.nv2-entity-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.nv2-entity-pill {
+  padding: 2px 8px;
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
+}
 
 /* Suggestions */
-.nv2-suggestion-row { display: flex; flex-wrap: wrap; gap: var(--nv2-space-xs); }
-.nv2-suggestion-btn { padding: 4px 8px; border: 1px dashed var(--interactive-accent); border-radius: var(--radius-s); background: none; color: var(--interactive-accent); font-size: var(--font-smallest); cursor: pointer; }
-.nv2-suggestion-btn:hover { background: var(--background-modifier-hover); }
-.nv2-suggestion-list { display: flex; flex-direction: column; gap: var(--nv2-space-xs); margin-top: var(--nv2-space-xs); }
-.nv2-suggestion-link-row { display: flex; justify-content: space-between; font-size: var(--font-smaller); }
-.nv2-suggestion-icon-btn { background: none; border: none; color: var(--interactive-accent); font-size: var(--font-smallest); cursor: pointer; padding: 2px 6px; }
+.nv2-suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nv2-space-xs);
+}
+.nv2-suggestion-btn {
+  padding: 4px 8px;
+  border: 1px dashed var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background: none;
+  color: var(--interactive-accent);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+.nv2-suggestion-btn:hover {
+  background: var(--background-modifier-hover);
+}
+.nv2-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-xs);
+  margin-top: var(--nv2-space-xs);
+}
+.nv2-suggestion-link-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-smaller);
+}
+.nv2-suggestion-icon-btn {
+  background: none;
+  border: none;
+  color: var(--interactive-accent);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+  padding: 2px 6px;
+}
 
 /* Triage */
-.nv2-triage-box { border-left: 3px solid var(--color-orange); padding-left: var(--nv2-space-sm); }
-.nv2-triage-title { display: flex; align-items: center; gap: 4px; font-weight: 600; color: var(--color-orange); font-size: var(--font-smallest); margin-bottom: var(--nv2-space-xs); }
-.nv2-triage-message { font-size: var(--font-smaller); margin-bottom: var(--nv2-space-sm); }
-.nv2-triage-actions { display: flex; gap: var(--nv2-space-xs); }
-.nv2-triage-btn { padding: 4px 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: none; font-size: var(--font-smallest); cursor: pointer; }
-.nv2-triage-btn--primary { background: var(--color-orange); color: white; border-color: var(--color-orange); }
+.nv2-triage-box {
+  border-left: 3px solid var(--color-orange);
+  padding-left: var(--nv2-space-sm);
+}
+.nv2-triage-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--color-orange);
+  font-size: var(--font-smallest);
+  margin-bottom: var(--nv2-space-xs);
+}
+.nv2-triage-message {
+  font-size: var(--font-smaller);
+  margin-bottom: var(--nv2-space-sm);
+}
+.nv2-triage-actions {
+  display: flex;
+  gap: var(--nv2-space-xs);
+}
+.nv2-triage-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: none;
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+.nv2-triage-btn--primary {
+  background: var(--color-orange);
+  color: white;
+  border-color: var(--color-orange);
+}

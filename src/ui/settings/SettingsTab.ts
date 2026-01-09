@@ -13,7 +13,6 @@ import type { NotientAgent } from "../../core/agent/agentLoop";
 import type { ProfileManager } from "../../core/agent/profileManager";
 import { MODEL_DEFAULTS } from "../../core/constants";
 import type { Kernel } from "../../core/kernel";
-import { IndexManagementPanel } from "./panels/IndexManagementPanel";
 import type { UserProfile } from "../../types/profile";
 import {
   DEFAULT_SETTINGS,
@@ -25,6 +24,7 @@ import {
   type SettingsWarning,
 } from "../../types/settings";
 import { ProfilePreviewModal } from "../modals/ProfilePreviewModal";
+import { IndexManagementPanel } from "./panels/IndexManagementPanel";
 
 // Default IPs per service
 const DEFAULT_IPS = {
@@ -72,9 +72,15 @@ export async function saveSettings(plugin: Plugin, settings: NotientSettings): P
   // Validate before saving
   const validation = validateSettings(settings);
   if (!validation.valid) {
-    console.error("[Settings] Cannot save invalid settings:", validation.errors);
-    // Still save, but warn - we don't want to lose user data
+    console.error("[Settings] Validation errors:", validation.errors);
+    // Show first error to user via Notice
+    const firstError = validation.errors[0];
+    new Notice(`Settings error: ${firstError.message}`, 5000);
   }
+  if (validation.warnings.length > 0) {
+    console.warn("[Settings] Validation warnings:", validation.warnings);
+  }
+  // Still save to avoid losing user data
   await plugin.saveData(settings);
 }
 
@@ -122,15 +128,33 @@ function migrateSettings(settings: NotientSettings): NotientSettings {
   return migrated;
 }
 
+/**
+ * Validate URL format (http:// or https:// with host and optional port)
+ */
+function isValidUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function validateSettings(settings: NotientSettings): SettingsValidation {
   const errors: SettingsError[] = [];
   const warnings: SettingsWarning[] = [];
 
+  // Ollama validation
   if (settings.ollama.enabled) {
     if (!settings.ollama.host) {
       errors.push({ field: "ollama.host", message: "Ollama host is required" });
+    } else if (!isValidUrl(settings.ollama.host)) {
+      errors.push({
+        field: "ollama.host",
+        message: "Invalid URL format (expected http://host:port)",
+      });
     }
-    if (!settings.ollama.embeddingModel) {
+    if (!settings.ollama.embeddingModel || settings.ollama.embeddingModel.trim() === "") {
       warnings.push({
         field: "ollama.embeddingModel",
         message: "No embedding model selected",
@@ -138,10 +162,77 @@ export function validateSettings(settings: NotientSettings): SettingsValidation 
     }
   }
 
+  // LM Studio validation
+  if (settings.lmstudio.enabled) {
+    if (!settings.lmstudio.host) {
+      errors.push({ field: "lmstudio.host", message: "LM Studio host is required" });
+    } else if (!isValidUrl(settings.lmstudio.host)) {
+      errors.push({
+        field: "lmstudio.host",
+        message: "Invalid URL format (expected http://host:port)",
+      });
+    }
+    if (!settings.lmstudio.reasoningModel || settings.lmstudio.reasoningModel.trim() === "") {
+      warnings.push({
+        field: "lmstudio.reasoningModel",
+        message: "No reasoning model selected",
+      });
+    }
+  }
+
+  // Indexing validation
   if (settings.indexing.chunkSize < 32) {
     errors.push({
       field: "indexing.chunkSize",
       message: "Chunk size must be at least 32 characters",
+    });
+  }
+  if (settings.indexing.chunkSize > 8192) {
+    errors.push({
+      field: "indexing.chunkSize",
+      message: "Chunk size must be at most 8192 characters",
+    });
+  }
+
+  // Agent history validation
+  if (settings.agent.history.maxEntries < 1) {
+    errors.push({
+      field: "agent.history.maxEntries",
+      message: "Max history entries must be positive",
+    });
+  }
+  if (settings.agent.history.maxAgeDays < 1) {
+    errors.push({
+      field: "agent.history.maxAgeDays",
+      message: "Max history age must be at least 1 day",
+    });
+  }
+
+  // Chat retention validation
+  if (settings.chatRetention.maxMessagesPerNote < 1) {
+    errors.push({
+      field: "chatRetention.maxMessagesPerNote",
+      message: "Max messages per note must be positive",
+    });
+  }
+  if (settings.chatRetention.maxAgeDays < 1) {
+    errors.push({
+      field: "chatRetention.maxAgeDays",
+      message: "Chat retention must be at least 1 day",
+    });
+  }
+
+  // Bulk workflow validation
+  if (settings.agent.bulk.maxNotesPerWorkflow < 1) {
+    errors.push({
+      field: "agent.bulk.maxNotesPerWorkflow",
+      message: "Max notes per workflow must be positive",
+    });
+  }
+  if (settings.agent.bulk.delayBetweenTasksMs < 0) {
+    errors.push({
+      field: "agent.bulk.delayBetweenTasksMs",
+      message: "Delay between tasks cannot be negative",
     });
   }
 
@@ -710,9 +801,21 @@ export class NotientSettingTab extends PluginSettingTab {
       sliderValue.textContent = `${value} chars`;
     });
 
+    // Track original chunk size to detect changes
+    const originalChunkSize = this.settings.indexing.chunkSize;
+
     slider.addEventListener("change", async (e) => {
-      this.settings.indexing.chunkSize = Number.parseInt((e.target as HTMLInputElement).value, 10);
+      const newChunkSize = Number.parseInt((e.target as HTMLInputElement).value, 10);
+      this.settings.indexing.chunkSize = newChunkSize;
       await this.onSettingsChange(this.settings);
+
+      // Warn user that changing chunk size requires reindexing
+      if (newChunkSize !== originalChunkSize) {
+        new Notice(
+          "Chunk size changed. Existing embeddings are now invalid. Please run a full reindex to apply the new chunk size.",
+          8000,
+        );
+      }
     });
 
     // Tooltip
@@ -773,7 +876,7 @@ export class NotientSettingTab extends PluginSettingTab {
             getIndexedCount(): number;
           }>("indexManager");
 
-          if (!indexManager || (await indexManager.getIndexedCount()) === 0) {
+          if (!indexManager || indexManager.getIndexedCount() === 0) {
             new Notice("Please build the vault index first (Settings > Index > Rebuild)");
             return;
           }

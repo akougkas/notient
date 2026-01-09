@@ -98,6 +98,9 @@ export class ProfileManager {
       await atomicWriteFile(this.profilePath, JSON.stringify(profile, null, 2));
       this.profile = profile;
       console.log("[ProfileManager] Saved profile:", profile.domain?.primary || "(no domain)");
+
+      // Emit event so subscribers (e.g., NotientAgent) can update
+      this.kernel.eventBus.emit("profile:updated", { profile });
     } catch (error) {
       console.error("[ProfileManager] Failed to save profile:", error);
       throw error;
@@ -126,7 +129,7 @@ export class ProfileManager {
       throw new Error("Index manager not available");
     }
 
-    const indexedCount = await indexManager.getIndexedCount();
+    const indexedCount = indexManager.getIndexedCount();
     if (indexedCount === 0) {
       throw new Error("Please build the vault index first (Settings > Index > Rebuild)");
     }
@@ -239,6 +242,9 @@ export class ProfileManager {
       }
       this.profile = undefined;
       console.log("[ProfileManager] Profile reset");
+
+      // Emit event so subscribers (e.g., NotientAgent) can clear profile
+      this.kernel.eventBus.emit("profile:updated", { profile: undefined });
     } catch (error) {
       console.error("[ProfileManager] Failed to reset profile:", error);
       throw error;

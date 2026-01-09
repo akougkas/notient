@@ -238,6 +238,9 @@ export default class NotientPlugin extends Plugin {
         this.kernel.obsidian.notice(
           "Notient requires BOTH Ollama and LM Studio. Run setup wizard.",
         );
+        // Reset initializing flag and emit failure event for UI
+        this.kernel.setServicesInitializing(false);
+        this.kernel.eventBus.emit("services:failed", { reason: "missing_config" });
         return;
       }
 
@@ -351,6 +354,11 @@ export default class NotientPlugin extends Plugin {
           currentProfile, // Pass profile for prompt personalization
         );
         this.kernel.registerService("agent", this.notientAgent);
+
+        // Subscribe to profile updates to propagate to agent
+        eventBus.on("profile:updated", (event) => {
+          this.notientAgent?.setProfile(event.profile);
+        });
 
         // Agent Task Queue (new architecture)
         this.agentTaskQueue = new AgentTaskQueue(this.notientAgent, eventBus);

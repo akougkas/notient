@@ -1,0 +1,236 @@
+/**
+ * ChatView Component Styles
+ */
+
+.nv2-chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: var(--size-4-2);
+}
+
+/* Context Bar */
+.nv2-chat-context {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.nv2-chat-context-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.nv2-chat-context-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-chat-context-title {
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nv2-chat-context-subtitle {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* Messages Area */
+.nv2-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--size-4-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-4);
+}
+
+/* Empty State */
+.nv2-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: var(--size-4-2);
+  text-align: center;
+  padding: var(--size-4-8);
+}
+
+.nv2-chat-empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.nv2-chat-empty-title {
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.nv2-chat-empty-subtitle {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  max-width: 300px;
+}
+
+/* Message Bubbles */
+.nv2-chat-message {
+  display: flex;
+  gap: var(--size-4-2);
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nv2-chat-message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  background: var(--background-secondary);
+}
+
+.nv2-chat-message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-chat-message-role {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-1);
+}
+
+.nv2-chat-message-text {
+  color: var(--text-normal);
+  line-height: 1.5;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.nv2-chat-message--user .nv2-chat-message-text {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+}
+
+.nv2-chat-message--assistant .nv2-chat-message-text {
+  padding: var(--size-4-2) 0;
+}
+
+.nv2-chat-message--streaming .nv2-chat-message-text::after {
+  content: "▊";
+  animation: blink 1s infinite;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Input Area */
+.nv2-chat-input-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.nv2-chat-input {
+  width: 100%;
+  min-height: 40px;
+  max-height: 120px;
+  padding: var(--size-4-2);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: var(--font-ui-medium);
+  resize: none;
+  overflow-y: auto;
+}
+
+.nv2-chat-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.nv2-chat-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-chat-input::placeholder {
+  color: var(--text-faint);
+}
+
+.nv2-chat-input-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.nv2-chat-button {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-4);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-s);
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.nv2-chat-button:hover {
+  opacity: 0.9;
+}
+
+.nv2-chat-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nv2-chat-button--stop {
+  background: var(--text-error);
+}
+
+.nv2-chat-button-icon {
+  font-size: 16px;
+  line-height: 1;
+}

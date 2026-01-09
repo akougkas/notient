@@ -1,0 +1,126 @@
+/* Agent Streams View */
+
+.nv2-agent-streams {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-lg);
+}
+
+/* Review List */
+.nv2-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-review-item {
+  padding: var(--nv2-space-md);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--color-orange);
+  border-radius: var(--radius-m);
+}
+
+.nv2-review-item.nv2-risk--high {
+  border-left-color: var(--color-red);
+}
+
+.nv2-review-item.nv2-risk--medium {
+  border-left-color: var(--color-orange);
+}
+
+.nv2-review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-review-title {
+  font-weight: 500;
+}
+
+.nv2-review-type {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.nv2-review-target {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  margin-bottom: var(--nv2-space-xs);
+}
+
+.nv2-review-reason {
+  font-size: var(--font-smaller);
+  color: var(--text-normal);
+  margin-bottom: var(--nv2-space-sm);
+}
+
+.nv2-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--nv2-space-sm);
+}
+
+/* Badge for section labels */
+.nv2-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  margin-left: var(--nv2-space-xs);
+  background: var(--color-orange);
+  color: white;
+  border-radius: 9px;
+  font-size: var(--font-smallest);
+  font-weight: 600;
+}
+
+/* Buttons */
+.nv2-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smaller);
+  cursor: pointer;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.nv2-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.nv2-btn--primary {
+  background: var(--interactive-accent);
+  color: white;
+  border-color: var(--interactive-accent);
+}
+
+.nv2-btn--primary:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.nv2-btn--secondary {
+  background: transparent;
+}
+
+.nv2-btn--small {
+  padding: 2px 8px;
+  font-size: var(--font-smallest);
+}
+
+/* Activity item actions */
+.nv2-activity-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--nv2-space-xs);
+}
+
+.nv2-activity-icon {
+  color: var(--color-green);
+}
