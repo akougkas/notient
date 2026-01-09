@@ -73,7 +73,7 @@ src/ui/sidebar/App.tsx                  # Both need to touch this
 
 | Agent | File | What | Status |
 |-------|------|------|--------|
-| Claude | `App.tsx` | Adding services:initialized subscription | PENDING |
+| - | - | - | - |
 
 ---
 
@@ -83,7 +83,10 @@ src/ui/sidebar/App.tsx                  # Both need to touch this
 
 | Agent | File | Commit | Description |
 |-------|------|--------|-------------|
-| - | - | - | - |
+| Claude | `App.tsx` | `22e938e` | Added services:initialized event subscription |
+| Claude | `noteIntelligence.ts` | `22e938e` | Fixed service key from 'searchPipeline' to 'search' |
+| Claude | `profileManager.ts` | `22e938e` | Removed await on synchronous getIndexedCount() |
+| Claude | `TaskModal.ts` | `22e938e` | Fixed chatHistory truncation (getMessages vs getMessagesForLLM) |
 
 ---
 
