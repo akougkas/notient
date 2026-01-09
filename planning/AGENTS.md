@@ -1,147 +1,195 @@
-# Agent Coordination File
+# 🤖 AGENTS.md - Parallel Agent Coordination & Synchronization
 
-> **CRITICAL: Read this before making ANY changes.**
-
-This file coordinates parallel development between AI agents working on separate git branches.
+> **Last Updated:** 2026-01-09
+> **Active Sessions:** 2
+> **Human Leader:** Anthony Kougkas (Creator of Notient)
 
 ---
 
-## Communication Protocol
+## 🎭 Agent Personas
 
-### Before editing a shared file:
-
-1. Check this file for ownership
-2. If shared, add a note below in "Active Edits" section
-3. Commit your changes with clear message
-4. Update "Completed" section
-
-### Commit message format:
+### AGENT-1: "Archie" - The Systems Architect
 
 ```
-[claude] fix: description
-[gemini] feat: description
+╔══════════════════════════════════════════════════════════════════╗
+║  CODENAME: Archie                                                ║
+║  SPECIALTY: Backend Architecture, Optimization, Type Safety     ║
+║  PERSONALITY: Methodical, performance-obsessed, loves patterns  ║
+║  MANTRA: "Correctness first, elegance follows"                   ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**Archie's Focus Areas:**
+- State machines and service initialization
+- Type system integrity and safety
+- Error handling and resilience
+- Pipeline architecture and data flow
+- Dead code elimination and optimization
+- Backend wiring and event systems
+
+**Archie's Tendencies:**
+- Will push back on "pretty" solutions that sacrifice performance
+- Prefers explicit over implicit
+- Loves dependency injection and clean contracts
+- Gets frustrated by UI-first thinking that ignores edge cases
+
+---
+
+### AGENT-2: "Sage" - The Experience Designer
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  CODENAME: Sage                                                  ║
+║  SPECIALTY: UI/UX, User Flows, Visual Polish, Accessibility     ║
+║  PERSONALITY: Empathetic, detail-oriented, pixel-perfect        ║
+║  MANTRA: "If it's confusing, it's broken"                        ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**Sage's Focus Areas:**
+- Sidebar components and reactivity
+- Chat interface and streaming UX
+- Modal interactions and feedback
+- Event subscriptions for live updates
+- Settings UI and user flows
+- Dashboard visualization
+
+**Sage's Tendencies:**
+- Will push back on "technically correct" solutions that feel clunky
+- Prefers user-centric design over internal elegance
+- Loves smooth animations and instant feedback
+- Gets frustrated by engineering decisions that hurt UX
+
+---
+
+## ⚔️ Conflict Resolution Protocol
+
+When Archie and Sage disagree, they **MUST** follow this protocol:
+
+### Level 1: Documented Disagreement
+```markdown
+## 🔴 CONFLICT: [Brief Title]
+**Archie's Position:** [Technical reasoning]
+**Sage's Position:** [UX reasoning]
+**Files Affected:** [List]
+**Blocking:** [Yes/No]
+```
+
+### Level 2: Escalate to Human Leader
+If the conflict affects:
+- Core architecture decisions
+- User-facing behavior
+- Performance vs UX tradeoffs
+- Deletion of features
+
+**STOP WORK** on the conflicting item and add to Active Conflicts section below.
+
+### Level 3: Human Decision
+Anthony (the human leader) will review and decide. The decision is **FINAL**.
+
+---
+
+## 📋 Task Assignment Summary
+
+| Part | Title | Agent | Status |
+|------|-------|-------|--------|
+| 1.1 | Sidebar Stuck on Initializing | `[AGENT-2]` Sage | ⬜ Not Started |
+| 1.2 | Antagonist Agent Non-Functional | `[AGENT-1]` Archie | ⬜ Not Started |
+| 1.3 | UserEvolutionService Never Instantiated | `[AGENT-1]` Archie | ⬜ Not Started |
+| 1.4 | ChatView Uses Fake Mock | `[AGENT-2]` Sage | ⬜ Not Started |
+| 1.5 | TaskModal History Not Persisted | `[AGENT-2]` Sage | ⬜ Not Started |
+| 1.6 | AgentStreamsView No Events | `[AGENT-2]` Sage | ⬜ Not Started |
+| 2.1 | Action Types Not Implemented | `[AGENT-1]` Archie | ⬜ Not Started |
+| 2.2 | action:proposed Missing | `[AGENT-1]` Archie | ⬜ Not Started |
+| 2.3 | action:apply-requested Unhandled | `[AGENT-1]` Archie | ⬜ Not Started |
+| 2.4 | ProfileManager Crash | `[AGENT-1]` Archie | ⬜ Not Started |
+| 2.5 | PARA Type Mismatch | `[AGENT-1]` Archie | ⬜ Not Started |
+| 3.1 | Omnibar Unused | `[AGENT-2]` Sage | ⬜ Not Started |
+| 3.2 | QuickActions Not Connected | `[AGENT-2]` Sage | ⬜ Not Started |
+| 3.3 | InsightStream Actions Unwired | `[AGENT-2]` Sage | ⬜ Not Started |
+| 3.4 | Settings Profile Propagation | `[AGENT-2]` Sage | ⬜ Not Started |
+| 3.5 | Settings Health Not Live | `[AGENT-2]` Sage | ⬜ Not Started |
+| 3.6 | Dashboard Sync No Refresh | `[AGENT-2]` Sage | ⬜ Not Started |
+| 4.* | Dead Code Cleanup | `[AGENT-1]` Archie | ⬜ Not Started |
+| 5.* | Error Handling Gaps | `[AGENT-1]` Archie | ⬜ Not Started |
+| 6.* | Type System Issues | `[AGENT-1]` Archie | ⬜ Not Started |
+| 7.1 | Universal Undo UI | `[AGENT-2]` Sage | ⬜ Not Started |
+| 7.2 | Search Mode Selection | `[AGENT-2]` Sage | ⬜ Not Started |
+| 7.3 | Dashboard History Tab | `[AGENT-2]` Sage | ⬜ Not Started |
+| 9.* | Initialization State Machine | `[AGENT-1]` Archie | ⬜ Not Started |
+
+---
+
+## 🔒 File Ownership Rules
+
+### Exclusive Files (NO cross-agent edits)
+
+| Agent | Exclusive Files |
+|-------|-----------------|
+| Archie | `src/main.ts`, `src/core/**/*`, `src/services/**/*`, `src/types/**/*` |
+| Sage | `src/ui/**/*`, `styles/**/*` |
+
+### Shared Files (Coordinate before editing)
+
+| File | Owner | Notes |
+|------|-------|-------|
+| `src/types/events.ts` | Archie | Sage may REQUEST new event types |
+| `src/core/kernel.ts` | Archie | Sage uses via hooks only |
+
+---
+
+## 🚧 Active Conflicts
+
+<!-- Add conflicts here when they arise -->
+
+*No active conflicts*
+
+---
+
+## 📝 Session Log
+
+### AGENT-1 (Archie) Session
+```
+Status: ⬜ Not Started
+Branch: archie/backend-fixes
+Last Activity: -
+Current Task: -
+```
+
+### AGENT-2 (Sage) Session
+```
+Status: ⬜ Not Started
+Branch: sage/ui-wiring
+Last Activity: -
+Current Task: -
 ```
 
 ---
 
-## Historical Edits
-
-<!-- Add entries here when working on shared files -->
-
----
-
-## Completed Edits
-
-<!-- Move entries here when committed -->
-
-| Agent | File | Commit | Description |
-|-------|------|--------|-------------|
-| Claude | `App.tsx` | `22e938e` | Added services:initialized event subscription |
-| Claude | `noteIntelligence.ts` | `22e938e` | Fixed service key from 'searchPipeline' to 'search' |
-| Claude | `profileManager.ts` | `22e938e` | Removed await on synchronous getIndexedCount() |
-| Claude | `TaskModal.ts` | `22e938e` | Fixed chatHistory truncation (getMessages vs getMessagesForLLM) |
-| Claude | `ChatView.tsx` | `07fc487` | Created sidebar chat view with streaming support |
-| Claude | `App.tsx` (Footer) | `07fc487` | Wired up event subscriptions for providers/index/agents |
-| Claude | `chat-view.css` | `07fc487` | Added styles for chat interface |
-| Claude | `main.ts` | (pending) | Fixed early return flag reset + services:failed event |
-| Claude | `actionApplier.ts` | (pending) | Fixed Phase 3 stubs to return error instead of fake success |
-| Claude | `actionHistory.ts` | (pending) | Fixed batch undo partial failure handling |
-| Claude | `profileManager.ts` | (pending) | Added profile:updated event emission |
-| Claude | `events.ts` | (pending) | Added profile:updated and services:failed event types |
-| Claude | `IndexManagementPanel.ts` | (pending) | Added try/catch error handling |
-| Claude | `TaskModal.ts` | (pending) | Added ConversationStore history loading |
-| Claude | `Omnibar.tsx` | (pending) | Created search input component |
-| Claude | `AgentStreamsView.tsx` | (pending) | Created review queue view |
-| Claude | `agent-streams.css` | (pending) | Created agent streams styles |
-| Claude | `KernelContext.tsx` | (pending) | Added useServicesInitialized hook |
-| Claude | `IntelligenceActions.ts` | (pending) | REMOVED dead code file |
-| Claude | `openai-compatible.ts` | (pending) | Added 5-min timeout to LLM streaming |
-| Claude | `pipeline.ts` | (pending) | Fixed cache key array mutation + disposal |
-| Claude | `noteIntelligence.ts` | (pending) | Added queue bounding (max 1000) |
-| Claude | `KernelContext.tsx` | (pending) | Fixed useCallback with useRef pattern |
-| Claude | `SettingsTab.ts` | (pending) | Added chunk size change warning |
-| Claude | `promptBuilder.ts` | (pending) | Added profile to action plan prompts |
-| Claude | `pipeline.ts` | (pending) | Added search:progress events |
-| Claude | `events.ts` | (pending) | Added SearchProgressEvent type |
-| Claude | `actionPipeline.ts` | (pending) | Added executeBatchesInOrder + topological sort |
-| Claude | `indexManager.ts` | (pending) | Added import dimension validation |
-| Claude | `IndexManagementPanel.ts` | (pending) | Fixed button state management |
-| Claude | `SettingsTab.ts` | (pending) | Added settings validation (URL, numbers, models) |
-| Claude | `kernel.ts` | (pending) | Added ServiceRegistry for type-safe services |
-| Claude | `pipeline.ts` | (pending) | Added search:error event emission |
-| Claude | `events.ts` | (pending) | Added SearchErrorEvent type |
-| Gemini | `Header.tsx` | (pending) | Created tab-based header with view switching |
-| Gemini | `Footer.tsx` | (pending) | Created three-zone status footer |
-| Gemini | `VitalsCards.tsx` | (pending) | Created 4-metric vitals cards component |
-| Gemini | `ChatView.tsx` | (pending) | Created chat interface with context, messages, input |
-| Gemini | `NoteCard.tsx` | (pending) | Enhanced with path, folder, PARA type |
-| Gemini | `App.tsx` | (pending) | Full restructure: tabs, views, signals, event subscriptions |
-| Gemini | `header.css` | (pending) | Tab navigation styles |
-| Gemini | `footer.css` | (pending) | Three-zone footer styles |
-| Gemini | `vitals-cards.css` | (pending) | Metric card styles |
-| Gemini | `chat-view.css` | (pending) | Chat interface styles |
-| Gemini | `note-card.css` | (pending) | Enhanced meta row styles |
-| Gemini | `base.css` | (pending) | Placeholder component styles |
-| Gemini | `index.css` | (pending) | Added new component imports |
-
----
-
-## Merge Order
-
-When both agents complete their work:
+## 🚀 Merge Strategy
 
 ```bash
+# After both agents complete:
 git checkout main
-git merge fix/critical-bugs      # Claude's fixes FIRST
-git merge feat/sidebar-v2-ui     # Gemini's UI SECOND
-```
 
-**Why this order:** Fixes establish correct foundations, then UI builds on top.
+# Archie's backend fixes FIRST (establishes correct foundations)
+git merge archie/backend-fixes
 
----
+# Sage's UI wiring SECOND (builds on backend)
+git merge sage/ui-wiring
 
-## Key Specs (Both Agents Should Read)
-
-| Document | Purpose |
-|----------|---------|
-| `.claude/CLAUDE.md` | Project context, architecture, current state |
-| `.claude/specs/sidebar-v2-architecture.md` | UI spec for three-view tabbed sidebar |
-| `.claude/audit/MASTER-TODO.md` | Full list of issues from 6-agent audit |
-
----
-
-## Quick Reference: What We're Building
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  HEADER (locked) - Gemini                                       │
-│  [Notient]                    [📝 Note] [🤖 Agents] [💬 Chat]    │
-├─────────────────────────────────────────────────────────────────┤
-│  CONTENT - Gemini                                               │
-│  • Note Vitals: Identity → Vitals → Quick Actions → Insights    │
-│  • Agent Streams: Active → Pending Review → Recent Activity     │
-│  • Chat: Context → Messages → Input                             │
-├─────────────────────────────────────────────────────────────────┤
-│  FOOTER (locked) - Gemini                                       │
-│  [Providers]      │      [Index]       │     [Agents]           │
-└─────────────────────────────────────────────────────────────────┘
-
-Core/Services Bug Fixes - Claude
-• App.tsx:91 - services:initialized subscription
-• noteIntelligence.ts:503 - service key mismatch
-• profileManager.ts:129 - async/await fix
-• TaskModal.ts:296 - chatHistory truncation
+# If conflicts, involve human leader
 ```
 
 ---
 
-## Emergency Contact
+## 📞 Emergency Protocol
 
-If you encounter a merge conflict or need to coordinate:
-1. STOP making changes
-2. Document the conflict in "Active Edits" above
-3. Wait for human to coordinate
+If either agent encounters:
+1. **Blocking dependency on other agent** → Add to Active Conflicts, WAIT
+2. **Unclear requirements** → Add question to Active Conflicts, tag human
+3. **Breaking change to shared file** → STOP, document in Session Log
 
 ---
 
-**Last updated:** 2026-01-09 by Gemini (sidebar v2.0 complete)
+*Coordination file managed by Anthony Kougkas. Agents: update your session log after each work session.*
