@@ -342,11 +342,13 @@ export default class NotientPlugin extends Plugin {
         if (!this.llmProvider) {
           throw new Error("LLM Provider is required for NotientAgent");
         }
+        const currentProfile = this.profileManager?.get();
         this.notientAgent = new NotientAgent(
           this.llmProvider,
           this.searchPipeline,
           this.contextBuilder,
           this.kernel.obsidian,
+          currentProfile, // Pass profile for prompt personalization
         );
         this.kernel.registerService("agent", this.notientAgent);
 
@@ -415,14 +417,17 @@ export default class NotientPlugin extends Plugin {
         );
         this.kernel.registerService("workflowRunner", this.workflowRunner);
 
-        // Intelligence 2.0: ActionOrchestrator (requires lmstudio + search)
+        // Intelligence 2.0: ActionOrchestrator (requires lmstudio + search + profile)
         if (this.lmStudioService && this.searchPipeline) {
+          // Profile provider returns current profile dynamically
+          const profileProvider = () => this.profileManager?.get();
           this.actionOrchestrator = new ActionOrchestrator(
             this.lmStudioService,
             this.searchPipeline,
+            profileProvider, // Profile injected into Intelligence 2.0 prompts
           );
           this.kernel.registerService("actionOrchestrator", this.actionOrchestrator);
-          console.log("[Notient] ActionOrchestrator initialized");
+          console.log("[Notient] ActionOrchestrator initialized (profile-aware)");
         }
 
         console.log("[Notient] Phase 2 agentic services initialized");
@@ -646,6 +651,8 @@ export default class NotientPlugin extends Plugin {
 
           if (editedProfile) {
             await this.profileManager.save(editedProfile);
+            // Propagate profile to agent for prompt personalization
+            this.notientAgent?.setProfile(editedProfile);
             new Notice("Profile saved successfully");
           }
         } catch (error) {

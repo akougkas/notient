@@ -7,6 +7,7 @@
 
 import { normalizePath } from "obsidian";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
+import type { UserProfile } from "../../types/profile";
 import {
   ACTION_RISK_MAP,
   type ActionPlanResponse,
@@ -32,8 +33,17 @@ export class NotientAgent {
     private search: SearchPipeline | null,
     private contextBuilder: VaultContextBuilder | null,
     private obsidian: ObsidianFacade,
+    profile?: UserProfile,
   ) {
-    this.promptBuilder = new NotientPromptBuilder();
+    this.promptBuilder = new NotientPromptBuilder(profile);
+  }
+
+  /**
+   * Update the user profile for prompt personalization
+   * Called when profile changes (e.g., user edits in Settings)
+   */
+  setProfile(profile: UserProfile | undefined): void {
+    this.promptBuilder.setProfile(profile);
   }
 
   /**

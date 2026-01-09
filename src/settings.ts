@@ -9,6 +9,7 @@
  */
 
 import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
+import type { NotientAgent } from "./core/agent/agentLoop";
 import type { ProfileManager } from "./core/agent/profileManager";
 import { MODEL_DEFAULTS } from "./core/constants";
 import type { Kernel } from "./core/kernel";
@@ -793,6 +794,7 @@ export class NotientSettingTab extends PluginSettingTab {
 
             if (editedProfile) {
               await profileManager.save(editedProfile);
+              this.propagateProfileToAgent(editedProfile); // Update agent prompts
               new Notice("Profile saved successfully");
               this.display(); // Refresh settings
             }
@@ -831,6 +833,7 @@ export class NotientSettingTab extends PluginSettingTab {
             // Confirm reset
             if (confirm("Are you sure? This will delete your profile.")) {
               await profileManager.reset();
+              this.propagateProfileToAgent(undefined); // Clear agent profile
               new Notice("Profile reset");
               this.display(); // Refresh settings
             }
@@ -981,8 +984,22 @@ export class NotientSettingTab extends PluginSettingTab {
       target[parts[parts.length - 1]] = value;
 
       await profileManager.save(profile);
+
+      // Propagate profile change to agent for prompt personalization
+      this.propagateProfileToAgent(profile);
     } catch (error) {
       console.error("[Settings] Failed to update profile field:", error);
+    }
+  }
+
+  /**
+   * Propagate profile changes to the NotientAgent
+   * Ensures the agent uses the latest profile for prompt generation
+   */
+  private propagateProfileToAgent(profile: UserProfile | undefined): void {
+    const agent = this.kernel.getService<NotientAgent>("agent");
+    if (agent) {
+      agent.setProfile(profile);
     }
   }
 

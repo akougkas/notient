@@ -6,10 +6,11 @@
  */
 
 import type { LMStudioService } from "../../services/lmstudio";
+import type { UserProfile } from "../../types/profile";
 import type { SearchPipeline } from "../search/pipeline";
 import type { ActionPipeline, ActionPipelineConfig, PipelineEvent } from "./actionPipeline";
 import { createActionPipeline } from "./actionPipeline";
-import { type AgentPrompt, type IntelligenceActionType, getPrompt } from "./prompts";
+import { type AgentPrompt, type IntelligenceActionType, getProfileAwarePrompt } from "./prompts";
 
 /**
  * Workflow complexity level
@@ -75,13 +76,32 @@ export interface DispatchResult {
 }
 
 /**
+ * Profile provider function type
+ * Returns the current user profile (or undefined if not set)
+ */
+export type ProfileProvider = () => UserProfile | undefined;
+
+/**
  * Action Orchestrator - Central coordinator for Intelligence 2.0 actions
  */
 export class ActionOrchestrator {
+  private profileProvider: ProfileProvider;
+
   constructor(
     private llm: LMStudioService,
     private search: SearchPipeline,
-  ) {}
+    profileProvider?: ProfileProvider,
+  ) {
+    // Default to no profile if not provided
+    this.profileProvider = profileProvider ?? (() => undefined);
+  }
+
+  /**
+   * Update the profile provider (e.g., when ProfileManager becomes available)
+   */
+  setProfileProvider(provider: ProfileProvider): void {
+    this.profileProvider = provider;
+  }
 
   /**
    * Dispatch an intelligence action
@@ -91,8 +111,9 @@ export class ActionOrchestrator {
     context: ActionContext,
     triggerConfig?: TriggerConfig,
   ): Promise<DispatchResult> {
-    // Load specialized prompt
-    const prompt = getPrompt(actionType);
+    // Load specialized prompt with current user profile
+    const profile = this.profileProvider();
+    const prompt = getProfileAwarePrompt(actionType, profile);
 
     // Detect workflow complexity
     const complexity = this.detectComplexity(actionType);
