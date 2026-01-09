@@ -87,6 +87,9 @@ src/ui/sidebar/App.tsx                  # Both need to touch this
 | Claude | `noteIntelligence.ts` | `22e938e` | Fixed service key from 'searchPipeline' to 'search' |
 | Claude | `profileManager.ts` | `22e938e` | Removed await on synchronous getIndexedCount() |
 | Claude | `TaskModal.ts` | `22e938e` | Fixed chatHistory truncation (getMessages vs getMessagesForLLM) |
+| Claude | `ChatView.tsx` | `07fc487` | Created sidebar chat view with streaming support |
+| Claude | `App.tsx` (Footer) | `07fc487` | Wired up event subscriptions for providers/index/agents |
+| Claude | `chat-view.css` | `07fc487` | Added styles for chat interface |
 
 ---
 
