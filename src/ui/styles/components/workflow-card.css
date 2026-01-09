@@ -1,6 +1,4 @@
-/* ==========================================================================
-   Workflow Cards
-   ========================================================================== */
+/* Workflow Cards */
 
 .nv2-workflow-container {
   display: flex;
@@ -9,163 +7,84 @@
 }
 
 .nv2-workflow-card {
-  background: var(--nv2-bg-secondary);
-  border: 1px solid var(--nv2-border-color);
-  border-left: 4px solid var(--nv2-border-color);
-  border-radius: var(--nv2-radius-md);
   padding: var(--nv2-space-md);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
 }
 
 .nv2-workflow-card--active {
-  border-left-color: var(--nv2-color-accent);
-  background: linear-gradient(90deg, var(--nv2-color-accent-subtle), transparent);
+  border-left-color: var(--interactive-accent);
 }
 
 .nv2-workflow-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
   margin-bottom: var(--nv2-space-sm);
 }
 
 .nv2-workflow-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-weight: 500;
 }
 
 .nv2-workflow-command {
-  font-family: var(--nv2-font-mono);
-  color: var(--nv2-color-accent);
+  font-family: var(--font-monospace);
+  color: var(--interactive-accent);
 }
 
 .nv2-workflow-status {
-  font-size: 10px;
-  text-transform: uppercase;
+  font-size: var(--font-smallest);
   padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--nv2-border-color);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
 }
 
 .nv2-workflow-progress-container {
-  background: var(--nv2-bg-primary);
-  height: 6px;
-  border-radius: 3px;
+  height: 4px;
+  background: var(--background-primary);
+  border-radius: 2px;
   overflow: hidden;
-  margin: 8px 0;
+  margin: var(--nv2-space-sm) 0;
 }
 
 .nv2-workflow-progress-fill {
-  background: var(--nv2-color-accent);
   height: 100%;
-  transition: width 0.3s ease;
+  background: var(--interactive-accent);
 }
 
 .nv2-workflow-progress-text {
-  font-size: 10px;
-  color: var(--nv2-text-muted);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
   text-align: right;
 }
 
 .nv2-workflow-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--nv2-space-sm);
 }
 
 .nv2-workflow-btn--cancel {
-  background: transparent;
-  border: 1px solid var(--nv2-border-color);
-  color: var(--nv2-text-muted);
   padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
+  background: none;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
   cursor: pointer;
 }
 
 .nv2-workflow-btn--cancel:hover {
-  background: var(--nv2-status-error);
+  background: var(--color-red);
   color: white;
-  border-color: var(--nv2-status-error);
 }
 
 .nv2-workflow-review-badge {
-  background: var(--nv2-status-warning);
-  color: var(--background-primary);
   padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 11px;
+  background: var(--color-orange);
+  color: white;
+  border-radius: var(--radius-s);
+  font-size: var(--font-smallest);
   font-weight: 600;
   cursor: pointer;
 }
-
-/* Workflow Errors */
-.nv2-workflow-errors {
-  margin-top: 8px;
-  background: rgba(var(--color-red-rgb), 0.1);
-  border-radius: var(--nv2-radius-sm);
-  overflow: hidden;
-}
-
-.nv2-workflow-errors-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-  color: var(--nv2-status-error);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.nv2-workflow-errors-icon {
-  display: flex;
-  width: 14px;
-  height: 14px;
-}
-
-.nv2-workflow-errors-title {
-  flex: 1;
-}
-
-.nv2-workflow-errors-toggle {
-  display: flex;
-  width: 14px;
-  height: 14px;
-  opacity: 0.6;
-}
-
-.nv2-workflow-errors-list {
-  padding: 0 10px 8px;
-  max-height: 150px;
-  overflow-y: auto;
-}
-
-.nv2-workflow-errors-list--collapsed {
-  display: none;
-}
-
-.nv2-workflow-error-item {
-  padding: 4px 0;
-  border-top: 1px solid var(--nv2-border-color);
-}
-
-.nv2-workflow-error-item:first-child {
-  border-top: none;
-}
-
-.nv2-workflow-error-text {
-  font-size: 11px;
-  color: var(--nv2-text-muted);
-  word-break: break-word;
-}
-
-.nv2-workflow-errors-more {
-  font-size: 11px;
-  color: var(--nv2-text-faint);
-  padding-top: 4px;
-  font-style: italic;
-}
-

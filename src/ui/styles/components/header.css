@@ -1,51 +1,30 @@
-/* ==========================================================================
-   Header
-   ========================================================================== */
+/* Header & Content Layout */
 
 .nv2-header {
-  padding: var(--nv2-space-lg) var(--nv2-space-lg) var(--nv2-space-md);
-  background: var(--nv2-bg-glass);
-  backdrop-filter: var(--nv2-glass-filter);
-  border-bottom: 1px solid var(--nv2-border-color);
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: var(--nv2-transition);
-}
-
-.nv2-header:hover {
-  background: var(--nv2-bg-secondary);
+  padding: var(--nv2-space-md);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .nv2-header-title {
-  font-size: var(--nv2-text-lg);
   font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
 }
 
 .nv2-accent {
-  color: var(--nv2-color-accent);
+  color: var(--interactive-accent);
 }
 
 .nv2-header-subtitle {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin-top: var(--nv2-space-xs);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
 }
 
-/* ==========================================================================
-   Main Content Area
-   ========================================================================== */
-
 .nv2-content {
-  flex-grow: 1;
+  flex: 1;
   overflow-y: auto;
-  padding: var(--nv2-space-lg);
+  padding: var(--nv2-space-md);
   display: flex;
   flex-direction: column;
-  gap: var(--nv2-space-xl);
+  gap: var(--nv2-space-lg);
 }
 
 .nv2-section {
@@ -55,11 +34,8 @@
 }
 
 .nv2-section-label {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: var(--nv2-space-xs);
-  opacity: 0.8;
+  letter-spacing: 0.05em;
 }
-

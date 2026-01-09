@@ -1,41 +1,31 @@
-/* ==========================================================================
-   Settings Panel
-   ========================================================================== */
+/* Settings Panel */
 
 .notient-settings {
   padding: var(--nv2-space-lg);
 }
 
 .notient-settings h1 {
-  font-size: var(--nv2-text-xl);
-  font-weight: 600;
   margin-bottom: var(--nv2-space-xl);
-  color: var(--nv2-text-normal);
 }
 
 .notient-settings h2 {
-  font-size: var(--nv2-text-lg);
-  font-weight: 500;
   margin-bottom: var(--nv2-space-md);
-  color: var(--nv2-text-normal);
 }
 
-/* Sections */
 .notient-settings-section {
   margin-bottom: var(--nv2-space-xl);
   padding-bottom: var(--nv2-space-lg);
-  border-bottom: 1px solid var(--nv2-border-color);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .notient-settings-section:last-child {
   border-bottom: none;
 }
 
-/* Status Box */
 .notient-settings-status-box {
-  background: var(--nv2-bg-secondary);
-  border-radius: var(--nv2-radius-md);
   padding: var(--nv2-space-md);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
   margin-bottom: var(--nv2-space-md);
 }
 
@@ -52,151 +42,52 @@
   gap: var(--nv2-space-xs);
 }
 
-/* Status Dots */
 .notient-settings-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--nv2-text-muted);
+  background: var(--text-muted);
 }
 
 .notient-settings-dot.status-connected {
-  background: var(--nv2-status-healthy);
-}
-
-.notient-settings-dot.status-disconnected {
-  background: var(--nv2-text-muted);
+  background: var(--color-green);
 }
 
 .notient-settings-dot.status-error {
-  background: var(--nv2-status-error);
+  background: var(--color-red);
 }
 
-.notient-settings-dot.status-checking {
-  background: var(--nv2-status-working);
-  animation: pulse 1s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.5;
-  }
-}
-
-/* Capability Display */
-.notient-settings-cap {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
-  margin-left: var(--nv2-space-xs);
-}
-
-.notient-settings-cap-row {
-  display: flex;
-  align-items: center;
-  gap: var(--nv2-space-sm);
-  flex-wrap: wrap;
-}
-
-.notient-settings-cap-icons {
-  display: flex;
-  gap: var(--nv2-space-xs);
-  margin-left: auto;
-}
-
-.notient-settings-model-tag {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
-  background: var(--nv2-bg-secondary);
-  padding: 2px 6px;
-  border-radius: var(--nv2-radius-sm);
-}
-
-/* Info & Warning */
 .notient-settings-info-dim {
-  font-size: var(--nv2-text-sm);
-  color: var(--nv2-text-muted);
-}
-
-.notient-settings-info-box {
-  background: var(--nv2-bg-secondary);
-  border-radius: var(--nv2-radius-md);
-  padding: var(--nv2-space-md);
-}
-
-.notient-settings-warning {
-  color: var(--nv2-status-warning);
-}
-
-.notient-settings-notice {
-  background: color-mix(in srgb, var(--nv2-status-working), transparent 90%);
-  border-left: 3px solid var(--nv2-status-working);
-  padding: var(--nv2-space-sm) var(--nv2-space-md);
-  border-radius: var(--nv2-radius-sm);
-  font-size: var(--nv2-text-sm);
-  margin-top: var(--nv2-space-sm);
-}
-
-/* Toggle Buttons (Local/Network) */
-.notient-settings-toggle-row {
-  margin-bottom: var(--nv2-space-sm);
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
 }
 
 .notient-settings-toggle {
   display: inline-flex;
-  border: 1px solid var(--nv2-border-color);
-  border-radius: var(--nv2-radius-md);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
   overflow: hidden;
 }
 
 .notient-settings-toggle-btn {
   padding: var(--nv2-space-xs) var(--nv2-space-md);
   border: none;
-  background: transparent;
-  color: var(--nv2-text-muted);
+  background: none;
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: var(--nv2-text-sm);
-  transition: var(--nv2-transition);
-}
-
-.notient-settings-toggle-btn:hover {
-  background: var(--nv2-bg-secondary);
 }
 
 .notient-settings-toggle-btn.active {
-  background: var(--nv2-color-accent);
+  background: var(--interactive-accent);
   color: white;
-}
-
-/* Slider */
-.notient-settings-slider-section {
-  margin-bottom: var(--nv2-space-md);
-}
-
-.notient-settings-slider-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--nv2-space-xs);
-}
-
-.notient-settings-slider-value {
-  font-weight: 500;
-  color: var(--nv2-color-accent);
 }
 
 .notient-settings-slider {
   width: 100%;
   height: 4px;
   -webkit-appearance: none;
-  appearance: none;
-  background: var(--nv2-bg-secondary);
+  background: var(--background-secondary);
   border-radius: 2px;
-  outline: none;
 }
 
 .notient-settings-slider::-webkit-slider-thumb {
@@ -204,33 +95,17 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--nv2-color-accent);
+  background: var(--interactive-accent);
   cursor: pointer;
-  transition: var(--nv2-transition);
 }
 
-.notient-settings-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-}
-
-.notient-settings-slider::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--nv2-color-accent);
-  cursor: pointer;
-  border: none;
-}
-
-.notient-settings-tooltip {
+.notient-settings-slider-header {
   display: flex;
   justify-content: space-between;
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
-  margin-top: var(--nv2-space-xs);
+  margin-bottom: var(--nv2-space-xs);
 }
 
-.notient-tooltip-sep {
-  color: var(--nv2-border-color);
+.notient-settings-slider-value {
+  font-weight: 500;
+  color: var(--interactive-accent);
 }
-

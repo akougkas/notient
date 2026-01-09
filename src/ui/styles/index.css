@@ -1,34 +1,27 @@
-/* ==========================================================================
-   NOTIENT V2 - CSS Entry Point
-   Imports all split CSS files in correct order
-   ========================================================================== */
+/* Notient CSS Entry Point */
 
-/* Design Tokens & Variables */
+/* Tokens */
 @import "./tokens.css";
 
-/* Layout & Reset */
+/* Layout */
 @import "./base.css";
 
 /* Components */
 @import "./components/header.css";
+@import "./components/footer.css";
 @import "./components/note-card.css";
 @import "./components/quick-actions.css";
-@import "./components/intelligence-actions.css";
-@import "./components/omnibar.css";
 @import "./components/insight-stream.css";
+@import "./components/omnibar.css";
+@import "./components/intelligence-actions.css";
+@import "./components/index-status.css";
 @import "./components/status-bar.css";
 @import "./components/activity-log.css";
 @import "./components/workflow-card.css";
-@import "./components/footer.css";
-@import "./components/index-status.css";
 
 /* Views */
-@import "./views/wizard.css";
-@import "./views/task-modal.css";
-@import "./views/index-management.css";
+@import "./views/modals.css";
 
-/* Utilities */
-@import "./utilities.css";
-
-/* Settings */
+/* Settings & Utilities */
 @import "./settings.css";
+@import "./utilities.css";

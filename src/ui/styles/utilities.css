@@ -1,49 +1,36 @@
-/* ==========================================================================
-   Utilities / Empty States
-   ========================================================================== */
+/* Utilities */
 
 .nv2-empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   padding: var(--nv2-space-xl);
   text-align: center;
-  color: var(--nv2-text-muted);
-  opacity: 0.6;
-}
-
-.nv2-empty-state-icon {
-  font-size: 24px;
-  margin-bottom: var(--nv2-space-sm);
+  color: var(--text-muted);
 }
 
 .nv2-loading {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--nv2-space-xl);
   gap: var(--nv2-space-sm);
-  color: var(--nv2-text-muted);
+  padding: var(--nv2-space-lg);
+  color: var(--text-muted);
 }
 
 .nv2-loading-spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--nv2-border-color);
-  border-top-color: var(--nv2-color-accent);
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin 0.6s linear infinite;
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 .nv2-hidden {
   display: none !important;
 }
-

@@ -1,49 +1,40 @@
-/* ==========================================================================
-   Quick Actions
-   ========================================================================== */
+/* Quick Actions */
 
 .nv2-quick-actions {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
   gap: var(--nv2-space-sm);
 }
 
 .nv2-quick-action {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: var(--nv2-space-md);
-  background: var(--nv2-bg-secondary);
-  border: 1px solid var(--nv2-border-color);
-  border-radius: var(--nv2-radius-md);
+  padding: var(--nv2-space-sm);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
   cursor: pointer;
-  transition: var(--nv2-transition);
 }
 
 .nv2-quick-action:hover {
-  /* Subtle menu accent (Mira style) */
-  background: color-mix(in srgb, var(--nv2-color-accent), transparent 92%);
-  border-color: color-mix(in srgb, var(--nv2-color-accent), transparent 70%);
-  transform: translateY(-1px);
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
 }
 
 .nv2-quick-action--primary {
-  /* Subtle highlight for primary action */
-  border-color: var(--nv2-color-accent-subtle);
+  border-color: var(--interactive-accent);
 }
 
 .nv2-quick-action-icon {
-  margin-bottom: var(--nv2-space-xs);
-  color: var(--nv2-text-muted);
+  color: var(--text-muted);
+  margin-bottom: 2px;
 }
 
 .nv2-quick-action:hover .nv2-quick-action-icon {
-  color: var(--nv2-color-accent);
+  color: var(--interactive-accent);
 }
 
 .nv2-quick-action-label {
-  font-size: var(--nv2-text-xs);
-  font-weight: 500;
+  font-size: var(--font-smallest);
 }
-

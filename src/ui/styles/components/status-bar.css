@@ -1,87 +1,45 @@
-/* ==========================================================================
-   Agent Dashboard
-   ========================================================================== */
+/* Status Bar */
 
 .nv2-status-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--nv2-space-sm) var(--nv2-space-md);
-  background: var(--nv2-bg-secondary);
-  border-radius: var(--nv2-radius-md);
-  border: 1px solid var(--nv2-border-color);
+  padding: var(--nv2-space-sm);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
 }
 
 .nv2-status-bar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--nv2-space-sm);
 }
 
 .nv2-status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--nv2-text-muted);
+  background: var(--text-muted);
 }
 
 .nv2-status-dot--running {
-  background: var(--nv2-status-working);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--nv2-status-working), transparent 80%);
-  animation: pulse-dot 1.5s infinite;
-}
-
-@keyframes pulse-dot {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.7;
-  }
-
-  50% {
-    transform: scale(1.1);
-    opacity: 1;
-  }
-
-  100% {
-    transform: scale(0.95);
-    opacity: 0.7;
-  }
-}
-
-@keyframes pulse-border {
-  0% {
-    border-color: color-mix(in srgb, var(--nv2-status-working), transparent 70%);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--nv2-status-working), transparent 70%);
-  }
-
-  50% {
-    border-color: var(--nv2-status-working);
-    box-shadow: 0 0 8px 0 color-mix(in srgb, var(--nv2-status-working), transparent 50%);
-  }
-
-  100% {
-    border-color: color-mix(in srgb, var(--nv2-status-working), transparent 70%);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--nv2-status-working), transparent 70%);
-  }
+  background: var(--color-blue);
 }
 
 .nv2-status-bar-text {
-  font-size: var(--nv2-text-sm);
+  font-size: var(--font-smaller);
   font-weight: 500;
 }
 
 .nv2-status-bar-btn {
-  background: transparent;
+  background: none;
   border: none;
-  color: var(--nv2-text-muted);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
 }
 
-.nv2-status-bar-btn:hover {
-  color: var(--nv2-text-normal);
-}
-
+/* Agent Dashboard */
 .nv2-agent-dashboard-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -89,43 +47,19 @@
 }
 
 .nv2-agent-dashboard-card {
-  background: var(--nv2-bg-secondary);
-  border: 1px solid var(--nv2-border-color);
-  border-radius: var(--nv2-radius-md);
-  padding: var(--nv2-space-md);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  padding: var(--nv2-space-sm);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
   text-align: center;
-  gap: var(--nv2-space-xs);
-}
-
-.nv2-agent-dashboard-card-icon {
-  color: var(--nv2-text-muted);
 }
 
 .nv2-agent-dashboard-card-name {
-  font-size: var(--nv2-text-xs);
+  font-size: var(--font-smallest);
   font-weight: 600;
 }
 
 .nv2-agent-dashboard-card-status {
-  font-size: 10px;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--nv2-bg-primary);
-  color: var(--nv2-text-muted);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
 }
-
-.nv2-agent-dashboard-card-status--active {
-  color: var(--nv2-status-healthy);
-  border: 1px solid color-mix(in srgb, var(--nv2-status-healthy), transparent 70%);
-}
-
-.nv2-status-pulsing {
-  color: var(--nv2-status-working);
-  border: 1px solid color-mix(in srgb, var(--nv2-status-working), transparent 70%);
-  animation: pulse-border 2s infinite;
-}
-

@@ -126,7 +126,7 @@ export class Kernel {
 
   /** Save current settings to disk */
   async saveSettings(): Promise<void> {
-    const { saveSettings } = await import("../settings");
+    const { saveSettings } = await import("../ui/settings");
     await saveSettings(this.context.plugin, this.context.settings);
   }
 

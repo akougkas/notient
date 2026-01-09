@@ -1,67 +1,46 @@
-/* ==========================================================================
-   Note Vitals Card
-   ========================================================================== */
+/* Note Card */
 
 .nv2-note-card {
-  background: var(--nv2-bg-secondary);
-  border: 1px solid var(--nv2-border-color);
-  border-radius: var(--nv2-radius-md);
-  padding: var(--nv2-space-lg);
-  box-shadow: var(--nv2-shadow-sm);
+  padding: var(--nv2-space-md);
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
 }
 
 .nv2-note-card-title {
-  font-size: var(--nv2-text-xl);
-  font-weight: 700;
+  font-size: var(--font-text-size);
+  font-weight: 600;
   margin-bottom: var(--nv2-space-sm);
-  word-break: break-word;
 }
 
 .nv2-note-card-tags {
   display: flex;
   flex-wrap: wrap;
   gap: var(--nv2-space-xs);
-  margin-bottom: var(--nv2-space-md);
+  margin-bottom: var(--nv2-space-sm);
 }
 
 .nv2-tag {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-muted);
-  background: var(--nv2-bg-primary);
-  border: 1px solid var(--nv2-border-color);
-  border-radius: 12px;
-  padding: 2px 8px;
-  font-family: var(--nv2-font-mono);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  background: var(--background-primary);
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
 }
 
 .nv2-note-card-links {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--nv2-space-md);
+  display: flex;
+  gap: var(--nv2-space-lg);
 }
 
 .nv2-link-row {
   display: flex;
   align-items: center;
-  gap: var(--nv2-space-sm);
-  color: var(--nv2-text-muted);
+  gap: var(--nv2-space-xs);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
 }
 
 .nv2-link-row-icon {
-  opacity: 0.6;
+  width: 14px;
+  height: 14px;
 }
-
-.nv2-link-row-label {
-  font-size: var(--nv2-text-sm);
-}
-
-.nv2-link-row-preview {
-  font-size: var(--nv2-text-xs);
-  color: var(--nv2-text-faint);
-  margin-left: auto;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
