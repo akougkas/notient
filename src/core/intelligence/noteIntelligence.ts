@@ -500,7 +500,7 @@ ${cleaned.slice(0, 6000)}`; // limit context window
     content: string,
     tags: string[],
   ): Promise<IntelligenceSuggestedLink[]> {
-    const search = this.kernel.getService<SearchPipeline>("searchPipeline");
+    const search = this.kernel.getService<SearchPipeline>("search");
     if (!search) return [];
 
     // Use hierarchical retrieval to find related notes

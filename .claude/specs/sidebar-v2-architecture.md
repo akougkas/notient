@@ -1,4 +1,4 @@
-# Notient Sidebar v2.0 - Architecture Specification
+"# Notient Sidebar v2.0 - Architecture Specification
 
 > Three-view tabbed sidebar with locked chrome and dynamic content
 
@@ -597,3 +597,4 @@ src/ui/styles/
 - [ ] Recent Activity shows undo capability
 - [ ] Chat maintains context with current note
 - [ ] All views have consistent locked layout
+"

@@ -126,7 +126,7 @@ export class ProfileManager {
       throw new Error("Index manager not available");
     }
 
-    const indexedCount = await indexManager.getIndexedCount();
+    const indexedCount = indexManager.getIndexedCount();
     if (indexedCount === 0) {
       throw new Error("Please build the vault index first (Settings > Index > Rebuild)");
     }
