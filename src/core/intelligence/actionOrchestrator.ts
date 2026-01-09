@@ -56,6 +56,8 @@ export interface TriggerConfig {
   sourceUrl?: string;
   /** Extract deadlines */
   extractDeadlines?: boolean;
+  /** Existing vault paths for duplicate detection */
+  existingPaths?: Set<string>;
 }
 
 /**
@@ -104,6 +106,7 @@ export class ActionOrchestrator {
       triggerConfig: triggerConfig as Record<string, unknown> | undefined,
       llm: this.llm,
       search: this.search,
+      existingPaths: triggerConfig?.existingPaths,
     };
 
     // Create pipeline

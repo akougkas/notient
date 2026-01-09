@@ -78,6 +78,8 @@ export class Kernel {
   private workflowRunner: unknown = null;
   private trustLevelManager: unknown = null;
   private actionApplier: unknown = null;
+  // Intelligence 2.0
+  private actionOrchestrator: unknown = null;
 
   constructor(private context: KernelContext) {
     this._eventBus = new EventBus();
@@ -300,6 +302,9 @@ export class Kernel {
       case "actionApplier":
         this.actionApplier = service;
         break;
+      case "actionOrchestrator":
+        this.actionOrchestrator = service;
+        break;
     }
   }
 
@@ -345,6 +350,8 @@ export class Kernel {
         return this.trustLevelManager as T;
       case "actionApplier":
         return this.actionApplier as T;
+      case "actionOrchestrator":
+        return this.actionOrchestrator as T;
       default:
         return null;
     }

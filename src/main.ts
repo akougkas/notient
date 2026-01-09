@@ -19,6 +19,7 @@ import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
+import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
 import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
 import { Kernel, type KernelContext } from "./core/kernel";
 // New architecture (Phase 1.8)
@@ -65,6 +66,8 @@ export default class NotientPlugin extends Plugin {
   private trustLevelManager: TrustLevelManager | null = null;
   private actionApplier: ActionApplier | null = null;
   private workflowRunner: WorkflowRunner | null = null;
+  // Intelligence 2.0
+  private actionOrchestrator: ActionOrchestrator | null = null;
 
   private servicesInitialized = false;
 
@@ -154,6 +157,9 @@ export default class NotientPlugin extends Plugin {
       }
       if (this.actionApplier) {
         this.actionApplier = null;
+      }
+      if (this.actionOrchestrator) {
+        this.actionOrchestrator = null;
       }
       if (this.trustLevelManager) {
         this.trustLevelManager = null;
@@ -394,6 +400,16 @@ export default class NotientPlugin extends Plugin {
           },
         );
         this.kernel.registerService("workflowRunner", this.workflowRunner);
+
+        // Intelligence 2.0: ActionOrchestrator (requires lmstudio + search)
+        if (this.lmStudioService && this.searchPipeline) {
+          this.actionOrchestrator = new ActionOrchestrator(
+            this.lmStudioService,
+            this.searchPipeline,
+          );
+          this.kernel.registerService("actionOrchestrator", this.actionOrchestrator);
+          console.log("[Notient] ActionOrchestrator initialized");
+        }
 
         console.log("[Notient] Phase 2 agentic services initialized");
 
@@ -687,6 +703,9 @@ export default class NotientPlugin extends Plugin {
       }
       if (this.actionApplier) {
         this.actionApplier = null;
+      }
+      if (this.actionOrchestrator) {
+        this.actionOrchestrator = null;
       }
       if (this.trustLevelManager) {
         this.trustLevelManager = null;

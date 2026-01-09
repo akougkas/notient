@@ -330,8 +330,15 @@ export class ActionApplier {
         return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId);
 
       case "highlight_text_issues":
+        // Phase 3: Requires editor annotation API integration
+        // Would add inline highlights in the note editor for text issues
+        console.log("[ActionApplier] highlight_text_issues is a Phase 3 feature (no-op)");
+        return { success: true, recordId: `noop-${Date.now()}` };
+
       case "extract_to_calendar":
-        // These actions require external integration, return success for now
+        // Phase 3: Requires calendar plugin integration (Tasks, FullCalendar, etc.)
+        // Would create calendar entries from extracted deadlines
+        console.log("[ActionApplier] extract_to_calendar is a Phase 3 feature (no-op)");
         return { success: true, recordId: `noop-${Date.now()}` };
 
       default:

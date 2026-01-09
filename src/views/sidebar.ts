@@ -20,6 +20,7 @@ import { isSlashCommand, parseSlashCommand } from "../core/agentic/commandParser
 import type { ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { WorkflowRunner } from "../core/agentic/workflowRunner";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "../core/constants";
+import type { ActionOrchestrator } from "../core/intelligence/actionOrchestrator";
 import type { NoteIntelligenceService } from "../core/intelligence/noteIntelligence";
 import type {
   IntelligenceEntity,
@@ -40,6 +41,10 @@ import {
 import type { IndexProgress } from "../types/indexer";
 import type { SearchResult } from "../types/search";
 import { InsightStream } from "./sidebar/components/InsightStream";
+import {
+  IntelligenceActions,
+  type IntelligenceActionsConfig,
+} from "./sidebar/components/IntelligenceActions";
 import { NoteCard } from "./sidebar/components/NoteCard";
 import { QuickActions, createNoteQuickActions } from "./sidebar/components/QuickActions";
 import { type IndexManagerStats, SidebarFooter } from "./sidebar/components/SidebarFooter";
@@ -148,6 +153,10 @@ export class NotientSidebarView extends ItemView {
     return this.kernel.getService<ActionApplier>("actionApplier");
   }
 
+  private getActionOrchestrator(): ActionOrchestrator | null {
+    return this.kernel.getService<ActionOrchestrator>("actionOrchestrator");
+  }
+
   // ============ Main Render ============
 
   private render(): void {
@@ -216,6 +225,9 @@ export class NotientSidebarView extends ItemView {
 
     // Quick Actions section
     this.renderQuickActionsSection();
+
+    // Intelligence 2.0 Actions section
+    this.renderIntelligenceActionsSection();
 
     // Insight Stream section
     this.renderInsightStream();
@@ -524,6 +536,45 @@ export class NotientSidebarView extends ItemView {
     );
     const quickActions = new QuickActions(actions);
     quickActions.render(this.contentEl_);
+  }
+
+  private renderIntelligenceActionsSection(): void {
+    if (!this.contentEl_) return;
+
+    const orchestrator = this.getActionOrchestrator();
+    const actionApplier = this.getActionApplier();
+
+    // Only render if both services are available
+    if (!orchestrator || !actionApplier) return;
+
+    const config: IntelligenceActionsConfig = {
+      orchestrator,
+      actionApplier,
+      getContext: async () => {
+        if (!this.noteVitals) return null;
+        // Read the note content
+        const file = this.app.vault.getAbstractFileByPath(this.noteVitals.path);
+        if (!(file instanceof TFile)) return null;
+
+        try {
+          const noteContent = await this.app.vault.cachedRead(file);
+          return {
+            notePath: this.noteVitals.path,
+            noteTitle: this.noteVitals.title,
+            noteContent,
+          };
+        } catch {
+          return null;
+        }
+      },
+      getExistingPaths: () => {
+        const files = this.kernel.obsidian.getMarkdownFiles();
+        return new Set(files.map((f) => f.path));
+      },
+    };
+
+    const intelligenceActions = new IntelligenceActions(config);
+    intelligenceActions.render(this.contentEl_);
   }
 
   private renderSearchSection(): void {
