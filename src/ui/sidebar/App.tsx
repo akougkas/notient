@@ -932,6 +932,109 @@ export function App() {
             onOpenNote={(path) => {
               kernel.obsidian.openFile(path);
             }}
+            onAction={async (action) => {
+              // Handle inline actions from chat messages
+              const currentPath = chatContext.value.notePath;
+              if (!currentPath && action.type !== "open-note" && action.type !== "create-note") {
+                new Notice("No note context for this action");
+                return;
+              }
+
+              switch (action.type) {
+                case "open-note": {
+                  const path = (action.payload as { path?: string })?.path;
+                  if (path) {
+                    kernel.obsidian.openFile(path);
+                  }
+                  break;
+                }
+
+                case "apply-links": {
+                  if (!actionApplier || !currentPath) {
+                    new Notice("Action system not available");
+                    return;
+                  }
+                  const links = (action.payload as { links?: string[] })?.links || [];
+                  if (links.length === 0) {
+                    new Notice("No links to apply");
+                    return;
+                  }
+                  const result = await actionApplier.applyConfirmed({
+                    id: `action-${Date.now()}`,
+                    type: "append_related_links",
+                    target: currentPath,
+                    title: `Add ${links.length} related links`,
+                    risk: "low",
+                    reason: "User applied links from chat",
+                    requiresWriteLock: true,
+                    payload: { links },
+                  });
+                  if (result.success) {
+                    new Notice(`Added ${links.length} links`);
+                  } else {
+                    new Notice(`Failed: ${result.error}`);
+                  }
+                  break;
+                }
+
+                case "apply-tags": {
+                  if (!actionApplier || !currentPath) {
+                    new Notice("Action system not available");
+                    return;
+                  }
+                  const tags = (action.payload as { tags?: string[] })?.tags || [];
+                  if (tags.length === 0) {
+                    new Notice("No tags to apply");
+                    return;
+                  }
+                  const result = await actionApplier.applyConfirmed({
+                    id: `action-${Date.now()}`,
+                    type: "frontmatter_add_tags",
+                    target: currentPath,
+                    title: `Add ${tags.length} tags`,
+                    risk: "low",
+                    reason: "User applied tags from chat",
+                    requiresWriteLock: true,
+                    payload: { tags },
+                  });
+                  if (result.success) {
+                    new Notice(`Added ${tags.length} tags`);
+                  } else {
+                    new Notice(`Failed: ${result.error}`);
+                  }
+                  break;
+                }
+
+                case "create-note": {
+                  if (!actionApplier) {
+                    new Notice("Action system not available");
+                    return;
+                  }
+                  const payload = action.payload as { path?: string; content?: string };
+                  if (!payload?.path || !payload?.content) {
+                    new Notice("Missing path or content");
+                    return;
+                  }
+                  const result = await actionApplier.applyConfirmed({
+                    id: `action-${Date.now()}`,
+                    type: "create_note",
+                    target: payload.path,
+                    title: `Create ${payload.path.split("/").pop()}`,
+                    risk: "low",
+                    reason: "User created note from chat",
+                    requiresWriteLock: true,
+                    payload: { path: payload.path, content: payload.content },
+                  });
+                  if (result.success) {
+                    new Notice(`Created ${payload.path}`);
+                    kernel.obsidian.openFile(payload.path);
+                  } else {
+                    new Notice(`Failed: ${result.error}`);
+                  }
+                  break;
+                }
+              }
+            }}
             showStats={true}
           />
         )}
