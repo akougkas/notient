@@ -14,6 +14,7 @@ import type { HealthMonitor } from "../services/healthMonitor";
 import type { IndexManager } from "../services/indexManager";
 import type { LMStudioService } from "../services/lmstudio";
 import type { OllamaService } from "../services/ollama";
+import type { OllamaRerankerService } from "../services/ollamaReranker";
 import { StoragePaths } from "../services/storagePaths";
 import { VaultLock } from "../services/vaultLock";
 import type { VectorStore } from "../services/vectorStore";
@@ -58,6 +59,7 @@ interface ServiceState {
 export interface ServiceRegistry {
   healthMonitor: HealthMonitor;
   ollama: OllamaService;
+  ollamaReranker: OllamaRerankerService;
   lmstudio: LMStudioService;
   vectorStore: VectorStore;
   indexManager: IndexManager;
@@ -112,6 +114,7 @@ export class Kernel {
   // Service references (set during initialization)
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
+  private ollamaReranker: OllamaRerankerService | null = null;
   private lmStudioService: LMStudioService | null = null;
   private vectorStore: VectorStore | null = null;
   private indexManager: IndexManager | null = null;
@@ -315,6 +318,9 @@ export class Kernel {
       case "ollama":
         this.ollamaService = service as OllamaService;
         break;
+      case "ollamaReranker":
+        this.ollamaReranker = service as OllamaRerankerService;
+        break;
       case "lmstudio":
         this.lmStudioService = service as LMStudioService;
         break;
@@ -396,6 +402,8 @@ export class Kernel {
         return this.healthMonitor;
       case "ollama":
         return this.ollamaService;
+      case "ollamaReranker":
+        return this.ollamaReranker;
       case "lmstudio":
         return this.lmStudioService;
       case "vectorStore":
@@ -472,6 +480,7 @@ export class Kernel {
       this.indexManager,
       this.vectorStore,
       this.lmStudioService,
+      this.ollamaReranker,
       this.ollamaService,
       this.healthMonitor,
     ];

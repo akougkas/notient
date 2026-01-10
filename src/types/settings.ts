@@ -12,6 +12,8 @@ export interface NotientSettings {
   ollama: {
     host: string;
     embeddingModel: string;
+    /** Dedicated reranker model (default: B-A-M-N/Qwen3-Reranker-4B) */
+    rerankModel: string;
     enabled: boolean;
   };
 
@@ -151,12 +153,13 @@ export const DEFAULT_SETTINGS: NotientSettings = {
   version: SETTINGS_VERSION,
   ollama: {
     host: "http://127.0.0.1:11434",
-    embeddingModel: "nomic-embed-text",
+    embeddingModel: "qwen3-embedding:0.6b", // Best accuracy (100%), 1024d, 32k ctx
+    rerankModel: "B-A-M-N/Qwen3-Reranker-4B", // Dedicated reranker (100% precision, 80% F1)
     enabled: true,
   },
   lmstudio: {
     host: "http://127.0.0.1:1234",
-    reasoningModel: "",
+    reasoningModel: "falcon-h1r-7b", // Default chat/reasoning model
     enabled: true,
   },
   indexing: {

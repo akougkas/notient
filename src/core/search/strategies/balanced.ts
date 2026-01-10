@@ -14,6 +14,7 @@
  */
 
 import type { LMStudioService } from "../../../services/lmstudio";
+import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import type { LLMProvider } from "../../llm/provider";
 import type { RankedResult, RerankCandidate } from "../../llm/types";
@@ -25,7 +26,7 @@ import type {
   StrategySearchOptions,
 } from "./types";
 
-/** Reranker abstraction (LLMProvider or legacy LMStudioService) */
+/** Reranker abstraction (OllamaRerankerService, LLMProvider, or legacy LMStudioService) */
 type Reranker = {
   rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
 };
@@ -234,12 +235,20 @@ export class BalancedSearchStrategy implements SearchStrategy {
   }
 
   /**
-   * Get reranker service (LLMProvider or legacy LMStudioService)
+   * Get reranker service (prioritizes dedicated Ollama reranker, falls back to LLM)
    */
   private getReranker(): Reranker | null {
+    // Priority 1: Dedicated Ollama reranker (Qwen3-Reranker-4B)
+    const ollamaReranker = this.context.kernel.getService<OllamaRerankerService>("ollamaReranker");
+    if (ollamaReranker?.isReady()) {
+      return ollamaReranker;
+    }
+
+    // Priority 2: LLM Provider (falls back to chat-based reranking)
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
     if (provider?.isReady) return provider;
 
+    // Priority 3: Legacy LM Studio service
     const legacy = this.context.kernel.getService<LMStudioService>("lmstudio");
     if (legacy?.isReady()) return legacy;
 

@@ -1,0 +1,706 @@
+{
+  "timestamp": "2026-01-10T03:41:00.247Z",
+  "results": [
+    {
+      "model": "qllama/bge-reranker-v2-m3",
+      "queryLatencies": [
+        55.83922299999995,
+        56.49223699999993,
+        56.66777000000002,
+        56.69089999999983,
+        56.74180100000012,
+        56.845732999999996,
+        56.89339000000018,
+        57.229274999999916,
+        57.42023500000005,
+        57.85982899999999,
+        58.634026000000176,
+        58.80526599999985,
+        59.88337000000001,
+        60.034703000000036,
+        60.04899999999998,
+        60.24641099999985,
+        61.581461999999874,
+        62.04995400000007,
+        62.18174299999987,
+        64.97688000000005,
+        67.06061899999997,
+        67.34113599999998,
+        68.07066900000001,
+        68.1115769999999,
+        69.23109,
+        69.41561999999999,
+        71.36702700000001,
+        72.16943700000002,
+        72.300227,
+        72.86907999999994
+      ],
+      "scores": [
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Machine learning is a subset of artificial intelli",
+          "score": 0.9858918379985309,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Deep learning neural networks are transforming AI ",
+          "score": 0.9744489877240975,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "AI-powered tools help automate repetitive tasks an",
+          "score": 0.9821289997935978,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The weather forecast shows rain tomorrow with temp",
+          "score": 0.9089347058303796,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Recipe for chocolate cake: mix flour, sugar, eggs,",
+          "score": 0.9861943097897985,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The meeting is scheduled for next Tuesday at 3pm i",
+          "score": 0.9555144120864152,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Obsidian uses a local vault to store all your mark",
+          "score": 0.9914894581884495,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Organize your notes using folders, tags, and links",
+          "score": 0.7673640748491246,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The daily notes plugin helps maintain a consistent",
+          "score": 0.8987561076897373,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Python is a popular programming language for data ",
+          "score": 0.8249758884756332,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The stock market closed higher today with tech sto",
+          "score": 0.7332389181031193,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Exercise regularly and maintain a balanced diet fo",
+          "score": 0.7842987942223771,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Define component props using TypeScript interfaces",
+          "score": 0.9766740636970139,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "React functional components accept props as their ",
+          "score": 0.9752148626340095,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Use generic types to create reusable component pro",
+          "score": 0.9721470287322223,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Java enterprise applications use Spring framework ",
+          "score": 0.989666241031933,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "CSS flexbox provides powerful layout capabilities ",
+          "score": 0.9977246318141608,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Database normalization reduces data redundancy in ",
+          "score": 0.9797723697939649,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Git merge conflicts occur when the same lines are ",
+          "score": 0.9969075824746797,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Use git mergetool to resolve conflicts with a visu",
+          "score": 0.9880078589343726,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "After resolving conflicts, stage the files and com",
+          "score": 0.9976342142932453,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "The solar system contains eight planets orbiting t",
+          "score": 0.9172116176193355,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Coffee beans are roasted at different temperatures",
+          "score": 0.9372281254314999,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Ancient Rome was one of the largest empires in hum",
+          "score": 0.8544985880887084,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "10 Pro Claude Code Tips & Tricks NO ONE Shares",
+          "score": 0.9983470758497647,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Claude Code is Amazing... Until It DELETES Product",
+          "score": 0.9929291504554506,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Use Claude Code for terminal control and command e",
+          "score": 0.9658119002170831,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Photoshop tutorials for image editing beginners",
+          "score": 0.8829683258283704,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Best practices for email marketing campaigns",
+          "score": 0.934567488364813,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Home gardening tips for growing vegetables",
+          "score": 0.8815408649054777,
+          "expected": "irrelevant"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "model": "B-A-M-N/qwen3-reranker-0.6b-fp16",
+      "queryLatencies": [
+        69.97577700000011,
+        70.04798399999981,
+        71.11555399999997,
+        72.08926500000007,
+        72.57458599999973,
+        72.97852299999977,
+        73.55440799999997,
+        73.71633099999963,
+        73.76484900000014,
+        73.78675000000021,
+        74.14263000000028,
+        74.80491699999993,
+        74.84388099999978,
+        74.88502400000016,
+        74.94999600000028,
+        75.12031300000035,
+        75.19498300000032,
+        75.61301600000024,
+        75.89263800000026,
+        76.02550299999984,
+        77.23120000000017,
+        77.27247999999963,
+        78.02684099999988,
+        78.02773699999989,
+        79.28807000000006,
+        79.45439400000032,
+        82.31234700000005,
+        83.01567599999998,
+        84.03965500000004,
+        189.40326400000004
+      ],
+      "scores": [
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Machine learning is a subset of artificial intelli",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Deep learning neural networks are transforming AI ",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "AI-powered tools help automate repetitive tasks an",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The weather forecast shows rain tomorrow with temp",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Recipe for chocolate cake: mix flour, sugar, eggs,",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The meeting is scheduled for next Tuesday at 3pm i",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Obsidian uses a local vault to store all your mark",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Organize your notes using folders, tags, and links",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The daily notes plugin helps maintain a consistent",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Python is a popular programming language for data ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The stock market closed higher today with tech sto",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Exercise regularly and maintain a balanced diet fo",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Define component props using TypeScript interfaces",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "React functional components accept props as their ",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Use generic types to create reusable component pro",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Java enterprise applications use Spring framework ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "CSS flexbox provides powerful layout capabilities ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Database normalization reduces data redundancy in ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Git merge conflicts occur when the same lines are ",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Use git mergetool to resolve conflicts with a visu",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "After resolving conflicts, stage the files and com",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "The solar system contains eight planets orbiting t",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Coffee beans are roasted at different temperatures",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Ancient Rome was one of the largest empires in hum",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "10 Pro Claude Code Tips & Tricks NO ONE Shares",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Claude Code is Amazing... Until It DELETES Product",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Use Claude Code for terminal control and command e",
+          "score": 0.5,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Photoshop tutorials for image editing beginners",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Best practices for email marketing campaigns",
+          "score": 0.5,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Home gardening tips for growing vegetables",
+          "score": 0,
+          "expected": "irrelevant"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "model": "B-A-M-N/Qwen3-Reranker-4B",
+      "queryLatencies": [
+        60.5836019999997,
+        62.722311999999874,
+        62.80601800000022,
+        63.06228199999987,
+        64.2473370000007,
+        64.37364799999978,
+        64.5120879999995,
+        64.5836419999996,
+        64.60066300000017,
+        65.49498500000027,
+        65.75718799999959,
+        66.5187449999994,
+        66.77739699999984,
+        69.32916900000055,
+        70.69342900000083,
+        70.73433400000067,
+        71.73349099999996,
+        71.78088900000057,
+        72.34022000000004,
+        86.15115600000081,
+        86.27207399999952,
+        87.2993349999997,
+        88.87020499999926,
+        90.18335899999965,
+        91.2578739999999,
+        91.86698199999955,
+        91.87039399999958,
+        93.1927939999996,
+        93.97795599999972,
+        95.7070990000002
+      ],
+      "scores": [
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Machine learning is a subset of artificial intelli",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Deep learning neural networks are transforming AI ",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "AI-powered tools help automate repetitive tasks an",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The weather forecast shows rain tomorrow with temp",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "Recipe for chocolate cake: mix flour, sugar, eggs,",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "machine learning artificial intelligence",
+          "doc": "The meeting is scheduled for next Tuesday at 3pm i",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Obsidian uses a local vault to store all your mark",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Organize your notes using folders, tags, and links",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The daily notes plugin helps maintain a consistent",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Python is a popular programming language for data ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "The stock market closed higher today with tech sto",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Obsidian vault notes organization",
+          "doc": "Exercise regularly and maintain a balanced diet fo",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Define component props using TypeScript interfaces",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "React functional components accept props as their ",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Use generic types to create reusable component pro",
+          "score": 0,
+          "expected": "relevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Java enterprise applications use Spring framework ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "CSS flexbox provides powerful layout capabilities ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "TypeScript React component props",
+          "doc": "Database normalization reduces data redundancy in ",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Git merge conflicts occur when the same lines are ",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Use git mergetool to resolve conflicts with a visu",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "After resolving conflicts, stage the files and com",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "The solar system contains eight planets orbiting t",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Coffee beans are roasted at different temperatures",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "git branch merge conflict resolution",
+          "doc": "Ancient Rome was one of the largest empires in hum",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "10 Pro Claude Code Tips & Tricks NO ONE Shares",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Claude Code is Amazing... Until It DELETES Product",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Use Claude Code for terminal control and command e",
+          "score": 1,
+          "expected": "relevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Photoshop tutorials for image editing beginners",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Best practices for email marketing campaigns",
+          "score": 0,
+          "expected": "irrelevant"
+        },
+        {
+          "query": "Claude Code tips productivity",
+          "doc": "Home gardening tips for growing vegetables",
+          "score": 0,
+          "expected": "irrelevant"
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "metrics": {
+    "qllama/bge-reranker-v2-m3": {
+      "latency": {
+        "p50": 60.24641099999985,
+        "p95": 72.300227,
+        "mean": 62.50198966666664
+      },
+      "accuracy": 0.5,
+      "precision": 0.5,
+      "recall": 1,
+      "f1": 0.6666666666666666,
+      "scoreSeparation": 0.05969452814302634,
+      "avgRelevantScore": 0.9642502135687587,
+      "avgIrrelevantScore": 0.9045556854257324,
+      "errorCount": 0
+    },
+    "B-A-M-N/qwen3-reranker-0.6b-fp16": {
+      "latency": {
+        "p50": 75.12031300000035,
+        "p95": 84.03965500000004,
+        "mean": 79.43828640000002
+      },
+      "accuracy": 0.7666666666666667,
+      "precision": 0.9,
+      "recall": 0.6,
+      "f1": 0.7200000000000001,
+      "scoreSeparation": 0.3333333333333333,
+      "avgRelevantScore": 0.36666666666666664,
+      "avgIrrelevantScore": 0.03333333333333333,
+      "errorCount": 0
+    },
+    "B-A-M-N/Qwen3-Reranker-4B": {
+      "latency": {
+        "p50": 70.73433400000067,
+        "p95": 93.97795599999972,
+        "mean": 75.31002223333329
+      },
+      "accuracy": 0.8333333333333334,
+      "precision": 1,
+      "recall": 0.6666666666666666,
+      "f1": 0.8,
+      "scoreSeparation": 0.6666666666666666,
+      "avgRelevantScore": 0.6666666666666666,
+      "avgIrrelevantScore": 0,
+      "errorCount": 0
+    }
+  }
+}

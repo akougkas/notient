@@ -1,0 +1,378 @@
+{
+  "timestamp": "2026-01-10T03:53:45.837Z",
+  "results": [
+    {
+      "model": "granite-embedding:30m",
+      "dimension": 384,
+      "singleLatencyMs": [
+        18.43580800000001,
+        18.469899999999996,
+        19.268896000000012,
+        19.382487999999995,
+        20.195943,
+        20.31851899999998,
+        20.35515799999999,
+        20.445753999999994,
+        22.250315,
+        23.32998600000002
+      ],
+      "batchLatencyMs": [
+        46.45498400000008,
+        46.76430400000004,
+        48.61189300000001,
+        49.54946099999995,
+        52.690669999999955
+      ],
+      "similarityScores": [
+        {
+          "pair": "Machine learning algorithms im... vs ML models learn from training ...",
+          "score": 0.7609519347464704,
+          "expected": "high"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs Obsidian helps you organize yo...",
+          "score": 0.9102919580741536,
+          "expected": "high"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs TS provides type safety for JS...",
+          "score": 0.7744950688645496,
+          "expected": "high"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs Version control systems like g...",
+          "score": 0.7509942432251036,
+          "expected": "high"
+        },
+        {
+          "pair": "Python is popular for data sci... vs Data scientists often use Pyth...",
+          "score": 0.9057724525180717,
+          "expected": "high"
+        },
+        {
+          "pair": "Machine learning algorithms im... vs The recipe calls for two cups ...",
+          "score": 0.4580589635066842,
+          "expected": "low"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs The stock market closed higher...",
+          "score": 0.5101832032457935,
+          "expected": "low"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs Ancient Rome was a powerful em...",
+          "score": 0.4827274738433822,
+          "expected": "low"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs The weather forecast predicts ...",
+          "score": 0.49174530419923534,
+          "expected": "low"
+        },
+        {
+          "pair": "Python is popular for data sci... vs My favorite color is blue...",
+          "score": 0.5276409796960335,
+          "expected": "low"
+        }
+      ]
+    },
+    {
+      "model": "granite-embedding:278m",
+      "dimension": 768,
+      "singleLatencyMs": [
+        54.01817899999992,
+        56.068759,
+        56.09224900000004,
+        56.18911800000001,
+        56.21067900000003,
+        56.829524999999876,
+        56.87079299999982,
+        57.18575399999986,
+        57.19050399999992,
+        58.707897
+      ],
+      "batchLatencyMs": [
+        103.79985600000009,
+        108.16330299999981,
+        110.93496600000026,
+        112.41870000000017,
+        114.81858699999975
+      ],
+      "similarityScores": [
+        {
+          "pair": "Machine learning algorithms im... vs ML models learn from training ...",
+          "score": 0.6491862284834347,
+          "expected": "high"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs Obsidian helps you organize yo...",
+          "score": 0.8713037805246433,
+          "expected": "high"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs TS provides type safety for JS...",
+          "score": 0.7865695608402272,
+          "expected": "high"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs Version control systems like g...",
+          "score": 0.7785444199673965,
+          "expected": "high"
+        },
+        {
+          "pair": "Python is popular for data sci... vs Data scientists often use Pyth...",
+          "score": 0.8621069241341169,
+          "expected": "high"
+        },
+        {
+          "pair": "Machine learning algorithms im... vs The recipe calls for two cups ...",
+          "score": 0.369693188766694,
+          "expected": "low"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs The stock market closed higher...",
+          "score": 0.5115522339229557,
+          "expected": "low"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs Ancient Rome was a powerful em...",
+          "score": 0.344356746838679,
+          "expected": "low"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs The weather forecast predicts ...",
+          "score": 0.4806515275614491,
+          "expected": "low"
+        },
+        {
+          "pair": "Python is popular for data sci... vs My favorite color is blue...",
+          "score": 0.5441805406416945,
+          "expected": "low"
+        }
+      ]
+    },
+    {
+      "model": "qwen3-embedding:0.6b",
+      "dimension": 1024,
+      "singleLatencyMs": [
+        40.395142000000305,
+        40.81906499999968,
+        40.92475999999988,
+        41.05106200000046,
+        42.943959999999606,
+        43.81842499999948,
+        45.00367499999993,
+        48.00437800000054,
+        48.01194899999973,
+        48.40751900000032
+      ],
+      "batchLatencyMs": [
+        116.48680000000058,
+        127.70813299999918,
+        133.29061400000046,
+        133.68777299999965,
+        135.2111330000007
+      ],
+      "similarityScores": [
+        {
+          "pair": "Machine learning algorithms im... vs ML models learn from training ...",
+          "score": 0.7512547952414612,
+          "expected": "high"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs Obsidian helps you organize yo...",
+          "score": 0.925288043524288,
+          "expected": "high"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs TS provides type safety for JS...",
+          "score": 0.8124787012870026,
+          "expected": "high"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs Version control systems like g...",
+          "score": 0.7772081086386309,
+          "expected": "high"
+        },
+        {
+          "pair": "Python is popular for data sci... vs Data scientists often use Pyth...",
+          "score": 0.8638089063166254,
+          "expected": "high"
+        },
+        {
+          "pair": "Machine learning algorithms im... vs The recipe calls for two cups ...",
+          "score": 0.3538585705237573,
+          "expected": "low"
+        },
+        {
+          "pair": "Obsidian is a note-taking appl... vs The stock market closed higher...",
+          "score": 0.3991991849244993,
+          "expected": "low"
+        },
+        {
+          "pair": "TypeScript adds types to JavaS... vs Ancient Rome was a powerful em...",
+          "score": 0.29841792275285084,
+          "expected": "low"
+        },
+        {
+          "pair": "Git tracks changes to source c... vs The weather forecast predicts ...",
+          "score": 0.3374046292870023,
+          "expected": "low"
+        },
+        {
+          "pair": "Python is popular for data sci... vs My favorite color is blue...",
+          "score": 0.4229334414186569,
+          "expected": "low"
+        }
+      ]
+    }
+  ],
+  "metrics": {
+    "granite-embedding:30m": {
+      "dimension": 384,
+      "latency": {
+        "single": {
+          "p50": 20.31851899999998,
+          "p95": 23.32998600000002,
+          "mean": 20.245276699999998
+        },
+        "batch8": {
+          "p50": 48.61189300000001,
+          "mean": 48.814262400000004,
+          "perItem": 6.1017828000000005
+        }
+      },
+      "semantic": {
+        "avgHighSim": 0.8205011314856698,
+        "avgLowSim": 0.4940711848982257,
+        "separation": 0.3264299465874441,
+        "accuracy": 0.8
+      },
+      "memoryPerChunk": 1536
+    },
+    "granite-embedding:278m": {
+      "dimension": 768,
+      "latency": {
+        "single": {
+          "p50": 56.829524999999876,
+          "p95": 58.707897,
+          "mean": 56.53634569999995
+        },
+        "batch8": {
+          "p50": 110.93496600000026,
+          "mean": 110.02708240000001,
+          "perItem": 13.753385300000001
+        }
+      },
+      "semantic": {
+        "avgHighSim": 0.7895421827899638,
+        "avgLowSim": 0.4500868475462944,
+        "separation": 0.3394553352436694,
+        "accuracy": 0.7
+      },
+      "memoryPerChunk": 3072
+    },
+    "qwen3-embedding:0.6b": {
+      "dimension": 1024,
+      "latency": {
+        "single": {
+          "p50": 43.81842499999948,
+          "p95": 48.40751900000032,
+          "mean": 43.93799349999999
+        },
+        "batch8": {
+          "p50": 133.29061400000046,
+          "mean": 129.27689060000012,
+          "perItem": 16.159611325000014
+        }
+      },
+      "semantic": {
+        "avgHighSim": 0.8260077110016016,
+        "avgLowSim": 0.36236274978135335,
+        "separation": 0.4636449612202483,
+        "accuracy": 1
+      },
+      "memoryPerChunk": 4096
+    }
+  },
+  "ranked": [
+    {
+      "model": "0.6b",
+      "metrics": {
+        "dimension": 1024,
+        "latency": {
+          "single": {
+            "p50": 43.81842499999948,
+            "p95": 48.40751900000032,
+            "mean": 43.93799349999999
+          },
+          "batch8": {
+            "p50": 133.29061400000046,
+            "mean": 129.27689060000012,
+            "perItem": 16.159611325000014
+          }
+        },
+        "semantic": {
+          "avgHighSim": 0.8260077110016016,
+          "avgLowSim": 0.36236274978135335,
+          "separation": 0.4636449612202483,
+          "accuracy": 1
+        },
+        "memoryPerChunk": 4096
+      },
+      "composite": 52.63319723346638
+    },
+    {
+      "model": "30m",
+      "metrics": {
+        "dimension": 384,
+        "latency": {
+          "single": {
+            "p50": 20.31851899999998,
+            "p95": 23.32998600000002,
+            "mean": 20.245276699999998
+          },
+          "batch8": {
+            "p50": 48.61189300000001,
+            "mean": 48.814262400000004,
+            "perItem": 6.1017828000000005
+          }
+        },
+        "semantic": {
+          "avgHighSim": 0.8205011314856698,
+          "avgLowSim": 0.4940711848982257,
+          "separation": 0.3264299465874441,
+          "accuracy": 0.8
+        },
+        "memoryPerChunk": 1536
+      },
+      "composite": 47.43629514960129
+    },
+    {
+      "model": "278m",
+      "metrics": {
+        "dimension": 768,
+        "latency": {
+          "single": {
+            "p50": 56.829524999999876,
+            "p95": 58.707897,
+            "mean": 56.53634569999995
+          },
+          "batch8": {
+            "p50": 110.93496600000026,
+            "mean": 110.02708240000001,
+            "perItem": 13.753385300000001
+          }
+        },
+        "semantic": {
+          "avgHighSim": 0.7895421827899638,
+          "avgLowSim": 0.4500868475462944,
+          "separation": 0.3394553352436694,
+          "accuracy": 0.7
+        },
+        "memoryPerChunk": 3072
+      },
+      "composite": 38.540314940741446
+    }
+  ]
+}

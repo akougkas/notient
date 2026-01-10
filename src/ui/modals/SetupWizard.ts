@@ -796,6 +796,7 @@ export class SetupWizardModal extends Modal {
       ollama: {
         host: `http://${this.ollama.ip}:${this.ollama.port}`,
         embeddingModel: this.ollama.selectedModel,
+        rerankModel: "B-A-M-N/Qwen3-Reranker-4B", // Locked to best-performing model
         enabled: true,
       },
       lmstudio: {
