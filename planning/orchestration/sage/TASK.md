@@ -1,46 +1,84 @@
-# Sage - Phase 4 Review: Conversations Per-Note
+# Sage - Phase 1 Stage 1.5: Optimize Debug Logging
 
-> **Status**: ASSIGNED
+> **Status**: PENDING (waits for Archie + Faye)
+> **Phase**: ALPHA-SPEC Phase 1 (Foundation)
 > **Agent**: `code-simplifier:code-simplifier`
-> **Branch**: `archie/backend-fixes`
+> **Branch**: `ALPHA-SPEC-SPRINT` (shared with all engineers)
+> **Duration**: 1 hour
 
 ---
 
-## Git Workflow (CRITICAL)
+## Git Workflow (CRITICAL - SHARED IDE)
 
-### Before Starting
+### Rule 1: You're Already on the Right Branch
 ```bash
+# Check current state
 git status
-git diff --name-only
+git branch   # Should show: * ALPHA-SPEC-SPRINT
 ```
-Understand what files are already modified. DO NOT touch files you don't need.
 
-### During Work
-- ONLY simplify files listed in "Focus Files" below
-- Keep changes focused on clarity, not functionality
+**NEVER switch branches** - you're already on `ALPHA-SPEC-SPRINT`.
+Archie and Faye are working on this same branch. Switching affects ALL terminals.
 
-### After Completing
+### Rule 2: Check What Files Were Modified (Before Starting)
 ```bash
-# Stage ONLY your files
-git add src/core/chat/types.ts
-git add src/core/chat/conversationStore.ts
-git add src/core/chat/chatService.ts
+git diff --name-only    # See which files Archie/Faye changed
+git log --oneline -3    # See recent commits
+```
+
+Chief of Staff will tell you which files to optimize.
+
+### Rule 3: Stage ONLY YOUR Files (ONE BY ONE)
+
+```bash
+# Check what changed
+git status
+
+# Stage ONLY files YOU modified in THIS session
+git add src/core/agent/taskQueue.ts         # ONLY if you optimized it
+git add src/ui/sidebar/App.tsx              # ONLY if you optimized it
+git add src/utils/debugLog.ts               # If you created this helper
 git add planning/orchestration/sage/REPORT.md
 
-# Commit with descriptive message
-git commit -m "refactor(chat): Simplify Phase 4 conversation storage code
-
-- [List specific simplifications made]
-
-Code review by Sage (code-simplifier)."
-
-# DO NOT PUSH - only commit
+# Verify ONLY your files are staged
+git status   # Staged files should match what YOU edited
 ```
 
-### Rules
-- **NO `git push`** - Only local commits
-- **NO staging unrelated files** - Check `git status` before commit
-- **NO amending** other people's commits
+**CRITICAL - What NOT to do**:
+- ❌ `git add .` - Stages EVERYTHING
+- ❌ `git add src/**` - Wildcards catch unrelated files
+- ❌ Staging files Archie or Faye modified (unless you also modified them)
+
+### Rule 4: Commit with Clear Message
+
+```bash
+git commit -m "refactor(phase-1): Optimize debug logging for performance
+
+Improvements:
+- Reduced log volume by [X%]
+- Added structured logging with context
+- Extracted common logging patterns
+- No performance impact (verified in DevTools)
+
+Code review by Sage (code-simplifier)."
+```
+
+### Rule 5: NEVER Push
+
+```bash
+# ❌ NEVER DO THIS - CEO handles all pushes
+git push
+```
+
+---
+
+### Git Rules Summary
+1. ✅ You're on `ALPHA-SPEC-SPRINT` (shared branch)
+2. ✅ Stage files ONE BY ONE with explicit paths
+3. ✅ Verify with `git status` before commit
+4. ❌ NEVER use `git add .` or wildcards
+5. ❌ NEVER switch branches (`git checkout`)
+6. ❌ NEVER push (`git push`)
 
 ---
 
