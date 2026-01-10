@@ -104,11 +104,29 @@ export class LinkFinderAgent extends BaseAgent {
 
   /**
    * Parse link suggestions from LLM
+   * Robust handling: sanitizes control chars and markdown, handles parse failures gracefully
    */
   protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput {
-    const parsed = this.parseJSON<LinkSuggestionsOutput>(rawOutput);
+    let parsed: LinkSuggestionsOutput | null = null;
 
-    // Validate and filter suggestions
+    try {
+      // Sanitize control characters that break JSON.parse
+      let sanitized = rawOutput
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
+        .replace(/\r\n/g, "\n") // Normalize line endings
+        .replace(/\r/g, "\n");
+
+      // Remove markdown formatting inside JSON strings (common LLM mistake)
+      // e.g., "reason": **"Some text"** → "reason": "Some text"
+      sanitized = sanitized.replace(/\*\*"([^"]+)"\*\*/g, '"$1"');
+      sanitized = sanitized.replace(/\*\*([^*]+)\*\*/g, "$1");
+
+      parsed = this.parseJSON<LinkSuggestionsOutput>(sanitized);
+    } catch (error) {
+      this.warn("JSON parse failed, returning empty links:", error);
+    }
+
+    // Graceful fallback: return empty links on any parse failure
     const validLinks = this.validateLinks(
       parsed?.links || [],
       context.currentNote.content,

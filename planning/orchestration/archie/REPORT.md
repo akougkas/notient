@@ -1,28 +1,23 @@
 # Archie Report
 status: complete
-commit: f82965e
+commit: c045cf5
 
 ## did
-- src/core/agents/chatAgent.ts:192-208: Removed implicit keyword delegation (classify, link, edit triggers)
-  - Kept explicit `[DELEGATE:agent-type]` marker support
-  - Added comment explaining why implicit triggers cause cascading agents
-- src/core/agents/classifierAgent.ts:77-108: Added robust JSON parsing
+- src/core/agents/linkFinderAgent.ts:105-142: Added robust JSON parsing
   - Sanitizes control characters before parsing
-  - Try/catch around parseJSON with graceful fallback to defaults
-  - Returns `{ paraCategory: "inbox", confidence: 0.5 }` on failure
-- src/core/agents/noteEditorAgent.ts:85-123: Added robust JSON parsing
-  - Same sanitization pattern as ClassifierAgent
-  - Returns `{ actions: [] }` on parse failure
-- src/services/ollamaReranker.ts:145-227: Fixed reranker response parsing
-  - Added parseRerankerScore() method for robust handling
-  - Parses numeric scores (0.8, 8/10, 85%)
-  - Handles malformed responses ("isyes", "documentno")
-  - Falls back to vector score with penalty on unrecognized output
-  - Increased num_predict from 5 to 20 tokens
+  - Strips markdown formatting inside JSON (e.g., `**"text"**` → `"text"`)
+  - Try/catch with graceful fallback to empty links array
+- src/core/agents/agentIdentity.ts:89-110: Tuned chat delegation prompt
+  - Added explicit WHEN TO DELEGATE / WHEN NOT TO DELEGATE sections
+  - Delegation now only for explicit user requests ("find links", "classify", "edit")
+  - Summaries, questions, analysis → respond directly, no delegation
+  - Added warning: don't delegate just because response mentions "connections"
 
 ## verify
-typecheck: pass
+typecheck: FAIL (pre-existing errors in App.tsx - Faye's domain)
 build: pass
 
 ## issues
-none
+- App.tsx has type errors: missing `requiresWriteLock` in ProposedAction objects (lines 962, 989, 1016)
+- These are pre-existing/Faye's changes, not from my modifications
+- Build succeeds (esbuild), only tsc typecheck fails

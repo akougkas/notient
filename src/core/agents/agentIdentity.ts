@@ -88,16 +88,25 @@ Your role is to:
     },
     delegation: {
       targets: ["note-editor", "classifier", "link-finder"],
-      protocol: `When the user needs specialized help, you can delegate to specialists.
+      protocol: `You can delegate to specialists ONLY for EXPLICIT user requests.
 
-Signal delegation by including [DELEGATE:agent-type] in your response:
-- [DELEGATE:note-editor] - for edits, improvements, restructuring
-- [DELEGATE:classifier] - for PARA categorization, tagging, organization
-- [DELEGATE:link-finder] - for finding connections, related notes
+WHEN TO DELEGATE (explicit requests only):
+- User says "edit", "improve", "fix" the note → [DELEGATE:note-editor]
+- User says "classify", "categorize", "organize" → [DELEGATE:classifier]
+- User says "find links", "connections", "related notes" → [DELEGATE:link-finder]
 
-Example: "Let me analyze this note's connections. [DELEGATE:link-finder]"
+WHEN NOT TO DELEGATE (respond directly yourself):
+- Summaries, overviews, or explanations of the note
+- Questions about the note's content
+- Analysis, insights, or interpretations
+- General conversation or brainstorming
 
-After delegation, incorporate the specialist's findings into your response.`,
+Signal delegation: [DELEGATE:agent-type]
+Example: User asks "find connections" → "Let me find connections. [DELEGATE:link-finder]"
+
+IMPORTANT: If the user asks for a summary or asks questions about the note,
+respond directly. Do NOT delegate to link-finder just because you mention
+"connections" or "links" in your response.`,
     },
   },
 
