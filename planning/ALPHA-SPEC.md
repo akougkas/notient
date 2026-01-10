@@ -47,7 +47,7 @@ Notes that think. Vaults that breathe. Knowledge that evolves.
 │                    ├─ /clipping  - Process web clipping     │
 │                    └─ /challenge - Get counterpoints        │
 │                                                             │
-│  @Notient     ──→  FIRE-AND-FORGET TO AGENT                 │
+│  @agent     ──→  FIRE-AND-FORGET TO AGENT                 │
 │                    ├─ Single agent: Research Chief of Staff │
 │                    ├─ Can invoke /commands at discretion    │
 │                    ├─ Can handle bulk operations via NL     │
@@ -57,46 +57,10 @@ Notes that think. Vaults that breathe. Knowledge that evolves.
 ```
 
 **Key Distinction**:
-- `@Notient` = Terminal-like command shell for agentic tasks
+- `@agent` = Terminal-like command shell for agentic tasks
 - `/command` = Predetermined, reusable LLM workflows
 - `Chat tab` = Sentient note conversation ("chat with the note")
 
-### 1.2 View Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  HEADER (Locked Chrome)                                     │
-│  ┌──────────┬──────────┬──────────┐                        │
-│  │ Vitals   │ Agents   │  Chat    │  ← 3 Tabs (immutable)  │
-│  └──────────┴──────────┴──────────┘                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  VIEW: Note Vitals (default)                                │
-│  ├─ Omnibar (unified input)                                 │
-│  ├─ NoteCard (identity + pulse)                             │
-│  ├─ VitalsCards (health metrics)                            │
-│  ├─ QuickActions (context-aware buttons)                    │
-│  └─ InsightsStream (per-note, persistent)                   │
-│                                                             │
-│  VIEW: Agent Streams                                        │
-│  ├─ CapabilityCards (service health)                        │
-│  ├─ Active Agents (with progress)                           │
-│  ├─ Pending Review (risk-colored)                           │
-│  └─ Recent Activity (with undo)                             │
-│                                                             │
-│  VIEW: Chat                                                 │
-│  ├─ Context Bar (note or vault toggle)                      │
-│  ├─ Message Stream (sentient conversation)                  │
-│  └─ Input (minimal empty state)                             │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  FOOTER (Locked Chrome - 4 Zones)                           │
-│  ┌─────────────┬───────────┬───────────┬────────┐          │
-│  │ Providers   │   Index   │  Agents   │Settings│          │
-│  │ LM● Ollama● │ 1,247     │ 2 active  │   ⚙    │          │
-│  └─────────────┴───────────┴───────────┴────────┘          │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ---
 
@@ -132,6 +96,7 @@ User types query
 ### 2.2 Results Display
 
 - **Format**: Rich cards (title, snippet, relevance score, tags)
+- **Overlay/Drawer**: Search results slide over note content (preserving context) rather than replacing view.
 - **AI Working Indicator**: Shimmer effect on results being re-evaluated
 - **Deep Mode Button**: Action button with icon, visible in dropdown
 
@@ -155,7 +120,7 @@ Per-note persistent stream of AI insights, async results, and proactive suggesti
 
 | Type | Source | Behavior |
 |------|--------|----------|
-| Agent responses | @Notient fire-and-forget | Appear when complete |
+| Agent responses | @agent fire-and-forget | Appear when complete |
 | Deep search results | Async deep search | Append as found |
 | Proactive suggestions | Notient intelligence | "This note could use /connect" |
 
@@ -165,14 +130,16 @@ Per-note persistent stream of AI insights, async results, and proactive suggesti
 INFORMATIVE                        ACTIONABLE
 ┌─────────────────────┐           ┌─────────────────────┐
 │ Action completed    │           │ [Apply] [Dismiss]   │
-│ Just a notification │           │ Click → Agent Streams│
-└─────────────────────┘           │ for details + UNDO   │
+│ Just a notification │           │ Expand Inline (>v)  │
+└─────────────────────┘           │ (Drawer animation)   │
                                   └─────────────────────┘
+
+**No Modals**: Detailed results expand *inline* within the stream or slide out as a drawer. Context is never lost.
 ```
 
 ### 3.4 Persistence
 
-- Stored in IntelligenceDB per-note
+- Stored in Intelligence.json or per-note
 - Survives note switches and Obsidian restarts
 - No badge/notification on arrival (user checks when ready)
 
@@ -186,13 +153,18 @@ Full dashboard with:
 - Health score (composite)
 - PARA classification
 - Backlinks/outlinks count
-- Word count
-- Tags
+- Word/token count
+- Tags/labels and special notes
 - Recent actions
 
 ### 4.2 Quick Actions
 
-**Context-aware buttons** (1-3 based on note state):
+**Quick action buttons** (3 fixed for all notes):
+- Fix Frontmatter → "Format"
+- Enhance content → "Improve"
+- Find Related → "Related"
+
+**Context-aware buttons** (3 based on active current note state):
 - Stale note → "Refresh"
 - No links → "Connect"
 - Long note → "Atomize"
@@ -208,6 +180,17 @@ Full dashboard with:
 
 This is why LLM-based assessment is required.
 
+### 4.4 Note Personality & Emotional States
+
+Notes are "Sentient Entities" with an emotional state:
+- **Energized**: High recent activity, new connections. (Vibrant Purple Pulse)
+- **Peaceful**: Stable reference, no immediate needs. (Calm Green Pulse)
+- **Stressed**: Many TODOs, deadlines, disjointed. (Urgent Orange Pulse)
+- **Dormant**: Unused >30 days. (Faint Gray Pulse)
+- **Orphaned**: No links, isolated. (Muted Blue, seeking connection)
+
+**Note Birth**: Notes "assemble" with a staggered animation when opened, rather than just appearing.
+
 ---
 
 ## Part 5: Chat Page
@@ -215,7 +198,7 @@ This is why LLM-based assessment is required.
 ### 5.1 Model
 
 ```
-@Notient (Omnibar)              Chat Tab
+@agent (Omnibar)              Chat Tab
 ━━━━━━━━━━━━━━━━━━━━            ━━━━━━━━━━━━━━━
 Terminal-like command           "Chat with the
 interface for agentic           sentient note"
@@ -236,37 +219,16 @@ Results → Insights Stream       dialogue with history
 
 ### 5.4 Implementation
 
-Current `ChatView.tsx` needs:
+Current new implementation needs:
 - Vault mode toggle in context bar
 - Simplified empty state
 - Per-note conversation persistence (already exists via ConversationStore)
 
 ---
 
-## Part 6: Footer Enhancements
+## Part 6: Error Recovery
 
-### 6.1 Zone Interactions
-
-| Zone | Click Action |
-|------|--------------|
-| Providers (LM/Ollama) | Popup modal to select **chat models only** (not embedding - would mismatch index) |
-| Index (note count) | Quick stats popup: indexed, chunks, last sync, rebuild option |
-| Agents | Navigate to Agent Streams tab |
-| Settings | Open Notient settings |
-
-### 6.2 Degraded State
-
-**Subtle indicator**: Yellow/orange tint on affected zone, hover shows reason.
-
-### 6.3 Reconnection UX
-
-**Visible countdown**: "Reconnecting in 3s..." in footer during auto-retry.
-
----
-
-## Part 7: Error Recovery
-
-### 7.1 Patterns
+### 6.1 Patterns
 
 | Scenario | Behavior |
 |----------|----------|
@@ -276,7 +238,7 @@ Current `ChatView.tsx` needs:
 | Empty search results | AI explanation: "Your vault doesn't contain notes about X" |
 | Action failure | Silent rollback + error added to Insights Stream |
 
-### 7.2 Degradation Flow
+### 6.2 Degradation Flow
 
 ```
 READY
@@ -286,7 +248,7 @@ READY
   └─ Ollama down ──→ FAILED (critical, all disabled)
 ```
 
-### 7.3 Toast System
+### 6.3 Toast System
 
 - Use Obsidian's native `Notice` system
 - Types: Success, Error, Info only
@@ -294,17 +256,17 @@ READY
 
 ---
 
-## Part 8: Theme & UI
+## Part 7: Theme & UI
 
-### 8.1 Visual Identity
+### 7.1 Visual Identity
 
 **Distinctive but harmonious** - Custom card styles, animations, visual language that COMPLEMENTS Obsidian themes.
 
-### 8.2 Animation Philosophy
+### 7.2 Animation Philosophy
 
-**Purposeful only** - Animations communicate state (loading, streaming). No decorative animations.
+**Purposeful only** - Animations communicate state (loading, streaming). No decorative animations. Exception: Note Card birth animation.
 
-### 8.3 Card Design
+### 7.3 Card Design
 
 **Glassmorphism lite** - Slight transparency + blur. Modern but subtle.
 
@@ -372,7 +334,7 @@ SETTINGS
 
 Current bulk commands (`/enrich vault`, `/classify vault`) should be:
 1. Removed from `commandParser.ts`
-2. Handled naturally by `@Notient` when user types "enrich all notes in inbox"
+2. Handled naturally by `@agent` when user types "enrich all notes in inbox"
 3. Agent decides scope based on query context
 
 ---
@@ -407,7 +369,7 @@ Current bulk commands (`/enrich vault`, `/classify vault`) should be:
 **Goal**: Per-note persistent insights
 
 1. Implement persistence layer in IntelligenceDB
-2. Route @Notient results to stream
+2. Route @agent results to stream
 3. Route deep search results to stream
 4. Add proactive suggestion generation
 5. Implement actionable vs informative styling
@@ -590,10 +552,10 @@ CRASHED ──→ UNINITIALIZED (restart)
 - Latency budget: <200ms instant
 
 **Rounds 3-13**: Core Architecture
-- ONE agent (@Notient), 8 actions (slash commands)
+- ONE agent (@agent), 8 actions (slash commands)
 - Agent context: Note + semantically related
 - Slash commands: Note-specific only (no bulk)
-- Bulk operations: Via @Notient natural language
+- Bulk operations: Via @agent natural language
 
 **Rounds 14-20**: UX Polish
 - Chat = sentient note conversation
@@ -610,7 +572,7 @@ CRASHED ──→ UNINITIALIZED (restart)
 3. **Don't** treat search modes as discrete (progressive enhancement)
 4. **Don't** block UI during AI processing (async with visual feedback)
 5. **Don't** run `bun run build` without `bun run dev` (won't deploy)
-6. **Don't** create bulk slash commands (use @Notient)
+6. **Don't** create bulk slash commands (use @agent)
 7. **Don't** add decorative animations (purposeful only)
 8. **Don't** override Obsidian theme colors (use variables)
 
