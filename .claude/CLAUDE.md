@@ -272,11 +272,80 @@ src/core/
 | `src/core/agents/agentIdentity.ts` | Tier 2 agent prompts |
 | `src/core/agent/identity.ts` | Tier 1 core identity |
 | `src/core/llm/provider.ts` | LLM interface |
+| `src/core/chat/chatService.ts` | Chat orchestrator (streaming, thinking, stats) |
+| `src/core/chat/thinkingParser.ts` | Parse `<think>` tags from reasoning models |
 | `src/core/agentic/trustLevelManager.ts` | Action risk evaluation |
 | `src/core/search/pipeline.ts` | Vector + reranking |
-| `src/views/sidebar.ts` | Main UI component |
+| `src/ui/sidebar/App.tsx` | Main sidebar UI (Preact) |
+| `src/ui/sidebar/components/chat/` | Rich chat components |
+| `src/ui/sidebar/components/AgentStreamsView.tsx` | Agent activity dashboard |
 | `planning/PRD.md` | Product requirements |
 | `planning/ROADMAP.md` | Deferred features |
+
+---
+
+## UI Architecture
+
+### Sidebar Views (Three-Tab Layout)
+
+```
+┌─────────────────────────────────────────┐
+│ NavDeck (Note | Agents | Chat tabs)     │
+├─────────────────────────────────────────┤
+│                                         │
+│  View Content (based on active tab)     │
+│                                         │
+├─────────────────────────────────────────┤
+│ SystemDashboard (status footer)         │
+└─────────────────────────────────────────┘
+```
+
+**Note Vitals View:**
+- NoteCard (health, links, freshness metrics)
+- VitalsCards (detailed breakdown)
+- QuickActions (agentic triggers)
+- InsightStream (AI insights + agent results)
+
+**Agent Streams View:**
+- CapabilityCards (Search, Context, Chat status)
+- ActiveAgents (running/completed with progress)
+- PendingReview (actions awaiting approval)
+- RecentActivity (completed actions with undo)
+
+**Chat View:**
+- RichChatView (markdown, thinking blocks, streaming)
+- Direct ChatService integration (not via taskQueue)
+
+### Quick Actions Pipeline
+
+```
+Vitals Quick Actions → triggerAgenticAction() → TaskQueue
+                                                    ↓
+                                              ChiefOfStaff
+                                                    ↓
+                                              Agent executes
+                                                    ↓
+                              ┌─────────────────────┴──────────────────────┐
+                              ↓                                            ↓
+                    Agent Streams View                           InsightStream (Vitals)
+                    (card with progress,                         (1-liner insight from
+                     View Results button)                         agent result)
+```
+
+### Chat Pipeline (Separate)
+
+```
+Chat Input → ChatService.chat() → LLM Stream → RichChatView
+                                      ↓
+                              ThinkingParser
+                              (separates <think> from content)
+                                      ↓
+                              MessageBubble + ThinkingBlock
+```
+
+**Key distinction:**
+- Quick Actions → Background agents → Results in Agent Streams + Insights
+- Chat → Direct conversation → Results in Chat UI
 
 ---
 
@@ -292,5 +361,5 @@ Track in `ROADMAP.md` with structure:
 
 ## Version
 
-- **Current:** 0.3.0 (Multi-Agent System)
+- **Current:** 0.3.1 (Chat + Agent Streams UI)
 - **Min Obsidian:** 1.4.0

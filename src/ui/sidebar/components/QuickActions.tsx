@@ -67,34 +67,41 @@ function ActionButton({ action }: ActionButtonProps) {
 }
 
 /**
+ * Callbacks for Quick Actions
+ */
+export interface QuickActionCallbacks {
+  /** Trigger agentic background workflow (shows in Agent Streams) */
+  triggerAgent: (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => void;
+  /** Send to conversational chat */
+  sendToChat: (prompt: string) => void;
+}
+
+/**
  * Factory function to create standard quick actions for a note
  * Per spec: 6 actions, smart-filtered to show 4-6 most relevant
+ *
+ * Actions are split between:
+ * - Agentic: Run in background, show in Agent Streams (Find, Link, Enrich, Tags)
+ * - Conversational: Open in Chat for discussion (Summary, Tasks)
  */
 export function createNoteQuickActions(
   noteTitle: string,
-  prefillChatAndSwitch: (prompt: string) => void,
+  callbacks: QuickActionCallbacks,
 ): QuickAction[] {
+  const { triggerAgent, sendToChat } = callbacks;
+
   return [
+    // AGENTIC ACTIONS - Run in background, show in Agent Streams
     {
       id: "find-connections",
       icon: "search",
       label: "Find",
       primary: true,
-      description: "Find related notes",
+      description: "Find related notes (Agent)",
       onClick: () =>
-        prefillChatAndSwitch(
+        triggerAgent(
           `Find notes semantically related to "${noteTitle}" and explain the connections`,
-        ),
-    },
-    {
-      id: "enrich",
-      icon: "sparkles",
-      label: "Enrich",
-      primary: false,
-      description: "Enrich with context",
-      onClick: () =>
-        prefillChatAndSwitch(
-          `Enrich and expand "${noteTitle}" with additional context, examples, and insights`,
+          "link",
         ),
     },
     {
@@ -102,21 +109,23 @@ export function createNoteQuickActions(
       icon: "link",
       label: "Link",
       primary: false,
-      description: "Suggest links",
+      description: "Suggest links (Agent)",
       onClick: () =>
-        prefillChatAndSwitch(
+        triggerAgent(
           `Suggest internal wiki-links to add to "${noteTitle}" that connect it to related notes`,
+          "link",
         ),
     },
     {
-      id: "summarize",
-      icon: "file-text",
-      label: "Summary",
+      id: "enrich",
+      icon: "sparkles",
+      label: "Enrich",
       primary: false,
-      description: "Generate summary",
+      description: "Enrich with context (Agent)",
       onClick: () =>
-        prefillChatAndSwitch(
-          `Create a concise summary of "${noteTitle}" that captures the key points`,
+        triggerAgent(
+          `Enrich and expand "${noteTitle}" with additional context, examples, and insights`,
+          "enrich",
         ),
     },
     {
@@ -124,10 +133,24 @@ export function createNoteQuickActions(
       icon: "tag",
       label: "Tags",
       primary: false,
-      description: "Suggest tags",
+      description: "Suggest tags (Agent)",
       onClick: () =>
-        prefillChatAndSwitch(
-          `Suggest relevant tags for "${noteTitle}" based on its content and themes`,
+        triggerAgent(
+          `Classify and suggest relevant tags for "${noteTitle}" based on its content`,
+          "classify",
+        ),
+    },
+
+    // CONVERSATIONAL ACTIONS - Open in Chat for discussion
+    {
+      id: "summarize",
+      icon: "file-text",
+      label: "Summary",
+      primary: false,
+      description: "Generate summary (Chat)",
+      onClick: () =>
+        sendToChat(
+          `Create a concise summary of "${noteTitle}" that captures the key points`,
         ),
     },
     {
@@ -135,9 +158,9 @@ export function createNoteQuickActions(
       icon: "check-square",
       label: "Tasks",
       primary: false,
-      description: "Extract tasks",
+      description: "Extract tasks (Chat)",
       onClick: () =>
-        prefillChatAndSwitch(`Extract any actionable items or tasks mentioned in "${noteTitle}"`),
+        sendToChat(`Extract any actionable items or tasks mentioned in "${noteTitle}"`),
     },
   ];
 }

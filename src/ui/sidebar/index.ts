@@ -12,8 +12,9 @@ export { NoteCard } from "./components/NoteCard";
 export { QuickActions, createNoteQuickActions } from "./components/QuickActions";
 export type { QuickAction } from "./components/QuickActions";
 export { InsightStream } from "./components/InsightStream";
-export { SidebarFooter } from "./components/SidebarFooter";
-export type { ServiceHealth, IndexManagerStats } from "./components/SidebarFooter";
+// SidebarFooter removed
+// ServiceHealth and IndexManagerStats removed
+
 
 // Services (re-export for convenience)
 export { NoteVitalsCalculator } from "@services/noteVitalsCalculator";

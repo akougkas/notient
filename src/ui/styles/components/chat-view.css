@@ -237,6 +237,8 @@
   font-size: var(--font-smaller);
   line-height: 1.6;
   word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Chat Actions */
@@ -550,6 +552,8 @@
   white-space: pre-wrap;
   word-wrap: break-word;
   margin: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .nv2-thinking-cursor {
@@ -832,6 +836,8 @@
 .nv2-markdown-content {
   font-size: var(--font-smaller);
   line-height: 1.6;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .nv2-markdown-content p {
@@ -895,6 +901,8 @@
   font-family: var(--font-monospace);
   font-size: 11px;
   line-height: 1.5;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .nv2-code-block code {

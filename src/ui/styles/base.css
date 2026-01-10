@@ -37,6 +37,19 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
+  /* Prevent body scroll */
+}
+
+/* Main Content Area - Scrollable */
+.nv2-content {
+  flex-grow: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Crucial for nested scrolling */
 }
 
 /* Section Labels */
@@ -66,6 +79,7 @@
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -80,10 +94,12 @@
 }
 
 @keyframes icon-float {
+
   0%,
   100% {
     transform: translateY(0);
   }
+
   50% {
     transform: translateY(-4px);
   }
@@ -289,12 +305,10 @@
    ============================================================================= */
 
 .nv2-skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--background-secondary) 25%,
-    var(--background-modifier-hover) 50%,
-    var(--background-secondary) 75%
-  );
+  background: linear-gradient(90deg,
+      var(--background-secondary) 25%,
+      var(--background-modifier-hover) 50%,
+      var(--background-secondary) 75%);
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
   border-radius: var(--nv2-radius-sm);
@@ -304,6 +318,7 @@
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
@@ -344,9 +359,11 @@
   0% {
     background-color: transparent;
   }
+
   50% {
     background-color: color-mix(in srgb, var(--color-green) 20%, transparent);
   }
+
   100% {
     background-color: transparent;
   }
@@ -357,14 +374,17 @@
 }
 
 @keyframes error-shake {
+
   0%,
   100% {
     transform: translateX(0);
   }
+
   20%,
   60% {
     transform: translateX(-4px);
   }
+
   40%,
   80% {
     transform: translateX(4px);

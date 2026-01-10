@@ -1,0 +1,143 @@
+/* Navigation Deck (Footer) */
+.nv2-nav-deck {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    height: 64px;
+    /* Taller target area */
+    background-color: var(--background-secondary);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
+    z-index: 10;
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+.nv2-nav-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+    margin: 0;
+}
+
+.nv2-nav-item:hover {
+    color: var(--text-normal);
+    background-color: var(--background-modifier-hover);
+}
+
+.nv2-nav-item--active {
+    color: var(--text-accent);
+}
+
+/* Icon & Badge wrapper */
+.nv2-nav-icon-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.nv2-nav-item--active .nv2-nav-icon-wrapper {
+    transform: translateY(-2px);
+    color: var(--text-accent);
+}
+
+.nv2-nav-icon {
+    width: 20px;
+    height: 20px;
+    stroke-width: 2px;
+}
+
+/* Label */
+.nv2-nav-label {
+    font-size: 0.7em;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.8;
+    transition: all 0.2s ease;
+}
+
+.nv2-nav-item--active .nv2-nav-label {
+    opacity: 1;
+    font-weight: 600;
+    text-shadow: 0 0 10px rgba(var(--text-accent-rgb), 0.4);
+}
+
+/* Active Glow Effect (Techno-Natural) */
+.nv2-nav-glow {
+    position: absolute;
+    bottom: 0px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--text-accent), transparent);
+    border-radius: 4px 4px 0 0;
+    box-shadow: 0 -2px 8px var(--text-accent);
+    opacity: 0;
+    animation: nv2-glow-pop 0.3s forwards;
+}
+
+@keyframes nv2-glow-pop {
+    from {
+        width: 0;
+        opacity: 0;
+    }
+
+    to {
+        width: 32px;
+        opacity: 1;
+    }
+}
+
+/* Badge */
+.nv2-nav-badge {
+    position: absolute;
+    top: -6px;
+    right: -8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background-color: var(--color-red);
+    color: white;
+    font-size: 0.6em;
+    font-weight: bold;
+    border-radius: 9px;
+    box-shadow: 0 0 0 2px var(--background-secondary);
+    z-index: 2;
+}
+
+/* Pulse Animation for running agents */
+.nv2-nav-item--pulse .nv2-nav-icon-wrapper {
+    animation: nv2-icon-pulse 2s infinite ease-in-out;
+}
+
+@keyframes nv2-icon-pulse {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+        color: var(--text-accent);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}

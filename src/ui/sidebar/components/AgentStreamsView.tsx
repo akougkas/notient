@@ -38,9 +38,29 @@ export interface ActiveAgent {
   id: string;
   type: string;
   targetNote: string;
-  status: "running" | "paused" | "queued";
+  status: "running" | "paused" | "queued" | "completed";
   progress?: number;
   startedAt?: Date;
+  completedAt?: Date;
+  /** Full result data for "View Results" modal */
+  resultData?: AgentResultData;
+}
+
+/** Result data from agent execution */
+export interface AgentResultData {
+  /** Main content/response from agent */
+  content: string;
+  /** Structured data (actions, links, tags, etc.) */
+  structured?: unknown;
+  /** Citations/related notes */
+  citations?: string[];
+  /** One-liner insight to show in Vitals */
+  insightSummary?: string;
+  /** Statistics */
+  stats?: {
+    durationMs: number;
+    tokensUsed?: number;
+  };
 }
 
 export interface PendingAction {
@@ -73,6 +93,10 @@ interface AgentStreamsViewProps {
   onApplyAction?: (id: string) => void;
   onDismissAction?: (id: string) => void;
   onUndoAction?: (id: string) => void;
+  /** View results of completed agent */
+  onViewResults?: (agent: ActiveAgent) => void;
+  /** Dismiss completed agent from list */
+  onDismissAgent?: (id: string) => void;
 }
 
 export function AgentStreamsView({
@@ -85,6 +109,8 @@ export function AgentStreamsView({
   onApplyAction,
   onDismissAction,
   onUndoAction,
+  onViewResults,
+  onDismissAgent,
 }: AgentStreamsViewProps) {
   const hasActiveAgents = activeAgents.value.length > 0;
   const hasPendingActions = pendingActions.value.length > 0;
@@ -121,6 +147,8 @@ export function AgentStreamsView({
                     agent={agent}
                     onPause={() => onPauseAgent?.(agent.id)}
                     onStop={() => onStopAgent?.(agent.id)}
+                    onViewResults={() => onViewResults?.(agent)}
+                    onDismiss={() => onDismissAgent?.(agent.id)}
                   />
                 ))}
               </div>
@@ -243,16 +271,22 @@ interface ActiveAgentCardProps {
   agent: ActiveAgent;
   onPause?: () => void;
   onStop?: () => void;
+  onViewResults?: () => void;
+  onDismiss?: () => void;
 }
 
-function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
+function ActiveAgentCard({ agent, onPause, onStop, onViewResults, onDismiss }: ActiveAgentCardProps) {
   const isRunning = agent.status === "running";
   const isPaused = agent.status === "paused";
   const isQueued = agent.status === "queued";
+  const isCompleted = agent.status === "completed";
 
   const elapsed = agent.startedAt ? formatElapsed(Date.now() - agent.startedAt.getTime()) : "";
+  const duration = agent.resultData?.stats?.durationMs
+    ? `${(agent.resultData.stats.durationMs / 1000).toFixed(1)}s`
+    : "";
 
-  const statusLabel = isRunning ? "Running" : isPaused ? "Paused" : "Queued";
+  const statusLabel = isRunning ? "Running" : isPaused ? "Paused" : isQueued ? "Queued" : "Completed";
 
   return (
     <article
@@ -265,12 +299,17 @@ function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
         {isRunning && <span class="nv2-agent-spinner" aria-hidden="true" />}
         {isPaused && <Icon name="pause" className="nv2-agent-paused-icon" />}
         {isQueued && <Icon name="clock" className="nv2-agent-queued-icon" />}
+        {isCompleted && <Icon name="check-circle" className="nv2-agent-completed-icon" />}
       </div>
 
       <div class="nv2-agent-body">
         <div class="nv2-agent-header">
           <span class="nv2-agent-type">{formatAgentType(agent.type)}</span>
-          {elapsed && <span class="nv2-agent-elapsed">{elapsed}</span>}
+          {isCompleted && duration ? (
+            <span class="nv2-agent-duration">{duration}</span>
+          ) : elapsed ? (
+            <span class="nv2-agent-elapsed">{elapsed}</span>
+          ) : null}
         </div>
 
         <div class="nv2-agent-target" title={agent.targetNote}>
@@ -291,6 +330,13 @@ function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
               />
             </div>
             <span class="nv2-agent-progress-text">{agent.progress}%</span>
+          </div>
+        )}
+
+        {/* Insight preview for completed agents */}
+        {isCompleted && agent.resultData?.insightSummary && (
+          <div class="nv2-agent-insight-preview">
+            {truncate(agent.resultData.insightSummary, 60)}
           </div>
         )}
 
@@ -330,6 +376,26 @@ function ActiveAgentCard({ agent, onPause, onStop }: ActiveAgentCardProps) {
             >
               Cancel
             </button>
+          )}
+          {isCompleted && (
+            <>
+              <button
+                type="button"
+                class="nv2-btn-sm nv2-btn-primary"
+                onClick={onViewResults}
+                aria-label="View agent results"
+              >
+                View Results
+              </button>
+              <button
+                type="button"
+                class="nv2-btn-sm"
+                onClick={onDismiss}
+                aria-label="Dismiss agent"
+              >
+                Dismiss
+              </button>
+            </>
           )}
         </div>
       </div>

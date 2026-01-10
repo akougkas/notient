@@ -1805,6 +1805,8 @@
   font-size: var(--font-smaller);
   line-height: 1.6;
   word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .nv2-chat-actions {
   display: flex;
@@ -2055,6 +2057,8 @@
   white-space: pre-wrap;
   word-wrap: break-word;
   margin: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .nv2-thinking-cursor {
   display: inline-block;
@@ -2285,6 +2289,8 @@
 .nv2-markdown-content {
   font-size: var(--font-smaller);
   line-height: 1.6;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .nv2-markdown-content p {
   margin: 0 0 var(--nv2-space-sm) 0;
@@ -2337,6 +2343,8 @@
   font-family: var(--font-monospace);
   font-size: 11px;
   line-height: 1.5;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .nv2-code-block code {
   background: none;
@@ -3284,16 +3292,33 @@
   color: var(--text-muted);
   text-transform: uppercase;
 }
+.nv2-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 .nv2-section-title {
   margin: 0;
   font-size: 1em;
   font-weight: 600;
 }
+.nv2-btn-icon {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.nv2-btn-icon:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
 .nv2-index-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 200px;
+  max-height: 250px;
   overflow-y: auto;
 }
 .nv2-index-item {
@@ -3304,22 +3329,79 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--nv2-radius-sm);
   background: var(--background-primary);
+  transition: all 0.2s ease;
 }
-.nv2-index-item--disabled {
-  opacity: 0.6;
+.nv2-index-item:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+.nv2-index-item--active {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 5%, transparent);
+}
+.nv2-index-item--incompatible {
+  opacity: 0.7;
   background: var(--background-secondary);
+}
+.nv2-index-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nv2-index-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .nv2-index-name {
   font-weight: 500;
-  display: block;
+}
+.nv2-badge {
+  font-size: 0.7em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+.nv2-badge--active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 .nv2-index-meta {
   font-size: 0.8em;
   color: var(--text-muted);
 }
 .nv2-btn-sm {
-  padding: 4px 8px;
+  padding: 4px 10px;
   font-size: 0.8em;
+}
+.nv2-loading-placeholder {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--text-muted);
+}
+.nv2-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: nv2-spin 1s linear infinite;
+}
+@keyframes nv2-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.nv2-empty-state-small {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  background: var(--background-secondary);
+  border-radius: var(--nv2-radius-sm);
 }
 
 /* src/ui/styles/settings.css */

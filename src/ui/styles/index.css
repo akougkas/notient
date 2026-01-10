@@ -7,8 +7,8 @@
 @import "./base.css";
 
 /* Components */
-@import "./components/header.css";
-@import "./components/footer.css";
+@import "./components/system-dashboard.css";
+@import "./components/nav-deck.css";
 @import "./components/note-card.css";
 @import "./components/vitals-cards.css";
 @import "./components/quick-actions.css";
@@ -22,6 +22,7 @@
 
 /* Views */
 @import "./views/modals.css";
+@import "./views/modal-content.css";
 
 /* Settings & Utilities */
 @import "./settings.css";

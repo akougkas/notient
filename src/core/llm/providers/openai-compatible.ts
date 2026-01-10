@@ -262,6 +262,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const decoder = new TextDecoder();
     let buffer = "";
+    // Track reasoning state for models that use separate reasoning_content field
+    let inReasoningBlock = false;
 
     try {
       while (true) {
@@ -271,7 +273,13 @@ export class OpenAICompatibleProvider implements LLMProvider {
         }
 
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // Close reasoning block if stream ends while reasoning
+          if (inReasoningBlock) {
+            yield "</think>";
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
 
@@ -282,14 +290,39 @@ export class OpenAICompatibleProvider implements LLMProvider {
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const data = line.slice(6).trim();
-            if (data === "[DONE]") return;
+            if (data === "[DONE]") {
+              // Close reasoning block if stream ends while reasoning
+              if (inReasoningBlock) {
+                yield "</think>";
+              }
+              return;
+            }
 
             try {
               const json = JSON.parse(data);
               const delta = json.choices?.[0]?.delta;
-              // Support both content and reasoning_content for thinking models
-              const content = delta?.content || delta?.reasoning_content;
-              if (content) yield content;
+              const reasoning = delta?.reasoning_content;
+              const content = delta?.content;
+
+              // Handle reasoning_content (thinking models like DeepSeek R1, LM Studio thinking)
+              if (reasoning) {
+                if (!inReasoningBlock) {
+                  // Start thinking block
+                  yield "<think>";
+                  inReasoningBlock = true;
+                }
+                yield reasoning;
+              }
+
+              // Handle regular content
+              if (content) {
+                if (inReasoningBlock) {
+                  // End thinking block before content starts
+                  yield "</think>";
+                  inReasoningBlock = false;
+                }
+                yield content;
+              }
             } catch {
               // Skip malformed JSON
             }
