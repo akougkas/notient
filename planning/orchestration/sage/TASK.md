@@ -1,6 +1,6 @@
-# Sage - Phase 1 Stage 1.5: Optimize Debug Logging
+# Sage - Phase 1 Stage 1.5: Clean Up Debug Logging
 
-> **Status**: PENDING (waits for Archie + Faye)
+> **Status**: READY TO LAUNCH
 > **Phase**: ALPHA-SPEC Phase 1 (Foundation)
 > **Agent**: `code-simplifier:code-simplifier`
 > **Branch**: `ALPHA-SPEC-SPRINT` (shared with all engineers)
@@ -8,145 +8,226 @@
 
 ---
 
+## Assignment
+
+Faye added debug logging to diagnose bugs. Clean it up and create a simple, toggle-able logging utility we can use everywhere.
+
+**What you'll do:**
+1. Optimize Faye's 13 console.log statements (3 files)
+2. Create simple `src/utils/debugLog.ts` helper
+3. Replace scattered logs with the helper
+4. Add toggle to disable in production
+5. Document the pattern for future use
+
+**Keep it simple** - this is basic software infrastructure, not rocket science.
+
+---
+
 ## Git Workflow (CRITICAL - SHARED IDE)
 
-### Rule 1: You're Already on the Right Branch
 ```bash
-# Check current state
+# You're already on ALPHA-SPEC-SPRINT - don't switch branches
 git status
 git branch   # Should show: * ALPHA-SPEC-SPRINT
-```
 
-**NEVER switch branches** - you're already on `ALPHA-SPEC-SPRINT`.
-Archie and Faye are working on this same branch. Switching affects ALL terminals.
-
-### Rule 2: Check What Files Were Modified (Before Starting)
-```bash
-git diff --name-only    # See which files Archie/Faye changed
-git log --oneline -3    # See recent commits
-```
-
-Chief of Staff will tell you which files to optimize.
-
-### Rule 3: Stage ONLY YOUR Files (ONE BY ONE)
-
-```bash
-# Check what changed
-git status
-
-# Stage ONLY files YOU modified in THIS session
-git add src/core/agent/taskQueue.ts         # ONLY if you optimized it
-git add src/ui/sidebar/App.tsx              # ONLY if you optimized it
-git add src/utils/debugLog.ts               # If you created this helper
+# After you're done, stage ONLY files YOU modified
+git add src/ui/sidebar/App.tsx
+git add src/ui/sidebar/components/QuickActions.tsx
+git add src/ui/sidebar/context/KernelContext.tsx
+git add src/utils/debugLog.ts                    # New file you create
 git add planning/orchestration/sage/REPORT.md
 
-# Verify ONLY your files are staged
-git status   # Staged files should match what YOU edited
-```
+# Commit
+git commit -m "refactor(phase-1): Add simple debug logging utility
 
-**CRITICAL - What NOT to do**:
-- ❌ `git add .` - Stages EVERYTHING
-- ❌ `git add src/**` - Wildcards catch unrelated files
-- ❌ Staging files Archie or Faye modified (unless you also modified them)
-
-### Rule 4: Commit with Clear Message
-
-```bash
-git commit -m "refactor(phase-1): Optimize debug logging for performance
-
-Improvements:
-- Reduced log volume by [X%]
-- Added structured logging with context
-- Extracted common logging patterns
-- No performance impact (verified in DevTools)
+- Created debugLog helper with toggle
+- Cleaned up Faye's 13 console.log statements
+- Reduced log volume, added structure
+- Toggle: DEBUG_ENABLED flag
 
 Code review by Sage (code-simplifier)."
+
+# NO PUSH
 ```
 
-### Rule 5: NEVER Push
+**Rules:**
+- ❌ NEVER use `git add .`
+- ❌ NEVER switch branches
+- ❌ NEVER push
 
+---
+
+## Files to Optimize
+
+Faye added debug logging to these 3 files:
+
+1. **src/ui/sidebar/App.tsx** (10 logs added)
+   - Lines 473-526: `triggerAgenticAction` callback (5 logs)
+   - Lines 735-743: Modal click handlers (2 logs)
+
+2. **src/ui/sidebar/components/QuickActions.tsx** (2 logs added)
+   - Lines 51-55: ActionButton click handler
+
+3. **src/ui/sidebar/context/KernelContext.tsx** (1 log added)
+   - Lines 71-76: useService hook
+
+**Total**: ~13 console.log statements
+
+---
+
+## What to Create
+
+### File: `src/utils/debugLog.ts`
+
+Create a simple debug logging utility:
+
+```typescript
+/**
+ * Simple debug logging utility
+ * Set DEBUG_ENABLED = true to see logs, false to disable
+ */
+const DEBUG_ENABLED = false; // Toggle point
+
+export function debugLog(component: string, message: string, data?: any) {
+  if (!DEBUG_ENABLED) return;
+
+  if (data !== undefined) {
+    console.log(`[${component}] ${message}`, data);
+  } else {
+    console.log(`[${component}] ${message}`);
+  }
+}
+
+export function debugError(component: string, message: string, data?: any) {
+  if (!DEBUG_ENABLED) return;
+
+  if (data !== undefined) {
+    console.error(`[${component}] ${message}`, data);
+  } else {
+    console.error(`[${component}] ${message}`);
+  }
+}
+```
+
+That's it. Simple, clean, works.
+
+---
+
+## How to Optimize Each File
+
+### 1. App.tsx (triggerAgenticAction)
+
+**Before** (5 verbose logs):
+```typescript
+console.log('[triggerAgenticAction] Called with:', { prompt, taskType });
+console.log('[triggerAgenticAction] taskQueue:', taskQueue);
+console.log('[triggerAgenticAction] noteVitals:', noteVitals.value);
+// ... code ...
+console.error('[triggerAgenticAction] FAILED - missing:', {
+  hasTaskQueue: !!taskQueue,
+  hasNoteVitals: !!noteVitals.value
+});
+```
+
+**After** (2 structured logs):
+```typescript
+import { debugLog, debugError } from "../../../utils/debugLog";
+
+debugLog('triggerAgenticAction', 'called', { prompt, taskType, hasTaskQueue: !!taskQueue, hasNoteVitals: !!noteVitals.value });
+// ... code ...
+if (!taskQueue || !noteVitals.value) {
+  debugError('triggerAgenticAction', 'services unavailable', { hasTaskQueue: !!taskQueue, hasNoteVitals: !!noteVitals.value });
+}
+```
+
+### 2. QuickActions.tsx (ActionButton)
+
+**Before** (2 logs):
+```typescript
+console.log('[QuickActions] Button clicked:', action.id);
+action.onClick();
+console.log('[QuickActions] onClick called successfully');
+```
+
+**After** (1 log):
+```typescript
+import { debugLog } from "../../../utils/debugLog";
+
+debugLog('QuickActions', `${action.id} clicked`);
+action.onClick();
+```
+
+### 3. KernelContext.tsx (useService)
+
+**Before** (1 log):
+```typescript
+const service = kernel.getService<T>(name);
+console.log('[useService]', name, '→', service);
+return service;
+```
+
+**After** (1 log, cleaner):
+```typescript
+import { debugLog } from "../../utils/debugLog";
+
+const service = kernel.getService<T>(name);
+debugLog('useService', name, { available: !!service });
+return service;
+```
+
+---
+
+## Goals
+
+1. **Reduce log volume**: 13 logs → ~6-8 logs (less noise)
+2. **Add structure**: Consistent format, clear component names
+3. **Make toggle-able**: One flag to disable all debug logs
+4. **Keep diagnostic value**: Still see what we need when DEBUG_ENABLED = true
+5. **No performance cost**: When disabled, immediate return (no string formatting)
+
+---
+
+## After You're Done
+
+1. Run verification:
 ```bash
-# ❌ NEVER DO THIS - CEO handles all pushes
-git push
+bun run typecheck  # Must pass
+bun run build      # Must succeed
 ```
 
----
+2. Write REPORT.md:
+```markdown
+# Sage - Phase 1 Stage 1.5 Report
 
-### Git Rules Summary
-1. ✅ You're on `ALPHA-SPEC-SPRINT` (shared branch)
-2. ✅ Stage files ONE BY ONE with explicit paths
-3. ✅ Verify with `git status` before commit
-4. ❌ NEVER use `git add .` or wildcards
-5. ❌ NEVER switch branches (`git checkout`)
-6. ❌ NEVER push (`git push`)
+## Summary
+[What you did, before/after log counts]
 
----
+## Created Files
+- src/utils/debugLog.ts (simple toggle-able logging)
 
-## How Sage Works
+## Optimized Files
+- src/ui/sidebar/App.tsx (10 logs → X logs)
+- src/ui/sidebar/components/QuickActions.tsx (2 logs → X logs)
+- src/ui/sidebar/context/KernelContext.tsx (1 log → X logs)
 
-Sage IS the code-simplifier agent from Anthropic. It:
-- Operates autonomously on recently modified code
-- Preserves all functionality while improving clarity
-- Uses Opus model for maximum capability
+## Pattern for Future Use
+[Document how engineers should use debugLog()]
 
----
-
-## Focus Files
-
-| File | Lines | What to Review |
-|------|-------|----------------|
-| `src/core/chat/types.ts` | 9-80 | StoredChatMessage, ConversationFile, ConversationRollup, AppendMessageOptions |
-| `src/core/chat/conversationStore.ts` | 1-630 | Per-note storage, lazy loading, migration, dual API |
-| `src/core/chat/chatService.ts` | 32-60 | extractReasoningSummary() utility |
-
----
-
-## Invocation
-
-To run Sage on Phase 4, use this exact prompt:
-
-```
-Simplify the Phase 4 conversation storage code that was recently added.
-
-## Git Workflow
-1. Run `git status` first to see current state
-2. Only modify files listed below
-3. After changes, stage ONLY your files and commit (no push)
-
-## Focus Files
-- src/core/chat/types.ts (lines 9-80)
-- src/core/chat/conversationStore.ts (lines 1-630)
-- src/core/chat/chatService.ts (lines 32-60)
-
-## After Simplification
-1. Run: bun run typecheck && bun run build
-2. Write findings to: planning/orchestration/sage/REPORT.md
-3. Git commit your changes (only your files, no push)
+## Build Verification
+✅ TypeScript passes
+✅ Build succeeds
 ```
 
----
-
-## What Code-Simplifier Will Do
-
-1. **Read** the specified files
-2. **Analyze** for simplification opportunities:
-   - Unnecessary abstractions
-   - Redundant code paths
-   - Over-validation
-   - Nested ternaries → switch statements
-   - Verbose patterns that could be cleaner
-3. **Apply** edits while preserving functionality
-4. **Verify** with typecheck and build
-5. **Report** changes made
-6. **Commit** only touched files (no push)
+3. Commit using git workflow above
 
 ---
 
-## What It WON'T Do
+## Questions?
 
-- Change functionality (only HOW code achieves it)
-- Remove helpful abstractions
-- Prioritize brevity over readability
-- Create clever solutions that are hard to understand
-- Touch files outside the focus list
-- Push to remote
+If you're unsure, keep it simple:
+- Use debugLog() for info
+- Use debugError() for errors
+- Keep the same diagnostic information
+- Just make it cleaner and toggle-able
+
+**Ready? Go optimize those logs and create the utility.**
