@@ -1,4 +1,4 @@
-# Archie - Phase 4 Report
+# Archie - Phase 5 Report
 
 > **Status**: COMPLETE
 > **Last Updated**: 2026-01-10
@@ -8,7 +8,7 @@
 
 ## Summary
 
-Phase 4 implements per-note conversation storage with lazy loading, reasoning summary extraction, and legacy migration support. The new architecture stores conversations in individual files keyed by noteId, enabling better performance through lazy loading and preparing for PARA-aware folder rollups.
+Phase 5 implements time-bucketed action history storage with diff-based undo. Actions are stored in a hot file (recent 200) with automatic archival to monthly files. Undo payloads now use unified diffs instead of full content, significantly reducing storage size.
 
 ---
 
@@ -16,130 +16,171 @@ Phase 4 implements per-note conversation storage with lazy loading, reasoning su
 
 | File | Lines Changed | Key Changes |
 |------|---------------|-------------|
-| `src/core/chat/types.ts:1-80` | +73 | Added `StoredChatMessage`, `ConversationFile`, `ConversationRollup`, `AppendMessageOptions`, `MessageStatus` |
-| `src/core/chat/conversationStore.ts:1-630` | Complete rewrite | Per-note file management, lazy loading, dual API (sync + async), migration |
-| `src/core/chat/chatService.ts:32-60` | +29 | Added `extractReasoningSummary()` utility function |
+| `src/core/agentic/types.ts:361-463` | +103 | Added `DiffUndoPayload`, `HotActionsFile`, `ActionsArchiveFile`, updated `AppliedActionRecord` |
+| `src/core/agentic/actionHistory.ts:1-905` | Complete rewrite | Hot + archive structure, diff undo, migration |
+| `src/core/agentic/actionApplier.ts:1-1167` | ~200 lines | Added reasoning param, diff-based undo for content changes |
 
 ---
 
-## New Types (`types.ts:9-80`)
+## New Types (`types.ts:361-463`)
 
 ```typescript
-MessageStatus           // "success" | "failed" | "cancelled"
-StoredChatMessage       // Extended message with status, reasoningSummary, actionRef
-ConversationFile        // Per-note file structure (version 2)
-ConversationRollup      // Folder rollup structure for PARA summaries
-AppendMessageOptions    // Options for appendMessageAsync
+DiffUndoPayload {
+  type: "diff";
+  patches: Array<{ path: string; diff: string }>;
+}
+
+AppliedActionStatus = "pending" | "applied" | "undone" | "failed";
+
+AppliedActionRecord {
+  // ... existing fields ...
+  reasoning: string;  // NEW: Why agent made this decision
+  status: AppliedActionStatus;  // NEW: Current status
+}
+
+HotActionsFile {
+  version: number;
+  records: AppliedActionRecord[];
+  oldestTimestamp: number;
+  newestTimestamp: number;
+}
+
+ActionsArchiveFile {
+  version: number;
+  yearMonth: string;
+  records: AppliedActionRecord[];
+  recordCount: number;
+  archivedAt: number;
+}
 ```
 
 ---
 
-## Rewritten Class: ConversationStore (`conversationStore.ts`)
+## Rewritten Class: ActionHistory (`actionHistory.ts`)
 
-### Data Structure
+### Constants
 
 ```typescript
-// In-memory cache (lazy loaded)
-private loaded: Map<string, StoredChatMessage[]>  // noteId -> messages
-private meta: Map<string, ConversationMeta>       // noteId -> metadata
-private dirty: Set<string>                        // noteIds pending save
+ACTIONS_VERSION = 2        // Schema version
+MAX_HOT_ACTIONS = 200      // Trigger archival when exceeded
+ARCHIVE_THRESHOLD = 150    // Number of records to archive
+FLUSH_DEBOUNCE_MS = 500    // Save debounce delay
 ```
 
 ### Public Methods
 
 | Method | Line | Signature | Purpose |
 |--------|------|-----------|---------|
-| `load()` | 90-92 | `async (): Promise<void>` | Backward-compatible (calls initialize) |
-| `initialize()` | 82-84 | `async (): Promise<void>` | Initialize + migrate legacy |
-| `loadConversation()` | 97-121 | `async (noteId): Promise<StoredChatMessage[]>` | Lazy load per-note |
-| `getHistory()` | 130-151 | `(notePath): ExtendedChatMessage[]` | Sync, from cache only |
-| `getHistoryAsync()` | 161-190 | `async (notePath, noteId?): Promise<ExtendedChatMessage[]>` | Async, lazy loading |
-| `appendMessage()` | 199-243 | `(notePath, message): void` | Sync, backward-compatible |
-| `appendMessageAsync()` | 254-313 | `async (notePath, message, options?, noteId?): Promise<void>` | Async with reasoning |
-| `handleRename()` | 321-362 | `(oldPath, newPath): void` | Handles noteId migration |
-| `deleteConversation()` | 369-389 | `(notePath): void` | Delete with archive |
-| `hasConversation()` | 396-399 | `(notePath): boolean` | Check cache |
-| `getConversationPaths()` | 405-407 | `(): string[]` | Backward-compatible |
-| `flush()` | 416-425 | `async (): Promise<void>` | Save dirty conversations |
-| `generateRollup()` | 430-488 | `async (folder): Promise<ConversationRollup>` | On-demand folder summary |
-| `prune()` | 493-540 | `async (): Promise<void>` | Prune old (file-based) |
+| `load()` | 84-109 | `async (): Promise<void>` | Loads hot actions + migration |
+| `addRecord()` | 114-148 | `(action, undo, paths, reasoning, workflowId?, taskId?): AppliedActionRecord` | Add record with reasoning |
+| `flush()` | 216-239 | `async (): Promise<void>` | Save hot actions (debounced) |
+| `getRecord()` | 256-258 | `(id): AppliedActionRecord \| undefined` | Get by ID (hot only) |
+| `getAllRecords()` | 263-265 | `(): AppliedActionRecord[]` | Get all hot records |
+| `getRecordsForNote()` | 270-274 | `(path): AppliedActionRecord[]` | Filter by note path |
+| `getRecordsForWorkflow()` | 279-281 | `(id): AppliedActionRecord[]` | Filter by workflow |
+| `getRecentRecords()` | 286-288 | `(limit?): AppliedActionRecord[]` | Recent for dashboard |
+| `getArchivedActions()` | 293-304 | `async (yearMonth): Promise<AppliedActionRecord[]>` | Query monthly archive |
+| `listArchiveMonths()` | 309-322 | `async (): Promise<string[]>` | List available archives |
+| `undo()` | 327-372 | `async (recordId): Promise<UndoResult>` | Undo action |
+| `canUndo()` | 511-527 | `(recordId): boolean` | Check if undoable |
+| `updateStatus()` | 532-538 | `(recordId, status): void` | Update record status |
+| `clear()` | 550-553 | `(): void` | Clear all hot records |
+| `prune()` | 559-562 | `(): void` | No-op (backward compat) |
+| `dispose()` | 579-585 | `async (): Promise<void>` | Final flush |
 
 ### Private Methods
 
 | Method | Line | Purpose |
 |--------|------|---------|
-| `scheduleFlush()` | 589-595 | Debounced save (500ms) |
-| `saveConversation()` | 600-620 | Save single conversation file |
-| `migrateIfNeeded()` | 625-623 | Migrate legacy conversations.json |
+| `archiveOldRecords()` | 153-180 | Archive oldest 150 when >200 |
+| `appendToArchive()` | 185-213 | Append to monthly file |
+| `scheduleFlush()` | 244-253 | Debounced save |
+| `applyUndo()` | 377-389 | Route to undo type handler |
+| `undoRestoreContent()` | 394-429 | Legacy full content restore |
+| `undoRenameBack()` | 434-455 | Rename/move undo |
+| `undoDiff()` | 460-504 | Apply reverse diff |
+| `migrateIfNeeded()` | 591-656 | Migrate legacy actions.json |
+
+### Exported Diff Utilities
+
+| Function | Line | Purpose |
+|----------|------|---------|
+| `createUnifiedDiff()` | 685-818 | Create unified diff (new→old for undo) |
+| `applyReverseDiff()` | 828-903 | Apply diff to restore content |
 
 ---
 
-## New Utility Function (`chatService.ts:43-60`)
+## Updated Class: ActionApplier (`actionApplier.ts`)
+
+### Method Signature Changes
+
+All `apply*` methods now accept `reasoning?: string`:
 
 ```typescript
-export function extractReasoningSummary(
-  thinkingContent: string | null | undefined,
-  maxLength: number = 200,
-): string | undefined
+async apply(
+  action: ProposedAction,
+  taskId?: string,
+  workflowId?: string,
+  skipConfirmation = false,
+  reasoning = "Action applied by agent",  // NEW
+): Promise<ApplyResult>
 ```
 
-**Purpose**: Extracts first 200 characters of thinking content for storage, avoiding full `<think>` block bloat.
+### Undo Strategy by Action Type
+
+| Action Type | Undo Type | Reason |
+|-------------|-----------|--------|
+| `frontmatter_set` | DiffUndoPayload | Content modification |
+| `frontmatter_add_tags` | DiffUndoPayload | Content modification |
+| `append_section` | DiffUndoPayload | Content modification |
+| `append_related_links` | DiffUndoPayload | Content modification |
+| `restructure_note` | DiffUndoPayload | Content modification |
+| `append_review_section` | DiffUndoPayload | Content modification |
+| `batch_append_links` | DiffUndoPayload | Content modification |
+| `move_note` | RenameBackUndo | Path operation |
+| `create_note` | RestoreContentUndo (before="") | File creation |
+| `batch_create_notes` | RestoreContentUndo (before="") | File creation |
+| `create_task_note` | RestoreContentUndo (before="") | File creation |
+| `create_synthesis_note` | RestoreContentUndo (before="") | File creation |
 
 ---
 
-## Backward Compatibility
+## Storage Structure
 
-The old synchronous API is preserved:
-
-| Old Method | New Behavior |
-|------------|--------------|
-| `load()` | Calls `initialize()` |
-| `getHistory(notePath)` | Returns from cache (sync), empty if not loaded |
-| `appendMessage(notePath, msg)` | Sync append, auto-computes noteId |
-| `handleRename(old, new)` | Handles noteId migration automatically |
-| `deleteConversation(notePath)` | Takes path, computes noteId |
-| `hasConversation(notePath)` | Checks cache by computed noteId |
-| `getConversationPaths()` | Returns paths from meta |
-
-New async API for enhanced features:
-
-| New Method | Purpose |
-|------------|---------|
-| `getHistoryAsync(notePath, noteId?)` | Lazy loads from disk |
-| `appendMessageAsync(notePath, msg, opts?, noteId?)` | Supports reasoning summary |
-
----
-
-## File Structure
-
-```
-data/conversations/
-  notes/
-    {noteId}.json      # Per-note conversation
-  rollups/
-    {para-folder}.json # On-demand folder summaries
-```
-
-### ConversationFile Schema (v2)
+### Hot File: `data/actions/hot/current.json`
 
 ```json
 {
   "version": 2,
-  "noteId": "abc123def456...",
-  "notePath": "projects/auth/setup.md",
-  "messages": [
+  "records": [
     {
-      "id": "msg-001",
-      "role": "assistant",
-      "content": "Here's how...",
-      "timestamp": "2026-01-10T12:00:00Z",
-      "status": "success",
-      "reasoningSummary": "Analyzed JWT config...",
-      "actionRef": "action-xyz"
+      "id": "action-1736507123456-a1b2c3",
+      "timestamp": 1736507123456,
+      "workflowId": "workflow-xyz",
+      "action": { "type": "append_section", ... },
+      "reasoning": "User requested summary section based on context",
+      "undo": {
+        "type": "diff",
+        "patches": [{ "path": "notes/example.md", "diff": "..." }]
+      },
+      "changedPaths": ["notes/example.md"],
+      "status": "applied"
     }
   ],
-  "createdAt": "...",
-  "lastAccessedAt": "..."
+  "oldestTimestamp": 1736500000000,
+  "newestTimestamp": 1736507123456
+}
+```
+
+### Archive Files: `data/actions/archive/{YYYY-MM}.json`
+
+```json
+{
+  "version": 2,
+  "yearMonth": "2026-01",
+  "records": [/* AppliedActionRecord[] */],
+  "recordCount": 150,
+  "archivedAt": 1736507200000
 }
 ```
 
@@ -147,80 +188,83 @@ data/conversations/
 
 ## Migration Approach
 
-1. **Detection**: `migrateIfNeeded()` checks for legacy `conversations.json`
-2. **Skip if migrated**: If `data/conversations/notes/` has files, skip
-3. **Migration steps**:
-   - Parse legacy file
-   - Generate noteId from each notePath using `generateNoteId()`
-   - Create per-note files with version 2 schema
-   - Add `status` field based on content presence
-4. **Archive**: Move legacy file to `_deleted/conversations-legacy-{timestamp}.json`
+1. **Detection**: Checks for legacy `actions.json` at `storagePaths.legacyActions`
+2. **Skip if migrated**: If `data/actions/hot/current.json` exists, skip
+3. **Convert records**: Add `reasoning` and `status` fields to legacy records
+   - `reasoning: "Legacy action - no reasoning recorded"`
+   - `status: "applied"`
+4. **Split**: Last 200 → hot file, older → grouped by month into archives
+5. **Archive legacy**: Move to `data/_operational/temp/_deleted/actions-legacy-{timestamp}.json`
+
+---
+
+## Diff Algorithm
+
+### Creating Diff (`createUnifiedDiff`)
+
+1. Split both contents into lines
+2. Walk through lines comparing old vs new
+3. Use lookahead (10 lines) to find best matches
+4. Generate unified diff hunks with 3-line context
+5. Returns standard unified diff format
+
+### Applying Reverse Diff (`applyReverseDiff`)
+
+1. Parse diff into hunks
+2. Apply hunks in reverse order (bottom to top) to preserve line numbers
+3. For reverse application:
+   - `+` lines (additions) → remove
+   - `-` lines (deletions) → add back
+   - ` ` lines (context) → preserve
+
+---
+
+## Backward Compatibility
+
+| Feature | Status |
+|---------|--------|
+| Constructor accepts retention config | ✓ (ignored, uses archival instead) |
+| `prune()` method | ✓ (no-op, archival handles cleanup) |
+| `RestoreContentUndo` support | ✓ (still works for file creation undo) |
+| `RenameBackUndo` support | ✓ (unchanged) |
 
 ---
 
 ## Verification Results
 
 ### Build
-- [x] `bun run typecheck` passes (no errors)
-- [x] `bun run build` passes (554.6KB main.js)
 
-### Code Quality
-- [x] No TypeScript errors
-- [x] Uses Phase 1 path methods (`storagePaths.conversationsNotes`, `getConversationPath()`)
-- [x] Backward compatible with existing callers
-- [x] Migrates legacy storage automatically
+```bash
+$ bun run typecheck
+$ tsc --noEmit
+# No errors
 
----
-
-## Usage Example
-
-### Storing assistant message with reasoning summary:
-
-```typescript
-import { extractReasoningSummary } from "./chatService";
-
-// After receiving ChatStreamEvent with type: "complete"
-const reasoningSummary = extractReasoningSummary(event.thinking);
-
-await conversationStore.appendMessageAsync(
-  notePath,
-  {
-    id: generateId(),
-    role: "assistant",
-    content: event.content,  // Content WITHOUT thinking
-    timestamp: new Date(),
-  },
-  {
-    reasoningSummary,
-    status: event.content ? "success" : "failed",
-    actionRef: resultingActionId,
-  }
-);
+$ bun run build
+# Build complete in 62ms
+# main.js: 557.2kb
 ```
-
----
-
-## Not Implemented (Deferred)
-
-1. **Topic extraction for rollups** - `topTopics` field always empty (would require LLM)
-2. **Automatic rollup generation** - On-demand only via `generateRollup(folder)`
-3. **Cross-note conversation search** - Not in Phase 4 scope
 
 ---
 
 ## Previous Phases
 
+### Phase 4: Per-Note Conversations (COMPLETE)
+Per-note conversation storage with lazy loading and reasoning summary extraction.
+
 ### Phase 3: Intelligence Tag-Keyed Sharding (COMPLETE)
 Reorganized intelligence from model-keyed to topic-keyed files.
 
 ### Phase 2: Chunk/Embedding Separation (COMPLETE)
-Implemented separated storage for chunks (model-agnostic) and embeddings (model-specific).
+Separated storage for chunks (model-agnostic) and embeddings (model-specific).
 
 ### Phase 1: Storage Path Infrastructure (COMPLETE)
 Established path infrastructure for hierarchical storage with 45+ path constants.
 
 ---
 
-## Next Recommended Action
+## Next Steps
 
-Proceed to Phase 5: Actions Time-Bucketed + Diff Undo.
+All 5 phases of storage restructure are complete:
+1. Update version number in `manifest.json` if needed
+2. Test full workflow end-to-end in test vault
+3. Clean up any orphaned legacy files

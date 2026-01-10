@@ -1,23 +1,22 @@
 /**
  * Action Applier Service
  *
- * Applies proposed actions to notes, enforcing validation and write-lock.
- * Records undo data for all applied actions.
+ * Applies proposed actions to notes with validation and undo support.
  */
 
 import { normalizePath } from "obsidian";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { Kernel } from "../kernel";
-import type { ActionHistory } from "./actionHistory";
+import { createUnifiedDiff, type ActionHistory } from "./actionHistory";
 import type { TrustLevelManager } from "./trustLevelManager";
 import {
   type AppendReviewSectionAction,
-  type AppliedActionRecord,
   type BatchAppendLinksAction,
   type BatchCreateNotesAction,
   type CreateNoteAction,
   type CreateSynthesisNoteAction,
   type CreateTaskNoteAction,
+  type DiffUndoPayload,
   INTELLIGENCE_2_ACTION_TYPES,
   type ProposedAction,
   type RenameBackUndo,
@@ -25,14 +24,20 @@ import {
   type RestructureNoteAction,
 } from "./types";
 
-/**
- * Result of applying an action
- */
+/** Result of applying an action */
 export interface ApplyResult {
   success: boolean;
   recordId?: string;
   error?: string;
   requiresConfirmation?: boolean;
+}
+
+/** Context for applying an action with diff-based undo */
+interface ApplyContext {
+  action: ProposedAction;
+  taskId?: string;
+  workflowId?: string;
+  reasoning?: string;
 }
 
 /**
@@ -47,17 +52,103 @@ export class ActionApplier {
   ) {}
 
   /**
+   * Apply a file modification with diff-based undo recording.
+   * Common pattern for frontmatter_set, frontmatter_add_tags, append_section, etc.
+   */
+  private async applyWithDiffUndo(
+    context: ApplyContext,
+    targetPath: string,
+    modifier: (content: string) => string | Promise<string>,
+  ): Promise<ApplyResult> {
+    const beforeContent = await this.obsidian.readFileByPath(targetPath);
+    if (beforeContent === null) {
+      return { success: false, error: `Could not read file: ${targetPath}` };
+    }
+
+    const newContent = await modifier(beforeContent);
+    const result = await this.obsidian.modifyFile(targetPath, newContent);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    const afterContent = await this.obsidian.readFileByPath(targetPath);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${targetPath}` };
+    }
+
+    const diff = createUnifiedDiff(afterContent, beforeContent, targetPath);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: targetPath, diff }],
+    };
+
+    const record = this.actionHistory.addRecord(
+      context.action,
+      undoPayload,
+      [targetPath],
+      context.reasoning ?? context.action.reason,
+      context.workflowId,
+      context.taskId,
+    );
+
+    return { success: true, recordId: record.id };
+  }
+
+  /**
+   * Apply a frontmatter modification with diff-based undo recording.
+   */
+  private async applyFrontmatterWithDiffUndo(
+    context: ApplyContext,
+    targetPath: string,
+    updater: (frontmatter: Record<string, unknown>) => void,
+  ): Promise<ApplyResult> {
+    const beforeContent = await this.obsidian.readFileByPath(targetPath);
+    if (beforeContent === null) {
+      return { success: false, error: `Could not read file: ${targetPath}` };
+    }
+
+    const result = await this.obsidian.processFrontMatter(targetPath, updater);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    const afterContent = await this.obsidian.readFileByPath(targetPath);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${targetPath}` };
+    }
+
+    const diff = createUnifiedDiff(afterContent, beforeContent, targetPath);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: targetPath, diff }],
+    };
+
+    const record = this.actionHistory.addRecord(
+      context.action,
+      undoPayload,
+      [targetPath],
+      context.reasoning ?? context.action.reason,
+      context.workflowId,
+      context.taskId,
+    );
+
+    return { success: true, recordId: record.id };
+  }
+
+  /**
    * Apply a single action to a note
    * @param action - The proposed action to apply
    * @param taskId - Optional task ID that produced this action
    * @param workflowId - Optional workflow ID this action belongs to
    * @param skipConfirmation - Skip confirmation check (used after user approves)
+   * @param reasoning - Why the agent made this decision (Phase 5)
    */
   async apply(
     action: ProposedAction,
     taskId?: string,
     workflowId?: string,
     skipConfirmation = false,
+    reasoning = "Action applied by agent",
   ): Promise<ApplyResult> {
     // 1. Check write lock
     if (!this.kernel.hasWriteLock) {
@@ -93,7 +184,7 @@ export class ActionApplier {
 
     // 4. Apply based on action type
     try {
-      const result = await this.applyAction(action, taskId, workflowId);
+      const result = await this.applyAction(action, taskId, workflowId, reasoning);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -109,8 +200,9 @@ export class ActionApplier {
     action: ProposedAction,
     taskId?: string,
     workflowId?: string,
+    reasoning = "Action approved by user",
   ): Promise<ApplyResult> {
-    return this.apply(action, taskId, workflowId, true);
+    return this.apply(action, taskId, workflowId, true, reasoning);
   }
 
   /**
@@ -281,42 +373,44 @@ export class ActionApplier {
     action: ProposedAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     switch (action.type) {
       // Phase 2 actions
       case "frontmatter_set":
-        return this.applyFrontmatterSet(action, taskId, workflowId);
+        return this.applyFrontmatterSet(action, taskId, workflowId, reasoning);
 
       case "frontmatter_add_tags":
-        return this.applyFrontmatterAddTags(action, taskId, workflowId);
+        return this.applyFrontmatterAddTags(action, taskId, workflowId, reasoning);
 
       case "append_section":
-        return this.applyAppendSection(action, taskId, workflowId);
+        return this.applyAppendSection(action, taskId, workflowId, reasoning);
 
       case "append_related_links":
-        return this.applyAppendRelatedLinks(action, taskId, workflowId);
+        return this.applyAppendRelatedLinks(action, taskId, workflowId, reasoning);
 
       case "move_note":
-        return this.applyMoveNote(action, taskId, workflowId);
+        return this.applyMoveNote(action, taskId, workflowId, reasoning);
 
       // Intelligence 2.0 actions
       case "create_note":
-        return this.applyCreateNote(action as CreateNoteAction, taskId, workflowId);
+        return this.applyCreateNote(action as CreateNoteAction, taskId, workflowId, reasoning);
 
       case "batch_create_notes":
-        return this.applyBatchCreateNotes(action as BatchCreateNotesAction, taskId, workflowId);
+        return this.applyBatchCreateNotes(action as BatchCreateNotesAction, taskId, workflowId, reasoning);
 
       case "restructure_note":
-        return this.applyRestructureNote(action as RestructureNoteAction, taskId, workflowId);
+        return this.applyRestructureNote(action as RestructureNoteAction, taskId, workflowId, reasoning);
 
       case "create_task_note":
-        return this.applyCreateTaskNote(action as CreateTaskNoteAction, taskId, workflowId);
+        return this.applyCreateTaskNote(action as CreateTaskNoteAction, taskId, workflowId, reasoning);
 
       case "create_synthesis_note":
         return this.applyCreateSynthesisNote(
           action as CreateSynthesisNoteAction,
           taskId,
           workflowId,
+          reasoning,
         );
 
       case "append_review_section":
@@ -324,10 +418,11 @@ export class ActionApplier {
           action as AppendReviewSectionAction,
           taskId,
           workflowId,
+          reasoning,
         );
 
       case "batch_append_links":
-        return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId);
+        return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId, reasoning);
 
       case "highlight_text_issues":
         console.warn("[ActionApplier] Action type 'highlight_text_issues' is not yet implemented");
@@ -355,6 +450,7 @@ export class ActionApplier {
     action: ProposedAction & { type: "frontmatter_set" },
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -373,19 +469,29 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
-    // Record for undo
-    const record = this.createRecord(
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
+    // Record for undo with new signature
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -396,6 +502,7 @@ export class ActionApplier {
     action: ProposedAction & { type: "frontmatter_add_tags" },
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -416,19 +523,29 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
     // Record for undo
-    const record = this.createRecord(
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -439,6 +556,7 @@ export class ActionApplier {
     action: ProposedAction & { type: "append_section" },
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -464,19 +582,29 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
     // Record for undo
-    const record = this.createRecord(
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -487,6 +615,7 @@ export class ActionApplier {
     action: ProposedAction & { type: "append_related_links" },
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -509,19 +638,29 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
     // Record for undo
-    const record = this.createRecord(
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -532,6 +671,7 @@ export class ActionApplier {
     action: ProposedAction & { type: "move_note" },
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
     const from = normalizePath(target);
@@ -557,41 +697,22 @@ export class ActionApplier {
     }
 
     // Record for undo (rename back)
-    const record = this.createRecord(
+    const undoPayload: RenameBackUndo = {
+      type: "rename_back",
+      from: to, // Current location (after move)
+      to: from, // Original location (to restore)
+    };
+
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [from, to],
-      {
-        type: "rename_back",
-        from: to, // Current location (after move)
-        to: from, // Original location (to restore)
-      } as RenameBackUndo,
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
-  }
-
-  /**
-   * Create an applied action record
-   */
-  private createRecord(
-    action: ProposedAction,
-    changedPaths: string[],
-    undo: RestoreContentUndo | RenameBackUndo,
-    taskId?: string,
-    workflowId?: string,
-  ): AppliedActionRecord {
-    return {
-      id: `applied-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      timestamp: Date.now(),
-      workflowId,
-      taskId,
-      action,
-      changedPaths,
-      undo,
-    };
   }
 
   // =============================================================================
@@ -605,6 +726,7 @@ export class ActionApplier {
     action: CreateNoteAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { payload } = action;
     const notePath = normalizePath(payload.path);
@@ -642,19 +764,21 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
-    // Record for undo (delete the created file)
-    const record = this.createRecord(
+    // Record for undo (delete the created file - use RestoreContentUndo with empty before)
+    const undoPayload: RestoreContentUndo = {
+      type: "restore_content",
+      files: [{ path: notePath, before: "" }], // Empty = file didn't exist
+    };
+
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [notePath],
-      {
-        type: "restore_content",
-        files: [{ path: notePath, before: "" }], // Empty = file didn't exist
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -665,6 +789,7 @@ export class ActionApplier {
     action: BatchCreateNotesAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { payload } = action;
     const createdPaths: string[] = [];
@@ -713,18 +838,19 @@ export class ActionApplier {
     }
 
     // Record for undo
-    const record = this.createRecord(
-      action,
-      createdPaths,
-      {
-        type: "restore_content",
-        files: createdPaths.map((p) => ({ path: p, before: "" })),
-      },
-      taskId,
-      workflowId,
-    );
+    const undoPayload: RestoreContentUndo = {
+      type: "restore_content",
+      files: createdPaths.map((p) => ({ path: p, before: "" })),
+    };
 
-    this.actionHistory.addRecord(record);
+    const record = this.actionHistory.addRecord(
+      action,
+      undoPayload,
+      createdPaths,
+      reasoning ?? action.reason,
+      workflowId,
+      taskId,
+    );
 
     if (errors.length > 0) {
       return {
@@ -744,6 +870,7 @@ export class ActionApplier {
     action: RestructureNoteAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -770,19 +897,29 @@ export class ActionApplier {
       return { success: false, error: result.error };
     }
 
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
     // Record for undo
-    const record = this.createRecord(
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -793,6 +930,7 @@ export class ActionApplier {
     action: CreateTaskNoteAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { payload } = action;
     const notePath = normalizePath(payload.path);
@@ -856,19 +994,21 @@ type: task-list
       return { success: false, error: result.error };
     }
 
-    // Record for undo
-    const record = this.createRecord(
+    // Record for undo (delete the created file)
+    const undoPayload: RestoreContentUndo = {
+      type: "restore_content",
+      files: [{ path: notePath, before: "" }],
+    };
+
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [notePath],
-      {
-        type: "restore_content",
-        files: [{ path: notePath, before: "" }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -879,6 +1019,7 @@ type: task-list
     action: CreateSynthesisNoteAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { payload } = action;
     const notePath = normalizePath(payload.path);
@@ -928,19 +1069,21 @@ type: task-list
       return { success: false, error: result.error };
     }
 
-    // Record for undo
-    const record = this.createRecord(
+    // Record for undo (delete the created file)
+    const undoPayload: RestoreContentUndo = {
+      type: "restore_content",
+      files: [{ path: notePath, before: "" }],
+    };
+
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [notePath],
-      {
-        type: "restore_content",
-        files: [{ path: notePath, before: "" }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -951,6 +1094,7 @@ type: task-list
     action: AppendReviewSectionAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
@@ -997,19 +1141,29 @@ type: task-list
       return { success: false, error: result.error };
     }
 
+    // Read after content for diff
+    const afterContent = await this.obsidian.readFileByPath(target);
+    if (afterContent === null) {
+      return { success: false, error: `Could not read file after modification: ${target}` };
+    }
+
+    // Generate diff-based undo
+    const diff = createUnifiedDiff(afterContent, beforeContent, target);
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches: [{ path: target, diff }],
+    };
+
     // Record for undo
-    const record = this.createRecord(
+    const record = this.actionHistory.addRecord(
       action,
+      undoPayload,
       [target],
-      {
-        type: "restore_content",
-        files: [{ path: target, before: beforeContent }],
-      },
-      taskId,
+      reasoning ?? action.reason,
       workflowId,
+      taskId,
     );
 
-    this.actionHistory.addRecord(record);
     return { success: true, recordId: record.id };
   }
 
@@ -1020,10 +1174,11 @@ type: task-list
     action: BatchAppendLinksAction,
     taskId?: string,
     workflowId?: string,
+    reasoning?: string,
   ): Promise<ApplyResult> {
     const { payload } = action;
     const changedPaths: string[] = [];
-    const beforeContents: Array<{ path: string; before: string }> = [];
+    const patches: Array<{ path: string; diff: string }> = [];
     const errors: string[] = [];
 
     // Group link pairs by source note
@@ -1044,8 +1199,6 @@ type: task-list
         continue;
       }
 
-      beforeContents.push({ path: fromPath, before: beforeContent });
-
       // Build links section
       const linksList = links.map((l) => `- [[${l.toNote}]] - ${l.context}`).join("\n");
       const sectionContent = `\n\n## Related Notes\n\n${linksList}`;
@@ -1059,6 +1212,13 @@ type: task-list
         continue;
       }
 
+      // Read after content for diff
+      const afterContent = await this.obsidian.readFileByPath(fromPath);
+      if (afterContent !== null) {
+        const diff = createUnifiedDiff(afterContent, beforeContent, fromPath);
+        patches.push({ path: fromPath, diff });
+      }
+
       changedPaths.push(fromPath);
     }
 
@@ -1066,19 +1226,20 @@ type: task-list
       return { success: false, error: errors.join("; ") };
     }
 
-    // Record for undo
-    const record = this.createRecord(
-      action,
-      changedPaths,
-      {
-        type: "restore_content",
-        files: beforeContents,
-      },
-      taskId,
-      workflowId,
-    );
+    // Record for undo with diff patches
+    const undoPayload: DiffUndoPayload = {
+      type: "diff",
+      patches,
+    };
 
-    this.actionHistory.addRecord(record);
+    const record = this.actionHistory.addRecord(
+      action,
+      undoPayload,
+      changedPaths,
+      reasoning ?? action.reason,
+      workflowId,
+      taskId,
+    );
 
     if (errors.length > 0) {
       return {

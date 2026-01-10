@@ -365,10 +365,10 @@ export type ProposedAction =
 /**
  * Type of undo payload
  */
-export type UndoPayloadType = "restore_content" | "rename_back";
+export type UndoPayloadType = "restore_content" | "rename_back" | "diff";
 
 /**
- * Undo payload for content restoration
+ * Undo payload for content restoration (legacy, still supported for migration)
  */
 export interface RestoreContentUndo {
   type: "restore_content";
@@ -391,9 +391,27 @@ export interface RenameBackUndo {
 }
 
 /**
+ * Diff-based undo payload (Phase 5 - smaller than full content)
+ */
+export interface DiffUndoPayload {
+  type: "diff";
+  /** Patches to apply to restore original content */
+  patches: Array<{
+    path: string;
+    /** Unified diff format (reversed: applying restores original) */
+    diff: string;
+  }>;
+}
+
+/**
  * Union of all undo payload types
  */
-export type UndoPayload = RestoreContentUndo | RenameBackUndo;
+export type UndoPayload = RestoreContentUndo | RenameBackUndo | DiffUndoPayload;
+
+/**
+ * Status of an applied action
+ */
+export type AppliedActionStatus = "pending" | "applied" | "undone" | "failed";
 
 /**
  * Record of an applied action for history/undo
@@ -409,10 +427,39 @@ export interface AppliedActionRecord {
   taskId?: string;
   /** The action that was applied */
   action: ProposedAction;
+  /** Why the agent made this decision (Phase 5) */
+  reasoning: string;
   /** Paths that were changed */
   changedPaths: string[];
   /** Data needed to undo this action */
   undo: UndoPayload;
+  /** Current status of the action (Phase 5) */
+  status: AppliedActionStatus;
+}
+
+// =============================================================================
+// Action Storage Structures (Phase 5)
+// =============================================================================
+
+/**
+ * Hot actions file structure (recent actions, max 200)
+ */
+export interface HotActionsFile {
+  version: number;
+  records: AppliedActionRecord[];
+  oldestTimestamp: number;
+  newestTimestamp: number;
+}
+
+/**
+ * Archive file structure (monthly archives)
+ */
+export interface ActionsArchiveFile {
+  version: number;
+  yearMonth: string;
+  records: AppliedActionRecord[];
+  recordCount: number;
+  archivedAt: number;
 }
 
 // =============================================================================
