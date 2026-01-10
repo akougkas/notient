@@ -386,11 +386,11 @@ export class SimpleIndexer {
     return { added, updated, errors };
   }
 
-  private async processNote(path: string, content: string, mtimeMs: number): Promise<void> {
+  private async processNote(notePath: string, content: string, mtimeMs: number): Promise<void> {
     // Chunk the note (TSI v2: tiered semantic chunking)
-    const metadata = this.kernel.obsidian.getMetadataByPath(path);
+    const metadata = this.kernel.obsidian.getMetadataByPath(notePath);
     const chunkSize = this.kernel.settings.indexing.chunkSize;
-    const chunks = chunkNoteTiered(path, content, mtimeMs, metadata, {
+    const chunks = chunkNoteTiered(notePath, content, mtimeMs, metadata, {
       // Use the existing "chunkSize" slider as a base signal.
       // Tier 2 is slightly smaller; Tier 1 + note sketch are larger.
       blockMaxChars: Math.min(2400, Math.max(600, Math.round(chunkSize * 0.8))),
@@ -404,17 +404,40 @@ export class SimpleIndexer {
     const embeddedChunks = await this.embedChunks(chunks);
 
     // Remove existing chunks for this note
-    const noteId = generateNoteId(path);
-    await this.indexManager.removeNote(path, noteId);
+    const noteId = generateNoteId(notePath);
+    const contentHash = generateContentHash(content);
 
-    // Store new chunks
-    this.updateProgress({ phase: "storing" });
-    await this.indexManager.addChunks(embeddedChunks);
+    // Phase 2: Use separated storage if enabled
+    if (this.indexManager.isUsingNewStructure()) {
+      // Remove using separated method
+      await this.indexManager.removeNoteSeparated(notePath, noteId);
+
+      // Store using separated method (chunks + embeddings)
+      this.updateProgress({ phase: "storing" });
+      const embeddings = embeddedChunks.map((c) => ({
+        chunkId: c.chunkId,
+        embedding: c.embedding,
+      }));
+      await this.indexManager.indexNoteSeparated(
+        noteId,
+        notePath,
+        mtimeMs,
+        contentHash,
+        chunks,
+        embeddings,
+      );
+    } else {
+      // Legacy: single-file storage
+      await this.indexManager.removeNote(notePath, noteId);
+
+      // Store new chunks
+      this.updateProgress({ phase: "storing" });
+      await this.indexManager.addChunks(embeddedChunks);
+    }
 
     // Update state
-    const contentHash = generateContentHash(content);
-    this.indexManager.setNoteState(path, {
-      path,
+    this.indexManager.setNoteState(notePath, {
+      path: notePath,
       mtimeMs,
       contentHash,
       chunkCount: chunks.length,

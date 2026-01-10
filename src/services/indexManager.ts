@@ -16,9 +16,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { generateNoteId } from "../core/indexer/simpleChunker";
 import type { Kernel } from "../core/kernel";
-import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
+import type { EmbeddedChunk, NoteChunk, StoredChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 import { atomicWriteFile } from "../utils/atomicWrite";
+import { ChunkStore } from "./simpleVectorStore";
 import { formatIndexTimestamp, parseIndexTimestamp } from "./storagePaths";
 import type { VectorStore } from "./vectorStore";
 
@@ -148,10 +149,16 @@ export class IndexManager {
   private discoveryCache: { indices: DiscoveredIndex[]; timestamp: number } | null = null;
   private static readonly DISCOVERY_CACHE_TTL_MS = 30000; // 30s
 
+  // Phase 2: Chunk/Embedding separation
+  private chunkStore: ChunkStore;
+  private useNewStructure = false;
+
   constructor(
     private kernel: Kernel,
     private vectorStore: VectorStore,
-  ) {}
+  ) {
+    this.chunkStore = new ChunkStore(kernel.storagePaths);
+  }
 
   async initialize(): Promise<void> {
     const activePath = this.kernel.settings.indexing.activeIndexPath;
@@ -178,6 +185,20 @@ export class IndexManager {
 
     // Set model config on VectorStore
     this.vectorStore.setModelConfig?.(this.modelKey, this.dimension);
+
+    // Phase 2: Check for new structure and load chunks
+    this.useNewStructure = this.kernel.storagePaths.hasNewStructure();
+    if (this.useNewStructure) {
+      console.log("[IndexManager] Loading chunks from new structure...");
+      await this.chunkStore.loadAll();
+    }
+
+    // Phase 2: Check for legacy index and migrate if needed
+    if (!this.useNewStructure && (await this.hasLegacyIndex())) {
+      console.log("[IndexManager] Detected legacy index, will migrate...");
+      await this.migrateLegacyIndex();
+      this.useNewStructure = true;
+    }
 
     // Load index
     if (activePath) {
@@ -1036,6 +1057,261 @@ export class IndexManager {
       console.log(`[IndexManager] Moved ${filePath} -> ${target}`);
     } catch (error) {
       console.warn("[IndexManager] Failed to move file:", error);
+    }
+  }
+
+  // ============ Phase 2: Chunk/Embedding Separation ============
+
+  /** Get the ChunkStore instance */
+  getChunkStore(): ChunkStore {
+    return this.chunkStore;
+  }
+
+  /** Check if using new separated structure */
+  isUsingNewStructure(): boolean {
+    return this.useNewStructure;
+  }
+
+  /**
+   * Index a note with separated chunk and embedding storage.
+   * Used by SimpleIndexer in Phase 2.
+   */
+  async indexNoteSeparated(
+    noteId: string,
+    notePath: string,
+    mtimeMs: number,
+    contentHash: string,
+    chunks: NoteChunk[],
+    embeddings: Array<{ chunkId: string; embedding: number[] }>,
+  ): Promise<void> {
+    if (this.isUserProvidedIndex) {
+      console.warn("[IndexManager] Cannot index: read-only index");
+      return;
+    }
+
+    // 1. Save chunks (model-agnostic)
+    const storedChunks = chunks.map((chunk) => this.toStoredChunk(chunk));
+    await this.chunkStore.saveNoteChunks(noteId, notePath, mtimeMs, contentHash, storedChunks);
+
+    // 2. Save embeddings (model-specific) - still goes through vectorStore
+    const embeddedChunks: EmbeddedChunk[] = chunks.map((chunk) => {
+      const embeddingData = embeddings.find((e) => e.chunkId === chunk.chunkId);
+      return {
+        ...chunk,
+        embedding: embeddingData?.embedding ?? [],
+        modelKey: this.modelKey,
+      };
+    });
+
+    await this.vectorStore.upsertChunks(embeddedChunks);
+    this.scheduleSave();
+  }
+
+  /** Convert NoteChunk to StoredChunk (strips embedding-related fields) */
+  private toStoredChunk(chunk: NoteChunk): StoredChunk {
+    return {
+      chunkId: chunk.chunkId,
+      noteId: chunk.noteId,
+      path: chunk.path,
+      title: chunk.title,
+      tier: chunk.tier,
+      kind: chunk.kind,
+      parentChunkId: chunk.parentChunkId,
+      headingPath: chunk.headingPath,
+      text: chunk.text,
+      blockRef: chunk.blockRef,
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      tokenEstimate: chunk.tokenEstimate,
+      importance: chunk.importance,
+      chunkIndex: chunk.chunkIndex,
+      tags: chunk.tags,
+      frontmatter: chunk.frontmatter,
+    };
+  }
+
+  /**
+   * Remove a note using separated storage
+   */
+  async removeNoteSeparated(notePath: string, noteId: string): Promise<void> {
+    if (this.isUserProvidedIndex) {
+      console.warn("[IndexManager] Cannot remove note: read-only index");
+      return;
+    }
+
+    // 1. Remove from vector store
+    await this.vectorStore.deleteByNoteId(noteId);
+
+    // 2. Remove chunks (moves to _deleted)
+    await this.chunkStore.removeNoteChunks(noteId);
+
+    // 3. Remove state
+    this.removeNoteState(notePath);
+  }
+
+  // ============ Legacy Migration ============
+
+  /** Check for legacy index files (idx_*.json in plugin root) */
+  private async hasLegacyIndex(): Promise<boolean> {
+    const pluginRoot = this.kernel.storagePaths.pluginRoot;
+    try {
+      const files = await fs.promises.readdir(pluginRoot);
+      return files.some((f) => f.startsWith("idx_") && f.endsWith(".json"));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Find the best legacy index file */
+  private async findLegacyIndex(): Promise<string | null> {
+    const pluginRoot = this.kernel.storagePaths.pluginRoot;
+    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+    try {
+      const files = await fs.promises.readdir(pluginRoot);
+      const indexFiles = files.filter((f) => f.startsWith("idx_") && f.endsWith(".json"));
+
+      // Find best match for current model
+      for (const file of indexFiles) {
+        if (file.includes(sanitizedKey) && file.includes(`${this.dimension}d`)) {
+          return path.join(pluginRoot, file);
+        }
+      }
+
+      // Return any index if no model match
+      if (indexFiles.length > 0) {
+        return path.join(pluginRoot, indexFiles[0]);
+      }
+    } catch {
+      // Ignore
+    }
+
+    return null;
+  }
+
+  /** Migrate legacy single-file index to new separated structure */
+  private async migrateLegacyIndex(): Promise<void> {
+    const legacyPath = await this.findLegacyIndex();
+    if (!legacyPath) {
+      console.log("[IndexManager] No legacy index to migrate");
+      return;
+    }
+
+    console.log(`[IndexManager] Migrating legacy index: ${legacyPath}`);
+
+    try {
+      // 1. Read legacy data
+      const content = await fs.promises.readFile(legacyPath, "utf-8");
+      const legacy = JSON.parse(content) as {
+        meta: {
+          modelKey: string;
+          dimension: number;
+          state?: {
+            lastFullIndexAt: number | null;
+            notes: Record<string, { mtimeMs?: number; contentHash?: string }>;
+          };
+        };
+        docs: Array<{
+          chunkId: string;
+          noteId: string;
+          path: string;
+          title: string;
+          tier: string;
+          kind: string;
+          parentChunkId: string | null;
+          headingPath: string[];
+          text: string;
+          blockRef: string | null;
+          startLine: number | null;
+          endLine: number | null;
+          tokenEstimate: number;
+          importance?: number;
+          chunkIndex: number;
+          embedding: number[];
+          mtimeMs: number;
+          contentHash: string;
+          tags: string[];
+          frontmatter: Record<string, unknown>;
+        }>;
+      };
+
+      console.log(`[IndexManager] Legacy index has ${legacy.docs.length} chunks`);
+
+      // 2. Ensure new directories
+      await this.kernel.storagePaths.ensureNewDirectories();
+
+      // 3. Group chunks by noteId
+      const noteChunksMap = new Map<string, StoredChunk[]>();
+      const noteMetaMap = new Map<
+        string,
+        { path: string; mtimeMs: number; contentHash: string }
+      >();
+
+      for (const doc of legacy.docs) {
+        if (!noteChunksMap.has(doc.noteId)) {
+          noteChunksMap.set(doc.noteId, []);
+        }
+
+        const storedChunk: StoredChunk = {
+          chunkId: doc.chunkId,
+          noteId: doc.noteId,
+          path: doc.path,
+          title: doc.title,
+          tier: doc.tier as StoredChunk["tier"],
+          kind: doc.kind as StoredChunk["kind"],
+          parentChunkId: doc.parentChunkId,
+          headingPath: doc.headingPath,
+          text: doc.text,
+          blockRef: doc.blockRef,
+          startLine: doc.startLine,
+          endLine: doc.endLine,
+          tokenEstimate: doc.tokenEstimate ?? 0,
+          importance: doc.importance,
+          chunkIndex: doc.chunkIndex,
+          tags: doc.tags ?? [],
+          frontmatter: doc.frontmatter ?? {},
+        };
+
+        noteChunksMap.get(doc.noteId)!.push(storedChunk);
+
+        // Track note metadata
+        if (!noteMetaMap.has(doc.noteId)) {
+          const noteState = legacy.meta.state?.notes?.[doc.path];
+          noteMetaMap.set(doc.noteId, {
+            path: doc.path,
+            mtimeMs: noteState?.mtimeMs ?? doc.mtimeMs ?? Date.now(),
+            contentHash: noteState?.contentHash ?? doc.contentHash ?? "",
+          });
+        }
+      }
+
+      // 4. Write chunk files
+      console.log(`[IndexManager] Writing ${noteChunksMap.size} chunk files...`);
+      for (const [noteId, chunks] of noteChunksMap) {
+        const meta = noteMetaMap.get(noteId)!;
+        await this.chunkStore.saveNoteChunks(
+          noteId,
+          meta.path,
+          meta.mtimeMs,
+          meta.contentHash,
+          chunks,
+        );
+      }
+
+      // 5. Move legacy file to archived
+      const archivedPath = this.kernel.storagePaths.getArchivedEmbeddingPath(
+        legacy.meta.modelKey,
+        legacy.meta.dimension,
+        formatIndexTimestamp(),
+      );
+      await fs.promises.mkdir(path.dirname(archivedPath), { recursive: true });
+      await fs.promises.rename(legacyPath, archivedPath);
+      console.log(`[IndexManager] Archived legacy index to: ${archivedPath}`);
+
+      console.log("[IndexManager] Migration complete");
+    } catch (error) {
+      console.error("[IndexManager] Migration failed:", error);
+      // Don't throw - let the system continue with existing index
     }
   }
 

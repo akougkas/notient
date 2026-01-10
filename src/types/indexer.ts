@@ -117,3 +117,78 @@ export interface EmbeddedChunk extends NoteChunk {
   /** Model key used */
   modelKey: string;
 }
+
+// ============================================================================
+// Phase 2: Chunk/Embedding Separation Types
+// ============================================================================
+
+/**
+ * Stored chunk content without embedding (model-agnostic).
+ * This is the format stored in per-note chunk files.
+ */
+export interface StoredChunk {
+  chunkId: string;
+  noteId: string;
+  path: string;
+  title: string;
+  tier: ChunkTier;
+  kind: ChunkKind;
+  parentChunkId: string | null;
+  headingPath: string[];
+  text: string;
+  blockRef: string | null;
+  startLine: number | null;
+  endLine: number | null;
+  tokenEstimate: number;
+  importance?: number;
+  chunkIndex: number;
+  tags: string[];
+  frontmatter: Record<string, unknown>;
+}
+
+/**
+ * Per-note chunk file structure.
+ * Stored at: data/chunks/notes/{noteId}.json
+ */
+export interface NoteChunkFile {
+  noteId: string;
+  path: string;
+  mtimeMs: number;
+  contentHash: string;
+  chunkerVersion: string;
+  chunks: StoredChunk[];
+}
+
+/**
+ * Chunks meta file structure.
+ * Stored at: data/chunks/meta.json
+ */
+export interface ChunksMeta {
+  version: number;
+  chunkerVersion: string;
+  noteCount: number;
+  chunkCount: number;
+  lastUpdated: number;
+}
+
+/**
+ * Embedding index structure (model-specific).
+ * Stored at: data/embeddings/active/{model}-{dim}d.json
+ */
+export interface EmbeddingIndex {
+  meta: {
+    version: number;
+    modelKey: string;
+    dimension: number;
+    chunkCount: number;
+    createdAt: number;
+    updatedAt: number;
+  };
+  /** Map of chunkId -> embedding vector */
+  embeddings: Record<string, number[]>;
+  state: {
+    lastFullIndexAt: number | null;
+    /** Map of notePath -> note state */
+    notes: Record<string, { noteId: string; embeddedAt: number }>;
+  };
+}

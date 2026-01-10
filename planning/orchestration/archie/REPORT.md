@@ -1,4 +1,4 @@
-# Archie - Phase 1 Report
+# Archie - Phase 2 Report
 
 > **Status**: COMPLETE
 > **Last Updated**: 2026-01-10
@@ -8,62 +8,95 @@
 
 ## Summary
 
-Phase 1 established the path infrastructure for the new hierarchical storage architecture. Updated `STORAGE_PATHS` constants and `StoragePaths` class to support per-note sharding, model-scoped embeddings, tag-keyed intelligence, and time-bucketed actions. Added migration detection methods and directory creation for the new structure.
+Phase 2 implements chunk/embedding separation, enabling model switching without re-chunking. Added `ChunkStore` class for model-agnostic chunk storage, updated `IndexManager` to coordinate both stores, and modified `SimpleIndexer` to write chunks and embeddings separately. Legacy index migration logic handles the transition from single-file to separated storage.
 
 ---
 
 ## Files Modified
 
-| File | Delta | Key Changes |
-|------|-------|-------------|
-| `src/core/constants.ts:13-67` | +52/-10 | New hierarchical `STORAGE_PATHS` with 45+ path constants |
-| `src/services/storagePaths.ts:47-584` | +471/-60 | Extended interface, constructor, getters, helper methods |
+| File | Lines Changed | Key Changes |
+|------|---------------|-------------|
+| `src/types/indexer.ts:121-194` | +74 | New types: `StoredChunk`, `NoteChunkFile`, `ChunksMeta`, `EmbeddingIndex` |
+| `src/services/simpleVectorStore.ts:14-277` | +175 | Added imports, `ChunkStore` class (170 LOC) |
+| `src/services/indexManager.ts:19-1316` | +265 | Added imports, `chunkStore` member, Phase 2 methods, migration logic |
+| `src/core/indexer/simpleIndexer.ts:389-446` | +23/-11 | Updated `processNote()` to use separated storage |
 
 ---
 
-## New Capabilities Added
+## New Types (`types/indexer.ts:121-194`)
 
-### Path Constants (`constants.ts:13-67`)
-```
-STORAGE_PATHS structure:
-├── data/chunks/           # Model-agnostic chunk content
-├── data/embeddings/       # Model-scoped (active, _rebuilding, _archived)
-├── data/intelligence/     # Tag-keyed learning
-├── data/conversations/    # Per-note + rollups
-├── data/actions/          # Time-bucketed (hot + archive)
-├── data/profile/          # User identity
-├── data/_operational/     # Volatile (locks, cache, temp, logs)
-└── LEGACY_* paths         # For migration detection
+```typescript
+StoredChunk         // Chunk content without embedding (model-agnostic)
+NoteChunkFile       // Per-note chunk file structure
+ChunksMeta          // Chunks meta file structure
+EmbeddingIndex      // Embedding index structure (model-specific)
 ```
 
-### New Methods (`storagePaths.ts`)
+---
+
+## New Classes/Methods
+
+### ChunkStore (`simpleVectorStore.ts:111-276`)
 
 | Method | Line | Purpose |
 |--------|------|---------|
-| `hasLegacyData()` | 285-291 | Detects old structure exists |
-| `hasNewStructure()` | 297-299 | Detects `data/` folder exists |
-| `getChunkPath(noteId)` | 344-346 | Per-note chunk file path |
-| `getEmbeddingIndexPath(model, dim)` | 371-374 | Active embedding index |
-| `getRebuildingEmbeddingPath(model, dim)` | 379-382 | During model transition |
-| `getArchivedEmbeddingPath(model, dim, ts)` | 387-390 | Archived embeddings |
-| `getIntelligenceTopicPath(tag)` | 411-414 | Tag-based shard path |
-| `getConversationPath(noteId)` | 440-442 | Per-note conversation |
-| `getConversationRollupPath(folder)` | 447-450 | PARA folder rollup |
-| `getActionArchivePath(yearMonth)` | 476-478 | Monthly action archive |
-| `ensureNewDirectories()` | 245-276 | Creates full new tree |
+| `loadNoteChunks(noteId)` | 121-139 | Load chunks for specific note from disk |
+| `saveNoteChunks(...)` | 145-173 | Save chunks for note to disk (atomic) |
+| `getChunk(chunkId)` | 178-180 | Get chunk by ID from memory |
+| `getChunksForNote(noteId)` | 185-192 | Get all chunks for a note |
+| `removeNoteChunks(noteId)` | 197-218 | Remove chunks, move file to `_deleted` |
+| `loadAll()` | 223-239 | Load all chunks at startup |
+| `getAllChunkIds()` | 244-246 | Get all chunk IDs |
+| `getNoteCount()` | 251-253 | Count notes with chunks |
+| `getChunkCount()` | 258-260 | Total chunk count |
+| `hasNoteChunks(noteId)` | 265-267 | Check if note has chunks |
+| `clear()` | 272-276 | Clear all from memory |
+
+### IndexManager Updates (`indexManager.ts:1063-1316`)
+
+| Method | Line | Purpose |
+|--------|------|---------|
+| `getChunkStore()` | 1065-1068 | Access ChunkStore instance |
+| `isUsingNewStructure()` | 1070-1073 | Check if using separated storage |
+| `indexNoteSeparated(...)` | 1079-1108 | Index with separated chunk/embedding storage |
+| `toStoredChunk(chunk)` | 1111-1131 | Convert NoteChunk to StoredChunk |
+| `removeNoteSeparated(...)` | 1136-1150 | Remove from both stores |
+| `hasLegacyIndex()` | 1154-1162 | Check for legacy idx_*.json files |
+| `findLegacyIndex()` | 1165-1190 | Find best legacy index for migration |
+| `migrateLegacyIndex()` | 1192-1316 | Migrate single-file to separated structure |
+
+### SimpleIndexer Updates (`simpleIndexer.ts:389-446`)
+
+- Updated `processNote()` to check `indexManager.isUsingNewStructure()`
+- When enabled, calls `removeNoteSeparated()` then `indexNoteSeparated()`
+- Falls back to legacy `removeNote()` + `addChunks()` otherwise
+
+---
+
+## Migration Approach
+
+1. **Detection**: `initialize()` checks `hasNewStructure()` and `hasLegacyIndex()`
+2. **Load chunks first**: If new structure exists, loads chunks immediately
+3. **Auto-migrate**: If legacy index found but no new structure, runs migration
+4. **Migration steps**:
+   - Read legacy `idx_*.json` file
+   - Group docs by `noteId`
+   - Write per-note chunk files to `data/chunks/notes/`
+   - Move legacy file to `data/embeddings/_archived/`
+5. **Backward compatible**: Legacy path still works if new structure not enabled
 
 ---
 
 ## Verification Results
 
 ### Build
-- [x] `bun run typecheck` passes
-- [x] `bun run build` passes (545.2KB main.js)
+- [x] `bun run typecheck` passes (no errors)
+- [x] `bun run build` passes (549.9KB main.js)
 
 ### Code Quality
 - [x] No TypeScript errors
-- [x] No references to removed `indexState` property
-- [x] Path sanitization for filesystem safety
+- [x] Imports properly added
+- [x] Backward compatible with legacy storage
 
 ---
 
@@ -73,18 +106,26 @@ None.
 
 ---
 
-## Notes for Next Phase
+## Notes for Sage's Review
 
-1. **`ensureDirectories()` unchanged** - Still uses legacy paths. Safe for existing callers until migration logic is added.
+1. **ChunkStore is minimal** - Just load/save/remove per-note JSON files. Could potentially merge into IndexManager but separation keeps concerns clear.
 
-2. **Path sanitization active** - `getIntelligenceTopicPath("#research/ai")` → `research-ai.json`
+2. **Migration is one-way** - Once migrated, old file moves to `_archived`. No rollback path implemented.
 
-3. **No data migration yet** - Phase 1 is infrastructure only. Phases 2-5 handle actual data migration.
+3. **SimpleVectorStore unchanged** - Still stores full docs in memory. A future optimization could make it reference ChunkStore for content during search, reducing memory if needed.
 
-4. **Legacy getters exposed** - `legacyConversations`, `legacyActions`, etc. available for migration code.
+4. **`useNewStructure` flag** - Controls which code path runs. Set based on `hasNewStructure()` check at startup.
+
+---
+
+## Previous Phase
+
+### Phase 1: Storage Path Infrastructure (COMPLETE)
+
+Established path infrastructure for hierarchical storage. Added 45+ path constants, extended `StoragePaths` class with dynamic path builders, migration detection methods, and directory creation helpers.
 
 ---
 
 ## Next Recommended Action
 
-Proceed to Phase 2: Chunk/Embedding Separation. The path infrastructure is in place for `indexManager.ts`, `simpleVectorStore.ts`, and `simpleIndexer.ts` to be updated.
+Proceed to Phase 3: Intelligence Tag-Based Sharding.

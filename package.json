@@ -6,9 +6,13 @@
   "type": "module",
   "scripts": {
     "build": "bun run typecheck && bun scripts/build.ts build",
+    "build:dev": "bun scripts/build.ts dev",
     "dev": "bun scripts/build.ts dev",
     "dev:watch": "bun scripts/build.ts dev --watch",
     "dev:clean": "bun scripts/build.ts dev --clean",
+    "dev:reset": "bun scripts/build.ts reset",
+    "dev:hard-reset": "bun scripts/build.ts hard-reset",
+    "dev:status": "bun scripts/build.ts status",
     "analyze": "bun scripts/build.ts analyze",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
