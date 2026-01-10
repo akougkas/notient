@@ -1,183 +1,285 @@
-# Archie - Phase 5: Actions Time-Bucketed + Diff Undo
+# Archie - Phase 1 Diagnosis (Backend)
 
 > **Status**: ASSIGNED
-> **Assigned**: 2026-01-10
+> **Phase**: ALPHA-SPEC Phase 1 (Foundation)
 > **Branch**: `archie/backend-fixes`
-> **Spec**: `planning/coding_tasks/05-actions-time-bucketed.md`
+> **Duration**: 1-2 hours (diagnosis only)
 
 ---
 
-## Git Workflow (CRITICAL)
+## Context
 
-### Before Starting
-```bash
-git status
-git diff --name-only
+User reports: "Buttons don't work (Quick Actions, Footer), app crashes under load"
+
+**Your job**: Diagnose backend/service integration issues
+
+**Faye's job** (running in parallel): Diagnose frontend/UI issues
+
+**Coordination**: You both write findings in your REPORT.md, Orchestrator reads both and determines root cause.
+
+---
+
+## Assignment: Backend Service Diagnosis
+
+### Objectives
+
+1. **Verify kernel service registration** - Are all required services registered?
+2. **Check initialization order** - Do services initialize in correct order?
+3. **Test service pathways** - Can UI successfully call backend services?
+4. **Diagnose EventBus** - Is pub/sub working correctly?
+5. **Document findings** - Write detailed REPORT.md
+
+---
+
+## Specific Tasks
+
+### Task 1: Audit Kernel Service Registration
+
+**File**: `src/core/kernel.ts`
+
+**Check**:
+- [ ] Is `taskQueue` (AgentTaskQueue) registered?
+- [ ] Is `actionApplier` registered?
+- [ ] Is `workflowRunner` registered?
+- [ ] Is `actionOrchestrator` registered?
+- [ ] Is `searchPipeline` registered?
+
+**How**: Read kernel.ts, verify `kernel.register()` calls for each service
+
+**Document**: List registered vs missing services in REPORT.md
+
+---
+
+### Task 2: Check Service Initialization
+
+**Files**:
+- `src/core/kernel.ts` (startup method)
+- `src/main.ts` (plugin onload)
+
+**Check**:
+- [ ] What order do services initialize?
+- [ ] Are there dependency chains (ServiceA needs ServiceB)?
+- [ ] Do any services fail silently during init?
+- [ ] Are there try/catch blocks that swallow errors?
+
+**How**: Trace initialization flow from `main.ts` → `kernel.startup()`
+
+**Document**: Initialization sequence and any failure points in REPORT.md
+
+---
+
+### Task 3: Test triggerAgenticAction Pathway
+
+**Pathway**:
 ```
-Understand what files are already modified. DO NOT touch files you don't need.
+UI Button Click
+  → triggerAgenticAction() in App.tsx
+    → taskQueue.enqueue()
+      → AgentTaskQueue processes
+        → ChiefOfStaff routes
+          → Agent executes
+```
 
-### During Work
-- ONLY modify files listed in "Files to Modify" below
-- Keep changes focused and minimal
+**Test**:
+1. Add console.log in `src/core/agent/taskQueue.ts` at `enqueue()` method
+2. Add console.log in ChiefOfStaff at routing logic
+3. Manually trigger a Quick Action in vaultex
+4. Check if logs appear
 
-### After Completing
+**Check**:
+- [ ] Does enqueue() get called?
+- [ ] Does task get processed?
+- [ ] Where does the pathway break?
+
+**Document**: Exact point of failure in REPORT.md
+
+---
+
+### Task 4: Verify EventBus Functionality
+
+**File**: `src/core/events/eventBus.ts`
+
+**Test**:
+1. Add test emit/subscribe in kernel startup
+2. Verify events propagate to subscribers
+3. Check if UI components receive events
+
+**Check**:
+- [ ] Is EventBus registered in kernel?
+- [ ] Can services emit events?
+- [ ] Do UI components receive emitted events?
+
+**Document**: EventBus health status in REPORT.md
+
+---
+
+### Task 5: Check for Silent Failures
+
+**Files**: Any service with try/catch blocks
+
+**Look for**:
+- Services that catch errors but don't log them
+- Services that return null/undefined on error
+- Missing error boundaries
+
+**Document**: List of silent failure points in REPORT.md
+
+---
+
+## Diagnosis Scenarios
+
+### Scenario A: Services Not Registered
+**If** you find taskQueue, actionApplier, or workflowRunner NOT registered in kernel:
+
+**Your REPORT.md should state**:
+```
+ROOT CAUSE: Missing service registration
+- taskQueue: NOT REGISTERED
+- actionApplier: REGISTERED
+- workflowRunner: NOT REGISTERED
+
+FIX REQUIRED: Register missing services in kernel.ts startup()
+ESTIMATED EFFORT: 1 hour
+```
+
+### Scenario B: Initialization Failure
+**If** services are registered but fail during startup:
+
+**Your REPORT.md should state**:
+```
+ROOT CAUSE: Service initialization crashes
+- Service X depends on Service Y (not yet initialized)
+- Error: [exact error message]
+
+FIX REQUIRED: Reorder initialization, add dependency checks
+ESTIMATED EFFORT: 2 hours
+```
+
+### Scenario C: EventBus Broken
+**If** EventBus isn't working:
+
+**Your REPORT.md should state**:
+```
+ROOT CAUSE: EventBus not functional
+- Events emitted but not received
+- Possible cause: [your hypothesis]
+
+FIX REQUIRED: Fix EventBus registration/pub-sub
+ESTIMATED EFFORT: 2-3 hours
+```
+
+### Scenario D: Everything Looks Correct
+**If** all services are registered and initialized correctly:
+
+**Your REPORT.md should state**:
+```
+BACKEND STATUS: All services healthy
+- All services registered ✓
+- Initialization succeeds ✓
+- EventBus functional ✓
+
+CONCLUSION: Issue is likely frontend (Faye's domain)
+NEXT STEP: Wait for Faye's findings
+```
+
+---
+
+## Deliverables
+
+### File: `planning/orchestration/archie/REPORT.md`
+
+**Structure**:
+```markdown
+# Archie - Phase 1 Diagnosis Report
+
+> **Status**: COMPLETE
+> **Date**: 2026-01-10
+> **Branch**: `archie/backend-fixes`
+
+## Summary
+
+[One paragraph: what you found, root cause hypothesis]
+
+## Service Registration Audit
+
+| Service | Registered? | Initialize Order | Status |
+|---------|-------------|------------------|--------|
+| taskQueue | YES/NO | #N | OK/FAILED |
+| actionApplier | YES/NO | #N | OK/FAILED |
+| ... | ... | ... | ... |
+
+## Initialization Flow
+
+[List initialization sequence, note any failures]
+
+## triggerAgenticAction Pathway Test
+
+[Results of manual test - where does it break?]
+
+## EventBus Health
+
+[Is pub/sub working?]
+
+## Silent Failure Points
+
+[List any try/catch blocks that swallow errors]
+
+## Root Cause Hypothesis
+
+[Scenario A/B/C/D - what you think is broken]
+
+## Recommended Fix
+
+[What needs to be implemented, estimated effort]
+
+## Next Steps
+
+[Wait for Faye's report, or proceed with fix if clear]
+```
+
+---
+
+### No Code Changes Yet
+
+**IMPORTANT**: This is diagnosis only. DO NOT fix anything yet.
+
+Write findings in REPORT.md, commit the report:
 ```bash
-# Stage ONLY your files
-git add src/core/agentic/types.ts
-git add src/core/agentic/actionHistory.ts
-git add src/core/agentic/actionApplier.ts
 git add planning/orchestration/archie/REPORT.md
-
-# Commit with descriptive message
-git commit -m "refactor(actions): Implement time-bucketed storage with diff undo
-
-- Replace single file with hot + monthly archives
-- Implement diff-based undo (smaller payloads)
-- Add inline reasoning field
-- Add archive query methods
-- Migrate legacy actions
-
-Phase 5 of storage restructure."
-
-# DO NOT PUSH - only commit
-```
-
-### Rules
-- **NO `git push`** - Only local commits
-- **NO staging unrelated files** - Check `git status` before commit
-- **NO amending** other people's commits
-
----
-
-## Objective
-
-Restructure action history for:
-- Time-bucketed archival (monthly files, keep forever)
-- Diff-based undo (smaller payloads)
-- Inline reasoning traces (from chat, summarized)
-
----
-
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `src/core/agentic/types.ts` | Add DiffUndoPayload, HotActionsFile, ActionsArchiveFile, update AppliedActionRecord |
-| `src/core/agentic/actionHistory.ts` | Rewrite for hot + archive structure, diff undo, migration |
-| `src/core/agentic/actionApplier.ts` | Generate diffs instead of full content for undo |
-
----
-
-## Implementation Steps
-
-### 1. Add Types (`types.ts`)
-
-```typescript
-// Diff-based undo payload
-export interface DiffUndoPayload {
-  type: "diff";
-  patches: Array<{
-    path: string;
-    diff: string;  // Unified diff format
-  }>;
-}
-
-// Combined undo type
-export type UndoPayload = DiffUndoPayload | RenameBackUndo | RestoreContentUndo;
-
-// Updated action record with reasoning
-export interface AppliedActionRecord {
-  id: string;
-  timestamp: number;
-  workflowId?: string;
-  action: AgentAction;
-  reasoning: string;  // NEW: Why agent made this decision
-  undo: UndoPayload;
-  changedPaths: string[];
-  status: "pending" | "applied" | "undone" | "failed";
-}
-
-// Hot actions file structure
-export interface HotActionsFile {
-  version: number;
-  records: AppliedActionRecord[];
-  oldestTimestamp: number;
-  newestTimestamp: number;
-}
-
-// Archive file structure
-export interface ActionsArchiveFile {
-  version: number;
-  yearMonth: string;
-  records: AppliedActionRecord[];
-  recordCount: number;
-  archivedAt: number;
-}
-```
-
-### 2. Rewrite ActionHistory
-
-- Hot file: `data/actions/hot/current.json` (recent 200 actions)
-- Archives: `data/actions/archive/{YYYY-MM}.json` (monthly)
-- Use `storagePaths.actionsCurrent`, `storagePaths.getActionArchivePath(yearMonth)`
-- Key methods:
-  - `load()` - Load hot actions (with migration)
-  - `addRecord(action, undo, changedPaths, reasoning, workflowId?)` - Add with reasoning
-  - `archiveOldRecords()` - Move oldest 150 to monthly archive when >200
-  - `undo(recordId)` - Apply undo (supports diff, rename, restore_content)
-  - `getArchivedActions(yearMonth)` - Query archives
-  - `listArchiveMonths()` - List available archives
-
-### 3. Update ActionApplier for Diffs
-
-When applying edits:
-1. Read current content BEFORE applying
-2. Apply the edit
-3. Generate unified diff for undo (reversed: new→old)
-4. Return DiffUndoPayload instead of RestoreContentUndo
-
-### 4. Migration Logic
-
-- Detect legacy `actions.json`
-- Split into hot (last 200) + archives (grouped by month)
-- Add `reasoning: "Legacy action - no reasoning recorded"` to old records
-- Move legacy file to `_deleted/`
-
----
-
-## Use Phase 1 Path Methods
-
-```typescript
-storagePaths.actionsHot               // data/actions/hot/
-storagePaths.actionsCurrent           // data/actions/hot/current.json
-storagePaths.actionsArchive           // data/actions/archive/
-storagePaths.getActionArchivePath(yearMonth)  // {YYYY-MM}.json
-storagePaths.tempDeleted              // For archived legacy file
+git commit -m "chore(phase-1): Archie backend diagnosis report"
 ```
 
 ---
 
-## Verification
+## Coordination with Faye
 
-```bash
-bun run typecheck && bun run build
-```
+Faye is diagnosing frontend issues in parallel. You may find:
+- Backend is healthy → issue is frontend
+- Frontend is healthy → issue is backend
+- Both have issues → multiple fixes needed
 
-### Manual Tests
-1. Start with existing `actions.json` file
-2. Load plugin → migration should run
-3. Verify `data/actions/hot/current.json` created
-4. Verify archives created if >200 legacy actions
-5. Test edit action → verify diff-based undo stored
-6. Test undo → verify content restored correctly
+Orchestrator will read BOTH reports and determine next steps.
 
 ---
 
-## Report
+## Timeline
 
-When complete, update `planning/orchestration/archie/REPORT.md` with:
-- Files modified (with line ranges)
-- New types added
-- Key methods implemented
-- Migration approach
-- Build verification results
+- **Start**: As soon as you read this
+- **Duration**: 1-2 hours
+- **End**: When REPORT.md is written and committed
+- **Next**: Wait for Orchestrator to review both reports
+
+---
+
+## Questions?
+
+If you're unsure about something, document the uncertainty in REPORT.md:
+```
+UNCERTAINTY: Could not determine if X is registered
+REASON: Code path unclear at [file:line]
+RECOMMENDATION: Need to add logging to confirm
+```
+
+---
+
+**Ready? Read this TASK.md and begin diagnosis. Write findings to REPORT.md.**
