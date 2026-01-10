@@ -44,113 +44,80 @@ export function parseIndexTimestamp(ts: string): Date | null {
   return new Date(Date.UTC(+y, +m - 1, +d, +h, +min, +s));
 }
 
-export interface StoragePathsConfig {
-  // Core paths
-  /** Vault root absolute path */
+/** Type derived from STORAGE_PATHS keys (camelCase versions) */
+type StoragePathKey = keyof typeof STORAGE_PATHS;
+
+/** Converts SCREAMING_SNAKE to camelCase */
+function toCamelCase(key: string): string {
+  return key.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+/** Core paths not derived from STORAGE_PATHS */
+interface CorePaths {
   vaultRoot: string;
-  /** Short vault hash (4 hex chars) for index filenames */
   vaultHash: string;
-  /** Plugin data folder */
   pluginRoot: string;
-  /** System index directory (vault/system/index) */
   systemIndex: string;
+}
 
-  // New structure root
-  /** Root data folder */
-  data: string;
+/** Full config: core paths + all STORAGE_PATHS as absolute paths */
+export type StoragePathsConfig = CorePaths & {
+  [K in StoragePathKey as ReturnType<typeof toCamelCase>]: string;
+};
 
-  // Chunks (model-agnostic)
-  /** Chunks root folder */
-  chunks: string;
-  /** Chunks metadata file */
-  chunksMeta: string;
-  /** Per-note chunk files folder */
-  chunksNotes: string;
-
-  // Embeddings (model-scoped)
-  /** Embeddings root folder */
-  embeddings: string;
-  /** Active embedding indices folder */
-  embeddingsActive: string;
-  /** Rebuilding embedding indices folder */
-  embeddingsRebuilding: string;
-  /** Archived embedding indices folder */
-  embeddingsArchived: string;
-
-  // Intelligence (tag-keyed)
-  /** Intelligence root folder */
-  intelligence: string;
-  /** Intelligence metadata file */
-  intelligenceMeta: string;
-  /** Intelligence topics folder */
-  intelligenceTopics: string;
-
-  // Conversations (per-note)
-  /** Conversations root folder */
-  conversations: string;
-  /** Per-note conversation files folder */
-  conversationsNotes: string;
-  /** Conversation rollups folder */
-  conversationsRollups: string;
-  /** Root conversation file (notes outside PARA) */
-  conversationsRoot: string;
-
-  // Actions (time-bucketed)
-  /** Actions root folder */
-  actions: string;
-  /** Hot actions folder */
-  actionsHot: string;
-  /** Current hot actions file */
-  actionsCurrent: string;
-  /** Actions archive folder */
-  actionsArchive: string;
-
-  // Profile
-  /** Profile folder */
-  profile: string;
-  /** Profile data file */
-  profileFile: string;
-
-  // Operational (volatile)
-  /** Operational root folder */
-  operational: string;
-  /** Lock files folder */
-  locks: string;
-  /** Cache folder */
-  cache: string;
-  /** Temp folder */
-  temp: string;
-  /** Incomplete operations temp folder */
-  tempIncomplete: string;
-  /** Invalid data temp folder */
-  tempInvalid: string;
-  /** Deleted data temp folder */
-  tempDeleted: string;
-  /** Logs folder */
-  logs: string;
-
-  // Legacy paths (for migration detection)
-  /** Legacy index state file path */
-  legacyIndexState: string;
-  /** Legacy conversations file path */
-  legacyConversations: string;
-  /** Legacy actions file path */
-  legacyActions: string;
-  /** Legacy profile file path */
-  legacyProfile: string;
-  /** Legacy cache folder */
-  legacyCache: string;
-  /** Legacy locks folder */
-  legacyLocks: string;
-  /** Legacy logs folder */
-  legacyLogs: string;
+/** Sanitize model key for safe filenames */
+function sanitizeModelKey(modelKey: string): string {
+  return modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
 /**
  * Resolves and manages all storage paths for the plugin
  */
 export class StoragePaths {
-  private config: StoragePathsConfig;
+  readonly vaultRoot: string;
+  readonly vaultHash: string;
+  readonly pluginRoot: string;
+  readonly systemIndex: string;
+
+  // New structure paths
+  readonly data: string;
+  readonly chunks: string;
+  readonly chunksMeta: string;
+  readonly chunksNotes: string;
+  readonly embeddings: string;
+  readonly embeddingsActive: string;
+  readonly embeddingsRebuilding: string;
+  readonly embeddingsArchived: string;
+  readonly intelligence: string;
+  readonly intelligenceMeta: string;
+  readonly intelligenceTopics: string;
+  readonly conversations: string;
+  readonly conversationsNotes: string;
+  readonly conversationsRollups: string;
+  readonly conversationsRoot: string;
+  readonly actions: string;
+  readonly actionsHot: string;
+  readonly actionsCurrent: string;
+  readonly actionsArchive: string;
+  readonly profile: string;
+  readonly profileFile: string;
+  readonly operational: string;
+  readonly locks: string;
+  readonly cache: string;
+  readonly temp: string;
+  readonly tempIncomplete: string;
+  readonly tempInvalid: string;
+  readonly tempDeleted: string;
+  readonly logs: string;
+
+  // Legacy paths
+  readonly legacyIndexState: string;
+  readonly legacyConversations: string;
+  readonly legacyActions: string;
+  readonly legacyProfile: string;
+  readonly legacyCache: string;
+  readonly legacyLocks: string;
+  readonly legacyLogs: string;
 
   constructor(app: App) {
     const adapter = app.vault.adapter;
@@ -159,81 +126,61 @@ export class StoragePaths {
       throw new Error("Notient requires desktop Obsidian with file system access");
     }
 
-    const vaultRoot = adapter.getBasePath();
-    const vaultHash = computeVaultHash(vaultRoot);
-    const pluginRoot = path.join(vaultRoot, ".obsidian", "plugins", PLUGIN_ID);
+    this.vaultRoot = adapter.getBasePath();
+    this.vaultHash = computeVaultHash(this.vaultRoot);
+    this.pluginRoot = path.join(this.vaultRoot, ".obsidian", "plugins", PLUGIN_ID);
+    this.systemIndex = path.join(this.vaultRoot, "system", "index");
 
-    this.config = {
-      // Core paths
-      vaultRoot,
-      vaultHash,
-      pluginRoot,
-      systemIndex: path.join(vaultRoot, "system", "index"),
+    // Build all paths from STORAGE_PATHS constant
+    const p = (key: keyof typeof STORAGE_PATHS): string =>
+      path.join(this.pluginRoot, STORAGE_PATHS[key]);
 
-      // New structure root
-      data: path.join(pluginRoot, STORAGE_PATHS.DATA),
+    // New structure
+    this.data = p("DATA");
+    this.chunks = p("CHUNKS");
+    this.chunksMeta = p("CHUNKS_META");
+    this.chunksNotes = p("CHUNKS_NOTES");
+    this.embeddings = p("EMBEDDINGS");
+    this.embeddingsActive = p("EMBEDDINGS_ACTIVE");
+    this.embeddingsRebuilding = p("EMBEDDINGS_REBUILDING");
+    this.embeddingsArchived = p("EMBEDDINGS_ARCHIVED");
+    this.intelligence = p("INTELLIGENCE");
+    this.intelligenceMeta = p("INTELLIGENCE_META");
+    this.intelligenceTopics = p("INTELLIGENCE_TOPICS");
+    this.conversations = p("CONVERSATIONS");
+    this.conversationsNotes = p("CONVERSATIONS_NOTES");
+    this.conversationsRollups = p("CONVERSATIONS_ROLLUPS");
+    this.conversationsRoot = p("CONVERSATIONS_ROOT");
+    this.actions = p("ACTIONS");
+    this.actionsHot = p("ACTIONS_HOT");
+    this.actionsCurrent = p("ACTIONS_CURRENT");
+    this.actionsArchive = p("ACTIONS_ARCHIVE");
+    this.profile = p("PROFILE");
+    this.profileFile = p("PROFILE_FILE");
+    this.operational = p("OPERATIONAL");
+    this.locks = p("LOCKS");
+    this.cache = p("CACHE");
+    this.temp = p("TEMP");
+    this.tempIncomplete = p("TEMP_INCOMPLETE");
+    this.tempInvalid = p("TEMP_INVALID");
+    this.tempDeleted = p("TEMP_DELETED");
+    this.logs = p("LOGS");
 
-      // Chunks (model-agnostic)
-      chunks: path.join(pluginRoot, STORAGE_PATHS.CHUNKS),
-      chunksMeta: path.join(pluginRoot, STORAGE_PATHS.CHUNKS_META),
-      chunksNotes: path.join(pluginRoot, STORAGE_PATHS.CHUNKS_NOTES),
-
-      // Embeddings (model-scoped)
-      embeddings: path.join(pluginRoot, STORAGE_PATHS.EMBEDDINGS),
-      embeddingsActive: path.join(pluginRoot, STORAGE_PATHS.EMBEDDINGS_ACTIVE),
-      embeddingsRebuilding: path.join(pluginRoot, STORAGE_PATHS.EMBEDDINGS_REBUILDING),
-      embeddingsArchived: path.join(pluginRoot, STORAGE_PATHS.EMBEDDINGS_ARCHIVED),
-
-      // Intelligence (tag-keyed)
-      intelligence: path.join(pluginRoot, STORAGE_PATHS.INTELLIGENCE),
-      intelligenceMeta: path.join(pluginRoot, STORAGE_PATHS.INTELLIGENCE_META),
-      intelligenceTopics: path.join(pluginRoot, STORAGE_PATHS.INTELLIGENCE_TOPICS),
-
-      // Conversations (per-note)
-      conversations: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS),
-      conversationsNotes: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS_NOTES),
-      conversationsRollups: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS_ROLLUPS),
-      conversationsRoot: path.join(pluginRoot, STORAGE_PATHS.CONVERSATIONS_ROOT),
-
-      // Actions (time-bucketed)
-      actions: path.join(pluginRoot, STORAGE_PATHS.ACTIONS),
-      actionsHot: path.join(pluginRoot, STORAGE_PATHS.ACTIONS_HOT),
-      actionsCurrent: path.join(pluginRoot, STORAGE_PATHS.ACTIONS_CURRENT),
-      actionsArchive: path.join(pluginRoot, STORAGE_PATHS.ACTIONS_ARCHIVE),
-
-      // Profile
-      profile: path.join(pluginRoot, STORAGE_PATHS.PROFILE),
-      profileFile: path.join(pluginRoot, STORAGE_PATHS.PROFILE_FILE),
-
-      // Operational (volatile)
-      operational: path.join(pluginRoot, STORAGE_PATHS.OPERATIONAL),
-      locks: path.join(pluginRoot, STORAGE_PATHS.LOCKS),
-      cache: path.join(pluginRoot, STORAGE_PATHS.CACHE),
-      temp: path.join(pluginRoot, STORAGE_PATHS.TEMP),
-      tempIncomplete: path.join(pluginRoot, STORAGE_PATHS.TEMP_INCOMPLETE),
-      tempInvalid: path.join(pluginRoot, STORAGE_PATHS.TEMP_INVALID),
-      tempDeleted: path.join(pluginRoot, STORAGE_PATHS.TEMP_DELETED),
-      logs: path.join(pluginRoot, STORAGE_PATHS.LOGS),
-
-      // Legacy paths (for migration detection)
-      legacyIndexState: path.join(pluginRoot, STORAGE_PATHS.LEGACY_INDEX_STATE),
-      legacyConversations: path.join(pluginRoot, STORAGE_PATHS.LEGACY_CONVERSATIONS),
-      legacyActions: path.join(pluginRoot, STORAGE_PATHS.LEGACY_ACTIONS),
-      legacyProfile: path.join(pluginRoot, STORAGE_PATHS.LEGACY_PROFILE),
-      legacyCache: path.join(pluginRoot, STORAGE_PATHS.LEGACY_CACHE),
-      legacyLocks: path.join(pluginRoot, STORAGE_PATHS.LEGACY_LOCKS),
-      legacyLogs: path.join(pluginRoot, STORAGE_PATHS.LEGACY_LOGS),
-    };
+    // Legacy paths
+    this.legacyIndexState = p("LEGACY_INDEX_STATE");
+    this.legacyConversations = p("LEGACY_CONVERSATIONS");
+    this.legacyActions = p("LEGACY_ACTIONS");
+    this.legacyProfile = p("LEGACY_PROFILE");
+    this.legacyCache = p("LEGACY_CACHE");
+    this.legacyLocks = p("LEGACY_LOCKS");
+    this.legacyLogs = p("LEGACY_LOGS");
   }
 
   /**
    * Ensure all required directories exist (legacy structure)
-   * For new structure, use ensureNewDirectories()
    */
   async ensureDirectories(): Promise<void> {
-    // Use legacy paths during migration period
-    const dirs = [this.config.legacyCache, this.config.legacyLocks, this.config.legacyLogs];
-
+    const dirs = [this.legacyCache, this.legacyLocks, this.legacyLogs];
     for (const dir of dirs) {
       await fs.promises.mkdir(dir, { recursive: true });
     }
@@ -244,30 +191,30 @@ export class StoragePaths {
    */
   async ensureNewDirectories(): Promise<void> {
     const dirs = [
-      this.config.data,
-      this.config.chunks,
-      this.config.chunksNotes,
-      this.config.embeddings,
-      this.config.embeddingsActive,
-      this.config.embeddingsRebuilding,
-      this.config.embeddingsArchived,
-      this.config.intelligence,
-      this.config.intelligenceTopics,
-      this.config.conversations,
-      this.config.conversationsNotes,
-      this.config.conversationsRollups,
-      this.config.actions,
-      this.config.actionsHot,
-      this.config.actionsArchive,
-      this.config.profile,
-      this.config.operational,
-      this.config.locks,
-      this.config.cache,
-      this.config.temp,
-      this.config.tempIncomplete,
-      this.config.tempInvalid,
-      this.config.tempDeleted,
-      this.config.logs,
+      this.data,
+      this.chunks,
+      this.chunksNotes,
+      this.embeddings,
+      this.embeddingsActive,
+      this.embeddingsRebuilding,
+      this.embeddingsArchived,
+      this.intelligence,
+      this.intelligenceTopics,
+      this.conversations,
+      this.conversationsNotes,
+      this.conversationsRollups,
+      this.actions,
+      this.actionsHot,
+      this.actionsArchive,
+      this.profile,
+      this.operational,
+      this.locks,
+      this.cache,
+      this.temp,
+      this.tempIncomplete,
+      this.tempInvalid,
+      this.tempDeleted,
+      this.logs,
     ];
 
     for (const dir of dirs) {
@@ -279,306 +226,125 @@ export class StoragePaths {
   // Migration Detection
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Check if legacy (pre-restructure) data exists
-   */
   hasLegacyData(): boolean {
     return (
-      fs.existsSync(this.config.legacyConversations) ||
-      fs.existsSync(this.config.legacyActions) ||
-      fs.existsSync(this.config.legacyProfile) ||
-      fs.existsSync(this.config.legacyIndexState)
+      fs.existsSync(this.legacyConversations) ||
+      fs.existsSync(this.legacyActions) ||
+      fs.existsSync(this.legacyProfile) ||
+      fs.existsSync(this.legacyIndexState)
     );
   }
 
-  /**
-   * Check if new structure exists
-   */
   hasNewStructure(): boolean {
-    return fs.existsSync(this.config.data);
+    return fs.existsSync(this.data);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Core Path Getters
+  // Dynamic Path Builders
   // ─────────────────────────────────────────────────────────────────────────────
 
-  get vaultRoot(): string {
-    return this.config.vaultRoot;
-  }
-
-  get vaultHash(): string {
-    return this.config.vaultHash;
-  }
-
-  get pluginRoot(): string {
-    return this.config.pluginRoot;
-  }
-
-  get systemIndex(): string {
-    return this.config.systemIndex;
-  }
-
-  get data(): string {
-    return this.config.data;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Chunks (Model-Agnostic)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get chunks(): string {
-    return this.config.chunks;
-  }
-
-  get chunksMeta(): string {
-    return this.config.chunksMeta;
-  }
-
-  get chunksNotes(): string {
-    return this.config.chunksNotes;
-  }
-
-  /**
-   * Get path for a specific note's chunk file
-   */
+  /** Get path for a specific note's chunk file */
   getChunkPath(noteId: string): string {
-    return path.join(this.config.chunksNotes, `${noteId}.json`);
+    return path.join(this.chunksNotes, `${noteId}.json`);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Embeddings (Model-Scoped)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get embeddings(): string {
-    return this.config.embeddings;
-  }
-
-  get embeddingsActive(): string {
-    return this.config.embeddingsActive;
-  }
-
-  get embeddingsRebuilding(): string {
-    return this.config.embeddingsRebuilding;
-  }
-
-  get embeddingsArchived(): string {
-    return this.config.embeddingsArchived;
-  }
-
-  /**
-   * Get path for embedding index (current model)
-   */
+  /** Get path for embedding index (current model) */
   getEmbeddingIndexPath(modelKey: string, dimension: number): string {
-    const sanitized = modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.config.embeddingsActive, `${sanitized}-${dimension}d.json`);
+    return path.join(this.embeddingsActive, `${sanitizeModelKey(modelKey)}-${dimension}d.json`);
   }
 
-  /**
-   * Get path for rebuilding embedding index
-   */
+  /** Get path for rebuilding embedding index */
   getRebuildingEmbeddingPath(modelKey: string, dimension: number): string {
-    const sanitized = modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.config.embeddingsRebuilding, `${sanitized}-${dimension}d.json`);
+    return path.join(this.embeddingsRebuilding, `${sanitizeModelKey(modelKey)}-${dimension}d.json`);
   }
 
-  /**
-   * Get path for archived embedding index
-   */
+  /** Get path for archived embedding index */
   getArchivedEmbeddingPath(modelKey: string, dimension: number, timestamp: string): string {
-    const sanitized = modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.config.embeddingsArchived, `${sanitized}-${dimension}d-${timestamp}.json`);
+    return path.join(
+      this.embeddingsArchived,
+      `${sanitizeModelKey(modelKey)}-${dimension}d-${timestamp}.json`
+    );
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Intelligence (Tag-Keyed)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get intelligence(): string {
-    return this.config.intelligence;
-  }
-
-  get intelligenceMeta(): string {
-    return this.config.intelligenceMeta;
-  }
-
-  get intelligenceTopics(): string {
-    return this.config.intelligenceTopics;
-  }
-
-  /**
-   * Get path for an intelligence topic file
-   */
+  /** Get path for an intelligence topic file */
   getIntelligenceTopicPath(tag: string): string {
-    // Sanitize tag for filename: remove leading #, replace invalid chars
     const sanitized = tag.replace(/^#/, "").replace(/[/\\:*?"<>|]/g, "-");
-    return path.join(this.config.intelligenceTopics, `${sanitized}.json`);
+    return path.join(this.intelligenceTopics, `${sanitized}.json`);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Conversations (Per-Note)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get conversations(): string {
-    return this.config.conversations;
-  }
-
-  get conversationsNotes(): string {
-    return this.config.conversationsNotes;
-  }
-
-  get conversationsRollups(): string {
-    return this.config.conversationsRollups;
-  }
-
-  get conversationsRoot(): string {
-    return this.config.conversationsRoot;
-  }
-
-  /**
-   * Get path for a specific note's conversation file
-   */
+  /** Get path for a specific note's conversation file */
   getConversationPath(noteId: string): string {
-    return path.join(this.config.conversationsNotes, `${noteId}.json`);
+    return path.join(this.conversationsNotes, `${noteId}.json`);
   }
 
-  /**
-   * Get path for a conversation rollup (PARA folder)
-   */
+  /** Get path for a conversation rollup (PARA folder) */
   getConversationRollupPath(paraFolder: string): string {
-    // Sanitize folder path for filename
     const sanitized = paraFolder.replace(/[/\\]/g, "-").replace(/^-|-$/g, "");
-    return path.join(this.config.conversationsRollups, `${sanitized}.json`);
+    return path.join(this.conversationsRollups, `${sanitized}.json`);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Actions (Time-Bucketed)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get actions(): string {
-    return this.config.actions;
-  }
-
-  get actionsHot(): string {
-    return this.config.actionsHot;
-  }
-
-  get actionsCurrent(): string {
-    return this.config.actionsCurrent;
-  }
-
-  get actionsArchive(): string {
-    return this.config.actionsArchive;
-  }
-
-  /**
-   * Get path for monthly action archive
-   */
+  /** Get path for monthly action archive */
   getActionArchivePath(yearMonth: string): string {
-    return path.join(this.config.actionsArchive, `${yearMonth}.json`);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Profile
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get profile(): string {
-    return this.config.profile;
-  }
-
-  get profileFile(): string {
-    return this.config.profileFile;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Operational (Volatile)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get operational(): string {
-    return this.config.operational;
-  }
-
-  get locks(): string {
-    return this.config.locks;
-  }
-
-  get cache(): string {
-    return this.config.cache;
-  }
-
-  get temp(): string {
-    return this.config.temp;
-  }
-
-  get tempIncomplete(): string {
-    return this.config.tempIncomplete;
-  }
-
-  get tempInvalid(): string {
-    return this.config.tempInvalid;
-  }
-
-  get tempDeleted(): string {
-    return this.config.tempDeleted;
-  }
-
-  get logs(): string {
-    return this.config.logs;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Legacy Paths (For Migration)
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  get legacyIndexState(): string {
-    return this.config.legacyIndexState;
-  }
-
-  get legacyConversations(): string {
-    return this.config.legacyConversations;
-  }
-
-  get legacyActions(): string {
-    return this.config.legacyActions;
-  }
-
-  get legacyProfile(): string {
-    return this.config.legacyProfile;
-  }
-
-  get legacyCache(): string {
-    return this.config.legacyCache;
-  }
-
-  get legacyLocks(): string {
-    return this.config.legacyLocks;
-  }
-
-  get legacyLogs(): string {
-    return this.config.legacyLogs;
+    return path.join(this.actionsArchive, `${yearMonth}.json`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Utility Methods
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Convert a vault-relative path to absolute path
-   */
+  /** Convert a vault-relative path to absolute path */
   toAbsolute(vaultPath: string): string {
-    return path.join(this.config.vaultRoot, vaultPath);
+    return path.join(this.vaultRoot, vaultPath);
   }
 
-  /**
-   * Convert an absolute path to vault-relative path
-   */
+  /** Convert an absolute path to vault-relative path */
   toVaultPath(absolutePath: string): string {
-    return path.relative(this.config.vaultRoot, absolutePath);
+    return path.relative(this.vaultRoot, absolutePath);
   }
 
-  /**
-   * Get all paths as config object
-   */
-  getConfig(): Readonly<StoragePathsConfig> {
-    return { ...this.config };
+  /** Get all paths as config object */
+  getConfig(): StoragePathsConfig {
+    return {
+      vaultRoot: this.vaultRoot,
+      vaultHash: this.vaultHash,
+      pluginRoot: this.pluginRoot,
+      systemIndex: this.systemIndex,
+      data: this.data,
+      chunks: this.chunks,
+      chunksMeta: this.chunksMeta,
+      chunksNotes: this.chunksNotes,
+      embeddings: this.embeddings,
+      embeddingsActive: this.embeddingsActive,
+      embeddingsRebuilding: this.embeddingsRebuilding,
+      embeddingsArchived: this.embeddingsArchived,
+      intelligence: this.intelligence,
+      intelligenceMeta: this.intelligenceMeta,
+      intelligenceTopics: this.intelligenceTopics,
+      conversations: this.conversations,
+      conversationsNotes: this.conversationsNotes,
+      conversationsRollups: this.conversationsRollups,
+      conversationsRoot: this.conversationsRoot,
+      actions: this.actions,
+      actionsHot: this.actionsHot,
+      actionsCurrent: this.actionsCurrent,
+      actionsArchive: this.actionsArchive,
+      profile: this.profile,
+      profileFile: this.profileFile,
+      operational: this.operational,
+      locks: this.locks,
+      cache: this.cache,
+      temp: this.temp,
+      tempIncomplete: this.tempIncomplete,
+      tempInvalid: this.tempInvalid,
+      tempDeleted: this.tempDeleted,
+      logs: this.logs,
+      legacyIndexState: this.legacyIndexState,
+      legacyConversations: this.legacyConversations,
+      legacyActions: this.legacyActions,
+      legacyProfile: this.legacyProfile,
+      legacyCache: this.legacyCache,
+      legacyLocks: this.legacyLocks,
+      legacyLogs: this.legacyLogs,
+    };
   }
 }

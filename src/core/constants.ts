@@ -9,52 +9,54 @@ export const PLUGIN_ID = "notient";
 export const VIEW_TYPE_SIDEBAR = "notient-sidebar";
 export const VIEW_TYPE_DASHBOARD = "notient-dashboard";
 
-/** Storage paths relative to plugin folder */
+/** Storage path segments - combined by StoragePaths class */
+const DATA = "data";
+const OP = `${DATA}/_operational`;
+
 export const STORAGE_PATHS = {
-  // Root data folder
-  DATA: "data",
+  DATA,
 
   // Chunks (model-agnostic)
-  CHUNKS: "data/chunks",
-  CHUNKS_META: "data/chunks/meta.json",
-  CHUNKS_NOTES: "data/chunks/notes",
+  CHUNKS: `${DATA}/chunks`,
+  CHUNKS_META: `${DATA}/chunks/meta.json`,
+  CHUNKS_NOTES: `${DATA}/chunks/notes`,
 
   // Embeddings (model-scoped)
-  EMBEDDINGS: "data/embeddings",
-  EMBEDDINGS_ACTIVE: "data/embeddings/active",
-  EMBEDDINGS_REBUILDING: "data/embeddings/_rebuilding",
-  EMBEDDINGS_ARCHIVED: "data/embeddings/_archived",
+  EMBEDDINGS: `${DATA}/embeddings`,
+  EMBEDDINGS_ACTIVE: `${DATA}/embeddings/active`,
+  EMBEDDINGS_REBUILDING: `${DATA}/embeddings/_rebuilding`,
+  EMBEDDINGS_ARCHIVED: `${DATA}/embeddings/_archived`,
 
   // Intelligence (tag-keyed)
-  INTELLIGENCE: "data/intelligence",
-  INTELLIGENCE_META: "data/intelligence/meta.json",
-  INTELLIGENCE_TOPICS: "data/intelligence/topics",
+  INTELLIGENCE: `${DATA}/intelligence`,
+  INTELLIGENCE_META: `${DATA}/intelligence/meta.json`,
+  INTELLIGENCE_TOPICS: `${DATA}/intelligence/topics`,
 
   // Conversations (per-note)
-  CONVERSATIONS: "data/conversations",
-  CONVERSATIONS_NOTES: "data/conversations/notes",
-  CONVERSATIONS_ROLLUPS: "data/conversations/rollups",
-  CONVERSATIONS_ROOT: "data/conversations/_root.json",
+  CONVERSATIONS: `${DATA}/conversations`,
+  CONVERSATIONS_NOTES: `${DATA}/conversations/notes`,
+  CONVERSATIONS_ROLLUPS: `${DATA}/conversations/rollups`,
+  CONVERSATIONS_ROOT: `${DATA}/conversations/_root.json`,
 
   // Actions (time-bucketed)
-  ACTIONS: "data/actions",
-  ACTIONS_HOT: "data/actions/hot",
-  ACTIONS_CURRENT: "data/actions/hot/current.json",
-  ACTIONS_ARCHIVE: "data/actions/archive",
+  ACTIONS: `${DATA}/actions`,
+  ACTIONS_HOT: `${DATA}/actions/hot`,
+  ACTIONS_CURRENT: `${DATA}/actions/hot/current.json`,
+  ACTIONS_ARCHIVE: `${DATA}/actions/archive`,
 
   // Profile
-  PROFILE: "data/profile",
-  PROFILE_FILE: "data/profile/profile.json",
+  PROFILE: `${DATA}/profile`,
+  PROFILE_FILE: `${DATA}/profile/profile.json`,
 
   // Operational (volatile)
-  OPERATIONAL: "data/_operational",
-  LOCKS: "data/_operational/locks",
-  CACHE: "data/_operational/cache",
-  TEMP: "data/_operational/temp",
-  TEMP_INCOMPLETE: "data/_operational/temp/_incomplete",
-  TEMP_INVALID: "data/_operational/temp/_invalid",
-  TEMP_DELETED: "data/_operational/temp/_deleted",
-  LOGS: "data/_operational/logs",
+  OPERATIONAL: OP,
+  LOCKS: `${OP}/locks`,
+  CACHE: `${OP}/cache`,
+  TEMP: `${OP}/temp`,
+  TEMP_INCOMPLETE: `${OP}/temp/_incomplete`,
+  TEMP_INVALID: `${OP}/temp/_invalid`,
+  TEMP_DELETED: `${OP}/temp/_deleted`,
+  LOGS: `${OP}/logs`,
 
   // Legacy paths (for migration detection)
   LEGACY_INDEX_STATE: "index-state.json",
