@@ -77,21 +77,23 @@ export function useService<T>(name: string): T | null {
   useEffect(() => {
     // Check immediately in case we missed initialization
     const current = kernel.getService<T>(name);
-    if (current !== service) {
+    if (current && !service) {
+      debugLog("useService", `${name} now available`);
       setService(current);
     }
 
     // Subscribe to services:initialized to catch late availability
     const unsubscribe = kernel.eventBus.on("services:initialized", () => {
       const fresh = kernel.getService<T>(name);
-      debugLog("useService", name, { available: !!fresh, event: "services:initialized" });
-      setService(fresh);
+      if (fresh) {
+        debugLog("useService", `${name} available via event`);
+        setService(fresh);
+      }
     });
 
     return () => unsubscribe();
   }, [kernel, name]);
 
-  debugLog("useService", name, { available: !!service });
   return service;
 }
 
