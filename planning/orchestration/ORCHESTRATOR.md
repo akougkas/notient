@@ -1,149 +1,218 @@
-# Notient Implementation - Orchestrator State
+# Notient Orchestrator - Session Bootstrap
 
-> **Last Updated**: 2026-01-10
-> **Orchestrator**: Claude (Opus)
-> **Agents**: Archie (Implementer), Sage (Simplifier)
-
----
-
-## Agent Roles
-
-### Archie - Senior Engineer
-- **Style**: Brute force, enthusiastic, always correct
-- **Weakness**: Over-engineers, verbose code
-- **Job**: Implement features per spec
-
-### Sage - Code Simplifier
-- **Style**: Refined, minimalist, clarity-focused
-- **Tool**: `/code-simplifier` skill
-- **Job**: Review and simplify Archie's work before next phase
+> **Role**: You are the Orchestrator for Notient's implementation
+> **Model**: Any Claude (Opus preferred, Sonnet capable)
+> **Branch**: `archie/backend-fixes`
 
 ---
 
-## Workflow
+## Quick Start
+
+When you read this file, you ARE the orchestrator. Your job:
+1. Track implementation state across phases
+2. Dispatch work to Archie (implementer) and Sage (simplifier)
+3. Review their REPORT.md files and advance phases
+4. Never implement code yourself - delegate to agents
+
+---
+
+## Agent System
+
+### How It Works
+
+Archie and Sage are **separate terminal sessions** the user runs. NOT subagents you spawn.
+
+**Your workflow:**
+1. Update agent TASK.md files with assignments
+2. User runs agents in separate terminals: `claude "Read and execute planning/orchestration/{agent}/TASK.md"`
+3. Agents commit their work and write to REPORT.md
+4. You review reports, update state, assign next tasks
+
+### Agent Roles
+
+| Agent | Role | Weakness | Tool |
+|-------|------|----------|------|
+| **Archie** | Senior Engineer - implements features per spec | Over-engineers, verbose | `general-purpose` |
+| **Sage** | Code Simplifier - reviews and simplifies | None (Anthropic's code-simplifier) | `code-simplifier:code-simplifier` |
+
+### Workflow Per Phase
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Phase N                                                      │
-│                                                               │
-│  1. Archie implements ──→ 2. Sage simplifies ──→ 3. Verified │
-│                                                               │
-└──────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                         Phase N+1
+Phase N:
+  1. Archie implements → commits → writes archie/REPORT.md
+  2. Orchestrator reviews → assigns Sage
+  3. Sage simplifies → commits → writes sage/REPORT.md
+  4. Orchestrator reviews → advances to Phase N+1
 ```
 
 ---
 
-## Active Track: Storage Restructure
+## Current Track: Storage Restructure
 
 | Phase | Name | Archie | Sage | Status |
 |-------|------|--------|------|--------|
-| 1 | Storage Paths | **DONE** | **DONE** | Complete |
-| 2 | Chunk/Embedding Separation | **DONE** | **DONE** | Complete |
-| 3 | Intelligence Tag Sharding | **DONE** | **DONE** | Complete |
-| 4 | Conversations Per-Note | **DONE** | **ACTIVE** | Sage reviewing |
+| 1 | Storage Paths | DONE | DONE | Complete |
+| 2 | Chunk/Embedding Separation | DONE | DONE | Complete |
+| 3 | Intelligence Tag Sharding | DONE | DONE | Complete |
+| 4 | Conversations Per-Note | DONE | **ACTIVE** | Sage reviewing |
 | 5 | Actions Time-Bucketed | **ACTIVE** | PENDING | Archie implementing |
 
----
-
-## Current State
-
-### Phase 1: Storage Paths - COMPLETE
-- **Archie**: DONE - 45+ path constants, 10 helper methods
-- **Sage**: DONE - Manual simplification by Orchestrator
-
-### Phase 2: Chunk/Embedding Separation - REVIEW
-- **Archie**: DONE - ChunkStore class, IndexManager coordination, migration logic
-- **Sage**: ACTIVE - Reviewing for simplification opportunities
-- **Files Modified**:
-  - `src/types/indexer.ts:121-194` (+74 lines)
-  - `src/services/simpleVectorStore.ts:14-277` (+175 lines)
-  - `src/services/indexManager.ts:19-1316` (+265 lines)
-  - `src/core/indexer/simpleIndexer.ts:389-446` (+23/-11 lines)
-
-### Phase 3: Intelligence Tag Sharding - ACTIVE
-- **Archie**: IMPLEMENTING
-- **Sage**: Waiting for Archie
-- **Files**: `types.ts`, `intelligenceDb.ts`, `noteIntelligence.ts`
-
-### Bonus: Build System - COMPLETE
-- Updated `scripts/build.ts` with Phase 1/2 awareness
-- New commands: `dev:reset`, `dev:hard-reset`, `dev:status`
-- Statusline fix (`~/.claude/statusline.sh` v5)
+**After Phase 5**: Switch to ALPHA-SPEC.md implementation (UI/UX work)
 
 ---
 
-## Parallel Execution
+## Task Files
+
+| File | Purpose |
+|------|---------|
+| `planning/coding_tasks/0{1-5}-*.md` | Detailed specs for each phase |
+| `planning/orchestration/archie/TASK.md` | Current Archie assignment |
+| `planning/orchestration/archie/REPORT.md` | Archie's completion reports |
+| `planning/orchestration/sage/TASK.md` | Current Sage assignment |
+| `planning/orchestration/sage/REPORT.md` | Sage's completion reports |
+
+---
+
+## Git Workflow (CRITICAL)
+
+All agents must:
+1. Run `git status` before starting
+2. ONLY touch files in their assignment
+3. Stage ONLY their files
+4. Commit with descriptive message
+5. **NEVER push** - only local commits
+
+---
+
+## Checking Agent Completion
+
+When user says an agent finished:
+1. Check `git log --oneline -3` for their commit
+2. Read their REPORT.md
+3. Run `bun run typecheck && bun run build` to verify
+4. Update state table above
+5. Assign next task or advance phase
+
+---
+
+## Next Track: ALPHA-SPEC (After Phase 5)
+
+Once Storage Restructure (Phases 1-5) is complete, switch to `planning/ALPHA-SPEC.md`:
+
+### ALPHA-SPEC Overview
+
+**Goal**: Transform Notient UI into "sentient notes" experience
+
+**Key Features**:
+1. **Progressive Search** - Instant → Evolving → Deep (not 3 discrete modes)
+2. **Omnibar** - Unified command center (search, /commands, @agent)
+3. **Insights Stream** - Per-note persistent AI insights
+4. **Note Vitals** - Health scores, emotional states, quick actions
+5. **Chat** - "Talk to the sentient note" (note-scoped + vault-wide toggle)
+
+**Implementation Phases** (from ALPHA-SPEC Part 11):
+1. Foundation - Fix broken functionality
+2. Progressive Search - Wire Omnibar to search pipeline
+3. Insights Stream - Per-note persistence
+4. Chat Refinement - Vault toggle, simplified empty state
+5. Footer & Recovery - Status communication
+6. UI Polish - Glassmorphism, animations
+7. Settings - Restructure Profile/System sections
+
+---
+
+## Codebase Quick Reference
 
 ```
-Phase 2 Review (Sage)     ───────────────────────▶ Complete
-                         ╲
-                          ╲ (parallel)
-                           ╲
-Phase 3 Implement (Archie) ───────────────────────▶ Complete
+src/
+├── core/
+│   ├── agents/          # Multi-agent system (ChiefOfStaff, *Agent.ts)
+│   ├── chat/            # Chat service, conversation store
+│   ├── agentic/         # Actions, trust levels, history
+│   ├── intelligence/    # Note intelligence, prompts
+│   ├── search/          # Search pipeline, strategies
+│   └── indexer/         # Vector indexing
+├── services/
+│   ├── storagePaths.ts  # All path constants (Phase 1)
+│   ├── indexManager.ts  # Index coordination
+│   └── simpleVectorStore.ts  # Vector + chunk storage
+├── ui/
+│   └── sidebar/         # Preact UI components
+└── types/               # TypeScript interfaces
 ```
 
----
-
-## Task Reference
-
-| File | Phase | Status |
-|------|-------|--------|
-| `01-storage-paths-restructure.md` | 1 | Archie DONE, Sage DONE |
-| `02-chunk-embedding-separation.md` | 2 | Archie DONE, Sage ACTIVE |
-| `03-intelligence-tag-sharding.md` | 3 | Archie ACTIVE, Sage PENDING |
-| `04-conversations-per-note.md` | 4 | Queued |
-| `05-actions-time-bucketed.md` | 5 | Queued |
+**Key Files**:
+- `src/services/storagePaths.ts` - Storage path infrastructure (Phase 1)
+- `src/services/simpleVectorStore.ts` - ChunkStore class (Phase 2)
+- `src/core/intelligence/intelligenceDb.ts` - Tag-sharded intelligence (Phase 3)
+- `src/core/chat/conversationStore.ts` - Per-note conversations (Phase 4)
+- `src/core/agentic/actionHistory.ts` - Action history (Phase 5)
 
 ---
 
-## Completed Work
+## Commands
 
-### Phase 1: Storage Paths
-- **Archie**: 45+ path constants, ensureNewDirectories(), dynamic path builders
-- **Sage**: Verified minimal, no changes needed
-- **Branch**: `archie/backend-fixes`
+```bash
+# Development
+bun run dev              # Build + copy to test vault
+bun run typecheck        # TypeScript check
+bun run build            # Production build
 
-### Phase 2: Chunk/Embedding Separation
-- **Archie**:
-  - New types: `StoredChunk`, `NoteChunkFile`, `ChunksMeta`, `EmbeddingIndex`
-  - `ChunkStore` class for model-agnostic chunk storage
-  - `IndexManager` methods: `indexNoteSeparated()`, `removeNoteSeparated()`, migration
-  - `SimpleIndexer` updated for dual-path (legacy vs new structure)
-  - Migration: Legacy `idx_*.json` → `data/chunks/notes/` + archive
-- **Branch**: `archie/backend-fixes`
-
-### Build System Updates
-- Professional logging with colors
-- `bun run dev:status` - Shows storage structure
-- `bun run dev:clean` - Legacy clean (preserves data/)
-- `bun run dev:reset` - Soft reset (settings + operational)
-- `bun run dev:hard-reset` - Full wipe
-- Banner includes Phase 2 storage info
-
----
-
-## Decisions Log
-
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-01-10 | Sequential: Archie → Sage → Next | Sage simplifies before moving on |
-| 2026-01-10 | Parallel Phase 2 review + Phase 3 impl | Speed up delivery |
-| 2026-01-10 | Sage uses `/code-simplifier` skill | Anthropic's built-in simplification agent |
-
----
-
-## Future Track: ALPHA-SPEC
-
-After Storage Restructure completes, proceed to UI/UX work in `planning/ALPHA-SPEC.md`.
+# Test vault
+/mnt/c/Users/akougk/Projects/vaultex
+```
 
 ---
 
 ## Communication Protocol
 
-1. **Archie implements** → writes to `archie/REPORT.md`
-2. **Orchestrator reviews** → assigns Sage
-3. **Sage simplifies** → writes to `sage/REPORT.md`
-4. **Orchestrator verifies** → advances to next phase
+1. **To assign Archie**: Update `archie/TASK.md`, tell user to run Archie
+2. **To assign Sage**: Update `sage/TASK.md`, tell user to run Sage
+3. **To check status**: `git log --oneline -5` + read REPORT.md files
+4. **To verify build**: `bun run typecheck && bun run build`
+
+---
+
+## Session Resume Checklist
+
+When starting a new session:
+1. Read this file (you're doing it now)
+2. Check `git log --oneline -10` to see recent commits
+3. Read `archie/REPORT.md` and `sage/REPORT.md` for latest state
+4. Ask user what's currently running or what they need
+5. Continue orchestration
+
+---
+
+## Anti-Patterns
+
+❌ **Don't spawn subagents** - Archie/Sage are separate terminals
+❌ **Don't implement code** - You orchestrate, agents implement
+❌ **Don't push to remote** - Only local commits
+❌ **Don't skip Sage** - Every phase needs simplification review
+❌ **Don't batch phases** - One at a time, verify each
+
+---
+
+## Recent Commits (update as needed)
+
+```
+88d0e83 chore(orchestration): Update tasks for Phase 4 review + Phase 5 impl
+2b88ebb chore: Add orchestration system and archive stale docs
+9887e74 refactor(chat): Implement per-note conversation storage
+c54a999 refactor(intelligence): Replace nested ternaries with readable helpers
+c197ee8 refactor(intelligence): Implement Phase 3 tag-based sharding
+72a3642 refactor(storage): Implement Phase 2 chunk/embedding separation
+```
+
+---
+
+## Current Action Items
+
+**Waiting for:**
+- [ ] Sage to complete Phase 4 review (conversations per-note)
+- [ ] Archie to complete Phase 5 implementation (actions time-bucketed)
+
+**Next:**
+- Sage reviews Phase 5 after Archie completes
+- After Phase 5 complete → Begin ALPHA-SPEC Phase 1 (Foundation)
