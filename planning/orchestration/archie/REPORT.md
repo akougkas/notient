@@ -265,6 +265,7 @@ Established path infrastructure for hierarchical storage with 45+ path constants
 ## Next Steps
 
 All 5 phases of storage restructure are complete:
-1. Update version number in `manifest.json` if needed
-2. Test full workflow end-to-end in test vault
-3. Clean up any orphaned legacy files
+1. ~~Update version number in `manifest.json` if needed~~ ✅ **Done** - Bumped to v0.2.0
+2. ~~Test full workflow end-to-end in test vault~~ ✅ **Verified**
+3. ~~Clean up any orphaned legacy files~~ ✅ **Done** - Migration handles automatically (moves to `data/_operational/temp/_deleted/`)
+

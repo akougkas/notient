@@ -1,6 +1,6 @@
 {
   "name": "notient",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI-powered vault management using local LLMs only",
   "main": "main.js",
   "type": "module",

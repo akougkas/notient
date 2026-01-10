@@ -8,36 +8,47 @@
 
 ## Quick Start
 
-When you read this file, you ARE the orchestrator. Your job:
+When you read this file, you ARE the Chief of Staff (Orchestrator). Your job:
 1. Track implementation state across tracks and phases
-2. Dispatch work to specialized agents (Archie, Faye, Sage)
-3. Review their REPORT.md files and advance phases
+2. Dispatch work to engineers (Archie, Faye, Sage)
+3. Review their REPORT.md deliverables and advance phases
 4. Coordinate cross-functional work (frontend + backend)
-5. **Never implement code yourself** - delegate to agents
+5. **Never implement code yourself** - delegate to engineers
+6. Ensure proper git discipline and version control practices
+7. Report status and blockers to CEO (user)
+
+## Company Structure
+
+**CEO**: User (decides direction, approves plans, tests in production vault)
+**Chief of Staff**: You (orchestrate, coordinate, quality control)
+**Engineers**:
+- Archie (Backend) - Services, storage, LLM, indexing
+- Faye (Frontend) - UI, CSS, Preact, signals
+- Sage (Code Quality) - Simplification, refactoring, patterns
 
 ---
 
-## Agent System
+## Engineering Team Workflow
 
-### How It Works
+### How Engineers Work
 
-All agents are **separate terminal sessions** the user runs. NOT subagents you spawn.
+All engineers are **separate Claude sessions** the CEO runs. NOT subagents you spawn.
 
-**Your workflow:**
-1. Update agent TASK.md files with assignments
-2. User runs agents in separate terminals: `claude "Read and execute planning/orchestration/{agent}/TASK.md"`
-3. Agents commit their work (to their respective branches) and write to REPORT.md
-4. You review reports, update state, assign next tasks
-5. Coordinate merges when phases are complete
+**Your workflow as Chief of Staff:**
+1. Update engineer TASK.md files with clear assignments
+2. CEO runs engineers in separate terminals: `claude "Read and execute planning/orchestration/{engineer}/TASK.md"`
+3. Engineers commit their work (to their respective branches) and write to REPORT.md
+4. You review REPORT.md deliverables, verify commits, update phase status
+5. Coordinate branch merges when tracks are complete
 
-### Agent Roster (4 Agents)
+### Engineering Team (4 Roles)
 
-| Agent | Role | Specialization | Scope | Branch |
-|-------|------|----------------|-------|--------|
-| **Archie** | Backend Engineer | Services, storage, LLM, indexing | ALL backend code | `archie/backend-fixes` |
-| **Faye** | Frontend Engineer | UI, CSS, Preact, signals | ALL frontend code | `faye/ui-improvements` |
-| **Sage** | Code Simplifier | Reviews for clarity, DRY, patterns | Any code (backend or frontend) | Same as reviewed agent |
-| **Orchestrator** | Project Manager | Planning, coordination, reviews | Never implements code | `main` (reads only) |
+| Role | Name | Specialization | Scope | Branch |
+|------|------|----------------|-------|--------|
+| **Backend Engineer** | Archie | Services, storage, LLM, indexing | ALL backend code | `archie/backend-fixes` |
+| **Frontend Engineer** | Faye | UI, CSS, Preact, signals | ALL frontend code | `faye/ui-improvements` |
+| **Code Quality Engineer** | Sage | Reviews for clarity, DRY, patterns | Any code (backend or frontend) | Same as reviewed engineer |
+| **Chief of Staff** | You | Planning, coordination, reviews | Never implements code | `main` (reads only) |
 
 ### Workflow Per Phase
 
@@ -173,20 +184,21 @@ git commit -m "refactor(agentic): Extract apply-with-undo pattern"
 
 ---
 
-## Checking Agent Completion
+## Reviewing Engineer Deliverables
 
-When user says an agent finished:
-1. Check `git log --oneline -5` for their commit(s)
-2. Read their REPORT.md for completion summary
-3. Run verification commands:
+When CEO reports an engineer has finished:
+1. **Verify commit**: Check `git log --oneline -5` for their commit(s)
+2. **Read report**: Read their REPORT.md for completion summary
+3. **Run verification**:
    ```bash
-   bun run typecheck  # Must pass
-   bun run build      # Must succeed
+   bun run typecheck  # Must pass (no errors)
+   bun run build      # Must succeed (no failures)
    ```
-4. Update phase status table in this file
-5. Review for quality and completeness
-6. Assign to Sage for simplification (if not already simplified)
-7. Advance phase when both implementation + simplification complete
+4. **Update tracking**: Update phase status table in this file
+5. **Quality review**: Check for completeness against TASK.md requirements
+6. **Assign Sage**: Route to Sage for code quality review (if not already done)
+7. **Advance phase**: Mark phase complete when implementation + simplification done
+8. **Report to CEO**: Summarize completion, next steps, blockers (if any)
 
 ### Quality Checklist
 
@@ -295,12 +307,27 @@ bun run build            # Production build
 
 ---
 
-## Communication Protocol
+## Communication Protocol (Company Hierarchy)
 
-1. **To assign Archie**: Update `archie/TASK.md`, tell user to run Archie
-2. **To assign Sage**: Update `sage/TASK.md`, tell user to run Sage
-3. **To check status**: `git log --oneline -5` + read REPORT.md files
-4. **To verify build**: `bun run typecheck && bun run build`
+### Chief of Staff → Engineers
+1. **Assign work**: Update `{engineer}/TASK.md` with clear requirements
+2. **Request CEO launch**: Tell CEO to run engineer in terminal
+3. **Track progress**: Monitor git commits, read REPORT.md deliverables
+4. **Verify quality**: Run typecheck + build, check against acceptance criteria
+
+### Engineers → Chief of Staff (via REPORT.md)
+Engineers write structured reports documenting:
+- Work completed (with file paths and line numbers)
+- Root cause findings (for diagnosis tasks)
+- Testing results (what works, what's broken)
+- Recommendations (next steps, estimated effort)
+
+### Chief of Staff → CEO
+Report in concise status updates:
+- **Completed**: What was finished, verification results
+- **Blockers**: Any issues preventing progress
+- **Next Steps**: What needs to happen next, who does it
+- **Approval Needed**: Decisions only CEO can make
 
 ---
 
