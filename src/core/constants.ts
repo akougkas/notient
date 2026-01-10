@@ -11,15 +11,59 @@ export const VIEW_TYPE_DASHBOARD = "notient-dashboard";
 
 /** Storage paths relative to plugin folder */
 export const STORAGE_PATHS = {
-  CACHE: "cache",
-  LOCKS: "locks",
-  LOGS: "logs",
-  INDEX_STATE: "index-state.json",
-  // Phase 2 additions
-  CONVERSATIONS: "conversations.json",
-  ACTIONS: "actions.json",
-  // Identity system
-  PROFILE: "profile.json",
+  // Root data folder
+  DATA: "data",
+
+  // Chunks (model-agnostic)
+  CHUNKS: "data/chunks",
+  CHUNKS_META: "data/chunks/meta.json",
+  CHUNKS_NOTES: "data/chunks/notes",
+
+  // Embeddings (model-scoped)
+  EMBEDDINGS: "data/embeddings",
+  EMBEDDINGS_ACTIVE: "data/embeddings/active",
+  EMBEDDINGS_REBUILDING: "data/embeddings/_rebuilding",
+  EMBEDDINGS_ARCHIVED: "data/embeddings/_archived",
+
+  // Intelligence (tag-keyed)
+  INTELLIGENCE: "data/intelligence",
+  INTELLIGENCE_META: "data/intelligence/meta.json",
+  INTELLIGENCE_TOPICS: "data/intelligence/topics",
+
+  // Conversations (per-note)
+  CONVERSATIONS: "data/conversations",
+  CONVERSATIONS_NOTES: "data/conversations/notes",
+  CONVERSATIONS_ROLLUPS: "data/conversations/rollups",
+  CONVERSATIONS_ROOT: "data/conversations/_root.json",
+
+  // Actions (time-bucketed)
+  ACTIONS: "data/actions",
+  ACTIONS_HOT: "data/actions/hot",
+  ACTIONS_CURRENT: "data/actions/hot/current.json",
+  ACTIONS_ARCHIVE: "data/actions/archive",
+
+  // Profile
+  PROFILE: "data/profile",
+  PROFILE_FILE: "data/profile/profile.json",
+
+  // Operational (volatile)
+  OPERATIONAL: "data/_operational",
+  LOCKS: "data/_operational/locks",
+  CACHE: "data/_operational/cache",
+  TEMP: "data/_operational/temp",
+  TEMP_INCOMPLETE: "data/_operational/temp/_incomplete",
+  TEMP_INVALID: "data/_operational/temp/_invalid",
+  TEMP_DELETED: "data/_operational/temp/_deleted",
+  LOGS: "data/_operational/logs",
+
+  // Legacy paths (for migration detection)
+  LEGACY_INDEX_STATE: "index-state.json",
+  LEGACY_CONVERSATIONS: "conversations.json",
+  LEGACY_ACTIONS: "actions.json",
+  LEGACY_PROFILE: "profile.json",
+  LEGACY_CACHE: "cache",
+  LEGACY_LOCKS: "locks",
+  LEGACY_LOGS: "logs",
 } as const;
 
 /** Lock file names */
