@@ -469,6 +469,10 @@ export default class NotientPlugin extends Plugin {
         });
       }
 
+      // Always create AgentTaskQueue (graceful degradation when LLM unavailable)
+      this.agentTaskQueue = new AgentTaskQueue(null, eventBus);
+      this.kernel.registerService("taskQueue", this.agentTaskQueue);
+
       // Create NotientAgent if LLM Provider available
       if (this.llmProvider) {
         const currentProfile = this.profileManager?.get();
@@ -481,14 +485,15 @@ export default class NotientPlugin extends Plugin {
         );
         this.kernel.registerService("agent", this.notientAgent);
 
+        // Wire agent to taskQueue (late binding)
+        this.agentTaskQueue.setAgent(this.notientAgent);
+
         // Subscribe to profile updates
         eventBus.on("profile:updated", (event) => {
           this.notientAgent?.setProfile(event.profile);
         });
-
-        // Agent Task Queue
-        this.agentTaskQueue = new AgentTaskQueue(this.notientAgent, eventBus);
-        this.kernel.registerService("taskQueue", this.agentTaskQueue);
+      } else {
+        console.warn("[Notient] LLM provider not available - agent tasks will fail with clear error");
       }
 
       // ConversationStore
@@ -500,9 +505,8 @@ export default class NotientPlugin extends Plugin {
       this.conversationStore.prune();
       this.kernel.registerService("conversationStore", this.conversationStore);
 
-      if (this.agentTaskQueue) {
-        this.agentTaskQueue.setConversationStore(this.conversationStore);
-      }
+      // Always wire conversation store (taskQueue always exists now)
+      this.agentTaskQueue.setConversationStore(this.conversationStore);
 
       // File rename handler
       this.kernel.obsidian.onFileRename((file, oldPath) => {
@@ -537,19 +541,18 @@ export default class NotientPlugin extends Plugin {
       );
       this.kernel.registerService("actionApplier", this.actionApplier);
 
-      if (this.agentTaskQueue) {
-        this.workflowRunner = new WorkflowRunner(
-          this.kernel,
-          eventBus,
-          this.agentTaskQueue,
-          this.kernel.obsidian,
-          {
-            maxNotesPerWorkflow: this.settings.agent.bulk.maxNotesPerWorkflow,
-            delayBetweenTasksMs: this.settings.agent.bulk.delayBetweenTasksMs,
-          },
-        );
-        this.kernel.registerService("workflowRunner", this.workflowRunner);
-      }
+      // Always create WorkflowRunner (taskQueue always exists now)
+      this.workflowRunner = new WorkflowRunner(
+        this.kernel,
+        eventBus,
+        this.agentTaskQueue,
+        this.kernel.obsidian,
+        {
+          maxNotesPerWorkflow: this.settings.agent.bulk.maxNotesPerWorkflow,
+          delayBetweenTasksMs: this.settings.agent.bulk.delayBetweenTasksMs,
+        },
+      );
+      this.kernel.registerService("workflowRunner", this.workflowRunner);
 
       // ActionOrchestrator (requires lmstudio + search)
       if (this.lmStudioService && this.searchPipeline) {

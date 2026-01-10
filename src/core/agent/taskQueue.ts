@@ -41,9 +41,23 @@ export class AgentTaskQueue {
   private processing = false;
 
   constructor(
-    private agent: ChiefOfStaff,
+    private agent: ChiefOfStaff | null,
     private eventBus: EventBus,
   ) {}
+
+  /**
+   * Check if the agent is available for task execution
+   */
+  isAgentAvailable(): boolean {
+    return this.agent !== null;
+  }
+
+  /**
+   * Set the agent (for late binding when LLM becomes available)
+   */
+  setAgent(agent: ChiefOfStaff): void {
+    this.agent = agent;
+  }
 
   /**
    * Set the conversation store for persistence (Phase 2)
@@ -58,6 +72,14 @@ export class AgentTaskQueue {
    * @returns The task ID
    */
   enqueue(task: Omit<AgentTask, "id" | "status" | "startedAt">): string {
+    // Check LLM availability first - provide clear error message
+    if (!this.agent) {
+      console.error("[AgentTaskQueue] Cannot enqueue task - LLM agent not available");
+      throw new Error(
+        "LM Studio connection required for agent tasks. Please ensure LM Studio is running.",
+      );
+    }
+
     // Backpressure: reject if queue is full (prevents memory exhaustion)
     const queuedCount = this.tasks.filter((t) => t.status === "queued").length;
     if (queuedCount >= MAX_QUEUE_SIZE) {
@@ -370,6 +392,11 @@ export class AgentTaskQueue {
    * Execute a task using the ChiefOfStaff (multi-agent system)
    */
   private async executeTask(task: AgentTask): Promise<void> {
+    // Guard: should never happen since enqueue checks, but TypeScript needs this
+    if (!this.agent) {
+      throw new Error("Agent not available");
+    }
+
     // Create abort controller for this task
     this.currentAbortController = new AbortController();
 
