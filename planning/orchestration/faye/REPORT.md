@@ -1,17 +1,16 @@
 # Faye Report
 status: complete
-commit: 7483571
+commit: pending
 
 ## did
-- src/ui/sidebar/context/KernelContext.tsx:73-96: Rewrote useService hook
-  - Added useState to hold service reference (lazy init with kernel.getService)
-  - Added useEffect to subscribe to "services:initialized" event
-  - On event: re-fetches service from kernel, setService triggers re-render
-  - Callbacks with service deps now get fresh refs after init
+- src/ui/sidebar/components/QuickActions.tsx:145-169: Changed Summary and Tasks actions from sendToChat() to triggerAgent() with taskType "analyze"
+- src/ui/sidebar/components/QuickActions.tsx:71-92: Updated interface and function comments to reflect all 6 actions are now agentic
+- src/ui/sidebar/App.tsx:482-500: Removed synchronous activeAgents add from triggerAgenticAction()
+- src/ui/sidebar/App.tsx:337-370: Modified "running" case in agent:task-update handler to add agents if not exists (single source of truth)
 
 ## verify
-typecheck: fail (pre-existing error in taskQueue.ts:398 - Archie's domain)
+typecheck: pass
 build: pass
 
 ## issues
-- taskQueue.ts:398 has uncommitted changes that made `agent` nullable but missed a null check in `executeTask()`. This blocks typecheck but is not Faye's code.
+none

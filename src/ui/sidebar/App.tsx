@@ -334,12 +334,40 @@ export function App() {
     if (isAgenticTask) {
       // Update Agent Streams view for agentic tasks
       switch (task.status) {
-        case "running":
-          // Update progress in active agents
-          activeAgents.value = activeAgents.value.map((agent) =>
-            agent.id === task.id ? { ...agent, progress: task.progress || 0 } : agent,
-          );
+        case "running": {
+          // Check if agent already exists
+          const exists = activeAgents.value.some((a) => a.id === task.id);
+          if (exists) {
+            // Update progress
+            activeAgents.value = activeAgents.value.map((agent) =>
+              agent.id === task.id ? { ...agent, progress: task.progress || 0 } : agent,
+            );
+          } else {
+            // Add new agent (single source of truth)
+            const actionLabels: Record<string, string> = {
+              link: "Link Finder",
+              enrich: "Note Editor",
+              classify: "Classifier",
+              analyze: "Context Builder",
+            };
+            activeAgents.value = [
+              ...activeAgents.value,
+              {
+                id: task.id,
+                type: actionLabels[task.taskType || ""] || task.taskType || "Agent",
+                targetNote: task.noteTitle || "Note",
+                status: "running",
+                progress: task.progress || 0,
+                startedAt: new Date(),
+              },
+            ];
+            agentStatus.value = {
+              ...agentStatus.value,
+              runningCount: agentStatus.value.runningCount + 1,
+            };
+          }
           break;
+        }
 
         case "completed": {
           // Find the agent and update with results (keep in activeAgents as "completed")
@@ -479,15 +507,6 @@ export function App() {
 
       if (taskQueue && noteVitals.value) {
         try {
-          const taskId = taskQueue.enqueue({
-            agent: "chat", // Legacy field
-            taskType, // This triggers proper routing in ChiefOfStaff
-            notePath: noteVitals.value.path,
-            noteTitle: noteVitals.value.title,
-            chatHistory: [{ role: "user", content: prompt }],
-          });
-
-          // Add to active agents for Agent Streams view
           const actionLabels: Record<string, string> = {
             link: "Link Finder",
             enrich: "Note Editor",
@@ -495,23 +514,15 @@ export function App() {
             analyze: "Context Builder",
           };
 
-          activeAgents.value = [
-            ...activeAgents.value,
-            {
-              id: taskId,
-              type: actionLabels[taskType] || taskType,
-              targetNote: noteVitals.value.title,
-              status: "running",
-              progress: 0,
-              startedAt: new Date(),
-            },
-          ];
+          taskQueue.enqueue({
+            agent: "chat", // Legacy field
+            taskType, // This triggers proper routing in ChiefOfStaff
+            notePath: noteVitals.value.path,
+            noteTitle: noteVitals.value.title,
+            chatHistory: [{ role: "user", content: prompt }],
+          });
 
-          agentStatus.value = {
-            ...agentStatus.value,
-            runningCount: agentStatus.value.runningCount + 1,
-          };
-
+          // Agent will be added to activeAgents via agent:task-update event
           // Switch to agents view to show progress
           activeView.value = "agents";
           new Notice(`${actionLabels[taskType]} started`);

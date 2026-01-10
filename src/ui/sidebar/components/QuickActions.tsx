@@ -70,11 +70,12 @@ function ActionButton({ action }: ActionButtonProps) {
 
 /**
  * Callbacks for Quick Actions
+ * All 6 actions now route through Agent Streams for consistent UX
  */
 export interface QuickActionCallbacks {
   /** Trigger agentic background workflow (shows in Agent Streams) */
   triggerAgent: (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => void;
-  /** Send to conversational chat */
+  /** Send to conversational chat (kept for Chat input, not used by Quick Actions) */
   sendToChat: (prompt: string) => void;
 }
 
@@ -82,18 +83,15 @@ export interface QuickActionCallbacks {
  * Factory function to create standard quick actions for a note
  * Per spec: 6 actions, smart-filtered to show 4-6 most relevant
  *
- * Actions are split between:
- * - Agentic: Run in background, show in Agent Streams (Find, Link, Enrich, Tags)
- * - Conversational: Open in Chat for discussion (Summary, Tasks)
+ * All 6 actions are agentic: run in background, show results in Agent Streams
  */
 export function createNoteQuickActions(
   noteTitle: string,
   callbacks: QuickActionCallbacks,
 ): QuickAction[] {
-  const { triggerAgent, sendToChat } = callbacks;
+  const { triggerAgent } = callbacks;
 
   return [
-    // AGENTIC ACTIONS - Run in background, show in Agent Streams
     {
       id: "find-connections",
       icon: "search",
@@ -143,24 +141,29 @@ export function createNoteQuickActions(
         ),
     },
 
-    // CONVERSATIONAL ACTIONS - Open in Chat for discussion
     {
       id: "summarize",
       icon: "file-text",
       label: "Summary",
       primary: false,
-      description: "Generate summary (Chat)",
+      description: "Generate summary (Agent)",
       onClick: () =>
-        sendToChat(`Create a concise summary of "${noteTitle}" that captures the key points`),
+        triggerAgent(
+          `Create a concise summary of "${noteTitle}" that captures the key points`,
+          "analyze",
+        ),
     },
     {
       id: "extract-tasks",
       icon: "check-square",
       label: "Tasks",
       primary: false,
-      description: "Extract tasks (Chat)",
+      description: "Extract tasks (Agent)",
       onClick: () =>
-        sendToChat(`Extract any actionable items or tasks mentioned in "${noteTitle}"`),
+        triggerAgent(
+          `Extract any actionable items or tasks mentioned in "${noteTitle}"`,
+          "analyze",
+        ),
     },
   ];
 }
