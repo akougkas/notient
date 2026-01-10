@@ -135,6 +135,7 @@ function buildProfileAwareSystemPrompt(
 }
 
 // Re-export all prompts and builders
+export { ANTAGONIST_PROMPT, buildAntagonistPrompt } from "./antagonist";
 export { ATOMIC_SPLIT_PROMPT, buildAtomicSplitPrompt } from "./atomic";
 export { BRAND_CHECK_PROMPT, buildBrandCheckPrompt } from "./brand";
 export { CLIPPING_PROMPT, buildClippingPrompt } from "./clipping";
