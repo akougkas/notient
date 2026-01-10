@@ -463,18 +463,109 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ---
 
-## Session State
+## Session State & Checkpoint
 
-**Last Updated**: 2026-01-10
-**Current Session**: ALPHA-SPEC Pre-Planning
+**Last Updated**: 2026-01-10 16:00
+**Current Phase**: Phase 1 Stage 1.5 (Debug Logging Optimization)
+**Active Branch**: `ALPHA-SPEC-SPRINT` (all engineers share this branch)
 **Build Status**: ✅ Passing (TypeScript + Build verified)
-**Active Branches**:
-- `archie/backend-fixes` (storage restructure complete)
-- `faye/ui-improvements` (ready for work)
 
-**Readiness**:
-- ✅ Storage Restructure Track Complete
-- ✅ All agents have TASK.md and REPORT.md files
-- ✅ Git workflow documented
-- ✅ Testing requirements defined
-- 🎯 Ready for Phase 0 Pre-Planning
+### Phase 1 Progress
+
+| Stage | Status | Engineer | Deliverable |
+|-------|--------|----------|-------------|
+| 1: Diagnosis | ✅ COMPLETE | Archie + Faye | Both REPORT.md done, commits made |
+| 1.5: Logging Cleanup | 🎯 **READY TO LAUNCH** | Sage | Task assigned, ready to start |
+| 2: Implementation | ⏸️ PENDING | Archie + Faye | Waiting for Sage completion |
+| 3: Baseline Audit | ⏸️ PENDING | Archie + Faye | - |
+| 4: Final Simplification | ⏸️ PENDING | Sage | - |
+
+### Stage 1 Findings (COMPLETE)
+
+**Archie's Findings** (commit `bb6f21f`):
+- ✅ Root cause: Conditional service registration
+- When LM Studio down → agent/taskQueue/workflowRunner not registered
+- Cascading failure with silent errors
+- No debug logging added (code review only)
+
+**Faye's Findings** (commit `3fcd5e1`):
+- ✅ Root cause: useService hook not reactive
+- Services initialize after 1-second delay
+- Callbacks capture null taskQueue, never update
+- Added 13 console.log statements (needs cleanup)
+
+**Combined Root Cause**:
+1. Backend: Services conditionally registered based on LM Studio
+2. Frontend: useService doesn't trigger re-renders when services available
+3. Result: Buttons work, but callbacks have stale null references
+
+### Stage 1.5 Next Action (SAGE)
+
+**Status**: Ready to launch
+**Command**: `claude "Read and execute planning/orchestration/sage/TASK.md"`
+
+**Sage's Assignment**:
+1. Create `src/utils/debugLog.ts` (simple toggle-able utility)
+2. Optimize Faye's 13 console.log statements
+3. Reduce to ~6-8 structured logs
+4. Add DEBUG_ENABLED flag
+5. Commit and report
+
+**Expected Duration**: 1 hour
+
+### After Sage Completes
+
+**Chief of Staff Actions**:
+1. Read `planning/orchestration/sage/REPORT.md`
+2. Verify commit: `git log --oneline -3`
+3. Run build: `bun run typecheck && bun run build`
+4. Review debug utility implementation
+5. Assign Stage 2 tasks to Archie + Faye (implementation fixes)
+
+### Stage 2 Implementation Tasks (DRAFT)
+
+Based on findings, need to implement:
+
+**Archie**:
+- Add explicit logging for skipped service registration
+- Improve error messages when LM Studio unavailable
+- Consider always-register pattern for graceful degradation
+
+**Faye**:
+- Make useService hook reactive (subscribe to services:initialized)
+- Force component re-render when services become available
+- OR get services inside callbacks (simpler workaround)
+
+**Estimated Effort**: 2-3 hours combined
+
+---
+
+## Resume Instructions for New Session
+
+When you return to orchestrate:
+
+1. **Check current state**:
+   ```bash
+   git status
+   git log --oneline -5
+   ```
+
+2. **Read reports**:
+   - Archie: `planning/orchestration/archie/REPORT.md`
+   - Faye: `planning/orchestration/faye/REPORT.md`
+   - Sage: `planning/orchestration/sage/REPORT.md` (if complete)
+
+3. **Determine next action**:
+   - If Sage REPORT.md exists → Proceed to Stage 2 (assign Archie + Faye)
+   - If Sage REPORT.md missing → Launch Sage (Stage 1.5)
+
+4. **Launch next engineer**:
+   ```bash
+   # If Sage needed:
+   claude "Read and execute planning/orchestration/sage/TASK.md"
+
+   # If Stage 2 ready:
+   # Update Archie/Faye TASK.md files first, then launch
+   ```
+
+5. **Track progress**: Update this ORCHESTRATOR.md after each stage completes
