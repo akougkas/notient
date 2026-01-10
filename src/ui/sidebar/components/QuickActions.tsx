@@ -49,7 +49,9 @@ function ActionButton({ action }: ActionButtonProps) {
   }, [action.icon]);
 
   const handleClick = useCallback(() => {
+    console.log("[QuickActions] Button clicked:", action.id);
     action.onClick();
+    console.log("[QuickActions] onClick called successfully");
   }, [action.onClick]);
 
   return (

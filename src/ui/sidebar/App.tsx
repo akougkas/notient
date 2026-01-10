@@ -470,6 +470,10 @@ export function App() {
   // Callback for agentic quick actions - routes through ChiefOfStaff with proper taskType
   const triggerAgenticAction = useCallback(
     (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => {
+      console.log("[triggerAgenticAction] Called with:", { prompt, taskType });
+      console.log("[triggerAgenticAction] taskQueue:", taskQueue);
+      console.log("[triggerAgenticAction] noteVitals:", noteVitals.value);
+
       if (taskQueue && noteVitals.value) {
         try {
           const taskId = taskQueue.enqueue({
@@ -512,6 +516,10 @@ export function App() {
           new Notice(err instanceof Error ? err.message : "Failed to start agent");
         }
       } else {
+        console.error("[triggerAgenticAction] FAILED - missing:", {
+          hasTaskQueue: !!taskQueue,
+          hasNoteVitals: !!noteVitals.value,
+        });
         new Notice("Agent system not available");
       }
     },
@@ -724,11 +732,13 @@ export function App() {
 
   // Modal open handlers - use Obsidian native modals
   const openModelSelector = useCallback(() => {
+    console.log("[openModelSelector] Called");
     const currentModel = providerStatus.value.lmstudio.model || providerStatus.value.ollama.model;
     new ModelSelectorModal(app, kernel, currentModel).open();
   }, [app, kernel]);
 
   const openIndexDashboard = useCallback(() => {
+    console.log("[openIndexDashboard] Called");
     new IndexDashboardModal(app, kernel, indexStatus.value).open();
   }, [app, kernel]);
 

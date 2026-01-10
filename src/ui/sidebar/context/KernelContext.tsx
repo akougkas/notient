@@ -70,7 +70,9 @@ export function useApp(): App {
  */
 export function useService<T>(name: string): T | null {
   const kernel = useKernel();
-  return kernel.getService<T>(name);
+  const service = kernel.getService<T>(name);
+  console.log("[useService]", name, "→", service);
+  return service;
 }
 
 /**
