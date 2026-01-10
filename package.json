@@ -14,7 +14,8 @@
     "test": "bun test",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
-    "format": "biome format --write src/"
+    "format": "biome format --write src/",
+    "import": "bun tools/import-bridge/index.ts"
   },
   "keywords": [
     "obsidian",
@@ -37,7 +38,10 @@
   "dependencies": {
     "@lmstudio/sdk": "^0.3.0",
     "@preact/signals": "^2.5.1",
+    "@types/prismjs": "^1.26.5",
+    "marked": "^17.0.1",
     "ollama": "^0.5.0",
-    "preact": "^10.28.2"
+    "preact": "^10.28.2",
+    "prismjs": "^1.30.0"
   }
 }
