@@ -465,8 +465,8 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ## Session State & Checkpoint
 
-**Last Updated**: 2026-01-10 16:00
-**Current Phase**: Phase 1 Stage 1.5 (Debug Logging Optimization)
+**Last Updated**: 2026-01-10 17:30
+**Current Phase**: Phase 1 Stage 2 (Implementation)
 **Active Branch**: `ALPHA-SPEC-SPRINT` (all engineers share this branch)
 **Build Status**: ✅ Passing (TypeScript + Build verified)
 
@@ -475,68 +475,61 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 | Stage | Status | Engineer | Deliverable |
 |-------|--------|----------|-------------|
 | 1: Diagnosis | ✅ COMPLETE | Archie + Faye | Both REPORT.md done, commits made |
-| 1.5: Logging Cleanup | 🎯 **READY TO LAUNCH** | Sage | Task assigned, ready to start |
-| 2: Implementation | ⏸️ PENDING | Archie + Faye | Waiting for Sage completion |
+| 1.5: Logging Cleanup | ✅ COMPLETE | Sage | debugLog.ts created, commit `255eb69` |
+| 2: Implementation | 🎯 **READY TO LAUNCH** | Archie + Faye | TASK.md files updated |
 | 3: Baseline Audit | ⏸️ PENDING | Archie + Faye | - |
 | 4: Final Simplification | ⏸️ PENDING | Sage | - |
 
 ### Stage 1 Findings (COMPLETE)
 
-**Archie's Findings** (commit `bb6f21f`):
+**Archie's Findings**:
 - ✅ Root cause: Conditional service registration
 - When LM Studio down → agent/taskQueue/workflowRunner not registered
 - Cascading failure with silent errors
-- No debug logging added (code review only)
 
 **Faye's Findings** (commit `3fcd5e1`):
 - ✅ Root cause: useService hook not reactive
 - Services initialize after 1-second delay
 - Callbacks capture null taskQueue, never update
-- Added 13 console.log statements (needs cleanup)
 
 **Combined Root Cause**:
 1. Backend: Services conditionally registered based on LM Studio
 2. Frontend: useService doesn't trigger re-renders when services available
 3. Result: Buttons work, but callbacks have stale null references
 
-### Stage 1.5 Next Action (SAGE)
+### Stage 1.5 Logging Cleanup (COMPLETE)
 
-**Status**: Ready to launch
-**Command**: `claude "Read and execute planning/orchestration/sage/TASK.md"`
+**Sage completed** (commit `255eb69`):
+- Created `src/utils/debugLog.ts` with toggle-able utility
+- DEBUG_ENABLED = false by default
 
-**Sage's Assignment**:
-1. Create `src/utils/debugLog.ts` (simple toggle-able utility)
-2. Optimize Faye's 13 console.log statements
-3. Reduce to ~6-8 structured logs
-4. Add DEBUG_ENABLED flag
-5. Commit and report
+**Sage Agent Updated**: Now orchestrates code-simplifier subagents instead of doing work directly.
 
-**Expected Duration**: 1 hour
+### Stage 2 Implementation (READY TO LAUNCH)
 
-### After Sage Completes
+**Archie's Task** (`planning/orchestration/archie/TASK.md`):
+- Always register services (remove conditional registration)
+- Add graceful degradation with clear error messages
+- Files: `src/main.ts`, `src/core/agent/taskQueue.ts`
 
-**Chief of Staff Actions**:
-1. Read `planning/orchestration/sage/REPORT.md`
-2. Verify commit: `git log --oneline -3`
-3. Run build: `bun run typecheck && bun run build`
-4. Review debug utility implementation
-5. Assign Stage 2 tasks to Archie + Faye (implementation fixes)
+**Faye's Task** (`planning/orchestration/faye/TASK.md`):
+- Make useService hook reactive (useState + useEffect)
+- Subscribe to `services:initialized` event
+- File: `src/ui/sidebar/context/KernelContext.tsx`
 
-### Stage 2 Implementation Tasks (DRAFT)
+**Both can run in parallel** - fixes are independent.
 
-Based on findings, need to implement:
+### Launch Commands
 
-**Archie**:
-- Add explicit logging for skipped service registration
-- Improve error messages when LM Studio unavailable
-- Consider always-register pattern for graceful degradation
+```bash
+# Terminal 1 - Archie (backend fix)
+claude "Read and execute planning/orchestration/archie/TASK.md"
 
-**Faye**:
-- Make useService hook reactive (subscribe to services:initialized)
-- Force component re-render when services become available
-- OR get services inside callbacks (simpler workaround)
+# Terminal 2 - Faye (frontend fix)
+claude "Read and execute planning/orchestration/faye/TASK.md"
+```
 
-**Estimated Effort**: 2-3 hours combined
+**Expected Duration**: 1-2 hours each
 
 ---
 
@@ -550,22 +543,22 @@ When you return to orchestrate:
    git log --oneline -5
    ```
 
-2. **Read reports**:
+2. **Read reports** (check which are updated):
    - Archie: `planning/orchestration/archie/REPORT.md`
    - Faye: `planning/orchestration/faye/REPORT.md`
-   - Sage: `planning/orchestration/sage/REPORT.md` (if complete)
+   - Sage: `planning/orchestration/sage/REPORT.md`
 
-3. **Determine next action**:
-   - If Sage REPORT.md exists → Proceed to Stage 2 (assign Archie + Faye)
-   - If Sage REPORT.md missing → Launch Sage (Stage 1.5)
+3. **Determine next action** based on Session State table above
 
-4. **Launch next engineer**:
+4. **Launch engineers**:
    ```bash
-   # If Sage needed:
-   claude "Read and execute planning/orchestration/sage/TASK.md"
-
-   # If Stage 2 ready:
-   # Update Archie/Faye TASK.md files first, then launch
+   # Stage 2 (current):
+   claude "Read and execute planning/orchestration/archie/TASK.md"
+   claude "Read and execute planning/orchestration/faye/TASK.md"
    ```
 
 5. **Track progress**: Update this ORCHESTRATOR.md after each stage completes
+
+## Source of Truth
+
+**ALPHA-SPEC.md** (`planning/ALPHA-SPEC.md`) is the source of truth for all UI/UX decisions. All engineer work serves that vision. The user interview and spec define what we're building - engineers implement it.
