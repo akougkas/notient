@@ -110,8 +110,7 @@ const CHUNKER_VERSION = "tsi-v2";
  */
 export class ChunkStore {
   private chunks: Map<string, StoredChunk> = new Map();
-  private noteChunks: Map<string, Set<string>> = new Map(); // noteId -> chunkIds
-  private dirty: Set<string> = new Set(); // noteIds with unsaved changes
+  private noteChunks: Map<string, Set<string>> = new Map();
 
   constructor(private storagePaths: StoragePaths) {}
 
@@ -169,7 +168,6 @@ export class ChunkStore {
       chunkIds.add(chunk.chunkId);
     }
     this.noteChunks.set(noteId, chunkIds);
-    this.dirty.delete(noteId);
   }
 
   /**
@@ -272,7 +270,6 @@ export class ChunkStore {
   clear(): void {
     this.chunks.clear();
     this.noteChunks.clear();
-    this.dirty.clear();
   }
 }
 

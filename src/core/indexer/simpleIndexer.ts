@@ -391,8 +391,6 @@ export class SimpleIndexer {
     const metadata = this.kernel.obsidian.getMetadataByPath(notePath);
     const chunkSize = this.kernel.settings.indexing.chunkSize;
     const chunks = chunkNoteTiered(notePath, content, mtimeMs, metadata, {
-      // Use the existing "chunkSize" slider as a base signal.
-      // Tier 2 is slightly smaller; Tier 1 + note sketch are larger.
       blockMaxChars: Math.min(2400, Math.max(600, Math.round(chunkSize * 0.8))),
       sectionMaxChars: Math.min(6000, Math.max(1200, Math.round(chunkSize * 1.6))),
       noteSketchMaxChars: Math.min(8000, Math.max(2000, Math.round(chunkSize * 2.2))),
@@ -403,35 +401,20 @@ export class SimpleIndexer {
     this.updateProgress({ phase: "embedding" });
     const embeddedChunks = await this.embedChunks(chunks);
 
-    // Remove existing chunks for this note
     const noteId = generateNoteId(notePath);
     const contentHash = generateContentHash(content);
 
-    // Phase 2: Use separated storage if enabled
+    // Store chunks and embeddings
+    this.updateProgress({ phase: "storing" });
     if (this.indexManager.isUsingNewStructure()) {
-      // Remove using separated method
       await this.indexManager.removeNoteSeparated(notePath, noteId);
-
-      // Store using separated method (chunks + embeddings)
-      this.updateProgress({ phase: "storing" });
       const embeddings = embeddedChunks.map((c) => ({
         chunkId: c.chunkId,
         embedding: c.embedding,
       }));
-      await this.indexManager.indexNoteSeparated(
-        noteId,
-        notePath,
-        mtimeMs,
-        contentHash,
-        chunks,
-        embeddings,
-      );
+      await this.indexManager.indexNoteSeparated(noteId, notePath, mtimeMs, contentHash, chunks, embeddings);
     } else {
-      // Legacy: single-file storage
       await this.indexManager.removeNote(notePath, noteId);
-
-      // Store new chunks
-      this.updateProgress({ phase: "storing" });
       await this.indexManager.addChunks(embeddedChunks);
     }
 

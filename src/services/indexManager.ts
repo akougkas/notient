@@ -1089,45 +1089,22 @@ export class IndexManager {
       return;
     }
 
-    // 1. Save chunks (model-agnostic)
-    const storedChunks = chunks.map((chunk) => this.toStoredChunk(chunk));
+    // 1. Save chunks (model-agnostic) - strip runtime fields
+    const storedChunks: StoredChunk[] = chunks.map(
+      ({ mtimeMs: _m, contentHash: _c, ...rest }) => rest,
+    );
     await this.chunkStore.saveNoteChunks(noteId, notePath, mtimeMs, contentHash, storedChunks);
 
-    // 2. Save embeddings (model-specific) - still goes through vectorStore
-    const embeddedChunks: EmbeddedChunk[] = chunks.map((chunk) => {
-      const embeddingData = embeddings.find((e) => e.chunkId === chunk.chunkId);
-      return {
-        ...chunk,
-        embedding: embeddingData?.embedding ?? [],
-        modelKey: this.modelKey,
-      };
-    });
+    // 2. Save embeddings (model-specific) - build map for O(1) lookup
+    const embeddingMap = new Map(embeddings.map((e) => [e.chunkId, e.embedding]));
+    const embeddedChunks: EmbeddedChunk[] = chunks.map((chunk) => ({
+      ...chunk,
+      embedding: embeddingMap.get(chunk.chunkId) ?? [],
+      modelKey: this.modelKey,
+    }));
 
     await this.vectorStore.upsertChunks(embeddedChunks);
     this.scheduleSave();
-  }
-
-  /** Convert NoteChunk to StoredChunk (strips embedding-related fields) */
-  private toStoredChunk(chunk: NoteChunk): StoredChunk {
-    return {
-      chunkId: chunk.chunkId,
-      noteId: chunk.noteId,
-      path: chunk.path,
-      title: chunk.title,
-      tier: chunk.tier,
-      kind: chunk.kind,
-      parentChunkId: chunk.parentChunkId,
-      headingPath: chunk.headingPath,
-      text: chunk.text,
-      blockRef: chunk.blockRef,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      tokenEstimate: chunk.tokenEstimate,
-      importance: chunk.importance,
-      chunkIndex: chunk.chunkIndex,
-      tags: chunk.tags,
-      frontmatter: chunk.frontmatter,
-    };
   }
 
   /**
@@ -1242,45 +1219,43 @@ export class IndexManager {
 
       // 3. Group chunks by noteId
       const noteChunksMap = new Map<string, StoredChunk[]>();
-      const noteMetaMap = new Map<
-        string,
-        { path: string; mtimeMs: number; contentHash: string }
-      >();
+      const noteMetaMap = new Map<string, { path: string; mtimeMs: number; contentHash: string }>();
 
       for (const doc of legacy.docs) {
+        // Extract fields for StoredChunk (exclude embedding, mtimeMs, contentHash)
+        const {
+          embedding: _e,
+          mtimeMs: docMtime,
+          contentHash: docHash,
+          tokenEstimate,
+          tags,
+          frontmatter,
+          tier,
+          kind,
+          ...rest
+        } = doc;
+
+        const storedChunk: StoredChunk = {
+          ...rest,
+          tier: tier as StoredChunk["tier"],
+          kind: kind as StoredChunk["kind"],
+          tokenEstimate: tokenEstimate ?? 0,
+          tags: tags ?? [],
+          frontmatter: frontmatter ?? {},
+        };
+
         if (!noteChunksMap.has(doc.noteId)) {
           noteChunksMap.set(doc.noteId, []);
         }
-
-        const storedChunk: StoredChunk = {
-          chunkId: doc.chunkId,
-          noteId: doc.noteId,
-          path: doc.path,
-          title: doc.title,
-          tier: doc.tier as StoredChunk["tier"],
-          kind: doc.kind as StoredChunk["kind"],
-          parentChunkId: doc.parentChunkId,
-          headingPath: doc.headingPath,
-          text: doc.text,
-          blockRef: doc.blockRef,
-          startLine: doc.startLine,
-          endLine: doc.endLine,
-          tokenEstimate: doc.tokenEstimate ?? 0,
-          importance: doc.importance,
-          chunkIndex: doc.chunkIndex,
-          tags: doc.tags ?? [],
-          frontmatter: doc.frontmatter ?? {},
-        };
-
         noteChunksMap.get(doc.noteId)!.push(storedChunk);
 
-        // Track note metadata
+        // Track note metadata (first chunk wins)
         if (!noteMetaMap.has(doc.noteId)) {
           const noteState = legacy.meta.state?.notes?.[doc.path];
           noteMetaMap.set(doc.noteId, {
             path: doc.path,
-            mtimeMs: noteState?.mtimeMs ?? doc.mtimeMs ?? Date.now(),
-            contentHash: noteState?.contentHash ?? doc.contentHash ?? "",
+            mtimeMs: noteState?.mtimeMs ?? docMtime ?? Date.now(),
+            contentHash: noteState?.contentHash ?? docHash ?? "",
           });
         }
       }
