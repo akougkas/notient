@@ -1,65 +1,145 @@
-/* Omnibar */
+/* =============================================================================
+   OMNIBAR - Search & Command Input
+   
+   Unified input for search and slash commands.
+   Uses nv2-* prefix for consistency with design system.
+   ============================================================================= */
+
+/* =============================================================================
+   Container
+   ============================================================================= */
 
 .nv2-omnibar {
   position: relative;
   margin: var(--nv2-space-md) 0;
+  z-index: 100;
 }
+
+/* =============================================================================
+   Input Wrapper
+   ============================================================================= */
 
 .nv2-omnibar-wrapper {
   display: flex;
   align-items: center;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--nv2-radius-md);
-  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  border-radius: var(--nv2-radius-lg);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nv2-omnibar-wrapper:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: color-mix(in srgb, var(--background-secondary) 90%, var(--background-primary));
 }
 
 .nv2-omnibar--focused .nv2-omnibar-wrapper {
   border-color: var(--interactive-accent);
+  background: var(--background-primary);
+  box-shadow: 
+    0 0 0 3px color-mix(in srgb, var(--interactive-accent) 15%, transparent),
+    0 4px 12px -2px rgba(0, 0, 0, 0.15);
 }
 
-.nv2-omnibar-icon {
-  color: var(--text-muted);
-  margin-right: var(--nv2-space-xs);
+/* Command mode styling */
+.nv2-omnibar--command .nv2-omnibar-wrapper {
+  border-color: var(--color-purple);
 }
+
+.nv2-omnibar--command.nv2-omnibar--focused .nv2-omnibar-wrapper {
+  border-color: var(--color-purple);
+  box-shadow: 
+    0 0 0 3px color-mix(in srgb, var(--color-purple) 15%, transparent),
+    0 4px 12px -2px rgba(0, 0, 0, 0.15);
+}
+
+/* =============================================================================
+   Search Icon
+   ============================================================================= */
+
+.nv2-omnibar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+
+.nv2-omnibar--focused .nv2-omnibar-icon {
+  color: var(--interactive-accent);
+}
+
+.nv2-omnibar--command .nv2-omnibar-icon {
+  color: var(--color-purple);
+}
+
+.nv2-omnibar-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* =============================================================================
+   Input Field
+   ============================================================================= */
 
 .nv2-omnibar-input {
   flex: 1;
-  border: none;
-  background: none;
+  min-width: 0;
   padding: var(--nv2-space-xs) 0;
+  background: transparent;
+  border: none;
   color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-family: var(--font-interface);
+  outline: none;
+}
+
+.nv2-omnibar-input::placeholder {
+  color: var(--text-faint);
 }
 
 .nv2-omnibar-input:focus {
   outline: none;
 }
-.nv2-omnibar-input::placeholder {
-  color: var(--text-muted);
-}
+
+/* =============================================================================
+   Right Controls
+   ============================================================================= */
 
 .nv2-omnibar-right {
   display: flex;
+  align-items: center;
   gap: var(--nv2-space-xs);
+  flex-shrink: 0;
 }
 
+/* Mode Pill Button */
 .nv2-mode-pill {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-s);
-  font-size: var(--font-smallest);
-  background: var(--background-modifier-hover);
-  border: none;
+  gap: 6px;
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+  border-radius: var(--nv2-radius-full);
+  color: var(--interactive-accent);
+  font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
-  color: var(--text-muted);
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .nv2-mode-pill:hover {
   background: color-mix(in srgb, var(--interactive-accent) 20%, transparent);
-  color: var(--interactive-accent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 40%, transparent);
+  transform: scale(1.02);
 }
 
 .nv2-mode-pill-icon {
@@ -74,257 +154,170 @@
 }
 
 .nv2-mode-pill-label {
-  font-weight: 500;
+  line-height: 1;
 }
 
+/* Keyboard Hint */
 .nv2-omnibar-kbd {
-  font-size: 10px;
+  padding: 2px 6px;
   font-family: var(--font-monospace);
-  color: var(--text-muted);
-  padding: 2px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
   background: var(--background-modifier-hover);
   border-radius: 4px;
+  line-height: 1.2;
 }
 
-/* Results */
-.nv2-omnibar-results {
+/* Spinner */
+.nv2-omnibar-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: nv2-omnibar-spin 0.6s linear infinite;
+}
+
+@keyframes nv2-omnibar-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* =============================================================================
+   Command Dropdown
+   ============================================================================= */
+
+.nv2-omnibar-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   left: 0;
   right: 0;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  box-shadow: var(--shadow-l);
+  border-radius: var(--nv2-radius-lg);
+  box-shadow: 
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 10px 20px -2px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
   max-height: 400px;
-  overflow: hidden;
-  z-index: 1000;
-}
-
-.nv2-omnibar-results.nv2-hidden {
-  display: none;
-}
-
-.nv2-results-meta {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--nv2-space-xs) var(--nv2-space-sm);
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.nv2-result-item {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--nv2-space-sm);
-  cursor: pointer;
-  border-left: 2px solid transparent;
-}
-
-.nv2-result-item:hover,
-.nv2-result-item--selected {
-  background: var(--background-modifier-hover);
-  border-left-color: var(--interactive-accent);
-}
-
-.nv2-result-main {
-  flex: 1;
-  min-width: 0;
-}
-.nv2-result-top {
-  display: flex;
-  align-items: center;
-  gap: var(--nv2-space-xs);
-}
-.nv2-result-title {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.nv2-result-para {
-  font-size: var(--font-smallest);
-  padding: 1px 4px;
-  background: var(--background-modifier-hover);
-  border-radius: var(--radius-s);
-}
-.nv2-result-context {
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-}
-.nv2-result-snippet {
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-  margin-top: var(--nv2-space-xs);
-  padding: var(--nv2-space-xs);
-  background: var(--background-modifier-hover);
-  border-radius: var(--radius-s);
-}
-.nv2-result-scores {
-  margin-left: var(--nv2-space-sm);
-}
-.nv2-score-sim {
-  font-family: var(--font-monospace);
-  font-size: var(--font-smallest);
-  color: var(--interactive-accent);
-}
-
-/* Hints */
-.nv2-hints-panel {
-  max-height: 300px;
   overflow-y: auto;
-}
-.nv2-hint-header {
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-  padding: var(--nv2-space-sm);
-  background: var(--background-modifier-hover);
-}
-.nv2-hint-item {
-  display: flex;
-  gap: var(--nv2-space-sm);
-  padding: var(--nv2-space-sm);
-  cursor: pointer;
-  border-left: 2px solid transparent;
-}
-.nv2-hint-item:hover {
-  background: var(--background-modifier-hover);
-  border-left-color: var(--interactive-accent);
-}
-.nv2-hint-key {
-  font-family: var(--font-monospace);
-  color: var(--interactive-accent);
-  min-width: 80px;
-}
-.nv2-hint-desc {
-  color: var(--text-normal);
-}
-.nv2-hint-example {
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-  margin-left: auto;
+  animation: nv2-dropdown-appear 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Loading */
-.nv2-loading-container,
-.nv2-omnibar-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--nv2-space-sm);
-  padding: var(--nv2-space-lg);
-  color: var(--text-muted);
-}
-.nv2-loading-spinner,
-.nv2-omnibar-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--background-modifier-border);
-  border-top-color: var(--interactive-accent);
-  border-radius: 50%;
-  animation: nv2-spin 0.6s linear infinite;
-}
-
-/* Note: @keyframes nv2-spin is defined in base.css */
-
-.nv2-empty-text,
-.nv2-empty-state-text,
-.nv2-omnibar-empty-text {
-  font-size: var(--font-smaller);
+@keyframes nv2-dropdown-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* =============================================================================
-   Search Results View (inline in sidebar)
+   Command Items
    ============================================================================= */
 
-.nv2-search-results {
-  padding: var(--nv2-space-sm);
-}
-
-.nv2-search-results-header {
+.nv2-command-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: var(--nv2-space-sm);
-}
-
-.nv2-search-results-title {
-  font-size: var(--font-smaller);
-  font-weight: 500;
-  color: var(--text-muted);
-}
-
-.nv2-search-results-clear {
-  font-size: var(--font-smallest);
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-s);
-}
-
-.nv2-search-results-clear:hover {
-  background: var(--background-modifier-hover);
-  color: var(--text-normal);
-}
-
-.nv2-search-no-results {
-  font-size: var(--font-smaller);
-  color: var(--text-muted);
-  text-align: center;
-  padding: var(--nv2-space-lg);
-}
-
-.nv2-search-results-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--nv2-space-xs);
-}
-
-.nv2-search-result-item {
-  display: block;
+  gap: var(--nv2-space-sm);
   width: 100%;
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
   text-align: left;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  padding: var(--nv2-space-sm);
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: all 0.1s ease;
 }
 
-.nv2-search-result-item:hover {
-  border-color: var(--interactive-accent);
+.nv2-command-item:hover,
+.nv2-command-item--selected {
+  background: var(--background-secondary);
+  border-left-color: var(--color-purple);
 }
 
-.nv2-search-result-title {
+.nv2-command-item--selected {
+  background: color-mix(in srgb, var(--color-purple) 8%, var(--background-secondary));
+}
+
+/* Bulk commands get different styling */
+.nv2-command-item--bulk {
+  opacity: 0.85;
+}
+
+.nv2-command-item--bulk:hover,
+.nv2-command-item--bulk.nv2-command-item--selected {
+  border-left-color: var(--color-orange);
+}
+
+/* Command Icon */
+.nv2-command-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: color-mix(in srgb, var(--color-purple) 15%, transparent);
+  border-radius: var(--nv2-radius-md);
+  color: var(--color-purple);
+  flex-shrink: 0;
+}
+
+.nv2-command-item--bulk .nv2-command-icon {
+  background: color-mix(in srgb, var(--color-orange) 15%, transparent);
+  color: var(--color-orange);
+}
+
+.nv2-command-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Command Content */
+.nv2-command-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-command-label {
   font-weight: 500;
   color: var(--text-normal);
-  margin-bottom: var(--nv2-space-xs);
+  display: block;
 }
 
-.nv2-search-result-snippet {
-  font-size: var(--font-smallest);
+.nv2-command-desc {
+  display: block;
+  font-size: 11px;
   color: var(--text-muted);
-  line-height: 1.4;
+  margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
 }
 
-.nv2-search-result-meta {
-  display: flex;
-  gap: var(--nv2-space-xs);
-  margin-top: var(--nv2-space-xs);
+/* Command Shortcut */
+.nv2-command-shortcut {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--background-modifier-hover);
+  padding: 2px 8px;
+  border-radius: var(--nv2-radius-sm);
+  flex-shrink: 0;
 }
 
-.nv2-search-result-score {
-  font-size: 10px;
-  color: var(--interactive-accent);
-  background: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-  padding: 1px 4px;
-  border-radius: var(--radius-s);
+/* =============================================================================
+   Reduced Motion
+   ============================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .nv2-omnibar-dropdown {
+    animation: none;
+  }
+  
+  .nv2-omnibar-spinner {
+    animation-duration: 1.5s;
+  }
 }

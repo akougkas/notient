@@ -125,7 +125,14 @@ export interface SearchStartedEvent {
 }
 
 /** Search progress stages */
-export type SearchStage = "embedding" | "vector-search" | "reranking" | "aggregating";
+export type SearchStage =
+  | "native"
+  | "embedding"
+  | "vector-search"
+  | "reranking"
+  | "expanding"
+  | "graph"
+  | "aggregating";
 
 export interface SearchProgressEvent {
   query: string;
@@ -141,6 +148,8 @@ export interface SearchCompleteEvent {
   cached: boolean;
   /** Whether LLM reranking was applied */
   reranked?: boolean;
+  /** Which search strategy was used */
+  strategy?: "quick" | "balanced" | "thorough";
 }
 
 export interface SearchErrorEvent {

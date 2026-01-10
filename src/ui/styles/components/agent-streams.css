@@ -6,6 +6,95 @@
   gap: var(--nv2-space-lg);
 }
 
+/* =============================================================================
+   Capability Cards (Search, Context, Chat)
+   ============================================================================= */
+
+.nv2-capability-section {
+  padding-bottom: var(--nv2-space-md);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.nv2-capability-cards {
+  display: flex;
+  gap: var(--nv2-space-sm);
+}
+
+.nv2-capability-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nv2-radius-md);
+  transition: all 0.15s ease;
+}
+
+.nv2-capability-card:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Active state - pulsing border */
+.nv2-capability-card--active {
+  border-color: var(--interactive-accent);
+  animation: nv2-capability-pulse 2s ease-in-out infinite;
+}
+
+@keyframes nv2-capability-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }
+}
+
+.nv2-capability-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.nv2-capability-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.nv2-capability-label {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+/* Status dot */
+.nv2-capability-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nv2-capability-dot--healthy {
+  background: var(--color-green);
+  box-shadow: 0 0 4px var(--color-green);
+}
+
+.nv2-capability-dot--degraded {
+  background: var(--color-orange);
+  box-shadow: 0 0 4px var(--color-orange);
+}
+
+.nv2-capability-dot--offline {
+  background: var(--color-red);
+  box-shadow: 0 0 4px var(--color-red);
+}
+
+/* =============================================================================
+   Section Styling
+   ============================================================================= */
+
 .nv2-agent-section {
   /* Section wrapper */
 }

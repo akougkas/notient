@@ -1,34 +1,43 @@
 /**
- * Semantic Search Pipeline
+ * Search Pipeline
  *
- * Provides fast semantic search with LLM reranking and caching.
- * Architecture: Vector search (fast) → LLM reranking (smart)
+ * Orchestrates search strategies based on user preferences.
+ * Implements the Strategy pattern for flexible search modes:
+ * - Quick: Native Obsidian search (<100ms, no AI)
+ * - Balanced: Vector search + LLM reranking (<2s)
+ * - Deep/Thorough: Agentic search with expansion (<10s)
+ *
+ * Features:
+ * - Automatic fallback chain (Deep → Balanced → Quick)
+ * - Result caching with LRU eviction
+ * - Progress events for UI updates
  */
 
-import type { LMStudioService } from "../../services/lmstudio";
 import type { OllamaService } from "../../services/ollama";
 import type { VectorStore } from "../../services/vectorStore";
 import type {
-  ChunkSearchResult,
   RelatedNote,
   SearchOptions,
   SearchResult,
+  ChunkSearchResult,
 } from "../../types/search";
-import { SEARCH_PRESETS } from "../../types/settings";
+import { SEARCH_PRESETS, type SearchPreset } from "../../types/settings";
 import { CACHE_CONFIG } from "../constants";
 import type { EventBus } from "../events/eventBus";
 import type { Kernel } from "../kernel";
-import type { LLMProvider } from "../llm/provider";
-import type { RankedResult, RerankCandidate } from "../llm/types";
-
-type Reranker = {
-  rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
-};
+import {
+  BalancedSearchStrategy,
+  DeepSearchStrategy,
+  QuickSearchStrategy,
+  type SearchStrategy,
+  type StrategyContext,
+  type StrategySearchOptions,
+} from "./strategies";
 
 interface CacheEntry {
   results: SearchResult[];
   timestamp: number;
-  queryEmbedding: number[];
+  preset: SearchPreset;
 }
 
 /** Extended search options with reranking control */
@@ -37,43 +46,56 @@ export interface ExtendedSearchOptions extends SearchOptions {
 }
 
 /**
- * Semantic search pipeline with LLM reranking and caching
+ * Search pipeline with strategy-based execution
  */
 export class SearchPipeline {
   private queryCache: Map<string, CacheEntry> = new Map();
-  private embeddingCache: Map<string, number[]> = new Map();
   private disposed = false;
   private abortController: AbortController | null = null;
+
+  /** Search strategies by mode */
+  private strategies: Map<SearchPreset, SearchStrategy> = new Map();
+  private strategyContext: StrategyContext;
 
   constructor(
     private kernel: Kernel,
     private eventBus: EventBus,
     private ollamaService: OllamaService,
     private vectorStore: VectorStore,
-  ) {}
+  ) {
+    // Create strategy context
+    this.strategyContext = {
+      kernel,
+      eventBus,
+      ollamaService,
+      vectorStore,
+    };
+
+    // Initialize strategies
+    this.initializeStrategies();
+  }
 
   /**
-   * Get reranker (prefer new LLMProvider; fall back to legacy LMStudioService)
+   * Initialize search strategies
    */
-  private getReranker(): Reranker | null {
-    const provider = this.kernel.getService<LLMProvider>("llmProvider");
-    if (provider?.isReady) return provider;
+  private initializeStrategies(): void {
+    this.strategies.set("quick", new QuickSearchStrategy(this.strategyContext));
+    this.strategies.set("balanced", new BalancedSearchStrategy(this.strategyContext));
+    this.strategies.set("thorough", new DeepSearchStrategy(this.strategyContext));
 
-    const legacy = this.kernel.getService<LMStudioService>("lmstudio");
-    if (legacy?.isReady()) return legacy;
-
-    return null;
+    console.log("[SearchPipeline] Strategies initialized: quick, balanced, thorough");
   }
 
   /**
    * Initialize the pipeline
    */
   async initialize(): Promise<void> {
-    // Nothing to initialize currently
+    // Strategies are initialized in constructor
+    console.log("[SearchPipeline] Ready");
   }
 
   /**
-   * Perform a semantic search with optional LLM reranking
+   * Perform a search using the configured strategy
    */
   async search(
     query: string,
@@ -81,255 +103,160 @@ export class SearchPipeline {
   ): Promise<SearchResult[]> {
     if (this.disposed) return [];
 
-    // Create abort controller for this search operation
+    // Create abort controller for this search
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
-    // Resolve effective settings from presets vs custom
+    // Get current preset and settings
     const searchSettings = this.kernel.settings.search;
-    let defaults = searchSettings.custom;
-    if (searchSettings.preset !== "custom") {
-      defaults = SEARCH_PRESETS[searchSettings.preset];
-    }
+    // Map "custom" preset to "balanced" behavior
+    const rawPreset = searchSettings.preset;
+    const preset: "quick" | "balanced" | "thorough" =
+      rawPreset === "custom" ? "balanced" : rawPreset;
+
+    // Get defaults from preset
+    const defaults = preset in SEARCH_PRESETS
+      ? SEARCH_PRESETS[preset as keyof typeof SEARCH_PRESETS]
+      : searchSettings.custom;
 
     const enableReranking = options.enableReranking ?? defaults.enableReranking;
-    const requestedTopK = options.topK ?? defaults.topK;
+    const topK = options.topK ?? defaults.topK;
     const minScore = options.minScore ?? defaults.minScore;
 
     console.log(
-      `[SearchPipeline] Search: preset=${searchSettings.preset}, rerank=${enableReranking}, topK=${requestedTopK}`,
+      `[SearchPipeline] Search: query="${query.slice(0, 50)}", preset=${preset}, rerank=${enableReranking}, topK=${topK}`,
     );
-
-    const baseFilters = {
-      minScore,
-      includeContent: options.includeContent ?? true,
-      paraType: options.paraType,
-      folderPaths: options.folderPaths,
-      tags: options.tags,
-      queryText: query,
-    } satisfies Omit<SearchOptions, "topK">;
 
     const startTime = Date.now();
-    const cacheKey = this.getCacheKey(
-      query,
-      { ...baseFilters, topK: requestedTopK },
-      enableReranking,
-    );
 
-    this.eventBus.emit("search:started", { query });
-
-    // Check cache first (LRU: update timestamp on access)
+    // Check cache
+    const cacheKey = this.getCacheKey(query, topK, minScore, preset);
     const cached = this.queryCache.get(cacheKey);
+
     if (cached && Date.now() - cached.timestamp < CACHE_CONFIG.SEARCH_CACHE_TTL_MS) {
-      // LRU: Update timestamp on cache hit to mark as recently used
+      // LRU: Update timestamp on cache hit
       cached.timestamp = Date.now();
+
       this.eventBus.emit("search:complete", {
         query,
         results: cached.results,
         durationMs: Date.now() - startTime,
         cached: true,
       });
+
+      console.log(`[SearchPipeline] Cache hit for "${query}" (${cached.results.length} results)`);
       return cached.results;
     }
 
+    // Emit search started
+    this.eventBus.emit("search:started", { query });
+
     try {
-      // Phase 1: Query embedding (cached)
-      this.eventBus.emit("search:progress", { query, stage: "embedding" });
-      const queryEmbedding = await this.getQueryEmbedding(query);
-      if (signal.aborted) return [];
+      // Get strategy for preset
+      const strategy = this.strategies.get(preset) ?? this.strategies.get("balanced")!;
 
-      // Phase 2: Hierarchical retrieval (TSI v2)
-      this.eventBus.emit("search:progress", { query, stage: "vector-search" });
-      // Stage 1: candidate notes (tier=note)
-      const noteCandidateK = enableReranking ? 80 : Math.max(40, requestedTopK * 4);
-      const noteCandidates = await this.vectorStore.search(queryEmbedding, {
-        ...baseFilters,
-        topK: noteCandidateK,
-        includeContent: false,
-        tier: "note",
-      });
+      // Build strategy options
+      const strategyOptions: StrategySearchOptions = {
+        topK,
+        minScore,
+        paraType: options.paraType,
+        folderPaths: options.folderPaths,
+        tags: options.tags,
+        includeContent: options.includeContent ?? true,
+        signal,
+      };
 
-      const candidateNoteIds = Array.from(new Set(noteCandidates.map((c) => c.noteId)));
-
-      // Stage 2: candidate chunks within candidate notes (tier=block)
-      const chunkCandidateK = enableReranking ? 120 : Math.max(60, requestedTopK * 6);
-      const chunksPerNote = enableReranking ? 5 : 3;
-      let chunkCandidates = await this.vectorStore.search(queryEmbedding, {
-        ...baseFilters,
-        topK: chunkCandidateK,
-        includeContent: true,
-        tier: "block",
-        noteIds: candidateNoteIds.length ? candidateNoteIds : undefined,
-        maxPerNote: candidateNoteIds.length ? chunksPerNote : undefined,
-      });
-
-      // If the vault isn't reindexed yet (no tiered chunks), fall back to legacy behavior
-      if (candidateNoteIds.length === 0 || chunkCandidates.length === 0) {
-        chunkCandidates = await this.vectorStore.search(queryEmbedding, {
-          ...baseFilters,
-          topK: enableReranking ? 50 : requestedTopK,
-          includeContent: true,
-        });
-      }
-
-      if (signal.aborted) return [];
-
-      let results: SearchResult[];
-
-      // Phase 3: Chunk-level reranking (smart)
-      const reranker = this.getReranker();
-      if (enableReranking && reranker && chunkCandidates.length > 0) {
+      // Execute strategy with progress callback
+      const results = await strategy.search(query, strategyOptions, (progress) => {
         this.eventBus.emit("search:progress", {
           query,
-          stage: "reranking",
-          detail: `${chunkCandidates.length} chunks`,
+          stage: progress.stage,
+          detail: progress.detail,
         });
-        const rerankedChunks = await this.rerankChunksWithLLM(query, chunkCandidates, reranker);
-        this.eventBus.emit("search:progress", { query, stage: "aggregating" });
-        results = this.aggregateChunksToNotes(rerankedChunks, { maxChunksPerNote: 3 });
-      } else {
-        // No reranker: rank by vector similarity, but still aggregate by note
-        this.eventBus.emit("search:progress", { query, stage: "aggregating" });
-        results = this.aggregateChunksToNotes(chunkCandidates, { maxChunksPerNote: 3 });
-      }
+      });
 
-      // Limit to requested topK
-      results = results.slice(0, requestedTopK);
+      if (signal.aborted) return [];
 
       // Cache results
-      this.updateCache(cacheKey, results, queryEmbedding);
+      this.updateCache(cacheKey, results, preset);
 
+      // Emit completion
       this.eventBus.emit("search:complete", {
         query,
         results,
         durationMs: Date.now() - startTime,
         cached: false,
-        reranked: enableReranking && Boolean(reranker),
+        strategy: preset,
       });
 
       return results;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[SearchPipeline] Search failed:", message);
+
       this.eventBus.emit("search:error", {
         query,
         error: message,
         operation: "search",
       });
+
+      // Fallback chain: try simpler strategies on failure
+      if (preset === "thorough") {
+        console.log("[SearchPipeline] Deep search failed, falling back to balanced");
+        return this.searchWithFallback(query, "balanced", options);
+      } else if (preset === "balanced") {
+        console.log("[SearchPipeline] Balanced search failed, falling back to quick");
+        return this.searchWithFallback(query, "quick", options);
+      }
+
       return [];
     }
   }
 
   /**
-   * Rerank chunk candidates using LLM (chunk-level reranking)
-   *
-   * Strategy: Send top 25 chunks to reranker to avoid missing relevant content.
-   * The reranker returns scores and reasoning for these candidates, while
-   * remaining chunks keep their original vector scores with a small penalty.
+   * Fallback search with a different strategy
    */
-  private async rerankChunksWithLLM(
+  private async searchWithFallback(
     query: string,
-    chunks: ChunkSearchResult[],
-    reranker: Reranker,
-  ): Promise<ChunkSearchResult[]> {
-    // Increased from 10 to 25 to reduce ranking degradation
-    const RERANK_LIMIT = 25;
+    fallbackPreset: SearchPreset,
+    options: Partial<ExtendedSearchOptions>,
+  ): Promise<SearchResult[]> {
+    const strategy = this.strategies.get(fallbackPreset);
+    if (!strategy) return [];
+
+    const defaults = SEARCH_PRESETS[fallbackPreset as keyof typeof SEARCH_PRESETS] ?? {
+      topK: 10,
+      minScore: 0.3,
+    };
 
     try {
-      // NOTE: The reranker types are "noteId"-based. For chunk-level reranking, we
-      // encode chunkId into the noteId field and map it back afterwards.
-      const candidates: RerankCandidate[] = chunks.slice(0, RERANK_LIMIT).map((c) => ({
-        noteId: c.chunkId,
-        path: c.path,
-        title: c.headingPath.length ? `${c.title} — ${c.headingPath.join(" > ")}` : c.title,
-        text: this.truncateForRerank(c.text),
-        originalScore: c.score,
-      }));
-
-      const ranked = await reranker.rerank(query, candidates);
-
-      if (!ranked.length) return chunks;
-
-      const scores = new Map<string, { score: number; reasoning: string }>();
-      for (const r of ranked) {
-        scores.set(r.noteId, { score: r.score, reasoning: r.reasoning });
-      }
-
-      const rerankedChunks: ChunkSearchResult[] = [];
-      for (const c of chunks) {
-        const rr = scores.get(c.chunkId);
-        if (rr) {
-          rerankedChunks.push({ ...c, score: rr.score, reasoning: rr.reasoning });
-        } else {
-          // Chunks outside the rerank window keep their vector scores
-          // Apply a small penalty to ensure reranked results are prioritized
-          const penalizedScore = c.score * 0.85;
-          rerankedChunks.push({ ...c, score: penalizedScore, reasoning: "Vector similarity" });
-        }
-      }
-
-      rerankedChunks.sort((a, b) => b.score - a.score);
-      return rerankedChunks;
+      return await strategy.search(
+        query,
+        {
+          topK: options.topK ?? defaults.topK,
+          minScore: options.minScore ?? defaults.minScore,
+          paraType: options.paraType,
+          folderPaths: options.folderPaths,
+          tags: options.tags,
+          includeContent: options.includeContent ?? true,
+          signal: this.abortController?.signal,
+        },
+        (progress) => {
+          this.eventBus.emit("search:progress", {
+            query,
+            stage: progress.stage,
+            detail: `Fallback: ${progress.detail}`,
+          });
+        },
+      );
     } catch (error) {
-      console.warn("[SearchPipeline] LLM reranking failed, using vector scores:", error);
-      return chunks;
+      console.error(`[SearchPipeline] Fallback to ${fallbackPreset} also failed:`, error);
+      return [];
     }
-  }
-
-  private truncateForRerank(text: string): string {
-    const MAX = 1200;
-    if (text.length <= MAX) return text;
-    return `${text.slice(0, MAX).trimEnd()}…`;
   }
 
   /**
-   * Get file modification time by path
-   */
-  private getFileMtime(path: string): number {
-    const file = this.kernel.obsidian.getFileByPath(path);
-    return file?.stat.mtime ?? 0;
-  }
-
-  private aggregateChunksToNotes(
-    chunks: ChunkSearchResult[],
-    opts: { maxChunksPerNote: number },
-  ): SearchResult[] {
-    const noteMap: Map<string, SearchResult> = new Map();
-
-    for (const chunk of chunks) {
-      const existing = noteMap.get(chunk.noteId);
-      if (existing) {
-        existing.chunks.push(chunk);
-        if (chunk.score > existing.bestScore) {
-          existing.bestScore = chunk.score;
-          existing.reasoning = chunk.reasoning;
-        }
-      } else {
-        noteMap.set(chunk.noteId, {
-          noteId: chunk.noteId,
-          path: chunk.path,
-          title: chunk.title,
-          bestScore: chunk.score,
-          paraType: chunk.paraType,
-          chunks: [chunk],
-          mtimeMs: this.getFileMtime(chunk.path),
-          reasoning: chunk.reasoning,
-        });
-      }
-    }
-
-    const results = Array.from(noteMap.values());
-    for (const r of results) {
-      r.chunks.sort((a, b) => b.score - a.score);
-      r.chunks = r.chunks.slice(0, Math.max(1, opts.maxChunksPerNote));
-    }
-
-    results.sort((a, b) => b.bestScore - a.bestScore);
-    return results;
-  }
-
-  /**
-   * Find notes related to a given note
+   * Find notes related to a given note (uses balanced strategy internals)
    */
   async findRelated(
     path: string,
@@ -337,7 +264,6 @@ export class SearchPipeline {
   ): Promise<RelatedNote[]> {
     if (this.disposed) return [];
 
-    // Create abort controller for this operation
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
@@ -345,27 +271,35 @@ export class SearchPipeline {
     const minScore = options.minScore ?? 0.4;
 
     try {
-      // Get the note's content and metadata
+      // Get note content for query
       const content = await this.kernel.obsidian.readFileByPath(path);
       if (!content) return [];
 
       const metadata = this.kernel.obsidian.getMetadataByPath(path);
       const noteTags = metadata?.tags ?? [];
 
-      // Use the note content as the query (or a summary)
-      const queryText = content.slice(0, 1000); // First 1000 chars as representative
-      const queryEmbedding = await this.getQueryEmbedding(queryText);
+      // Use first 1000 chars as query
+      const queryText = content.slice(0, 1000);
+
+      // Check if embeddings available
+      if (!this.ollamaService.isReady()) {
+        console.warn("[SearchPipeline] findRelated: Embeddings unavailable");
+        return [];
+      }
+
+      // Get embedding
+      const { embedding: queryEmbedding } = await this.ollamaService.embed(queryText);
       if (signal.aborted) return [];
 
-      // Search for similar notes (tier=note) when available
+      // Search vector store
       const chunkResults = await this.vectorStore.search(queryEmbedding, {
-        topK: topK * 3, // Get more to filter out self
+        topK: topK * 3,
         minScore,
         includeContent: false,
         tier: "note",
       });
 
-      // Filter out the source note and group by note
+      // Filter and aggregate
       const noteScores: Map<
         string,
         { path: string; title: string; scores: number[]; paraType: ChunkSearchResult["paraType"] }
@@ -387,14 +321,13 @@ export class SearchPipeline {
         }
       }
 
-      // Calculate aggregate scores and convert to RelatedNote
+      // Build results
       const relatedNotes: RelatedNote[] = [];
 
       for (const [, data] of noteScores) {
-        // Average score across chunks
         const avgScore = data.scores.reduce((a, b) => a + b, 0) / data.scores.length;
 
-        // Get metadata for shared tags
+        // Get shared tags
         const relatedMeta = this.kernel.obsidian.getMetadataByPath(data.path);
         const relatedTags = relatedMeta?.tags ?? [];
         const sharedTags = noteTags.filter((t) => relatedTags.includes(t));
@@ -413,7 +346,6 @@ export class SearchPipeline {
         });
       }
 
-      // Sort by score and limit
       relatedNotes.sort((a, b) => b.score - a.score);
       return relatedNotes.slice(0, topK);
     } catch (error) {
@@ -429,70 +361,50 @@ export class SearchPipeline {
   }
 
   /**
-   * Get embedding for a query (with caching)
+   * Generate cache key
    */
-  private async getQueryEmbedding(query: string): Promise<number[]> {
-    const cached = this.embeddingCache.get(query);
-    if (cached) return cached;
-
-    const { embedding } = await this.ollamaService.embed(query);
-
-    // LRU cache management
-    if (this.embeddingCache.size >= CACHE_CONFIG.MAX_QUERY_CACHE_SIZE) {
-      const firstKey = this.embeddingCache.keys().next().value;
-      if (firstKey) this.embeddingCache.delete(firstKey);
-    }
-
-    this.embeddingCache.set(query, embedding);
-    return embedding;
-  }
-
-  /**
-   * Generate cache key for query + options.
-   * Includes all options that affect results, including reranking flag.
-   */
-  private getCacheKey(query: string, options: SearchOptions, enableReranking = false): string {
+  private getCacheKey(
+    query: string,
+    topK: number,
+    minScore: number,
+    preset: SearchPreset,
+  ): string {
     return JSON.stringify({
       query: query.toLowerCase().trim(),
-      topK: options.topK,
-      minScore: options.minScore,
-      paraType: options.paraType,
-      // Create copies before sorting to avoid mutating caller's arrays
-      folderPaths: options.folderPaths?.slice().sort(),
-      tags: options.tags?.slice().sort(),
-      // Include reranking flag to avoid cache key collisions
-      enableReranking,
+      topK,
+      minScore,
+      preset,
     });
   }
 
   /**
-   * Update result cache with LRU eviction.
-   * LRU: evict least recently USED (not inserted) when capacity is reached.
+   * Update cache with LRU eviction
    */
-  private updateCache(key: string, results: SearchResult[], embedding: number[]): void {
-    // LRU: If key already exists, delete it first to update its position
+  private updateCache(key: string, results: SearchResult[], preset: SearchPreset): void {
+    // Remove existing entry to update position
     if (this.queryCache.has(key)) {
       this.queryCache.delete(key);
     }
 
-    // LRU eviction: remove oldest entry when at capacity
+    // LRU eviction
     if (this.queryCache.size >= CACHE_CONFIG.MAX_SEARCH_CACHE_SIZE) {
-      // Find the entry with the oldest timestamp (least recently used)
       let oldestKey: string | null = null;
       let oldestTime = Number.POSITIVE_INFINITY;
+
       for (const [k, v] of this.queryCache.entries()) {
         if (v.timestamp < oldestTime) {
           oldestTime = v.timestamp;
           oldestKey = k;
         }
       }
+
       if (oldestKey) this.queryCache.delete(oldestKey);
     }
 
     this.queryCache.set(key, {
       results,
       timestamp: Date.now(),
-      queryEmbedding: embedding,
+      preset,
     });
   }
 
@@ -501,16 +413,27 @@ export class SearchPipeline {
    */
   clearCache(): void {
     this.queryCache.clear();
-    this.embeddingCache.clear();
   }
 
   /**
-   * Dispose of the pipeline and abort any pending operations
+   * Get available strategies and their status
+   */
+  getStrategyStatus(): Array<{ name: string; available: boolean; description: string }> {
+    return Array.from(this.strategies.entries()).map(([name, strategy]) => ({
+      name,
+      available: strategy.isAvailable(),
+      description: strategy.description,
+    }));
+  }
+
+  /**
+   * Dispose of the pipeline
    */
   dispose(): void {
     this.disposed = true;
     this.abortController?.abort();
     this.abortController = null;
     this.clearCache();
+    this.strategies.clear();
   }
 }

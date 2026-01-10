@@ -205,6 +205,8 @@ export class OllamaService {
   /**
    * Generate embedding for a single text (used for search queries).
    * Has longer timeout and retry logic since search should work even during indexing.
+   *
+   * @throws Error if embedding fails after retries
    */
   async embed(text: string): Promise<EmbeddingResult> {
     if (this.disposed) {
@@ -221,7 +223,7 @@ export class OllamaService {
     }
 
     // Retry with longer timeout for search during heavy indexing
-    const MAX_RETRIES = 2;
+    const MAX_RETRIES = 3;
     const TIMEOUT_MS = 60000; // 60s for search queries
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -233,10 +235,15 @@ export class OllamaService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const isTimeout = message.includes("timed out");
+        const isConnectionError = message.includes("fetch failed") || message.includes("ECONNREFUSED");
 
-        if (isTimeout && attempt < MAX_RETRIES) {
-          console.log(`[OllamaService] Search embed timeout, retry ${attempt + 1}/${MAX_RETRIES}`);
-          await new Promise((r) => setTimeout(r, 500)); // Brief pause before retry
+        if ((isTimeout || isConnectionError) && attempt < MAX_RETRIES) {
+          const delay = Math.min(500 * Math.pow(2, attempt), 2000); // Exponential backoff, max 2s
+          console.log(
+            `[OllamaService] Embed failed (${isTimeout ? "timeout" : "connection"}), ` +
+            `retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
+          );
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
 
@@ -245,6 +252,23 @@ export class OllamaService {
     }
 
     throw new Error("Embedding failed after retries");
+  }
+
+  /**
+   * Try to generate embedding, returning null on failure (graceful degradation).
+   * Use this for search operations where fallback to native search is acceptable.
+   *
+   * @param text - Text to embed
+   * @returns Embedding result or null if unavailable
+   */
+  async tryEmbed(text: string): Promise<EmbeddingResult | null> {
+    try {
+      return await this.embed(text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[OllamaService] tryEmbed failed: ${message}`);
+      return null;
+    }
   }
 
   /**

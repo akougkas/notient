@@ -2,6 +2,7 @@
  * AgentStreamsView - View showing agent activity (View 2)
  *
  * Per spec layout:
+ * 0. Capability Cards - Search, Context, Chat status (per PRD)
  * 1. Active Agents - running/queued agents with progress
  * 2. Pending Review - actions awaiting approval with risk levels
  * 3. Recent Activity - completed/failed actions with undo
@@ -10,6 +11,7 @@
 import type { Signal } from "@preact/signals";
 import { setIcon } from "obsidian";
 import { useEffect, useRef } from "preact/hooks";
+import type { AgentType } from "../../../core/agent/types";
 
 // Icon component for Lucide icons in Preact
 function Icon({ name, className }: { name: string; className?: string }) {
@@ -20,6 +22,16 @@ function Icon({ name, className }: { name: string; className?: string }) {
     }
   }, [name]);
   return <span ref={iconRef} class={className} aria-hidden="true" />;
+}
+
+/**
+ * Capability status for the 3 core agents
+ */
+export interface CapabilityStatus {
+  agent: AgentType;
+  health: "healthy" | "degraded" | "offline";
+  isActive: boolean;
+  lastActivity?: Date;
 }
 
 export interface ActiveAgent {
@@ -54,6 +66,8 @@ interface AgentStreamsViewProps {
   activeAgents: Signal<ActiveAgent[]>;
   pendingActions: Signal<PendingAction[]>;
   recentActivity: Signal<RecentActivity[]>;
+  /** Status of the 3 capability agents */
+  capabilities?: Signal<CapabilityStatus[]>;
   onPauseAgent?: (id: string) => void;
   onStopAgent?: (id: string) => void;
   onApplyAction?: (id: string) => void;
@@ -65,6 +79,7 @@ export function AgentStreamsView({
   activeAgents,
   pendingActions,
   recentActivity,
+  capabilities,
   onPauseAgent,
   onStopAgent,
   onApplyAction,
@@ -78,6 +93,9 @@ export function AgentStreamsView({
 
   return (
     <div class="nv2-agent-streams" role="region" aria-label="Agent activity">
+      {/* Section 0: Capability Cards (per PRD: Search, Context, Chat) */}
+      <CapabilityCards capabilities={capabilities} />
+
       {isEmpty ? (
         <AgentEmptyState />
       ) : (
@@ -162,12 +180,61 @@ export function AgentStreamsView({
   );
 }
 
+/**
+ * Capability Cards - Shows status of the 3 core agents
+ * Per PRD: Three capability cards: Semantic Search, Context Builder, Chat Assistant
+ */
+const CAPABILITY_CONFIG: Record<AgentType, { icon: string; label: string; description: string }> = {
+  search: { icon: "search", label: "Search", description: "Semantic search" },
+  context: { icon: "package", label: "Context", description: "Context bundler" },
+  chat: { icon: "message-square", label: "Chat", description: "Chat assistant" },
+};
+
+interface CapabilityCardsProps {
+  capabilities?: Signal<CapabilityStatus[]>;
+}
+
+function CapabilityCards({ capabilities }: CapabilityCardsProps) {
+  // Default capabilities if not provided
+  const defaultCaps: CapabilityStatus[] = [
+    { agent: "search", health: "healthy", isActive: false },
+    { agent: "context", health: "healthy", isActive: false },
+    { agent: "chat", health: "healthy", isActive: false },
+  ];
+
+  const caps = capabilities?.value ?? defaultCaps;
+
+  return (
+    <section class="nv2-capability-section" aria-label="Agent capabilities">
+      <div class="nv2-capability-cards">
+        {caps.map((cap) => {
+          const config = CAPABILITY_CONFIG[cap.agent];
+          return (
+            <div
+              key={cap.agent}
+              class={`nv2-capability-card nv2-capability-card--${cap.health}${cap.isActive ? " nv2-capability-card--active" : ""}`}
+              title={`${config.label}: ${cap.health}${cap.isActive ? " (active)" : ""}`}
+            >
+              <Icon name={config.icon} className="nv2-capability-icon" />
+              <span class="nv2-capability-label">{config.label}</span>
+              <span
+                class={`nv2-capability-dot nv2-capability-dot--${cap.health}`}
+                aria-label={cap.health}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function AgentEmptyState() {
   return (
     <div class="nv2-agent-empty">
       <Icon name="bot" className="nv2-agent-empty-icon" />
       <div class="nv2-agent-empty-title">No Agent Activity</div>
-      <div class="nv2-agent-empty-text">Use Quick Actions from the Note view to start agents</div>
+      <div class="nv2-agent-empty-text">Use Quick Actions or /commands to start agents</div>
     </div>
   );
 }

@@ -60,10 +60,15 @@ export class WorkflowRunner {
 
   /**
    * Start a workflow from a parsed command
+   * Note: Only bulk commands (mode="bulk") should be passed here
    */
   async startFromCommand(parsed: ParsedCommand): Promise<StartWorkflowResult> {
+    // Ensure we have scope for bulk commands
+    const scope = parsed.scope ?? "vault";
+    const target = parsed.target ?? "";
+
     // Resolve target notes
-    const targets = this.resolveTargets(parsed.scope, parsed.target);
+    const targets = this.resolveTargets(scope, target);
 
     if (targets.length === 0) {
       return {
@@ -83,7 +88,7 @@ export class WorkflowRunner {
     const spec: WorkflowSpec = {
       id: crypto.randomUUID(),
       command: parsed.command,
-      scope: parsed.scope,
+      scope,
       targets: limitedTargets,
       createdAt: Date.now(),
       delayBetweenTasksMs: this.config.delayBetweenTasksMs,
