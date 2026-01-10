@@ -42,9 +42,9 @@
 |-------|------|--------|------|--------|
 | 1 | Storage Paths | **DONE** | **DONE** | Complete |
 | 2 | Chunk/Embedding Separation | **DONE** | **DONE** | Complete |
-| 3 | Intelligence Tag Sharding | **DONE** | **ACTIVE** | Sage reviewing |
-| 4 | Conversations Per-Note | **ACTIVE** | PENDING | Archie implementing |
-| 5 | Actions Time-Bucketed | - | - | Blocked |
+| 3 | Intelligence Tag Sharding | **DONE** | **DONE** | Complete |
+| 4 | Conversations Per-Note | **DONE** | **ACTIVE** | Sage reviewing |
+| 5 | Actions Time-Bucketed | **ACTIVE** | PENDING | Archie implementing |
 
 ---
 

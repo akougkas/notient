@@ -1,4 +1,4 @@
-# Sage - Phase 3 Review: Intelligence Tag Sharding
+# Sage - Phase 4 Review: Conversations Per-Note
 
 > **Status**: ASSIGNED
 > **Agent**: `code-simplifier:code-simplifier`
@@ -22,13 +22,13 @@ Understand what files are already modified. DO NOT touch files you don't need.
 ### After Completing
 ```bash
 # Stage ONLY your files
-git add src/core/intelligence/types.ts
-git add src/core/intelligence/intelligenceDb.ts
-git add src/core/intelligence/noteIntelligence.ts
+git add src/core/chat/types.ts
+git add src/core/chat/conversationStore.ts
+git add src/core/chat/chatService.ts
 git add planning/orchestration/sage/REPORT.md
 
 # Commit with descriptive message
-git commit -m "refactor(intelligence): Simplify Phase 3 tag-sharding code
+git commit -m "refactor(chat): Simplify Phase 4 conversation storage code
 
 - [List specific simplifications made]
 
@@ -57,18 +57,18 @@ Sage IS the code-simplifier agent from Anthropic. It:
 
 | File | Lines | What to Review |
 |------|-------|----------------|
-| `src/core/intelligence/types.ts` | 79-104 | IntelligenceTopicFile, IntelligenceMeta types |
-| `src/core/intelligence/intelligenceDb.ts` | 1-384 | Multi-file topic management, migration |
-| `src/core/intelligence/noteIntelligence.ts` | 48-226 | Tag passing, initialization |
+| `src/core/chat/types.ts` | 9-80 | StoredChatMessage, ConversationFile, ConversationRollup, AppendMessageOptions |
+| `src/core/chat/conversationStore.ts` | 1-630 | Per-note storage, lazy loading, migration, dual API |
+| `src/core/chat/chatService.ts` | 32-60 | extractReasoningSummary() utility |
 
 ---
 
 ## Invocation
 
-To run Sage on Phase 3, use this exact prompt:
+To run Sage on Phase 4, use this exact prompt:
 
 ```
-Simplify the Phase 3 intelligence tag-sharding code that was recently added.
+Simplify the Phase 4 conversation storage code that was recently added.
 
 ## Git Workflow
 1. Run `git status` first to see current state
@@ -76,9 +76,9 @@ Simplify the Phase 3 intelligence tag-sharding code that was recently added.
 3. After changes, stage ONLY your files and commit (no push)
 
 ## Focus Files
-- src/core/intelligence/types.ts (lines 79-104)
-- src/core/intelligence/intelligenceDb.ts (lines 1-384)
-- src/core/intelligence/noteIntelligence.ts (lines 48-226)
+- src/core/chat/types.ts (lines 9-80)
+- src/core/chat/conversationStore.ts (lines 1-630)
+- src/core/chat/chatService.ts (lines 32-60)
 
 ## After Simplification
 1. Run: bun run typecheck && bun run build
@@ -96,6 +96,7 @@ Simplify the Phase 3 intelligence tag-sharding code that was recently added.
    - Redundant code paths
    - Over-validation
    - Nested ternaries → switch statements
+   - Verbose patterns that could be cleaner
 3. **Apply** edits while preserving functionality
 4. **Verify** with typecheck and build
 5. **Report** changes made
