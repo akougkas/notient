@@ -465,100 +465,154 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ## Session State & Checkpoint
 
-**Last Updated**: 2026-01-10 17:30
-**Current Phase**: Phase 1 Stage 2 (Implementation)
-**Active Branch**: `ALPHA-SPEC-SPRINT` (all engineers share this branch)
-**Build Status**: ✅ Passing (TypeScript + Build verified)
+**Last Updated**: 2026-01-10 19:00
+**Current Phase**: Phase 1 Stage 3 (Baseline Audit)
+**Active Branch**: `ALPHA-SPEC-SPRINT`
+**Build Status**: ✅ Passing
+
+---
 
 ### Phase 1 Progress
 
-| Stage | Status | Engineer | Deliverable |
-|-------|--------|----------|-------------|
-| 1: Diagnosis | ✅ COMPLETE | Archie + Faye | Both REPORT.md done, commits made |
-| 1.5: Logging Cleanup | ✅ COMPLETE | Sage | debugLog.ts created, commit `255eb69` |
-| 2: Implementation | 🎯 **READY TO LAUNCH** | Archie + Faye | TASK.md files updated |
-| 3: Baseline Audit | ⏸️ PENDING | Archie + Faye | - |
-| 4: Final Simplification | ⏸️ PENDING | Sage | - |
+| Stage | Status | Commits |
+|-------|--------|---------|
+| 1: Diagnosis | ✅ DONE | `3fcd5e1`, `bb6f21f` |
+| 1.5: Logging | ✅ DONE | `255eb69` |
+| 2: Implementation | ✅ DONE | `4810494` (Archie), `7483571` (Faye) |
+| 2.5: Simplification | ✅ DONE | `eb9f12c` (Sage) |
+| 3: Baseline Audit | 🎯 NEXT | Full checklist per phase-1-breakdown.md |
+| 4: Final Review | ⏸️ PENDING | - |
 
-### Stage 1 Findings (COMPLETE)
+**Stage 2 Fixes Applied**:
+- Archie: Always register services, graceful degradation
+- Faye: useService hook now reactive (useState + useEffect)
+- Sage: Simplified implementation code
 
-**Archie's Findings**:
-- ✅ Root cause: Conditional service registration
-- When LM Studio down → agent/taskQueue/workflowRunner not registered
-- Cascading failure with silent errors
+---
 
-**Faye's Findings** (commit `3fcd5e1`):
-- ✅ Root cause: useService hook not reactive
-- Services initialize after 1-second delay
-- Callbacks capture null taskQueue, never update
+### UI Redesign Status
 
-**Combined Root Cause**:
-1. Backend: Services conditionally registered based on LM Studio
-2. Frontend: useService doesn't trigger re-renders when services available
-3. Result: Buttons work, but callbacks have stale null references
-
-### Stage 1.5 Logging Cleanup (COMPLETE)
-
-**Sage completed** (commit `255eb69`):
-- Created `src/utils/debugLog.ts` with toggle-able utility
-- DEBUG_ENABLED = false by default
-
-**Sage Agent Updated**: Now orchestrates code-simplifier subagents instead of doing work directly.
-
-### Stage 2 Implementation (READY TO LAUNCH)
-
-**Archie's Task** (`planning/orchestration/archie/TASK.md`):
-- Always register services (remove conditional registration)
-- Add graceful degradation with clear error messages
-- Files: `src/main.ts`, `src/core/agent/taskQueue.ts`
-
-**Faye's Task** (`planning/orchestration/faye/TASK.md`):
-- Make useService hook reactive (useState + useEffect)
-- Subscribe to `services:initialized` event
-- File: `src/ui/sidebar/context/KernelContext.tsx`
-
-**Both can run in parallel** - fixes are independent.
-
-### Launch Commands
-
-```bash
-# Terminal 1 - Archie (backend fix)
-claude "Read and execute planning/orchestration/archie/TASK.md"
-
-# Terminal 2 - Faye (frontend fix)
-claude "Read and execute planning/orchestration/faye/TASK.md"
+**Current Layout** (see image.png for reference):
+```
+┌─────────────────────────────────────────┐
+│ Header: [Notient] [Model●] [Index●] [⚙] │  ← 90% locked
+├─────────────────────────────────────────┤
+│ Omnibar: Search + DEEP button           │
+│ NoteCard: Title, path, PARA, tags       │
+│ Pulse Timeline                          │
+│ Vitals: 4 cards + health summary        │
+│ Quick Actions: 6 buttons (2x3)          │
+│ AI Insights: actionable cards           │
+├─────────────────────────────────────────┤
+│ NavDeck: [NOTE] [AGENTS] [CHAT]         │  ← Bottom tabs
+└─────────────────────────────────────────┘
 ```
 
-**Expected Duration**: 1-2 hours each
+**Key Changes**:
+- Footer REMOVED → Status moved to header pills
+- NavDeck now at BOTTOM as tab bar
+- Header ~90% complete (Model, Index, Settings pills work)
+
+---
+
+### Reprioritized Phase Order
+
+User interview confirmed dependency-based ordering:
+
+| Phase | Focus | Status |
+|-------|-------|--------|
+| 1 | Foundation | Stage 3 next |
+| 2 | Progressive Search | After Ph1 |
+| 3 | Insights Stream | After Ph2 (consumes search results) |
+| 4 | Chat Refinement | After Ph3 |
+| 5-7 | TBD | Header/Footer ~done, need reassessment |
+
+**Note**: Phases 5-7 (Footer, Polish, Settings) need replanning since UI redesign changed scope. Header status is mostly done. Discuss with CEO before Phase 5+.
+
+---
+
+### Global Config Updates (This Session)
+
+1. **AI-to-AI Protocol** added to `~/.claude/CLAUDE.md`
+   - Efficient TASK.md schema (no ceremony)
+   - Efficient REPORT.md schema
+   - Principles: dense, structured, scalable
+
+2. **Agent Definitions** updated:
+   - Archie/Faye: Original + report schema
+   - Sage: Orchestrates code-simplifier subagents
+   - Orchestrator: References AI-to-AI protocol
+
+3. **Project SCHEMA.md** created in `planning/orchestration/`
+
+---
+
+### Next Actions
+
+1. **Stage 3: Baseline Audit** (Full Checklist)
+   - Test all Quick Actions, Omnibar, Chat, Agent Streams
+   - Checklist in `phase-1-breakdown.md` lines 141-179
+   - Duration: 1-2 hours
+   - Assign: Archie + Faye parallel
+
+2. **After Phase 1 Complete**:
+   - User approval for vaultex testing
+   - Plan Phase 2 (Progressive Search)
+
+---
+
+### Key Files
+
+| Purpose | Path |
+|---------|------|
+| Spec (source of truth) | `planning/ALPHA-SPEC.md` |
+| Phase 1 breakdown | `planning/orchestration/phase-1-breakdown.md` |
+| Current UI screenshot | `image.png` (project root) |
+| AI-to-AI schemas | `planning/orchestration/SCHEMA.md` |
+| Global protocol | `~/.claude/CLAUDE.md` |
 
 ---
 
 ## Resume Instructions for New Session
 
-When you return to orchestrate:
+**Quick Start**:
+```bash
+git log --oneline -5   # Verify commits
+git status             # Check for uncommitted work
+bun run typecheck && bun run build  # Verify build
+```
 
-1. **Check current state**:
-   ```bash
-   git status
-   git log --oneline -5
-   ```
+**Then**:
+1. Read "Session State & Checkpoint" section above
+2. Current task: **Phase 1 Stage 3 - Baseline Audit**
+3. Prepare TASK.md files for Archie + Faye (testing checklist)
+4. Launch both in parallel terminals
 
-2. **Read reports** (check which are updated):
-   - Archie: `planning/orchestration/archie/REPORT.md`
-   - Faye: `planning/orchestration/faye/REPORT.md`
-   - Sage: `planning/orchestration/sage/REPORT.md`
+**If continuing UI work**:
+- CEO is redesigning UI (header/footer changes)
+- Header ~90% locked, footer removed
+- Check `image.png` for current state
+- Phases 5-7 need replanning - discuss with CEO first
 
-3. **Determine next action** based on Session State table above
-
-4. **Launch engineers**:
-   ```bash
-   # Stage 2 (current):
-   claude "Read and execute planning/orchestration/archie/TASK.md"
-   claude "Read and execute planning/orchestration/faye/TASK.md"
-   ```
-
-5. **Track progress**: Update this ORCHESTRATOR.md after each stage completes
+---
 
 ## Source of Truth
 
-**ALPHA-SPEC.md** (`planning/ALPHA-SPEC.md`) is the source of truth for all UI/UX decisions. All engineer work serves that vision. The user interview and spec define what we're building - engineers implement it.
+| Document | Purpose |
+|----------|---------|
+| `planning/ALPHA-SPEC.md` | Product vision, all UI/UX decisions |
+| `planning/orchestration/phase-1-breakdown.md` | Phase 1 detailed tasks |
+| `~/.claude/CLAUDE.md` | Global config + AI-to-AI protocol |
+| This file | Current state, what's next |
+
+---
+
+## Handoff Checklist
+
+✅ Phase 1 Stages 1-2.5 complete (commits verified)
+✅ AI-to-AI protocol added to global config
+✅ Agent definitions updated (Sage uses subagents)
+✅ UI redesign status documented
+✅ Reprioritized phases: 1→2→3→4→(5-7 TBD)
+⏳ Stage 3 Baseline Audit ready to assign
+⏳ Phases 5-7 need replanning after UI stabilizes

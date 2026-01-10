@@ -1,6 +1,6 @@
 # Faye Report
 status: complete
-commit: 1082ad4
+commit: 7483571
 
 ## did
 - src/ui/sidebar/context/KernelContext.tsx:73-96: Rewrote useService hook
