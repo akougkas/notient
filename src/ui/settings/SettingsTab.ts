@@ -17,7 +17,7 @@ import {
   debounce,
   setIcon,
 } from "obsidian";
-import type { NotientAgent } from "../../core/agent/agentLoop";
+import type { NotientAgent } from "../../core/agent";
 import type { ProfileManager } from "../../core/agent/profileManager";
 import { MODEL_DEFAULTS } from "../../core/constants";
 import type { Kernel } from "../../core/kernel";

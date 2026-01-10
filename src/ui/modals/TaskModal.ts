@@ -1,6 +1,7 @@
 import { type App, ButtonComponent, Modal, TextAreaComponent, setIcon } from "obsidian";
-import type { NotientAgent } from "../../core/agent";
+import type { ChiefOfStaffTask, NotientAgent } from "../../core/agent";
 import type { AgentTask } from "../../core/agent/types";
+import type { AgentEvent, StructuredOutput } from "../../core/agents/types";
 import type { ActionApplier, ActionHistory, TrustLevelManager } from "../../core/agentic";
 import type { ProposedAction, RiskLevel } from "../../core/agentic/types";
 import { ChatSession, type ConversationStore } from "../../core/chat";
@@ -387,7 +388,7 @@ export class TaskModal extends Modal {
   }
 
   /**
-   * Generate AI response using NotientAgent (new architecture)
+   * Generate AI response using NotientAgent (ChiefOfStaff multi-agent system)
    * UI-only: delegates all AI logic to the agent
    */
   private async generateResponse(): Promise<void> {
@@ -410,10 +411,23 @@ export class TaskModal extends Modal {
       this.inputEl.disabled = true;
     }
 
+    // Convert legacy AgentTask to ChiefOfStaffTask
+    const userMessages = this.task.chatHistory.filter((m) => m.role === "user");
+    const query = userMessages[userMessages.length - 1]?.content || "";
+    
+    const chiefTask: ChiefOfStaffTask = {
+      query,
+      notePath: this.task.notePath,
+      noteTitle: this.task.noteTitle,
+      chatHistory: this.task.chatHistory,
+    };
+
+    const citations: string[] = [];
+
     try {
       // Use the agent to execute with streaming
       // The agent handles: context building, search, prompt construction
-      for await (const event of agent.executeStreaming(this.task, this.abortController.signal)) {
+      for await (const event of agent.execute(chiefTask, this.abortController.signal)) {
         if (!this.isStreamActive) break;
 
         switch (event.type) {
@@ -425,32 +439,65 @@ export class TaskModal extends Modal {
 
           case "citations":
             // Update task with citations for display
+            citations.push(...event.paths);
             if (!this.task.result) {
               this.task.result = { type: "chat", data: "", citations: [] };
             }
-            this.task.result.citations = event.paths;
+            this.task.result.citations = citations;
             break;
 
-          case "actions":
-            // Store proposed actions and render them
-            this.pendingActions = event.actions;
-            this.renderProposedActions();
-            break;
+          case "complete": {
+            // Map AgentOutput to TaskResult
+            const output = event.output;
+            let responseContent = this.streamingContent;
+            
+            if (output.kind === "conversational") {
+              responseContent = output.content || this.streamingContent;
+              // Check for actions from delegated results
+              if (output.delegatedResults) {
+                for (const dr of output.delegatedResults) {
+                  if (dr.output.kind === "structured") {
+                    const data = dr.output.data as { actions?: ProposedAction[] };
+                    if (data.actions) {
+                      this.pendingActions.push(...data.actions);
+                    }
+                  }
+                }
+              }
+            } else if (output.kind === "structured") {
+              const data = output.data as { actions?: ProposedAction[] };
+              if (data.actions) {
+                this.pendingActions = data.actions;
+              }
+            }
 
-          case "complete":
             // Save the complete response
-            this.session.addAssistantMessage(event.result.data as string);
+            this.session.addAssistantMessage(responseContent);
             this.task.chatHistory = this.session.getMessages();
-            this.task.result = event.result;
-            // Update pending actions from result if available
-            if (event.result.actions) {
-              this.pendingActions = event.result.actions;
+            this.task.result = {
+              type: this.pendingActions.length > 0 ? "action_plan" : "chat",
+              data: responseContent,
+              citations,
+              actions: this.pendingActions.length > 0 ? this.pendingActions : undefined,
+            };
+            
+            // Render pending actions if any
+            if (this.pendingActions.length > 0) {
               this.renderProposedActions();
             }
             break;
+          }
 
           case "error":
             throw event.error;
+            
+          // Handle new event types (progress, delegation) as no-ops for UI
+          case "started":
+          case "progress":
+          case "delegation-started":
+          case "delegation-complete":
+            // Could add visual feedback here in the future
+            break;
         }
       }
     } catch (error) {

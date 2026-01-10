@@ -5,14 +5,20 @@
  * Tasks are processed one at a time, with support for cancellation
  * and progress tracking.
  *
- * Phase 2: Integrates with ConversationStore for conversation persistence.
+ * Architecture Note:
+ * This bridges the legacy AgentTask interface with the new ChiefOfStaff
+ * multi-agent system. It converts between:
+ * - AgentTask ↔ ChiefOfStaffTask
+ * - AgentEvent ↔ AgentStreamEvent
  */
 
+import type { ProposedAction } from "../agentic/types";
 import type { ConversationStore } from "../chat/conversationStore";
 import type { ExtendedChatMessage } from "../chat/types";
 import type { EventBus } from "../events/eventBus";
-import type { NotientAgent } from "./agentLoop";
-import type { AgentTask } from "./types";
+import type { ChiefOfStaff, ChiefOfStaffTask } from "../agents/chiefOfStaff";
+import type { AgentEvent, StructuredOutput, ConversationalOutput } from "../agents/types";
+import type { AgentStreamEvent, AgentTask, TaskResult } from "./types";
 
 /**
  * Callback for task update notifications
@@ -35,7 +41,7 @@ export class AgentTaskQueue {
   private processing = false;
 
   constructor(
-    private agent: NotientAgent,
+    private agent: ChiefOfStaff,
     private eventBus: EventBus,
   ) {}
 
@@ -312,22 +318,77 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Execute a task using the NotientAgent
+   * Convert legacy AgentTask to ChiefOfStaffTask
+   */
+  private toChiefOfStaffTask(task: AgentTask): ChiefOfStaffTask {
+    // Get the user query from chat history
+    const userMessages = task.chatHistory.filter((m) => m.role === "user");
+    const query = userMessages[userMessages.length - 1]?.content || "";
+
+    return {
+      query,
+      notePath: task.notePath,
+      noteTitle: task.noteTitle,
+      chatHistory: task.chatHistory,
+      // Map legacy taskType to targetAgent if appropriate
+      targetAgent: this.mapTaskTypeToAgent(task.taskType),
+    };
+  }
+
+  /**
+   * Map legacy taskType to new agent type
+   */
+  private mapTaskTypeToAgent(taskType?: string): "chat" | "note-editor" | "classifier" | "link-finder" | undefined {
+    switch (taskType) {
+      case "enrich":
+        return "note-editor";
+      case "classify":
+        return "classifier";
+      case "link":
+        return "link-finder";
+      case "chat":
+      case "analyze":
+      default:
+        return undefined; // Let ChiefOfStaff route automatically
+    }
+  }
+
+  /**
+   * Extract actions from AgentOutput
+   */
+  private extractActions(output: StructuredOutput | ConversationalOutput): ProposedAction[] {
+    if (output.kind === "structured") {
+      const data = output.data as { actions?: ProposedAction[] };
+      return data.actions || [];
+    }
+    return [];
+  }
+
+  /**
+   * Execute a task using the ChiefOfStaff (multi-agent system)
    */
   private async executeTask(task: AgentTask): Promise<void> {
     // Create abort controller for this task
     this.currentAbortController = new AbortController();
 
+    // Convert to ChiefOfStaff task format
+    const chiefTask = this.toChiefOfStaffTask(task);
+
     let fullResponse = "";
+    const citations: string[] = [];
+    let actions: ProposedAction[] = [];
 
     try {
-      for await (const event of this.agent.executeStreaming(
-        task,
-        this.currentAbortController.signal,
-      )) {
+      for await (const event of this.agent.execute(chiefTask, this.currentAbortController.signal)) {
         if (task.status !== "running") break;
 
+        // Map AgentEvent to AgentStreamEvent equivalent
         switch (event.type) {
+          case "started":
+            task.progress = 5;
+            this.emitUpdate(task);
+            break;
+
           case "progress":
             task.progress = event.progress;
             this.emitUpdate(task);
@@ -338,17 +399,76 @@ export class AgentTaskQueue {
             break;
 
           case "citations":
-            // Citations are handled in the complete event
+            citations.push(...event.paths);
+            break;
+
+          case "delegation-started":
+            // Emit as progress update
+            task.progress = Math.min(task.progress || 0, 50) + 10;
+            this.emitUpdate(task);
+            break;
+
+          case "delegation-complete":
+            // Extract any actions from delegated result
+            if (event.result.output.kind === "structured") {
+              const delegatedActions = this.extractActions(event.result.output);
+              actions.push(...delegatedActions);
+            }
             break;
 
           case "complete": {
+            // Convert AgentOutput to TaskResult
+            const output = event.output;
+            let resultType: TaskResult["type"] = "chat";
+            let resultData: unknown = fullResponse;
+
+            if (output.kind === "conversational") {
+              resultType = "chat";
+              resultData = output.content || fullResponse;
+              // Include delegated results' actions
+              if (output.delegatedResults) {
+                for (const dr of output.delegatedResults) {
+                  const drActions = this.extractActions(dr.output);
+                  actions.push(...drActions);
+                }
+              }
+            } else if (output.kind === "structured") {
+              // Determine result type from agent
+              switch (output.agentType) {
+                case "note-editor":
+                  resultType = "action_plan";
+                  break;
+                case "classifier":
+                  resultType = "classification";
+                  break;
+                case "link-finder":
+                  resultType = "links";
+                  break;
+                default:
+                  resultType = "chat";
+              }
+              resultData = output.data;
+              actions = this.extractActions(output);
+            }
+
+            // Build TaskResult
+            const result: TaskResult = {
+              type: resultType,
+              data: resultData,
+              citations,
+              actions: actions.length > 0 ? actions : undefined,
+            };
+
             // Add assistant response to chat history
-            const assistantContent = event.result.data as string;
+            const assistantContent = typeof resultData === "string" 
+              ? resultData 
+              : fullResponse || JSON.stringify(resultData);
+            
             task.chatHistory.push({
               role: "assistant",
               content: assistantContent,
             });
-            task.result = event.result;
+            task.result = result;
 
             // Phase 2: Persist assistant message to ConversationStore
             if (this.conversationStore && task.notePath) {
@@ -384,7 +504,8 @@ export class AgentTaskQueue {
       task.result = {
         type: "chat",
         data: fullResponse,
-        citations: [],
+        citations,
+        actions: actions.length > 0 ? actions : undefined,
       };
     }
   }

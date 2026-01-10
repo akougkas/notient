@@ -36,8 +36,8 @@ import type { LLMProvider } from "./llm/provider";
 import type { SearchPipeline } from "./search/pipeline";
 import type { SimpleVaultVitals } from "./vitals/simpleVitals";
 
-// Forward declaration for NotientAgent to avoid circular dependency
-import type { NotientAgent } from "./agent/agentLoop";
+// NotientAgent is now ChiefOfStaff (re-exported from agent/index.ts)
+import type { NotientAgent } from "./agent";
 import type { UserEvolutionService } from "./evolution/userEvolutionService";
 
 export interface KernelContext {
