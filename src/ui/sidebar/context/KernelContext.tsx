@@ -66,12 +66,31 @@ export function useApp(): App {
 
 /**
  * Get a registered service from the Kernel
+ * Reactive: re-renders when services become available after initialization
  * @param name - Service name registered with kernel.registerService()
  * @returns Service instance or null if not registered
  */
 export function useService<T>(name: string): T | null {
   const kernel = useKernel();
-  const service = kernel.getService<T>(name);
+  const [service, setService] = useState<T | null>(() => kernel.getService<T>(name));
+
+  useEffect(() => {
+    // Check immediately in case we missed initialization
+    const current = kernel.getService<T>(name);
+    if (current !== service) {
+      setService(current);
+    }
+
+    // Subscribe to services:initialized to catch late availability
+    const unsubscribe = kernel.eventBus.on("services:initialized", () => {
+      const fresh = kernel.getService<T>(name);
+      debugLog("useService", name, { available: !!fresh, event: "services:initialized" });
+      setService(fresh);
+    });
+
+    return () => unsubscribe();
+  }, [kernel, name]);
+
   debugLog("useService", name, { available: !!service });
   return service;
 }
