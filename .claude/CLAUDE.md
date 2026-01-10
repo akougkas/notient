@@ -363,3 +363,293 @@ Track in `ROADMAP.md` with structure:
 
 - **Current:** 0.3.1 (Chat + Agent Streams UI)
 - **Min Obsidian:** 1.4.0
+
+---
+
+## Code Map (Complete Source Tree)
+
+**CRITICAL**: All implementation tasks MUST work within this existing structure. Do NOT create new files or folders unless absolutely necessary. If you believe a new file is required, you MUST:
+1. Explain why existing files cannot accommodate the change
+2. Get explicit user approval before creating
+
+```
+src/
+├── main.ts                           # Plugin entry point, lifecycle hooks
+├── adapters/
+│   └── obsidianFacade.ts             # Obsidian API wrapper (file ops, metadata)
+│
+├── core/
+│   ├── kernel.ts                     # Service registry, DI container
+│   ├── constants.ts                  # PLUGIN_ID, VIEW_TYPES, STORAGE_PATHS
+│   │
+│   ├── events/
+│   │   ├── eventBus.ts               # Typed pub/sub system
+│   │   └── types.ts                  # Event type definitions
+│   │
+│   ├── llm/
+│   │   ├── provider.ts               # LLMProvider interface
+│   │   └── providers/
+│   │       ├── openai-compatible.ts  # Base for OpenAI-style APIs
+│   │       └── ...
+│   │
+│   ├── agent/                        # TIER 1 IDENTITY (legacy location)
+│   │   ├── identity.ts               # Core Notient persona (buildBaseIdentity)
+│   │   ├── profileManager.ts         # User profile CRUD
+│   │   └── taskQueue.ts              # Background task execution
+│   │
+│   ├── agents/                       # MULTI-AGENT SYSTEM
+│   │   ├── types.ts                  # AgentType, AgentContext, AgentOutput
+│   │   ├── base.ts                   # BaseAgent abstract class
+│   │   ├── agentIdentity.ts          # TIER 2 specializations (buildAgentSystemPrompt)
+│   │   ├── chiefOfStaff.ts           # Central orchestrator, routing
+│   │   ├── workflowAgents.ts         # Workflow command configs
+│   │   ├── chatAgent.ts              # Conversational agent
+│   │   ├── noteEditorAgent.ts        # Note modification agent
+│   │   └── ...Agent.ts               # Other specialized agents
+│   │
+│   ├── chat/
+│   │   ├── chatService.ts            # Chat orchestration, streaming
+│   │   ├── conversationStore.ts      # Persistence (note-keyed)
+│   │   ├── thinkingParser.ts         # <think> tag extraction
+│   │   ├── session.ts                # Session management
+│   │   └── types.ts                  # ChatMessage, ExtendedChatMessage
+│   │
+│   ├── indexer/
+│   │   ├── simpleIndexer.ts          # Vault sync orchestration
+│   │   ├── simpleChunker.ts          # Content hashing, note ID generation
+│   │   └── tieredSemanticChunker.ts  # TSI v2: 3-tier hierarchical chunking
+│   │
+│   ├── intelligence/
+│   │   ├── noteIntelligence.ts       # Background intelligence generation
+│   │   ├── intelligenceDb.ts         # Persistence (model-keyed, TO BE: tag-keyed)
+│   │   ├── types.ts                  # IntelligenceRecord, Health, Entities
+│   │   └── prompts/                  # Workflow prompt builders
+│   │       ├── index.ts
+│   │       └── *.ts
+│   │
+│   ├── agentic/
+│   │   ├── actionApplier.ts          # Execute approved actions
+│   │   ├── actionHistory.ts          # Undo history persistence
+│   │   ├── trustLevelManager.ts      # Risk evaluation
+│   │   ├── workflowRunner.ts         # Workflow execution
+│   │   └── types.ts                  # AppliedActionRecord, UndoPayload
+│   │
+│   ├── search/
+│   │   ├── pipeline.ts               # SearchPipeline, preset strategies
+│   │   └── strategies/
+│   │       ├── quick.ts              # Obsidian native search
+│   │       ├── balanced.ts           # Vector + reranking
+│   │       └── deep.ts               # Agentic exploration
+│   │
+│   ├── context/
+│   │   └── vaultContextBuilder.ts    # Build context for LLM prompts
+│   │
+│   ├── vitals/
+│   │   └── simpleVitals.ts           # Note health computation
+│   │
+│   ├── importer/
+│   │   ├── importerService.ts        # External data import
+│   │   └── migrationService.ts       # Data migration utilities
+│   │
+│   └── evolution/
+│       └── userEvolutionService.ts   # User preference learning
+│
+├── services/
+│   ├── storagePaths.ts               # Single source of truth for all paths
+│   ├── indexManager.ts               # Index file I/O, discovery, migration
+│   ├── vectorStore.ts                # VectorStore interface
+│   ├── simpleVectorStore.ts          # In-memory brute-force implementation
+│   ├── vaultLock.ts                  # Multi-window write locking
+│   ├── ollama.ts                     # Ollama embedding service
+│   ├── ollamaReranker.ts             # LLM-based reranking
+│   ├── lmstudio.ts                   # LM Studio reasoning service
+│   └── healthMonitor.ts              # Service health checks
+│
+├── types/
+│   ├── settings.ts                   # NotientSettings interface
+│   ├── indexer.ts                    # NoteChunk, EmbeddedChunk, IndexProgress
+│   ├── search.ts                     # SearchOptions, SearchResult, ChunkSearchResult
+│   └── profile.ts                    # UserProfile, DomainInferenceResult
+│
+├── ui/
+│   ├── sidebar/
+│   │   ├── App.tsx                   # Main sidebar component (Preact)
+│   │   ├── hooks/                    # Custom Preact hooks
+│   │   └── components/
+│   │       ├── NavDeck.tsx           # Tab navigation
+│   │       ├── SystemDashboard.tsx   # Status footer
+│   │       ├── NoteVitalsView.tsx    # Note health + insights
+│   │       ├── AgentStreamsView.tsx  # Agent activity
+│   │       ├── chat/                 # Chat UI components
+│   │       │   ├── RichChatView.tsx
+│   │       │   ├── MessageBubble.tsx
+│   │       │   └── ThinkingBlock.tsx
+│   │       └── ...
+│   │
+│   ├── settings/
+│   │   ├── SettingsTab.ts            # Settings panel
+│   │   └── panels/                   # Individual setting panels
+│   │
+│   ├── modals/
+│   │   ├── SetupWizard.ts            # First-run wizard
+│   │   ├── IndexDashboardModal.ts    # Index management
+│   │   ├── ProfileEditModal.ts       # Profile editor
+│   │   └── TaskModal.ts              # Task progress
+│   │
+│   └── dashboard/
+│       └── DashboardView.ts          # Full-page dashboard
+│
+├── utils/
+│   └── atomicWrite.ts                # Crash-safe file writes
+│
+└── styles.css                        # Design tokens, component styles
+```
+
+---
+
+## Data Storage Architecture
+
+### Current Structure (TO BE MIGRATED)
+
+```
+.obsidian/plugins/notient/
+├── main.js, manifest.json, styles.css  # Core (Obsidian-required)
+├── data.json                           # Settings
+├── conversations.json                  # All chats (single file)
+├── intelligence-{model}.json           # AI insights (model-keyed)
+├── idx_*.json                          # Vector index (316MB+)
+├── profile.json                        # User profile
+├── cache/, locks/, logs/               # Operational
+```
+
+### Target Structure (PLANNED)
+
+```
+.obsidian/plugins/notient/
+├── main.js, manifest.json, styles.css  # Core (Obsidian-required)
+├── data.json                           # Settings ONLY
+│
+└── data/                               # All plugin data
+    │
+    ├── chunks/                         # MODEL-AGNOSTIC chunk content
+    │   ├── meta.json                   # Chunker version, config
+    │   └── notes/
+    │       └── {noteId}.json           # Chunks per note (no vectors)
+    │
+    ├── embeddings/                     # MODEL-SCOPED vectors
+    │   ├── active/
+    │   │   └── {modelKey}-{dim}d.json  # Current model index
+    │   ├── _rebuilding/                # During model transition
+    │   └── _archived/                  # Previous model indices
+    │
+    ├── intelligence/                   # TAG-KEYED learning (keep forever)
+    │   ├── meta.json                   # Schema version
+    │   └── topics/
+    │       ├── {tag}.json              # e.g., research.json, project.json
+    │       └── _uncategorized.json     # Notes without matching tags
+    │
+    ├── conversations/                  # PER-NOTE + ON-DEMAND ROLLUPS
+    │   ├── notes/
+    │   │   └── {noteId}.json           # Per-note conversation
+    │   ├── rollups/                    # Generated on-demand
+    │   │   └── {para-folder}.json      # Folder-level summaries
+    │   └── _root.json                  # Notes outside PARA
+    │
+    ├── actions/                        # TIME-BUCKETED (keep forever)
+    │   ├── hot/
+    │   │   └── current.json            # Recent 200 actions
+    │   └── archive/
+    │       └── {YYYY-MM}.json          # Monthly archives
+    │
+    ├── profile/
+    │   └── profile.json                # User identity
+    │
+    └── _operational/                   # VOLATILE (safe to delete)
+        ├── locks/
+        ├── cache/
+        ├── temp/
+        │   ├── _incomplete/            # Interrupted operations
+        │   ├── _invalid/               # Validation failures
+        │   └── _deleted/               # User-deleted, audit trail
+        └── logs/
+```
+
+---
+
+## Tiered Semantic Index (TSI v2)
+
+### Three-Tier Hierarchy
+
+```
+Note (Tier 0) → exactly 1 per note
+  └── Sections (Tier 1) → per H1-H3 heading
+       └── Blocks (Tier 2) → paragraphs, lists, tables, code, etc.
+```
+
+### Tier Details
+
+| Tier | Name | Count | Size | Content |
+|------|------|-------|------|---------|
+| 0 | Note | 1 | ~3.6KB | Title, path, outline, sketch (NOT full text) |
+| 1 | Section | per H1-H3 | ~2.4KB | Heading path + section content |
+| 2 | Block | per semantic unit | ~1.2KB | Heading path + individual block |
+
+### Key Design Decisions
+
+1. **Heading paths embedded in text**: `## Overview > Implementation > Architecture`
+2. **Parent linking**: `parentChunkId` chains blocks → sections → notes
+3. **Stable chunk IDs**: SHA256 of `noteId:tier:anchor` (deterministic)
+4. **Frontmatter merged**: Tags, aliases in note chunk text (not separate)
+5. **No folder/vault aggregates**: Brute-force search is fast enough (<50ms)
+
+### Chunk Structure
+
+```typescript
+interface NoteChunk {
+  id: string;               // Stable: {noteId}-{tier}-{hash}
+  noteId: string;           // Parent note
+  path: string;             // Vault path
+  tier: "note" | "section" | "block";
+  kind: ChunkKind;          // paragraph, list, code, table, etc.
+  parentChunkId: string | null;
+  headingPath: string[];    // ["Part 1", "Section A"]
+  text: string;             // Embedding input (includes header)
+  blockRef: string | null;  // Obsidian ^blockId
+  startLine: number | null;
+  endLine: number | null;
+  tags: string[];           // From frontmatter
+  frontmatter: Record<string, unknown>;
+}
+```
+
+---
+
+## Implementation Rules
+
+### Working With Existing Code
+
+1. **Extend, don't replace**: Add methods to existing classes before creating new files
+2. **Use existing types**: Check `types/*.ts` before defining new interfaces
+3. **Follow patterns**: New services register in `kernel.ts`, use `EventBus`
+4. **Preserve hierarchy**: TSI v2 chunk structure is foundational—don't flatten
+
+### Storage Modifications
+
+1. **Always use `storagePaths.ts`**: Never hardcode paths
+2. **Atomic writes**: Use `atomicWriteFile()` for all persistence
+3. **Migration support**: Add version fields, handle schema upgrades
+4. **Keep forever**: Move to `_archived/` or `_deleted/`, never truly delete
+
+### Data Flow Patterns
+
+```
+User Action → Service → EventBus → UI Update
+                 ↓
+            Persistence (debounced)
+```
+
+### Embedding Model Coupling
+
+- **Chunks**: Model-agnostic (content + structure only)
+- **Embeddings**: Model-scoped (dimension must match)
+- **On model switch**: Re-embed all chunks, archive old index

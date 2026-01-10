@@ -1,18 +1,61 @@
-# Archie - Phase 3: Intelligence Tag-Based Sharding
+# Archie - Phase 4: Conversations Per-Note + Rollups
 
-> **Status**: COMPLETE
+> **Status**: ASSIGNED
 > **Assigned**: 2026-01-10
 > **Branch**: `archie/backend-fixes`
-> **Spec**: `planning/coding_tasks/03-intelligence-tag-sharding.md`
+> **Spec**: `planning/coding_tasks/04-conversations-per-note.md`
+
+---
+
+## Git Workflow (CRITICAL)
+
+### Before Starting
+```bash
+git status
+git diff --name-only
+```
+Understand what files are already modified. DO NOT touch files you don't need.
+
+### During Work
+- ONLY modify files listed in "Files to Modify" below
+- Keep changes focused and minimal
+
+### After Completing
+```bash
+# Stage ONLY your files
+git add src/core/chat/types.ts
+git add src/core/chat/conversationStore.ts
+git add src/core/chat/chatService.ts
+git add planning/orchestration/archie/REPORT.md
+
+# Commit with descriptive message
+git commit -m "refactor(chat): Implement per-note conversation storage
+
+- Replace single conversations.json with per-note files
+- Add lazy loading (only load when needed)
+- Strip <think> blocks, store reasoning summary
+- Add status field for failed/cancelled messages
+- Add on-demand folder rollup generation
+- Migrate legacy conversations
+
+Phase 4 of storage restructure."
+
+# DO NOT PUSH - only commit
+```
+
+### Rules
+- **NO `git push`** - Only local commits
+- **NO staging unrelated files** - Check `git status` before commit
+- **NO amending** other people's commits
 
 ---
 
 ## Objective
 
-Reorganize intelligence storage from model-keyed single file to tag-keyed multiple files. This enables:
-- Semantic organization by topic (matches how users think)
-- Exportable knowledge bundles
-- Keep forever philosophy (intelligence = learned knowledge)
+Restructure conversation storage from single file to per-note files with on-demand folder rollups. This enables:
+- Better performance (only load conversation when needed)
+- PARA-aware folder summaries
+- Reasoning trace handling (strip, summarize, link to actions)
 
 ---
 
@@ -20,9 +63,9 @@ Reorganize intelligence storage from model-keyed single file to tag-keyed multip
 
 | File | Changes |
 |------|---------|
-| `src/core/intelligence/types.ts` | Add IntelligenceTopicFile, IntelligenceMeta types |
-| `src/core/intelligence/intelligenceDb.ts` | Rewrite for tag-based sharding |
-| `src/core/intelligence/noteIntelligence.ts` | Update to pass tags to upsert |
+| `src/core/chat/types.ts` | Add StoredChatMessage, ConversationFile, ConversationRollup types |
+| `src/core/chat/conversationStore.ts` | Rewrite for per-note files, lazy loading, migration |
+| `src/core/chat/chatService.ts` | Update to strip reasoning traces, pass status |
 
 ---
 
@@ -31,61 +74,61 @@ Reorganize intelligence storage from model-keyed single file to tag-keyed multip
 ### 1. Add Types (`types.ts`)
 
 ```typescript
-export interface IntelligenceTopicFile {
+export interface StoredChatMessage {
+  id: string;
+  role: "system" | "user" | "assistant";
+  content: string;
+  timestamp: string;
+  attachments?: Array<{ id: string; type: string; filename: string; path: string; }>;
+  status?: "success" | "failed" | "cancelled";
+  reasoningSummary?: string;
+  actionRef?: string;
+}
+
+export interface ConversationFile {
   version: number;
-  topic: string;
-  criteria: { tags: string[] };
-  records: Record<string, IntelligenceRecord>;
+  noteId: string;
+  notePath: string;
+  messages: StoredChatMessage[];
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+export interface ConversationRollup {
+  version: number;
+  folder: string;
   noteCount: number;
-  lastUpdated: number;
-}
-
-export interface IntelligenceMeta {
-  version: number;
-  topics: string[];
-  totalNotes: number;
-  totalRecords: number;
-  lastUpdated: number;
+  messageCount: number;
+  topTopics: string[];
+  recentNotes: Array<{ noteId: string; path: string; messageCount: number; lastMessage: string; }>;
+  generatedAt: string;
 }
 ```
 
-### 2. Rewrite IntelligenceDb
+### 2. Rewrite ConversationStore
 
-- Replace single-file with multi-file topic management
-- Use `storagePaths.getIntelligenceTopicPath(topic)` from Phase 1
+- Replace single-file with per-note file management
+- Use `storagePaths.getConversationPath(noteId)` from Phase 1
 - Key methods:
-  - `load()` - Load all topic files
-  - `get(notePath)` - Search all topics for a note
-  - `upsert(notePath, record, noteTags)` - Determine topic from tags
-  - `delete(notePath)` - Remove from all topics
-  - `flush()` - Save dirty topics
+  - `loadConversation(noteId)` - Lazy load per-note
+  - `getHistory(notePath, noteId)` - Get messages
+  - `appendMessage(notePath, noteId, message, options)` - Add with reasoning handling
+  - `flush()` - Save dirty conversations
+  - `generateRollup(folder)` - On-demand folder summary
+  - `migrateIfNeeded()` - Migrate legacy conversations.json
 
-### 3. Topic Assignment Logic
+### 3. Update ChatService
 
-```typescript
-function getTopicForNote(notePath: string, noteTags: string[]): string {
-  if (noteTags.length === 0) return '_uncategorized';
+- After receiving response, parse thinking blocks with ThinkingParser
+- Summarize reasoning (first 200 chars)
+- Store message with summary, NOT full thinking
+- Set status field appropriately
 
-  const primaryTag = noteTags[0]
-    .replace(/^#/, '')
-    .split('/')[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-');
+### 4. Migration Logic
 
-  return primaryTag || '_uncategorized';
-}
-```
-
-### 4. Update NoteIntelligenceService
-
-- Pass tags when upserting: `this.db.upsert(notePath, record, tags)`
-- Remove model-key dependency from initialization
-
-### 5. Migration Logic
-
-- Detect legacy `intelligence-*.json` file
-- Group records by topic based on suggestedTags
-- Write topic files to `data/intelligence/topics/`
+- Detect legacy `conversations.json`
+- Parse and split by note
+- Write per-note files to `data/conversations/notes/`
 - Move legacy file to `_deleted/`
 
 ---
@@ -93,10 +136,11 @@ function getTopicForNote(notePath: string, noteTags: string[]): string {
 ## Use Phase 1 Path Methods
 
 ```typescript
-storagePaths.intelligenceTopics      // Directory for topic files
-storagePaths.intelligenceMeta        // meta.json path
-storagePaths.getIntelligenceTopicPath(topic)  // {topic}.json path
-storagePaths.tempDeleted             // For archived legacy file
+storagePaths.conversationsNotes           // Directory for per-note files
+storagePaths.conversationsRollups         // Directory for rollups
+storagePaths.getConversationPath(noteId)  // {noteId}.json path
+storagePaths.getConversationRollupPath(folder)  // rollup path
+storagePaths.tempDeleted                  // For archived legacy file
 ```
 
 ---
@@ -108,10 +152,11 @@ bun run typecheck && bun run build
 ```
 
 ### Manual Test
-1. Start with existing `intelligence-*.json` file
+1. Start with existing `conversations.json` file
 2. Load plugin → migration should run
-3. Verify `data/intelligence/topics/` created
-4. Test note intelligence generation writes to correct topic file
+3. Verify `data/conversations/notes/` created
+4. Test chat → verify per-note file created
+5. Verify `<think>` blocks are summarized, not stored in full
 
 ---
 
@@ -119,6 +164,7 @@ bun run typecheck && bun run build
 
 When complete, update `planning/orchestration/archie/REPORT.md` with:
 - Files modified (with line ranges)
-- New methods/classes added
+- New types added
+- Key methods implemented
 - Migration approach
 - Build verification results
