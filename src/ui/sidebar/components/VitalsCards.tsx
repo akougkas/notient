@@ -16,12 +16,11 @@ import { Icon } from "./Icon";
 
 interface VitalsCardsProps {
   vitals: NoteVitals;
-  onCardClick?: (metric: "health" | "links" | "freshness" | "grade") => void;
 }
 
 type VitalStatus = "healthy" | "attention" | "unhealthy";
 
-export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
+export function VitalsCards({ vitals }: VitalsCardsProps) {
   const grade = calculateGrade(vitals);
   const totalLinks = vitals.links.backlinks + vitals.links.outlinks;
   const freshnessStatus = getFreshnessStatus(vitals.freshness.lastModified);
@@ -44,7 +43,6 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
           label="Health"
           status={vitals.health.status}
           hint={healthHint}
-          onClick={() => onCardClick?.("health")}
         />
         <VitalCard
           metric="links"
@@ -53,7 +51,6 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
           label="Links"
           status={getLinkStatus(totalLinks)}
           hint={`${vitals.links.backlinks} in / ${vitals.links.outlinks} out`}
-          onClick={() => onCardClick?.("links")}
         />
         <VitalCard
           metric="freshness"
@@ -62,7 +59,6 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
           label="Fresh"
           status={freshnessStatus}
           hint={formatLastModified(vitals.freshness.lastModified)}
-          onClick={() => onCardClick?.("freshness")}
         />
         <VitalCard
           metric="grade"
@@ -71,7 +67,6 @@ export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
           label="Grade"
           status={getGradeStatus(grade)}
           hint={getGradeHint(grade)}
-          onClick={() => onCardClick?.("grade")}
         />
       </div>
       {/* Health summary message below cards - per spec */}
@@ -90,24 +85,21 @@ interface VitalCardProps {
   label: string;
   status: VitalStatus;
   hint: string;
-  onClick?: () => void;
 }
 
-function VitalCard({ metric, icon, value, label, status, hint, onClick }: VitalCardProps) {
+function VitalCard({ metric, icon, value, label, status, hint }: VitalCardProps) {
   return (
-    <button
-      type="button"
+    <div
       class={`nv2-vital-card nv2-vital-card--${status}`}
-      onClick={onClick}
       title={`${label}: ${value}\n${hint}`}
-      aria-label={`${label}: ${value}. ${hint}. Click for details.`}
+      aria-label={`${label}: ${value}. ${hint}`}
       data-metric={metric}
     >
       <Icon name={icon} className="nv2-vital-icon" />
       <span class="nv2-vital-value">{value}</span>
       <span class="nv2-vital-label">{label}</span>
       <span class="nv2-vital-ring" />
-    </button>
+    </div>
   );
 }
 

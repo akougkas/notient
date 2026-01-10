@@ -18,8 +18,8 @@ export interface Insight {
 }
 
 export interface InsightGeneratorCallbacks {
-  prefillChatAndSwitch: (prompt: string) => void;
-  onMetricClick: (metric: "health" | "links" | "freshness") => void;
+  /** Trigger agentic action (shows in Agent Streams) */
+  triggerAgent: (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => void;
   showNotice: (message: string) => void;
 }
 
@@ -39,10 +39,11 @@ export class InsightGenerator {
       insights.push({
         text: "This note has no connections. Consider linking it to related notes.",
         action: "Find Connections",
-        actionIcon: "eye",
+        actionIcon: "search",
         actionCallback: () => {
-          this.callbacks.prefillChatAndSwitch(
-            `Find notes that could be linked to "${noteVitals.title}"`,
+          this.callbacks.triggerAgent(
+            `Find notes that could be linked to "${noteVitals.title}" and explain the connections`,
+            "link",
           );
         },
         priority: "high",
@@ -50,9 +51,14 @@ export class InsightGenerator {
     } else if (noteVitals.links.backlinks > 0) {
       insights.push({
         text: `This note appears strongly related to other notes via ${noteVitals.links.backlinks} backlink${noteVitals.links.backlinks > 1 ? "s" : ""}.`,
-        action: "Review Links",
-        actionIcon: "eye",
-        actionCallback: () => this.callbacks.onMetricClick("links"),
+        action: "Analyze Links",
+        actionIcon: "link",
+        actionCallback: () => {
+          this.callbacks.triggerAgent(
+            `Analyze the link structure of "${noteVitals.title}" and suggest improvements`,
+            "link",
+          );
+        },
         priority: "high",
       });
     }
@@ -61,12 +67,13 @@ export class InsightGenerator {
     if (noteVitals.paraType === "inbox" || noteVitals.paraType === "unknown") {
       insights.push({
         text: `Suggested classification update: Move from #${noteVitals.paraType} to #active-projects based on recent edits.`,
-        action: "Apply Change",
-        actionIcon: "check",
+        action: "Classify",
+        actionIcon: "tag",
         actionPrimary: true,
         actionCallback: () => {
-          this.callbacks.prefillChatAndSwitch(
-            `Suggest the best PARA category for "${noteVitals.title}" and help me organize it`,
+          this.callbacks.triggerAgent(
+            `Classify "${noteVitals.title}" and suggest the best PARA category based on its content`,
+            "classify",
           );
         },
         priority: "low",

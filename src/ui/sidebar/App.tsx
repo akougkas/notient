@@ -704,20 +704,10 @@ export function App() {
   const insightGenerator = useMemo(
     () =>
       new InsightGenerator({
-        prefillChatAndSwitch,
-        onMetricClick: (metric) => {
-          if (noteVitals.value) {
-            const prompts: Record<string, string> = {
-              health: `Analyze the health of my note "${noteVitals.value.title}" and suggest improvements`,
-              links: `Show me all the connections for "${noteVitals.value.title}" and suggest new links`,
-              freshness: `What has changed in "${noteVitals.value.title}" and what should I review?`,
-            };
-            prefillChatAndSwitch(prompts[metric]);
-          }
-        },
+        triggerAgent: triggerAgenticAction,
         showNotice: (msg) => new Notice(msg),
       }),
-    [prefillChatAndSwitch, noteVitals],
+    [triggerAgenticAction],
   );
 
   // Static insights from note vitals analysis
@@ -810,18 +800,7 @@ export function App() {
                   {/* Section 1: Note Identity */}
                   <NoteCard noteVitals={noteVitals.value!} backlinkPreview={backlinkPreview} />
                   {/* Section 2: Vitals Cards (4 metrics) */}
-                  <VitalsCards
-                    vitals={noteVitals.value!}
-                    onCardClick={(metric) => {
-                      const prompts: Record<string, string> = {
-                        health: `Analyze the health of "${noteVitals.value!.title}" and suggest improvements`,
-                        links: `Show me connections for "${noteVitals.value!.title}" and suggest new links`,
-                        freshness: `What has changed in "${noteVitals.value!.title}" recently?`,
-                        grade: `How can I improve the quality grade of "${noteVitals.value!.title}"?`,
-                      };
-                      prefillChatAndSwitch(prompts[metric]);
-                    }}
-                  />
+                  <VitalsCards vitals={noteVitals.value!} />
                   {/* Section 3: Quick Actions */}
                   <QuickActions actions={quickActions} />
                   {/* Section 4: AI Insights */}
