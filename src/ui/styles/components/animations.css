@@ -1,0 +1,113 @@
+/* =============================================================================
+   Staggered Animations - Cascade Effects for Dynamic Content
+   ============================================================================= */
+
+/* Fade in with slight upward movement - the birth animation */
+@keyframes nv2-fade-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Note birth animation - materialization effect */
+@keyframes nv2-note-birth {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Slide down animation for overlays/drawers */
+@keyframes nv2-slide-down {
+  0% {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scale in animation */
+@keyframes nv2-scale-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Staggered container wrapper */
+.nv2-staggered-item {
+  animation: nv2-fade-in-up 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Note card birth animation */
+.nv2-note-card {
+  animation: nv2-note-birth 0.4s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Apply stagger to children of note card */
+.nv2-note-card > *:nth-child(1) {
+  animation-delay: calc(var(--stagger-delay, 0ms) + 50ms);
+}
+.nv2-note-card > *:nth-child(2) {
+  animation-delay: calc(var(--stagger-delay, 0ms) + 80ms);
+}
+.nv2-note-card > *:nth-child(3) {
+  animation-delay: calc(var(--stagger-delay, 0ms) + 110ms);
+}
+.nv2-note-card > *:nth-child(4) {
+  animation-delay: calc(var(--stagger-delay, 0ms) + 140ms);
+}
+
+/* Insight item stagger */
+.nv2-insight {
+  animation: nv2-fade-in-up 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Agent card stagger */
+.nv2-agent-card {
+  animation: nv2-fade-in-up 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Pending action stagger */
+.nv2-pending-card {
+  animation: nv2-fade-in-up 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Activity item stagger */
+.nv2-activity-card {
+  animation: nv2-fade-in-up 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Search result stagger */
+.nv2-search-result-item {
+  animation: nv2-fade-in-up 0.25s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Vitals card stagger */
+.nv2-vital-card {
+  animation: nv2-scale-in 0.3s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
+
+/* Quick action button stagger */
+.nv2-quick-action-btn {
+  animation: nv2-scale-in 0.25s var(--nv2-ease-out-back) var(--stagger-delay, 0ms) backwards;
+}
