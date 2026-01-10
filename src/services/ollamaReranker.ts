@@ -7,8 +7,8 @@
  * Model: B-A-M-N/Qwen3-Reranker-4B (locked, benchmarked as best)
  */
 
-import type { RankedResult, RerankCandidate } from "../core/llm/types";
 import type { Kernel } from "../core/kernel";
+import type { RankedResult, RerankCandidate } from "../core/llm/types";
 
 /** Default reranker model - locked after benchmarking */
 export const DEFAULT_RERANKER_MODEL = "B-A-M-N/Qwen3-Reranker-4B";
@@ -49,9 +49,7 @@ export class OllamaRerankerService {
     try {
       const available = await this.checkModelAvailable(model);
       if (!available) {
-        console.warn(
-          `[OllamaRerankerService] Model ${model} not found. Run: ollama pull ${model}`
-        );
+        console.warn(`[OllamaRerankerService] Model ${model} not found. Run: ollama pull ${model}`);
         return;
       }
       this.modelLoaded = true;
@@ -122,9 +120,7 @@ export class OllamaRerankerService {
               reasoning: score >= 0.5 ? "Relevant to query" : "Low relevance",
             };
           } catch (error) {
-            console.warn(
-              `[OllamaRerankerService] Failed to score candidate: ${error}`
-            );
+            console.warn(`[OllamaRerankerService] Failed to score candidate: ${error}`);
             return {
               noteId: candidate.noteId,
               path: candidate.path,
@@ -133,7 +129,7 @@ export class OllamaRerankerService {
               reasoning: "Rerank failed, using vector score",
             };
           }
-        })
+        }),
       );
       results.push(...batchResults);
     }
@@ -150,7 +146,7 @@ export class OllamaRerankerService {
     host: string,
     model: string,
     query: string,
-    candidate: RerankCandidate
+    candidate: RerankCandidate,
   ): Promise<number> {
     // Build Qwen3 reranker prompt
     const prompt = this.buildQwen3Prompt(query, candidate.text);
@@ -184,9 +180,7 @@ export class OllamaRerankerService {
       return 0.0;
     } else {
       // Ambiguous response - use conservative score
-      console.warn(
-        `[OllamaRerankerService] Unexpected response: "${answer}", using 0.3`
-      );
+      console.warn(`[OllamaRerankerService] Unexpected response: "${answer}", using 0.3`);
       return 0.3;
     }
   }
@@ -198,9 +192,7 @@ export class OllamaRerankerService {
     // Truncate document if too long (max ~2000 chars for efficiency)
     const maxDocLen = 2000;
     const truncatedDoc =
-      document.length > maxDocLen
-        ? document.slice(0, maxDocLen).trimEnd() + "..."
-        : document;
+      document.length > maxDocLen ? document.slice(0, maxDocLen).trimEnd() + "..." : document;
 
     return `<|im_start|>system
 ${QWEN3_PROMPT.system}

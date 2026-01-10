@@ -103,7 +103,10 @@ export class IndexManagementPanel {
     });
   }
 
-  private async renderWithStats(section: HTMLElement, indexManager: IndexManagerInterface): Promise<void> {
+  private async renderWithStats(
+    section: HTMLElement,
+    indexManager: IndexManagerInterface,
+  ): Promise<void> {
     // Header
     const header = section.createEl("h2", { cls: "notient-settings-header" });
     const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
@@ -164,12 +167,18 @@ export class IndexManagementPanel {
 
     // Note count
     const noteMetric = metricsRow.createDiv({ cls: "notient-settings-metric" });
-    noteMetric.createEl("span", { text: String(stats.noteCount), cls: "notient-settings-metric-value" });
+    noteMetric.createEl("span", {
+      text: String(stats.noteCount),
+      cls: "notient-settings-metric-value",
+    });
     noteMetric.createEl("span", { text: "Notes Indexed", cls: "notient-settings-metric-label" });
 
     // Chunk count
     const chunkMetric = metricsRow.createDiv({ cls: "notient-settings-metric" });
-    chunkMetric.createEl("span", { text: String(stats.chunkCount), cls: "notient-settings-metric-value" });
+    chunkMetric.createEl("span", {
+      text: String(stats.chunkCount),
+      cls: "notient-settings-metric-value",
+    });
     chunkMetric.createEl("span", { text: "Total Chunks", cls: "notient-settings-metric-label" });
 
     // Completion
@@ -192,7 +201,9 @@ export class IndexManagementPanel {
     };
     const stateInfo = stateMap[stats.state] || stateMap.none;
 
-    const stateEl = statusBox.createDiv({ cls: `notient-settings-state-indicator ${stateInfo.cls}` });
+    const stateEl = statusBox.createDiv({
+      cls: `notient-settings-state-indicator ${stateInfo.cls}`,
+    });
     const stateIcon = stateEl.createSpan({ cls: "notient-settings-icon-inline" });
     setIcon(stateIcon, stateInfo.icon);
     stateEl.createSpan({ text: stateInfo.text });
@@ -231,8 +242,9 @@ export class IndexManagementPanel {
       description: "Index new and modified notes",
       disabled: anyOpInProgress,
       onClick: () => {
-        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
-          .commands.executeCommandById("notient:reindex-vault");
+        (
+          this.app as App & { commands: { executeCommandById: (id: string) => void } }
+        ).commands.executeCommandById("notient:reindex-vault");
       },
     });
 
@@ -243,8 +255,9 @@ export class IndexManagementPanel {
       description: "Add new notes only",
       disabled: anyOpInProgress,
       onClick: () => {
-        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
-          .commands.executeCommandById("notient:reindex-vault");
+        (
+          this.app as App & { commands: { executeCommandById: (id: string) => void } }
+        ).commands.executeCommandById("notient:reindex-vault");
       },
     });
 
@@ -440,7 +453,8 @@ export class IndexManagementPanel {
 
     if (!isActive) {
       // Switch button
-      const isSwitching = this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
+      const isSwitching =
+        this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
       const switchBtn = actionsCell.createEl("button", {
         cls: "notient-settings-action-btn-small",
         text: isSwitching ? "..." : "Use",
@@ -461,7 +475,8 @@ export class IndexManagementPanel {
 
       // Delete button (only for plugin indices)
       if (!isExternal) {
-        const isDeleting = this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
+        const isDeleting =
+          this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
         const delBtn = actionsCell.createEl("button", {
           cls: "notient-settings-action-btn-small mod-warning",
           text: isDeleting ? "..." : "Delete",
@@ -513,7 +528,9 @@ export class IndexManagementPanel {
                 this.onRefresh();
                 const text = await file.text();
                 const result = await indexManager.importIndex(text);
-                this.kernel.obsidian.notice(`Imported ${result.noteCount} notes for ${result.modelKey}`);
+                this.kernel.obsidian.notice(
+                  `Imported ${result.noteCount} notes for ${result.modelKey}`,
+                );
               } catch (error) {
                 this.kernel.obsidian.notice(`Import failed: ${error}`);
               } finally {
@@ -545,8 +562,9 @@ export class IndexManagementPanel {
         if (!anyOpInProgress) {
           btn.onClick(() => {
             if (!confirm("This will delete the current index and start fresh. Continue?")) return;
-            (this.app as App & { commands: { executeCommandById: (id: string) => void } })
-              .commands.executeCommandById("notient:full-reindex");
+            (
+              this.app as App & { commands: { executeCommandById: (id: string) => void } }
+            ).commands.executeCommandById("notient:full-reindex");
           });
         }
       });

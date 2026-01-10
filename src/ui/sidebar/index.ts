@@ -15,7 +15,6 @@ export { InsightStream } from "./components/InsightStream";
 // SidebarFooter removed
 // ServiceHealth and IndexManagerStats removed
 
-
 // Services (re-export for convenience)
 export { NoteVitalsCalculator } from "@services/noteVitalsCalculator";
 export type { NoteVitals, IndexManagerLike } from "@services/noteVitalsCalculator";

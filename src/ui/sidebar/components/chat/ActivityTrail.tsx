@@ -5,9 +5,9 @@
  * Displays phases: Building context → Thinking → Generating → Complete
  */
 
-import type { ActivityPhase } from "../../../../core/chat/types";
-import { setIcon } from "obsidian";
 import { useEffect, useRef } from "preact/hooks";
+import type { ActivityPhase } from "../../../../core/chat/types";
+import { Icon } from "../Icon";
 
 interface ActivityItem {
   id: string;
@@ -23,19 +23,6 @@ interface ActivityTrailProps {
   isStreaming?: boolean;
   /** Maximum items to show */
   maxItems?: number;
-}
-
-/**
- * Icon component
- */
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 /**

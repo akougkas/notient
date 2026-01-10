@@ -17,33 +17,28 @@
  */
 
 import type { UserProfile } from "../../types/profile";
-import type { LLMProvider } from "../llm/provider";
 import {
-  buildAtomicSplitPrompt,
-  buildSynthesisPrompt,
-  buildTaskExtractionPrompt,
-  buildBrandCheckPrompt,
-  buildConnectionPrompt,
-  buildEnhancePrompt,
-  buildAntagonistPrompt,
-  buildClippingPrompt,
+  ANTAGONIST_PROMPT,
   ATOMIC_SPLIT_PROMPT,
-  SYNTHESIS_PROMPT,
-  TASK_EXTRACTION_PROMPT,
+  type AgentPrompt,
   BRAND_CHECK_PROMPT,
+  CLIPPING_PROMPT,
   CONNECTION_PROMPT,
   ENHANCE_PROMPT,
-  ANTAGONIST_PROMPT,
-  CLIPPING_PROMPT,
-  type AgentPrompt,
+  SYNTHESIS_PROMPT,
+  TASK_EXTRACTION_PROMPT,
+  buildAntagonistPrompt,
+  buildAtomicSplitPrompt,
+  buildBrandCheckPrompt,
+  buildClippingPrompt,
+  buildConnectionPrompt,
+  buildEnhancePrompt,
+  buildSynthesisPrompt,
+  buildTaskExtractionPrompt,
 } from "../intelligence/prompts";
+import type { LLMProvider } from "../llm/provider";
 import { BaseAgent } from "./base";
-import type {
-  AgentContext,
-  AgentEvent,
-  AgentType,
-  StructuredOutput,
-} from "./types";
+import type { AgentContext, AgentEvent, AgentType, StructuredOutput } from "./types";
 
 /**
  * Workflow agent types (Intelligence 2.0)
@@ -165,11 +160,7 @@ export class WorkflowAgent extends BaseAgent {
   protected profile?: UserProfile;
   protected workflowConfig: WorkflowAgentConfig;
 
-  constructor(
-    llm: LLMProvider,
-    workflowType: WorkflowAgentType,
-    profile?: UserProfile,
-  ) {
+  constructor(llm: LLMProvider, workflowType: WorkflowAgentType, profile?: UserProfile) {
     // Map workflow types to generic "note-editor" agent type for base config
     super(llm, "note-editor");
     this.profile = profile;
@@ -266,7 +257,6 @@ export class WorkflowAgent extends BaseAgent {
 
       yield { type: "progress", agentType, progress: 100 };
       yield { type: "complete", agentType, output };
-
     } catch (error) {
       yield { type: "error", agentType, error: error as Error };
     }

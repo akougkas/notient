@@ -45,9 +45,7 @@ export class BalancedSearchStrategy implements SearchStrategy {
   private readonly MAX_EMBEDDING_CACHE = 50;
 
   constructor(private context: StrategyContext) {
-    this.nativeSearch = new NativeSearch(context.kernel.obsidian, (path) =>
-      this.getParaType(path),
-    );
+    this.nativeSearch = new NativeSearch(context.kernel.obsidian, (path) => this.getParaType(path));
   }
 
   /**
@@ -106,9 +104,7 @@ export class BalancedSearchStrategy implements SearchStrategy {
       if (options.signal?.aborted) return [];
 
       if (chunkCandidates.length === 0) {
-        console.log(
-          "[BalancedSearchStrategy] No vector results, falling back to native search",
-        );
+        console.log("[BalancedSearchStrategy] No vector results, falling back to native search");
         onProgress?.({ stage: "native", detail: "No vector results, using native search..." });
         const nativeMatches = await this.nativeSearch.search(query, options);
         return this.convertNativeToResults(nativeMatches, options);
@@ -420,7 +416,7 @@ export class BalancedSearchStrategy implements SearchStrategy {
    */
   private getParaType(path: string): SearchResult["paraType"] {
     if (!path) return "unknown";
-    
+
     const para = this.context.kernel.settings.para;
     const lowerPath = path.toLowerCase();
 

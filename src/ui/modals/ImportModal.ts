@@ -5,7 +5,7 @@
  * Provides UI for selecting source folder and previewing import.
  */
 
-import { type App, Modal, Notice, setIcon, TFolder } from "obsidian";
+import { type App, Modal, Notice, TFolder, setIcon } from "obsidian";
 import type { ImporterService, PluginImportSummary } from "../../core/importer/importerService";
 
 export interface ImportModalResult {
@@ -19,14 +19,14 @@ export interface ImportModalResult {
 export class ImportModal extends Modal {
   private result: ImportModalResult = { completed: false };
   private resolvePromise: ((result: ImportModalResult) => void) | null = null;
-  private selectedFolder: string = "";
-  private outputFolder: string = "imports";
-  private recursive: boolean = true;
-  private isProcessing: boolean = false;
+  private selectedFolder = "";
+  private outputFolder = "imports";
+  private recursive = true;
+  private isProcessing = false;
 
   constructor(
     app: App,
-    private importerService: ImporterService
+    private importerService: ImporterService,
   ) {
     super(app);
   }
@@ -88,7 +88,7 @@ export class ImportModal extends Modal {
     group.createEl("label", { text: "Source Folder" });
 
     const pickerRow = group.createDiv({ cls: "notient-import-picker-row" });
-    
+
     const input = pickerRow.createEl("input", {
       type: "text",
       placeholder: "Select a folder...",
@@ -115,7 +115,8 @@ export class ImportModal extends Modal {
     dropdown.className = "notient-import-folder-dropdown";
 
     // Get all folders
-    const folders = this.app.vault.getAllLoadedFiles()
+    const folders = this.app.vault
+      .getAllLoadedFiles()
       .filter((f): f is TFolder => f instanceof TFolder)
       .filter((f) => f.path !== "")
       .sort((a, b) => a.path.localeCompare(b.path));
@@ -184,7 +185,7 @@ export class ImportModal extends Modal {
 
   private renderRecursiveOption(container: HTMLElement): void {
     const group = container.createDiv({ cls: "notient-import-field notient-import-checkbox" });
-    
+
     const checkbox = group.createEl("input", {
       type: "checkbox",
     });
@@ -246,7 +247,7 @@ export class ImportModal extends Modal {
 
     const list = this.previewEl.createEl("ul", { cls: "notient-import-file-list" });
     const maxShow = 10;
-    
+
     for (let i = 0; i < Math.min(files.length, maxShow); i++) {
       const relativePath = files[i].path.slice(this.selectedFolder.length + 1);
       list.createEl("li", { text: relativePath });
@@ -296,14 +297,11 @@ export class ImportModal extends Modal {
     progressEl.createEl("p", { text: "Processing files..." });
 
     try {
-      const summary = await this.importerService.importFromVaultFolder(
-        this.selectedFolder,
-        {
-          sourcePath: this.selectedFolder,
-          outputFolder: this.outputFolder,
-          recursive: this.recursive,
-        }
-      );
+      const summary = await this.importerService.importFromVaultFolder(this.selectedFolder, {
+        sourcePath: this.selectedFolder,
+        outputFolder: this.outputFolder,
+        recursive: this.recursive,
+      });
 
       this.result = { completed: true, summary };
       this.showResults(summary);
@@ -314,7 +312,7 @@ export class ImportModal extends Modal {
         text: err instanceof Error ? err.message : "Unknown error",
         cls: "notient-import-error",
       });
-      
+
       const closeBtn = contentEl.createEl("button", { text: "Close" });
       closeBtn.addEventListener("click", () => this.close());
     }
@@ -333,20 +331,23 @@ export class ImportModal extends Modal {
 
     // Stats
     const stats = contentEl.createDiv({ cls: "notient-import-stats" });
-    
-    stats.createDiv({ cls: "notient-import-stat" }).innerHTML = 
-      `<span class="notient-import-stat-value">${summary.created}</span><span class="notient-import-stat-label">Created</span>`;
-    
-    stats.createDiv({ cls: "notient-import-stat" }).innerHTML = 
-      `<span class="notient-import-stat-value">${summary.updated}</span><span class="notient-import-stat-label">Updated</span>`;
-    
-    stats.createDiv({ cls: "notient-import-stat" }).innerHTML = 
-      `<span class="notient-import-stat-value">${summary.totalLinksConverted}</span><span class="notient-import-stat-label">Links Fixed</span>`;
+
+    stats.createDiv({
+      cls: "notient-import-stat",
+    }).innerHTML = `<span class="notient-import-stat-value">${summary.created}</span><span class="notient-import-stat-label">Created</span>`;
+
+    stats.createDiv({
+      cls: "notient-import-stat",
+    }).innerHTML = `<span class="notient-import-stat-value">${summary.updated}</span><span class="notient-import-stat-label">Updated</span>`;
+
+    stats.createDiv({
+      cls: "notient-import-stat",
+    }).innerHTML = `<span class="notient-import-stat-value">${summary.totalLinksConverted}</span><span class="notient-import-stat-label">Links Fixed</span>`;
 
     if (summary.failed > 0) {
       const failedEl = contentEl.createDiv({ cls: "notient-import-failed" });
       failedEl.createEl("p", { text: `${summary.failed} file(s) failed to import` });
-      
+
       const failedList = failedEl.createEl("ul");
       for (const result of summary.results.filter((r) => !r.success)) {
         failedList.createEl("li", { text: `${result.sourcePath}: ${result.error}` });

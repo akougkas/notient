@@ -52,9 +52,7 @@ export class DeepSearchStrategy implements SearchStrategy {
 
   constructor(private context: StrategyContext) {
     this.balancedStrategy = new BalancedSearchStrategy(context);
-    this.nativeSearch = new NativeSearch(context.kernel.obsidian, (path) =>
-      this.getParaType(path),
-    );
+    this.nativeSearch = new NativeSearch(context.kernel.obsidian, (path) => this.getParaType(path));
   }
 
   /**
@@ -181,15 +179,12 @@ Example: ["term1", "term2", "term3"]`;
     const messages: ChatMessage[] = [
       {
         role: "system",
-        content:
-          "You generate search expansion terms. Return only valid JSON arrays.",
+        content: "You generate search expansion terms. Return only valid JSON arrays.",
       },
       { role: "user", content: prompt },
     ];
 
-    const response = llm.complete
-      ? await llm.complete(messages)
-      : await llm.chat!(messages);
+    const response = llm.complete ? await llm.complete(messages) : await llm.chat!(messages);
 
     // Parse JSON array from response
     try {
@@ -325,7 +320,11 @@ Example: ["term1", "term2", "term3"]`;
    */
   private resolveLink(link: string, sourcePath: string): string | null {
     // Handle various link formats: [[note]], [[folder/note]], [[note.md]]
-    let target = link.replace(/^\[\[|\]\]$/g, "").split("|")[0].split("#")[0].trim();
+    let target = link
+      .replace(/^\[\[|\]\]$/g, "")
+      .split("|")[0]
+      .split("#")[0]
+      .trim();
 
     // If it doesn't have an extension, add .md
     if (!target.endsWith(".md")) {
@@ -421,9 +420,7 @@ Example: ["term1", "term2", "term3"]`;
 
     // Enhance query with expanded terms for reranking
     const enhancedQuery =
-      expandedTerms.length > 0
-        ? `${query} (related: ${expandedTerms.join(", ")})`
-        : query;
+      expandedTerms.length > 0 ? `${query} (related: ${expandedTerms.join(", ")})` : query;
 
     const ranked = await reranker.rerank(enhancedQuery, candidates);
     if (!ranked.length) return results;
@@ -503,7 +500,7 @@ Example: ["term1", "term2", "term3"]`;
    */
   private getParaType(path: string): SearchResult["paraType"] {
     if (!path) return "unknown";
-    
+
     const para = this.context.kernel.settings.para;
     const lowerPath = path.toLowerCase();
 

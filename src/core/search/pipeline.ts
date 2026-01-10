@@ -16,10 +16,10 @@
 import type { OllamaService } from "../../services/ollama";
 import type { VectorStore } from "../../services/vectorStore";
 import type {
+  ChunkSearchResult,
   RelatedNote,
   SearchOptions,
   SearchResult,
-  ChunkSearchResult,
 } from "../../types/search";
 import { SEARCH_PRESETS, type SearchPreset } from "../../types/settings";
 import { CACHE_CONFIG } from "../constants";
@@ -115,9 +115,10 @@ export class SearchPipeline {
       rawPreset === "custom" ? "balanced" : rawPreset;
 
     // Get defaults from preset
-    const defaults = preset in SEARCH_PRESETS
-      ? SEARCH_PRESETS[preset as keyof typeof SEARCH_PRESETS]
-      : searchSettings.custom;
+    const defaults =
+      preset in SEARCH_PRESETS
+        ? SEARCH_PRESETS[preset as keyof typeof SEARCH_PRESETS]
+        : searchSettings.custom;
 
     const enableReranking = options.enableReranking ?? defaults.enableReranking;
     const topK = options.topK ?? defaults.topK;
@@ -363,12 +364,7 @@ export class SearchPipeline {
   /**
    * Generate cache key
    */
-  private getCacheKey(
-    query: string,
-    topK: number,
-    minScore: number,
-    preset: SearchPreset,
-  ): string {
+  private getCacheKey(query: string, topK: number, minScore: number, preset: SearchPreset): string {
     return JSON.stringify({
       query: query.toLowerCase().trim(),
       topK,

@@ -13,12 +13,7 @@ import type { UserProfile } from "../../types/profile";
 import type { LLMProvider } from "../llm/provider";
 import { buildAgentSystemPrompt } from "./agentIdentity";
 import { BaseAgent } from "./base";
-import type {
-  AgentContext,
-  AgentEvent,
-  LinkSuggestionsOutput,
-  StructuredOutput,
-} from "./types";
+import type { AgentContext, AgentEvent, LinkSuggestionsOutput, StructuredOutput } from "./types";
 
 /**
  * Link Finder agent implementation
@@ -52,20 +47,28 @@ export class LinkFinderAgent extends BaseAgent {
     // Add existing links (to avoid duplicates)
     const existingLinks = this.extractExistingLinks(context.currentNote.content);
     if (existingLinks.length > 0) {
-      contextParts.push(`\nEXISTING LINKS IN NOTE:\n${existingLinks.map((l) => `- [[${l}]]`).join("\n")}`);
+      contextParts.push(
+        `\nEXISTING LINKS IN NOTE:\n${existingLinks.map((l) => `- [[${l}]]`).join("\n")}`,
+      );
     }
 
     // Add vault graph context (backlinks, orphans, hubs)
     if (context.graph) {
       const graphInfo = [];
       if (context.graph.backlinks.length > 0) {
-        graphInfo.push(`Notes linking TO this note: ${context.graph.backlinks.slice(0, 10).join(", ")}`);
+        graphInfo.push(
+          `Notes linking TO this note: ${context.graph.backlinks.slice(0, 10).join(", ")}`,
+        );
       }
       if (context.graph.outlinks.length > 0) {
-        graphInfo.push(`Notes this note links TO: ${context.graph.outlinks.slice(0, 10).join(", ")}`);
+        graphInfo.push(
+          `Notes this note links TO: ${context.graph.outlinks.slice(0, 10).join(", ")}`,
+        );
       }
       if (context.graph.hubs.length > 0) {
-        graphInfo.push(`Hub notes (highly connected): ${context.graph.hubs.slice(0, 5).join(", ")}`);
+        graphInfo.push(
+          `Hub notes (highly connected): ${context.graph.hubs.slice(0, 5).join(", ")}`,
+        );
       }
       if (graphInfo.length > 0) {
         contextParts.push(`\nVAULT GRAPH CONTEXT:\n${graphInfo.join("\n")}`);
@@ -158,7 +161,6 @@ export class LinkFinderAgent extends BaseAgent {
 
       yield { type: "progress", agentType: "link-finder", progress: 100 };
       yield { type: "complete", agentType: "link-finder", output };
-
     } catch (error) {
       yield { type: "error", agentType: "link-finder", error: error as Error };
     }

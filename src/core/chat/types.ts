@@ -74,11 +74,11 @@ export type ChatStreamEvent =
  * Activity phases for the activity trail
  */
 export type ActivityPhase =
-  | "context"      // Building context
-  | "thinking"     // Model reasoning
-  | "generating"   // Generating response
-  | "delegation"   // Delegating to specialist
-  | "complete";    // Done
+  | "context" // Building context
+  | "thinking" // Model reasoning
+  | "generating" // Generating response
+  | "delegation" // Delegating to specialist
+  | "complete"; // Done
 
 /**
  * Statistics collected during chat response generation

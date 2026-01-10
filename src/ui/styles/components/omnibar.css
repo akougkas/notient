@@ -38,9 +38,8 @@
 .nv2-omnibar--focused .nv2-omnibar-wrapper {
   border-color: var(--interactive-accent);
   background: var(--background-primary);
-  box-shadow: 
-    0 0 0 3px color-mix(in srgb, var(--interactive-accent) 15%, transparent),
-    0 4px 12px -2px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 15%, transparent), 0 4px 12px
+    -2px rgba(0, 0, 0, 0.15);
 }
 
 /* Command mode styling */
@@ -50,9 +49,8 @@
 
 .nv2-omnibar--command.nv2-omnibar--focused .nv2-omnibar-wrapper {
   border-color: var(--color-purple);
-  box-shadow: 
-    0 0 0 3px color-mix(in srgb, var(--color-purple) 15%, transparent),
-    0 4px 12px -2px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-purple) 15%, transparent), 0 4px 12px -2px
+    rgba(0, 0, 0, 0.15);
 }
 
 /* =============================================================================
@@ -179,7 +177,9 @@
 }
 
 @keyframes nv2-omnibar-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* =============================================================================
@@ -194,10 +194,8 @@
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--nv2-radius-lg);
-  box-shadow: 
-    0 4px 6px -1px rgba(0, 0, 0, 0.1),
-    0 10px 20px -2px rgba(0, 0, 0, 0.15),
-    0 0 0 1px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 10px 20px -2px rgba(0, 0, 0, 0.15), 0 0 0 1px
+    rgba(0, 0, 0, 0.05);
   max-height: 400px;
   overflow-y: auto;
   animation: nv2-dropdown-appear 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -316,7 +314,7 @@
   .nv2-omnibar-dropdown {
     animation: none;
   }
-  
+
   .nv2-omnibar-spinner {
     animation-duration: 1.5s;
   }

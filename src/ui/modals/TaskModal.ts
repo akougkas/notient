@@ -1,9 +1,9 @@
 import { type App, ButtonComponent, Modal, TextAreaComponent, setIcon } from "obsidian";
 import type { ChiefOfStaffTask, NotientAgent } from "../../core/agent";
 import type { AgentTask } from "../../core/agent/types";
-import type { AgentEvent, StructuredOutput } from "../../core/agents/types";
 import type { ActionApplier, ActionHistory, TrustLevelManager } from "../../core/agentic";
 import type { ProposedAction, RiskLevel } from "../../core/agentic/types";
+import type { AgentEvent, StructuredOutput } from "../../core/agents/types";
 import { ChatSession, type ConversationStore } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
 
@@ -414,7 +414,7 @@ export class TaskModal extends Modal {
     // Convert legacy AgentTask to ChiefOfStaffTask
     const userMessages = this.task.chatHistory.filter((m) => m.role === "user");
     const query = userMessages[userMessages.length - 1]?.content || "";
-    
+
     const chiefTask: ChiefOfStaffTask = {
       query,
       notePath: this.task.notePath,
@@ -450,7 +450,7 @@ export class TaskModal extends Modal {
             // Map AgentOutput to TaskResult
             const output = event.output;
             let responseContent = this.streamingContent;
-            
+
             if (output.kind === "conversational") {
               responseContent = output.content || this.streamingContent;
               // Check for actions from delegated results
@@ -480,7 +480,7 @@ export class TaskModal extends Modal {
               citations,
               actions: this.pendingActions.length > 0 ? this.pendingActions : undefined,
             };
-            
+
             // Render pending actions if any
             if (this.pendingActions.length > 0) {
               this.renderProposedActions();
@@ -490,7 +490,7 @@ export class TaskModal extends Modal {
 
           case "error":
             throw event.error;
-            
+
           // Handle new event types (progress, delegation) as no-ops for UI
           case "started":
           case "progress":

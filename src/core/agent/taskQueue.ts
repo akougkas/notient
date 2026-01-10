@@ -13,11 +13,11 @@
  */
 
 import type { ProposedAction } from "../agentic/types";
+import type { ChiefOfStaff, ChiefOfStaffTask } from "../agents/chiefOfStaff";
+import type { AgentEvent, ConversationalOutput, StructuredOutput } from "../agents/types";
 import type { ConversationStore } from "../chat/conversationStore";
 import type { ExtendedChatMessage } from "../chat/types";
 import type { EventBus } from "../events/eventBus";
-import type { ChiefOfStaff, ChiefOfStaffTask } from "../agents/chiefOfStaff";
-import type { AgentEvent, StructuredOutput, ConversationalOutput } from "../agents/types";
 import type { AgentStreamEvent, AgentTask, TaskResult } from "./types";
 
 /**
@@ -338,7 +338,9 @@ export class AgentTaskQueue {
   /**
    * Map legacy taskType to new agent type
    */
-  private mapTaskTypeToAgent(taskType?: string): "chat" | "note-editor" | "classifier" | "link-finder" | undefined {
+  private mapTaskTypeToAgent(
+    taskType?: string,
+  ): "chat" | "note-editor" | "classifier" | "link-finder" | undefined {
     switch (taskType) {
       case "enrich":
         return "note-editor";
@@ -460,10 +462,11 @@ export class AgentTaskQueue {
             };
 
             // Add assistant response to chat history
-            const assistantContent = typeof resultData === "string" 
-              ? resultData 
-              : fullResponse || JSON.stringify(resultData);
-            
+            const assistantContent =
+              typeof resultData === "string"
+                ? resultData
+                : fullResponse || JSON.stringify(resultData);
+
             task.chatHistory.push({
               role: "assistant",
               content: assistantContent,

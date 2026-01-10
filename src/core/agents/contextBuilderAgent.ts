@@ -10,17 +10,12 @@
  */
 
 import type { UserProfile } from "../../types/profile";
+import type { VaultContextBuilder } from "../context/vaultContextBuilder";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
-import type { VaultContextBuilder } from "../context/vaultContextBuilder";
 import { buildAgentSystemPrompt } from "./agentIdentity";
 import { BaseAgent } from "./base";
-import type {
-  AgentContext,
-  AgentEvent,
-  InternalOutput,
-  SearchContext,
-} from "./types";
+import type { AgentContext, AgentEvent, InternalOutput, SearchContext } from "./types";
 
 /**
  * Context Builder agent implementation
@@ -72,13 +67,18 @@ export class ContextBuilderAgent extends BaseAgent {
     const contextParts: string[] = [];
 
     // Add current note info (minimal, just metadata)
-    contextParts.push(`\nCURRENT NOTE: "${context.currentNote.title}" (${context.currentNote.path})`);
+    contextParts.push(
+      `\nCURRENT NOTE: "${context.currentNote.title}" (${context.currentNote.path})`,
+    );
 
     // Add search results if available
     if (context.search?.results.length) {
       const resultsList = context.search.results
         .slice(0, 7)
-        .map((r, i) => `${i + 1}. [[${r.title}]] (score: ${r.score.toFixed(2)}): ${r.snippet.slice(0, 100)}...`)
+        .map(
+          (r, i) =>
+            `${i + 1}. [[${r.title}]] (score: ${r.score.toFixed(2)}): ${r.snippet.slice(0, 100)}...`,
+        )
         .join("\n");
       contextParts.push(`\nSEARCH RESULTS:\n${resultsList}`);
     }
@@ -160,7 +160,6 @@ export class ContextBuilderAgent extends BaseAgent {
         }
 
         yield { type: "progress", agentType: "context-builder", progress: 50 };
-
       } catch (error) {
         this.warn("Search failed, continuing without search context:", error);
       }
@@ -184,7 +183,6 @@ export class ContextBuilderAgent extends BaseAgent {
         yield { type: "progress", agentType: "context-builder", progress: 70 };
 
         contextSummary = await this.completeLLM(messages);
-
       } catch (error) {
         this.warn("Context summarization failed:", error);
       }
@@ -201,10 +199,16 @@ export class ContextBuilderAgent extends BaseAgent {
 
     // Emit citations for found notes
     if (relatedNotes.length > 0) {
-      yield { type: "citations", agentType: "context-builder", paths: relatedNotes.map((n) => n.path) };
+      yield {
+        type: "citations",
+        agentType: "context-builder",
+        paths: relatedNotes.map((n) => n.path),
+      };
     }
 
-    this.log(`Built context: ${relatedNotes.length} related notes, summary: ${contextSummary.slice(0, 50)}...`);
+    this.log(
+      `Built context: ${relatedNotes.length} related notes, summary: ${contextSummary.slice(0, 50)}...`,
+    );
 
     yield { type: "progress", agentType: "context-builder", progress: 100 };
     yield { type: "complete", agentType: "context-builder", output };

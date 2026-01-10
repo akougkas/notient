@@ -108,7 +108,7 @@ export class NativeSearch {
   ): Promise<NativeMatch | null> {
     // Null safety for file properties
     if (!file.path || !file.basename) return null;
-    
+
     const path = file.path.toLowerCase();
     const title = file.basename.toLowerCase();
 

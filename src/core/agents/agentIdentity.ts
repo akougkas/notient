@@ -2,7 +2,7 @@
  * Agent Identity System
  *
  * Extends the core Notient identity system with agent-specific overlays.
- * 
+ *
  * Architecture:
  * - Tier 1: Core Notient Identity (from identity.ts)
  *   - Research Chief of Staff persona
@@ -10,7 +10,7 @@
  *   - PARA methodology
  *   - Reasoning style
  *   - Output style preferences
- * 
+ *
  * - Tier 2: Agent Specialization (this file)
  *   - Mission statement
  *   - Expertise area
@@ -267,7 +267,7 @@ Do NOT use JSON. Output plain text summary only.`,
 
 /**
  * Build the complete system prompt for an agent
- * 
+ *
  * Combines:
  * - Tier 1: Core Notient identity (buildBaseIdentity)
  * - Tier 2: Agent specialization

@@ -5,11 +5,11 @@
  * - President = User (decision maker)
  * - Chief of Staff = Notient core (coordinator, dispatcher, router, aggregator)
  * - Department Heads = Specialized agents (core + workflow)
- * 
+ *
  * Two-Tier Identity System:
  * - Tier 1: Core Notient Identity (Research Chief of Staff + user profile)
  * - Tier 2: Agent Specialization (role + mission + output format)
- * 
+ *
  * Agent Types:
  * - Core Agents: chat, note-editor, classifier, link-finder, context-builder
  * - Workflow Agents: enhance, atomic, synthesis, task, brand, connection, antagonist, clipping
@@ -55,5 +55,10 @@ export { ChiefOfStaff } from "./chiefOfStaff";
 export type { ChiefOfStaffTask } from "./chiefOfStaff";
 
 // Model selection
-export { ModelSelector, createModelSelector, getDefaultOptions, MODEL_PROFILES } from "./modelSelector";
+export {
+  ModelSelector,
+  createModelSelector,
+  getDefaultOptions,
+  MODEL_PROFILES,
+} from "./modelSelector";
 export type { ModelProfile } from "./modelSelector";

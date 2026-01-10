@@ -5,8 +5,7 @@
  */
 
 import type { ChatStatistics } from "../../../../core/chat/types";
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
+import { Icon } from "../Icon";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { StatsPanel } from "./StatsPanel";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -39,19 +38,6 @@ interface MessageBubbleProps {
   onOpenNote: (path: string) => void;
   onAction?: (action: MessageAction) => void;
   showStats?: boolean;
-}
-
-/**
- * Icon component
- */
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 /**

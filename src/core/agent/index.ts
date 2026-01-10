@@ -2,7 +2,7 @@
  * Agent Module Exports
  *
  * Clean public API for the Notient agent system.
- * 
+ *
  * Architecture Note:
  * ChiefOfStaff (from src/core/agents/) is the new multi-agent orchestrator
  * that replaces the legacy NotientAgent. We export it as NotientAgent for

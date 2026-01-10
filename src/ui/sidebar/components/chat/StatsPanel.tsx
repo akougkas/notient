@@ -5,9 +5,9 @@
  * Shows response time, token counts, tokens/sec, context usage, and model info.
  */
 
-import type { ChatStatistics } from "../../../../core/chat/types";
 import { setIcon } from "obsidian";
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { ChatStatistics } from "../../../../core/chat/types";
 
 interface StatsPanelProps {
   /** Statistics data */
@@ -57,11 +57,7 @@ function getContextUsagePercent(used: number, max: number): number {
   return Math.round((used / max) * 100);
 }
 
-export function StatsPanel({
-  statistics,
-  visible = true,
-  position = "inline",
-}: StatsPanelProps) {
+export function StatsPanel({ statistics, visible = true, position = "inline" }: StatsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   if (!visible) return null;
@@ -93,10 +89,7 @@ export function StatsPanel({
         <Icon name="zap" className="nv2-stats-icon" />
         {statistics.tokensPerSecond.toFixed(1)} t/s
       </span>
-      <Icon
-        name={isExpanded ? "chevron-up" : "chevron-down"}
-        className="nv2-stats-expand-icon"
-      />
+      <Icon name={isExpanded ? "chevron-up" : "chevron-down"} className="nv2-stats-expand-icon" />
     </button>
   );
 
@@ -146,9 +139,7 @@ export function StatsPanel({
           <div class="nv2-stats-section-title">Context Window</div>
           <div class="nv2-stats-row">
             <span class="nv2-stats-label">Used</span>
-            <span class="nv2-stats-value">
-              {formatNumber(statistics.contextWindowUsed)} chars
-            </span>
+            <span class="nv2-stats-value">{formatNumber(statistics.contextWindowUsed)} chars</span>
           </div>
           <div class="nv2-stats-row">
             <span class="nv2-stats-label">Max</span>

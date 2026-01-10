@@ -6,8 +6,8 @@
  */
 
 import { marked } from "marked";
-import Prism from "prismjs";
 import { useEffect, useMemo, useRef } from "preact/hooks";
+import Prism from "prismjs";
 
 // Import common language syntaxes
 import "prismjs/components/prism-javascript";

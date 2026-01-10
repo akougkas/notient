@@ -149,9 +149,7 @@ export function createNoteQuickActions(
       primary: false,
       description: "Generate summary (Chat)",
       onClick: () =>
-        sendToChat(
-          `Create a concise summary of "${noteTitle}" that captures the key points`,
-        ),
+        sendToChat(`Create a concise summary of "${noteTitle}" that captures the key points`),
     },
     {
       id: "extract-tasks",

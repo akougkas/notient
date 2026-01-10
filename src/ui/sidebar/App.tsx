@@ -7,87 +7,51 @@
  * - Footer: Three-zone status (Providers | Index | Agents)
  */
 
-import { signal } from "@preact/signals";
 import { Notice, setIcon } from "obsidian";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
 import type { ActionApplier, ActionHistory, WorkflowRunner } from "../../core/agentic";
-import { ChatService, type ChatStatistics, type ActivityPhase } from "../../core/chat";
+import { type ActivityPhase, ChatService, type ChatStatistics } from "../../core/chat";
 import { InsightGenerator } from "../../services/insightGenerator";
 import type { SearchResult } from "../../types/search";
-import {
-  type ActiveAgent,
-  type AgentResultData,
-  AgentStreamsView,
-  type PendingAction,
-  type RecentActivity,
-} from "./components/AgentStreamsView";
-import { type ChatContext, type ChatMessage, ChatView } from "./components/ChatView";
-import {
-  RichChatView,
-  type RichChatMessage,
-  type ActivityItem,
-  createActivityItem,
-} from "./components/chat";
-import { ModelSelectorModal } from "./components/ModelSelectorModal";
-import { IndexDashboardModal } from "./components/IndexDashboardModal";
-import { NavDeck } from "./components/NavDeck";
-import { SystemDashboard } from "./components/SystemDashboard";
-import type { AgentStatus, IndexStatus, ProviderStatus, SidebarView } from "./types";
+import type { InitializationContext, InitializationState } from "../../types/services";
+import { IndexDashboardModal } from "../modals/IndexDashboardModal";
+import { ModelSelectorModal } from "../modals/ModelSelectorModal";
+import { type AgentResultData, AgentStreamsView } from "./components/AgentStreamsView";
 import { InsightStream } from "./components/InsightStream";
+import { NavDeck } from "./components/NavDeck";
 import { NoteCard } from "./components/NoteCard";
 import { Omnibar } from "./components/Omnibar";
 import { QuickActions, createNoteQuickActions } from "./components/QuickActions";
+import { SystemDashboard } from "./components/SystemDashboard";
 import { VitalsCards } from "./components/VitalsCards";
+import { type RichChatMessage, RichChatView, createActivityItem } from "./components/chat";
 import { useApp, useEventBus, useKernel, useService } from "./context/KernelContext";
 import { useBacklinkPreview, useNoteVitals } from "./hooks/useNoteVitals";
 
-import type { InitializationContext, InitializationState } from "../../types/services";
-
-// Global signals for sidebar state
-const showModelModal = signal(false);
-const showIndexModal = signal(false);
-const isServicesReady = signal(false);
-const initState = signal<InitializationState>("UNINITIALIZED");
-const initContext = signal<InitializationContext | null>(null);
-const activeView = signal<SidebarView>("note");
-const providerStatus = signal<ProviderStatus>({
-  lmstudio: { connected: false, model: null },
-  ollama: { connected: false, model: null },
-});
-const indexStatus = signal<IndexStatus>({
-  noteCount: 0,
-  lastSyncedAt: null,
-  isIndexing: false,
-});
-const agentStatus = signal<AgentStatus>({
-  runningCount: 0,
-  pendingReviewCount: 0,
-});
-
-// Agent Streams view state
-const activeAgents = signal<ActiveAgent[]>([]);
-const pendingActions = signal<PendingAction[]>([]);
-const recentActivity = signal<RecentActivity[]>([]);
-// Dynamic insights from completed agents (displayed in Vitals InsightStream)
-const agentInsights = signal<import("../../services/insightGenerator").Insight[]>([]);
-
-// Chat view state (legacy - used with old ChatView)
-const chatContext = signal<ChatContext>({ notePath: null, noteTitle: null });
-const chatMessages = signal<ChatMessage[]>([]);
-const isChatStreaming = signal(false);
-const chatStreamingContent = signal("");
-
-// Rich chat view state (new - used with RichChatView)
-const richChatMessages = signal<RichChatMessage[]>([]);
-const chatStreamingThinking = signal("");
-const isChatThinking = signal(false);
-const chatActivities = signal<ActivityItem[]>([]);
-const useRichChat = signal(true); // Feature flag - enable rich chat by default
-
-// Search state
-const searchResults = signal<SearchResult[]>([]);
-const searchQuery = signal<string>("");
+// Import centralized state
+import {
+  activeAgents,
+  activeView,
+  agentInsights,
+  agentStatus,
+  chatActivities,
+  chatContext,
+  chatMessages,
+  chatStreamingContent,
+  chatStreamingThinking,
+  indexStatus,
+  initContext,
+  initState,
+  isChatStreaming,
+  isChatThinking,
+  isServicesReady,
+  pendingActions,
+  providerStatus,
+  recentActivity,
+  searchQuery,
+  searchResults,
+} from "./state";
 
 export function App() {
   const kernel = useKernel();
@@ -236,12 +200,12 @@ export function App() {
     activeAgents.value = activeAgents.value.map((agent) =>
       agent.id === workflow.id
         ? {
-          ...agent,
-          progress:
-            workflow.progress.total > 0
-              ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
-              : 0,
-        }
+            ...agent,
+            progress:
+              workflow.progress.total > 0
+                ? Math.round((workflow.progress.completed / workflow.progress.total) * 100)
+                : 0,
+          }
         : agent,
     );
   });
@@ -372,9 +336,7 @@ export function App() {
         case "running":
           // Update progress in active agents
           activeAgents.value = activeAgents.value.map((agent) =>
-            agent.id === task.id
-              ? { ...agent, progress: task.progress || 0 }
-              : agent
+            agent.id === task.id ? { ...agent, progress: task.progress || 0 } : agent,
           );
           break;
 
@@ -384,19 +346,19 @@ export function App() {
 
           if (agent) {
             // Extract content from result
-            const resultContent = typeof task.result?.data === "string"
-              ? task.result.data
-              : JSON.stringify(task.result?.data || {}, null, 2);
+            const resultContent =
+              typeof task.result?.data === "string"
+                ? task.result.data
+                : JSON.stringify(task.result?.data || {}, null, 2);
 
             // Create a one-liner insight summary from the result
-            const insightSummary = resultContent.length > 100
-              ? resultContent.slice(0, 100).trim() + "..."
-              : resultContent;
+            const insightSummary =
+              resultContent.length > 100
+                ? resultContent.slice(0, 100).trim() + "..."
+                : resultContent;
 
             // Calculate duration
-            const durationMs = agent.startedAt
-              ? Date.now() - agent.startedAt.getTime()
-              : 0;
+            const durationMs = agent.startedAt ? Date.now() - agent.startedAt.getTime() : 0;
 
             // Build result data for "View Results" modal
             const resultData: AgentResultData = {
@@ -417,7 +379,7 @@ export function App() {
                     progress: 100,
                     resultData,
                   }
-                : a
+                : a,
             );
 
             // Decrease running count
@@ -501,49 +463,6 @@ export function App() {
           };
           break;
         }
-      }
-    } else {
-      // Legacy chat handling - only process for current context
-      if (task.notePath !== chatContext.value.notePath) return;
-
-      switch (task.status) {
-        case "running":
-          isChatStreaming.value = true;
-          break;
-
-        case "completed":
-          isChatStreaming.value = false;
-          chatStreamingContent.value = "";
-
-          if (task.result?.data) {
-            const assistantContent = task.result.data as string;
-            const assistantMsg: ChatMessage = {
-              id: `assistant-${Date.now()}`,
-              role: "assistant",
-              content: assistantContent,
-              timestamp: new Date(),
-              citations: task.result.citations,
-            };
-            chatMessages.value = [...chatMessages.value, assistantMsg];
-          }
-          break;
-
-        case "failed":
-          isChatStreaming.value = false;
-          chatStreamingContent.value = "";
-          const errorMsg: ChatMessage = {
-            id: `error-${Date.now()}`,
-            role: "assistant",
-            content: `Sorry, something went wrong: ${task.error || "Unknown error"}`,
-            timestamp: new Date(),
-          };
-          chatMessages.value = [...chatMessages.value, errorMsg];
-          break;
-
-        case "cancelled":
-          isChatStreaming.value = false;
-          chatStreamingContent.value = "";
-          break;
       }
     }
   });
@@ -641,7 +560,7 @@ export function App() {
           content: "Chat service is not available. Please wait for initialization.",
           timestamp: new Date(),
         };
-        richChatMessages.value = [...richChatMessages.value, errorMsg];
+        chatMessages.value = [...chatMessages.value, errorMsg];
         return;
       }
 
@@ -652,7 +571,7 @@ export function App() {
         content: message,
         timestamp: new Date(),
       };
-      richChatMessages.value = [...richChatMessages.value, userMsg];
+      chatMessages.value = [...chatMessages.value, userMsg];
 
       // Clear previous streaming state
       isChatStreaming.value = true;
@@ -664,7 +583,7 @@ export function App() {
       // Build note context
       let noteContext = null;
       if (noteVitals.value) {
-        const content = await kernel.obsidian.readFileByPath(noteVitals.value.path) || "";
+        const content = (await kernel.obsidian.readFileByPath(noteVitals.value.path)) || "";
         noteContext = {
           title: noteVitals.value.title,
           path: noteVitals.value.path,
@@ -674,7 +593,7 @@ export function App() {
       }
 
       // Build chat history for context
-      const history = richChatMessages.value
+      const history = chatMessages.value
         .filter((m) => m.role !== "assistant" || !m.id.startsWith("error-"))
         .slice(-10)
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
@@ -736,7 +655,7 @@ export function App() {
           thinkingDurationMs: statistics?.thinkingTimeMs,
           statistics: statistics || undefined,
         };
-        richChatMessages.value = [...richChatMessages.value, assistantMsg];
+        chatMessages.value = [...chatMessages.value, assistantMsg];
       } catch (error) {
         const errorMsg: RichChatMessage = {
           id: `error-${Date.now()}`,
@@ -744,7 +663,7 @@ export function App() {
           content: `Sorry, something went wrong: ${error instanceof Error ? error.message : "Unknown error"}`,
           timestamp: new Date(),
         };
-        richChatMessages.value = [...richChatMessages.value, errorMsg];
+        chatMessages.value = [...chatMessages.value, errorMsg];
       } finally {
         isChatStreaming.value = false;
         chatStreamingContent.value = "";
@@ -787,17 +706,15 @@ export function App() {
 
   // Merge agent insights (dynamic) with static insights
   // Agent insights appear first as they're more actionable
-  const insights = useMemo(
-    () => [...agentInsights.value, ...staticInsights],
-    [staticInsights],
-  );
+  const insights = useMemo(() => [...agentInsights.value, ...staticInsights], [staticInsights]);
 
   // Quick actions for current note
   const quickActions = useMemo(
-    () => createNoteQuickActions(noteVitals.value?.title || "this note", {
-      triggerAgent: triggerAgenticAction,
-      sendToChat: prefillChatAndSwitch,
-    }),
+    () =>
+      createNoteQuickActions(noteVitals.value?.title || "this note", {
+        triggerAgent: triggerAgenticAction,
+        sendToChat: prefillChatAndSwitch,
+      }),
     [noteVitals.value?.title, triggerAgenticAction, prefillChatAndSwitch],
   );
 
@@ -805,26 +722,24 @@ export function App() {
   const hasNote = noteVitals.value !== null;
   const currentView = activeView.value;
 
+  // Modal open handlers - use Obsidian native modals
+  const openModelSelector = useCallback(() => {
+    const currentModel = providerStatus.value.lmstudio.model || providerStatus.value.ollama.model;
+    new ModelSelectorModal(app, kernel, currentModel).open();
+  }, [app, kernel]);
+
+  const openIndexDashboard = useCallback(() => {
+    new IndexDashboardModal(app, kernel, indexStatus.value).open();
+  }, [app, kernel]);
+
   return (
     <div class="nv2-app">
-      {/* Modals */}
-      <ModelSelectorModal
-        isOpen={showModelModal.value}
-        onClose={() => showModelModal.value = false}
-        currentModel={providerStatus.value.lmstudio.model || providerStatus.value.ollama.model}
-      />
-      <IndexDashboardModal
-        isOpen={showIndexModal.value}
-        onClose={() => showIndexModal.value = false}
-        indexStatus={indexStatus.value}
-      />
-
       {/* Top: System Dashboard (Status & Settings) */}
       <SystemDashboard
         providers={providerStatus}
         index={indexStatus}
-        onModelClick={() => showModelModal.value = true}
-        onIndexClick={() => showIndexModal.value = true}
+        onModelClick={openModelSelector}
+        onIndexClick={openIndexDashboard}
         onSettingsClick={() => {
           // Open Notient settings tab
           const setting = (app as any).setting;
@@ -983,7 +898,7 @@ export function App() {
                 }
                 message += `---\n\n${content}`;
                 if (citations && citations.length > 0) {
-                  message += `\n\n**Related Notes:**\n${citations.map(c => `- [[${c}]]`).join('\n')}`;
+                  message += `\n\n**Related Notes:**\n${citations.map((c) => `- [[${c}]]`).join("\n")}`;
                 }
 
                 // For now, show in a Notice (TODO: proper modal)
@@ -996,11 +911,11 @@ export function App() {
               activeAgents.value = activeAgents.value.filter((a) => a.id !== id);
             }}
           />
-        ) : useRichChat.value ? (
-          // Rich Chat View (new - with markdown, thinking, stats)
+        ) : (
+          // Chat View
           <RichChatView
             context={chatContext}
-            messages={richChatMessages}
+            messages={chatMessages}
             isStreaming={isChatStreaming}
             streamingContent={chatStreamingContent}
             streamingThinking={chatStreamingThinking}
@@ -1009,79 +924,18 @@ export function App() {
             onSendMessage={handleRichChatSend}
             onClearContext={() => {
               chatContext.value = { notePath: null, noteTitle: null };
-              richChatMessages.value = [];
+              chatMessages.value = [];
             }}
             onOpenNote={(path) => {
               kernel.obsidian.openFile(path);
             }}
             showStats={true}
           />
-        ) : (
-          // Legacy Chat View
-          <ChatView
-            context={chatContext}
-            messages={chatMessages}
-            isStreaming={isChatStreaming}
-            streamingContent={chatStreamingContent}
-            onSendMessage={(message) => {
-              // Add user message to UI immediately
-              const userMsg: ChatMessage = {
-                id: `user-${Date.now()}`,
-                role: "user",
-                content: message,
-                timestamp: new Date(),
-              };
-              chatMessages.value = [...chatMessages.value, userMsg];
-
-              // Send to agent queue for processing
-              // The agent:task-update event handler will update streaming state and add assistant response
-              if (taskQueue && chatContext.value.notePath) {
-                try {
-                  taskQueue.enqueue({
-                    agent: "chat",
-                    notePath: chatContext.value.notePath,
-                    noteTitle: chatContext.value.noteTitle || "Note",
-                    chatHistory: chatMessages.value.map((m) => ({
-                      role: m.role,
-                      content: m.content,
-                    })),
-                  });
-                } catch (err) {
-                  const errorMsg: ChatMessage = {
-                    id: `error-${Date.now()}`,
-                    role: "assistant",
-                    content: err instanceof Error ? err.message : "Failed to send message",
-                    timestamp: new Date(),
-                  };
-                  chatMessages.value = [...chatMessages.value, errorMsg];
-                }
-              } else {
-                // No task queue available - show error
-                const errorMsg: ChatMessage = {
-                  id: `error-${Date.now()}`,
-                  role: "assistant",
-                  content:
-                    "Chat service is not available. Please wait for initialization to complete.",
-                  timestamp: new Date(),
-                };
-                chatMessages.value = [...chatMessages.value, errorMsg];
-              }
-            }}
-            onClearContext={() => {
-              chatContext.value = { notePath: null, noteTitle: null };
-            }}
-            onOpenNote={(path) => {
-              kernel.obsidian.openFile(path);
-            }}
-          />
         )}
       </div>
 
       {/* Bottom: Navigation Deck (View Switcher) */}
-      <NavDeck
-        activeView={activeView}
-        agentStatus={agentStatus}
-      />
+      <NavDeck activeView={activeView} agentStatus={agentStatus} />
     </div>
   );
 }

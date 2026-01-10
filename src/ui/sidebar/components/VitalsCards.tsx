@@ -11,9 +11,8 @@
  * Each card is clickable and sends the user to chat for more details.
  */
 
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
+import { Icon } from "./Icon";
 
 interface VitalsCardsProps {
   vitals: NoteVitals;
@@ -21,17 +20,6 @@ interface VitalsCardsProps {
 }
 
 type VitalStatus = "healthy" | "attention" | "unhealthy";
-
-// Icon component for Lucide icons in Preact
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
-}
 
 export function VitalsCards({ vitals, onCardClick }: VitalsCardsProps) {
   const grade = calculateGrade(vitals);

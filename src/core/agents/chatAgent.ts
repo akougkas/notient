@@ -8,7 +8,7 @@
  *
  * This is the primary user-facing agent that can invoke specialist agents
  * when the conversation requires structured actions.
- * 
+ *
  * Identity: Tier 1 (Core Notient) + Tier 2 (Senior Advisor & Liaison)
  */
 
@@ -71,7 +71,7 @@ export class ChatAgent extends BaseAgent {
 
     // Build context string for identity system
     const contextParts: string[] = [];
-    
+
     // Add current note
     contextParts.push(this.formatNoteForPrompt(context.currentNote));
 
@@ -133,7 +133,11 @@ export class ChatAgent extends BaseAgent {
 
         // Check for delegation triggers mid-stream
         const trigger = this.detectDelegationTrigger(fullResponse);
-        if (trigger && this.delegationHandler && !this.hasDelegated(delegatedResults, trigger.agentType)) {
+        if (
+          trigger &&
+          this.delegationHandler &&
+          !this.hasDelegated(delegatedResults, trigger.agentType)
+        ) {
           yield { type: "delegation-started", from: "chat", to: trigger.agentType };
 
           try {
@@ -169,10 +173,13 @@ export class ChatAgent extends BaseAgent {
 
       yield { type: "progress", agentType: "chat", progress: 100 };
       yield { type: "complete", agentType: "chat", output };
-
     } catch (error) {
       if ((error as Error).name === "AbortError") {
-        yield { type: "error", agentType: "chat", error: new DOMException("Chat aborted", "AbortError") };
+        yield {
+          type: "error",
+          agentType: "chat",
+          error: new DOMException("Chat aborted", "AbortError"),
+        };
         return;
       }
       yield { type: "error", agentType: "chat", error: error as Error };
@@ -200,7 +207,9 @@ export class ChatAgent extends BaseAgent {
     const lowerText = text.toLowerCase();
 
     if (
-      (lowerText.includes("classify") || lowerText.includes("categorize") || lowerText.includes("para")) &&
+      (lowerText.includes("classify") ||
+        lowerText.includes("categorize") ||
+        lowerText.includes("para")) &&
       this.canDelegateTo("classifier")
     ) {
       return {
@@ -211,7 +220,9 @@ export class ChatAgent extends BaseAgent {
     }
 
     if (
-      (lowerText.includes("find connection") || lowerText.includes("related notes") || lowerText.includes("link")) &&
+      (lowerText.includes("find connection") ||
+        lowerText.includes("related notes") ||
+        lowerText.includes("link")) &&
       this.canDelegateTo("link-finder")
     ) {
       return {
@@ -222,7 +233,9 @@ export class ChatAgent extends BaseAgent {
     }
 
     if (
-      (lowerText.includes("edit") || lowerText.includes("improve") || lowerText.includes("restructure")) &&
+      (lowerText.includes("edit") ||
+        lowerText.includes("improve") ||
+        lowerText.includes("restructure")) &&
       this.canDelegateTo("note-editor")
     ) {
       return {
@@ -241,8 +254,8 @@ export class ChatAgent extends BaseAgent {
   private extractInstructionForAgent(text: string, agentType: AgentType): string {
     // Find sentence containing the delegation trigger
     const sentences = text.split(/[.!?]+/);
-    const triggerSentence = sentences.find((s) =>
-      s.toLowerCase().includes(agentType) || s.includes("[DELEGATE:")
+    const triggerSentence = sentences.find(
+      (s) => s.toLowerCase().includes(agentType) || s.includes("[DELEGATE:"),
     );
 
     return triggerSentence?.trim() || `Process this note as ${agentType}`;

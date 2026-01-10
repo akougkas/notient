@@ -438,8 +438,11 @@ export class NotientSettingTab extends PluginSettingTab {
 
       this.renderIndexingSection(containerEl);
 
-      this.indexManagementPanel = new IndexManagementPanel(this.app, this.kernel, this.settings, () =>
-        this.display(),
+      this.indexManagementPanel = new IndexManagementPanel(
+        this.app,
+        this.kernel,
+        this.settings,
+        () => this.display(),
       );
       this.indexManagementPanel.render(containerEl);
 
@@ -1281,47 +1284,45 @@ export class NotientSettingTab extends PluginSettingTab {
       );
 
     // Begin Migration button
-    new Setting(section)
-      .setName("")
-      .addButton((btn) =>
-        btn
-          .setButtonText("Begin Migration")
-          .setCta()
-          .onClick(async () => {
-            if (!this.migrationSourcePath) {
-              new Notice("Please specify a source folder path");
-              return;
-            }
+    new Setting(section).setName("").addButton((btn) =>
+      btn
+        .setButtonText("Begin Migration")
+        .setCta()
+        .onClick(async () => {
+          if (!this.migrationSourcePath) {
+            new Notice("Please specify a source folder path");
+            return;
+          }
 
-            // Get migration service from kernel
-            const migrationService = this.kernel.getService<{
-              startMigration(sourcePath: string, destFolder: string): Promise<void>;
-            }>("migrationService");
+          // Get migration service from kernel
+          const migrationService = this.kernel.getService<{
+            startMigration(sourcePath: string, destFolder: string): Promise<void>;
+          }>("migrationService");
 
-            if (!migrationService) {
-              new Notice("Migration service not available. Ensure services are initialized.");
-              return;
-            }
+          if (!migrationService) {
+            new Notice("Migration service not available. Ensure services are initialized.");
+            return;
+          }
 
-            btn.setDisabled(true);
-            btn.setButtonText("Starting...");
+          btn.setDisabled(true);
+          btn.setButtonText("Starting...");
 
-            try {
-              await migrationService.startMigration(
-                this.migrationSourcePath,
-                this.migrationDestFolder,
-              );
-              new Notice("Migration started! Check Dashboard for progress.");
-              // Clear the source path after successful start
-              this.migrationSourcePath = "";
-              this.display();
-            } catch (error) {
-              new Notice(`Migration failed: ${(error as Error).message}`);
-              btn.setDisabled(false);
-              btn.setButtonText("Begin Migration");
-            }
-          }),
-      );
+          try {
+            await migrationService.startMigration(
+              this.migrationSourcePath,
+              this.migrationDestFolder,
+            );
+            new Notice("Migration started! Check Dashboard for progress.");
+            // Clear the source path after successful start
+            this.migrationSourcePath = "";
+            this.display();
+          } catch (error) {
+            new Notice(`Migration failed: ${(error as Error).message}`);
+            btn.setDisabled(false);
+            btn.setButtonText("Begin Migration");
+          }
+        }),
+    );
 
     // CLI hint for power users
     const cliHint = section.createDiv({ cls: "notient-settings-info-dim" });

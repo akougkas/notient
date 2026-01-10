@@ -24,11 +24,11 @@ export const DEFAULT_THINKING_CONFIG: ThinkingConfig = {
  */
 export class ThinkingParser {
   private config: ThinkingConfig;
-  private buffer: string = "";
-  private thinkingContent: string = "";
-  private mainContent: string = "";
-  private inThinkingBlock: boolean = false;
-  private thinkingStartTime: number = 0;
+  private buffer = "";
+  private thinkingContent = "";
+  private mainContent = "";
+  private inThinkingBlock = false;
+  private thinkingStartTime = 0;
 
   constructor(config: Partial<ThinkingConfig> = {}) {
     this.config = { ...DEFAULT_THINKING_CONFIG, ...config };

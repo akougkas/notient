@@ -9,20 +9,8 @@
  */
 
 import type { Signal } from "@preact/signals";
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
 import type { AgentType } from "../../../core/agent/types";
-
-// Icon component for Lucide icons in Preact
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
-}
+import { Icon } from "./Icon";
 
 /**
  * Capability status for the 3 core agents
@@ -275,7 +263,13 @@ interface ActiveAgentCardProps {
   onDismiss?: () => void;
 }
 
-function ActiveAgentCard({ agent, onPause, onStop, onViewResults, onDismiss }: ActiveAgentCardProps) {
+function ActiveAgentCard({
+  agent,
+  onPause,
+  onStop,
+  onViewResults,
+  onDismiss,
+}: ActiveAgentCardProps) {
   const isRunning = agent.status === "running";
   const isPaused = agent.status === "paused";
   const isQueued = agent.status === "queued";
@@ -286,7 +280,13 @@ function ActiveAgentCard({ agent, onPause, onStop, onViewResults, onDismiss }: A
     ? `${(agent.resultData.stats.durationMs / 1000).toFixed(1)}s`
     : "";
 
-  const statusLabel = isRunning ? "Running" : isPaused ? "Paused" : isQueued ? "Queued" : "Completed";
+  const statusLabel = isRunning
+    ? "Running"
+    : isPaused
+      ? "Paused"
+      : isQueued
+        ? "Queued"
+        : "Completed";
 
   return (
     <article

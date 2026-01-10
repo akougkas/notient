@@ -20,6 +20,7 @@ import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
 import { UserEvolutionService } from "./core/evolution";
+import { ImporterService, MigrationService } from "./core/importer";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
 import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
@@ -37,13 +38,12 @@ import { OllamaRerankerService } from "./services/ollamaReranker";
 import { SimpleVectorStore } from "./services/simpleVectorStore";
 import type { NotientSettings } from "./types/settings";
 import { NotientDashboardView } from "./ui/dashboard/DashboardView";
+import { ImportModal } from "./ui/modals/ImportModal";
 import { IndexOptionsModal } from "./ui/modals/IndexOptionsModal";
 import { ProfilePreviewModal } from "./ui/modals/ProfilePreviewModal";
 import { SetupWizardModal } from "./ui/modals/SetupWizard";
 import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
 import { NotientSidebarView } from "./ui/sidebar";
-import { ImporterService, MigrationService } from "./core/importer";
-import { ImportModal } from "./ui/modals/ImportModal";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;
@@ -861,7 +861,9 @@ export default class NotientPlugin extends Plugin {
         const result = await modal.run();
         if (result.completed && result.summary) {
           const { created, updated, totalLinksConverted } = result.summary;
-          new Notice(`Import complete: ${created} created, ${updated} updated, ${totalLinksConverted} links fixed`);
+          new Notice(
+            `Import complete: ${created} created, ${updated} updated, ${totalLinksConverted} links fixed`,
+          );
         }
       },
     });

@@ -13,24 +13,16 @@
  */
 
 import type { Signal } from "@preact/signals";
-import { setIcon } from "obsidian";
 import { useEffect, useRef } from "preact/hooks";
 import type { ActivityPhase, ChatStatistics } from "../../../../core/chat/types";
+import { Icon } from "../Icon";
 import { ActivityTrail, createActivityItem } from "./ActivityTrail";
-import { MessageBubble, type RichChatMessage, StreamingBubble, type MessageAction } from "./MessageBubble";
-
-/**
- * Icon component
- */
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
-}
+import {
+  type MessageAction,
+  MessageBubble,
+  type RichChatMessage,
+  StreamingBubble,
+} from "./MessageBubble";
 
 export interface ChatContext {
   notePath: string | null;
@@ -220,7 +212,10 @@ function EmptyState({
       </div>
       {hasContext && (
         <div class="nv2-chat-suggestions">
-          <SuggestionChip text="Summarize this note" onClick={() => onSendMessage("Summarize this note")} />
+          <SuggestionChip
+            text="Summarize this note"
+            onClick={() => onSendMessage("Summarize this note")}
+          />
           <SuggestionChip
             text="Find related notes"
             onClick={() => onSendMessage("Find notes related to this")}

@@ -274,7 +274,15 @@ export function Omnibar({
         inputRef.current?.blur();
       }
     },
-    [query, showDropdown, selectedIndex, commandSuggestions, isCommandMode, executeCommand, executeSearch],
+    [
+      query,
+      showDropdown,
+      selectedIndex,
+      commandSuggestions,
+      isCommandMode,
+      executeCommand,
+      executeSearch,
+    ],
   );
 
   // Handle focus/blur
@@ -298,7 +306,9 @@ export function Omnibar({
   );
 
   return (
-    <div class={`nv2-omnibar${isFocused ? " nv2-omnibar--focused" : ""}${isCommandMode ? " nv2-omnibar--command" : ""}`}>
+    <div
+      class={`nv2-omnibar${isFocused ? " nv2-omnibar--focused" : ""}${isCommandMode ? " nv2-omnibar--command" : ""}`}
+    >
       <div class="nv2-omnibar-wrapper">
         <div class="nv2-omnibar-icon" ref={iconRef} />
         <input

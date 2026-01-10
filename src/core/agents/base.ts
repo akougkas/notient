@@ -5,7 +5,7 @@
  * Provides common functionality: context handling, LLM access, streaming.
  */
 
-import type { LLMProvider, ChatMessage, CompletionOptions } from "../llm";
+import type { ChatMessage, CompletionOptions, LLMProvider } from "../llm";
 import type {
   AgentConfig,
   AgentContext,
@@ -111,7 +111,8 @@ ${truncatedContent}
     const formatted = notes
       .slice(0, maxNotes)
       .map((n) => {
-        const preview = n.text.length > maxCharsPerNote ? `${n.text.slice(0, maxCharsPerNote)}...` : n.text;
+        const preview =
+          n.text.length > maxCharsPerNote ? `${n.text.slice(0, maxCharsPerNote)}...` : n.text;
         return `### [[${n.title}]] (${n.path})\n${preview}`;
       })
       .join("\n\n");
@@ -140,10 +141,7 @@ ${truncatedContent}
   /**
    * Stream LLM response with proper error handling
    */
-  protected async *streamLLM(
-    messages: ChatMessage[],
-    signal?: AbortSignal,
-  ): AsyncIterable<string> {
+  protected async *streamLLM(messages: ChatMessage[], signal?: AbortSignal): AsyncIterable<string> {
     try {
       for await (const chunk of this.llm.stream(messages, this.getCompletionOptions(), signal)) {
         if (signal?.aborted) {
@@ -239,14 +237,20 @@ ${truncatedContent}
 /**
  * Type guard for checking agent output kind
  */
-export function isConversationalOutput(output: AgentOutput): output is AgentOutput & { kind: "conversational" } {
+export function isConversationalOutput(
+  output: AgentOutput,
+): output is AgentOutput & { kind: "conversational" } {
   return output.kind === "conversational";
 }
 
-export function isStructuredOutput(output: AgentOutput): output is AgentOutput & { kind: "structured" } {
+export function isStructuredOutput(
+  output: AgentOutput,
+): output is AgentOutput & { kind: "structured" } {
   return output.kind === "structured";
 }
 
-export function isInternalOutput(output: AgentOutput): output is AgentOutput & { kind: "internal" } {
+export function isInternalOutput(
+  output: AgentOutput,
+): output is AgentOutput & { kind: "internal" } {
   return output.kind === "internal";
 }

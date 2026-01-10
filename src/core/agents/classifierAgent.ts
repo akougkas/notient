@@ -13,12 +13,7 @@ import type { UserProfile } from "../../types/profile";
 import type { LLMProvider } from "../llm/provider";
 import { buildAgentSystemPrompt } from "./agentIdentity";
 import { BaseAgent } from "./base";
-import type {
-  AgentContext,
-  AgentEvent,
-  ClassificationOutput,
-  StructuredOutput,
-} from "./types";
+import type { AgentContext, AgentEvent, ClassificationOutput, StructuredOutput } from "./types";
 
 /**
  * Classifier agent implementation
@@ -133,7 +128,6 @@ export class ClassifierAgent extends BaseAgent {
 
       yield { type: "progress", agentType: "classifier", progress: 100 };
       yield { type: "complete", agentType: "classifier", output };
-
     } catch (error) {
       yield { type: "error", agentType: "classifier", error: error as Error };
     }

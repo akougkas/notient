@@ -16,13 +16,13 @@ import type { WorkflowScope } from "./types";
  * These run on the CURRENT note only
  */
 export type SingleNoteCommand =
-  | "enhance"    // → "enhance" action
-  | "connect"    // → "connection" action
-  | "atomize"    // → "atomic" action
+  | "enhance" // → "enhance" action
+  | "connect" // → "connection" action
+  | "atomize" // → "atomic" action
   | "synthesize" // → "synthesis" action
-  | "tasks"      // → "task" action
-  | "brand"      // → "brand" action
-  | "clipping"   // → "clipping" action
+  | "tasks" // → "task" action
+  | "brand" // → "brand" action
+  | "clipping" // → "clipping" action
   | "challenge"; // → "antagonist" action
 
 /**
@@ -58,7 +58,12 @@ export interface ParsedCommand {
  * Parse error result
  */
 export interface ParseError {
-  type: "unknown_command" | "invalid_syntax" | "folder_not_found" | "empty_folder" | "no_active_note";
+  type:
+    | "unknown_command"
+    | "invalid_syntax"
+    | "folder_not_found"
+    | "empty_folder"
+    | "no_active_note";
   message: string;
 }
 
@@ -74,7 +79,7 @@ export type ParseResult =
  */
 const SINGLE_NOTE_COMMANDS: SingleNoteCommand[] = [
   "enhance",
-  "connect", 
+  "connect",
   "atomize",
   "synthesize",
   "tasks",
@@ -287,22 +292,106 @@ export function isSlashCommand(input: string): boolean {
 export function getCommandSuggestions(partial?: string): CommandSuggestion[] {
   const all: CommandSuggestion[] = [
     // Single-note commands (current note)
-    { command: "/enhance", label: "Enhance Note", description: "Add structure, depth, and polish to this note", icon: "sparkles", mode: "single" },
-    { command: "/connect", label: "Find Connections", description: "Discover semantic links to other notes", icon: "link", mode: "single" },
-    { command: "/atomize", label: "Atomize Note", description: "Split into atomic concepts (100-300 words each)", icon: "split", mode: "single" },
-    { command: "/synthesize", label: "Create Synthesis", description: "Create synthesis note from related notes", icon: "network", mode: "single" },
-    { command: "/tasks", label: "Extract Tasks", description: "Find actions, decisions, and deadlines", icon: "check-square", mode: "single" },
-    { command: "/brand", label: "Brand Check", description: "Verify brand voice and tone alignment", icon: "shield", mode: "single" },
-    { command: "/clipping", label: "Process Clipping", description: "Transform web clipping into structured notes", icon: "clipboard", mode: "single" },
-    { command: "/challenge", label: "Challenge Ideas", description: "Get counterpoints from Antagonist Agent", icon: "flame", mode: "single" },
-    
+    {
+      command: "/enhance",
+      label: "Enhance Note",
+      description: "Add structure, depth, and polish to this note",
+      icon: "sparkles",
+      mode: "single",
+    },
+    {
+      command: "/connect",
+      label: "Find Connections",
+      description: "Discover semantic links to other notes",
+      icon: "link",
+      mode: "single",
+    },
+    {
+      command: "/atomize",
+      label: "Atomize Note",
+      description: "Split into atomic concepts (100-300 words each)",
+      icon: "split",
+      mode: "single",
+    },
+    {
+      command: "/synthesize",
+      label: "Create Synthesis",
+      description: "Create synthesis note from related notes",
+      icon: "network",
+      mode: "single",
+    },
+    {
+      command: "/tasks",
+      label: "Extract Tasks",
+      description: "Find actions, decisions, and deadlines",
+      icon: "check-square",
+      mode: "single",
+    },
+    {
+      command: "/brand",
+      label: "Brand Check",
+      description: "Verify brand voice and tone alignment",
+      icon: "shield",
+      mode: "single",
+    },
+    {
+      command: "/clipping",
+      label: "Process Clipping",
+      description: "Transform web clipping into structured notes",
+      icon: "clipboard",
+      mode: "single",
+    },
+    {
+      command: "/challenge",
+      label: "Challenge Ideas",
+      description: "Get counterpoints from Antagonist Agent",
+      icon: "flame",
+      mode: "single",
+    },
+
     // Bulk workflow commands
-    { command: "/enrich vault", label: "Enrich Vault", description: "Add metadata and tags to all notes", icon: "folder", mode: "bulk" },
-    { command: "/enrich folder:", label: "Enrich Folder", description: "Add metadata and tags to folder notes", icon: "folder-open", mode: "bulk" },
-    { command: "/classify vault", label: "Classify Vault", description: "Suggest PARA categories for all notes", icon: "folder-tree", mode: "bulk" },
-    { command: "/classify folder:", label: "Classify Folder", description: "Suggest PARA categories for folder notes", icon: "folder-tree", mode: "bulk" },
-    { command: "/link vault", label: "Link Vault", description: "Find connections across all notes", icon: "link-2", mode: "bulk" },
-    { command: "/link folder:", label: "Link Folder", description: "Find connections in folder notes", icon: "link-2", mode: "bulk" },
+    {
+      command: "/enrich vault",
+      label: "Enrich Vault",
+      description: "Add metadata and tags to all notes",
+      icon: "folder",
+      mode: "bulk",
+    },
+    {
+      command: "/enrich folder:",
+      label: "Enrich Folder",
+      description: "Add metadata and tags to folder notes",
+      icon: "folder-open",
+      mode: "bulk",
+    },
+    {
+      command: "/classify vault",
+      label: "Classify Vault",
+      description: "Suggest PARA categories for all notes",
+      icon: "folder-tree",
+      mode: "bulk",
+    },
+    {
+      command: "/classify folder:",
+      label: "Classify Folder",
+      description: "Suggest PARA categories for folder notes",
+      icon: "folder-tree",
+      mode: "bulk",
+    },
+    {
+      command: "/link vault",
+      label: "Link Vault",
+      description: "Find connections across all notes",
+      icon: "link-2",
+      mode: "bulk",
+    },
+    {
+      command: "/link folder:",
+      label: "Link Folder",
+      description: "Find connections in folder notes",
+      icon: "link-2",
+      mode: "bulk",
+    },
   ];
 
   if (!partial) return all;

@@ -8,17 +8,7 @@
 import { setIcon } from "obsidian";
 import { useCallback, useEffect, useRef } from "preact/hooks";
 import type { Insight } from "../../../services/insightGenerator";
-
-// Icon component for Lucide icons in Preact
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
-}
+import { Icon } from "./Icon";
 
 interface InsightStreamProps {
   insights: Insight[];

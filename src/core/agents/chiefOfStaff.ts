@@ -45,9 +45,9 @@ import type {
 import { AGENT_CONFIGS } from "./types";
 import {
   WorkflowAgent,
+  type WorkflowAgentType,
   getWorkflowByCommand,
   isWorkflowCommand,
-  type WorkflowAgentType,
 } from "./workflowAgents";
 
 /**
@@ -106,7 +106,12 @@ export class ChiefOfStaff {
     this.noteEditorAgent = new NoteEditorAgent(llm, profile);
     this.classifierAgent = new ClassifierAgent(llm, profile);
     this.linkFinderAgent = new LinkFinderAgent(llm, profile);
-    this.contextBuilderAgent = new ContextBuilderAgent(llm, searchPipeline, vaultContextBuilder, profile);
+    this.contextBuilderAgent = new ContextBuilderAgent(
+      llm,
+      searchPipeline,
+      vaultContextBuilder,
+      profile,
+    );
 
     // Wire up delegation handler
     this.chatAgent.setDelegationHandler(this.handleDelegation.bind(this));
@@ -139,7 +144,11 @@ export class ChiefOfStaff {
       // Phase 1: Load current note content
       const noteContext = await this.loadNoteContext(task.notePath, task.noteTitle);
       if (!noteContext) {
-        yield { type: "error", agentType: "context-builder", error: new Error("Failed to load note") };
+        yield {
+          type: "error",
+          agentType: "context-builder",
+          error: new Error("Failed to load note"),
+        };
         return;
       }
 
@@ -159,7 +168,7 @@ export class ChiefOfStaff {
 
       // Phase 3: Run preflight agents (context-builder)
       let contextOutput: InternalOutput | null = null;
-      
+
       for (const preflightAgent of routing.preflightAgents) {
         if (signal?.aborted) return;
 
@@ -167,10 +176,10 @@ export class ChiefOfStaff {
 
         if (preflightAgent === "context-builder") {
           const preflightContext = this.buildBaseContext(task, noteContext, null);
-          
+
           for await (const event of this.contextBuilderAgent.execute(preflightContext, signal)) {
             yield event;
-            
+
             if (event.type === "complete" && isInternalOutput(event.output)) {
               contextOutput = event.output;
               this.currentSession.completedAgents.set("context-builder", event.output);
@@ -195,7 +204,6 @@ export class ChiefOfStaff {
           this.currentSession.completedAgents.set(routing.primaryAgent, event.output);
         }
       }
-
     } finally {
       // Session cleanup happens naturally, no explicit cleanup needed
     }
@@ -204,7 +212,10 @@ export class ChiefOfStaff {
   /**
    * Execute and aggregate results (non-streaming)
    */
-  async executeAndAggregate(task: ChiefOfStaffTask, signal?: AbortSignal): Promise<AggregatedResult> {
+  async executeAndAggregate(
+    task: ChiefOfStaffTask,
+    signal?: AbortSignal,
+  ): Promise<AggregatedResult> {
     const outputs: AgentOutput[] = [];
     const allCitations: string[] = [];
     const proposedActions: ProposedAction[] = [];
@@ -248,7 +259,7 @@ export class ChiefOfStaff {
    */
   setProfile(profile: UserProfile | undefined): void {
     this.profile = profile;
-    
+
     // Propagate to core agents for identity system
     this.chatAgent.setProfile(profile);
     this.noteEditorAgent.setProfile(profile);
@@ -274,7 +285,7 @@ export class ChiefOfStaff {
     this.noteEditorAgent = new NoteEditorAgent(llm, this.profile);
     this.classifierAgent = new ClassifierAgent(llm, this.profile);
     this.linkFinderAgent = new LinkFinderAgent(llm, this.profile);
-    
+
     // Context builder keeps its search pipeline reference
     this.contextBuilderAgent = new ContextBuilderAgent(
       llm,
@@ -401,8 +412,26 @@ export class ChiefOfStaff {
   private detectIntents(query: string): { edit: number; classify: number; link: number } {
     const q = query.toLowerCase();
 
-    const editKeywords = ["edit", "improve", "enhance", "fix", "restructure", "rewrite", "add", "append", "update"];
-    const classifyKeywords = ["classify", "categorize", "organize", "para", "move", "tag", "folder"];
+    const editKeywords = [
+      "edit",
+      "improve",
+      "enhance",
+      "fix",
+      "restructure",
+      "rewrite",
+      "add",
+      "append",
+      "update",
+    ];
+    const classifyKeywords = [
+      "classify",
+      "categorize",
+      "organize",
+      "para",
+      "move",
+      "tag",
+      "folder",
+    ];
     const linkKeywords = ["link", "connect", "related", "similar", "connections", "references"];
 
     const countMatches = (keywords: string[]) =>
@@ -483,8 +512,10 @@ export class ChiefOfStaff {
     }
 
     // Build context for delegated agent
-    const lastContext = this.currentSession.completedAgents.get("context-builder") as InternalOutput | undefined;
-    
+    const lastContext = this.currentSession.completedAgents.get("context-builder") as
+      | InternalOutput
+      | undefined;
+
     // Get note context from previous execution or load fresh
     const noteContext = await this.loadNoteContext(
       this.currentSession.notePath,
@@ -667,7 +698,9 @@ export class ChiefOfStaff {
   /**
    * Get agent instance by type
    */
-  private getAgent(type: AgentType): ChatAgent | NoteEditorAgent | ClassifierAgent | LinkFinderAgent | ContextBuilderAgent {
+  private getAgent(
+    type: AgentType,
+  ): ChatAgent | NoteEditorAgent | ClassifierAgent | LinkFinderAgent | ContextBuilderAgent {
     switch (type) {
       case "chat":
         return this.chatAgent;

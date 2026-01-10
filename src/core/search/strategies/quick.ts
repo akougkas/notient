@@ -33,10 +33,7 @@ export class QuickSearchStrategy implements SearchStrategy {
   private nativeSearch: NativeSearch;
 
   constructor(private context: StrategyContext) {
-    this.nativeSearch = new NativeSearch(
-      context.kernel.obsidian,
-      (path) => this.getParaType(path),
-    );
+    this.nativeSearch = new NativeSearch(context.kernel.obsidian, (path) => this.getParaType(path));
   }
 
   /**
@@ -175,7 +172,7 @@ export class QuickSearchStrategy implements SearchStrategy {
    */
   private getParaType(path: string): ParaType {
     if (!path) return "unknown";
-    
+
     const para = this.context.kernel.settings.para;
     const lowerPath = path.toLowerCase();
 

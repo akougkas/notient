@@ -60,9 +60,7 @@ export class OllamaService {
     }
 
     const model = settings.ollama.embeddingModel;
-    console.log(
-      `[OllamaService] Initializing with host=${settings.ollama.host}, model=${model}`,
-    );
+    console.log(`[OllamaService] Initializing with host=${settings.ollama.host}, model=${model}`);
 
     this.client = new Ollama({
       host: settings.ollama.host,
@@ -143,7 +141,9 @@ export class OllamaService {
       };
 
       // Calculate effective max chars for this model
-      const charsPerToken = caps.architecture?.toLowerCase().includes("bert") ? 2.5 : MODEL_DEFAULTS.CHARS_PER_TOKEN;
+      const charsPerToken = caps.architecture?.toLowerCase().includes("bert")
+        ? 2.5
+        : MODEL_DEFAULTS.CHARS_PER_TOKEN;
       const maxChars = Math.floor(caps.contextLength * charsPerToken * 0.8);
       console.log(
         `[OllamaService] Discovered ${model}: arch=${caps.architecture}, ctx=${caps.contextLength}, dim=${caps.embeddingDimension}, maxChars=${maxChars}`,
@@ -235,13 +235,14 @@ export class OllamaService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const isTimeout = message.includes("timed out");
-        const isConnectionError = message.includes("fetch failed") || message.includes("ECONNREFUSED");
+        const isConnectionError =
+          message.includes("fetch failed") || message.includes("ECONNREFUSED");
 
         if ((isTimeout || isConnectionError) && attempt < MAX_RETRIES) {
           const delay = Math.min(500 * Math.pow(2, attempt), 2000); // Exponential backoff, max 2s
           console.log(
             `[OllamaService] Embed failed (${isTimeout ? "timeout" : "connection"}), ` +
-            `retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
+              `retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
           );
           await new Promise((r) => setTimeout(r, delay));
           continue;

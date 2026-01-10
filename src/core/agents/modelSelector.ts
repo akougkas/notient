@@ -139,7 +139,11 @@ export class ModelSelector {
     }
 
     // Infer from name patterns
-    if (normalized.includes("thinking") || normalized.includes("-r1") || normalized.includes("h1r")) {
+    if (
+      normalized.includes("thinking") ||
+      normalized.includes("-r1") ||
+      normalized.includes("h1r")
+    ) {
       return {
         ...DEFAULT_PROFILE,
         name: normalized,

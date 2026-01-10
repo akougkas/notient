@@ -15,12 +15,7 @@ import { SUPPORTED_ACTION_TYPES } from "../agentic/types";
 import type { LLMProvider } from "../llm/provider";
 import { buildAgentSystemPrompt } from "./agentIdentity";
 import { BaseAgent } from "./base";
-import type {
-  AgentContext,
-  AgentEvent,
-  NoteEditOutput,
-  StructuredOutput,
-} from "./types";
+import type { AgentContext, AgentEvent, NoteEditOutput, StructuredOutput } from "./types";
 
 // Risk map for actions
 const RISK_MAP: Record<string, RiskLevel> = {
@@ -92,7 +87,7 @@ export class NoteEditorAgent extends BaseAgent {
    */
   protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput {
     const parsed = this.parseJSON<NoteEditOutput>(rawOutput);
-    
+
     if (!parsed || !Array.isArray(parsed.actions)) {
       return {
         kind: "structured",
@@ -123,7 +118,10 @@ export class NoteEditorAgent extends BaseAgent {
     const systemPrompt = this.buildSystemPrompt(context);
     const messages = [
       { role: "system" as const, content: systemPrompt },
-      { role: "user" as const, content: `Analyze and propose edits for this note. Output only valid JSON.` },
+      {
+        role: "user" as const,
+        content: `Analyze and propose edits for this note. Output only valid JSON.`,
+      },
     ];
 
     this.log(`Generating edit proposals for ${context.currentNote.path}`);
@@ -144,7 +142,6 @@ export class NoteEditorAgent extends BaseAgent {
 
       yield { type: "progress", agentType: "note-editor", progress: 100 };
       yield { type: "complete", agentType: "note-editor", output };
-
     } catch (error) {
       yield { type: "error", agentType: "note-editor", error: error as Error };
     }
@@ -161,7 +158,7 @@ export class NoteEditorAgent extends BaseAgent {
       if (!this.isValidAction(rawAction)) continue;
 
       const action = rawAction as Partial<ProposedAction>;
-      
+
       // Validate action type
       const actionType = action.type as ProposedActionType;
       if (!SUPPORTED_ACTION_TYPES.includes(actionType)) {

@@ -43,8 +43,13 @@
 }
 
 @keyframes nv2-capability-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 transparent; }
-  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+  }
 }
 
 .nv2-capability-icon {

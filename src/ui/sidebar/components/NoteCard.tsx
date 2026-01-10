@@ -5,25 +5,13 @@
  * Shows: title, path/folder, tags, note type, PARA classification
  */
 
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
+import { Icon } from "./Icon";
 import { PulseTimeline } from "./PulseTimeline";
 
 interface NoteCardProps {
   noteVitals: NoteVitals;
   backlinkPreview?: string;
-}
-
-// Icon component for Lucide icons in Preact
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 // Note type icons for the "Sentient Note" personality

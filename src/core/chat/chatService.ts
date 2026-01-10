@@ -14,8 +14,8 @@
  */
 
 import type { UserProfile } from "../../types/profile";
-import type { AgentType } from "../agents/types";
 import { buildBaseIdentity } from "../agent/identity";
+import type { AgentType } from "../agents/types";
 import type { LLMProvider } from "../llm/provider";
 import type { ChatMessage } from "../llm/types";
 import { ThinkingParser, estimateTokenCount } from "./thinkingParser";

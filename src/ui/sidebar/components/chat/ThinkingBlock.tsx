@@ -6,9 +6,9 @@
  */
 
 import type { Signal } from "@preact/signals";
-import { setIcon } from "obsidian";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { estimateTokenCount } from "../../../../core/chat/thinkingParser";
+import { Icon } from "../Icon";
 
 interface ThinkingBlockProps {
   /** Thinking content to display */
@@ -21,19 +21,6 @@ interface ThinkingBlockProps {
   streamingContent?: Signal<string>;
   /** Whether to start expanded */
   defaultExpanded?: boolean;
-}
-
-/**
- * Icon component for Obsidian icons
- */
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 export function ThinkingBlock({

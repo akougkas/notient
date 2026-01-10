@@ -60,7 +60,7 @@ function isExternalLink(url: string): boolean {
  * Extract note name from a path
  */
 function extractNoteName(path: string): string {
-  let cleaned = path.replace(/^\.\.?\//, "");
+  const cleaned = path.replace(/^\.\.?\//, "");
   const parts = cleaned.split("/");
   let filename = parts[parts.length - 1];
   filename = filename.replace(/\.md$/i, "");
@@ -94,7 +94,7 @@ function extractFrontmatter(content: string): { frontmatter: string | null; body
  */
 function normalizeContent(content: string): { normalized: string; conversions: number } {
   const { frontmatter, body } = extractFrontmatter(content);
-  
+
   let conversions = 0;
   const normalizedBody = body.replace(PATTERNS.markdown, (match, text, target) => {
     // Skip external links
@@ -120,13 +120,13 @@ export class ImporterService {
 
   /**
    * Import files from an external source into the vault
-   * 
+   *
    * Note: This method works with files that are already accessible via the vault.
    * For importing from external directories, use the CLI tool.
    */
   async importFromVaultFolder(
     sourceFolderPath: string,
-    options: Partial<PluginImportOptions> = {}
+    options: Partial<PluginImportOptions> = {},
   ): Promise<PluginImportSummary> {
     const vault = this.kernel.obsidian.vault;
     const outputFolder = options.outputFolder || "imports";
@@ -180,7 +180,7 @@ export class ImporterService {
    */
   async importContent(
     content: string,
-    targetPath: string
+    targetPath: string,
   ): Promise<{ success: boolean; linksConverted: number; error?: string }> {
     try {
       const vault = this.kernel.obsidian.vault;
@@ -188,7 +188,7 @@ export class ImporterService {
 
       // Check if file exists
       const existing = vault.getAbstractFileByPath(targetPath);
-      
+
       if (existing) {
         await vault.modify(existing as TFile, normalized);
       } else {
@@ -239,7 +239,7 @@ export class ImporterService {
   private async findMarkdownFiles(
     vault: Vault,
     folderPath: string,
-    recursive: boolean
+    recursive: boolean,
   ): Promise<TFile[]> {
     const files: TFile[] = [];
     const allFiles = vault.getMarkdownFiles();
@@ -262,7 +262,7 @@ export class ImporterService {
     vault: Vault,
     file: TFile,
     sourceRoot: string,
-    targetRoot: string
+    targetRoot: string,
   ): Promise<PluginImportResult> {
     try {
       // Calculate relative path

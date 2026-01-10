@@ -9,11 +9,11 @@
  * Fire-and-forget: queues background work and returns immediately.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { normalizeMarkdownFile } from "../../../tools/import-bridge/normalizer";
 import type { EventBus } from "../events/eventBus";
 import type { Kernel } from "../kernel";
-import { normalizeMarkdownFile } from "../../../tools/import-bridge/normalizer";
 
 /** Migration status for tracking */
 export interface MigrationStatus {
@@ -166,7 +166,9 @@ export class MigrationService {
     if (indexer) {
       try {
         const indexResult = await indexer.syncVault();
-        console.log(`[MigrationService] Indexed: ${indexResult.added} added, ${indexResult.updated} updated`);
+        console.log(
+          `[MigrationService] Indexed: ${indexResult.added} added, ${indexResult.updated} updated`,
+        );
       } catch (error) {
         console.warn("[MigrationService] Indexing failed:", error);
       }
@@ -177,7 +179,12 @@ export class MigrationService {
     this.eventBus.emit("migration:progress", { migration, phase: "analyzing" });
 
     const workflowRunner = this.kernel.getService<{
-      startFromCommand(parsed: { command: string; mode: string; scope: string; target: string }): Promise<{ success: boolean }>;
+      startFromCommand(parsed: {
+        command: string;
+        mode: string;
+        scope: string;
+        target: string;
+      }): Promise<{ success: boolean }>;
     }>("workflowRunner");
 
     if (workflowRunner) {
