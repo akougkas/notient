@@ -7,6 +7,70 @@
 
 ---
 
+## Git Workflow (CRITICAL)
+
+### Before Starting
+```bash
+git status
+git diff --name-only
+```
+**Check**: Are you on `faye/ui-improvements` branch? Are there uncommitted changes?
+
+If branch doesn't exist yet, create it:
+```bash
+git checkout -b faye/ui-improvements
+```
+
+If branch exists:
+```bash
+git checkout faye/ui-improvements
+```
+
+### During Diagnosis
+You will add temporary debug logging to these files:
+- `src/ui/sidebar/components/QuickActions.tsx`
+- `src/ui/sidebar/App.tsx`
+- `src/ui/sidebar/context/KernelContext.tsx`
+
+**Rule**: Only add console.log statements, DO NOT change logic.
+
+### After Completing Diagnosis
+
+Stage ONLY the files you modified + your REPORT.md:
+```bash
+# Check what you modified
+git status
+
+# Stage only your changes
+git add src/ui/sidebar/components/QuickActions.tsx
+git add src/ui/sidebar/App.tsx
+git add src/ui/sidebar/context/KernelContext.tsx   # if modified
+git add planning/orchestration/faye/REPORT.md
+
+# Commit with descriptive message
+git commit -m "chore(phase-1): Frontend diagnosis with debug logging
+
+Added console.log statements to trace:
+- QuickActions button click handlers
+- triggerAgenticAction callback execution
+- useService hook return values
+- Modal click handlers (Footer)
+
+Findings documented in faye/REPORT.md.
+Root cause: [brief summary from your report]"
+
+# DO NOT PUSH - only local commit
+```
+
+### Rules
+- **NO `git push`** - Only local commits
+- **NO `git add .`** - Stage specific files only
+- **NO `git add src/ui/**`** - Stage specific files, not wildcards
+- **NO amending** other commits - Create new commit
+- **NO branch switching** during work - Stay on faye/ui-improvements
+
+---
+
 ## Context
 
 User reports: "Buttons don't work (Quick Actions, Footer), app crashes under load"
@@ -304,16 +368,11 @@ NEXT STEP: Wait for Archie's findings
 
 ---
 
-### Temporary Debug Code
+### Diagnosis Only - No Fixes Yet
 
-**IMPORTANT**: The console.log statements are temporary for diagnosis.
+**IMPORTANT**: This is diagnosis only. DO NOT implement fixes yet.
 
-Commit the debug version:
-```bash
-git add src/ui/**
-git add planning/orchestration/faye/REPORT.md
-git commit -m "chore(phase-1): Faye frontend diagnosis with debug logging"
-```
+The console.log statements are temporary for diagnosis. Add debug logging to trace execution, write findings in REPORT.md, then commit using the git workflow above.
 
 After diagnosis, Orchestrator will tell you whether to remove logs or proceed with fixes.
 

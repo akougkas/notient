@@ -7,6 +7,66 @@
 
 ---
 
+## Git Workflow (CRITICAL)
+
+### Before Starting
+```bash
+git status
+git diff --name-only
+```
+**Check**: Are you on `archie/backend-fixes` branch? Are there uncommitted changes?
+
+If you need to switch branches:
+```bash
+git checkout archie/backend-fixes
+```
+
+### During Diagnosis
+You will add temporary debug logging to these files:
+- `src/core/agent/taskQueue.ts`
+- `src/core/agents/chiefOfStaff.ts`
+- `src/core/kernel.ts` (possibly)
+- `src/core/events/eventBus.ts` (possibly)
+
+**Rule**: Only add console.log statements, DO NOT change logic.
+
+### After Completing Diagnosis
+
+Stage ONLY the files you modified + your REPORT.md:
+```bash
+# Check what you modified
+git status
+
+# Stage only your changes
+git add src/core/agent/taskQueue.ts
+git add src/core/agents/chiefOfStaff.ts
+git add src/core/kernel.ts                    # if modified
+git add src/core/events/eventBus.ts           # if modified
+git add planning/orchestration/archie/REPORT.md
+
+# Commit with descriptive message
+git commit -m "chore(phase-1): Backend diagnosis with debug logging
+
+Added console.log statements to trace:
+- taskQueue.enqueue() execution
+- ChiefOfStaff routing logic
+- Service registration checks
+- EventBus pub/sub flow
+
+Findings documented in archie/REPORT.md.
+Root cause: [brief summary from your report]"
+
+# DO NOT PUSH - only local commit
+```
+
+### Rules
+- **NO `git push`** - Only local commits
+- **NO `git add .`** - Stage specific files only
+- **NO amending** other commits - Create new commit
+- **NO branch switching** during work - Stay on archie/backend-fixes
+
+---
+
 ## Context
 
 User reports: "Buttons don't work (Quick Actions, Footer), app crashes under load"
@@ -239,15 +299,11 @@ NEXT STEP: Wait for Faye's findings
 
 ---
 
-### No Code Changes Yet
+### Diagnosis Only - No Fixes Yet
 
-**IMPORTANT**: This is diagnosis only. DO NOT fix anything yet.
+**IMPORTANT**: This is diagnosis only. DO NOT implement fixes yet.
 
-Write findings in REPORT.md, commit the report:
-```bash
-git add planning/orchestration/archie/REPORT.md
-git commit -m "chore(phase-1): Archie backend diagnosis report"
-```
+Add debug logging to trace execution, write findings in REPORT.md, then commit using the git workflow above.
 
 ---
 
