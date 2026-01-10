@@ -335,23 +335,20 @@ export default class NotientPlugin extends Plugin {
         progress: { stage: "index", percent: 50, message: "Loading vector store..." },
       });
 
-      // Create vector store (initialization happens in IndexManager.initialize)
+      // Create vector store (pure in-memory - IndexManager handles file I/O)
       this.vectorStore = new SimpleVectorStore(this.kernel);
       this.kernel.registerService("vectorStore", this.vectorStore);
 
       this.initStateMachine.updateProgress({
         stage: "index",
         percent: 60,
-        message: "Loading index state...",
+        message: "Loading index...",
       });
 
-      // Initialize index manager
+      // Initialize index manager (discovers/loads index, populates vectorStore)
       this.indexManager = new IndexManager(this.kernel, this.vectorStore!);
       await this.indexManager.initialize();
       this.kernel.registerService("indexManager", this.indexManager);
-
-      // v3: No crash detection - partial indices are just partial
-      // User can manually trigger sync or rebuild from settings
 
       this.initStateMachine.updateProgress({
         stage: "index",
@@ -588,14 +585,27 @@ export default class NotientPlugin extends Plugin {
       if (indexAction !== "none") {
         setTimeout(() => this.executeIndexAction(indexAction), 500);
       } else if (this.settings.setupComplete) {
-        const indexCount = await this.indexManager.getIndexedCount();
-        if (indexCount === 0) {
+        // Check index state and auto-resume if incomplete
+        const stats = await this.indexManager.getStats();
+
+        if (stats.state === "none") {
           console.log("[Notient] No index found, starting initial indexing");
           setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
-        } else {
-          console.log("[Notient] Existing index found with", indexCount, "notes. Ready to use.");
+        } else if (stats.state === "incomplete") {
+          // Auto-resume: silently continue indexing remaining notes
+          console.log(
+            `[Notient] Incomplete index (${stats.noteCount}/${stats.vaultNoteCount}), auto-resuming...`,
+          );
           if (!lmStudioFailed) {
-            this.kernel.obsidian.notice(`Notient ready! ${indexCount} notes indexed.`);
+            this.kernel.obsidian.notice(
+              `Resuming indexing: ${stats.noteCount}/${stats.vaultNoteCount} notes...`,
+            );
+          }
+          setTimeout(() => this.startBackgroundIndexing("sync"), 2000);
+        } else {
+          console.log(`[Notient] Index ready: ${stats.noteCount} notes (${stats.state})`);
+          if (!lmStudioFailed) {
+            this.kernel.obsidian.notice(`Notient ready! ${stats.noteCount} notes indexed.`);
           }
         }
       }

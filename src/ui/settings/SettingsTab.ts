@@ -330,8 +330,10 @@ export class NotientSettingTab extends PluginSettingTab {
     return ip === local || ip === "127.0.0.1" || ip === "localhost";
   }
 
-  private getModelDimension(modelName: string): number | null {
-    return MODEL_DEFAULTS.EMBEDDING_DIMENSIONS[modelName] ?? null;
+  private getModelDimension(_modelName: string): number | null {
+    // Dimensions are discovered at runtime via OllamaService.discoverCapabilities()
+    // Return null here - actual dimension shown after service initializes
+    return null;
   }
 
   /**

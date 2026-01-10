@@ -2,13 +2,14 @@
  * Index Manager
  *
  * Unified management of vector index and note state tracking.
- * Provides a clean interface for the indexer to work with.
+ * OWNS ALL FILE I/O - SimpleVectorStore is pure in-memory.
  *
  * Responsibilities:
+ * - Discover existing index files on disk
+ * - Load index data and populate VectorStore
+ * - Save VectorStore data to disk (with debouncing)
  * - Track which notes are indexed and their state
- * - Delegate vector operations to the underlying store
  * - Handle model switching and index migration
- * - Persistence coordination
  */
 
 import * as fs from "node:fs";
@@ -21,9 +22,14 @@ import { atomicWriteFile } from "../utils/atomicWrite";
 import { formatIndexTimestamp, parseIndexTimestamp } from "./storagePaths";
 import type { VectorStore } from "./vectorStore";
 
-/** Regex to parse new index filename format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json */
-const NEW_INDEX_PATTERN = /^idx_(\d{8}T\d{6})_([a-f0-9]{4})_(.+)_(\d+)d\.json$/;
-/** Regex to parse legacy index filename format: index-{model}-{dim}d.json */
+/** Index file version - must match SimpleVectorStore */
+const INDEX_VERSION = 3;
+
+/** Regex to parse v3 index filename: idx_{timestamp}_v{version}_{model}_{dim}d.json */
+const V3_INDEX_PATTERN = /^idx_(\d{8}T\d{6})_v(\d+)_(.+)_(\d+)d\.json$/;
+/** Regex to parse v2 index filename: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json */
+const V2_INDEX_PATTERN = /^idx_(\d{8}T\d{6})_([a-f0-9]{4})_(.+)_(\d+)d\.json$/;
+/** Regex to parse legacy index filename: index-{model}-{dim}d.json */
 const LEGACY_INDEX_PATTERN = /^index-(.+)-(\d+)d\.json$/;
 
 /** Parsed index filename metadata */
@@ -32,30 +38,21 @@ interface ParsedIndexName {
   vaultHash: string | null;
   modelKey: string;
   dimension: number;
-  isLegacy: boolean;
+  version: number | null;
+  format: "v3" | "v2" | "legacy";
 }
 
 /** Rich metadata for discovered indices - used by UI surfaces */
 export interface DiscoveredIndex {
-  /** Full file path */
   path: string;
-  /** Model key (e.g., "nomic-embed-text") */
   modelKey: string;
-  /** Embedding dimension */
   dimension: number;
-  /** Number of chunks in index */
   docCount: number;
-  /** Source: plugin-managed or external vault */
   source: "plugin" | "vault";
-  /** Creation timestamp from filename (null for legacy) */
   createdAt: Date | null;
-  /** Last updated timestamp from index metadata */
   updatedAt: Date | null;
-  /** Short vault hash from filename (null for legacy) */
   vaultHash: string | null;
-  /** Whether this uses the legacy naming format */
   isLegacy: boolean;
-  /** Display-friendly name derived from filename */
   displayName: string;
 }
 
@@ -63,15 +60,29 @@ export interface DiscoveredIndex {
 function parseIndexFilename(filename: string): ParsedIndexName | null {
   const baseName = path.basename(filename);
 
-  // Try new format first
-  const newMatch = baseName.match(NEW_INDEX_PATTERN);
-  if (newMatch) {
+  // Try v3 format first
+  const v3Match = baseName.match(V3_INDEX_PATTERN);
+  if (v3Match) {
     return {
-      timestamp: newMatch[1],
-      vaultHash: newMatch[2],
-      modelKey: newMatch[3],
-      dimension: Number.parseInt(newMatch[4], 10),
-      isLegacy: false,
+      timestamp: v3Match[1],
+      vaultHash: null,
+      modelKey: v3Match[3],
+      dimension: Number.parseInt(v3Match[4], 10),
+      version: Number.parseInt(v3Match[2], 10),
+      format: "v3",
+    };
+  }
+
+  // Try v2 format
+  const v2Match = baseName.match(V2_INDEX_PATTERN);
+  if (v2Match) {
+    return {
+      timestamp: v2Match[1],
+      vaultHash: v2Match[2],
+      modelKey: v2Match[3],
+      dimension: Number.parseInt(v2Match[4], 10),
+      version: null,
+      format: "v2",
     };
   }
 
@@ -83,7 +94,8 @@ function parseIndexFilename(filename: string): ParsedIndexName | null {
       vaultHash: null,
       modelKey: legacyMatch[1],
       dimension: Number.parseInt(legacyMatch[2], 10),
-      isLegacy: true,
+      version: null,
+      format: "legacy",
     };
   }
 
@@ -99,21 +111,11 @@ export interface NoteState {
   embeddedAt: number;
 }
 
-/** Persisted state file format */
-interface StateFile {
-  version: number;
-  modelKey: string;
-  lastFullIndexAt: number | null;
-  indexingInProgress: boolean;
-  indexingStartedAt: number | null;
-  notes: Record<string, NoteState>;
-}
-
-/** Index completion state (v3: no crash detection - partial is just partial) */
+/** Index completion state */
 export type IndexState =
   | "none" // No index exists for this model
   | "complete" // Index exists and all vault notes are indexed
-  | "incomplete" // Index exists but some notes missing (user decides when to continue)
+  | "incomplete" // Index exists but some notes missing
   | "stale"; // Index exists but may have outdated entries
 
 /** Exported index state for UI */
@@ -129,25 +131,22 @@ export interface IndexStats {
 }
 
 /**
- * Index Manager - coordinates vector store and state tracking
- *
- * Identity Strategy (Index-First Architecture):
- * - modelKey and dimension are derived from the LOADED INDEX FILE's metadata
- * - NOT from Ollama's current model (which may differ)
- * - This enables true multi-model index switching
- *
- * Index Types:
- * - Plugin indices (.obsidian/plugins/notient/): Notient-managed, FULL capability
- * - User-provided indices (vault/system/index/): External RAG data, READ-ONLY
+ * Index Manager - coordinates vector store and OWNS all file I/O.
  */
 export class IndexManager {
   private modelKey = "";
   private dimension = 0;
-  private isUserProvidedIndex = false; // User-provided indices (system/index/) are read-only
-  /** Resolved active index path */
+  private isUserProvidedIndex = false;
   private activeIndexPath: string | null = null;
-  /** Track indexing errors for vitals (note paths that failed) */
   private errorPaths: Set<string> = new Set();
+
+  // Save scheduling
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private saveDebounceMs = 10000; // 10s debounce
+
+  // Discovery caching to prevent repeated filesystem scans
+  private discoveryCache: { indices: DiscoveredIndex[]; timestamp: number } | null = null;
+  private static readonly DISCOVERY_CACHE_TTL_MS = 30000; // 30s
 
   constructor(
     private kernel: Kernel,
@@ -158,67 +157,11 @@ export class IndexManager {
     const activePath = this.kernel.settings.indexing.activeIndexPath;
 
     // Determine if this is a user-provided external index (read-only)
-    // User-provided indices live in vault/system/index/ and are for RAG expansion
     this.isUserProvidedIndex = activePath
       ? activePath.includes("system/index") || activePath.includes("system\\index")
       : false;
 
-    if (activePath) {
-      // INDEX-FIRST: Derive identity from the index file's metadata
-      console.log(`[IndexManager] Loading index from override path: ${activePath}`);
-      this.activeIndexPath = activePath;
-
-      const meta = await IndexManager.readIndexMeta(activePath);
-      if (meta) {
-        this.modelKey = meta.modelKey;
-        this.dimension = meta.dimension;
-        console.log(
-          `[IndexManager] Identity from index file: modelKey=${this.modelKey}, dim=${this.dimension}, userProvided=${this.isUserProvidedIndex}`,
-        );
-
-        // Cache the metadata in settings for UI access
-        this.kernel.settings.indexing.activeIndexMeta = {
-          modelKey: this.modelKey,
-          dimension: this.dimension,
-          isUserProvided: this.isUserProvidedIndex,
-        };
-      } else {
-        // Index file unreadable - fall back to Ollama
-        console.warn(
-          `[IndexManager] Could not read index metadata from ${activePath}, falling back to Ollama`,
-        );
-        await this.deriveIdentityFromOllama();
-      }
-
-      // Pass isReadOnly to vectorStore so it knows not to persist changes to external indices
-      await this.vectorStore.initialize({
-        indexOverridePath: activePath,
-        isReadOnly: this.isUserProvidedIndex,
-      });
-    } else {
-      // No override - use Ollama's current model for identity
-      await this.deriveIdentityFromOllama();
-      await this.vectorStore.initialize({ isReadOnly: false });
-
-      // After vectorStore initializes, it may have discovered/created an index path
-      // We need to get the resolved path for state file naming
-      // For now, generate the expected path (vectorStore uses same logic)
-      this.activeIndexPath = this.generateIndexPath();
-    }
-
-    // State is now embedded in index file (v3) - no separate state file to load
-
-    // Clean up old files from .deleted folder (runs in background)
-    this.cleanupDeletedFolder().catch(() => {});
-
-    const noteCount = this.vectorStore.getIndexedNoteCount?.() ?? 0;
-    console.log(
-      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${noteCount}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`,
-    );
-  }
-
-  /** Derive identity from Ollama service (default behavior for plugin indices) */
-  private async deriveIdentityFromOllama(): Promise<void> {
+    // Get model info from Ollama first (we need this for discovery)
     const ollama = this.kernel.getService<{
       getModelKey(): string;
       getDimension(): Promise<number>;
@@ -230,148 +173,401 @@ export class IndexManager {
 
     this.modelKey = ollama.getModelKey();
     this.dimension = await ollama.getDimension();
-    this.isUserProvidedIndex = false;
 
-    // Cache in settings
+    console.log(`[IndexManager] Initializing for model=${this.modelKey}, dim=${this.dimension}`);
+
+    // Set model config on VectorStore
+    this.vectorStore.setModelConfig?.(this.modelKey, this.dimension);
+
+    // Load index
+    if (activePath) {
+      // User specified a path in settings
+      console.log(`[IndexManager] Loading from settings path: ${activePath}`);
+      this.activeIndexPath = activePath;
+      await this.loadIndexFromPath(activePath);
+    } else {
+      // Discover existing index
+      const discovered = await this.discoverBestIndex();
+      if (discovered) {
+        console.log(`[IndexManager] Discovered existing index: ${discovered}`);
+        this.activeIndexPath = discovered;
+        await this.loadIndexFromPath(discovered);
+      } else {
+        // No existing index - generate path for new one
+        this.activeIndexPath = this.generateIndexPath();
+        console.log(`[IndexManager] No index found, will create: ${this.activeIndexPath}`);
+      }
+    }
+
+    // Initialize vector store (it's now just in-memory setup)
+    await this.vectorStore.initialize();
+
+    // Cache metadata in settings for UI
     this.kernel.settings.indexing.activeIndexMeta = {
       modelKey: this.modelKey,
       dimension: this.dimension,
-      isUserProvided: false, // Plugin indices are NOT user-provided
+      isUserProvided: this.isUserProvidedIndex,
     };
+
+    // Clean up old files from .deleted folder (background)
+    this.cleanupDeletedFolder().catch(() => {});
+
+    const noteCount = this.vectorStore.getIndexedNoteCount?.() ?? 0;
+    console.log(
+      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${noteCount}, path=${this.activeIndexPath}`,
+    );
+  }
+
+  // ============ Index Discovery ============
+
+  /**
+   * Discover the best matching index for current model/dimension.
+   * Returns the path to the best match, or null if none found.
+   */
+  private async discoverBestIndex(): Promise<string | null> {
+    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const pluginRoot = this.kernel.storagePaths.pluginRoot;
+
+    console.log(
+      `[IndexManager] Discovering indices for modelKey=${sanitizedKey}, dim=${this.dimension}`,
+    );
+
+    try {
+      const files = await fs.promises.readdir(pluginRoot);
+      const indexFiles = files.filter(
+        (f) => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"),
+      );
+      console.log("[IndexManager] Found index files:", indexFiles);
+
+      const matches: Array<{
+        path: string;
+        format: "v3" | "v2" | "legacy";
+        timestamp?: string;
+        version?: number;
+      }> = [];
+
+      for (const file of indexFiles) {
+        const parsed = parseIndexFilename(file);
+        if (!parsed) continue;
+
+        // Must match model key and dimension
+        if (parsed.modelKey !== sanitizedKey || parsed.dimension !== this.dimension) {
+          continue;
+        }
+
+        matches.push({
+          path: path.join(pluginRoot, file),
+          format: parsed.format,
+          timestamp: parsed.timestamp ?? undefined,
+          version: parsed.version ?? undefined,
+        });
+        console.log(`[IndexManager] Matched (${parsed.format}): ${file}`);
+      }
+
+      if (matches.length === 0) {
+        console.log("[IndexManager] No matching indices found");
+        return null;
+      }
+
+      // Sort: v3 > v2 > legacy, then by timestamp (newest first)
+      const formatPriority = { v3: 0, v2: 1, legacy: 2 };
+      matches.sort((a, b) => {
+        if (a.format !== b.format) return formatPriority[a.format] - formatPriority[b.format];
+        if (a.timestamp && b.timestamp) return b.timestamp.localeCompare(a.timestamp);
+        return 0;
+      });
+
+      console.log(`[IndexManager] Selected: ${matches[0].path}`);
+      return matches[0].path;
+    } catch (e) {
+      console.warn("[IndexManager] Discovery failed:", e);
+      return null;
+    }
+  }
+
+  // ============ Index Loading ============
+
+  /**
+   * Load index from a specific path.
+   * Handles v2 and v3 formats, migrates v2 to v3.
+   */
+  private async loadIndexFromPath(indexPath: string): Promise<boolean> {
+    console.log(`[IndexManager] Loading index from: ${indexPath}`);
+
+    try {
+      const exists = await fs.promises
+        .access(indexPath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (!exists) {
+        console.log(`[IndexManager] Index file not found: ${indexPath}`);
+        return false;
+      }
+
+      const raw = await fs.promises.readFile(indexPath, "utf-8");
+      const data = JSON.parse(raw) as {
+        meta: {
+          version?: number;
+          modelKey: string;
+          dimension: number;
+          docCount: number;
+          createdAt: number;
+          updatedAt: number;
+          state?: {
+            lastFullIndexAt: number | null;
+            notes: Record<string, unknown>;
+          };
+        };
+        docs: unknown[];
+      };
+
+      console.log(
+        `[IndexManager] Found index: version=${data.meta.version}, model=${data.meta.modelKey}, dim=${data.meta.dimension}, docs=${data.meta.docCount}`,
+      );
+
+      // Validate model key and dimension
+      const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+      if (data.meta.modelKey !== sanitizedKey) {
+        console.log(
+          `[IndexManager] Model key mismatch: file=${data.meta.modelKey}, current=${sanitizedKey}`,
+        );
+        return false;
+      }
+
+      if (data.meta.dimension !== this.dimension) {
+        console.log(
+          `[IndexManager] Dimension mismatch: file=${data.meta.dimension}, current=${this.dimension}`,
+        );
+        return false;
+      }
+
+      // Check version - support v2 and v3
+      const version = data.meta.version ?? 2;
+      if (version !== 2 && version !== 3) {
+        console.log(`[IndexManager] Unsupported index version: ${version}`);
+        await this.moveToDeleted(indexPath, `v${version}`);
+        return false;
+      }
+
+      // For v2, try to migrate state from separate state file
+      let state = data.meta.state;
+      if (version === 2 && !state) {
+        state = (await this.loadV2State()) ?? undefined;
+      }
+
+      // Load into VectorStore
+      this.vectorStore.loadFromData?.({
+        meta: {
+          modelKey: data.meta.modelKey,
+          dimension: data.meta.dimension,
+          createdAt: data.meta.createdAt,
+          updatedAt: data.meta.updatedAt,
+        },
+        docs: data.docs as any,
+        state: state as any,
+      });
+
+      // If we migrated from v2, mark dirty to save as v3
+      if (version === 2) {
+        console.log("[IndexManager] Migrated from v2, will save as v3");
+        // Generate new v3 filename
+        this.activeIndexPath = this.generateIndexPath();
+        this.scheduleSave();
+      }
+
+      return true;
+    } catch (error) {
+      console.error("[IndexManager] Failed to load index:", error);
+      await this.moveToDeleted(indexPath, "corrupt").catch(() => {});
+      return false;
+    }
   }
 
   /**
-   * Switch to a specific index path.
-   * DESIGN: No hot-swapping. Index switching requires a clean plugin reload
-   * to ensure all services (agents, chat, search) are using consistent state.
+   * Load state from v2 separate state file (for migration).
    */
-  async switchToIndex(indexPath: string): Promise<void> {
-    // Read metadata from the target index to validate it exists
-    const meta = await IndexManager.readIndexMeta(indexPath);
-    if (!meta) {
-      this.kernel.obsidian.notice("Cannot switch: Index file not readable");
+  private async loadV2State(): Promise<{
+    lastFullIndexAt: number | null;
+    notes: Record<string, unknown>;
+  } | null> {
+    const statePath = path.join(
+      this.kernel.storagePaths.pluginRoot,
+      `state-${this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`,
+    );
+
+    try {
+      const exists = await fs.promises
+        .access(statePath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (!exists) {
+        console.log("[IndexManager] No v2 state file to migrate");
+        return null;
+      }
+
+      const raw = await fs.promises.readFile(statePath, "utf-8");
+      const stateData = JSON.parse(raw) as {
+        lastFullIndexAt: number | null;
+        notes: Record<string, unknown>;
+      };
+
+      console.log(
+        `[IndexManager] Migrated ${Object.keys(stateData.notes).length} notes from v2 state`,
+      );
+
+      // Move old state file to .deleted
+      await this.moveToDeleted(statePath, "migrated-to-v3");
+
+      return stateData;
+    } catch (error) {
+      console.warn("[IndexManager] Failed to migrate v2 state:", error);
+      return null;
+    }
+  }
+
+  // ============ Index Saving ============
+
+  /**
+   * Schedule a save operation (debounced).
+   */
+  scheduleSave(): void {
+    if (this.isUserProvidedIndex) return;
+
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.saveIndex().catch((error) => {
+        console.error("[IndexManager] Scheduled save failed:", error);
+        this.kernel.eventBus.emit("index:error", { error: String(error), source: "indexManager" });
+      });
+    }, this.saveDebounceMs);
+  }
+
+  /**
+   * Save index to disk immediately.
+   */
+  async saveIndex(): Promise<void> {
+    if (this.isUserProvidedIndex) {
+      console.log("[IndexManager] Skipping save: read-only index");
       return;
     }
 
-    // User-provided indices (in system/index/) are read-only RAG expansion
-    const isUserProvided =
-      indexPath.includes("system/index") || indexPath.includes("system\\index");
+    if (!this.activeIndexPath) {
+      console.warn("[IndexManager] No active index path, cannot save");
+      return;
+    }
 
-    // Update settings with new active index
-    this.kernel.settings.indexing.activeIndexPath = indexPath;
-    this.kernel.settings.indexing.activeIndexMeta = {
-      modelKey: meta.modelKey,
-      dimension: meta.dimension,
-      isUserProvided: isUserProvided,
-    };
-    await this.kernel.saveSettings();
+    if (!this.vectorStore.isDirty?.()) {
+      return; // Nothing to save
+    }
 
-    // Trigger plugin reload for clean state
-    const label = isUserProvided ? `${meta.modelKey} (external)` : meta.modelKey;
-    this.kernel.obsidian.notice(`Switching to ${label} index. Reloading plugin...`, 5000);
+    try {
+      const data = this.vectorStore.exportData?.();
+      if (!data) {
+        console.warn("[IndexManager] VectorStore.exportData() returned nothing");
+        return;
+      }
 
-    // Give the notice time to display, then reload
-    setTimeout(() => {
-      // Reload the plugin by disabling and re-enabling
-      const app = this.kernel.obsidian.getApp();
-      const pluginId = "notient";
-      // @ts-expect-error - accessing internal Obsidian API
-      app.plugins.disablePlugin(pluginId).then(() => {
-        // @ts-expect-error - accessing internal Obsidian API
-        app.plugins.enablePlugin(pluginId);
-      });
-    }, 500);
+      await atomicWriteFile(this.activeIndexPath, JSON.stringify(data));
+      this.vectorStore.clearDirty?.();
+
+      console.log(
+        `[IndexManager] Saved ${data.meta.docCount} chunks, ${Object.keys(data.meta.state.notes).length} notes to ${path.basename(this.activeIndexPath)}`,
+      );
+    } catch (error) {
+      console.error("[IndexManager] Failed to save index:", error);
+      throw error;
+    }
   }
 
-  /** Check if the current index is read-only (user-provided external index) */
-  isReadOnly(): boolean {
-    return this.isUserProvidedIndex;
+  // ============ Path Management ============
+
+  /**
+   * Generate a new index path with v3 naming format.
+   * Format: idx_{timestamp}_v{version}_{model}_{dim}d.json
+   */
+  private generateIndexPath(): string {
+    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const timestamp = formatIndexTimestamp();
+    return path.join(
+      this.kernel.storagePaths.pluginRoot,
+      `idx_${timestamp}_v${INDEX_VERSION}_${sanitizedKey}_${this.dimension}d.json`,
+    );
   }
 
-  /** Get the dimension of the current index */
-  getDimension(): number {
-    return this.dimension;
+  /** Get the active index path */
+  getActiveIndexPath(): string | null {
+    return this.activeIndexPath;
   }
 
-  // ============ State Tracking (delegates to VectorStore v3) ============
+  // ============ State Tracking (delegates to VectorStore) ============
 
-  /** Get state for a note */
   getNoteState(notePath: string): NoteState | null {
     return this.vectorStore.getNoteState?.(notePath) ?? null;
   }
 
-  /** Update state for a note */
   setNoteState(notePath: string, state: NoteState): void {
     this.vectorStore.setNoteState?.(notePath, state);
+    this.scheduleSave();
   }
 
-  /** Remove state for a note */
   removeNoteState(notePath: string): void {
     this.vectorStore.removeNoteState?.(notePath);
+    this.scheduleSave();
   }
 
-  /** Check if a note needs reindexing */
   needsReindex(notePath: string, mtimeMs: number, contentHash: string): boolean {
     const state = this.vectorStore.getNoteState?.(notePath);
     if (!state) return true;
-
-    // Content changed
     if (state.contentHash !== contentHash) return true;
-
-    // File modified after indexing
     if (mtimeMs > state.embeddedAt) return true;
-
     return false;
   }
 
-  /** Get all indexed note paths */
   getIndexedPaths(): string[] {
     return this.vectorStore.getIndexedPaths?.() ?? [];
   }
 
-  /** Get count of indexed notes */
   getIndexedCount(): number {
     return this.vectorStore.getIndexedNoteCount?.() ?? 0;
   }
 
-  /** Check if a specific note is indexed */
   isNoteIndexed(notePath: string): boolean {
     return this.vectorStore.isNoteIndexed?.(notePath) ?? false;
   }
 
-  /** Record that a full index completed */
   recordFullIndex(): void {
     this.vectorStore.recordFullIndex?.();
+    this.scheduleSave();
   }
 
-  /** Get last full index timestamp */
   getLastFullIndexAt(): number | null {
     return this.vectorStore.getLastFullIndexAt?.() ?? null;
   }
 
-  /** Get count of indexing errors */
   getErrorCount(): number {
     return this.errorPaths.size;
   }
 
-  /** Record an indexing error for a note */
   recordError(notePath: string): void {
     this.errorPaths.add(notePath);
   }
 
-  /** Clear error tracking (called when index is cleared or rebuilt) */
   clearErrors(): void {
     this.errorPaths.clear();
   }
 
-  /** Get index statistics for UI */
   async getStats(): Promise<IndexStats> {
     const chunkCount = await this.countChunks();
     const noteCount = this.getIndexedCount();
     const vaultNoteCount = this.kernel.obsidian.getMarkdownFiles().length;
     const lastFullIndexAt = this.getLastFullIndexAt();
 
-    // Determine index state (v3: no crash detection - partial is just partial)
     let state: IndexState;
     if (noteCount === 0 && chunkCount === 0) {
       state = "none";
@@ -380,7 +576,7 @@ export class IndexManager {
     } else if (noteCount > 0) {
       state = "incomplete";
     } else {
-      state = "stale"; // Has chunks but no state tracking
+      state = "stale";
     }
 
     const completionPercent =
@@ -402,15 +598,16 @@ export class IndexManager {
 
   async addChunks(chunks: EmbeddedChunk[]): Promise<void> {
     if (this.isUserProvidedIndex) {
-      console.warn("[IndexManager] Cannot add chunks: User-provided index is read-only");
+      console.warn("[IndexManager] Cannot add chunks: read-only index");
       return;
     }
     await this.vectorStore.upsertChunks(chunks);
+    this.scheduleSave();
   }
 
   async removeNote(notePath: string, noteId: string): Promise<void> {
     if (this.isUserProvidedIndex) {
-      console.warn("[IndexManager] Cannot remove note: User-provided index is read-only");
+      console.warn("[IndexManager] Cannot remove note: read-only index");
       return;
     }
     await this.vectorStore.deleteByNoteId(noteId);
@@ -437,59 +634,74 @@ export class IndexManager {
     return this.vectorStore.isReady();
   }
 
+  isReadOnly(): boolean {
+    return this.isUserProvidedIndex;
+  }
+
+  getDimension(): number {
+    return this.dimension;
+  }
+
+  getActiveModelKey(): string {
+    return this.modelKey;
+  }
+
   // ============ Bulk Operations ============
 
   beginBulkUpdate(): void {
-    if (this.isUserProvidedIndex) {
-      console.warn("[IndexManager] Cannot begin bulk update: User-provided index is read-only");
-      return;
-    }
+    if (this.isUserProvidedIndex) return;
     this.vectorStore.beginBulkUpdate?.();
   }
 
   async endBulkUpdate(): Promise<void> {
     if (this.isUserProvidedIndex) return;
     await this.vectorStore.endBulkUpdate?.();
-    // State is now saved with vectorStore (v3 embedded state)
+    this.scheduleSave();
   }
 
   async clearAll(): Promise<void> {
     if (this.isUserProvidedIndex) {
-      console.warn("[IndexManager] Cannot clear: User-provided index is read-only");
+      console.warn("[IndexManager] Cannot clear: read-only index");
       return;
     }
     await this.vectorStore.clearAll?.();
     this.vectorStore.clearState?.();
+    this.scheduleSave();
   }
 
   // ============ Persistence ============
 
   async save(): Promise<void> {
-    await this.vectorStore.flush?.();
-    // State is now saved with vectorStore (v3 embedded state)
+    await this.saveIndex();
   }
 
   async dispose(): Promise<void> {
+    // Cancel pending save
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+
+    // Final save if dirty
+    if (this.vectorStore.isDirty?.()) {
+      await this.saveIndex();
+    }
+
     await this.vectorStore.dispose();
   }
 
   // ============ Multi-Model Support ============
 
-  getActiveModelKey(): string {
-    return this.modelKey;
-  }
-
   /**
    * Discover available indices from plugin storage and system/index.
-   * Returns rich metadata for UI display, sorted by creation date (newest first).
    * Static version for use during setup before full service initialization.
    */
-  static async discoverIndices(storagePaths: any): Promise<DiscoveredIndex[]> {
+  static async discoverIndices(storagePaths: {
+    pluginRoot: string;
+    systemIndex: string;
+  }): Promise<DiscoveredIndex[]> {
     const results: DiscoveredIndex[] = [];
 
-    /**
-     * Process a single index file and extract rich metadata
-     */
     const processIndexFile = async (
       filePath: string,
       source: "plugin" | "vault",
@@ -500,7 +712,6 @@ export class IndexManager {
       const filename = path.basename(filePath);
       const parsed = parseIndexFilename(filename);
 
-      // Derive createdAt from filename timestamp (new format) or meta (legacy)
       let createdAt: Date | null = null;
       if (parsed?.timestamp) {
         createdAt = parseIndexTimestamp(parsed.timestamp);
@@ -508,10 +719,8 @@ export class IndexManager {
         createdAt = new Date(meta.createdAt);
       }
 
-      // Generate display name
       let displayName: string;
-      if (parsed && !parsed.isLegacy) {
-        // New format: show human-readable date + model
+      if (parsed && parsed.format !== "legacy") {
         const dateStr = createdAt
           ? createdAt.toLocaleDateString("en-US", {
               month: "short",
@@ -521,7 +730,6 @@ export class IndexManager {
           : "Unknown";
         displayName = `${meta.modelKey} (${dateStr})`;
       } else {
-        // Legacy format
         displayName = `${meta.modelKey} (legacy)`;
       }
 
@@ -534,37 +742,28 @@ export class IndexManager {
         createdAt,
         updatedAt: meta.updatedAt ? new Date(meta.updatedAt) : null,
         vaultHash: parsed?.vaultHash ?? null,
-        isLegacy: parsed?.isLegacy ?? true,
+        isLegacy: parsed?.format === "legacy",
         displayName,
       };
     };
 
-    // 1. Scan Plugin Storage (.obsidian/plugins/notient/)
+    // Scan Plugin Storage
     try {
-      console.log(`[IndexManager] Scanning plugin storage: ${storagePaths.pluginRoot}`);
       const pluginFiles = await fs.promises.readdir(storagePaths.pluginRoot);
       const indexFiles = pluginFiles.filter(
         (f) => (f.startsWith("idx_") || f.startsWith("index-")) && f.endsWith(".json"),
       );
-      console.log(`[IndexManager] Found ${indexFiles.length} potential index files:`, indexFiles);
 
       for (const file of indexFiles) {
         const filePath = path.join(storagePaths.pluginRoot, file);
         const idx = await processIndexFile(filePath, "plugin");
-        if (idx) {
-          console.log(
-            `[IndexManager] Loaded index: ${file} (${idx.modelKey}, ${idx.dimension}d, ${idx.docCount} docs)`,
-          );
-          results.push(idx);
-        } else {
-          console.warn(`[IndexManager] Failed to load index metadata: ${file}`);
-        }
+        if (idx) results.push(idx);
       }
     } catch (e) {
       console.warn("[IndexManager] Failed to scan plugin storage:", e);
     }
 
-    // 2. Scan Vault System Storage (system/index/*.json)
+    // Scan Vault System Storage
     try {
       const sysPath = storagePaths.systemIndex;
       const dirExists = await fs.promises
@@ -586,15 +785,12 @@ export class IndexManager {
       console.warn("[IndexManager] Failed to scan system index:", e);
     }
 
-    // Sort by creation date (newest first), then by model key
+    // Sort: v3 > v2 > legacy, then by date
     results.sort((a, b) => {
-      // Non-legacy before legacy
       if (a.isLegacy !== b.isLegacy) return a.isLegacy ? 1 : -1;
-      // Newer before older
       const aTime = a.createdAt?.getTime() ?? 0;
       const bTime = b.createdAt?.getTime() ?? 0;
       if (aTime !== bTime) return bTime - aTime;
-      // Alphabetical by model key
       return a.modelKey.localeCompare(b.modelKey);
     });
 
@@ -602,7 +798,25 @@ export class IndexManager {
   }
 
   async discoverIndices(): Promise<DiscoveredIndex[]> {
-    return IndexManager.discoverIndices(this.kernel.storagePaths);
+    // Use cached results if available and fresh
+    const now = Date.now();
+    if (
+      this.discoveryCache &&
+      now - this.discoveryCache.timestamp < IndexManager.DISCOVERY_CACHE_TTL_MS
+    ) {
+      return this.discoveryCache.indices;
+    }
+
+    const indices = await IndexManager.discoverIndices(this.kernel.storagePaths);
+    this.discoveryCache = { indices, timestamp: now };
+    return indices;
+  }
+
+  /**
+   * Clear the discovery cache (call after index operations that change the file list).
+   */
+  clearDiscoveryCache(): void {
+    this.discoveryCache = null;
   }
 
   static async readIndexMeta(filePath: string): Promise<{
@@ -625,73 +839,85 @@ export class IndexManager {
         };
       }
     } catch (e) {
-      // ignore invalid json
+      // ignore
     }
     return null;
   }
 
   /**
+   * Switch to a specific index path.
+   */
+  async switchToIndex(indexPath: string): Promise<void> {
+    const meta = await IndexManager.readIndexMeta(indexPath);
+    if (!meta) {
+      this.kernel.obsidian.notice("Cannot switch: Index file not readable");
+      return;
+    }
+
+    const isUserProvided =
+      indexPath.includes("system/index") || indexPath.includes("system\\index");
+
+    this.kernel.settings.indexing.activeIndexPath = indexPath;
+    this.kernel.settings.indexing.activeIndexMeta = {
+      modelKey: meta.modelKey,
+      dimension: meta.dimension,
+      isUserProvided,
+    };
+    await this.kernel.saveSettings();
+
+    const label = isUserProvided ? `${meta.modelKey} (external)` : meta.modelKey;
+    this.kernel.obsidian.notice(`Switching to ${label} index. Reloading plugin...`, 5000);
+
+    setTimeout(() => {
+      const app = this.kernel.obsidian.getApp();
+      const pluginId = "notient";
+      // @ts-expect-error - Obsidian internal API
+      app.plugins.disablePlugin(pluginId).then(() => {
+        // @ts-expect-error - Obsidian internal API
+        app.plugins.enablePlugin(pluginId);
+      });
+    }, 500);
+  }
+
+  /**
    * Delete a specific index by its file path.
-   * Only plugin-created indices can be deleted (not user-provided external indices).
    */
   async deleteIndexByPath(indexPath: string): Promise<boolean> {
-    // Prevent deletion of user-provided (vault) indices
     const isExternal = indexPath.includes("system/index") || indexPath.includes("system\\index");
     if (isExternal) {
-      console.warn("[IndexManager] Cannot delete user-provided index - it's read-only");
+      console.warn("[IndexManager] Cannot delete user-provided index");
       return false;
     }
 
-    // Check if this is the active index
-    const activePath = this.kernel.settings.indexing.activeIndexPath;
-    if (activePath === indexPath) {
-      // Can't delete active index - clear it instead
+    if (this.activeIndexPath === indexPath) {
       await this.clearAll();
+      this.clearDiscoveryCache();
       return true;
     }
 
     try {
-      // Delete the index file
-      const indexExists = await fs.promises
+      const exists = await fs.promises
         .access(indexPath)
         .then(() => true)
         .catch(() => false);
 
-      if (indexExists) {
+      if (exists) {
         await this.moveToDeleted(indexPath, "deleted");
       }
 
-      // Delete associated state file
-      // Extract modelKey from index filename and look for state-{modelKey}.json
-      const parsed = parseIndexFilename(indexPath);
-      if (parsed) {
-        const statePath = path.join(
-          this.kernel.storagePaths.pluginRoot,
-          `state-${parsed.modelKey}.json`,
-        );
-        const stateExists = await fs.promises
-          .access(statePath)
-          .then(() => true)
-          .catch(() => false);
-        if (stateExists) {
-          await this.moveToDeleted(statePath, "deleted");
-        }
-      }
-
-      console.log(`[IndexManager] Deleted index at ${indexPath}`);
+      this.clearDiscoveryCache();
       return true;
     } catch (error) {
-      console.error(`[IndexManager] Failed to delete index at ${indexPath}:`, error);
+      console.error("[IndexManager] Failed to delete index:", error);
       return false;
     }
   }
 
   /**
-   * Trim stale entries - remove vectors for notes that no longer exist
+   * Trim stale entries - remove vectors for notes that no longer exist.
    */
   async trimIndex(): Promise<{ removed: number }> {
     if (this.isUserProvidedIndex) {
-      console.warn("[IndexManager] Cannot trim: User-provided index is read-only");
       return { removed: 0 };
     }
 
@@ -715,7 +941,7 @@ export class IndexManager {
     }
 
     if (removed > 0) {
-      await this.vectorStore.flush?.();
+      this.scheduleSave();
     }
 
     console.log(`[IndexManager] Trimmed ${removed} stale entries`);
@@ -724,33 +950,22 @@ export class IndexManager {
 
   // ============ Export / Import ============
 
-  /**
-   * Export index to a portable JSON format.
-   * v3: Index file already contains embedded state, so we just read and return it.
-   */
   async exportIndex(): Promise<string> {
     if (!this.activeIndexPath) {
       throw new Error("No active index to export");
     }
 
-    try {
-      const indexData = await fs.promises.readFile(this.activeIndexPath, "utf-8");
-      // Wrap in export envelope with timestamp
-      const exportData = {
-        exportedAt: Date.now(),
-        index: JSON.parse(indexData),
-      };
-      return JSON.stringify(exportData);
-    } catch (error) {
-      throw new Error(`Failed to export index: ${error}`);
+    const data = this.vectorStore.exportData?.();
+    if (!data) {
+      throw new Error("Failed to export index data");
     }
+
+    return JSON.stringify({
+      exportedAt: Date.now(),
+      index: data,
+    });
   }
 
-  /**
-   * Import index from exported JSON.
-   * v3: Index file contains embedded state, so we just write the index file.
-   * Supports both v3 (state in meta.state) and legacy (separate state property).
-   */
   async importIndex(jsonData: string): Promise<{ modelKey: string; noteCount: number }> {
     try {
       const data = JSON.parse(jsonData) as {
@@ -764,48 +979,43 @@ export class IndexManager {
           };
           docs: unknown[];
         };
-        state?: { notes: Record<string, unknown> }; // Legacy format
+        state?: { notes: Record<string, unknown> };
       };
 
       const importedModelKey = data.index.meta.modelKey;
       const importedDimension = data.index.meta.dimension;
 
-      // Validate embedding dimensions match current model
       if (importedDimension && this.dimension && importedDimension !== this.dimension) {
         throw new Error(
-          `Dimension mismatch: imported index has ${importedDimension}d embeddings, ` +
-            `but current model uses ${this.dimension}d. ` +
-            `Import an index with matching dimensions or switch to a compatible embedding model.`,
+          `Dimension mismatch: imported=${importedDimension}d, current=${this.dimension}d`,
         );
       }
 
-      // Ensure state is embedded in index (migrate legacy format)
+      // Ensure state is embedded
       if (!data.index.meta.state && data.state) {
         data.index.meta.state = {
           lastFullIndexAt: null,
           notes: data.state.notes || {},
         };
-        data.index.meta.version = 3;
+        data.index.meta.version = INDEX_VERSION;
       }
 
-      // Generate new filename with v3 naming
+      // Generate new filename
       const sanitizedKey = importedModelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
       const timestamp = formatIndexTimestamp();
       const indexPath = path.join(
         this.kernel.storagePaths.pluginRoot,
-        `idx_${timestamp}_v3_${sanitizedKey}_${importedDimension}d.json`,
+        `idx_${timestamp}_v${INDEX_VERSION}_${sanitizedKey}_${importedDimension}d.json`,
       );
 
-      // Write index file (atomic for crash safety)
       await atomicWriteFile(indexPath, JSON.stringify(data.index));
 
-      // Count notes from embedded state
       const noteCount = data.index.meta.state?.notes
         ? Object.keys(data.index.meta.state.notes).length
         : 0;
 
-      console.log(`[IndexManager] Imported index for ${importedModelKey} at ${indexPath}`);
-
+      this.clearDiscoveryCache();
+      console.log(`[IndexManager] Imported index at ${indexPath}`);
       return { modelKey: importedModelKey, noteCount };
     } catch (error) {
       throw new Error(`Failed to import index: ${error}`);
@@ -814,36 +1024,21 @@ export class IndexManager {
 
   // ============ Private Methods ============
 
-  /**
-   * Generate a new index path with the new naming format.
-   * Format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
-   */
-  private generateIndexPath(): string {
-    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const timestamp = formatIndexTimestamp();
-    const vaultHash = this.kernel.storagePaths.vaultHash;
-    return path.join(
-      this.kernel.storagePaths.pluginRoot,
-      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`,
-    );
-  }
-
-  // State file methods removed in v3 - state is now embedded in index file
-
   private async moveToDeleted(filePath: string, reason: string): Promise<void> {
-    const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
-    await fs.promises.mkdir(deletedDir, { recursive: true });
+    if (this.isUserProvidedIndex) return;
 
-    const base = path.basename(filePath);
-    const target = path.join(deletedDir, `${base}.${reason}.${Date.now()}`);
-    await fs.promises.rename(filePath, target);
-    console.log(`[IndexManager] Moved ${filePath} -> ${target}`);
+    try {
+      const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
+      await fs.promises.mkdir(deletedDir, { recursive: true });
+      const base = path.basename(filePath).replace(/\.json$/, "");
+      const target = path.join(deletedDir, `${base}-${reason}-${Date.now()}.json`);
+      await fs.promises.rename(filePath, target);
+      console.log(`[IndexManager] Moved ${filePath} -> ${target}`);
+    } catch (error) {
+      console.warn("[IndexManager] Failed to move file:", error);
+    }
   }
 
-  /**
-   * Clean up old files from .deleted folder.
-   * Removes files older than maxAgeDays (default 7 days).
-   */
   private async cleanupDeletedFolder(maxAgeDays = 7): Promise<void> {
     const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
 
@@ -869,16 +1064,15 @@ export class IndexManager {
             cleaned++;
           }
         } catch {
-          // Ignore individual file errors
+          // ignore
         }
       }
 
       if (cleaned > 0) {
         console.log(`[IndexManager] Cleaned ${cleaned} old files from .deleted`);
       }
-    } catch (error) {
-      // Don't fail initialization on cleanup errors
-      console.warn("[IndexManager] Failed to cleanup .deleted folder:", error);
+    } catch {
+      // ignore
     }
   }
 }

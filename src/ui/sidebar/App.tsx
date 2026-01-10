@@ -613,6 +613,14 @@ export function App() {
         agents={agentStatus}
         activeView={activeView}
         isReady={isReady}
+        onSettingsClick={() => {
+          // Open Notient settings tab
+          const setting = (app as any).setting;
+          if (setting) {
+            setting.open();
+            setting.openTabById("notient");
+          }
+        }}
       />
     </div>
   );

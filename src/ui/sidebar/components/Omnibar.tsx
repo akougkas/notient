@@ -76,7 +76,7 @@ export function Omnibar({
     // Update kernel settings
     if (kernel.settings) {
       kernel.settings.search.preset = nextPreset;
-      // Note: Settings save is handled by kernel.onSettingsChange
+      console.log(`[Omnibar] Search preset changed to: ${nextPreset}`);
     }
   }, [searchPreset, kernel]);
 

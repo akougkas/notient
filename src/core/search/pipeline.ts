@@ -96,6 +96,10 @@ export class SearchPipeline {
     const requestedTopK = options.topK ?? defaults.topK;
     const minScore = options.minScore ?? defaults.minScore;
 
+    console.log(
+      `[SearchPipeline] Search: preset=${searchSettings.preset}, rerank=${enableReranking}, topK=${requestedTopK}`,
+    );
+
     const baseFilters = {
       minScore,
       includeContent: options.includeContent ?? true,

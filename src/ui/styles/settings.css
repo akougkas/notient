@@ -345,3 +345,277 @@
   background: var(--color-purple);
   color: white;
 }
+
+/* Index Management - Metrics Row */
+.notient-settings-metrics-row {
+  display: flex;
+  gap: var(--nv2-space-lg);
+  margin: var(--nv2-space-md) 0;
+}
+
+.notient-settings-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 80px;
+}
+
+.notient-settings-metric-value {
+  font-size: var(--font-ui-larger);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.notient-settings-metric-value.complete {
+  color: var(--color-green);
+}
+
+.notient-settings-metric-value.incomplete {
+  color: var(--color-orange);
+}
+
+.notient-settings-metric-label {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+}
+
+/* State Indicator */
+.notient-settings-state-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  font-size: var(--font-smaller);
+  width: fit-content;
+}
+
+.notient-settings-state-indicator.complete {
+  color: var(--color-green);
+}
+
+.notient-settings-state-indicator.incomplete {
+  color: var(--color-orange);
+}
+
+.notient-settings-state-indicator.stale {
+  color: var(--color-yellow);
+}
+
+.notient-settings-state-indicator.none {
+  color: var(--text-muted);
+}
+
+/* Index Operations Grid */
+.notient-settings-ops-section {
+  margin: var(--nv2-space-lg) 0;
+}
+
+.notient-settings-ops-section h4 {
+  margin-bottom: var(--nv2-space-sm);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.notient-settings-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--nv2-space-sm);
+}
+
+.notient-settings-op-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-md);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  cursor: pointer;
+  transition: all var(--nv2-transition-fast);
+}
+
+.notient-settings-op-btn:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+
+.notient-settings-op-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notient-settings-op-btn.mod-warning {
+  border-color: var(--color-red);
+}
+
+.notient-settings-op-btn.mod-warning:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-red) 10%, transparent);
+}
+
+.notient-settings-op-icon {
+  color: var(--text-muted);
+}
+
+.notient-settings-op-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.notient-settings-op-icon.spinning svg {
+  animation: nv2-spin 1s linear infinite;
+}
+
+.notient-settings-op-label {
+  font-weight: 500;
+  font-size: var(--font-ui-small);
+}
+
+.notient-settings-op-desc {
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Index Inventory Table */
+.notient-settings-inventory-section {
+  margin: var(--nv2-space-lg) 0;
+}
+
+.notient-settings-inventory-section h4 {
+  margin-bottom: var(--nv2-space-sm);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.notient-settings-index-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-smaller);
+}
+
+.notient-settings-index-table th {
+  text-align: left;
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.notient-settings-index-table td {
+  padding: var(--nv2-space-sm);
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.notient-settings-index-table tr.active {
+  background: var(--background-secondary);
+}
+
+.notient-settings-index-table tr:hover {
+  background: var(--background-modifier-hover);
+}
+
+.notient-settings-active-dot {
+  color: var(--color-green);
+  margin-right: var(--nv2-space-xs);
+}
+
+.notient-settings-warn-icon {
+  color: var(--color-orange);
+  margin-left: var(--nv2-space-xs);
+}
+
+.notient-settings-warn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notient-settings-dim-badge {
+  background: var(--background-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.notient-settings-source-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.notient-settings-source-badge.plugin {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.notient-settings-source-badge.external {
+  background: var(--color-purple);
+  color: white;
+}
+
+.notient-settings-actions-cell {
+  display: flex;
+  gap: var(--nv2-space-xs);
+}
+
+.notient-settings-action-btn-small {
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  font-size: var(--font-smallest);
+  cursor: pointer;
+}
+
+.notient-settings-action-btn-small:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+}
+
+.notient-settings-action-btn-small:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notient-settings-action-btn-small.mod-warning {
+  color: var(--color-red);
+  border-color: var(--color-red);
+}
+
+.notient-settings-active-label {
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+}
+
+/* Danger Zone */
+.notient-settings-danger-zone {
+  margin-top: var(--nv2-space-xl);
+  padding: var(--nv2-space-md);
+  border: 1px solid var(--color-red);
+  border-radius: var(--radius-m);
+  background: color-mix(in srgb, var(--color-red) 5%, transparent);
+}
+
+.notient-settings-danger-header {
+  color: var(--color-red);
+  margin-bottom: var(--nv2-space-md);
+}
+
+.notient-settings-index-model {
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+}
+
+.notient-settings-index-dim {
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}

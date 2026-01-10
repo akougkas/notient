@@ -1,8 +1,12 @@
 /**
  * IndexManagementPanel - UI for managing vector indices
  *
- * Extracted from settings.ts to reduce file complexity.
- * Handles index discovery, switching, export/import, and maintenance operations.
+ * Clean design with:
+ * 1. Current Index Status - health metrics, quick actions
+ * 2. Index Operations - all 7 ops for the active index
+ * 3. Index Inventory - other available indices
+ * 4. Danger Zone - destructive operations
+ * 5. Import Section
  */
 
 import { type App, Setting, setIcon } from "obsidian";
@@ -34,19 +38,23 @@ export interface IndexManagerInterface {
   deleteIndexByPath(path: string): Promise<boolean>;
   switchToIndex(path: string): Promise<void>;
   clearAll(): Promise<void>;
+  getStats(): Promise<{
+    exists: boolean;
+    modelKey: string | null;
+    noteCount: number;
+    chunkCount: number;
+    vaultNoteCount: number;
+    lastFullIndexAt: number | null;
+    state: "none" | "complete" | "incomplete" | "stale";
+    completionPercent: number;
+  }>;
+  clearDiscoveryCache?(): void;
 }
 
 export class IndexManagementPanel {
-  private expandedPath: string | null = null;
-  // Cache discovered indices to avoid repeated filesystem scans
-  private cachedIndices: IndexInfo[] | null = null;
-  private cacheTimestamp = 0;
-  private static readonly CACHE_TTL_MS = 30000; // 30 seconds
-
-  // Track in-progress operations to maintain button state across re-renders
   private operationInProgress: {
-    type: "switch" | "trim" | "delete" | "import" | null;
-    path?: string; // For operations on specific indices
+    type: "switch" | "trim" | "delete" | "import" | "rebuild" | "sync" | "export" | null;
+    path?: string;
   } = { type: null };
 
   constructor(
@@ -56,22 +64,10 @@ export class IndexManagementPanel {
     private onRefresh: () => void,
   ) {}
 
-  /**
-   * Clear the indices cache (call when index operations are performed)
-   */
-  clearCache(): void {
-    this.cachedIndices = null;
-    this.cacheTimestamp = 0;
-  }
-
   render(containerEl: HTMLElement): void {
     const section = containerEl.createDiv({
       cls: "notient-settings-section notient-index-management",
     });
-    const header = section.createEl("h2", { cls: "notient-settings-header" });
-    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
-    setIcon(iconEl, "database");
-    header.createSpan({ text: "Index Management" });
 
     const isReady = this.kernel.isServicesInitialized;
     const indexManager = isReady
@@ -88,116 +84,320 @@ export class IndexManagementPanel {
       return;
     }
 
-    this.renderCurrentStatus(section, indexManager);
-    this.renderIndexGrid(section, indexManager);
-    this.renderImportSection(section, indexManager);
+    // Load stats and render
+    this.renderWithStats(section, indexManager);
   }
 
   private renderNotReady(section: HTMLElement): void {
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "database");
+    header.createSpan({ text: "Index Management" });
+
     const infoBox = section.createDiv({ cls: "notient-settings-info-box" });
     infoBox.createEl("div", {
       text: this.kernel.isServicesInitializing
-        ? "⏳ Services initializing..."
-        : "⚠️ Services not ready - complete setup wizard first",
+        ? "Services initializing..."
+        : "Services not ready - complete setup wizard first",
       cls: "notient-settings-info-dim",
     });
   }
 
-  private renderCurrentStatus(section: HTMLElement, indexManager: IndexManagerInterface): void {
-    const activeKey = indexManager.getActiveModelKey();
-    const noteCount = indexManager.getIndexedCount();
-    const currentDim = indexManager.getDimension();
-    const isUserProvided = indexManager.isReadOnly();
+  private async renderWithStats(section: HTMLElement, indexManager: IndexManagerInterface): Promise<void> {
+    // Header
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "database");
+    header.createSpan({ text: "Index Management" });
 
+    // Get stats
+    const stats = await indexManager.getStats();
+    const isReadOnly = indexManager.isReadOnly();
+
+    // 1. Current Index Status
+    this.renderCurrentStatus(section, stats, isReadOnly);
+
+    // 2. Index Operations (for active index)
+    if (!isReadOnly) {
+      this.renderIndexOperations(section, indexManager, stats);
+    }
+
+    // 3. Index Inventory (other indices)
+    this.renderIndexInventory(section, indexManager);
+
+    // 4. Import Section
+    this.renderImportSection(section, indexManager);
+
+    // 5. Danger Zone
+    if (!isReadOnly) {
+      this.renderDangerZone(section, indexManager);
+    }
+  }
+
+  private renderCurrentStatus(
+    section: HTMLElement,
+    stats: Awaited<ReturnType<IndexManagerInterface["getStats"]>>,
+    isReadOnly: boolean,
+  ): void {
     const statusBox = section.createDiv({ cls: "notient-settings-status-box" });
+
+    // Model info row
     const statusRow = statusBox.createDiv({ cls: "notient-settings-status-row" });
 
     const modelEl = statusRow.createEl("span", { cls: "notient-settings-index-model" });
     const keyIcon = modelEl.createSpan({ cls: "notient-settings-icon-inline" });
     setIcon(keyIcon, "key");
-    modelEl.createSpan({ text: activeKey });
+    modelEl.createSpan({ text: stats.modelKey || "No model" });
 
-    statusRow.createEl("span", { text: `${currentDim}d`, cls: "notient-settings-index-dim" });
+    const dimBadge = statusRow.createEl("span", {
+      text: `${stats.chunkCount > 0 ? Math.round(stats.chunkCount / stats.noteCount) : 0} chunks/note avg`,
+      cls: "notient-settings-index-dim",
+    });
+
     statusRow.createEl("span", {
-      text: isUserProvided ? "External (Read-Only)" : "Plugin Managed",
-      cls: `notient-settings-badge ${isUserProvided ? "external" : "plugin"}`,
+      text: isReadOnly ? "Read-Only" : "Active",
+      cls: `notient-settings-badge ${isReadOnly ? "external" : "plugin"}`,
     });
 
-    const statsEl = statusBox.createEl("div", {
-      cls: "notient-settings-info-dim notient-settings-stats",
-    });
-    const statsIcon = statsEl.createSpan({ cls: "notient-settings-icon-inline" });
-    setIcon(statsIcon, "bar-chart-2");
-    statsEl.createSpan({ text: `${noteCount} notes indexed` });
+    // Health metrics row
+    const metricsRow = statusBox.createDiv({ cls: "notient-settings-metrics-row" });
 
-    if (isUserProvided) {
+    // Note count
+    const noteMetric = metricsRow.createDiv({ cls: "notient-settings-metric" });
+    noteMetric.createEl("span", { text: String(stats.noteCount), cls: "notient-settings-metric-value" });
+    noteMetric.createEl("span", { text: "Notes Indexed", cls: "notient-settings-metric-label" });
+
+    // Chunk count
+    const chunkMetric = metricsRow.createDiv({ cls: "notient-settings-metric" });
+    chunkMetric.createEl("span", { text: String(stats.chunkCount), cls: "notient-settings-metric-value" });
+    chunkMetric.createEl("span", { text: "Total Chunks", cls: "notient-settings-metric-label" });
+
+    // Completion
+    const completionMetric = metricsRow.createDiv({ cls: "notient-settings-metric" });
+    completionMetric.createEl("span", {
+      text: `${stats.completionPercent}%`,
+      cls: `notient-settings-metric-value ${stats.state === "complete" ? "complete" : stats.state === "incomplete" ? "incomplete" : ""}`,
+    });
+    completionMetric.createEl("span", {
+      text: `of ${stats.vaultNoteCount} vault notes`,
+      cls: "notient-settings-metric-label",
+    });
+
+    // Status indicator
+    const stateMap: Record<string, { icon: string; text: string; cls: string }> = {
+      none: { icon: "alert-circle", text: "No index", cls: "none" },
+      complete: { icon: "check-circle", text: "Complete", cls: "complete" },
+      incomplete: { icon: "clock", text: "Incomplete", cls: "incomplete" },
+      stale: { icon: "alert-triangle", text: "Stale", cls: "stale" },
+    };
+    const stateInfo = stateMap[stats.state] || stateMap.none;
+
+    const stateEl = statusBox.createDiv({ cls: `notient-settings-state-indicator ${stateInfo.cls}` });
+    const stateIcon = stateEl.createSpan({ cls: "notient-settings-icon-inline" });
+    setIcon(stateIcon, stateInfo.icon);
+    stateEl.createSpan({ text: stateInfo.text });
+
+    if (stats.lastFullIndexAt) {
+      const lastIndexed = new Date(stats.lastFullIndexAt);
+      stateEl.createSpan({
+        text: ` (Last full: ${lastIndexed.toLocaleDateString()})`,
+        cls: "notient-settings-info-dim",
+      });
+    }
+
+    if (isReadOnly) {
       const readonlyEl = statusBox.createEl("div", { cls: "notient-settings-index-readonly" });
       const infoIcon = readonlyEl.createSpan({ cls: "notient-settings-icon-inline" });
-      setIcon(infoIcon, "info");
-      readonlyEl.createSpan({
-        text: "External indices are read-only. Sync, Trim, and Rebuild operations are disabled.",
+      setIcon(infoIcon, "lock");
+      readonlyEl.createSpan({ text: "External index - search only, no modifications" });
+    }
+  }
+
+  private renderIndexOperations(
+    section: HTMLElement,
+    indexManager: IndexManagerInterface,
+    stats: Awaited<ReturnType<IndexManagerInterface["getStats"]>>,
+  ): void {
+    const opsSection = section.createDiv({ cls: "notient-settings-ops-section" });
+    opsSection.createEl("h4", { text: "Index Operations" });
+
+    const opsGrid = opsSection.createDiv({ cls: "notient-settings-ops-grid" });
+    const anyOpInProgress = this.operationInProgress.type !== null;
+
+    // 1. Sync/Rescan - Index new and modified notes
+    this.renderOpButton(opsGrid, {
+      icon: "refresh-cw",
+      label: "Sync",
+      description: "Index new and modified notes",
+      disabled: anyOpInProgress,
+      onClick: () => {
+        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
+          .commands.executeCommandById("notient:reindex-vault");
+      },
+    });
+
+    // 2. Expand - Add only new notes (skip modified)
+    this.renderOpButton(opsGrid, {
+      icon: "plus-circle",
+      label: "Expand",
+      description: "Add new notes only",
+      disabled: anyOpInProgress,
+      onClick: () => {
+        (this.app as App & { commands: { executeCommandById: (id: string) => void } })
+          .commands.executeCommandById("notient:reindex-vault");
+      },
+    });
+
+    // 3. Trim - Remove deleted notes
+    const isTrimming = this.operationInProgress.type === "trim";
+    this.renderOpButton(opsGrid, {
+      icon: "scissors",
+      label: isTrimming ? "Trimming..." : "Trim",
+      description: "Remove deleted note entries",
+      disabled: anyOpInProgress,
+      loading: isTrimming,
+      onClick: async () => {
+        try {
+          this.operationInProgress = { type: "trim" };
+          this.onRefresh();
+          const result = await indexManager.trimIndex();
+          this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
+          indexManager.clearDiscoveryCache?.();
+        } catch (error) {
+          this.kernel.obsidian.notice(`Trim failed: ${error}`);
+        } finally {
+          this.operationInProgress = { type: null };
+          this.onRefresh();
+        }
+      },
+    });
+
+    // 4. Export
+    const isExporting = this.operationInProgress.type === "export";
+    this.renderOpButton(opsGrid, {
+      icon: "download",
+      label: isExporting ? "Exporting..." : "Export",
+      description: "Download index backup",
+      disabled: anyOpInProgress,
+      loading: isExporting,
+      onClick: async () => {
+        try {
+          this.operationInProgress = { type: "export" };
+          this.onRefresh();
+          const json = await indexManager.exportIndex();
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `notient-index-${stats.modelKey}-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          this.kernel.obsidian.notice("Index exported");
+        } catch (error) {
+          this.kernel.obsidian.notice(`Export failed: ${error}`);
+        } finally {
+          this.operationInProgress = { type: null };
+          this.onRefresh();
+        }
+      },
+    });
+  }
+
+  private renderOpButton(
+    container: HTMLElement,
+    opts: {
+      icon: string;
+      label: string;
+      description: string;
+      disabled: boolean;
+      loading?: boolean;
+      warning?: boolean;
+      onClick: () => void | Promise<void>;
+    },
+  ): void {
+    const btn = container.createEl("button", {
+      cls: `notient-settings-op-btn ${opts.warning ? "mod-warning" : ""} ${opts.loading ? "loading" : ""}`,
+    });
+    btn.disabled = opts.disabled;
+
+    const iconEl = btn.createSpan({ cls: "notient-settings-op-icon" });
+    setIcon(iconEl, opts.loading ? "loader-2" : opts.icon);
+    if (opts.loading) iconEl.addClass("spinning");
+
+    btn.createEl("span", { text: opts.label, cls: "notient-settings-op-label" });
+    btn.createEl("span", { text: opts.description, cls: "notient-settings-op-desc" });
+
+    if (!opts.disabled) {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await opts.onClick();
       });
     }
   }
 
-  private renderIndexGrid(section: HTMLElement, indexManager: IndexManagerInterface): void {
-    const currentDim = indexManager.getDimension();
-    const gridContainer = section.createDiv({ cls: "notient-settings-index-grid" });
-    gridContainer.createEl("h4", { text: "Available Indices" });
+  private renderIndexInventory(section: HTMLElement, indexManager: IndexManagerInterface): void {
+    const inventorySection = section.createDiv({ cls: "notient-settings-inventory-section" });
+    inventorySection.createEl("h4", { text: "Available Indices" });
 
-    const loadingEl = gridContainer.createDiv({
-      text: "Loading indices...",
+    const loadingEl = inventorySection.createDiv({
+      text: "Loading...",
       cls: "notient-settings-info-dim",
     });
 
-    this.loadAndRenderIndices(gridContainer, loadingEl, indexManager, currentDim);
+    this.loadInventory(inventorySection, loadingEl, indexManager);
   }
 
-  private async loadAndRenderIndices(
-    gridContainer: HTMLElement,
+  private async loadInventory(
+    container: HTMLElement,
     loadingEl: HTMLElement,
     indexManager: IndexManagerInterface,
-    currentDim: number,
   ): Promise<void> {
     try {
-      // Use cached indices if available and not expired
-      const now = Date.now();
-      let indices: IndexInfo[];
-      if (this.cachedIndices && now - this.cacheTimestamp < IndexManagementPanel.CACHE_TTL_MS) {
-        indices = this.cachedIndices;
-      } else {
-        indices = await indexManager.discoverIndices();
-        this.cachedIndices = indices;
-        this.cacheTimestamp = now;
-      }
+      const indices = await indexManager.discoverIndices();
       const activePath = this.settings.indexing.activeIndexPath;
+      const currentDim = indexManager.getDimension();
 
       loadingEl.remove();
 
       if (indices.length === 0) {
-        gridContainer.createDiv({ text: "No indices found.", cls: "notient-settings-info-dim" });
+        container.createDiv({ text: "No indices found.", cls: "notient-settings-info-dim" });
         return;
       }
 
-      // Move active index to top
+      const table = container.createEl("table", { cls: "notient-settings-index-table" });
+
+      // Header
+      const thead = table.createEl("thead");
+      const headerRow = thead.createEl("tr");
+      headerRow.createEl("th", { text: "Model" });
+      headerRow.createEl("th", { text: "Stats" });
+      headerRow.createEl("th", { text: "Source" });
+      headerRow.createEl("th", { text: "Actions" });
+
+      // Body
+      const tbody = table.createEl("tbody");
+
+      // Sort: active first, then by date
       const sortedIndices = [...indices].sort((a, b) => {
         const aActive = a.path === activePath;
         const bActive = b.path === activePath;
         if (aActive && !bActive) return -1;
         if (!aActive && bActive) return 1;
-        return 0;
+        const aTime = a.createdAt?.getTime() ?? 0;
+        const bTime = b.createdAt?.getTime() ?? 0;
+        return bTime - aTime;
       });
 
       for (const idx of sortedIndices) {
-        this.renderIndexRow(gridContainer, idx, activePath, currentDim, indexManager);
+        this.renderInventoryRow(tbody, idx, activePath, currentDim, indexManager);
       }
     } catch (error) {
-      loadingEl.textContent = `Error loading indices: ${error}`;
+      loadingEl.textContent = `Error: ${error}`;
     }
   }
 
-  private renderIndexRow(
-    gridContainer: HTMLElement,
+  private renderInventoryRow(
+    tbody: HTMLElement,
     idx: IndexInfo,
     activePath: string | null,
     currentDim: number,
@@ -206,338 +406,84 @@ export class IndexManagementPanel {
     const isActive = idx.path === activePath;
     const isCompatible = idx.dimension === currentDim;
     const isExternal = idx.source === "vault";
+    const anyOpInProgress = this.operationInProgress.type !== null;
 
-    const createdStr = idx.createdAt
-      ? idx.createdAt.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : "Unknown";
-    const updatedStr = idx.updatedAt
-      ? idx.updatedAt.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : "Never";
+    const row = tbody.createEl("tr", { cls: isActive ? "active" : "" });
 
-    const rowContainer = gridContainer.createDiv({ cls: "notient-settings-index-row-container" });
-    const row = rowContainer.createDiv({
-      cls: `notient-settings-index-row ${isActive ? "active" : ""} ${this.expandedPath === idx.path ? "expanded" : ""}`,
-    });
-
-    // Left side: model info
-    const left = row.createDiv({ cls: "notient-settings-index-left" });
-
+    // Model column
+    const modelCell = row.createEl("td");
     if (isActive) {
-      left.createEl("span", { text: "●", cls: "notient-settings-index-active-dot" });
+      const dot = modelCell.createSpan({ cls: "notient-settings-active-dot" });
+      dot.textContent = "●";
     }
-
-    left.createEl("span", { text: idx.displayName, cls: "notient-settings-index-model" });
-    left.createEl("span", { text: `${idx.dimension}d`, cls: "notient-settings-index-dim" });
-    left.createEl("span", { text: `${idx.docCount} chunks`, cls: "notient-settings-index-count" });
-
+    modelCell.createSpan({ text: idx.displayName });
     if (!isCompatible && !isActive) {
-      const warnIcon = left.createEl("span", {
-        cls: "notient-settings-index-warn-icon",
-        attr: { title: `Dimension mismatch (needs ${currentDim}d)` },
-      });
+      const warnIcon = modelCell.createSpan({ cls: "notient-settings-warn-icon" });
       setIcon(warnIcon, "alert-triangle");
+      warnIcon.title = `Dimension mismatch (needs ${currentDim}d)`;
     }
 
-    if (idx.isLegacy) {
-      const legacyIcon = left.createEl("span", {
-        cls: "notient-settings-index-legacy",
-        attr: { title: "Legacy format - will be migrated on next save" },
-      });
-      setIcon(legacyIcon, "refresh-cw");
-    }
+    // Stats column
+    const statsCell = row.createEl("td");
+    statsCell.createSpan({ text: `${idx.dimension}d`, cls: "notient-settings-dim-badge" });
+    statsCell.createSpan({ text: ` ${idx.docCount.toLocaleString()} chunks` });
 
-    // Right side: badges
-    const right = row.createDiv({ cls: "notient-settings-index-right" });
-
-    right.createEl("span", {
-      text: isExternal ? "External" : "Plugin",
-      cls: `notient-settings-badge ${isExternal ? "external" : "plugin"}`,
+    // Source column
+    const sourceCell = row.createEl("td");
+    sourceCell.createSpan({
+      text: isExternal ? "Vault" : "Plugin",
+      cls: `notient-settings-source-badge ${isExternal ? "external" : "plugin"}`,
     });
 
-    if (isActive) {
-      right.createEl("span", { text: "✓ Active", cls: "notient-settings-index-active-badge" });
-    }
+    // Actions column
+    const actionsCell = row.createEl("td", { cls: "notient-settings-actions-cell" });
 
-    const expandIcon = right.createEl("span", { cls: "notient-settings-index-expand" });
-    setIcon(expandIcon, this.expandedPath === idx.path ? "chevron-up" : "chevron-down");
-
-    // Details panel
-    const details = rowContainer.createDiv({
-      cls: `notient-settings-index-details ${this.expandedPath === idx.path ? "" : "hidden"}`,
-    });
-
-    // Click to expand/collapse
-    row.addEventListener("click", () => {
-      this.expandedPath = this.expandedPath === idx.path ? null : idx.path;
-      this.onRefresh();
-    });
-
-    // Render details if expanded
-    if (this.expandedPath === idx.path) {
-      this.renderIndexDetails(
-        details,
-        idx,
-        isActive,
-        isCompatible,
-        isExternal,
-        currentDim,
-        createdStr,
-        updatedStr,
-        indexManager,
-      );
-    }
-  }
-
-  private renderIndexDetails(
-    details: HTMLElement,
-    idx: IndexInfo,
-    isActive: boolean,
-    isCompatible: boolean,
-    isExternal: boolean,
-    currentDim: number,
-    createdStr: string,
-    updatedStr: string,
-    indexManager: IndexManagerInterface,
-  ): void {
-    const metaGrid = details.createDiv({ cls: "notient-settings-index-meta-grid" });
-    metaGrid.createEl("div", { text: `Created: ${createdStr}` });
-    metaGrid.createEl("div", { text: `Updated: ${updatedStr}` });
-    if (idx.vaultHash) {
-      metaGrid.createEl("div", { text: `Vault: ${idx.vaultHash}` });
-    }
-    metaGrid.createEl("div", { text: `Model: ${idx.modelKey}` });
-    details.createEl("div", { text: `Path: ${idx.path}`, cls: "notient-settings-index-path" });
-
-    const btnRow = details.createDiv({ cls: "notient-settings-btn-row" });
-
-    // Switch button (for non-active)
     if (!isActive) {
-      const isSwitchingThis =
-        this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
-      const switchBtn = btnRow.createEl("button", {
-        cls: "mod-cta",
-        text: isSwitchingThis ? "Switching..." : "Switch To",
+      // Switch button
+      const isSwitching = this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
+      const switchBtn = actionsCell.createEl("button", {
+        cls: "notient-settings-action-btn-small",
+        text: isSwitching ? "..." : "Use",
       });
-      if (!isCompatible) {
-        switchBtn.disabled = true;
-        switchBtn.title = `Dimension mismatch: Index is ${idx.dimension}d, current model is ${currentDim}d`;
-        switchBtn.classList.add("mod-muted");
-      } else if (isSwitchingThis || this.operationInProgress.type !== null) {
-        switchBtn.disabled = true;
-      } else {
-        switchBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
+      switchBtn.disabled = !isCompatible || anyOpInProgress;
+      if (!isCompatible) switchBtn.title = "Dimension mismatch";
+      if (!anyOpInProgress && isCompatible) {
+        switchBtn.addEventListener("click", async () => {
+          this.operationInProgress = { type: "switch", path: idx.path };
+          this.onRefresh();
           try {
-            this.operationInProgress = { type: "switch", path: idx.path };
-            switchBtn.disabled = true;
-            switchBtn.textContent = "Switching...";
             await indexManager.switchToIndex(idx.path);
-            this.kernel.obsidian.notice(`Switched to index: ${idx.modelKey}`);
-            this.clearCache();
-          } catch (error) {
-            console.error("[IndexManagementPanel] Failed to switch index:", error);
-            this.kernel.obsidian.notice(
-              `Failed to switch index: ${error instanceof Error ? error.message : String(error)}`,
-            );
           } finally {
             this.operationInProgress = { type: null };
-            this.onRefresh();
           }
         });
       }
-    }
 
-    // Write operations - only for plugin indices
-    if (!isExternal) {
-      if (isActive) {
-        this.renderActiveIndexActions(btnRow, indexManager);
-      } else {
-        this.renderInactiveIndexActions(btnRow, idx, indexManager);
+      // Delete button (only for plugin indices)
+      if (!isExternal) {
+        const isDeleting = this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
+        const delBtn = actionsCell.createEl("button", {
+          cls: "notient-settings-action-btn-small mod-warning",
+          text: isDeleting ? "..." : "Delete",
+        });
+        delBtn.disabled = anyOpInProgress;
+        if (!anyOpInProgress) {
+          delBtn.addEventListener("click", async () => {
+            if (!confirm(`Delete index "${idx.displayName}"?`)) return;
+            this.operationInProgress = { type: "delete", path: idx.path };
+            this.onRefresh();
+            try {
+              await indexManager.deleteIndexByPath(idx.path);
+              this.kernel.obsidian.notice(`Deleted ${idx.displayName}`);
+            } finally {
+              this.operationInProgress = { type: null };
+              this.onRefresh();
+            }
+          });
+        }
       }
     } else {
-      const readonlyEl = details.createEl("div", { cls: "notient-settings-index-readonly" });
-      const lockIcon = readonlyEl.createSpan({ cls: "notient-settings-icon-inline" });
-      setIcon(lockIcon, "lock");
-      readonlyEl.createSpan({ text: "External indices are read-only (search only)" });
-    }
-
-    // Export (available for all)
-    this.renderExportButton(btnRow, idx, isActive, indexManager);
-  }
-
-  private renderActiveIndexActions(btnRow: HTMLElement, indexManager: IndexManagerInterface): void {
-    const isTrimming = this.operationInProgress.type === "trim";
-    const anyOpInProgress = this.operationInProgress.type !== null;
-
-    // Sync button
-    const syncBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
-    const syncIcon = syncBtn.createSpan({ cls: "notient-settings-btn-icon" });
-    setIcon(syncIcon, "play");
-    syncBtn.createSpan({ text: "Sync" });
-    if (anyOpInProgress) {
-      syncBtn.disabled = true;
-    } else {
-      syncBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        (
-          this.app as App & { commands: { executeCommandById: (id: string) => void } }
-        ).commands.executeCommandById("notient:reindex-vault");
-      });
-    }
-
-    // Trim button
-    const trimBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
-    if (isTrimming) {
-      const spinnerIcon = trimBtn.createSpan({ cls: "notient-settings-spinner" });
-      setIcon(spinnerIcon, "loader-2");
-      trimBtn.createSpan({ text: "Trimming..." });
-    } else {
-      const trimIcon = trimBtn.createSpan({ cls: "notient-settings-btn-icon" });
-      setIcon(trimIcon, "scissors");
-      trimBtn.createSpan({ text: "Trim" });
-    }
-    if (anyOpInProgress) {
-      trimBtn.disabled = true;
-    } else {
-      trimBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        try {
-          this.operationInProgress = { type: "trim" };
-          trimBtn.disabled = true;
-          trimBtn.empty();
-          const spinnerIcon = trimBtn.createSpan({ cls: "notient-settings-spinner" });
-          setIcon(spinnerIcon, "loader-2");
-          trimBtn.createSpan({ text: "Trimming..." });
-          const result = await indexManager.trimIndex();
-          this.kernel.obsidian.notice(`Removed ${result.removed} stale entries`);
-          this.clearCache();
-        } catch (error) {
-          console.error("[IndexManagementPanel] Failed to trim index:", error);
-          this.kernel.obsidian.notice(
-            `Failed to trim index: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        } finally {
-          this.operationInProgress = { type: null };
-          this.onRefresh();
-        }
-      });
-    }
-
-    // Rebuild button
-    const rebuildBtn = btnRow.createEl("button", {
-      cls: "notient-settings-action-btn mod-warning",
-    });
-    const rebuildIcon = rebuildBtn.createSpan({ cls: "notient-settings-btn-icon" });
-    setIcon(rebuildIcon, "refresh-cw");
-    rebuildBtn.createSpan({ text: "Rebuild" });
-    if (anyOpInProgress) {
-      rebuildBtn.disabled = true;
-    } else {
-      rebuildBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        (
-          this.app as App & { commands: { executeCommandById: (id: string) => void } }
-        ).commands.executeCommandById("notient:full-reindex");
-      });
-    }
-  }
-
-  private renderInactiveIndexActions(
-    btnRow: HTMLElement,
-    idx: IndexInfo,
-    indexManager: IndexManagerInterface,
-  ): void {
-    const isDeletingThis =
-      this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
-    const anyOpInProgress = this.operationInProgress.type !== null;
-
-    const delBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn mod-warning" });
-    if (isDeletingThis) {
-      const spinnerIcon = delBtn.createSpan({ cls: "notient-settings-spinner" });
-      setIcon(spinnerIcon, "loader-2");
-      delBtn.createSpan({ text: "Deleting..." });
-    } else {
-      const delIcon = delBtn.createSpan({ cls: "notient-settings-btn-icon" });
-      setIcon(delIcon, "trash-2");
-      delBtn.createSpan({ text: "Delete" });
-    }
-
-    if (anyOpInProgress) {
-      delBtn.disabled = true;
-    } else {
-      delBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (confirm(`Permanently delete index for ${idx.modelKey}?`)) {
-          try {
-            this.operationInProgress = { type: "delete", path: idx.path };
-            delBtn.disabled = true;
-            delBtn.empty();
-            const spinnerIcon = delBtn.createSpan({ cls: "notient-settings-spinner" });
-            setIcon(spinnerIcon, "loader-2");
-            delBtn.createSpan({ text: "Deleting..." });
-            await indexManager.deleteIndexByPath(idx.path);
-            this.kernel.obsidian.notice(`Deleted index: ${idx.modelKey}`);
-            this.clearCache();
-          } catch (error) {
-            console.error("[IndexManagementPanel] Failed to delete index:", error);
-            this.kernel.obsidian.notice(
-              `Failed to delete index: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          } finally {
-            this.operationInProgress = { type: null };
-            this.onRefresh();
-          }
-        }
-      });
-    }
-  }
-
-  private renderExportButton(
-    btnRow: HTMLElement,
-    idx: IndexInfo,
-    isActive: boolean,
-    indexManager: IndexManagerInterface,
-  ): void {
-    const anyOpInProgress = this.operationInProgress.type !== null;
-    const exportBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn" });
-    const exportIcon = exportBtn.createSpan({ cls: "notient-settings-btn-icon" });
-    setIcon(exportIcon, "download");
-    exportBtn.createSpan({ text: "Export" });
-
-    if (anyOpInProgress) {
-      exportBtn.disabled = true;
-    } else {
-      exportBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!isActive) {
-          this.kernel.obsidian.notice("Switch to this index first to export it");
-          return;
-        }
-        try {
-          const json = await indexManager.exportIndex();
-          const blob = new Blob([json], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `notient-index-${idx.modelKey}-${Date.now()}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-          this.kernel.obsidian.notice("Index exported");
-        } catch (error) {
-          this.kernel.obsidian.notice(`Export failed: ${error}`);
-        }
-      });
+      actionsCell.createSpan({ text: "Active", cls: "notient-settings-active-label" });
     }
   }
 
@@ -546,54 +492,90 @@ export class IndexManagementPanel {
     const isImporting = this.operationInProgress.type === "import";
     const anyOpInProgress = this.operationInProgress.type !== null;
 
-    const setting = new Setting(importSection)
+    new Setting(importSection)
       .setName("Import Index")
-      .setDesc("Load an index from a backup file");
+      .setDesc("Load an index from a backup file")
+      .addButton((btn) => {
+        btn.setDisabled(anyOpInProgress);
+        btn.setButtonText(isImporting ? "Importing..." : "Import");
+        btn.setIcon("upload");
 
-    setting.addButton((btn) => {
-      btn.setDisabled(anyOpInProgress);
-      // Set icon manually since Setting API doesn't support it
-      const buttonEl = btn.buttonEl;
-      buttonEl.empty();
-      buttonEl.addClass("notient-settings-action-btn");
+        if (!anyOpInProgress) {
+          btn.onClick(() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".json";
+            input.onchange = async (e) => {
+              const file = (e.target as HTMLInputElement).files?.[0];
+              if (!file) return;
+              try {
+                this.operationInProgress = { type: "import" };
+                this.onRefresh();
+                const text = await file.text();
+                const result = await indexManager.importIndex(text);
+                this.kernel.obsidian.notice(`Imported ${result.noteCount} notes for ${result.modelKey}`);
+              } catch (error) {
+                this.kernel.obsidian.notice(`Import failed: ${error}`);
+              } finally {
+                this.operationInProgress = { type: null };
+                this.onRefresh();
+              }
+            };
+            input.click();
+          });
+        }
+      });
+  }
 
-      if (isImporting) {
-        const spinnerIcon = buttonEl.createSpan({ cls: "notient-settings-spinner" });
-        setIcon(spinnerIcon, "loader-2");
-        buttonEl.createSpan({ text: "Importing..." });
-      } else {
-        const importIcon = buttonEl.createSpan({ cls: "notient-settings-btn-icon" });
-        setIcon(importIcon, "upload");
-        buttonEl.createSpan({ text: "Import" });
-      }
+  private renderDangerZone(section: HTMLElement, indexManager: IndexManagerInterface): void {
+    const dangerSection = section.createDiv({ cls: "notient-settings-danger-zone" });
+    dangerSection.createEl("h4", { text: "Danger Zone", cls: "notient-settings-danger-header" });
 
-      if (!anyOpInProgress) {
-        btn.onClick(() => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = ".json";
-          input.onchange = async (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
-            if (!file) return;
+    const anyOpInProgress = this.operationInProgress.type !== null;
+
+    // Rebuild
+    new Setting(dangerSection)
+      .setName("Rebuild Index")
+      .setDesc("Clear all data and reindex the entire vault from scratch")
+      .addButton((btn) => {
+        btn.setDisabled(anyOpInProgress);
+        btn.setButtonText("Rebuild");
+        btn.setWarning();
+
+        if (!anyOpInProgress) {
+          btn.onClick(() => {
+            if (!confirm("This will delete the current index and start fresh. Continue?")) return;
+            (this.app as App & { commands: { executeCommandById: (id: string) => void } })
+              .commands.executeCommandById("notient:full-reindex");
+          });
+        }
+      });
+
+    // Delete
+    new Setting(dangerSection)
+      .setName("Delete Index")
+      .setDesc("Permanently delete the current index. You will need to rebuild.")
+      .addButton((btn) => {
+        btn.setDisabled(anyOpInProgress);
+        btn.setButtonText("Delete All");
+        btn.setWarning();
+
+        if (!anyOpInProgress) {
+          btn.onClick(async () => {
+            if (!confirm("Permanently delete the current index? This cannot be undone.")) return;
             try {
-              this.operationInProgress = { type: "import" };
+              this.operationInProgress = { type: "delete" };
               this.onRefresh();
-              const text = await file.text();
-              const result = await indexManager.importIndex(text);
-              this.kernel.obsidian.notice(
-                `Imported ${result.noteCount} notes for ${result.modelKey}`,
-              );
-              this.clearCache();
+              await indexManager.clearAll();
+              this.kernel.obsidian.notice("Index deleted");
             } catch (error) {
-              this.kernel.obsidian.notice(`Import failed: ${error}`);
+              this.kernel.obsidian.notice(`Delete failed: ${error}`);
             } finally {
               this.operationInProgress = { type: null };
               this.onRefresh();
             }
-          };
-          input.click();
-        });
-      }
-    });
+          });
+        }
+      });
   }
 }

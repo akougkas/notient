@@ -49,18 +49,14 @@ export const PERFORMANCE = {
 
 /** Default model configurations */
 export const MODEL_DEFAULTS = {
-  OLLAMA_EMBEDDING_MODELS: [
-    "nomic-embed-text",
-    "mxbai-embed-large",
-    "all-minilm",
-    "snowflake-arctic-embed",
-  ],
-  EMBEDDING_DIMENSIONS: {
-    "nomic-embed-text": 768,
-    "mxbai-embed-large": 1024,
-    "all-minilm": 384,
-    "snowflake-arctic-embed": 1024,
-  } as Record<string, number>,
+  /**
+   * Conservative fallback values used ONLY when runtime discovery fails.
+   * Actual capabilities are discovered via Ollama's /api/show endpoint.
+   */
+  FALLBACK_CONTEXT_TOKENS: 512,
+  FALLBACK_EMBEDDING_DIMENSION: 384,
+  /** Average chars per token for truncation calculation */
+  CHARS_PER_TOKEN: 4,
 } as const;
 
 /** Shared LLM prompts */

@@ -5,7 +5,7 @@
  * Allows for alternative implementations in the future.
  */
 
-import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
+import type { ChunkKind, ChunkTier, EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 
 /**
@@ -98,9 +98,7 @@ export interface VectorStore {
   // ============ Embedded State API (v3) ============
 
   /** Get state for a note */
-  getNoteState?(
-    notePath: string,
-  ): {
+  getNoteState?(notePath: string): {
     path: string;
     mtimeMs: number;
     contentHash: string;
@@ -140,4 +138,122 @@ export interface VectorStore {
 
   /** Clear all state (for rebuild) */
   clearState?(): void;
+
+  // ============ Data Transfer API (for IndexManager file I/O) ============
+
+  /**
+   * Load data from parsed index file.
+   * Called by IndexManager after reading and parsing JSON.
+   */
+  loadFromData?(data: {
+    meta: {
+      modelKey: string;
+      dimension: number;
+      createdAt: number;
+      updatedAt: number;
+    };
+    docs: Array<{
+      chunkId: string;
+      noteId: string;
+      path: string;
+      title: string;
+      headingPath: string[];
+      tier: ChunkTier;
+      kind: ChunkKind;
+      parentChunkId: string | null;
+      blockRef: string | null;
+      startLine: number | null;
+      endLine: number | null;
+      tokenEstimate: number;
+      importance?: number;
+      chunkIndex: number;
+      text: string;
+      embedding: number[];
+      mtimeMs: number;
+      contentHash: string;
+      tags: string[];
+      frontmatter: Record<string, unknown>;
+    }>;
+    state?: {
+      lastFullIndexAt: number | null;
+      notes: Record<
+        string,
+        {
+          path: string;
+          mtimeMs: number;
+          contentHash: string;
+          chunkCount: number;
+          embeddedAt: number;
+        }
+      >;
+    };
+  }): void;
+
+  /**
+   * Export current data for persistence.
+   * Called by IndexManager when saving to disk.
+   */
+  exportData?(): {
+    meta: {
+      version: number;
+      modelKey: string;
+      dimension: number;
+      docCount: number;
+      createdAt: number;
+      updatedAt: number;
+      chunker: { name: string; version: number };
+      tiers: { note: boolean; section: boolean; block: boolean };
+      state: {
+        lastFullIndexAt: number | null;
+        notes: Record<
+          string,
+          {
+            path: string;
+            mtimeMs: number;
+            contentHash: string;
+            chunkCount: number;
+            embeddedAt: number;
+          }
+        >;
+      };
+    };
+    docs: Array<{
+      chunkId: string;
+      noteId: string;
+      path: string;
+      title: string;
+      headingPath: string[];
+      tier: ChunkTier;
+      kind: ChunkKind;
+      parentChunkId: string | null;
+      blockRef: string | null;
+      startLine: number | null;
+      endLine: number | null;
+      tokenEstimate: number;
+      importance?: number;
+      chunkIndex: number;
+      text: string;
+      embedding: number[];
+      mtimeMs: number;
+      contentHash: string;
+      tags: string[];
+      frontmatter: Record<string, unknown>;
+    }>;
+  };
+
+  /**
+   * Set model configuration (called before loadFromData or for fresh index).
+   */
+  setModelConfig?(modelKey: string, dimension: number): void;
+
+  /**
+   * Mark the store as dirty (needs saving).
+   * IndexManager will check this to schedule saves.
+   */
+  isDirty?(): boolean;
+
+  /**
+   * Clear the dirty flag after successful save.
+   */
+  clearDirty?(): void;
 }
