@@ -446,6 +446,7 @@ export class NotientSettingTab extends PluginSettingTab {
       this.renderSearchSection(containerEl);
       this.renderIdentitySection(containerEl);
       this.renderParaSection(containerEl);
+      this.renderMigrationSection(containerEl);
       this.renderAdvancedSection(containerEl);
     } catch (error) {
       console.error("[Notient Settings] Display error:", error);
@@ -1206,6 +1207,125 @@ export class NotientSettingTab extends PluginSettingTab {
           }),
       );
     }
+  }
+
+  // Migration state for the UI
+  private migrationSourcePath = "";
+  private migrationDestFolder = "imports";
+
+  private renderMigrationSection(containerEl: HTMLElement): void {
+    const section = containerEl.createDiv({ cls: "notient-settings-section" });
+    const header = section.createEl("h2", { cls: "notient-settings-header" });
+    const iconEl = header.createSpan({ cls: "notient-settings-header-icon" });
+    setIcon(iconEl, "sparkles");
+    header.createSpan({ text: "Expand Your Knowledge" });
+
+    // Description
+    section.createEl("p", {
+      text: "Bring notes from other systems into your vault. Files will be normalized, indexed, and analyzed by Notient agents.",
+      cls: "setting-item-description",
+    });
+
+    // Source folder picker
+    const sourceRow = new Setting(section)
+      .setName("Source Folder")
+      .setDesc("External folder path containing markdown files to import");
+
+    sourceRow.addText((text) =>
+      text
+        .setPlaceholder("/path/to/markdown/files")
+        .setValue(this.migrationSourcePath)
+        .onChange((value) => {
+          this.migrationSourcePath = value;
+        }),
+    );
+
+    sourceRow.addButton((btn) =>
+      btn
+        .setIcon("folder-open")
+        .setTooltip("Browse for folder")
+        .onClick(async () => {
+          // Use Electron's dialog to pick external folder
+          try {
+            // Access Electron remote module (available in Obsidian's Electron context)
+            // biome-ignore lint/suspicious/noExplicitAny: Accessing Electron internals
+            const electron = (window as any).require?.("@electron/remote");
+            if (!electron?.dialog) {
+              throw new Error("Electron dialog not available");
+            }
+            const result = await electron.dialog.showOpenDialog({
+              properties: ["openDirectory"],
+            });
+            if (!result.canceled && result.filePaths?.length > 0) {
+              this.migrationSourcePath = result.filePaths[0];
+              this.display(); // Refresh to show path
+            }
+          } catch {
+            // Fallback: user must type path manually
+            new Notice("Folder picker not available. Please enter the path manually.");
+          }
+        }),
+    );
+
+    // Destination folder input
+    new Setting(section)
+      .setName("Destination Folder")
+      .setDesc("Folder in your vault where files will be imported")
+      .addText((text) =>
+        text
+          .setPlaceholder("imports")
+          .setValue(this.migrationDestFolder)
+          .onChange((value) => {
+            this.migrationDestFolder = value || "imports";
+          }),
+      );
+
+    // Begin Migration button
+    new Setting(section)
+      .setName("")
+      .addButton((btn) =>
+        btn
+          .setButtonText("Begin Migration")
+          .setCta()
+          .onClick(async () => {
+            if (!this.migrationSourcePath) {
+              new Notice("Please specify a source folder path");
+              return;
+            }
+
+            // Get migration service from kernel
+            const migrationService = this.kernel.getService<{
+              startMigration(sourcePath: string, destFolder: string): Promise<void>;
+            }>("migrationService");
+
+            if (!migrationService) {
+              new Notice("Migration service not available. Ensure services are initialized.");
+              return;
+            }
+
+            btn.setDisabled(true);
+            btn.setButtonText("Starting...");
+
+            try {
+              await migrationService.startMigration(
+                this.migrationSourcePath,
+                this.migrationDestFolder,
+              );
+              new Notice("Migration started! Check Dashboard for progress.");
+              // Clear the source path after successful start
+              this.migrationSourcePath = "";
+              this.display();
+            } catch (error) {
+              new Notice(`Migration failed: ${(error as Error).message}`);
+              btn.setDisabled(false);
+              btn.setButtonText("Begin Migration");
+            }
+          }),
+      );
+
+    // CLI hint for power users
+    const cliHint = section.createDiv({ cls: "notient-settings-info-dim" });
+    cliHint.innerHTML = `<small>Power users: Use <code>bun run import -s /source -v /vault</code> for CLI imports.</small>`;
   }
 
   private renderAdvancedSection(containerEl: HTMLElement): void {

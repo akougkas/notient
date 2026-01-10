@@ -39,6 +39,7 @@ import type { SimpleVaultVitals } from "./vitals/simpleVitals";
 // NotientAgent is now ChiefOfStaff (re-exported from agent/index.ts)
 import type { NotientAgent } from "./agent";
 import type { UserEvolutionService } from "./evolution/userEvolutionService";
+import type { MigrationService } from "./importer/migrationService";
 
 export interface KernelContext {
   app: App;
@@ -79,6 +80,7 @@ export interface ServiceRegistry {
   actionOrchestrator: ActionOrchestrator;
   profileManager: ProfileManager;
   userEvolution: UserEvolutionService;
+  migrationService: MigrationService;
 }
 
 /** Valid service names */

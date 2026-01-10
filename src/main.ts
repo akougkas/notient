@@ -42,6 +42,8 @@ import { ProfilePreviewModal } from "./ui/modals/ProfilePreviewModal";
 import { SetupWizardModal } from "./ui/modals/SetupWizard";
 import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
 import { NotientSidebarView } from "./ui/sidebar";
+import { ImporterService, MigrationService } from "./core/importer";
+import { ImportModal } from "./ui/modals/ImportModal";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;
@@ -80,6 +82,10 @@ export default class NotientPlugin extends Plugin {
 
   // Evolution system (PART 1.3)
   private userEvolution: UserEvolutionService | null = null;
+
+  // Import bridge service
+  private importerService: ImporterService | null = null;
+  private migrationService: MigrationService | null = null;
 
   // State machine for initialization
   private initStateMachine: InitializationStateMachine | null = null;
@@ -556,6 +562,10 @@ export default class NotientPlugin extends Plugin {
         this.kernel.registerService("actionOrchestrator", this.actionOrchestrator);
       }
 
+      // MigrationService (for "Expand Your Knowledge" feature)
+      this.migrationService = new MigrationService(this.kernel, eventBus);
+      this.kernel.registerService("migrationService", this.migrationService);
+
       // Register action event handlers (PART 2.3)
       this.registerActionEventHandlers(eventBus);
 
@@ -835,6 +845,24 @@ export default class NotientPlugin extends Plugin {
         // biome-ignore lint/suspicious/noExplicitAny: Obsidian internal API
         (this.app as any).setting?.open?.();
         // Note: Cannot scroll to specific section easily, user will see Identity section
+      },
+    });
+
+    // Import markdown files
+    this.addCommand({
+      id: "import-markdown",
+      name: "Import markdown files",
+      callback: async () => {
+        // Ensure importer service exists
+        if (!this.importerService) {
+          this.importerService = new ImporterService(this.kernel);
+        }
+        const modal = new ImportModal(this.app, this.importerService);
+        const result = await modal.run();
+        if (result.completed && result.summary) {
+          const { created, updated, totalLinksConverted } = result.summary;
+          new Notice(`Import complete: ${created} created, ${updated} updated, ${totalLinksConverted} links fixed`);
+        }
       },
     });
   }

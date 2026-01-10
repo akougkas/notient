@@ -43,7 +43,12 @@ export type EventType =
   // Identity system events
   | "profile:updated"
   // Lock management events
-  | "lock:lost";
+  | "lock:lost"
+  // Migration events
+  | "migration:started"
+  | "migration:progress"
+  | "migration:completed"
+  | "migration:failed";
 
 /** Event payload mapping */
 export interface EventPayloads {
@@ -79,6 +84,11 @@ export interface EventPayloads {
   "profile:updated": ProfileUpdatedEvent;
   // Lock management events
   "lock:lost": LockLostEvent;
+  // Migration events
+  "migration:started": MigrationStartedEvent;
+  "migration:progress": MigrationProgressEvent;
+  "migration:completed": MigrationCompletedEvent;
+  "migration:failed": MigrationFailedEvent;
 }
 
 export interface AgentTaskUpdateEvent {
@@ -256,6 +266,28 @@ export interface LockLostEvent {
   reason: "refresh_failed" | "stale_detected" | "manual_release";
   /** Original error message if applicable */
   error?: string;
+}
+
+// =============================================================================
+// Migration Events
+// =============================================================================
+
+export interface MigrationStartedEvent {
+  migration: import("../core/importer/migrationService").MigrationStatus;
+}
+
+export interface MigrationProgressEvent {
+  migration: import("../core/importer/migrationService").MigrationStatus;
+  phase: "importing" | "indexing" | "analyzing";
+}
+
+export interface MigrationCompletedEvent {
+  migration: import("../core/importer/migrationService").MigrationStatus;
+}
+
+export interface MigrationFailedEvent {
+  migration: import("../core/importer/migrationService").MigrationStatus;
+  error: string;
 }
 
 /** Event listener function type */
