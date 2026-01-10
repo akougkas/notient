@@ -10,6 +10,7 @@
 
 import type { UserProfile } from "../../../types/profile";
 import { buildBaseIdentity } from "../../agent/identity";
+import { ANTAGONIST_PROMPT, buildAntagonistPrompt } from "./antagonist";
 import { ATOMIC_SPLIT_PROMPT, buildAtomicSplitPrompt } from "./atomic";
 import { BRAND_CHECK_PROMPT, buildBrandCheckPrompt } from "./brand";
 import { CLIPPING_PROMPT, buildClippingPrompt } from "./clipping";
@@ -17,7 +18,6 @@ import { CONNECTION_PROMPT, buildConnectionPrompt } from "./connection";
 import { ENHANCE_PROMPT, buildEnhancePrompt } from "./enhance";
 import { SYNTHESIS_PROMPT, buildSynthesisPrompt } from "./synthesis";
 import { TASK_EXTRACTION_PROMPT, buildTaskExtractionPrompt } from "./task";
-import { ANTAGONIST_PROMPT, buildAntagonistPrompt } from "./antagonist";
 
 /**
  * Intelligence 2.0 action types

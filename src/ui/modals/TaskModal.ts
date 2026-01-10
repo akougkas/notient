@@ -112,7 +112,7 @@ export class TaskModal extends Modal {
 
     // Get existing persisted history to find new messages
     const persistedHistory = conversationStore.getHistory(this.task.notePath);
-    const existingIds = new Set(persistedHistory.map(m => m.id));
+    const existingIds = new Set(persistedHistory.map((m) => m.id));
 
     // Append only new messages (ones that don't have a matching ID)
     for (const msg of messages) {
@@ -141,7 +141,7 @@ export class TaskModal extends Modal {
     let hash = 0;
     for (let i = 0; i < Math.min(content.length, 100); i++) {
       const char = content.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash; // Convert to 32bit integer
     }
     return hash.toString(36);

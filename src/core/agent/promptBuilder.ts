@@ -61,7 +61,7 @@ export class NotientPromptBuilder {
    * Create a prompt builder with optional user profile for domain adaptation
    * @param profile - Optional user profile for personalizing prompts
    */
-  constructor(private profile?: UserProfile) { }
+  constructor(private profile?: UserProfile) {}
 
   /**
    * Update the profile (e.g., after profile changes)

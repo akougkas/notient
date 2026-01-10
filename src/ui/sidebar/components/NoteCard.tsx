@@ -11,143 +11,143 @@ import type { NoteVitals } from "../../../services/noteVitalsCalculator";
 import { PulseTimeline } from "./PulseTimeline";
 
 interface NoteCardProps {
-	noteVitals: NoteVitals;
-	backlinkPreview?: string;
+  noteVitals: NoteVitals;
+  backlinkPreview?: string;
 }
 
 // Icon component for Lucide icons in Preact
 function Icon({ name, className }: { name: string; className?: string }) {
-	const iconRef = useRef<HTMLSpanElement>(null);
-	useEffect(() => {
-		if (iconRef.current) {
-			setIcon(iconRef.current, name);
-		}
-	}, [name]);
-	return <span ref={iconRef} class={className} aria-hidden="true" />;
+  const iconRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (iconRef.current) {
+      setIcon(iconRef.current, name);
+    }
+  }, [name]);
+  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 // Note type icons for the "Sentient Note" personality
 const NOTE_TYPE_CONFIG: Record<string, { icon: string; label: string; color: string }> = {
-	research: { icon: "flask-conical", label: "Research", color: "var(--color-purple)" },
-	journal: { icon: "book-open", label: "Journal", color: "var(--color-blue)" },
-	project: { icon: "target", label: "Project", color: "var(--color-green)" },
-	meeting: { icon: "users", label: "Meeting", color: "var(--color-orange)" },
-	reference: { icon: "library", label: "Reference", color: "var(--text-muted)" },
-	inbox: { icon: "inbox", label: "Inbox", color: "var(--color-yellow)" },
-	unknown: { icon: "file-text", label: "Note", color: "var(--text-muted)" },
+  research: { icon: "flask-conical", label: "Research", color: "var(--color-purple)" },
+  journal: { icon: "book-open", label: "Journal", color: "var(--color-blue)" },
+  project: { icon: "target", label: "Project", color: "var(--color-green)" },
+  meeting: { icon: "users", label: "Meeting", color: "var(--color-orange)" },
+  reference: { icon: "library", label: "Reference", color: "var(--text-muted)" },
+  inbox: { icon: "inbox", label: "Inbox", color: "var(--color-yellow)" },
+  unknown: { icon: "file-text", label: "Note", color: "var(--text-muted)" },
 };
 
 const PARA_CONFIG: Record<string, { icon: string; label: string }> = {
-	projects: { icon: "target", label: "Projects" },
-	areas: { icon: "home", label: "Areas" },
-	resources: { icon: "book-open", label: "Resources" },
-	archive: { icon: "archive", label: "Archive" },
-	inbox: { icon: "inbox", label: "Inbox" },
-	unknown: { icon: "help-circle", label: "" },
+  projects: { icon: "target", label: "Projects" },
+  areas: { icon: "home", label: "Areas" },
+  resources: { icon: "book-open", label: "Resources" },
+  archive: { icon: "archive", label: "Archive" },
+  inbox: { icon: "inbox", label: "Inbox" },
+  unknown: { icon: "help-circle", label: "" },
 };
 
 export function NoteCard({ noteVitals }: NoteCardProps) {
-	const folder = extractFolder(noteVitals.path);
-	// Use unknown as default since noteType may not exist on NoteVitals
-	const noteTypeKey = (noteVitals as { noteType?: string }).noteType || "unknown";
-	const noteType = NOTE_TYPE_CONFIG[noteTypeKey] || NOTE_TYPE_CONFIG.unknown;
-	const paraType = PARA_CONFIG[noteVitals.paraType || "unknown"] || PARA_CONFIG.unknown;
+  const folder = extractFolder(noteVitals.path);
+  // Use unknown as default since noteType may not exist on NoteVitals
+  const noteTypeKey = (noteVitals as { noteType?: string }).noteType || "unknown";
+  const noteType = NOTE_TYPE_CONFIG[noteTypeKey] || NOTE_TYPE_CONFIG.unknown;
+  const paraType = PARA_CONFIG[noteVitals.paraType || "unknown"] || PARA_CONFIG.unknown;
 
-	// Health state class for "Sentient Note" breathing animation
-	const healthState = noteVitals.health?.status || "healthy";
+  // Health state class for "Sentient Note" breathing animation
+  const healthState = noteVitals.health?.status || "healthy";
 
-	return (
-		<article class={`nv2-note-card nv2-note-card--${healthState}`} aria-label="Note identity">
-			{/* Note Type Badge - The "personality" indicator */}
-			<div class="nv2-note-card-header">
-				<span
-					class="nv2-note-type-badge"
-					style={{ "--type-color": noteType.color }}
-					title={noteType.label}
-				>
-					<Icon name={noteType.icon} className="nv2-note-type-icon" />
-					<span class="nv2-note-type-label">{noteType.label}</span>
-				</span>
-				{noteVitals.isIndexed && (
-					<span class="nv2-indexed-badge" title="Indexed for semantic search">
-						<span class="nv2-indexed-dot" />
-						Indexed
-					</span>
-				)}
-			</div>
+  return (
+    <article class={`nv2-note-card nv2-note-card--${healthState}`} aria-label="Note identity">
+      {/* Note Type Badge - The "personality" indicator */}
+      <div class="nv2-note-card-header">
+        <span
+          class="nv2-note-type-badge"
+          style={{ "--type-color": noteType.color }}
+          title={noteType.label}
+        >
+          <Icon name={noteType.icon} className="nv2-note-type-icon" />
+          <span class="nv2-note-type-label">{noteType.label}</span>
+        </span>
+        {noteVitals.isIndexed && (
+          <span class="nv2-indexed-badge" title="Indexed for semantic search">
+            <span class="nv2-indexed-dot" />
+            Indexed
+          </span>
+        )}
+      </div>
 
-			{/* Title - The note's "name" */}
-			<h2 class="nv2-note-card-title">{noteVitals.title}</h2>
+      {/* Title - The note's "name" */}
+      <h2 class="nv2-note-card-title">{noteVitals.title}</h2>
 
-			{/* Location & Classification */}
-			<div class="nv2-note-card-meta">
-				<span class="nv2-meta-item nv2-meta-folder" title={noteVitals.path}>
-					<Icon name="folder" className="nv2-meta-icon" />
-					<span class="nv2-meta-text">{folder}</span>
-				</span>
-				{paraType.label && (
-					<span class="nv2-meta-item nv2-meta-para">
-						<Icon name={paraType.icon} className="nv2-meta-icon" />
-						<span class="nv2-meta-text">{paraType.label}</span>
-					</span>
-				)}
-			</div>
+      {/* Location & Classification */}
+      <div class="nv2-note-card-meta">
+        <span class="nv2-meta-item nv2-meta-folder" title={noteVitals.path}>
+          <Icon name="folder" className="nv2-meta-icon" />
+          <span class="nv2-meta-text">{folder}</span>
+        </span>
+        {paraType.label && (
+          <span class="nv2-meta-item nv2-meta-para">
+            <Icon name={paraType.icon} className="nv2-meta-icon" />
+            <span class="nv2-meta-text">{paraType.label}</span>
+          </span>
+        )}
+      </div>
 
-			{/* Tags - The note's "interests" */}
-			<TagsRow tags={noteVitals.tags} />
+      {/* Tags - The note's "interests" */}
+      <TagsRow tags={noteVitals.tags} />
 
-			{/* Pulse Timeline - The note's "heartbeat" */}
-			<PulseTimeline
-				createdAt={noteVitals.lifecycle.createdAt}
-				modifiedAt={noteVitals.lifecycle.modifiedAt}
-				totalLinks={noteVitals.links.backlinks + noteVitals.links.outlinks}
-				isIndexed={noteVitals.isIndexed}
-				healthStatus={noteVitals.health.status}
-			/>
-		</article>
-	);
+      {/* Pulse Timeline - The note's "heartbeat" */}
+      <PulseTimeline
+        createdAt={noteVitals.lifecycle.createdAt}
+        modifiedAt={noteVitals.lifecycle.modifiedAt}
+        totalLinks={noteVitals.links.backlinks + noteVitals.links.outlinks}
+        isIndexed={noteVitals.isIndexed}
+        healthStatus={noteVitals.health.status}
+      />
+    </article>
+  );
 }
 
 function extractFolder(path: string): string {
-	if (!path.includes("/")) return "Root";
-	const folder = path.substring(0, path.lastIndexOf("/"));
-	// Truncate long paths from the beginning
-	if (folder.length > 30) {
-		return `...${folder.slice(-27)}`;
-	}
-	return folder || "Root";
+  if (!path.includes("/")) return "Root";
+  const folder = path.substring(0, path.lastIndexOf("/"));
+  // Truncate long paths from the beginning
+  if (folder.length > 30) {
+    return `...${folder.slice(-27)}`;
+  }
+  return folder || "Root";
 }
 
 interface TagsRowProps {
-	tags: string[];
+  tags: string[];
 }
 
 function TagsRow({ tags }: TagsRowProps) {
-	const cleanTags = tags.map((t) => t.replace(/^#/, "")).filter(Boolean);
-	if (cleanTags.length === 0) {
-		return (
-			<div class="nv2-note-card-tags nv2-note-card-tags--empty">
-				<span class="nv2-tag nv2-tag--placeholder">No tags yet</span>
-			</div>
-		);
-	}
+  const cleanTags = tags.map((t) => t.replace(/^#/, "")).filter(Boolean);
+  if (cleanTags.length === 0) {
+    return (
+      <div class="nv2-note-card-tags nv2-note-card-tags--empty">
+        <span class="nv2-tag nv2-tag--placeholder">No tags yet</span>
+      </div>
+    );
+  }
 
-	const visibleCount = 4;
-	const visible = cleanTags.slice(0, visibleCount);
-	const remaining = cleanTags.length - visibleCount;
+  const visibleCount = 4;
+  const visible = cleanTags.slice(0, visibleCount);
+  const remaining = cleanTags.length - visibleCount;
 
-	return (
-		<div class="nv2-note-card-tags" role="list" aria-label="Tags">
-			{visible.map((tag) => (
-				<span key={tag} class="nv2-tag" role="listitem">
-					#{tag}
-				</span>
-			))}
-			{remaining > 0 && (
-				<span class="nv2-tag nv2-tag--more" title={cleanTags.slice(visibleCount).join(", ")}>
-					+{remaining}
-				</span>
-			)}
-		</div>
-	);
+  return (
+    <div class="nv2-note-card-tags" role="list" aria-label="Tags">
+      {visible.map((tag) => (
+        <span key={tag} class="nv2-tag" role="listitem">
+          #{tag}
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span class="nv2-tag nv2-tag--more" title={cleanTags.slice(visibleCount).join(", ")}>
+          +{remaining}
+        </span>
+      )}
+    </div>
+  );
 }

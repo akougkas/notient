@@ -10,7 +10,6 @@
  *                     FAILED             CRASHED          DEGRADED
  */
 
-import type { EventBus } from "../events/eventBus";
 import type {
   CrashedReason,
   DegradedReason,
@@ -18,6 +17,7 @@ import type {
   InitializationContext,
   InitializationState,
 } from "../../types/services";
+import type { EventBus } from "../events/eventBus";
 
 /** Valid state transitions */
 const VALID_TRANSITIONS: Record<InitializationState, InitializationState[]> = {

@@ -10,7 +10,7 @@
  */
 
 import { setIcon } from "obsidian";
-import { useEffect, useRef, useMemo } from "preact/hooks";
+import { useEffect, useMemo, useRef } from "preact/hooks";
 
 interface PulseTimelineProps {
   /** When the note was created */
@@ -84,7 +84,7 @@ export function PulseTimeline({
   // Calculate positions
   const modifiedPos = useMemo(
     () => calculatePosition(modifiedAt, createdAt),
-    [modifiedAt, createdAt]
+    [modifiedAt, createdAt],
   );
 
   // Determine activity level for visual intensity
@@ -155,19 +155,13 @@ export function PulseTimeline({
       )}
 
       {/* Today marker */}
-      <div
-        class="nv2-pulse-marker nv2-pulse-marker--today"
-        style={{ left: "100%" }}
-        title="Today"
-      >
+      <div class="nv2-pulse-marker nv2-pulse-marker--today" style={{ left: "100%" }} title="Today">
         <span class="nv2-pulse-now" />
       </div>
 
       {/* Labels */}
       <div class="nv2-pulse-labels">
-        <span class="nv2-pulse-label nv2-pulse-label--start">
-          {formatRelative(createdAt)}
-        </span>
+        <span class="nv2-pulse-label nv2-pulse-label--start">{formatRelative(createdAt)}</span>
         <span class="nv2-pulse-label nv2-pulse-label--end">now</span>
       </div>
     </div>

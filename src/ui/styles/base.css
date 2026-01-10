@@ -80,8 +80,13 @@
 }
 
 @keyframes icon-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 .nv2-empty-state-title {
@@ -117,7 +122,9 @@
 }
 
 @keyframes nv2-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .nv2-loading-text {
@@ -294,8 +301,12 @@
 }
 
 @keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .nv2-skeleton-text {
@@ -330,9 +341,15 @@
 }
 
 @keyframes success-flash {
-  0% { background-color: transparent; }
-  50% { background-color: color-mix(in srgb, var(--color-green) 20%, transparent); }
-  100% { background-color: transparent; }
+  0% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--color-green) 20%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 
 .nv2-error-shake {
@@ -340,9 +357,18 @@
 }
 
 @keyframes error-shake {
-  0%, 100% { transform: translateX(0); }
-  20%, 60% { transform: translateX(-4px); }
-  40%, 80% { transform: translateX(4px); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
 }
 
 /* =============================================================================

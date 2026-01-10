@@ -123,7 +123,9 @@ export class IndexManagementPanel {
       cls: `notient-settings-badge ${isUserProvided ? "external" : "plugin"}`,
     });
 
-    const statsEl = statusBox.createEl("div", { cls: "notient-settings-info-dim notient-settings-stats" });
+    const statsEl = statusBox.createEl("div", {
+      cls: "notient-settings-info-dim notient-settings-stats",
+    });
     const statsIcon = statsEl.createSpan({ cls: "notient-settings-icon-inline" });
     setIcon(statsIcon, "bar-chart-2");
     statsEl.createSpan({ text: `${noteCount} notes indexed` });
@@ -132,7 +134,9 @@ export class IndexManagementPanel {
       const readonlyEl = statusBox.createEl("div", { cls: "notient-settings-index-readonly" });
       const infoIcon = readonlyEl.createSpan({ cls: "notient-settings-icon-inline" });
       setIcon(infoIcon, "info");
-      readonlyEl.createSpan({ text: "External indices are read-only. Sync, Trim, and Rebuild operations are disabled." });
+      readonlyEl.createSpan({
+        text: "External indices are read-only. Sync, Trim, and Rebuild operations are disabled.",
+      });
     }
   }
 
@@ -431,7 +435,9 @@ export class IndexManagementPanel {
     }
 
     // Rebuild button
-    const rebuildBtn = btnRow.createEl("button", { cls: "notient-settings-action-btn mod-warning" });
+    const rebuildBtn = btnRow.createEl("button", {
+      cls: "notient-settings-action-btn mod-warning",
+    });
     const rebuildIcon = rebuildBtn.createSpan({ cls: "notient-settings-btn-icon" });
     setIcon(rebuildIcon, "refresh-cw");
     rebuildBtn.createSpan({ text: "Rebuild" });

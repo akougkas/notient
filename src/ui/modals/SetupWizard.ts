@@ -354,7 +354,9 @@ export class SetupWizardModal extends Modal {
 
     // Model Select
     if (config.status === "connected") {
-      const modelGroup = card.createDiv({ cls: "nv2-wizard-input-group nv2-wizard-input-group--model" });
+      const modelGroup = card.createDiv({
+        cls: "nv2-wizard-input-group nv2-wizard-input-group--model",
+      });
       modelGroup.createDiv({ cls: "nv2-wizard-label", text: "Model" });
       const select = modelGroup.createEl("select", { cls: "nv2-wizard-input" });
 
@@ -385,7 +387,9 @@ export class SetupWizardModal extends Modal {
       const errorEl = card.createDiv({ cls: "nv2-wizard-service-error" });
       const errorIcon = errorEl.createSpan({ cls: "nv2-wizard-error-icon" });
       setIcon(errorIcon, "alert-circle");
-      errorEl.createSpan({ text: config.error || "Could not connect. Check if the service is running." });
+      errorEl.createSpan({
+        text: config.error || "Could not connect. Check if the service is running.",
+      });
     }
   }
 

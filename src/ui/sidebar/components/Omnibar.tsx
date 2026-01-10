@@ -14,7 +14,11 @@ import { useEventBus, useKernel } from "../context/KernelContext";
 
 const PRESET_DISPLAY: Record<SearchPreset, { icon: string; label: string; tooltip: string }> = {
   quick: { icon: "zap", label: "Quick", tooltip: "Fast search, no AI reranking" },
-  balanced: { icon: "scale", label: "Balanced", tooltip: "Recommended - vector search with AI reranking" },
+  balanced: {
+    icon: "scale",
+    label: "Balanced",
+    tooltip: "Recommended - vector search with AI reranking",
+  },
   thorough: { icon: "brain", label: "Deep", tooltip: "Thorough search with extensive reranking" },
   custom: { icon: "settings", label: "Custom", tooltip: "Custom search settings" },
 };
@@ -43,7 +47,7 @@ export function Omnibar({
   const [isFocused, setIsFocused] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchPreset, setSearchPreset] = useState<SearchPreset>(
-    kernel.settings?.search?.preset || "balanced"
+    kernel.settings?.search?.preset || "balanced",
   );
 
   // Set up the search icon

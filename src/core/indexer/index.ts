@@ -3,4 +3,9 @@
  */
 
 export { SimpleIndexer } from "./simpleIndexer";
-export { generateNoteId, generateContentHash, generateChunkId, estimateTokens } from "./simpleChunker";
+export {
+  generateNoteId,
+  generateContentHash,
+  generateChunkId,
+  estimateTokens,
+} from "./simpleChunker";

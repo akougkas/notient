@@ -8,7 +8,15 @@
  * - Multi-index management
  */
 
-import { type App, Notice, type Plugin, PluginSettingTab, Setting, debounce, setIcon } from "obsidian";
+import {
+  type App,
+  Notice,
+  type Plugin,
+  PluginSettingTab,
+  Setting,
+  debounce,
+  setIcon,
+} from "obsidian";
 import type { NotientAgent } from "../../core/agent/agentLoop";
 import type { ProfileManager } from "../../core/agent/profileManager";
 import { MODEL_DEFAULTS } from "../../core/constants";
@@ -577,15 +585,24 @@ export class NotientSettingTab extends PluginSettingTab {
       // Show capability icons
       const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
       if (caps.search) {
-        const searchIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Search ready" } });
+        const searchIcon = capIcons.createSpan({
+          cls: "notient-settings-cap-icon",
+          attr: { title: "Search ready" },
+        });
         setIcon(searchIcon, "search");
       }
       if (caps.reasoning) {
-        const chatIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Chat & rerank ready" } });
+        const chatIcon = capIcons.createSpan({
+          cls: "notient-settings-cap-icon",
+          attr: { title: "Chat & rerank ready" },
+        });
         setIcon(chatIcon, "bot");
       }
       if (caps.indexing) {
-        const indexIcon = capIcons.createSpan({ cls: "notient-settings-cap-icon", attr: { title: "Indexing available" } });
+        const indexIcon = capIcons.createSpan({
+          cls: "notient-settings-cap-icon",
+          attr: { title: "Indexing available" },
+        });
         setIcon(indexIcon, "file-text");
       }
     } else if (this.kernel.isServicesInitializing) {
@@ -1153,11 +1170,21 @@ export class NotientSettingTab extends PluginSettingTab {
       <p class="notient-settings-info-dim">Subfolders are automatically included when matching.</p>
     `;
 
-    const paraTypes: Array<{ key: keyof NotientSettings["para"]; label: string; icon: string; hint: string }> = [
+    const paraTypes: Array<{
+      key: keyof NotientSettings["para"];
+      label: string;
+      icon: string;
+      hint: string;
+    }> = [
       { key: "inbox", label: "Inbox", icon: "inbox", hint: "Unsorted notes, daily captures" },
       { key: "projects", label: "Projects", icon: "target", hint: "Active work with deadlines" },
       { key: "areas", label: "Areas", icon: "home", hint: "Ongoing responsibilities" },
-      { key: "resources", label: "Resources", icon: "book-open", hint: "Reference material, knowledge" },
+      {
+        key: "resources",
+        label: "Resources",
+        icon: "book-open",
+        hint: "Reference material, knowledge",
+      },
       { key: "archive", label: "Archive", icon: "archive", hint: "Completed/inactive items" },
     ];
 

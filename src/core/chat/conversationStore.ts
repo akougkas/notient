@@ -168,7 +168,9 @@ export class ConversationStore {
         }
         // Exponential backoff
         const delayMs = baseDelayMs * 2 ** (attempt - 1);
-        console.warn(`[ConversationStore] Flush attempt ${attempt} failed, retrying in ${delayMs}ms`);
+        console.warn(
+          `[ConversationStore] Flush attempt ${attempt} failed, retrying in ${delayMs}ms`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }

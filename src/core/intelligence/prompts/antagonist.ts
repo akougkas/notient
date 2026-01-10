@@ -23,28 +23,28 @@ TONE:
 `;
 
 export const ANTAGONIST_PROMPT: AgentPrompt = {
-    system: SYSTEM_PROMPT,
-    userTemplate: `Analyze the following note and provide a rigorous critique:\n\n{{noteContent}}`,
-    outputSchema: {
-        type: "object",
-        properties: {
-            claims_analyzed: { type: "array", items: { type: "string" } },
-            critique: {
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        claim: { type: "string" },
-                        weakness: { type: "string" },
-                        counterpoint: { type: "string" },
-                        severity: { type: "string", enum: ["high", "medium", "low"] }
-                    }
-                }
-            },
-            probing_questions: { type: "array", items: { type: "string" } },
-            steelman_argument: { type: "string" }
-        }
-    }
+  system: SYSTEM_PROMPT,
+  userTemplate: `Analyze the following note and provide a rigorous critique:\n\n{{noteContent}}`,
+  outputSchema: {
+    type: "object",
+    properties: {
+      claims_analyzed: { type: "array", items: { type: "string" } },
+      critique: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            claim: { type: "string" },
+            weakness: { type: "string" },
+            counterpoint: { type: "string" },
+            severity: { type: "string", enum: ["high", "medium", "low"] },
+          },
+        },
+      },
+      probing_questions: { type: "array", items: { type: "string" } },
+      steelman_argument: { type: "string" },
+    },
+  },
 };
 
 /**
@@ -52,7 +52,7 @@ export const ANTAGONIST_PROMPT: AgentPrompt = {
  * @param profile - User profile for optional personalization
  */
 export function buildAntagonistPrompt(profile?: UserProfile): string {
-    // In the future, we can adapt the critique style based on profile
-    // e.g. "critique based on HPC principles"
-    return SYSTEM_PROMPT;
+  // In the future, we can adapt the critique style based on profile
+  // e.g. "critique based on HPC principles"
+  return SYSTEM_PROMPT;
 }

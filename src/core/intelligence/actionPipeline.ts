@@ -859,10 +859,7 @@ class ActionPipelineImpl implements ActionPipeline {
 
     // Calculate a score (10 = no issues, 0 = all high severity)
     const baseScore = 10;
-    const score = Math.max(
-      0,
-      baseScore - highSeverityCount * 3 - mediumSeverityCount * 1,
-    );
+    const score = Math.max(0, baseScore - highSeverityCount * 3 - mediumSeverityCount * 1);
 
     return [
       {

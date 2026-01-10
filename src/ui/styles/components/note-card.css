@@ -28,8 +28,13 @@
 
 /* Subtle "breathing" animation when note is healthy - Sentient Note philosophy */
 @keyframes note-breathe {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .nv2-note-card--healthy::before {

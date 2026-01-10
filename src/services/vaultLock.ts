@@ -29,7 +29,10 @@ const LOCK_MAX_RETRIES = 3;
 const LOCK_RETRY_BASE_MS = 200;
 
 /** Callback invoked when lock is lost */
-export type OnLockLostCallback = (reason: "refresh_failed" | "stale_detected", error?: string) => void;
+export type OnLockLostCallback = (
+  reason: "refresh_failed" | "stale_detected",
+  error?: string,
+) => void;
 
 export class VaultLock {
   private lockPath: string;
@@ -37,7 +40,10 @@ export class VaultLock {
   private hasLock = false;
   private onLockLost?: OnLockLostCallback;
 
-  constructor(private storagePaths: StoragePaths, onLockLost?: OnLockLostCallback) {
+  constructor(
+    private storagePaths: StoragePaths,
+    onLockLost?: OnLockLostCallback,
+  ) {
     this.lockPath = path.join(storagePaths.locks, LOCK_FILES.WRITER);
     this.onLockLost = onLockLost;
   }

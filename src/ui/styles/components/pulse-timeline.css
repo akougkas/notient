@@ -133,13 +133,16 @@
 }
 
 @keyframes pulse-breathe {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
-    box-shadow: 0 0 0 2px var(--background-primary), 0 0 8px color-mix(in srgb, var(--interactive-accent) 40%, transparent);
+    box-shadow: 0 0 0 2px var(--background-primary), 0 0 8px
+      color-mix(in srgb, var(--interactive-accent) 40%, transparent);
   }
   50% {
     transform: scale(1.1);
-    box-shadow: 0 0 0 2px var(--background-primary), 0 0 12px color-mix(in srgb, var(--interactive-accent) 60%, transparent);
+    box-shadow: 0 0 0 2px var(--background-primary), 0 0 12px
+      color-mix(in srgb, var(--interactive-accent) 60%, transparent);
   }
 }
 

@@ -6,9 +6,9 @@
  */
 
 import type { SearchResult } from "../../types/search";
+import type { UserEvolutionService, UserEvolutionState } from "../evolution/userEvolutionService";
 import type { Kernel } from "../kernel";
 import { ParaDetector } from "../para/detector";
-import type { UserEvolutionService, UserEvolutionState } from "../evolution/userEvolutionService";
 
 export interface VaultContext {
   // Structural context
@@ -70,12 +70,14 @@ export class VaultContextBuilder {
 
     // Get user evolution state
     // Check if service is available (might be lazy loaded)
-    const evolutionState = this.userEvolution ? this.userEvolution.getState() : {
-      currentFocus: "General",
-      sentiment: "neutral",
-      evolutionaryStage: "gathering",
-      recentTopics: []
-    } as UserEvolutionState;
+    const evolutionState = this.userEvolution
+      ? this.userEvolution.getState()
+      : ({
+          currentFocus: "General",
+          sentiment: "neutral",
+          evolutionaryStage: "gathering",
+          recentTopics: [],
+        } as UserEvolutionState);
 
     // Build summary
     const summary = this.buildSummary({
@@ -85,7 +87,7 @@ export class VaultContextBuilder {
       candidateCount: candidates.length,
       totalNotes,
       query,
-      evolutionState
+      evolutionState,
     });
 
     return {
@@ -257,7 +259,9 @@ export class VaultContextBuilder {
 
     // Evolution context
     if (params.evolutionState) {
-      parts.push(`User Context: Currently in '${params.evolutionState.evolutionaryStage}' stage, focusing on '${params.evolutionState.currentFocus}'.`);
+      parts.push(
+        `User Context: Currently in '${params.evolutionState.evolutionaryStage}' stage, focusing on '${params.evolutionState.currentFocus}'.`,
+      );
     }
 
     parts.push(
