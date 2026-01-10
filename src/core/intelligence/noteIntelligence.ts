@@ -383,26 +383,10 @@ ${cleaned}`;
     const now = Date.now();
     const days = Math.floor((now - mtimeMs) / (1000 * 60 * 60 * 24));
 
-    const freshness = days <= 7 ? 100 : days <= 30 ? 75 : days <= 90 ? 55 : days <= 180 ? 35 : 20;
-
-    const backlinks = this.linkStats?.backlinks.get(notePath) ?? 0;
-    const outlinks = this.linkStats?.outlinks.get(notePath) ?? 0;
-    const totalLinks = backlinks + outlinks;
-    const connectivity =
-      totalLinks >= 12
-        ? 100
-        : totalLinks >= 6
-          ? 80
-          : totalLinks >= 2
-            ? 55
-            : totalLinks === 1
-              ? 40
-              : 15;
-
-    const structure = headingCount >= 6 ? 95 : headingCount >= 3 ? 80 : headingCount >= 1 ? 55 : 30;
-
-    const metadataScore =
-      tags.length >= 5 ? 90 : tags.length >= 2 ? 70 : tags.length >= 1 ? 50 : 25;
+    const freshness = this.scoreFreshness(days);
+    const connectivity = this.scoreConnectivity(notePath);
+    const structure = this.scoreStructure(headingCount);
+    const metadataScore = this.scoreMetadata(tags.length);
 
     const score = Math.round(
       freshness * 0.25 + connectivity * 0.35 + structure * 0.2 + metadataScore * 0.2,
@@ -418,6 +402,40 @@ ${cleaned}`;
       },
       computedAt: now,
     };
+  }
+
+  private scoreFreshness(days: number): number {
+    if (days <= 7) return 100;
+    if (days <= 30) return 75;
+    if (days <= 90) return 55;
+    if (days <= 180) return 35;
+    return 20;
+  }
+
+  private scoreConnectivity(notePath: string): number {
+    const backlinks = this.linkStats?.backlinks.get(notePath) ?? 0;
+    const outlinks = this.linkStats?.outlinks.get(notePath) ?? 0;
+    const totalLinks = backlinks + outlinks;
+
+    if (totalLinks >= 12) return 100;
+    if (totalLinks >= 6) return 80;
+    if (totalLinks >= 2) return 55;
+    if (totalLinks === 1) return 40;
+    return 15;
+  }
+
+  private scoreStructure(headingCount: number): number {
+    if (headingCount >= 6) return 95;
+    if (headingCount >= 3) return 80;
+    if (headingCount >= 1) return 55;
+    return 30;
+  }
+
+  private scoreMetadata(tagCount: number): number {
+    if (tagCount >= 5) return 90;
+    if (tagCount >= 2) return 70;
+    if (tagCount >= 1) return 50;
+    return 25;
   }
 
   private async extractEntitiesAndTags(

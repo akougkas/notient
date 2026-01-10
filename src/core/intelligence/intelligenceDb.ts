@@ -236,17 +236,14 @@ export class IntelligenceDb {
    * Determine which topic a note belongs to based on its tags.
    * Uses the first tag's root segment as the topic name.
    */
-  private getTopicForNote(notePath: string, noteTags: string[]): string {
-    if (noteTags.length === 0) {
-      return "_uncategorized";
-    }
+  private getTopicForNote(_notePath: string, noteTags: string[]): string {
+    if (noteTags.length === 0) return "_uncategorized";
 
-    // Use first tag as topic
     const primaryTag = noteTags[0]
-      .replace(/^#/, "") // Remove leading #
-      .split("/")[0] // Take first part of nested tag
+      .replace(/^#/, "")
+      .split("/")[0]
       .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-"); // Sanitize for filename safety
+      .replace(/[^a-z0-9-]/g, "-");
 
     return primaryTag || "_uncategorized";
   }
@@ -292,18 +289,17 @@ export class IntelligenceDb {
   }
 
   private async saveMetaFile(): Promise<void> {
-    // Ensure directory exists
     await fs.promises.mkdir(this.storagePaths.intelligence, { recursive: true });
 
-    let totalRecords = 0;
-    for (const records of this.topics.values()) {
-      totalRecords += records.size;
-    }
+    const totalRecords = Array.from(this.topics.values()).reduce(
+      (sum, records) => sum + records.size,
+      0,
+    );
 
     const meta: IntelligenceMeta = {
       version: INTELLIGENCE_VERSION,
       topics: Array.from(this.topics.keys()),
-      totalNotes: totalRecords, // Assuming 1 record per note
+      totalNotes: totalRecords,
       totalRecords,
       lastUpdated: Date.now(),
     };
