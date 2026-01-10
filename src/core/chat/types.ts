@@ -52,34 +52,6 @@ export interface ConversationFile {
 }
 
 /**
- * Folder rollup structure for PARA-aware summaries
- * Stored at: data/conversations/rollups/{para-folder}.json
- */
-export interface ConversationRollup {
-  version: number;
-  folder: string;
-  noteCount: number;
-  messageCount: number;
-  topTopics: string[];
-  recentNotes: Array<{
-    noteId: string;
-    path: string;
-    messageCount: number;
-    lastMessage: string;
-  }>;
-  generatedAt: string;
-}
-
-/**
- * Options for appending messages with metadata
- */
-export interface AppendMessageOptions {
-  reasoningSummary?: string;
-  actionRef?: string;
-  status?: MessageStatus;
-}
-
-/**
  * Configuration for a chat session
  */
 export interface ChatConfig {

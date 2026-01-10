@@ -18,9 +18,7 @@ import type { StoragePaths } from "../../services/storagePaths";
 import { atomicWriteFile } from "../../utils/atomicWrite";
 import { generateNoteId } from "../indexer/simpleChunker";
 import type {
-  AppendMessageOptions,
   ConversationFile,
-  ConversationRollup,
   ExtendedChatMessage,
   StoredChatMessage,
 } from "./types";
@@ -121,11 +119,8 @@ export class ConversationStore {
   }
 
   /**
-   * Get conversation history for a note (SYNCHRONOUS - backward compatible)
-   * Returns from cache only. For lazy loading, use getHistoryAsync().
-   *
-   * @param notePath - Note path (required)
-   * @returns ExtendedChatMessage[] from cache, or empty array if not loaded
+   * Get conversation history for a note
+   * Returns from cache, or empty array if not loaded.
    */
   getHistory(notePath: string): ExtendedChatMessage[] {
     const noteId = generateNoteId(notePath);
@@ -151,46 +146,7 @@ export class ConversationStore {
   }
 
   /**
-   * Get conversation history for a note (ASYNC - lazy loading)
-   * Loads from disk if not in cache.
-   *
-   * @param notePath - Note path (required)
-   * @param noteId - Optional pre-computed noteId (computed from notePath if not provided)
-   * @returns ExtendedChatMessage[]
-   */
-  async getHistoryAsync(notePath: string, noteId?: string): Promise<ExtendedChatMessage[]> {
-    const resolvedNoteId = noteId ?? generateNoteId(notePath);
-    const messages = await this.loadConversation(resolvedNoteId);
-
-    // Ensure meta is set for new loads
-    if (!this.meta.has(resolvedNoteId) && messages.length > 0) {
-      this.meta.set(resolvedNoteId, {
-        notePath,
-        createdAt: new Date(),
-        lastAccessedAt: new Date(),
-      });
-    }
-
-    // Update last accessed time
-    const existingMeta = this.meta.get(resolvedNoteId);
-    if (existingMeta) {
-      existingMeta.lastAccessedAt = new Date();
-      this.dirty.add(resolvedNoteId);
-      this.scheduleFlush();
-    }
-
-    // Convert StoredChatMessage to ExtendedChatMessage
-    return messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      timestamp: new Date(message.timestamp),
-      attachments: message.attachments,
-    }));
-  }
-
-  /**
-   * Append a message to a conversation (SYNCHRONOUS - backward compatible)
+   * Append a message to a conversation
    * Stores in cache and schedules disk flush.
    *
    * @param notePath - Note path (required)
@@ -243,77 +199,7 @@ export class ConversationStore {
   }
 
   /**
-   * Append a message with extended options (ASYNC - supports reasoning summary)
-   * Use this when storing assistant messages with thinking block summaries.
-   *
-   * @param notePath - Note path
-   * @param message - Message to append
-   * @param options - Extended options (reasoningSummary, actionRef, status)
-   * @param noteId - Optional pre-computed noteId
-   */
-  async appendMessageAsync(
-    notePath: string,
-    message: ExtendedChatMessage,
-    options?: AppendMessageOptions,
-    noteId?: string,
-  ): Promise<void> {
-    const resolvedNoteId = noteId ?? generateNoteId(notePath);
-
-    // Load conversation if not cached
-    if (!this.loaded.has(resolvedNoteId)) {
-      await this.loadConversation(resolvedNoteId);
-    }
-
-    let messages = this.loaded.get(resolvedNoteId);
-    if (!messages) {
-      messages = [];
-      this.loaded.set(resolvedNoteId, messages);
-      this.meta.set(resolvedNoteId, {
-        notePath,
-        createdAt: new Date(),
-        lastAccessedAt: new Date(),
-      });
-    }
-
-    // Determine status
-    let status = options?.status;
-    if (!status && message.role === "assistant") {
-      status = message.content ? "success" : "failed";
-    }
-
-    // Create stored message
-    const stored: StoredChatMessage = {
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      timestamp: message.timestamp.toISOString(),
-      attachments: message.attachments,
-      status,
-      reasoningSummary: options?.reasoningSummary,
-      actionRef: options?.actionRef,
-    };
-
-    messages.push(stored);
-
-    // Enforce per-note message limit
-    if (messages.length > this.retention.maxMessagesPerNote) {
-      const excess = messages.length - this.retention.maxMessagesPerNote;
-      messages.splice(0, excess);
-    }
-
-    // Update meta
-    const conversationMeta = this.meta.get(resolvedNoteId);
-    if (conversationMeta) {
-      conversationMeta.notePath = notePath; // Update in case path changed
-      conversationMeta.lastAccessedAt = new Date();
-    }
-
-    this.dirty.add(resolvedNoteId);
-    this.scheduleFlush();
-  }
-
-  /**
-   * Handle note rename - update stored path (backward compatible)
+   * Handle note rename - update stored path
    *
    * @param oldPath - Old note path
    * @param newPath - New note path
@@ -435,72 +321,6 @@ export class ConversationStore {
         this.dirty.add(noteId); // Re-add for retry
       }
     }
-  }
-
-  /**
-   * Generate folder rollup (on-demand)
-   */
-  async generateRollup(folder: string): Promise<ConversationRollup> {
-    const notesDir = this.storagePaths.conversationsNotes;
-
-    let files: string[] = [];
-    try {
-      files = await fs.promises.readdir(notesDir);
-    } catch {
-      // Directory doesn't exist yet
-    }
-
-    const recentNotes: ConversationRollup["recentNotes"] = [];
-    let totalMessages = 0;
-
-    for (const file of files) {
-      if (!file.endsWith(".json")) continue;
-
-      const noteId = file.replace(".json", "");
-      const filePath = path.join(notesDir, file);
-
-      try {
-        const content = await fs.promises.readFile(filePath, "utf-8");
-        const data: ConversationFile = JSON.parse(content);
-
-        // Check if note is in this folder
-        if (!data.notePath.startsWith(folder)) continue;
-
-        totalMessages += data.messages.length;
-
-        const lastMessage = data.messages[data.messages.length - 1];
-        recentNotes.push({
-          noteId: data.noteId,
-          path: data.notePath,
-          messageCount: data.messages.length,
-          lastMessage: lastMessage?.timestamp ?? data.lastAccessedAt,
-        });
-      } catch {
-        // Skip unreadable files
-      }
-    }
-
-    // Sort by last message (most recent first)
-    recentNotes.sort(
-      (a, b) => new Date(b.lastMessage).getTime() - new Date(a.lastMessage).getTime(),
-    );
-
-    const rollup: ConversationRollup = {
-      version: 1,
-      folder,
-      noteCount: recentNotes.length,
-      messageCount: totalMessages,
-      topTopics: [], // Could extract via LLM, keeping simple for now
-      recentNotes: recentNotes.slice(0, 10), // Top 10
-      generatedAt: new Date().toISOString(),
-    };
-
-    // Save rollup
-    const rollupPath = this.storagePaths.getConversationRollupPath(folder);
-    await fs.promises.mkdir(this.storagePaths.conversationsRollups, { recursive: true });
-    await atomicWriteFile(rollupPath, JSON.stringify(rollup, null, 2));
-
-    return rollup;
   }
 
   /**
