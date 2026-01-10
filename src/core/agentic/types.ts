@@ -391,14 +391,13 @@ export interface RenameBackUndo {
 }
 
 /**
- * Diff-based undo payload (Phase 5 - smaller than full content)
+ * Diff-based undo payload (smaller than full content)
  */
 export interface DiffUndoPayload {
   type: "diff";
-  /** Patches to apply to restore original content */
+  /** Patches to apply to restore original content (reversed diff format) */
   patches: Array<{
     path: string;
-    /** Unified diff format (reversed: applying restores original) */
     diff: string;
   }>;
 }
@@ -427,23 +426,21 @@ export interface AppliedActionRecord {
   taskId?: string;
   /** The action that was applied */
   action: ProposedAction;
-  /** Why the agent made this decision (Phase 5) */
+  /** Why the agent made this decision */
   reasoning: string;
   /** Paths that were changed */
   changedPaths: string[];
   /** Data needed to undo this action */
   undo: UndoPayload;
-  /** Current status of the action (Phase 5) */
+  /** Current status of the action */
   status: AppliedActionStatus;
 }
 
 // =============================================================================
-// Action Storage Structures (Phase 5)
+// Action Storage Structures
 // =============================================================================
 
-/**
- * Hot actions file structure (recent actions, max 200)
- */
+/** Hot actions file structure (recent 200 actions) */
 export interface HotActionsFile {
   version: number;
   records: AppliedActionRecord[];
@@ -451,9 +448,7 @@ export interface HotActionsFile {
   newestTimestamp: number;
 }
 
-/**
- * Archive file structure (monthly archives)
- */
+/** Monthly archive file structure */
 export interface ActionsArchiveFile {
   version: number;
   yearMonth: string;

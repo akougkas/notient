@@ -453,46 +453,13 @@ export class ActionApplier {
     reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
-
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
-    // Apply the change
-    const result = await this.obsidian.processFrontMatter(target, (fm) => {
-      fm[payload.key] = payload.value;
-    });
-
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo with new signature
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyFrontmatterWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      (fm) => {
+        fm[payload.key] = payload.value;
+      },
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
@@ -505,48 +472,14 @@ export class ActionApplier {
     reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
-
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
-    // Apply the change
-    const result = await this.obsidian.processFrontMatter(target, (fm) => {
-      const existingTags = Array.isArray(fm.tags) ? fm.tags : [];
-      const newTags = [...new Set([...existingTags, ...payload.tags])];
-      fm.tags = newTags;
-    });
-
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyFrontmatterWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      (fm) => {
+        const existingTags = Array.isArray(fm.tags) ? fm.tags : [];
+        fm.tags = [...new Set([...existingTags, ...payload.tags])];
+      },
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
@@ -559,53 +492,14 @@ export class ActionApplier {
     reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
+    const heading = payload.heading ? `## ${payload.heading}\n\n` : "";
+    const sectionContent = `\n\n${heading}${payload.content}`;
 
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
-    // Build the section to append
-    let sectionContent = "\n\n";
-    if (payload.heading) {
-      sectionContent += `## ${payload.heading}\n\n`;
-    }
-    sectionContent += payload.content;
-
-    // Apply the change
-    const result = await this.obsidian.processFile(target, (content) => {
-      return content.trimEnd() + sectionContent;
-    });
-
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      (content) => content.trimEnd() + sectionContent,
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
@@ -618,50 +512,14 @@ export class ActionApplier {
     reasoning?: string,
   ): Promise<ApplyResult> {
     const { target, payload } = action;
-
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
-    // Build the links section
     const linksList = payload.links.map((link) => `- [[${link}]]`).join("\n");
     const sectionContent = `\n\n## Related Notes\n\n${linksList}`;
 
-    // Apply the change
-    const result = await this.obsidian.processFile(target, (content) => {
-      return content.trimEnd() + sectionContent;
-    });
-
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      (content) => content.trimEnd() + sectionContent,
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
@@ -874,12 +732,6 @@ export class ActionApplier {
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
     // Build links to extracted sections
     let newContent = payload.content;
     if (payload.extractedSections.length > 0) {
@@ -890,37 +742,11 @@ export class ActionApplier {
       }
     }
 
-    // Apply the change
-    const result = await this.obsidian.processFile(target, () => newContent);
-
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      () => newContent,
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
@@ -1098,73 +924,38 @@ type: task-list
   ): Promise<ApplyResult> {
     const { target, payload } = action;
 
-    // Read before content for undo
-    const beforeContent = await this.obsidian.readFileByPath(target);
-    if (beforeContent === null) {
-      return { success: false, error: `Could not read file: ${target}` };
-    }
-
     // Build the review section
-    let sectionContent = `\n\n## ${payload.reviewType.charAt(0).toUpperCase() + payload.reviewType.slice(1)} Review\n\n`;
-    sectionContent += `**Score:** ${payload.score}/10\n`;
-    sectionContent += `**Date:** ${payload.date}\n\n`;
+    const title = payload.reviewType.charAt(0).toUpperCase() + payload.reviewType.slice(1);
+    const parts = [
+      `\n\n## ${title} Review\n`,
+      `**Score:** ${payload.score}/10`,
+      `**Date:** ${payload.date}\n`,
+    ];
 
     if (payload.findings.strengths.length > 0) {
-      sectionContent += "### Strengths\n\n";
-      for (const s of payload.findings.strengths) {
-        sectionContent += `- ${s}\n`;
-      }
-      sectionContent += "\n";
+      parts.push("### Strengths\n");
+      parts.push(...payload.findings.strengths.map((s) => `- ${s}`));
+      parts.push("");
     }
 
     if (payload.findings.concerns.length > 0) {
-      sectionContent += "### Concerns\n\n";
-      for (const c of payload.findings.concerns) {
-        sectionContent += `- ${c}\n`;
-      }
-      sectionContent += "\n";
+      parts.push("### Concerns\n");
+      parts.push(...payload.findings.concerns.map((c) => `- ${c}`));
+      parts.push("");
     }
 
     if (payload.findings.suggestions.length > 0) {
-      sectionContent += "### Suggestions\n\n";
-      for (const s of payload.findings.suggestions) {
-        sectionContent += `- ${s}\n`;
-      }
+      parts.push("### Suggestions\n");
+      parts.push(...payload.findings.suggestions.map((s) => `- ${s}`));
     }
 
-    // Apply the change
-    const result = await this.obsidian.processFile(target, (content) => {
-      return content.trimEnd() + sectionContent;
-    });
+    const sectionContent = parts.join("\n");
 
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // Read after content for diff
-    const afterContent = await this.obsidian.readFileByPath(target);
-    if (afterContent === null) {
-      return { success: false, error: `Could not read file after modification: ${target}` };
-    }
-
-    // Generate diff-based undo
-    const diff = createUnifiedDiff(afterContent, beforeContent, target);
-    const undoPayload: DiffUndoPayload = {
-      type: "diff",
-      patches: [{ path: target, diff }],
-    };
-
-    // Record for undo
-    const record = this.actionHistory.addRecord(
-      action,
-      undoPayload,
-      [target],
-      reasoning ?? action.reason,
-      workflowId,
-      taskId,
+    return this.applyWithDiffUndo(
+      { action, taskId, workflowId, reasoning },
+      target,
+      (content) => content.trimEnd() + sectionContent,
     );
-
-    return { success: true, recordId: record.id };
   }
 
   /**
