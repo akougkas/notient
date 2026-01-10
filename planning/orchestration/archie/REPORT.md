@@ -1,16 +1,24 @@
 # Archie Report
 status: complete
-commit: a21cb8b
+commit: f82965e
 
 ## did
-- src/core/agent/taskQueue.ts:43-60: Made agent nullable, added isAgentAvailable(), setAgent() for late binding
-- src/core/agent/taskQueue.ts:74-81: Added LLM availability check in enqueue() - throws clear error if agent null
-- src/core/agent/taskQueue.ts:395-398: Added guard in executeTask() for TypeScript
-- src/main.ts:472-474: Always create AgentTaskQueue with null agent, register unconditionally
-- src/main.ts:488-489: Late-bind agent to taskQueue when LLM available
-- src/main.ts:495-496: Added warning log when LLM unavailable
-- src/main.ts:508-509: Removed conditional around setConversationStore
-- src/main.ts:544-555: Removed conditional around WorkflowRunner registration
+- src/core/agents/chatAgent.ts:192-208: Removed implicit keyword delegation (classify, link, edit triggers)
+  - Kept explicit `[DELEGATE:agent-type]` marker support
+  - Added comment explaining why implicit triggers cause cascading agents
+- src/core/agents/classifierAgent.ts:77-108: Added robust JSON parsing
+  - Sanitizes control characters before parsing
+  - Try/catch around parseJSON with graceful fallback to defaults
+  - Returns `{ paraCategory: "inbox", confidence: 0.5 }` on failure
+- src/core/agents/noteEditorAgent.ts:85-123: Added robust JSON parsing
+  - Same sanitization pattern as ClassifierAgent
+  - Returns `{ actions: [] }` on parse failure
+- src/services/ollamaReranker.ts:145-227: Fixed reranker response parsing
+  - Added parseRerankerScore() method for robust handling
+  - Parses numeric scores (0.8, 8/10, 85%)
+  - Handles malformed responses ("isyes", "documentno")
+  - Falls back to vector score with penalty on unrecognized output
+  - Increased num_predict from 5 to 20 tokens
 
 ## verify
 typecheck: pass

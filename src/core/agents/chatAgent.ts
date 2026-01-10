@@ -190,7 +190,9 @@ export class ChatAgent extends BaseAgent {
    * Detect delegation triggers in the response
    */
   private detectDelegationTrigger(text: string): DelegationTrigger | null {
-    // Explicit delegation markers
+    // Only support explicit delegation markers - no implicit keyword detection
+    // Reason: Implicit triggers fire on LLM OUTPUT keywords like "connections" or "classify"
+    // even when user asked for a simple summary, causing cascading agent activations
     const delegateMatch = text.match(/\[DELEGATE:(\w+-?\w*)\]/i);
     if (delegateMatch) {
       const agentType = delegateMatch[1] as AgentType;
@@ -201,48 +203,6 @@ export class ChatAgent extends BaseAgent {
           confidence: 1.0,
         };
       }
-    }
-
-    // Implicit triggers based on keywords (lower confidence)
-    const lowerText = text.toLowerCase();
-
-    if (
-      (lowerText.includes("classify") ||
-        lowerText.includes("categorize") ||
-        lowerText.includes("para")) &&
-      this.canDelegateTo("classifier")
-    ) {
-      return {
-        agentType: "classifier",
-        instruction: "Classify this note using PARA methodology",
-        confidence: 0.7,
-      };
-    }
-
-    if (
-      (lowerText.includes("find connection") ||
-        lowerText.includes("related notes") ||
-        lowerText.includes("link")) &&
-      this.canDelegateTo("link-finder")
-    ) {
-      return {
-        agentType: "link-finder",
-        instruction: "Find semantic connections to other notes",
-        confidence: 0.7,
-      };
-    }
-
-    if (
-      (lowerText.includes("edit") ||
-        lowerText.includes("improve") ||
-        lowerText.includes("restructure")) &&
-      this.canDelegateTo("note-editor")
-    ) {
-      return {
-        agentType: "note-editor",
-        instruction: "Suggest improvements to this note",
-        confidence: 0.7,
-      };
     }
 
     return null;

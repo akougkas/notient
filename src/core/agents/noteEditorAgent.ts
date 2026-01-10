@@ -84,10 +84,24 @@ export class NoteEditorAgent extends BaseAgent {
 
   /**
    * Parse structured output from LLM
+   * Robust handling: sanitizes control chars, handles parse failures gracefully
    */
   protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput {
-    const parsed = this.parseJSON<NoteEditOutput>(rawOutput);
+    let parsed: NoteEditOutput | null = null;
 
+    try {
+      // Sanitize control characters that break JSON.parse
+      const sanitized = rawOutput
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
+        .replace(/\r\n/g, "\n") // Normalize line endings
+        .replace(/\r/g, "\n");
+
+      parsed = this.parseJSON<NoteEditOutput>(sanitized);
+    } catch (error) {
+      this.warn("JSON parse failed, returning empty proposals:", error);
+    }
+
+    // Graceful fallback: return empty proposals on any parse failure
     if (!parsed || !Array.isArray(parsed.actions)) {
       return {
         kind: "structured",
