@@ -75,3 +75,30 @@ export interface IntelligenceFile {
   updatedAt: number;
   records: Record<string, IntelligenceRecord>;
 }
+
+/**
+ * Intelligence topic file structure (Phase 3: tag-based sharding)
+ * Stored at: data/intelligence/topics/{topic}.json
+ */
+export interface IntelligenceTopicFile {
+  version: number;
+  topic: string;
+  criteria: {
+    tags: string[];
+  };
+  records: Record<string, IntelligenceRecord>;
+  noteCount: number;
+  lastUpdated: number;
+}
+
+/**
+ * Intelligence meta file structure (Phase 3)
+ * Stored at: data/intelligence/meta.json
+ */
+export interface IntelligenceMeta {
+  version: number;
+  topics: string[];
+  totalNotes: number;
+  totalRecords: number;
+  lastUpdated: number;
+}

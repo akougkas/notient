@@ -48,14 +48,8 @@ export class NoteIntelligenceService {
   async initialize(): Promise<void> {
     if (this.disposed) return;
 
-    const ollama = this.kernel.getService<{ getModelKey(): string }>("ollama");
-    if (!ollama) {
-      console.warn("[NoteIntelligence] Ollama service unavailable; skipping intelligence init");
-      return;
-    }
-
-    const modelKey = ollama.getModelKey();
-    this.db = new IntelligenceDb(this.kernel.storagePaths.pluginRoot, modelKey);
+    // No longer model-keyed - intelligence is vault-centric (Phase 3)
+    this.db = new IntelligenceDb(this.kernel.storagePaths);
     await this.db.load();
 
     // After indexing completes, refresh stale intelligence records.
@@ -184,9 +178,12 @@ export class NoteIntelligenceService {
     const content = await this.kernel.obsidian.readFileByPath(notePath);
     if (content === null) return;
 
+    // Get tags once for consistency (used for health, summary, and topic sharding)
+    const noteTags = metadata?.tags ?? [];
+
     const health = this.computeHealth(
       notePath,
-      metadata?.tags ?? [],
+      noteTags,
       metadata?.headings?.length ?? 0,
       state.mtimeMs,
     );
@@ -194,7 +191,7 @@ export class NoteIntelligenceService {
       title,
       notePath,
       content,
-      metadata?.tags ?? [],
+      noteTags,
       metadata?.headings ?? [],
     );
 
@@ -203,7 +200,7 @@ export class NoteIntelligenceService {
       path: notePath,
       mtimeMs: state.mtimeMs,
       contentHash: state.contentHash,
-      modelKey: indexManager?.getActiveModelKey?.() ?? db.getModelKey(),
+      modelKey: indexManager?.getActiveModelKey?.() ?? "unknown",
       generatedAt: Date.now(),
       summaryShort: summary?.summaryShort ?? null,
       summaryStructured: summary?.summaryStructured ?? null,
@@ -215,17 +212,18 @@ export class NoteIntelligenceService {
     };
 
     // Pass 2: Extract & Suggest (Entities + Tags)
-    const extraction = await this.extractEntitiesAndTags(title, content, metadata?.tags ?? []);
+    const extraction = await this.extractEntitiesAndTags(title, content, noteTags);
     record.entities = extraction.entities;
     record.suggestedTags = extraction.suggestedTags;
 
     // Pass 3: Link Intelligence
-    record.suggestedLinks = await this.suggestLinks(notePath, content, metadata?.tags ?? []);
+    record.suggestedLinks = await this.suggestLinks(notePath, content, noteTags);
 
     // Pass 4: Inbox Triage
-    record.triageAction = await this.inboxTriage(notePath, content, metadata?.tags ?? []);
+    record.triageAction = await this.inboxTriage(notePath, content, noteTags);
 
-    db.upsert(notePath, record);
+    // Pass tags for topic-based sharding (Phase 3)
+    db.upsert(notePath, record, noteTags);
 
     this.eventBus.emit("intelligence:updated", { path: notePath, record });
   }

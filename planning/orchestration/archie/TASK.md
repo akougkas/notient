@@ -1,58 +1,124 @@
-# Archie - Phase 2: Chunk/Embedding Separation
+# Archie - Phase 3: Intelligence Tag-Based Sharding
 
 > **Status**: COMPLETE
 > **Assigned**: 2026-01-10
-> **Completed**: 2026-01-10
 > **Branch**: `archie/backend-fixes`
-> **Spec**: `planning/coding_tasks/02-chunk-embedding-separation.md`
+> **Spec**: `planning/coding_tasks/03-intelligence-tag-sharding.md`
 
 ---
 
 ## Objective
 
-Separate model-agnostic chunk content from model-specific embeddings. This enables:
-- Model switching without re-chunking
-- Background embedding loading (faster startup)
-- Chunk structure preserved across model changes
+Reorganize intelligence storage from model-keyed single file to tag-keyed multiple files. This enables:
+- Semantic organization by topic (matches how users think)
+- Exportable knowledge bundles
+- Keep forever philosophy (intelligence = learned knowledge)
 
 ---
 
 ## Files to Modify
 
-| File | What to Do |
-|------|------------|
-| `src/types/indexer.ts` | Add `StoredChunk`, `NoteChunkFile`, `ChunksMeta`, `EmbeddingIndex` types |
-| `src/services/simpleVectorStore.ts` | Add `ChunkStore` class, modify `SimpleVectorStore` to reference it |
-| `src/services/indexManager.ts` | Coordinate ChunkStore and VectorStore |
-| `src/core/indexer/simpleIndexer.ts` | Write chunks and embeddings separately |
+| File | Changes |
+|------|---------|
+| `src/core/intelligence/types.ts` | Add IntelligenceTopicFile, IntelligenceMeta types |
+| `src/core/intelligence/intelligenceDb.ts` | Rewrite for tag-based sharding |
+| `src/core/intelligence/noteIntelligence.ts` | Update to pass tags to upsert |
 
 ---
 
-## Prerequisites
+## Implementation Steps
 
-- [x] Phase 1 completed (storage paths updated)
-- [x] Read `/.claude/CLAUDE.md` for TSI v2 architecture
-- [x] Read `planning/coding_tasks/00-storage-restructure-overview.md`
+### 1. Add Types (`types.ts`)
+
+```typescript
+export interface IntelligenceTopicFile {
+  version: number;
+  topic: string;
+  criteria: { tags: string[] };
+  records: Record<string, IntelligenceRecord>;
+  noteCount: number;
+  lastUpdated: number;
+}
+
+export interface IntelligenceMeta {
+  version: number;
+  topics: string[];
+  totalNotes: number;
+  totalRecords: number;
+  lastUpdated: number;
+}
+```
+
+### 2. Rewrite IntelligenceDb
+
+- Replace single-file with multi-file topic management
+- Use `storagePaths.getIntelligenceTopicPath(topic)` from Phase 1
+- Key methods:
+  - `load()` - Load all topic files
+  - `get(notePath)` - Search all topics for a note
+  - `upsert(notePath, record, noteTags)` - Determine topic from tags
+  - `delete(notePath)` - Remove from all topics
+  - `flush()` - Save dirty topics
+
+### 3. Topic Assignment Logic
+
+```typescript
+function getTopicForNote(notePath: string, noteTags: string[]): string {
+  if (noteTags.length === 0) return '_uncategorized';
+
+  const primaryTag = noteTags[0]
+    .replace(/^#/, '')
+    .split('/')[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-');
+
+  return primaryTag || '_uncategorized';
+}
+```
+
+### 4. Update NoteIntelligenceService
+
+- Pass tags when upserting: `this.db.upsert(notePath, record, tags)`
+- Remove model-key dependency from initialization
+
+### 5. Migration Logic
+
+- Detect legacy `intelligence-*.json` file
+- Group records by topic based on suggestedTags
+- Write topic files to `data/intelligence/topics/`
+- Move legacy file to `_deleted/`
 
 ---
 
-## Deliverables
+## Use Phase 1 Path Methods
 
-1. New types in `types/indexer.ts`
-2. `ChunkStore` class managing per-note chunk files
-3. Modified `SimpleVectorStore` storing embeddings only
-4. Updated `IndexManager` coordinating both stores
-5. Migration logic for legacy `idx_*.json` files
-6. Verification: `bun run typecheck && bun run build` passes
+```typescript
+storagePaths.intelligenceTopics      // Directory for topic files
+storagePaths.intelligenceMeta        // meta.json path
+storagePaths.getIntelligenceTopicPath(topic)  // {topic}.json path
+storagePaths.tempDeleted             // For archived legacy file
+```
 
 ---
 
-## Reporting
+## Verification
 
-When complete, update `REPORT.md` with:
+```bash
+bun run typecheck && bun run build
+```
+
+### Manual Test
+1. Start with existing `intelligence-*.json` file
+2. Load plugin → migration should run
+3. Verify `data/intelligence/topics/` created
+4. Test note intelligence generation writes to correct topic file
+
+---
+
+## Report
+
+When complete, update `planning/orchestration/archie/REPORT.md` with:
 - Files modified (with line ranges)
 - New methods/classes added
-- Migration logic summary
-- Verification results
-- Notes for Sage's simplification review
-
+- Migration approach
+- Build verification results
