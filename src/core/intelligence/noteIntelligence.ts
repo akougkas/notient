@@ -150,7 +150,10 @@ export class NoteIntelligenceService {
         await this.yieldToUI();
       }
 
-      await this.db.flush();
+      // Null check: db may have been disposed during async operations
+      if (this.db) {
+        await this.db.flush();
+      }
     } finally {
       this.running = false;
       this.linkStats = null;
@@ -158,7 +161,9 @@ export class NoteIntelligenceService {
   }
 
   private async processNote(notePath: string): Promise<void> {
-    if (!this.db) return;
+    // Capture local reference to avoid race condition during async operations
+    const db = this.db;
+    if (!db) return;
 
     const indexManager = this.kernel.getService<{
       getNoteState(path: string): { mtimeMs: number; contentHash: string } | null;
@@ -198,7 +203,7 @@ export class NoteIntelligenceService {
       path: notePath,
       mtimeMs: state.mtimeMs,
       contentHash: state.contentHash,
-      modelKey: indexManager?.getActiveModelKey?.() ?? this.db.getModelKey(),
+      modelKey: indexManager?.getActiveModelKey?.() ?? db.getModelKey(),
       generatedAt: Date.now(),
       summaryShort: summary?.summaryShort ?? null,
       summaryStructured: summary?.summaryStructured ?? null,
@@ -220,7 +225,7 @@ export class NoteIntelligenceService {
     // Pass 4: Inbox Triage
     record.triageAction = await this.inboxTriage(notePath, content, metadata?.tags ?? []);
 
-    this.db.upsert(notePath, record);
+    db.upsert(notePath, record);
 
     this.eventBus.emit("intelligence:updated", { path: notePath, record });
   }

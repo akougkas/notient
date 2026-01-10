@@ -10,6 +10,47 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
+ * Rename with retry for Windows EPERM issues.
+ * Windows can temporarily lock files (antivirus, indexing, etc.)
+ */
+async function renameWithRetry(
+  src: string,
+  dest: string,
+  maxRetries = 3,
+  baseDelayMs = 100,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await fs.promises.rename(src, dest);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // EPERM, EBUSY, EACCES are all Windows file-locking related
+      const isRetryable = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      const isLastAttempt = attempt === maxRetries - 1;
+
+      if (!isRetryable || isLastAttempt) {
+        // Last resort: try copy + delete instead of rename
+        if (isRetryable) {
+          try {
+            await fs.promises.copyFile(src, dest);
+            await fs.promises.unlink(src);
+            return;
+          } catch {
+            // Copy failed too, throw original error
+          }
+        }
+        throw error;
+      }
+
+      // Exponential backoff: 100ms, 200ms, 400ms
+      const delay = baseDelayMs * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
  * Atomically write data to a file using temp file + rename pattern.
  * This ensures the file is either fully written or not changed at all.
  *
@@ -46,7 +87,8 @@ export async function atomicWriteFile(filePath: string, data: string): Promise<v
     }
 
     // Atomic rename (on same filesystem, this is atomic)
-    await fs.promises.rename(tempPath, filePath);
+    // On Windows, rename can fail with EPERM if file is locked - retry with backoff
+    await renameWithRetry(tempPath, filePath);
   } catch (error) {
     // Clean up temp file if write or rename failed
     try {
