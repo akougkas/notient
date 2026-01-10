@@ -1,56 +1,37 @@
 /**
  * Conversation Store
  *
- * Persists chat conversations across sessions, keyed by note path.
- * Handles note renames by updating conversation keys.
+ * Per-note conversation storage with lazy loading.
+ * Files stored at: data/conversations/notes/{noteId}.json
+ *
+ * Key features:
+ * - Lazy loading: only loads conversation when accessed
+ * - Status tracking: success/failed/cancelled for audit trail
+ * - Reasoning summary: stores <think> summary, not full content
+ * - Migration: auto-migrates legacy conversations.json
+ * - Rollups: on-demand folder summaries for PARA
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { StoragePaths } from "../../services/storagePaths";
 import { atomicWriteFile } from "../../utils/atomicWrite";
-import type { ExtendedChatMessage } from "./types";
+import { generateNoteId } from "../indexer/simpleChunker";
+import type {
+  AppendMessageOptions,
+  ConversationFile,
+  ConversationRollup,
+  ExtendedChatMessage,
+  StoredChatMessage,
+} from "./types";
 
-/** Schema version for migration support */
-const SCHEMA_VERSION = 1;
+/** Schema version for per-note files */
+const CONVERSATION_VERSION = 2;
 
 /** Default retention settings */
 const DEFAULT_MAX_MESSAGES_PER_NOTE = 50;
 const DEFAULT_MAX_AGE_DAYS = 30;
 const FLUSH_DEBOUNCE_MS = 500;
-
-/**
- * Serializable format for a single conversation
- */
-interface SerializedConversation {
-  notePath: string;
-  messages: SerializedMessage[];
-  createdAt: string;
-  lastAccessedAt: string;
-}
-
-/**
- * Serializable message format (Date -> ISO string)
- */
-interface SerializedMessage {
-  id: string;
-  role: "system" | "user" | "assistant";
-  content: string;
-  timestamp: string;
-  attachments?: Array<{
-    id: string;
-    type: "rag-citation" | "user-attached";
-    filename: string;
-    path: string;
-  }>;
-}
-
-/**
- * Root storage schema
- */
-interface ConversationStorage {
-  version: number;
-  conversations: Record<string, SerializedConversation>;
-}
 
 /**
  * Retention configuration
@@ -60,15 +41,27 @@ export interface ChatRetentionConfig {
   maxAgeDays: number;
 }
 
+/** In-memory conversation metadata */
+interface ConversationMeta {
+  notePath: string;
+  createdAt: Date;
+  lastAccessedAt: Date;
+}
+
 /**
- * Manages conversation persistence across sessions
+ * Manages per-note conversation persistence
  */
 export class ConversationStore {
-  private conversations: Map<string, ExtendedChatMessage[]> = new Map();
-  private conversationMeta: Map<string, { createdAt: Date; lastAccessedAt: Date }> = new Map();
-  private dirty = false;
-  private flushTimeout: ReturnType<typeof setTimeout> | null = null;
-  private loaded = false;
+  /** Loaded conversations keyed by noteId */
+  private loaded: Map<string, StoredChatMessage[]> = new Map();
+  /** Metadata for loaded conversations */
+  private meta: Map<string, ConversationMeta> = new Map();
+  /** noteIds with unsaved changes */
+  private dirty: Set<string> = new Set();
+  /** Debounced flush timer */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether migration has been checked */
+  private migrationChecked = false;
 
   constructor(
     private storagePaths: StoragePaths,
@@ -78,155 +71,159 @@ export class ConversationStore {
     },
   ) {}
 
+  // ============================================================================
+  // Public API
+  // ============================================================================
+
   /**
-   * Load conversations from disk
+   * Initialize store and run migration if needed
+   * @alias load() - backward compatible
+   */
+  async initialize(): Promise<void> {
+    await this.migrateIfNeeded();
+  }
+
+  /**
+   * Backward-compatible load method
+   * @deprecated Use initialize() instead
    */
   async load(): Promise<void> {
-    if (this.loaded) return;
+    await this.initialize();
+  }
 
-    const filePath = this.storagePaths.conversations;
+  /**
+   * Load conversation for a specific note (lazy)
+   */
+  async loadConversation(noteId: string): Promise<StoredChatMessage[]> {
+    // Check cache first
+    if (this.loaded.has(noteId)) {
+      return this.loaded.get(noteId)!;
+    }
+
+    const filePath = this.storagePaths.getConversationPath(noteId);
 
     try {
-      const exists = await this.fileExists(filePath);
-      if (!exists) {
-        this.loaded = true;
-        return;
-      }
-
       const content = await fs.promises.readFile(filePath, "utf-8");
-      const storage: ConversationStorage = JSON.parse(content);
+      const data: ConversationFile = JSON.parse(content);
 
-      // Handle schema migrations here if needed
-      if (storage.version !== SCHEMA_VERSION) {
-        console.warn(
-          `[ConversationStore] Schema migration needed from v${storage.version} to v${SCHEMA_VERSION}`,
-        );
-        // Future: add migration logic
-      }
+      this.loaded.set(noteId, data.messages);
+      this.meta.set(noteId, {
+        notePath: data.notePath,
+        createdAt: new Date(data.createdAt),
+        lastAccessedAt: new Date(data.lastAccessedAt),
+      });
 
-      // Deserialize conversations
-      for (const [notePath, serialized] of Object.entries(storage.conversations)) {
-        const messages = serialized.messages.map(this.deserializeMessage);
-        this.conversations.set(notePath, messages);
-        this.conversationMeta.set(notePath, {
-          createdAt: new Date(serialized.createdAt),
-          lastAccessedAt: new Date(serialized.lastAccessedAt),
-        });
-      }
-
-      this.loaded = true;
-      console.log(`[ConversationStore] Loaded ${this.conversations.size} conversations`);
-    } catch (error) {
-      console.error("[ConversationStore] Failed to load:", error);
-      this.loaded = true; // Mark as loaded even on error to prevent retries
+      return data.messages;
+    } catch {
+      // No conversation yet - return empty
+      return [];
     }
   }
 
   /**
-   * Flush conversations to disk with retry logic
-   */
-  async flush(): Promise<void> {
-    if (!this.dirty) return;
-
-    // Clear any pending debounce
-    if (this.flushTimeout) {
-      clearTimeout(this.flushTimeout);
-      this.flushTimeout = null;
-    }
-
-    const filePath = this.storagePaths.conversations;
-    const storage: ConversationStorage = {
-      version: SCHEMA_VERSION,
-      conversations: {},
-    };
-
-    for (const [notePath, messages] of this.conversations.entries()) {
-      const meta = this.conversationMeta.get(notePath);
-      storage.conversations[notePath] = {
-        notePath,
-        messages: messages.map(this.serializeMessage),
-        createdAt: meta?.createdAt.toISOString() ?? new Date().toISOString(),
-        lastAccessedAt: meta?.lastAccessedAt.toISOString() ?? new Date().toISOString(),
-      };
-    }
-
-    // Retry with exponential backoff: 100ms, 200ms, 400ms
-    const maxRetries = 3;
-    const baseDelayMs = 100;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await atomicWriteFile(filePath, JSON.stringify(storage, null, 2));
-        this.dirty = false;
-        console.log(`[ConversationStore] Flushed ${this.conversations.size} conversations`);
-        return;
-      } catch (error) {
-        const isLastAttempt = attempt === maxRetries;
-        if (isLastAttempt) {
-          console.error("[ConversationStore] Failed to flush after 3 attempts:", error);
-          return;
-        }
-        // Exponential backoff
-        const delayMs = baseDelayMs * 2 ** (attempt - 1);
-        console.warn(
-          `[ConversationStore] Flush attempt ${attempt} failed, retrying in ${delayMs}ms`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-
-  /**
-   * Schedule a debounced flush
-   */
-  private scheduleFlush(): void {
-    this.dirty = true;
-
-    if (this.flushTimeout) {
-      clearTimeout(this.flushTimeout);
-    }
-
-    this.flushTimeout = setTimeout(() => {
-      this.flush();
-    }, FLUSH_DEBOUNCE_MS);
-  }
-
-  /**
-   * Get conversation history for a note
-   * @param notePath - Normalized path to the note
+   * Get conversation history for a note (SYNCHRONOUS - backward compatible)
+   * Returns from cache only. For lazy loading, use getHistoryAsync().
+   *
+   * @param notePath - Note path (required)
+   * @returns ExtendedChatMessage[] from cache, or empty array if not loaded
    */
   getHistory(notePath: string): ExtendedChatMessage[] {
-    const messages = this.conversations.get(notePath);
+    const noteId = generateNoteId(notePath);
+    const messages = this.loaded.get(noteId);
     if (!messages) return [];
 
     // Update last accessed time
-    const meta = this.conversationMeta.get(notePath);
-    if (meta) {
-      meta.lastAccessedAt = new Date();
+    const existingMeta = this.meta.get(noteId);
+    if (existingMeta) {
+      existingMeta.lastAccessedAt = new Date();
+      this.dirty.add(noteId);
       this.scheduleFlush();
     }
 
-    return [...messages];
+    // Convert StoredChatMessage to ExtendedChatMessage
+    return messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: new Date(message.timestamp),
+      attachments: message.attachments,
+    }));
   }
 
   /**
-   * Append a message to a conversation
-   * @param notePath - Normalized path to the note
-   * @param message - Message to append
+   * Get conversation history for a note (ASYNC - lazy loading)
+   * Loads from disk if not in cache.
+   *
+   * @param notePath - Note path (required)
+   * @param noteId - Optional pre-computed noteId (computed from notePath if not provided)
+   * @returns ExtendedChatMessage[]
    */
-  appendMessage(notePath: string, message: ExtendedChatMessage): void {
-    let messages = this.conversations.get(notePath);
+  async getHistoryAsync(notePath: string, noteId?: string): Promise<ExtendedChatMessage[]> {
+    const resolvedNoteId = noteId ?? generateNoteId(notePath);
+    const messages = await this.loadConversation(resolvedNoteId);
 
-    if (!messages) {
-      messages = [];
-      this.conversations.set(notePath, messages);
-      this.conversationMeta.set(notePath, {
+    // Ensure meta is set for new loads
+    if (!this.meta.has(resolvedNoteId) && messages.length > 0) {
+      this.meta.set(resolvedNoteId, {
+        notePath,
         createdAt: new Date(),
         lastAccessedAt: new Date(),
       });
     }
 
-    messages.push(message);
+    // Update last accessed time
+    const existingMeta = this.meta.get(resolvedNoteId);
+    if (existingMeta) {
+      existingMeta.lastAccessedAt = new Date();
+      this.dirty.add(resolvedNoteId);
+      this.scheduleFlush();
+    }
+
+    // Convert StoredChatMessage to ExtendedChatMessage
+    return messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: new Date(message.timestamp),
+      attachments: message.attachments,
+    }));
+  }
+
+  /**
+   * Append a message to a conversation (SYNCHRONOUS - backward compatible)
+   * Stores in cache and schedules disk flush.
+   *
+   * @param notePath - Note path (required)
+   * @param message - Message to append
+   */
+  appendMessage(notePath: string, message: ExtendedChatMessage): void {
+    const noteId = generateNoteId(notePath);
+
+    let messages = this.loaded.get(noteId);
+    if (!messages) {
+      messages = [];
+      this.loaded.set(noteId, messages);
+      this.meta.set(noteId, {
+        notePath,
+        createdAt: new Date(),
+        lastAccessedAt: new Date(),
+      });
+    }
+
+    // Determine status based on content
+    const status = message.role === "assistant" ? (message.content ? "success" : "failed") : undefined;
+
+    // Create stored message
+    const stored: StoredChatMessage = {
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp.toISOString(),
+      attachments: message.attachments,
+      status,
+    };
+
+    messages.push(stored);
 
     // Enforce per-note message limit
     if (messages.length > this.retention.maxMessagesPerNote) {
@@ -234,85 +231,326 @@ export class ConversationStore {
       messages.splice(0, excess);
     }
 
-    // Update last accessed time
-    const meta = this.conversationMeta.get(notePath);
-    if (meta) {
-      meta.lastAccessedAt = new Date();
+    // Update meta
+    const conversationMeta = this.meta.get(noteId);
+    if (conversationMeta) {
+      conversationMeta.notePath = notePath;
+      conversationMeta.lastAccessedAt = new Date();
     }
 
+    this.dirty.add(noteId);
     this.scheduleFlush();
   }
 
   /**
-   * Handle note rename - update conversation key
-   * @param oldPath - Previous path
-   * @param newPath - New path
+   * Append a message with extended options (ASYNC - supports reasoning summary)
+   * Use this when storing assistant messages with thinking block summaries.
+   *
+   * @param notePath - Note path
+   * @param message - Message to append
+   * @param options - Extended options (reasoningSummary, actionRef, status)
+   * @param noteId - Optional pre-computed noteId
+   */
+  async appendMessageAsync(
+    notePath: string,
+    message: ExtendedChatMessage,
+    options?: AppendMessageOptions,
+    noteId?: string,
+  ): Promise<void> {
+    const resolvedNoteId = noteId ?? generateNoteId(notePath);
+
+    // Load conversation if not cached
+    if (!this.loaded.has(resolvedNoteId)) {
+      await this.loadConversation(resolvedNoteId);
+    }
+
+    let messages = this.loaded.get(resolvedNoteId);
+    if (!messages) {
+      messages = [];
+      this.loaded.set(resolvedNoteId, messages);
+      this.meta.set(resolvedNoteId, {
+        notePath,
+        createdAt: new Date(),
+        lastAccessedAt: new Date(),
+      });
+    }
+
+    // Determine status
+    let status = options?.status;
+    if (!status && message.role === "assistant") {
+      status = message.content ? "success" : "failed";
+    }
+
+    // Create stored message
+    const stored: StoredChatMessage = {
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp.toISOString(),
+      attachments: message.attachments,
+      status,
+      reasoningSummary: options?.reasoningSummary,
+      actionRef: options?.actionRef,
+    };
+
+    messages.push(stored);
+
+    // Enforce per-note message limit
+    if (messages.length > this.retention.maxMessagesPerNote) {
+      const excess = messages.length - this.retention.maxMessagesPerNote;
+      messages.splice(0, excess);
+    }
+
+    // Update meta
+    const conversationMeta = this.meta.get(resolvedNoteId);
+    if (conversationMeta) {
+      conversationMeta.notePath = notePath; // Update in case path changed
+      conversationMeta.lastAccessedAt = new Date();
+    }
+
+    this.dirty.add(resolvedNoteId);
+    this.scheduleFlush();
+  }
+
+  /**
+   * Handle note rename - update stored path (backward compatible)
+   *
+   * @param oldPath - Old note path
+   * @param newPath - New note path
    */
   handleRename(oldPath: string, newPath: string): void {
-    const messages = this.conversations.get(oldPath);
-    const meta = this.conversationMeta.get(oldPath);
+    // For rename, we need to handle two cases:
+    // 1. The noteId is derived from oldPath - we need to migrate to newPath-based noteId
+    // 2. The conversation is in memory - update the notePath in meta
 
-    if (messages) {
-      this.conversations.delete(oldPath);
-      this.conversations.set(newPath, messages);
+    const oldNoteId = generateNoteId(oldPath);
+    const newNoteId = generateNoteId(newPath);
 
-      if (meta) {
-        this.conversationMeta.delete(oldPath);
+    // Check if we have a conversation for the old path
+    const messages = this.loaded.get(oldNoteId);
+    const meta = this.meta.get(oldNoteId);
+
+    if (messages && meta) {
+      // If noteId changed, we need to move the data
+      if (oldNoteId !== newNoteId) {
+        // Move to new noteId
+        this.loaded.delete(oldNoteId);
+        this.loaded.set(newNoteId, messages);
+        this.meta.delete(oldNoteId);
+        meta.notePath = newPath;
         meta.lastAccessedAt = new Date();
-        this.conversationMeta.set(newPath, meta);
-      }
+        this.meta.set(newNoteId, meta);
+        this.dirty.delete(oldNoteId);
+        this.dirty.add(newNoteId);
 
-      this.scheduleFlush();
-      console.log(`[ConversationStore] Renamed conversation: ${oldPath} -> ${newPath}`);
+        // Schedule file migration (old file will be deleted after save)
+        this.scheduleFlush();
+
+        // Also delete the old file asynchronously
+        const oldFilePath = this.storagePaths.getConversationPath(oldNoteId);
+        fs.promises.unlink(oldFilePath).catch(() => {
+          // File might not exist - that's OK
+        });
+      } else {
+        // Same noteId (case-only change), just update path
+        meta.notePath = newPath;
+        meta.lastAccessedAt = new Date();
+        this.dirty.add(oldNoteId);
+        this.scheduleFlush();
+      }
     }
   }
 
   /**
-   * Delete conversation for a note
-   * @param notePath - Path to the note
+   * Delete conversation for a note (takes notePath for backward compatibility)
+   *
+   * @param notePath - Note path
    */
   deleteConversation(notePath: string): void {
-    if (this.conversations.has(notePath)) {
-      this.conversations.delete(notePath);
-      this.conversationMeta.delete(notePath);
-      this.scheduleFlush();
-      console.log(`[ConversationStore] Deleted conversation: ${notePath}`);
+    const noteId = generateNoteId(notePath);
+    this.loaded.delete(noteId);
+    this.meta.delete(noteId);
+    this.dirty.delete(noteId);
+
+    const filePath = this.storagePaths.getConversationPath(noteId);
+
+    // Move to _deleted for audit trail (async, fire-and-forget)
+    fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true })
+      .then(() => {
+        const deletedPath = path.join(
+          this.storagePaths.tempDeleted,
+          `conversation-${noteId}-${Date.now()}.json`,
+        );
+        return fs.promises.rename(filePath, deletedPath);
+      })
+      .catch(() => {
+        // File might not exist - that's OK
+      });
+  }
+
+  /**
+   * Check if a conversation exists for a note (in cache)
+   *
+   * @param notePath - Note path
+   */
+  hasConversation(notePath: string): boolean {
+    const noteId = generateNoteId(notePath);
+    return this.loaded.has(noteId);
+  }
+
+  /**
+   * Get all note paths with loaded conversations
+   * @deprecated Use getLoadedNoteIds() for noteIds or iterate meta for paths
+   */
+  getConversationPaths(): string[] {
+    return Array.from(this.meta.values()).map((m) => m.notePath);
+  }
+
+  /**
+   * Get all loaded note IDs
+   */
+  getLoadedNoteIds(): string[] {
+    return Array.from(this.loaded.keys());
+  }
+
+  /**
+   * Flush all dirty conversations to disk
+   */
+  async flush(): Promise<void> {
+    if (this.dirty.size === 0) return;
+
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    const toSave = Array.from(this.dirty);
+    this.dirty.clear();
+
+    for (const noteId of toSave) {
+      try {
+        await this.saveConversation(noteId);
+      } catch (error) {
+        console.error(`[ConversationStore] Failed to save ${noteId}:`, error);
+        this.dirty.add(noteId); // Re-add for retry
+      }
     }
   }
 
   /**
-   * Check if a conversation exists for a note
+   * Generate folder rollup (on-demand)
    */
-  hasConversation(notePath: string): boolean {
-    return this.conversations.has(notePath);
-  }
+  async generateRollup(folder: string): Promise<ConversationRollup> {
+    const notesDir = this.storagePaths.conversationsNotes;
 
-  /**
-   * Get all note paths with conversations
-   */
-  getConversationPaths(): string[] {
-    return Array.from(this.conversations.keys());
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(notesDir);
+    } catch {
+      // Directory doesn't exist yet
+    }
+
+    const recentNotes: ConversationRollup["recentNotes"] = [];
+    let totalMessages = 0;
+
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+
+      const noteId = file.replace(".json", "");
+      const filePath = path.join(notesDir, file);
+
+      try {
+        const content = await fs.promises.readFile(filePath, "utf-8");
+        const data: ConversationFile = JSON.parse(content);
+
+        // Check if note is in this folder
+        if (!data.notePath.startsWith(folder)) continue;
+
+        totalMessages += data.messages.length;
+
+        const lastMessage = data.messages[data.messages.length - 1];
+        recentNotes.push({
+          noteId: data.noteId,
+          path: data.notePath,
+          messageCount: data.messages.length,
+          lastMessage: lastMessage?.timestamp ?? data.lastAccessedAt,
+        });
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    // Sort by last message (most recent first)
+    recentNotes.sort(
+      (a, b) => new Date(b.lastMessage).getTime() - new Date(a.lastMessage).getTime(),
+    );
+
+    const rollup: ConversationRollup = {
+      version: 1,
+      folder,
+      noteCount: recentNotes.length,
+      messageCount: totalMessages,
+      topTopics: [], // Could extract via LLM, keeping simple for now
+      recentNotes: recentNotes.slice(0, 10), // Top 10
+      generatedAt: new Date().toISOString(),
+    };
+
+    // Save rollup
+    const rollupPath = this.storagePaths.getConversationRollupPath(folder);
+    await fs.promises.mkdir(this.storagePaths.conversationsRollups, { recursive: true });
+    await atomicWriteFile(rollupPath, JSON.stringify(rollup, null, 2));
+
+    return rollup;
   }
 
   /**
    * Prune old conversations based on retention policy
    */
-  prune(): void {
+  async prune(): Promise<void> {
+    const notesDir = this.storagePaths.conversationsNotes;
     const now = Date.now();
     const maxAge = this.retention.maxAgeDays * 24 * 60 * 60 * 1000;
     let pruned = 0;
 
-    for (const [notePath, meta] of this.conversationMeta.entries()) {
-      const age = now - meta.lastAccessedAt.getTime();
-      if (age > maxAge) {
-        this.conversations.delete(notePath);
-        this.conversationMeta.delete(notePath);
-        pruned++;
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(notesDir);
+    } catch {
+      return; // Directory doesn't exist
+    }
+
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+
+      const noteId = file.replace(".json", "");
+      const filePath = path.join(notesDir, file);
+
+      try {
+        const content = await fs.promises.readFile(filePath, "utf-8");
+        const data: ConversationFile = JSON.parse(content);
+
+        const age = now - new Date(data.lastAccessedAt).getTime();
+        if (age > maxAge) {
+          // Remove from cache
+          this.loaded.delete(noteId);
+          this.meta.delete(noteId);
+          this.dirty.delete(noteId);
+
+          // Move to _deleted
+          const deletedPath = path.join(
+            this.storagePaths.tempDeleted,
+            `conversation-pruned-${noteId}-${Date.now()}.json`,
+          );
+          await fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true });
+          await fs.promises.rename(filePath, deletedPath);
+          pruned++;
+        }
+      } catch {
+        // Skip unreadable files
       }
     }
 
     if (pruned > 0) {
-      this.scheduleFlush();
       console.log(`[ConversationStore] Pruned ${pruned} old conversations`);
     }
   }
@@ -321,9 +559,9 @@ export class ConversationStore {
    * Clear all conversations
    */
   clear(): void {
-    this.conversations.clear();
-    this.conversationMeta.clear();
-    this.scheduleFlush();
+    this.loaded.clear();
+    this.meta.clear();
+    this.dirty.clear();
   }
 
   /**
@@ -339,51 +577,164 @@ export class ConversationStore {
   }
 
   /**
-   * Get conversation count
+   * Get loaded conversation count
    */
   get count(): number {
-    return this.conversations.size;
+    return this.loaded.size;
   }
 
   /**
    * Dispose - ensure final flush
    */
   async dispose(): Promise<void> {
-    if (this.flushTimeout) {
-      clearTimeout(this.flushTimeout);
-      this.flushTimeout = null;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
     }
     await this.flush();
+    this.loaded.clear();
+    this.meta.clear();
   }
 
-  // ============ Private Helpers ============
+  // ============================================================================
+  // Private Methods
+  // ============================================================================
 
-  private async fileExists(filePath: string): Promise<boolean> {
+  /**
+   * Schedule a debounced flush
+   */
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.flush();
+    }, FLUSH_DEBOUNCE_MS);
+  }
+
+  /**
+   * Save a specific conversation to disk
+   */
+  private async saveConversation(noteId: string): Promise<void> {
+    const messages = this.loaded.get(noteId);
+    const conversationMeta = this.meta.get(noteId);
+    if (!messages || !conversationMeta) return;
+
+    const filePath = this.storagePaths.getConversationPath(noteId);
+    const data: ConversationFile = {
+      version: CONVERSATION_VERSION,
+      noteId,
+      notePath: conversationMeta.notePath,
+      messages,
+      createdAt: conversationMeta.createdAt.toISOString(),
+      lastAccessedAt: conversationMeta.lastAccessedAt.toISOString(),
+    };
+
+    // Ensure directory exists
+    await fs.promises.mkdir(this.storagePaths.conversationsNotes, { recursive: true });
+    await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
+  }
+
+  /**
+   * Migrate legacy conversations.json to per-note files
+   */
+  private async migrateIfNeeded(): Promise<void> {
+    if (this.migrationChecked) return;
+    this.migrationChecked = true;
+
+    const legacyPath = this.storagePaths.legacyConversations;
+
     try {
-      await fs.promises.access(filePath, fs.constants.F_OK);
-      return true;
+      // Check if legacy file exists
+      await fs.promises.access(legacyPath);
     } catch {
-      return false;
+      // No legacy file - nothing to migrate
+      return;
     }
-  }
 
-  private serializeMessage(msg: ExtendedChatMessage): SerializedMessage {
-    return {
-      id: msg.id,
-      role: msg.role,
-      content: msg.content,
-      timestamp: msg.timestamp.toISOString(),
-      attachments: msg.attachments,
-    };
-  }
+    // Check if already migrated (new directory has files)
+    try {
+      const newDir = this.storagePaths.conversationsNotes;
+      await fs.promises.access(newDir);
+      const files = await fs.promises.readdir(newDir);
+      if (files.length > 0) {
+        // Already migrated - don't overwrite
+        return;
+      }
+    } catch {
+      // Directory doesn't exist yet - proceed with migration
+    }
 
-  private deserializeMessage(msg: SerializedMessage): ExtendedChatMessage {
-    return {
-      id: msg.id,
-      role: msg.role,
-      content: msg.content,
-      timestamp: new Date(msg.timestamp),
-      attachments: msg.attachments,
-    };
+    console.log("[ConversationStore] Migrating legacy conversations...");
+
+    try {
+      // Read legacy file
+      const content = await fs.promises.readFile(legacyPath, "utf-8");
+      const legacy = JSON.parse(content) as {
+        version?: number;
+        conversations?: Record<
+          string,
+          {
+            notePath: string;
+            messages: Array<{
+              id: string;
+              role: "system" | "user" | "assistant";
+              content: string;
+              timestamp: string;
+              attachments?: StoredChatMessage["attachments"];
+            }>;
+            createdAt: string;
+            lastAccessedAt: string;
+          }
+        >;
+      };
+
+      // Ensure new directory
+      await fs.promises.mkdir(this.storagePaths.conversationsNotes, { recursive: true });
+
+      // Migrate each conversation
+      let migratedCount = 0;
+      for (const [notePath, conversation] of Object.entries(legacy.conversations ?? {})) {
+        const noteId = generateNoteId(notePath);
+
+        // Convert messages to new format
+        const messages: StoredChatMessage[] = (conversation.messages ?? []).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          timestamp: message.timestamp,
+          attachments: message.attachments,
+          status: message.content ? ("success" as const) : ("failed" as const),
+        }));
+
+        // Create per-note file
+        const data: ConversationFile = {
+          version: CONVERSATION_VERSION,
+          noteId,
+          notePath,
+          messages,
+          createdAt: conversation.createdAt,
+          lastAccessedAt: conversation.lastAccessedAt,
+        };
+
+        const filePath = this.storagePaths.getConversationPath(noteId);
+        await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
+        migratedCount++;
+      }
+
+      // Move legacy file to _deleted for audit trail
+      const deletedPath = path.join(
+        this.storagePaths.tempDeleted,
+        `conversations-legacy-${Date.now()}.json`,
+      );
+      await fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true });
+      await fs.promises.rename(legacyPath, deletedPath);
+
+      console.log(
+        `[ConversationStore] Migration complete: ${migratedCount} conversations migrated`,
+      );
+    } catch (error) {
+      console.error("[ConversationStore] Migration failed:", error);
+    }
   }
 }

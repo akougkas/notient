@@ -6,6 +6,79 @@
 
 import type { ChatMessage } from "../llm/types";
 
+// ============================================================================
+// Stored Conversation Types (Per-Note Files)
+// ============================================================================
+
+/**
+ * Message status for audit trail
+ */
+export type MessageStatus = "success" | "failed" | "cancelled";
+
+/**
+ * Extended message with status and reasoning summary
+ * Stored in per-note conversation files
+ */
+export interface StoredChatMessage {
+  id: string;
+  role: "system" | "user" | "assistant";
+  content: string;
+  timestamp: string;
+  attachments?: Array<{
+    id: string;
+    type: "rag-citation" | "user-attached";
+    filename: string;
+    path: string;
+  }>;
+  /** Message completion status */
+  status?: MessageStatus;
+  /** Summarized reasoning (first ~200 chars of thinking block) */
+  reasoningSummary?: string;
+  /** Link to action ID if message triggered an action */
+  actionRef?: string;
+}
+
+/**
+ * Per-note conversation file structure
+ * Stored at: data/conversations/notes/{noteId}.json
+ */
+export interface ConversationFile {
+  version: number;
+  noteId: string;
+  notePath: string;
+  messages: StoredChatMessage[];
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+/**
+ * Folder rollup structure for PARA-aware summaries
+ * Stored at: data/conversations/rollups/{para-folder}.json
+ */
+export interface ConversationRollup {
+  version: number;
+  folder: string;
+  noteCount: number;
+  messageCount: number;
+  topTopics: string[];
+  recentNotes: Array<{
+    noteId: string;
+    path: string;
+    messageCount: number;
+    lastMessage: string;
+  }>;
+  generatedAt: string;
+}
+
+/**
+ * Options for appending messages with metadata
+ */
+export interface AppendMessageOptions {
+  reasoningSummary?: string;
+  actionRef?: string;
+  status?: MessageStatus;
+}
+
 /**
  * Configuration for a chat session
  */

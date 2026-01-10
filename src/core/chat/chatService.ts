@@ -11,6 +11,7 @@
  * - Activity trail events for UI breadcrumbs
  * - Statistics collection (tokens/sec, response time, etc.)
  * - Delegation detection for specialist agent handoff
+ * - Reasoning summary extraction for storage
  */
 
 import type { UserProfile } from "../../types/profile";
@@ -27,6 +28,36 @@ import {
   DEFAULT_CHAT_CONFIG,
   type DelegationDetection,
 } from "./types";
+
+/** Maximum length for reasoning summary */
+const REASONING_SUMMARY_MAX_LENGTH = 200;
+
+/**
+ * Extract a reasoning summary from thinking content.
+ * Used when storing messages to avoid bloating storage with full thinking blocks.
+ *
+ * @param thinkingContent - Full thinking/reasoning content from <think> blocks
+ * @param maxLength - Maximum summary length (default 200)
+ * @returns Summary string or undefined if no thinking content
+ */
+export function extractReasoningSummary(
+  thinkingContent: string | null | undefined,
+  maxLength: number = REASONING_SUMMARY_MAX_LENGTH,
+): string | undefined {
+  if (!thinkingContent || thinkingContent.trim().length === 0) {
+    return undefined;
+  }
+
+  // Clean up and normalize whitespace
+  const cleaned = thinkingContent.trim().replace(/\s+/g, " ");
+
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+
+  // Truncate and add ellipsis
+  return `${cleaned.slice(0, maxLength)}...`;
+}
 
 /**
  * ChatService - Lightweight chat orchestrator
