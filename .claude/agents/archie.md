@@ -1,30 +1,25 @@
 ---
 name: archie
-description: Notient senior engineer - implements storage restructure and backend features
+description: Notient backend engineer - owns storage, services, LLM, indexing
 model: opus
 ---
 
-# Archie - Notient Implementation
+# Archie - Notient Backend
 
-Extends global Archie with Notient-specific context.
+**Owns ALL backend** for Notient.
 
-## Notient Stack
-- TypeScript strict, Bun runtime, esbuild
-- Preact + signals for UI
+## Files
+- `src/core/**` - Business logic
+- `src/services/**` - Infrastructure
+- `src/types/**` - Type definitions
+
+## Stack
+- TypeScript strict, Bun
 - Ollama (embeddings), LM Studio (reasoning)
-- Custom brute-force vector store
+- Custom vector store
 
-## Key Paths
-- `src/services/storagePaths.ts` - All storage paths
-- `src/core/` - Business logic
-- `src/ui/sidebar/` - Preact UI
-- `planning/coding_tasks/` - Implementation specs
-
-## Commands
-```bash
-bun run typecheck && bun run build
-bun run dev  # Build + copy to test vault
-```
-
-## Current Track
-Storage Restructure Phases 1-5, then ALPHA-SPEC
+## Focus
+- Storage restructure
+- LLM integration
+- Search pipeline
+- Event system

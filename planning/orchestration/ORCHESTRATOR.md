@@ -237,8 +237,8 @@ Multi-phase UI/UX transformation per `planning/ALPHA-SPEC.md`
 
 **Agents:**
 - Orchestrator: Plan phases, coordinate
-- Faye: Design specs, CSS, styling
-- Archie: Complex Preact logic
+- Faye: ALL frontend (UI, CSS, Preact, signals)
+- Archie: ALL backend (services, storage, LLM)
 - Sage: Simplification reviews
 
 **First action:** Plan ALPHA-SPEC Phase 1 breakdown
