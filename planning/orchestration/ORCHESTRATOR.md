@@ -55,7 +55,7 @@ Phase N:
 | 2 | Chunk/Embedding Separation | DONE | DONE | Complete |
 | 3 | Intelligence Tag Sharding | DONE | DONE | Complete |
 | 4 | Conversations Per-Note | DONE | **ACTIVE** | Sage reviewing |
-| 5 | Actions Time-Bucketed | **ACTIVE** | PENDING | Archie implementing |
+| 5 | Actions Time-Bucketed | **DONE** | **DONE** | Complete |
 
 **After Phase 5**: Switch to ALPHA-SPEC.md implementation (UI/UX work)
 
@@ -216,3 +216,29 @@ c197ee8 refactor(intelligence): Implement Phase 3 tag-based sharding
 **Next:**
 - Sage reviews Phase 5 after Archie completes
 - After Phase 5 complete → Begin ALPHA-SPEC Phase 1 (Foundation)
+
+---
+
+## Next Session: ALPHA-SPEC
+
+Storage Restructure (Phases 1-5) COMPLETE. Next track:
+
+### ALPHA-SPEC Implementation
+Multi-phase UI/UX transformation per `planning/ALPHA-SPEC.md`
+
+**Phases:**
+1. Foundation - Fix broken functionality
+2. Progressive Search - Omnibar + instant/evolving/deep
+3. Insights Stream - Per-note AI insights
+4. Chat Refinement - Vault toggle, sentient note conversation
+5. Footer & Recovery - Status, reconnection
+6. UI Polish - Glassmorphism, animations
+7. Settings - Profile/System restructure
+
+**Agents:**
+- Orchestrator: Plan phases, coordinate
+- Faye: Design specs, CSS, styling
+- Archie: Complex Preact logic
+- Sage: Simplification reviews
+
+**First action:** Plan ALPHA-SPEC Phase 1 breakdown
