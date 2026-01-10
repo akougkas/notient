@@ -8,6 +8,7 @@
 
 import { setIcon } from "obsidian";
 import { useCallback, useEffect, useRef } from "preact/hooks";
+import { debugLog } from "../../../utils/debugLog";
 
 export interface QuickAction {
   id: string;
@@ -49,9 +50,8 @@ function ActionButton({ action }: ActionButtonProps) {
   }, [action.icon]);
 
   const handleClick = useCallback(() => {
-    console.log("[QuickActions] Button clicked:", action.id);
+    debugLog("QuickActions", `${action.id} clicked`);
     action.onClick();
-    console.log("[QuickActions] onClick called successfully");
   }, [action.onClick]);
 
   return (

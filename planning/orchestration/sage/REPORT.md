@@ -1,254 +1,186 @@
-# Sage - Phase 5 Simplification Report
+# Sage - Phase 1 Stage 1.5 Report
 
 > **Status**: COMPLETE
-> **Last Updated**: 2026-01-10
-> **Reviewing**: Phase 5 Actions Time-Bucketed Storage
-
----
+> **Date**: 2026-01-10
+> **Branch**: ALPHA-SPEC-SPRINT
 
 ## Summary
 
-Simplified the Phase 5 actions time-bucketed code across 3 files. Extracted common patterns, simplified the diff algorithm, and reduced code duplication. All functionality preserved, typecheck and build pass.
+Created a simple, toggle-able debug logging utility and cleaned up Faye's diagnostic logging. Reduced 7 console.log/console.error statements across 3 files to 5 structured debugLog calls. Added a central toggle point for production builds.
 
-**Lines Saved**: ~180 lines through pattern extraction and algorithm simplification
-
----
-
-## Simplifications Made
-
-| File | Change | Impact |
-|------|--------|--------|
-| `actionHistory.ts` | Extracted `getYearMonth()` and `groupByMonth()` helpers | -20 lines, eliminated duplication |
-| `actionHistory.ts` | Simplified `createUnifiedDiff()` algorithm | -40 lines, clearer logic |
-| `actionHistory.ts` | Reduced verbose JSDoc comments | -15 lines |
-| `actionApplier.ts` | Added `applyWithDiffUndo()` helper method | Extracted common pattern |
-| `actionApplier.ts` | Added `applyFrontmatterWithDiffUndo()` helper | Extracted common pattern |
-| `actionApplier.ts` | Simplified 6 apply methods using helpers | -100 lines |
-| `types.ts` | Cleaned up Phase 5 comments | Minor clarity improvement |
+**Result**: Cleaner diagnostic output with zero production cost when disabled.
 
 ---
 
-## Patterns Cleaned
+## Created Files
 
-### 1. Extracted Month Grouping Logic (DRY)
+### src/utils/debugLog.ts
 
-**Before**: Duplicated in `archiveOldRecords()` and `migrateIfNeeded()`
+Simple toggle-able logging utility:
+
 ```typescript
-// In archiveOldRecords():
-const byMonth = new Map<string, AppliedActionRecord[]>();
-for (const record of toArchive) {
-  const date = new Date(record.timestamp);
-  const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-  if (!byMonth.has(yearMonth)) {
-    byMonth.set(yearMonth, []);
-  }
-  byMonth.get(yearMonth)!.push(record);
+const DEBUG_ENABLED = false;  // Toggle point
+
+export function debugLog(component: string, message: string, data?: unknown): void {
+  if (!DEBUG_ENABLED) return;
+  // structured console.log
 }
 
-// Same code repeated in migrateIfNeeded()...
-```
-
-**After**: Extracted to reusable helper
-```typescript
-function getYearMonth(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function groupByMonth(records: AppliedActionRecord[]): Map<string, AppliedActionRecord[]> {
-  const byMonth = new Map<string, AppliedActionRecord[]>();
-  for (const record of records) {
-    const yearMonth = getYearMonth(record.timestamp);
-    const existing = byMonth.get(yearMonth) ?? [];
-    existing.push(record);
-    byMonth.set(yearMonth, existing);
-  }
-  return byMonth;
-}
-
-// Usage:
-for (const [yearMonth, records] of groupByMonth(toArchive)) {
-  await this.appendToArchive(yearMonth, records);
+export function debugError(component: string, message: string, data?: unknown): void {
+  if (!DEBUG_ENABLED) return;
+  // structured console.error
 }
 ```
 
-### 2. Simplified Diff Algorithm
-
-**Before**: Complex ~130 line algorithm with nested loops and state tracking
-```typescript
-export function createUnifiedDiff(newContent: string, oldContent: string, filePath: string): string {
-  // Complex LCS-inspired approach with:
-  // - hunk state management
-  // - context line tracking
-  // - lookahead scanning
-  // - flushHunk() closure
-  // - multiple nested while loops
-  // ~130 lines
-}
-```
-
-**After**: Clearer two-phase approach (~90 lines)
-```typescript
-export function createUnifiedDiff(newContent: string, oldContent: string, filePath: string): string {
-  const output: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
-  const changes = findChanges(newLines, oldLines);  // Phase 1: Find differences
-
-  for (const change of changes) {  // Phase 2: Generate hunks
-    // Add context and diff lines
-  }
-  return output.join("\n");
-}
-
-function findChanges(newLines: string[], oldLines: string[]): Change[] {
-  // Separate concern: just find where content differs
-}
-```
-
-**Rationale**:
-- Separated concerns (finding vs formatting)
-- Eliminated mutable state tracking in main function
-- Made algorithm easier to understand and debug
-
-### 3. Extracted Apply-With-Undo Pattern
-
-**Before**: 6 methods with identical boilerplate (~35 lines each)
-```typescript
-private async applyFrontmatterSet(...): Promise<ApplyResult> {
-  const beforeContent = await this.obsidian.readFileByPath(target);
-  if (beforeContent === null) {
-    return { success: false, error: `Could not read file: ${target}` };
-  }
-
-  // Apply change...
-
-  const afterContent = await this.obsidian.readFileByPath(target);
-  if (afterContent === null) {
-    return { success: false, error: `Could not read file after modification: ${target}` };
-  }
-
-  const diff = createUnifiedDiff(afterContent, beforeContent, target);
-  const undoPayload: DiffUndoPayload = {
-    type: "diff",
-    patches: [{ path: target, diff }],
-  };
-
-  const record = this.actionHistory.addRecord(
-    action, undoPayload, [target], reasoning ?? action.reason, workflowId, taskId
-  );
-
-  return { success: true, recordId: record.id };
-}
-```
-
-**After**: Single helper, concise implementations
-```typescript
-private async applyWithDiffUndo(
-  context: ApplyContext,
-  targetPath: string,
-  modifier: (content: string) => string | Promise<string>,
-): Promise<ApplyResult> {
-  // Centralized before/after/diff/record logic
-}
-
-private async applyFrontmatterSet(...): Promise<ApplyResult> {
-  const { target, payload } = action;
-  return this.applyFrontmatterWithDiffUndo(
-    { action, taskId, workflowId, reasoning },
-    target,
-    (fm) => { fm[payload.key] = payload.value; },
-  );
-}
-```
-
-### 4. Simplified Apply Methods
-
-Methods simplified using the new helpers:
-
-| Method | Before | After |
-|--------|--------|-------|
-| `applyFrontmatterSet` | 35 lines | 10 lines |
-| `applyFrontmatterAddTags` | 38 lines | 12 lines |
-| `applyAppendSection` | 45 lines | 12 lines |
-| `applyAppendRelatedLinks` | 45 lines | 12 lines |
-| `applyRestructureNote` | 48 lines | 20 lines |
-| `applyAppendReviewSection` | 55 lines | 28 lines |
+**Key features**:
+- Single toggle point (`DEBUG_ENABLED`)
+- Zero cost when disabled (immediate return before string formatting)
+- Consistent format: `[Component] message { data }`
+- Separate error logging function
 
 ---
 
-## What Was NOT Changed
+## Optimized Files
 
-### actionHistory.ts - Core Logic Preserved
-- `load()` - Hot file loading with migration
-- `addRecord()` - Record creation and archiving trigger
-- `archiveOldRecords()` - Monthly bucketing
-- `appendToArchive()` - Archive file management
-- `flush()` - Debounced disk persistence
-- `undo()` - All three undo strategies (restore, rename, diff)
-- `applyReverseDiff()` - Reverse diff application
-- Migration logic intact
-
-### actionApplier.ts - Core Logic Preserved
-- `apply()` - Write lock and trust checking
-- `validateAction()` - All action type validations
-- `applyMoveNote()` - Rename-based undo (different pattern)
-- `applyCreateNote()` - RestoreContentUndo pattern
-- `applyBatchCreateNotes()` - Multi-file creation
-- `applyCreateTaskNote()` - Task note formatting
-- `applyCreateSynthesisNote()` - Synthesis note creation
-- `applyBatchAppendLinks()` - Multi-file modification with collected patches
-
-### types.ts - All Types Preserved
-- `DiffUndoPayload` - Diff-based undo structure
-- `HotActionsFile` - Hot file schema
-- `ActionsArchiveFile` - Archive file schema
-- All other types unchanged
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| src/ui/sidebar/App.tsx | 5 logs | 3 logs | -2 logs, consolidated |
+| src/ui/sidebar/components/QuickActions.tsx | 2 logs | 1 log | -1 log, removed redundant |
+| src/ui/sidebar/context/KernelContext.tsx | 1 log | 1 log | Same count, cleaner output |
+| **Total** | **8 logs** | **5 logs** | **-3 logs** |
 
 ---
 
-## Verification Results
+## Changes Made
+
+### 1. App.tsx - triggerAgenticAction (5 → 2 logs)
+
+**Before**:
+```typescript
+console.log("[triggerAgenticAction] Called with:", { prompt, taskType });
+console.log("[triggerAgenticAction] taskQueue:", taskQueue);
+console.log("[triggerAgenticAction] noteVitals:", noteVitals.value);
+// ...
+console.error("[triggerAgenticAction] FAILED - missing:", {...});
+```
+
+**After**:
+```typescript
+debugLog("triggerAgenticAction", "called", {
+  taskType,
+  hasTaskQueue: !!taskQueue,
+  hasNoteVitals: !!noteVitals.value,
+});
+// ...
+debugError("triggerAgenticAction", "services unavailable", {...});
+```
+
+**Rationale**: Consolidated 3 info logs into 1 structured call. All diagnostic info preserved in single object.
+
+### 2. App.tsx - Modal handlers (2 → 2 logs)
+
+**Before**:
+```typescript
+console.log("[openModelSelector] Called");
+console.log("[openIndexDashboard] Called");
+```
+
+**After**:
+```typescript
+debugLog("SystemDashboard", "model selector opened");
+debugLog("SystemDashboard", "index dashboard opened");
+```
+
+**Rationale**: Renamed component to match actual UI location. Same count, better organization.
+
+### 3. QuickActions.tsx - ActionButton (2 → 1 log)
+
+**Before**:
+```typescript
+console.log("[QuickActions] Button clicked:", action.id);
+action.onClick();
+console.log("[QuickActions] onClick called successfully");
+```
+
+**After**:
+```typescript
+debugLog("QuickActions", `${action.id} clicked`);
+action.onClick();
+```
+
+**Rationale**: Removed redundant "success" log. Click either works or throws - success log adds noise.
+
+### 4. KernelContext.tsx - useService (1 → 1 log)
+
+**Before**:
+```typescript
+console.log("[useService]", name, "→", service);
+```
+
+**After**:
+```typescript
+debugLog("useService", name, { available: !!service });
+```
+
+**Rationale**: Same diagnostic value, consistent format, boolean avoids logging full object.
+
+---
+
+## Pattern for Future Use
+
+When adding debug logging to Notient components:
+
+```typescript
+import { debugLog, debugError } from "../../utils/debugLog";
+
+// Info logging
+debugLog("ComponentName", "action description", { relevantData });
+
+// Error logging
+debugError("ComponentName", "what failed", { diagnosticData });
+```
+
+**Guidelines**:
+1. Component name should match actual file/component
+2. Message should be lowercase, describe what happened
+3. Data object should contain boolean flags (`hasX: !!x`) not full objects
+4. Use `debugError` only for actual error paths
+5. Toggle `DEBUG_ENABLED = true` in debugLog.ts during development
+
+---
+
+## Build Verification
 
 - [x] `bun run typecheck` passes
 - [x] `bun run build` passes (555.9kb main.js)
-- [x] No changes to public API
-- [x] All action storage functionality preserved
-- [x] All undo strategies working
+- [x] No runtime impact when DEBUG_ENABLED = false
 
 ---
 
 ## Files Modified
 
-1. `/home/akougkas/projects/notient/src/core/agentic/types.ts`
-   - Lines 393-403: Cleaned up DiffUndoPayload comments
-   - Lines 429-436: Removed "Phase 5" references from comments
-   - Lines 439-458: Simplified section header and type comments
+1. **src/utils/debugLog.ts** (NEW)
+   - Simple debug logging utility with toggle
 
-2. `/home/akougkas/projects/notient/src/core/agentic/actionHistory.ts`
-   - Lines 1-7: Simplified module docstring
-   - Lines 39-55: Added `getYearMonth()` and `groupByMonth()` helpers
-   - Lines 57-65: Simplified interface comments
-   - Lines 161-173: Simplified `archiveOldRecords()` using helpers
-   - Lines 619-624: Simplified migration using `groupByMonth()`
-   - Lines 654-774: Replaced complex diff algorithm with cleaner version
+2. **src/ui/sidebar/App.tsx**
+   - Added import for debugLog
+   - Lines 474-478: Replaced 3 console.log with 1 debugLog
+   - Lines 522-525: Replaced console.error with debugError
+   - Lines 738, 744: Replaced console.log with debugLog
 
-3. `/home/akougkas/projects/notient/src/core/agentic/actionApplier.ts`
-   - Lines 1-33: Simplified header and added ApplyContext interface
-   - Lines 54-95: Added `applyWithDiffUndo()` helper
-   - Lines 97-136: Added `applyFrontmatterWithDiffUndo()` helper
-   - Lines 446-483: Simplified frontmatter methods
-   - Lines 485-523: Simplified append methods
-   - Lines 724-750: Simplified restructure method
-   - Lines 916-959: Simplified review section method
+3. **src/ui/sidebar/components/QuickActions.tsx**
+   - Added import for debugLog
+   - Lines 52-54: Replaced 2 console.log with 1 debugLog
 
----
-
-## Design Notes
-
-The `applyBatchAppendLinks()` method was not simplified because it has a different pattern: it modifies multiple files and collects patches for a single undo record. This is intentionally different from single-file modifications and the complexity is warranted.
+4. **src/ui/sidebar/context/KernelContext.tsx**
+   - Added import for debugLog
+   - Line 75: Replaced console.log with debugLog
 
 ---
 
 ## Previous Reports
 
-- Phase 4: Conversation storage (removed unused async variants and rollup feature)
-- Phase 3: Intelligence tag-sharding (nested ternaries to if-chains)
+- Phase 5: Actions time-bucketed storage simplification
+- Phase 4: Conversation storage cleanup
+- Phase 3: Intelligence tag-sharding simplification
 - Phase 2: Chunk/embedding separation

@@ -14,6 +14,7 @@ import { createContext } from "preact";
 import { useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Kernel } from "../../../core/kernel";
 import type { EventListener, EventPayloads, EventType } from "../../../types/events";
+import { debugLog } from "../../../utils/debugLog";
 
 // ============ Context ============
 
@@ -71,7 +72,7 @@ export function useApp(): App {
 export function useService<T>(name: string): T | null {
   const kernel = useKernel();
   const service = kernel.getService<T>(name);
-  console.log("[useService]", name, "→", service);
+  debugLog("useService", name, { available: !!service });
   return service;
 }
 

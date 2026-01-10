@@ -28,6 +28,7 @@ import { VitalsCards } from "./components/VitalsCards";
 import { type RichChatMessage, RichChatView, createActivityItem } from "./components/chat";
 import { useApp, useEventBus, useKernel, useService } from "./context/KernelContext";
 import { useBacklinkPreview, useNoteVitals } from "./hooks/useNoteVitals";
+import { debugError, debugLog } from "../../utils/debugLog";
 
 // Import centralized state
 import {
@@ -470,9 +471,11 @@ export function App() {
   // Callback for agentic quick actions - routes through ChiefOfStaff with proper taskType
   const triggerAgenticAction = useCallback(
     (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => {
-      console.log("[triggerAgenticAction] Called with:", { prompt, taskType });
-      console.log("[triggerAgenticAction] taskQueue:", taskQueue);
-      console.log("[triggerAgenticAction] noteVitals:", noteVitals.value);
+      debugLog("triggerAgenticAction", "called", {
+        taskType,
+        hasTaskQueue: !!taskQueue,
+        hasNoteVitals: !!noteVitals.value,
+      });
 
       if (taskQueue && noteVitals.value) {
         try {
@@ -516,7 +519,7 @@ export function App() {
           new Notice(err instanceof Error ? err.message : "Failed to start agent");
         }
       } else {
-        console.error("[triggerAgenticAction] FAILED - missing:", {
+        debugError("triggerAgenticAction", "services unavailable", {
           hasTaskQueue: !!taskQueue,
           hasNoteVitals: !!noteVitals.value,
         });
@@ -732,13 +735,13 @@ export function App() {
 
   // Modal open handlers - use Obsidian native modals
   const openModelSelector = useCallback(() => {
-    console.log("[openModelSelector] Called");
+    debugLog("SystemDashboard", "model selector opened");
     const currentModel = providerStatus.value.lmstudio.model || providerStatus.value.ollama.model;
     new ModelSelectorModal(app, kernel, currentModel).open();
   }, [app, kernel]);
 
   const openIndexDashboard = useCallback(() => {
-    console.log("[openIndexDashboard] Called");
+    debugLog("SystemDashboard", "index dashboard opened");
     new IndexDashboardModal(app, kernel, indexStatus.value).open();
   }, [app, kernel]);
 
