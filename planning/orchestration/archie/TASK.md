@@ -2,26 +2,30 @@
 
 > **Status**: ASSIGNED
 > **Phase**: ALPHA-SPEC Phase 1 (Foundation)
-> **Branch**: `archie/backend-fixes`
+> **Branch**: `ALPHA-SPEC-SPRINT` (shared with all engineers)
 > **Duration**: 1-2 hours (diagnosis only)
 
 ---
 
-## Git Workflow (CRITICAL)
+## Git Workflow (CRITICAL - SHARED IDE)
 
-### Before Starting
+### Rule 1: You're Already on the Right Branch
 ```bash
+# Check current state
 git status
-git diff --name-only
+git branch   # Should show: * ALPHA-SPEC-SPRINT
 ```
-**Check**: Are you on `archie/backend-fixes` branch? Are there uncommitted changes?
 
-If you need to switch branches:
+**NEVER switch branches** - you're already on `ALPHA-SPEC-SPRINT`.
+Faye and Sage are working on this same branch. Switching affects ALL terminals.
+
+### Rule 2: Check What YOU Changed (Before Staging)
 ```bash
-git checkout archie/backend-fixes
+git diff --name-only    # See which files are modified
+git diff src/core/agent/taskQueue.ts   # See your exact changes
 ```
 
-### During Diagnosis
+### Rule 3: During Diagnosis
 You will add temporary debug logging to these files:
 - `src/core/agent/taskQueue.ts`
 - `src/core/agents/chiefOfStaff.ts`
@@ -30,21 +34,31 @@ You will add temporary debug logging to these files:
 
 **Rule**: Only add console.log statements, DO NOT change logic.
 
-### After Completing Diagnosis
+### Rule 4: Stage ONLY YOUR Files (ONE BY ONE)
 
-Stage ONLY the files you modified + your REPORT.md:
 ```bash
-# Check what you modified
+# Check what changed (includes YOUR changes + possibly others')
 git status
 
-# Stage only your changes
+# Stage ONLY files YOU modified in THIS session
 git add src/core/agent/taskQueue.ts
 git add src/core/agents/chiefOfStaff.ts
-git add src/core/kernel.ts                    # if modified
-git add src/core/events/eventBus.ts           # if modified
+git add src/core/kernel.ts                    # ONLY if you modified it
+git add src/core/events/eventBus.ts           # ONLY if you modified it
 git add planning/orchestration/archie/REPORT.md
 
-# Commit with descriptive message
+# Verify ONLY your files are staged
+git status   # Staged files should match what YOU edited
+```
+
+**CRITICAL - What NOT to do**:
+- ❌ `git add .` - Stages EVERYTHING (including Faye's work)
+- ❌ `git add src/**` - Wildcards catch other engineers' files
+- ❌ Staging files you didn't touch in this session
+
+### Rule 5: Commit with Clear Message
+
+```bash
 git commit -m "chore(phase-1): Backend diagnosis with debug logging
 
 Added console.log statements to trace:
@@ -55,15 +69,24 @@ Added console.log statements to trace:
 
 Findings documented in archie/REPORT.md.
 Root cause: [brief summary from your report]"
-
-# DO NOT PUSH - only local commit
 ```
 
-### Rules
-- **NO `git push`** - Only local commits
-- **NO `git add .`** - Stage specific files only
-- **NO amending** other commits - Create new commit
-- **NO branch switching** during work - Stay on archie/backend-fixes
+### Rule 6: NEVER Push
+
+```bash
+# ❌ NEVER DO THIS - CEO handles all pushes
+git push
+```
+
+---
+
+### Git Rules Summary
+1. ✅ You're on `ALPHA-SPEC-SPRINT` (shared branch)
+2. ✅ Stage files ONE BY ONE with explicit paths
+3. ✅ Verify with `git status` before commit
+4. ❌ NEVER use `git add .` or wildcards
+5. ❌ NEVER switch branches (`git checkout`)
+6. ❌ NEVER push (`git push`)
 
 ---
 

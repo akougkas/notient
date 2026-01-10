@@ -1,32 +1,31 @@
 # Faye - Phase 1 Diagnosis (Frontend)
 
-> **Status**: COMPLETE
+> **Status**: ASSIGNED
 > **Phase**: ALPHA-SPEC Phase 1 (Foundation)
-> **Branch**: `faye/ui-improvements`
+> **Branch**: `ALPHA-SPEC-SPRINT` (shared with all engineers)
 > **Duration**: 1-2 hours (diagnosis only)
 
 ---
 
-## Git Workflow (CRITICAL)
+## Git Workflow (CRITICAL - SHARED IDE)
 
-### Before Starting
+### Rule 1: You're Already on the Right Branch
 ```bash
+# Check current state
 git status
-git diff --name-only
+git branch   # Should show: * ALPHA-SPEC-SPRINT
 ```
-**Check**: Are you on `faye/ui-improvements` branch? Are there uncommitted changes?
 
-If branch doesn't exist yet, create it:
+**NEVER switch branches** - you're already on `ALPHA-SPEC-SPRINT`.
+Archie and Sage are working on this same branch. Switching affects ALL terminals.
+
+### Rule 2: Check What YOU Changed (Before Staging)
 ```bash
-git checkout -b faye/ui-improvements
+git diff --name-only    # See which files are modified
+git diff src/ui/sidebar/App.tsx   # See your exact changes
 ```
 
-If branch exists:
-```bash
-git checkout faye/ui-improvements
-```
-
-### During Diagnosis
+### Rule 3: During Diagnosis
 You will add temporary debug logging to these files:
 - `src/ui/sidebar/components/QuickActions.tsx`
 - `src/ui/sidebar/App.tsx`
@@ -34,20 +33,32 @@ You will add temporary debug logging to these files:
 
 **Rule**: Only add console.log statements, DO NOT change logic.
 
-### After Completing Diagnosis
+### Rule 4: Stage ONLY YOUR Files (ONE BY ONE)
 
-Stage ONLY the files you modified + your REPORT.md:
 ```bash
-# Check what you modified
+# Check what changed (includes YOUR changes + possibly others')
 git status
 
-# Stage only your changes
+# Stage ONLY files YOU modified in THIS session
 git add src/ui/sidebar/components/QuickActions.tsx
 git add src/ui/sidebar/App.tsx
-git add src/ui/sidebar/context/KernelContext.tsx   # if modified
+git add src/ui/sidebar/context/KernelContext.tsx   # ONLY if you modified it
 git add planning/orchestration/faye/REPORT.md
 
-# Commit with descriptive message
+# Verify ONLY your files are staged
+git status   # Staged files should match what YOU edited
+```
+
+**CRITICAL - What NOT to do**:
+- ❌ `git add .` - Stages EVERYTHING (including Archie's work)
+- ❌ `git add src/ui/**` - Wildcards catch unrelated files
+- ❌ `git add -A` - Stages all changes in repo
+- ❌ Staging files you didn't touch in this session
+- ❌ Staging orchestration files (ORCHESTRATOR.md, phase-1-breakdown.md)
+
+### Rule 5: Commit with Clear Message
+
+```bash
 git commit -m "chore(phase-1): Frontend diagnosis with debug logging
 
 Added console.log statements to trace:
@@ -58,16 +69,25 @@ Added console.log statements to trace:
 
 Findings documented in faye/REPORT.md.
 Root cause: [brief summary from your report]"
-
-# DO NOT PUSH - only local commit
 ```
 
-### Rules
-- **NO `git push`** - Only local commits
-- **NO `git add .`** - Stage specific files only
-- **NO `git add src/ui/**`** - Stage specific files, not wildcards
-- **NO amending** other commits - Create new commit
-- **NO branch switching** during work - Stay on faye/ui-improvements
+### Rule 6: NEVER Push
+
+```bash
+# ❌ NEVER DO THIS - CEO handles all pushes
+git push
+```
+
+---
+
+### Git Rules Summary
+1. ✅ You're on `ALPHA-SPEC-SPRINT` (shared branch)
+2. ✅ Stage files ONE BY ONE with explicit paths
+3. ✅ Verify with `git status` before commit
+4. ❌ NEVER use `git add .` or wildcards
+5. ❌ NEVER switch branches (`git checkout`)
+6. ❌ NEVER push (`git push`)
+7. ❌ NEVER stage orchestration files (unless you're Chief of Staff)
 
 ---
 
@@ -79,7 +99,7 @@ User reports: "Buttons don't work (Quick Actions, Footer), app crashes under loa
 
 **Archie's job** (running in parallel): Diagnose backend/service integration issues
 
-**Coordination**: You both write findings in your REPORT.md, Orchestrator reads both and determines root cause.
+**Coordination**: You both write findings in your REPORT.md, Chief of Staff reads both and determines root cause.
 
 ---
 
@@ -313,7 +333,7 @@ NEXT STEP: Wait for Archie's findings
 
 > **Status**: COMPLETE
 > **Date**: 2026-01-10
-> **Branch**: `faye/ui-improvements`
+> **Branch**: ALPHA-SPEC-SPRINT
 
 ## Summary
 
@@ -374,7 +394,7 @@ NEXT STEP: Wait for Archie's findings
 
 The console.log statements are temporary for diagnosis. Add debug logging to trace execution, write findings in REPORT.md, then commit using the git workflow above.
 
-After diagnosis, Orchestrator will tell you whether to remove logs or proceed with fixes.
+After diagnosis, Chief of Staff will tell you whether to remove logs or proceed with fixes.
 
 ---
 
@@ -385,7 +405,7 @@ Archie is diagnosing backend services in parallel. Combined findings will reveal
 - Backend issue only → Archie fixes
 - Both broken → both fix (sequential: Archie first)
 
-Orchestrator will read BOTH reports and determine next steps.
+Chief of Staff will read BOTH reports and determine next steps.
 
 ---
 
@@ -394,7 +414,7 @@ Orchestrator will read BOTH reports and determine next steps.
 - **Start**: As soon as you read this
 - **Duration**: 1-2 hours
 - **End**: When REPORT.md is written and committed
-- **Next**: Wait for Orchestrator to review both reports
+- **Next**: Wait for Chief of Staff to review both reports
 
 ---
 

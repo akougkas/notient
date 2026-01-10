@@ -135,25 +135,69 @@ Phase N:
 
 ---
 
-## Git Workflow (CRITICAL)
+## Git Workflow (CRITICAL - SHARED IDE)
 
 ### Branch Strategy
 
 | Branch | Owner | Purpose | Lifecycle |
 |--------|-------|---------|-----------|
-| `main` | User | Production-ready code | Never touched by agents |
-| `archie/backend-fixes` | Archie | All backend work | Merge to main when track complete |
-| `faye/ui-improvements` | Faye | All frontend work | Merge to main when track complete |
+| `main` | CEO | Production-ready code | Never touched by engineers |
+| `ALPHA-SPEC-SPRINT` | **ALL ENGINEERS** | Shared feature branch for Phase 1 | All Phase 1 work happens here |
 
-### Agent Git Rules
+**CRITICAL**: All engineers work on `ALPHA-SPEC-SPRINT` together.
+- Coordination through careful file staging, NOT branch switching
+- Switching branches affects ALL terminals (shared IDE state)
+- Each engineer stages ONLY files they modified in their session
 
-All agents must:
-1. **Before starting**: Run `git status` and `git diff --name-only`
-2. **Scope**: ONLY touch files in their assignment
-3. **Staging**: Stage ONLY their modified files (never `git add .`)
-4. **Commit**: Use conventional commits (`feat:`, `refactor:`, `style:`, `fix:`)
-5. **Push**: **NEVER push** - only local commits
-6. **Branch switching**: Stay on assigned branch unless explicitly instructed
+### Engineer Git Rules (GLOBAL - NO EXCEPTIONS)
+
+#### Rule 1: Check What YOU Changed
+```bash
+# Before staging anything
+git status              # See all changes in repo
+git diff --name-only    # See which files are modified
+git diff path/to/file   # See exact changes in a file
+```
+
+#### Rule 2: Stage ONLY YOUR Files
+```bash
+# Stage files ONE BY ONE with explicit paths
+git add src/core/agent/taskQueue.ts       # File YOU modified
+git add src/core/agents/chiefOfStaff.ts   # File YOU modified
+git add planning/orchestration/archie/REPORT.md  # YOUR report
+
+# Verify before commit
+git status   # Should ONLY show YOUR files staged
+```
+
+**What NOT to do**:
+- ❌ `git add .` (stages everything, including other engineers' work)
+- ❌ `git add src/ui/**` (wildcards can catch other engineers' files)
+- ❌ `git add -A` (stages all changes)
+- ❌ Staging files you didn't modify in THIS session
+
+#### Rule 3: Commit with Clear Message
+```bash
+git commit -m "type(scope): what you did
+
+- Detail 1
+- Detail 2"
+```
+
+#### Rule 4: NEVER Switch Branches
+```bash
+# ❌ NEVER DO THIS - affects all terminals
+git checkout other-branch
+git switch other-branch
+
+# ✅ You're already on ALPHA-SPEC-SPRINT, stay there
+```
+
+#### Rule 5: NEVER Push
+```bash
+# ❌ NEVER DO THIS - CEO handles all pushes
+git push
+```
 
 ### Commit Message Format
 
