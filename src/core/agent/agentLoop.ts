@@ -211,7 +211,6 @@ export class NotientAgent {
     try {
       for await (const chunk of this.llm.stream(messages, undefined, signal)) {
         if (signal?.aborted) {
-          // Yield abort event so UI can properly clean up
           yield { type: "error", error: new DOMException("Task aborted", "AbortError") };
           return;
         }

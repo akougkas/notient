@@ -410,54 +410,50 @@ export class NotientSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("notient-settings");
 
-    containerEl.createEl("h1", { text: "Notient Settings" });
+    try {
+      containerEl.createEl("h1", { text: "Notient Settings" });
 
-    // Auto-fetch models if not already fetched (async, re-renders on completion)
-    this.autoFetchModels();
+      // Auto-fetch disabled pending agent redesign
+      // this.autoFetchModels();
 
-    // Connection Status
-    this.renderConnectionStatus(containerEl);
+      this.renderConnectionStatus(containerEl);
 
-    // Embeddings Service (Ollama)
-    this.renderServiceSection(
-      containerEl,
-      "ollama",
-      "Embeddings (Ollama)",
-      "database",
-      "Embedding Model",
-      "nomic-embed-text",
-    );
+      this.renderServiceSection(
+        containerEl,
+        "ollama",
+        "Embeddings (Ollama)",
+        "database",
+        "Embedding Model",
+        "nomic-embed-text",
+      );
 
-    // Chat Service (LM Studio)
-    this.renderServiceSection(
-      containerEl,
-      "lmstudio",
-      "Chat (LM Studio)",
-      "message-square",
-      "Reasoning Model",
-      "ministral-3b-instruct",
-    );
+      this.renderServiceSection(
+        containerEl,
+        "lmstudio",
+        "Chat (LM Studio)",
+        "message-square",
+        "Reasoning Model",
+        "ministral-3b-instruct",
+      );
 
-    // Indexing (with chunk size slider)
-    this.renderIndexingSection(containerEl);
+      this.renderIndexingSection(containerEl);
 
-    // Index Management (using extracted panel)
-    this.indexManagementPanel = new IndexManagementPanel(this.app, this.kernel, this.settings, () =>
-      this.display(),
-    );
-    this.indexManagementPanel.render(containerEl);
+      this.indexManagementPanel = new IndexManagementPanel(this.app, this.kernel, this.settings, () =>
+        this.display(),
+      );
+      this.indexManagementPanel.render(containerEl);
 
-    // Search Settings
-    this.renderSearchSection(containerEl);
-
-    // Identity (Profile)
-    this.renderIdentitySection(containerEl);
-
-    // PARA Folders
-    this.renderParaSection(containerEl);
-
-    // Advanced
-    this.renderAdvancedSection(containerEl);
+      this.renderSearchSection(containerEl);
+      this.renderIdentitySection(containerEl);
+      this.renderParaSection(containerEl);
+      this.renderAdvancedSection(containerEl);
+    } catch (error) {
+      console.error("[Notient Settings] Display error:", error);
+      containerEl.createEl("p", {
+        text: `Settings error: ${error instanceof Error ? error.message : String(error)}`,
+        cls: "notient-settings-error",
+      });
+    }
   }
 
   private renderSearchSection(containerEl: HTMLElement): void {

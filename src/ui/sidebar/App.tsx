@@ -356,13 +356,17 @@ export function App() {
   const prefillChatAndSwitch = useCallback(
     (prompt: string) => {
       if (taskQueue && noteVitals.value) {
-        taskQueue.enqueue({
-          agent: "chat",
-          notePath: noteVitals.value.path,
-          noteTitle: noteVitals.value.title,
-          chatHistory: [{ role: "user", content: prompt }],
-        });
-        new Notice("Task sent to chat agent");
+        try {
+          taskQueue.enqueue({
+            agent: "chat",
+            notePath: noteVitals.value.path,
+            noteTitle: noteVitals.value.title,
+            chatHistory: [{ role: "user", content: prompt }],
+          });
+          new Notice("Task sent to chat agent");
+        } catch (err) {
+          new Notice(err instanceof Error ? err.message : "Failed to queue task");
+        }
       } else {
         new Notice("Agent system not available");
       }
@@ -575,15 +579,25 @@ export function App() {
               // Send to agent queue for processing
               // The agent:task-update event handler will update streaming state and add assistant response
               if (taskQueue && chatContext.value.notePath) {
-                taskQueue.enqueue({
-                  agent: "chat",
-                  notePath: chatContext.value.notePath,
-                  noteTitle: chatContext.value.noteTitle || "Note",
-                  chatHistory: chatMessages.value.map((m) => ({
-                    role: m.role,
-                    content: m.content,
-                  })),
-                });
+                try {
+                  taskQueue.enqueue({
+                    agent: "chat",
+                    notePath: chatContext.value.notePath,
+                    noteTitle: chatContext.value.noteTitle || "Note",
+                    chatHistory: chatMessages.value.map((m) => ({
+                      role: m.role,
+                      content: m.content,
+                    })),
+                  });
+                } catch (err) {
+                  const errorMsg: ChatMessage = {
+                    id: `error-${Date.now()}`,
+                    role: "assistant",
+                    content: err instanceof Error ? err.message : "Failed to send message",
+                    timestamp: new Date(),
+                  };
+                  chatMessages.value = [...chatMessages.value, errorMsg];
+                }
               } else {
                 // No task queue available - show error
                 const errorMsg: ChatMessage = {

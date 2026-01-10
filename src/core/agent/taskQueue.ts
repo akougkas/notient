@@ -19,6 +19,9 @@ import type { AgentTask } from "./types";
  */
 type TaskUpdateCallback = (task: AgentTask) => void;
 
+/** Maximum number of queued tasks to prevent memory exhaustion */
+const MAX_QUEUE_SIZE = 20;
+
 /**
  * Manages agent tasks in a queue with sequential execution
  */
@@ -49,6 +52,13 @@ export class AgentTaskQueue {
    * @returns The task ID
    */
   enqueue(task: Omit<AgentTask, "id" | "status" | "startedAt">): string {
+    // Backpressure: reject if queue is full (prevents memory exhaustion)
+    const queuedCount = this.tasks.filter((t) => t.status === "queued").length;
+    if (queuedCount >= MAX_QUEUE_SIZE) {
+      console.warn(`[AgentTaskQueue] Queue full (${queuedCount} tasks), rejecting new task`);
+      throw new Error("Task queue is full. Please wait for current tasks to complete.");
+    }
+
     const id = crypto.randomUUID();
 
     // Phase 2: Handle conversation persistence

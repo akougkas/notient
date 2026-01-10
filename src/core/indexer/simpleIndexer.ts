@@ -267,7 +267,9 @@ export class SimpleIndexer {
       file.path,
       setTimeout(() => {
         this.debounceTimers.delete(file.path);
-        void this.indexNote(file.path);
+        this.indexNote(file.path).catch((err) => {
+          console.error(`[SimpleIndexer] Failed to index ${file.path}:`, err);
+        });
       }, debounceMs),
     );
   }
