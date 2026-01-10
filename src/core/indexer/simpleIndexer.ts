@@ -85,22 +85,8 @@ export class SimpleIndexer {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
 
-    // Check if indexing is already in progress (prevent concurrent operations)
-    if (this.indexManager.isIndexing()) {
-      console.warn("[SimpleIndexer] Indexing already in progress, skipping");
-      this.kernel.obsidian.notice("Indexing already in progress...");
-      return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
-    }
-
-    // Set crash recovery flag BEFORE indexing starts
-    this.indexManager.beginIndexing();
-
-    try {
-      return await this.doSyncVault();
-    } finally {
-      // Clear crash recovery flag when done (success or failure)
-      this.indexManager.endIndexing();
-    }
+    // v3: No crash detection - just run the sync
+    return await this.doSyncVault();
   }
 
   /**
@@ -189,28 +175,11 @@ export class SimpleIndexer {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
 
-    // Check if indexing is already in progress (prevent concurrent operations)
-    if (this.indexManager.isIndexing()) {
-      console.warn("[SimpleIndexer] Indexing already in progress, skipping full reindex");
-      this.kernel.obsidian.notice("Indexing already in progress...");
-      return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
-    }
-
-    // Set crash recovery flag
-    this.indexManager.beginIndexing();
-
-    try {
-      console.log("[SimpleIndexer] Starting full reindex - clearing existing index...");
-      await this.indexManager.clearAll();
-      console.log("[SimpleIndexer] Index cleared, starting fresh sync...");
-
-      // syncVault() will see indexingInProgress=true and skip its own beginIndexing() call
-      // This is intentional - we hold the lock for the entire fullReindex operation
-      return await this.doSyncVault();
-    } finally {
-      // Clear crash recovery flag
-      this.indexManager.endIndexing();
-    }
+    // v3: No crash detection - just run the reindex
+    console.log("[SimpleIndexer] Starting full reindex - clearing existing index...");
+    await this.indexManager.clearAll();
+    console.log("[SimpleIndexer] Index cleared, starting fresh sync...");
+    return await this.doSyncVault();
   }
 
   /**

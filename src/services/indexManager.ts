@@ -109,12 +109,11 @@ interface StateFile {
   notes: Record<string, NoteState>;
 }
 
-/** Index completion state */
+/** Index completion state (v3: no crash detection - partial is just partial) */
 export type IndexState =
   | "none" // No index exists for this model
   | "complete" // Index exists and all vault notes are indexed
-  | "incomplete" // Index exists but some notes missing
-  | "crashed" // Previous indexing was interrupted
+  | "incomplete" // Index exists but some notes missing (user decides when to continue)
   | "stale"; // Index exists but may have outdated entries
 
 /** Exported index state for UI */
@@ -125,9 +124,6 @@ export interface IndexStats {
   chunkCount: number;
   vaultNoteCount: number;
   lastFullIndexAt: number | null;
-  indexingInProgress: boolean;
-  indexingStartedAt: number | null;
-  needsRecovery: boolean; // True if crash detected
   state: IndexState;
   completionPercent: number;
 }
@@ -145,16 +141,10 @@ export interface IndexStats {
  * - User-provided indices (vault/system/index/): External RAG data, READ-ONLY
  */
 export class IndexManager {
-  private states: Map<string, NoteState> = new Map();
   private modelKey = "";
   private dimension = 0;
   private isUserProvidedIndex = false; // User-provided indices (system/index/) are read-only
-  private lastFullIndexAt: number | null = null;
-  private indexingInProgress = false;
-  private indexingStartedAt: number | null = null;
-  private dirty = false;
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Resolved active index path (used to derive state path) */
+  /** Resolved active index path */
   private activeIndexPath: string | null = null;
   /** Track indexing errors for vitals (note paths that failed) */
   private errorPaths: Set<string> = new Set();
@@ -216,14 +206,14 @@ export class IndexManager {
       this.activeIndexPath = this.generateIndexPath();
     }
 
-    // Load state file (matched to active index)
-    await this.loadState();
+    // State is now embedded in index file (v3) - no separate state file to load
 
     // Clean up old files from .deleted folder (runs in background)
     this.cleanupDeletedFolder().catch(() => {});
 
+    const noteCount = this.vectorStore.getIndexedNoteCount?.() ?? 0;
     console.log(
-      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${this.states.size}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`,
+      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${noteCount}, userProvided=${this.isUserProvidedIndex}, indexPath=${this.activeIndexPath}`,
     );
   }
 
@@ -303,30 +293,26 @@ export class IndexManager {
     return this.dimension;
   }
 
-  // ============ State Tracking ============
+  // ============ State Tracking (delegates to VectorStore v3) ============
 
   /** Get state for a note */
   getNoteState(notePath: string): NoteState | null {
-    return this.states.get(notePath) ?? null;
+    return this.vectorStore.getNoteState?.(notePath) ?? null;
   }
 
   /** Update state for a note */
   setNoteState(notePath: string, state: NoteState): void {
-    this.states.set(notePath, state);
-    this.dirty = true;
-    this.scheduleSave();
+    this.vectorStore.setNoteState?.(notePath, state);
   }
 
   /** Remove state for a note */
   removeNoteState(notePath: string): void {
-    this.states.delete(notePath);
-    this.dirty = true;
-    this.scheduleSave();
+    this.vectorStore.removeNoteState?.(notePath);
   }
 
   /** Check if a note needs reindexing */
   needsReindex(notePath: string, mtimeMs: number, contentHash: string): boolean {
-    const state = this.states.get(notePath);
+    const state = this.vectorStore.getNoteState?.(notePath);
     if (!state) return true;
 
     // Content changed
@@ -340,31 +326,27 @@ export class IndexManager {
 
   /** Get all indexed note paths */
   getIndexedPaths(): string[] {
-    return Array.from(this.states.keys());
+    return this.vectorStore.getIndexedPaths?.() ?? [];
   }
 
   /** Get count of indexed notes */
   getIndexedCount(): number {
-    return this.states.size;
+    return this.vectorStore.getIndexedNoteCount?.() ?? 0;
   }
 
   /** Check if a specific note is indexed */
   isNoteIndexed(notePath: string): boolean {
-    return this.states.has(notePath);
+    return this.vectorStore.isNoteIndexed?.(notePath) ?? false;
   }
 
   /** Record that a full index completed */
   recordFullIndex(): void {
-    this.lastFullIndexAt = Date.now();
-    this.indexingInProgress = false;
-    this.indexingStartedAt = null;
-    this.dirty = true;
-    this.scheduleSave();
+    this.vectorStore.recordFullIndex?.();
   }
 
   /** Get last full index timestamp */
   getLastFullIndexAt(): number | null {
-    return this.lastFullIndexAt;
+    return this.vectorStore.getLastFullIndexAt?.() ?? null;
   }
 
   /** Get count of indexing errors */
@@ -382,70 +364,35 @@ export class IndexManager {
     this.errorPaths.clear();
   }
 
-  /** Mark that indexing has started (for crash recovery detection) */
-  beginIndexing(): void {
-    this.indexingInProgress = true;
-    this.indexingStartedAt = Date.now();
-    this.dirty = true;
-    // Save immediately with proper error handling
-    this.saveState().catch((error) => {
-      console.error("[IndexManager] Failed to save indexing start state:", error);
-      this.kernel.eventBus.emit("index:error", { error: String(error), source: "beginIndexing" });
-    });
-  }
-
-  /** Mark that indexing has completed */
-  endIndexing(): void {
-    this.indexingInProgress = false;
-    this.indexingStartedAt = null;
-    this.dirty = true;
-    this.scheduleSave();
-  }
-
-  /** Check if indexing is currently in progress (for lock checking) */
-  isIndexing(): boolean {
-    return this.indexingInProgress;
-  }
-
   /** Get index statistics for UI */
   async getStats(): Promise<IndexStats> {
     const chunkCount = await this.countChunks();
+    const noteCount = this.getIndexedCount();
     const vaultNoteCount = this.kernel.obsidian.getMarkdownFiles().length;
+    const lastFullIndexAt = this.getLastFullIndexAt();
 
-    // Detect crash: indexing was in progress but took > 30 minutes (stuck)
-    const CRASH_THRESHOLD_MS = 30 * 60 * 1000;
-    const needsRecovery =
-      this.indexingInProgress &&
-      this.indexingStartedAt !== null &&
-      Date.now() - this.indexingStartedAt > CRASH_THRESHOLD_MS;
-
-    // Determine index state
+    // Determine index state (v3: no crash detection - partial is just partial)
     let state: IndexState;
-    if (this.states.size === 0 && chunkCount === 0) {
+    if (noteCount === 0 && chunkCount === 0) {
       state = "none";
-    } else if (needsRecovery) {
-      state = "crashed";
-    } else if (this.states.size >= vaultNoteCount) {
+    } else if (noteCount >= vaultNoteCount) {
       state = "complete";
-    } else if (this.states.size > 0) {
+    } else if (noteCount > 0) {
       state = "incomplete";
     } else {
       state = "stale"; // Has chunks but no state tracking
     }
 
     const completionPercent =
-      vaultNoteCount > 0 ? Math.round((this.states.size / vaultNoteCount) * 100) : 0;
+      vaultNoteCount > 0 ? Math.round((noteCount / vaultNoteCount) * 100) : 0;
 
     return {
-      exists: this.states.size > 0 || chunkCount > 0,
+      exists: noteCount > 0 || chunkCount > 0,
       modelKey: this.modelKey || null,
-      noteCount: this.states.size,
+      noteCount,
       chunkCount,
       vaultNoteCount,
-      lastFullIndexAt: this.lastFullIndexAt,
-      indexingInProgress: this.indexingInProgress,
-      indexingStartedAt: this.indexingStartedAt,
-      needsRecovery,
+      lastFullIndexAt,
       state,
       completionPercent,
     };
@@ -503,7 +450,7 @@ export class IndexManager {
   async endBulkUpdate(): Promise<void> {
     if (this.isUserProvidedIndex) return;
     await this.vectorStore.endBulkUpdate?.();
-    await this.saveState();
+    // State is now saved with vectorStore (v3 embedded state)
   }
 
   async clearAll(): Promise<void> {
@@ -512,23 +459,17 @@ export class IndexManager {
       return;
     }
     await this.vectorStore.clearAll?.();
-    this.states.clear();
-    this.lastFullIndexAt = null;
-    this.dirty = true;
+    this.vectorStore.clearState?.();
   }
 
   // ============ Persistence ============
 
   async save(): Promise<void> {
     await this.vectorStore.flush?.();
-    await this.saveState();
+    // State is now saved with vectorStore (v3 embedded state)
   }
 
   async dispose(): Promise<void> {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-    }
-    await this.saveState();
     await this.vectorStore.dispose();
   }
 
@@ -755,29 +696,25 @@ export class IndexManager {
     }
 
     const currentPaths = new Set(this.kernel.obsidian.getMarkdownFiles().map((f) => f.path));
+    const indexedPaths = this.getIndexedPaths();
 
     let removed = 0;
     const stalePaths: string[] = [];
 
-    for (const notePath of Array.from(this.states.keys())) {
+    for (const notePath of indexedPaths) {
       if (!currentPaths.has(notePath)) {
         stalePaths.push(notePath);
       }
     }
 
     for (const notePath of stalePaths) {
-      const state = this.states.get(notePath);
-      if (state) {
-        const noteId = generateNoteId(notePath);
-        await this.vectorStore.deleteByNoteId(noteId);
-        this.states.delete(notePath);
-        removed++;
-      }
+      const noteId = generateNoteId(notePath);
+      await this.vectorStore.deleteByNoteId(noteId);
+      this.vectorStore.removeNoteState?.(notePath);
+      removed++;
     }
 
     if (removed > 0) {
-      this.dirty = true;
-      await this.saveState();
       await this.vectorStore.flush?.();
     }
 
@@ -788,28 +725,21 @@ export class IndexManager {
   // ============ Export / Import ============
 
   /**
-   * Export index to a portable JSON format
+   * Export index to a portable JSON format.
+   * v3: Index file already contains embedded state, so we just read and return it.
    */
   async exportIndex(): Promise<string> {
-    const indexPath = path.join(this.kernel.storagePaths.pluginRoot, `index-${this.modelKey}.json`);
+    if (!this.activeIndexPath) {
+      throw new Error("No active index to export");
+    }
 
     try {
-      const indexData = await fs.promises.readFile(indexPath, "utf-8");
-      const stateData: StateFile = {
-        version: 1,
-        modelKey: this.modelKey,
-        lastFullIndexAt: this.lastFullIndexAt,
-        indexingInProgress: false,
-        indexingStartedAt: null,
-        notes: Object.fromEntries(this.states),
-      };
-
+      const indexData = await fs.promises.readFile(this.activeIndexPath, "utf-8");
+      // Wrap in export envelope with timestamp
       const exportData = {
         exportedAt: Date.now(),
         index: JSON.parse(indexData),
-        state: stateData,
       };
-
       return JSON.stringify(exportData);
     } catch (error) {
       throw new Error(`Failed to export index: ${error}`);
@@ -817,16 +747,24 @@ export class IndexManager {
   }
 
   /**
-   * Import index from exported JSON
-   * Returns model key of imported index (may differ from current)
-   * Validates that imported index dimensions match current model dimensions
+   * Import index from exported JSON.
+   * v3: Index file contains embedded state, so we just write the index file.
+   * Supports both v3 (state in meta.state) and legacy (separate state property).
    */
   async importIndex(jsonData: string): Promise<{ modelKey: string; noteCount: number }> {
     try {
       const data = JSON.parse(jsonData) as {
         exportedAt: number;
-        index: { meta: { modelKey: string; dimension: number }; docs: unknown[] };
-        state: StateFile;
+        index: {
+          meta: {
+            modelKey: string;
+            dimension: number;
+            version?: number;
+            state?: { lastFullIndexAt: number | null; notes: Record<string, unknown> };
+          };
+          docs: unknown[];
+        };
+        state?: { notes: Record<string, unknown> }; // Legacy format
       };
 
       const importedModelKey = data.index.meta.modelKey;
@@ -841,26 +779,34 @@ export class IndexManager {
         );
       }
 
-      // Write index file (atomic for crash safety)
+      // Ensure state is embedded in index (migrate legacy format)
+      if (!data.index.meta.state && data.state) {
+        data.index.meta.state = {
+          lastFullIndexAt: null,
+          notes: data.state.notes || {},
+        };
+        data.index.meta.version = 3;
+      }
+
+      // Generate new filename with v3 naming
+      const sanitizedKey = importedModelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const timestamp = formatIndexTimestamp();
       const indexPath = path.join(
         this.kernel.storagePaths.pluginRoot,
-        `index-${importedModelKey}.json`,
+        `idx_${timestamp}_v3_${sanitizedKey}_${importedDimension}d.json`,
       );
+
+      // Write index file (atomic for crash safety)
       await atomicWriteFile(indexPath, JSON.stringify(data.index));
 
-      // Write state file (atomic for crash safety)
-      const statePath = path.join(
-        this.kernel.storagePaths.pluginRoot,
-        `state-${importedModelKey}.json`,
-      );
-      await atomicWriteFile(statePath, JSON.stringify(data.state, null, 2));
+      // Count notes from embedded state
+      const noteCount = data.index.meta.state?.notes
+        ? Object.keys(data.index.meta.state.notes).length
+        : 0;
 
-      console.log(`[IndexManager] Imported index for ${importedModelKey}`);
+      console.log(`[IndexManager] Imported index for ${importedModelKey} at ${indexPath}`);
 
-      return {
-        modelKey: importedModelKey,
-        noteCount: Object.keys(data.state.notes).length,
-      };
+      return { modelKey: importedModelKey, noteCount };
     } catch (error) {
       throw new Error(`Failed to import index: ${error}`);
     }
@@ -882,100 +828,7 @@ export class IndexManager {
     );
   }
 
-  /**
-   * Get state file path.
-   * Simple format: state-{modelKey}.json
-   * One state file per model key - simpler and avoids orphans.
-   */
-  private getStatePath(): string {
-    return path.join(this.kernel.storagePaths.pluginRoot, `state-${this.modelKey}.json`);
-  }
-
-  private async loadState(): Promise<void> {
-    const statePath = this.getStatePath();
-
-    const exists = await fs.promises
-      .access(statePath)
-      .then(() => true)
-      .catch(() => false);
-
-    if (!exists) {
-      console.log(
-        `[IndexManager] No state file found for modelKey=${this.modelKey}, starting fresh`,
-      );
-      return;
-    }
-
-    console.log(`[IndexManager] Loading state from: ${statePath}`);
-
-    try {
-      const raw = await fs.promises.readFile(statePath, "utf-8");
-      const data: StateFile = JSON.parse(raw);
-
-      // Validate model key
-      if (data.modelKey !== this.modelKey) {
-        console.log(
-          `[IndexManager] Model key mismatch: file=${data.modelKey}, current=${this.modelKey}. Starting fresh.`,
-        );
-        return;
-      }
-
-      this.lastFullIndexAt = data.lastFullIndexAt;
-      this.indexingInProgress = data.indexingInProgress ?? false;
-      this.indexingStartedAt = data.indexingStartedAt ?? null;
-      this.states.clear();
-      for (const [notePath, state] of Object.entries(data.notes)) {
-        this.states.set(notePath, state);
-      }
-
-      // Log crash recovery state
-      if (this.indexingInProgress) {
-        console.log(
-          `[IndexManager] Detected interrupted indexing from ${new Date(this.indexingStartedAt ?? 0).toISOString()}`,
-        );
-      }
-
-      console.log(
-        `[IndexManager] Loaded state: ${this.states.size} notes, modelKey=${this.modelKey}`,
-      );
-    } catch (error) {
-      console.warn("[IndexManager] Failed to load state:", error);
-    }
-  }
-
-  private async saveState(): Promise<void> {
-    if (!this.dirty) return;
-
-    const statePath = this.getStatePath();
-    const data: StateFile = {
-      version: 1,
-      modelKey: this.modelKey,
-      lastFullIndexAt: this.lastFullIndexAt,
-      indexingInProgress: this.indexingInProgress,
-      indexingStartedAt: this.indexingStartedAt,
-      notes: Object.fromEntries(this.states),
-    };
-
-    try {
-      // Atomic write: temp file + rename for crash safety
-      await atomicWriteFile(statePath, JSON.stringify(data, null, 2));
-      this.dirty = false;
-    } catch (error) {
-      console.error("[IndexManager] Failed to save state:", error);
-    }
-  }
-
-  private scheduleSave(): void {
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.saveState().catch((error) => {
-        console.error("[IndexManager] Scheduled save failed:", error);
-        // Emit error event so UI can notify user
-        this.kernel.eventBus.emit("index:error", { error: String(error), source: "save" });
-      });
-    }, 2000); // Debounce 2s
-  }
+  // State file methods removed in v3 - state is now embedded in index file
 
   private async moveToDeleted(filePath: string, reason: string): Promise<void> {
     const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");

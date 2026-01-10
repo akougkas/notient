@@ -94,4 +94,50 @@ export interface VectorStore {
    * Much faster than deleting documents one by one.
    */
   clearAll?(): Promise<void>;
+
+  // ============ Embedded State API (v3) ============
+
+  /** Get state for a note */
+  getNoteState?(
+    notePath: string,
+  ): {
+    path: string;
+    mtimeMs: number;
+    contentHash: string;
+    chunkCount: number;
+    embeddedAt: number;
+  } | null;
+
+  /** Set state for a note */
+  setNoteState?(
+    notePath: string,
+    state: {
+      path: string;
+      mtimeMs: number;
+      contentHash: string;
+      chunkCount: number;
+      embeddedAt: number;
+    },
+  ): void;
+
+  /** Remove state for a note */
+  removeNoteState?(notePath: string): void;
+
+  /** Get all indexed note paths */
+  getIndexedPaths?(): string[];
+
+  /** Get count of indexed notes */
+  getIndexedNoteCount?(): number;
+
+  /** Check if a note is indexed */
+  isNoteIndexed?(notePath: string): boolean;
+
+  /** Get last full index timestamp */
+  getLastFullIndexAt?(): number | null;
+
+  /** Record that a full index completed */
+  recordFullIndex?(): void;
+
+  /** Clear all state (for rebuild) */
+  clearState?(): void;
 }

@@ -22,7 +22,12 @@ import { atomicWriteFile } from "../utils/atomicWrite";
 import { formatIndexTimestamp } from "./storagePaths";
 import type { VectorStore, VectorStoreInitOptions } from "./vectorStore";
 
-const INDEX_VERSION = 2;
+/**
+ * Index file version. Bump when format changes.
+ * v2: Tiered semantic chunks
+ * v3: Embedded state (no separate state file), new naming schema
+ */
+const INDEX_VERSION = 3;
 const CHUNKER_META = { name: "tiered-semantic", version: 1 } as const;
 const TIER_FLAGS = { note: true, section: true, block: true } as const;
 
@@ -74,6 +79,21 @@ interface PersistedDoc {
   frontmatter: Record<string, unknown>;
 }
 
+/** State for a single indexed note (embedded in index file) */
+export interface EmbeddedNoteState {
+  path: string;
+  mtimeMs: number;
+  contentHash: string;
+  chunkCount: number;
+  embeddedAt: number;
+}
+
+/** Embedded state section in index file */
+export interface EmbeddedIndexState {
+  lastFullIndexAt: number | null;
+  notes: Record<string, EmbeddedNoteState>;
+}
+
 interface IndexMetadata {
   version: number;
   modelKey: string;
@@ -83,6 +103,8 @@ interface IndexMetadata {
   updatedAt: number;
   chunker?: { name: string; version: number };
   tiers?: { note: boolean; section: boolean; block: boolean };
+  /** Embedded state - added in v3 */
+  state?: EmbeddedIndexState;
 }
 
 /**
@@ -104,8 +126,69 @@ export class SimpleVectorStore implements VectorStore {
   /** Resolved index file path (discovered or generated) */
   private resolvedIndexPath: string | null = null;
 
+  // ============ Embedded State (v3) ============
+  /** Note states - embedded in index file, no separate state file */
+  private noteStates: Map<string, EmbeddedNoteState> = new Map();
+  /** Last full index timestamp */
+  private lastFullIndexAt: number | null = null;
+
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
+  }
+
+  // ============ State API (for IndexManager) ============
+
+  /** Get state for a note */
+  getNoteState(notePath: string): EmbeddedNoteState | null {
+    return this.noteStates.get(notePath) ?? null;
+  }
+
+  /** Set state for a note */
+  setNoteState(notePath: string, state: EmbeddedNoteState): void {
+    this.noteStates.set(notePath, state);
+    this.dirty = true;
+    this.scheduleSave();
+  }
+
+  /** Remove state for a note */
+  removeNoteState(notePath: string): void {
+    this.noteStates.delete(notePath);
+    this.dirty = true;
+    this.scheduleSave();
+  }
+
+  /** Get all indexed note paths */
+  getIndexedPaths(): string[] {
+    return Array.from(this.noteStates.keys());
+  }
+
+  /** Get count of indexed notes */
+  getIndexedNoteCount(): number {
+    return this.noteStates.size;
+  }
+
+  /** Check if a note is indexed */
+  isNoteIndexed(notePath: string): boolean {
+    return this.noteStates.has(notePath);
+  }
+
+  /** Get last full index timestamp */
+  getLastFullIndexAt(): number | null {
+    return this.lastFullIndexAt;
+  }
+
+  /** Record that a full index completed */
+  recordFullIndex(): void {
+    this.lastFullIndexAt = Date.now();
+    this.dirty = true;
+    this.scheduleSave();
+  }
+
+  /** Clear all state (for rebuild) */
+  clearState(): void {
+    this.noteStates.clear();
+    this.lastFullIndexAt = null;
+    this.dirty = true;
   }
 
   async initialize(options?: VectorStoreInitOptions): Promise<void> {
@@ -529,8 +612,13 @@ export class SimpleVectorStore implements VectorStore {
    * Get the resolved index path. Uses cached path if available,
    * otherwise generates a new path for a fresh index.
    *
-   * New format: idx_{YYYYMMDD}T{HHMMSS}_{vaultHash}_{model}_{dim}d.json
-   * Example: idx_20250107T143052_a7f3_nomic_embed_text_768d.json
+   * Naming schema (v3): idx_{YYYYMMDD}T{HHMMSS}_v{version}_{model}_{dim}d.json
+   * - Timestamp first for lexicographic sorting (newest first)
+   * - Version for schema migrations
+   * - Full model name (sanitized)
+   * - Dimension
+   *
+   * Example: idx_20260109T143052_v3_nomic_embed_text_768d.json
    */
   private getIndexPath(): string {
     // Use cached path if we've already resolved/generated one
@@ -541,19 +629,23 @@ export class SimpleVectorStore implements VectorStore {
     // Generate a new path for a fresh index
     const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const timestamp = formatIndexTimestamp(new Date(this.createdAt));
-    const vaultHash = this.kernel.storagePaths.vaultHash;
 
     this.resolvedIndexPath = path.join(
       this.kernel.storagePaths.pluginRoot,
-      `idx_${timestamp}_${vaultHash}_${sanitizedKey}_${this.dimension}d.json`,
+      `idx_${timestamp}_v${INDEX_VERSION}_${sanitizedKey}_${this.dimension}d.json`,
     );
     return this.resolvedIndexPath;
   }
 
   /**
    * Discover existing index files matching this model/dimension.
-   * Searches for both new format (idx_*) and legacy format (index-*).
+   * Searches for:
+   * - v3 format: idx_{timestamp}_v{version}_{model}_{dim}d.json
+   * - v2 format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
+   * - Legacy format: index-{model}-{dim}d.json
+   *
    * Returns the most recently created match, or null if none found.
+   * Prefers v3 > v2 > legacy.
    */
   private async discoverExistingIndex(): Promise<string | null> {
     const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -570,29 +662,46 @@ export class SimpleVectorStore implements VectorStore {
       );
       console.log("[SimpleVectorStore] All index files in storage:", allIndexFiles);
 
-      // New format pattern: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
-      const newPattern = new RegExp(
+      // v3 format: idx_{timestamp}_v{version}_{model}_{dim}d.json
+      const v3Pattern = new RegExp(
+        `^idx_\\d{8}T\\d{6}_v\\d+_${sanitizedKey}_${this.dimension}d\\.json$`,
+      );
+      // v2 format: idx_{timestamp}_{vaultHash}_{model}_{dim}d.json
+      const v2Pattern = new RegExp(
         `^idx_\\d{8}T\\d{6}_[a-f0-9]{4}_${sanitizedKey}_${this.dimension}d\\.json$`,
       );
-      // Legacy pattern: index-{model}-{dim}d.json
+      // Legacy format: index-{model}-{dim}d.json
       const legacyPattern = new RegExp(`^index-${sanitizedKey}-${this.dimension}d\\.json$`);
 
-      const matches: Array<{ path: string; isLegacy: boolean; timestamp?: string }> = [];
+      const matches: Array<{
+        path: string;
+        format: "v3" | "v2" | "legacy";
+        timestamp?: string;
+        version?: number;
+      }> = [];
 
       for (const file of files) {
-        if (newPattern.test(file)) {
-          // Extract timestamp from new format for sorting
+        if (v3Pattern.test(file)) {
+          const tsMatch = file.match(/^idx_(\d{8}T\d{6})_v(\d+)_/);
+          matches.push({
+            path: path.join(pluginRoot, file),
+            format: "v3",
+            timestamp: tsMatch?.[1],
+            version: tsMatch ? Number.parseInt(tsMatch[2], 10) : undefined,
+          });
+          console.log(`[SimpleVectorStore] Matched (v3): ${file}`);
+        } else if (v2Pattern.test(file)) {
           const tsMatch = file.match(/^idx_(\d{8}T\d{6})_/);
           matches.push({
             path: path.join(pluginRoot, file),
-            isLegacy: false,
+            format: "v2",
             timestamp: tsMatch?.[1],
           });
-          console.log(`[SimpleVectorStore] Matched (new format): ${file}`);
+          console.log(`[SimpleVectorStore] Matched (v2): ${file}`);
         } else if (legacyPattern.test(file)) {
           matches.push({
             path: path.join(pluginRoot, file),
-            isLegacy: true,
+            format: "legacy",
           });
           console.log(`[SimpleVectorStore] Matched (legacy): ${file}`);
         }
@@ -603,9 +712,10 @@ export class SimpleVectorStore implements VectorStore {
         return null;
       }
 
-      // Prefer non-legacy, sort by timestamp (newest first)
+      // Sort: v3 > v2 > legacy, then by timestamp (newest first)
+      const formatPriority = { v3: 0, v2: 1, legacy: 2 };
       matches.sort((a, b) => {
-        if (a.isLegacy !== b.isLegacy) return a.isLegacy ? 1 : -1;
+        if (a.format !== b.format) return formatPriority[a.format] - formatPriority[b.format];
         if (a.timestamp && b.timestamp) return b.timestamp.localeCompare(a.timestamp);
         return 0;
       });
@@ -640,13 +750,13 @@ export class SimpleVectorStore implements VectorStore {
       };
 
       console.log(
-        `[SimpleVectorStore] Found index: fileModelKey=${data.meta.modelKey}, fileDim=${data.meta.dimension}, docCount=${data.meta.docCount}`,
+        `[SimpleVectorStore] Found index: fileModelKey=${data.meta.modelKey}, fileDim=${data.meta.dimension}, docCount=${data.meta.docCount}, version=${data.meta.version}`,
       );
 
-      // Hard migration: only v2 is supported (Tiered Semantic Index)
-      if (data.meta.version !== INDEX_VERSION) {
+      // Support v2 (migrate to v3) and v3
+      if (data.meta.version !== 2 && data.meta.version !== 3) {
         console.log(
-          `[SimpleVectorStore] Index version mismatch: file=${data.meta.version}, expected=${INDEX_VERSION}. Moving aside and creating fresh.`,
+          `[SimpleVectorStore] Index version ${data.meta.version} not supported. Moving aside.`,
         );
         await this.moveToDeleted(indexPath, `v${data.meta.version ?? "unknown"}`);
         return false;
@@ -686,6 +796,25 @@ export class SimpleVectorStore implements VectorStore {
         this.noteIdToChunkIds.get(doc.noteId)?.add(doc.chunkId);
       }
 
+      // Load embedded state (v3) or migrate from separate state file (v2)
+      this.noteStates.clear();
+      this.lastFullIndexAt = null;
+
+      if (data.meta.version === 3 && data.meta.state) {
+        // v3: state is embedded in index file
+        this.lastFullIndexAt = data.meta.state.lastFullIndexAt;
+        for (const [notePath, state] of Object.entries(data.meta.state.notes)) {
+          this.noteStates.set(notePath, state);
+        }
+        console.log(`[SimpleVectorStore] Loaded embedded state: ${this.noteStates.size} notes`);
+      } else if (data.meta.version === 2) {
+        // v2: try to migrate state from separate state file
+        await this.migrateStateFromV2();
+        // Mark dirty so we save in v3 format
+        this.dirty = true;
+        console.log(`[SimpleVectorStore] Migrated from v2, will save as v3`);
+      }
+
       console.log(`[SimpleVectorStore] Loaded ${this.docs.size} chunks from disk`);
       return true;
     } catch (error) {
@@ -697,6 +826,49 @@ export class SimpleVectorStore implements VectorStore {
         // ignore
       }
       return false;
+    }
+  }
+
+  /**
+   * Migrate state from v2 separate state file to embedded state.
+   * Looks for state-{modelKey}.json and imports notes map.
+   */
+  private async migrateStateFromV2(): Promise<void> {
+    const statePath = path.join(this.kernel.storagePaths.pluginRoot, `state-${this.modelKey}.json`);
+
+    try {
+      const exists = await fs.promises
+        .access(statePath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (!exists) {
+        console.log(`[SimpleVectorStore] No v2 state file to migrate`);
+        return;
+      }
+
+      const raw = await fs.promises.readFile(statePath, "utf-8");
+      const stateData = JSON.parse(raw) as {
+        version: number;
+        modelKey: string;
+        lastFullIndexAt: number | null;
+        indexingInProgress?: boolean;
+        indexingStartedAt?: number | null;
+        notes: Record<string, EmbeddedNoteState>;
+      };
+
+      // Import state (ignore indexingInProgress - we don't track that anymore)
+      this.lastFullIndexAt = stateData.lastFullIndexAt;
+      for (const [notePath, state] of Object.entries(stateData.notes)) {
+        this.noteStates.set(notePath, state);
+      }
+
+      console.log(`[SimpleVectorStore] Migrated ${this.noteStates.size} notes from v2 state file`);
+
+      // Move old state file to .deleted
+      await this.moveToDeleted(statePath, "migrated-to-v3");
+    } catch (error) {
+      console.warn("[SimpleVectorStore] Failed to migrate v2 state:", error);
     }
   }
 
@@ -739,6 +911,12 @@ export class SimpleVectorStore implements VectorStore {
         });
       }
 
+      // Build embedded state (v3)
+      const embeddedState: EmbeddedIndexState = {
+        lastFullIndexAt: this.lastFullIndexAt,
+        notes: Object.fromEntries(this.noteStates),
+      };
+
       const data = {
         meta: {
           version: INDEX_VERSION,
@@ -749,6 +927,7 @@ export class SimpleVectorStore implements VectorStore {
           updatedAt: Date.now(),
           chunker: CHUNKER_META,
           tiers: TIER_FLAGS,
+          state: embeddedState,
         } as IndexMetadata,
         docs: persistedDocs,
       };
@@ -756,7 +935,9 @@ export class SimpleVectorStore implements VectorStore {
       // Atomic write: temp file + rename for crash safety
       await atomicWriteFile(indexPath, JSON.stringify(data));
       this.dirty = false;
-      console.log(`[SimpleVectorStore] Saved ${persistedDocs.length} chunks`);
+      console.log(
+        `[SimpleVectorStore] Saved ${persistedDocs.length} chunks, ${this.noteStates.size} note states`,
+      );
     } catch (error) {
       console.error("[SimpleVectorStore] Failed to save:", error);
     }

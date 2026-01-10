@@ -15,7 +15,6 @@ import { Notice, Plugin } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
 import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
-import { InitializationStateMachine } from "./core/services";
 // Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
@@ -28,6 +27,7 @@ import { Kernel, type KernelContext } from "./core/kernel";
 // New architecture (Phase 1.8)
 import { LMStudioProvider } from "./core/llm";
 import { SearchPipeline } from "./core/search/pipeline";
+import { InitializationStateMachine } from "./core/services";
 import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { HealthMonitor } from "./services/healthMonitor";
 import { IndexManager } from "./services/indexManager";
@@ -318,7 +318,10 @@ export default class NotientPlugin extends Plugin {
           console.log("[Notient] LM Studio service initialized");
         } catch (lmError) {
           // Scenario P2: LM Studio down → continue in degraded mode
-          console.warn("[Notient] LM Studio initialization failed (chat/reranking disabled):", lmError);
+          console.warn(
+            "[Notient] LM Studio initialization failed (chat/reranking disabled):",
+            lmError,
+          );
           lmStudioFailed = true;
         }
       } else {
@@ -347,16 +350,8 @@ export default class NotientPlugin extends Plugin {
       await this.indexManager.initialize();
       this.kernel.registerService("indexManager", this.indexManager);
 
-      // Check for crash recovery (Scenario I9: indexingInProgress = true on load)
-      const indexStats = await this.indexManager.getStats();
-      if (indexStats.state === "crashed" || indexStats.indexingInProgress) {
-        console.warn("[Notient] Detected interrupted indexing - recovery needed");
-        this.initStateMachine.transition("CRASHED", {
-          crashedReason: "indexing_interrupted",
-          errorMessage: "Previous indexing was interrupted. Recovery options available.",
-        });
-        // Don't return - let UI show recovery options
-      }
+      // v3: No crash detection - partial indices are just partial
+      // User can manually trigger sync or rebuild from settings
 
       this.initStateMachine.updateProgress({
         stage: "index",
@@ -560,7 +555,9 @@ export default class NotientPlugin extends Plugin {
       if (this.initStateMachine.state === "CRASHED") {
         // Stay in CRASHED state - let user choose recovery
         this.kernel.setServicesInitializing(false);
-        this.kernel.obsidian.notice("Previous indexing interrupted. Check settings for recovery options.");
+        this.kernel.obsidian.notice(
+          "Previous indexing interrupted. Check settings for recovery options.",
+        );
         return;
       }
 
@@ -1123,9 +1120,7 @@ export default class NotientPlugin extends Plugin {
         // Check current and queued workflows for the action
         const currentWorkflow = this.workflowRunner.getCurrentWorkflow();
         const queuedWorkflows = this.workflowRunner.getQueuedWorkflows();
-        const workflows = currentWorkflow
-          ? [currentWorkflow, ...queuedWorkflows]
-          : queuedWorkflows;
+        const workflows = currentWorkflow ? [currentWorkflow, ...queuedWorkflows] : queuedWorkflows;
 
         for (const wf of workflows) {
           const found = wf.reviewQueue.find((a: { id: string }) => a.id === actionId);

@@ -75,7 +75,9 @@ export class IndexOptionsModal extends Modal {
         const completeRow = infoBox.createEl("p");
         const completeIcon = completeRow.createSpan({ cls: "notient-index-info-icon" });
         setIcon(completeIcon, "check-circle");
-        completeRow.createSpan({ text: ` Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} passages` });
+        completeRow.createSpan({
+          text: ` Found complete index: ${stats.noteCount} notes, ${stats.chunkCount} passages`,
+        });
         if (stats.lastFullIndexAt) {
           const date = new Date(stats.lastFullIndexAt).toLocaleDateString();
           infoBox.createEl("p", {
@@ -90,7 +92,9 @@ export class IndexOptionsModal extends Modal {
         const incompleteRow = infoBox.createEl("p");
         const incompleteIcon = incompleteRow.createSpan({ cls: "notient-index-info-icon" });
         setIcon(incompleteIcon, "clock");
-        incompleteRow.createSpan({ text: ` Found incomplete index: ${stats.noteCount}/${stats.vaultNoteCount} notes (${stats.completionPercent}%)` });
+        incompleteRow.createSpan({
+          text: ` Found incomplete index: ${stats.noteCount}/${stats.vaultNoteCount} notes (${stats.completionPercent}%)`,
+        });
         infoBox.createEl("p", {
           text: `${stats.vaultNoteCount - stats.noteCount} notes remaining`,
           cls: "notient-index-info-dim",
@@ -98,17 +102,7 @@ export class IndexOptionsModal extends Modal {
         break;
       }
 
-      case "crashed": {
-        const crashedRow = infoBox.createEl("p", { cls: "notient-index-info-warning" });
-        const crashedIcon = crashedRow.createSpan({ cls: "notient-index-info-icon" });
-        setIcon(crashedIcon, "alert-triangle");
-        crashedRow.createSpan({ text: " Previous indexing was interrupted" });
-        infoBox.createEl("p", {
-          text: `${stats.noteCount}/${stats.vaultNoteCount} notes were indexed before interruption`,
-          cls: "notient-index-info-dim",
-        });
-        break;
-      }
+      // v3: "crashed" state removed - partial is just "incomplete"
 
       case "stale": {
         const staleRow = infoBox.createEl("p", { cls: "notient-index-info-warning" });
@@ -161,7 +155,6 @@ export class IndexOptionsModal extends Modal {
         break;
 
       case "incomplete":
-      case "crashed":
         this.addOption(
           optionsDiv,
           "resume",
@@ -170,7 +163,14 @@ export class IndexOptionsModal extends Modal {
           true,
           "play",
         );
-        this.addOption(optionsDiv, "rebuild", "Start Fresh", "Clear and re-index everything", false, "refresh-cw");
+        this.addOption(
+          optionsDiv,
+          "rebuild",
+          "Start Fresh",
+          "Clear and re-index everything",
+          false,
+          "refresh-cw",
+        );
         this.addOption(
           optionsDiv,
           "use_existing",
