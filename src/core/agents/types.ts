@@ -33,8 +33,13 @@ export type UIAgentType = "chat";
 export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
   | "classifier" // PARA classification, tagging
-  | "link-finder" // Find semantic connections (to be renamed: connection)
+  | "connection" // Find semantic connections between notes
   | "context-builder"; // Build context for other agents (internal)
+
+/**
+ * @deprecated Use "connection" instead. Maintained for backwards compatibility.
+ */
+export type LinkFinderType = "connection";
 
 /**
  * All agent types in the system (union of UI and Expert agents).
@@ -101,7 +106,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     contextBudget: 12000,
     outputKind: "conversational",
     canDelegate: true,
-    delegationTargets: ["note-editor", "classifier", "link-finder"],
+    delegationTargets: ["note-editor", "classifier", "connection"],
     contextPriority: 1,
   },
   "note-editor": {
@@ -128,9 +133,9 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     delegationTargets: [],
     contextPriority: 3,
   },
-  "link-finder": {
-    type: "link-finder",
-    name: "Link Finder",
+  connection: {
+    type: "connection",
+    name: "Connection Agent",
     isUI: false, // Expert agent - structured output, routable
     temperature: 0.3,
     maxTokens: 1200,
