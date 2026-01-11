@@ -49,7 +49,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: true,
     temperatureRange: { min: 0.1, max: 0.7 },
     speedTier: "fast",
-    strengths: ["classifier", "link-finder"],
+    strengths: ["classifier", "connection"],
   },
 
   // Qwen series
@@ -58,7 +58,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: false,
     temperatureRange: { min: 0.0, max: 1.0 },
     speedTier: "medium",
-    strengths: ["chat", "note-editor", "link-finder"],
+    strengths: ["chat", "note-editor", "connection"],
   },
   "qwen2.5-3b-instruct": {
     contextWindow: 32768,
@@ -92,7 +92,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: true,
     temperatureRange: { min: 0.0, max: 0.6 },
     speedTier: "slow",
-    strengths: ["note-editor", "link-finder"],
+    strengths: ["note-editor", "connection"],
   },
 };
 

@@ -362,14 +362,14 @@ export class AgentTaskQueue {
    */
   private mapTaskTypeToAgent(
     taskType?: string,
-  ): "chat" | "note-editor" | "classifier" | "link-finder" | undefined {
+  ): "chat" | "note-editor" | "classifier" | "connection" | undefined {
     switch (taskType) {
       case "enrich":
         return "note-editor";
       case "classify":
         return "classifier";
       case "link":
-        return "link-finder";
+        return "connection";
       case "chat":
       case "analyze":
       default:
@@ -470,7 +470,7 @@ export class AgentTaskQueue {
                 case "classifier":
                   resultType = "classification";
                   break;
-                case "link-finder":
+                case "connection":
                   resultType = "links";
                   break;
                 default:

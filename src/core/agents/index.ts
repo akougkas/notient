@@ -36,8 +36,13 @@ export type { AgentSpecialization, AgentOutputFormat, AgentDelegationSpec } from
 export { ChatAgent } from "./chatAgent";
 export { NoteEditorAgent } from "./noteEditorAgent";
 export { ClassifierAgent } from "./classifierAgent";
-export { LinkFinderAgent } from "./linkFinderAgent";
+export { ConnectionAgent } from "./connectionAgent";
 export { ContextBuilderAgent } from "./contextBuilderAgent";
+
+/**
+ * @deprecated Use ConnectionAgent instead. Maintained for backwards compatibility.
+ */
+export { ConnectionAgent as LinkFinderAgent } from "./connectionAgent";
 
 // Workflow agents (Intelligence 2.0)
 export {

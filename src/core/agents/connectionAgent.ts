@@ -1,12 +1,12 @@
 /**
- * Link Finder Agent
+ * Connection Agent
  *
  * Specialist agent for finding semantic connections between notes.
  * Temperature: 0.3 (balanced precision and creativity)
  * Output: Structured JSON (LinkSuggestionsOutput)
  * Context Priority: Note + vault graph + search results
  *
- * Identity: Tier 1 (Core Notient) + Tier 2 (Connection Specialist)
+ * Identity: Tier 1 (Core Notient) + Tier 2 (Knowledge Connector)
  */
 
 import type { UserProfile } from "../../types/profile";
@@ -16,13 +16,13 @@ import { BaseAgent } from "./base";
 import type { AgentContext, AgentEvent, LinkSuggestionsOutput, StructuredOutput } from "./types";
 
 /**
- * Link Finder agent implementation
+ * Connection agent implementation
  */
-export class LinkFinderAgent extends BaseAgent {
+export class ConnectionAgent extends BaseAgent {
   private profile?: UserProfile;
 
   constructor(llm: LLMProvider, profile?: UserProfile) {
-    super(llm, "link-finder");
+    super(llm, "connection");
     this.profile = profile;
   }
 
@@ -34,8 +34,8 @@ export class LinkFinderAgent extends BaseAgent {
   }
 
   /**
-   * Build system prompt for link finding
-   * Uses two-tier identity: Core Notient + Connection Specialist
+   * Build system prompt for connection finding
+   * Uses two-tier identity: Core Notient + Knowledge Connector
    */
   protected buildSystemPrompt(context: AgentContext): string {
     // Build context string
@@ -98,8 +98,8 @@ export class LinkFinderAgent extends BaseAgent {
       contextParts.push(`\nSEARCH QUERY: "${context.search.query}"`);
     }
 
-    // Use unified identity system: Tier 1 (Core Notient) + Tier 2 (Connection Specialist)
-    return buildAgentSystemPrompt("link-finder", this.profile, contextParts.join("\n"));
+    // Use unified identity system: Tier 1 (Core Notient) + Tier 2 (Knowledge Connector)
+    return buildAgentSystemPrompt("connection", this.profile, contextParts.join("\n"));
   }
 
   /**
@@ -152,7 +152,7 @@ export class LinkFinderAgent extends BaseAgent {
 
     return {
       kind: "structured",
-      agentType: "link-finder",
+      agentType: "connection",
       schema: "LinkSuggestionsOutput",
       data: { links: validLinks },
       parseError,
@@ -160,11 +160,11 @@ export class LinkFinderAgent extends BaseAgent {
   }
 
   /**
-   * Execute link finder agent
+   * Execute connection agent
    */
   async *execute(context: AgentContext, signal?: AbortSignal): AsyncIterable<AgentEvent> {
-    yield { type: "started", agentType: "link-finder" };
-    yield { type: "progress", agentType: "link-finder", progress: 10 };
+    yield { type: "started", agentType: "connection" };
+    yield { type: "progress", agentType: "connection", progress: 10 };
 
     const systemPrompt = this.buildSystemPrompt(context);
     const messages = [
@@ -175,14 +175,14 @@ export class LinkFinderAgent extends BaseAgent {
       },
     ];
 
-    this.log(`Finding links for: ${context.currentNote.title}`);
+    this.log(`Finding connections for: ${context.currentNote.title}`);
 
     try {
-      yield { type: "progress", agentType: "link-finder", progress: 30 };
+      yield { type: "progress", agentType: "connection", progress: 30 };
 
       const rawOutput = await this.completeLLM(messages);
 
-      yield { type: "progress", agentType: "link-finder", progress: 70 };
+      yield { type: "progress", agentType: "connection", progress: 70 };
 
       const output = this.parseOutput(rawOutput, context);
       const linkOutput = output.data as LinkSuggestionsOutput;
@@ -190,20 +190,20 @@ export class LinkFinderAgent extends BaseAgent {
       // Emit citations for the suggested links
       const citationPaths = linkOutput.links.map((l) => l.targetPath);
       if (citationPaths.length > 0) {
-        yield { type: "citations", agentType: "link-finder", paths: citationPaths };
+        yield { type: "citations", agentType: "connection", paths: citationPaths };
       }
 
       // Log with distinction between parse error vs no links found
       if (output.parseError) {
         this.warn(`Parse error (returning ${linkOutput.links.length} links): ${output.parseError}`);
       } else {
-        this.log(`Found ${linkOutput.links.length} link suggestions`);
+        this.log(`Found ${linkOutput.links.length} connection suggestions`);
       }
 
-      yield { type: "progress", agentType: "link-finder", progress: 100 };
-      yield { type: "complete", agentType: "link-finder", output };
+      yield { type: "progress", agentType: "connection", progress: 100 };
+      yield { type: "complete", agentType: "connection", output };
     } catch (error) {
-      yield { type: "error", agentType: "link-finder", error: error as Error };
+      yield { type: "error", agentType: "connection", error: error as Error };
     }
   }
 
