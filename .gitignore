@@ -27,3 +27,5 @@ bun.lockb
 
 .playwright-mcp/
 repomix-output.xml
+.claude/get-shit-done
+.claude/commands/gsd
