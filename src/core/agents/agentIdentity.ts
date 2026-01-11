@@ -16,6 +16,22 @@
  *   - Expertise area
  *   - Output format requirements
  *   - Delegation capabilities
+ *
+ * Two-Tier Agent Model:
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │ UI AGENTS (isUI: true)                                                  │
+ * │ - Chat: Conversational interface, detects intent, delegates to experts │
+ * │ - NOT routable by other agents                                         │
+ * │ - Produces conversational output                                       │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ EXPERT AGENTS (isUI: false)                                            │
+ * │ - note-editor, classifier, link-finder, context-builder                │
+ * │ - Specialized domain expertise                                         │
+ * │ - Produce structured output                                            │
+ * │ - Routable via ChiefOfStaff                                            │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * This is why we have 12 expert agents, not 13 — Chat is the UI, not a peer.
  */
 
 import type { UserProfile } from "../../types/profile";
@@ -62,21 +78,38 @@ export interface AgentDelegationSpec {
 
 /**
  * Agent specializations for each agent type
+ *
+ * IMPORTANT: Chat is a UI agent, not an expert agent. It handles conversation
+ * and recognizes when to route to expert agents. All other agents are experts
+ * that produce structured output and are routable via ChiefOfStaff.
  */
 export const AGENT_SPECIALIZATIONS: Record<AgentType, AgentSpecialization> = {
+  /**
+   * Chat Agent - UI Layer (not routable expert)
+   *
+   * Chat is the user's conversational interface to the Research Chief of Staff.
+   * It is NOT a 13th agent that gets routed to — it IS the entry point.
+   * When it recognizes work that needs expert handling, it describes WHAT
+   * needs to be done (edit, classify, find connections) and ChiefOfStaff
+   * handles routing to the appropriate expert.
+   */
   chat: {
-    role: "Senior Advisor & Liaison",
-    mission: `You are the user's primary point of contact within the Research Chief of Staff office.
+    role: "Conversational Interface",
+    mission: `You are the user's conversational interface to the Research Chief of Staff office.
 Your role is to:
-- Have informed, contextual conversations about the current note
-- Answer questions grounded in vault content
-- Identify when specialist expertise is needed and delegate appropriately
-- Synthesize insights from specialists into clear recommendations`,
+- Understand user intent through natural conversation
+- Provide conversational responses grounded in vault content
+- Recognize when specialist expertise is needed
+- Describe WHAT work needs to be done (ChiefOfStaff handles routing)
+
+You are the UI layer — the human-friendly entry point. When users chat with Notient,
+they are chatting with you. When they need specialized work (editing, classifying,
+linking), you recognize the intent and signal it.`,
     expertise: [
-      "Conversational knowledge synthesis",
-      "Question answering with citations",
-      "Identifying user intent and needs",
-      "Coordinating specialist agents",
+      "Natural conversation",
+      "Intent recognition",
+      "Grounded question answering",
+      "Contextual awareness",
     ],
     outputFormat: {
       type: "conversational",
@@ -88,25 +121,24 @@ Your role is to:
     },
     delegation: {
       targets: ["note-editor", "classifier", "link-finder"],
-      protocol: `You can delegate to specialists ONLY for EXPLICIT user requests.
+      protocol: `Recognize when users need expert work and signal the INTENT (not the agent).
 
-WHEN TO DELEGATE (explicit requests only):
-- User says "edit", "improve", "fix" the note → [DELEGATE:note-editor]
-- User says "classify", "categorize", "organize" → [DELEGATE:classifier]
-- User says "find links", "connections", "related notes" → [DELEGATE:link-finder]
+WHEN TO SIGNAL DELEGATION (explicit user requests):
+- User wants editing/improvement → [DELEGATE:edit] "I'll help improve this note."
+- User wants classification/organization → [DELEGATE:classify] "Let me classify this note."
+- User wants connections/links → [DELEGATE:link] "I'll find connections for this note."
 
-WHEN NOT TO DELEGATE (respond directly yourself):
-- Summaries, overviews, or explanations of the note
+WHEN TO RESPOND DIRECTLY (conversational):
 - Questions about the note's content
-- Analysis, insights, or interpretations
-- General conversation or brainstorming
+- Summaries or explanations
+- Analysis or insights
+- General conversation
 
-Signal delegation: [DELEGATE:agent-type]
-Example: User asks "find connections" → "Let me find connections. [DELEGATE:link-finder]"
+Signal format: [DELEGATE:intent-type]
+Intent types: edit, classify, link
 
-IMPORTANT: If the user asks for a summary or asks questions about the note,
-respond directly. Do NOT delegate to link-finder just because you mention
-"connections" or "links" in your response.`,
+IMPORTANT: Signal the INTENT (what needs to be done), not the agent.
+ChiefOfStaff handles routing to the appropriate expert.`,
     },
   },
 

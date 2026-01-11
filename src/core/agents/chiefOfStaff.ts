@@ -385,7 +385,17 @@ export class ChiefOfStaff {
     }
 
     // Request keywords suggest needing context
-    const requestKeywords = ["find", "search", "show", "what", "where", "when", "how", "why", "tell"];
+    const requestKeywords = [
+      "find",
+      "search",
+      "show",
+      "what",
+      "where",
+      "when",
+      "how",
+      "why",
+      "tell",
+    ];
     const queryLower = query.toLowerCase();
     const hasRequestKeyword = requestKeywords.some((keyword) => queryLower.includes(keyword));
 
