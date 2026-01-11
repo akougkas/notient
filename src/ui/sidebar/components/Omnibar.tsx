@@ -84,6 +84,7 @@ export function Omnibar({
   const abortRef = useRef<AbortController | null>(null);
   const deepAbortRef = useRef<AbortController | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const deepButtonRef = useRef<HTMLButtonElement>(null);
 
   // State
   const [query, setQuery] = useState("");
@@ -480,7 +481,8 @@ export function Omnibar({
         }
         if (e.key === "Tab") {
           e.preventDefault();
-          // Focus "Go Deeper" button (handled via SearchDropdown)
+          // Focus "Go Deeper" button
+          deepButtonRef.current?.focus();
           return;
         }
       }
@@ -627,6 +629,7 @@ export function Omnibar({
           onDeepSearch={executeDeepSearch}
           aiUnavailable={aiUnavailable}
           isDeepSearching={isDeepSearching}
+          deepButtonRef={deepButtonRef}
         />
       )}
     </div>

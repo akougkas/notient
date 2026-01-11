@@ -16,6 +16,7 @@
 @import "./components/agent-streams.css";
 @import "./components/chat-view.css";
 @import "./components/omnibar.css";
+@import "./components/search-dropdown.css";
 @import "./components/intelligence-actions.css";
 @import "./components/index-status.css";
 @import "./components/pulse-timeline.css";

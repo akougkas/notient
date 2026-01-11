@@ -4,7 +4,8 @@
  * Shows results that shimmer during AI evaluation, then animate reorder.
  */
 
-import { useLayoutEffect, useRef } from "preact/hooks";
+import type { Ref } from "preact";
+import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
 import { SearchFooter } from "./SearchFooter";
 import { SearchResultItem, type SearchResultItemData } from "./SearchResultItem";
 
@@ -19,6 +20,7 @@ interface SearchDropdownProps {
   onDeepSearch: () => void;
   aiUnavailable?: boolean;
   isDeepSearching?: boolean;
+  deepButtonRef?: Ref<HTMLButtonElement>;
 }
 
 export function SearchDropdown({
@@ -30,6 +32,7 @@ export function SearchDropdown({
   onDeepSearch,
   aiUnavailable,
   isDeepSearching = false,
+  deepButtonRef,
 }: SearchDropdownProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -88,6 +91,24 @@ export function SearchDropdown({
     }
   }, [phase]);
 
+  // Clean up itemRefs when results change to prevent memory leak
+  useEffect(() => {
+    // Remove refs for results that no longer exist
+    const currentIds = new Set(results.map((r) => r.noteId));
+    for (const id of itemRefs.current.keys()) {
+      if (!currentIds.has(id)) {
+        itemRefs.current.delete(id);
+      }
+    }
+  }, [results]);
+
+  // Clear all refs on unmount
+  useEffect(() => {
+    return () => {
+      itemRefs.current.clear();
+    };
+  }, []);
+
   if (!isOpen) return null;
 
   const hasResults = results.length > 0;
@@ -140,6 +161,7 @@ export function SearchDropdown({
         onDeepSearch={onDeepSearch}
         isDeepSearching={isDeepSearching}
         disabled={!hasResults && phase === "idle"}
+        deepButtonRef={deepButtonRef}
       />
     </div>
   );

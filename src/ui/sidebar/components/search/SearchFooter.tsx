@@ -3,15 +3,17 @@
  */
 
 import { setIcon } from "obsidian";
+import type { Ref } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 
 interface SearchFooterProps {
   onDeepSearch: () => void;
   isDeepSearching: boolean;
   disabled?: boolean;
+  deepButtonRef?: Ref<HTMLButtonElement>;
 }
 
-export function SearchFooter({ onDeepSearch, isDeepSearching, disabled }: SearchFooterProps) {
+export function SearchFooter({ onDeepSearch, isDeepSearching, disabled, deepButtonRef }: SearchFooterProps) {
   const iconRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -23,6 +25,7 @@ export function SearchFooter({ onDeepSearch, isDeepSearching, disabled }: Search
   return (
     <div class="nv2-search-footer">
       <button
+        ref={deepButtonRef}
         type="button"
         class={`nv2-search-deep-btn${isDeepSearching ? " nv2-search-deep-btn--loading" : ""}`}
         onClick={onDeepSearch}

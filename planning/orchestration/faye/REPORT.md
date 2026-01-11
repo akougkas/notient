@@ -1,34 +1,50 @@
 # Faye Report
 status: complete
-commit: 5a9df65
+commit: cf51e17
 
 ## did
 
-### P0 Complete
-- src/ui/sidebar/components/search/SearchResultItem.tsx: New component with shimmer loading state
-- src/ui/sidebar/components/search/SearchFooter.tsx: "Go Deeper" button with Shift+Enter hint
-- src/ui/sidebar/components/search/DeepSearchIndicator.tsx: Inline progress during deep search
-- src/ui/sidebar/components/search/SearchDropdown.tsx: Main container with FLIP reorder animation
-- src/ui/sidebar/components/search/index.ts: Re-exports
-- src/ui/sidebar/components/Omnibar.tsx: Full rewrite with progressive search integration
-  - 300ms debounce, min 2 chars
-  - INSTANT phase (no reranking) → EVOLVING phase (AI reranking)
-  - 3s evolving timeout, 15s deep timeout
-  - Keyboard navigation: Arrow Up/Down, Enter, Shift+Enter, ESC, Tab
-  - Click outside to dismiss
-  - Deep search with toast notifications
-  - AI unavailable fallback warning
-- styles.css: Added ~300 lines for search dropdown, shimmer, footer, warning, empty states
+### Phase 2.5 - CSS Fix (P0 BLOCKER)
+- src/ui/styles/components/search-dropdown.css:1-304: NEW FILE with all search dropdown styles
+  - SearchDropdown container (positioned, shadowed, max-height 400px)
+  - nv2-search-warning (AI unavailable banner)
+  - nv2-search-empty, -empty-text, -empty-hint (no results state)
+  - nv2-search-results (scrollable container)
+  - nv2-search-result, --selected, --loading (result rows)
+  - nv2-search-result-icon, -content, -title, -meta, -path, -dot, -time, -snippet, -score
+  - nv2-search-footer, -deep-btn, --loading (Go Deeper row)
+  - nv2-search-deep-icon, --spin, -label
+  - nv2-search-footer-hint with kbd styling
+  - nv2-deep-search-indicator, -spinner, -text, -cancel (inline progress)
+  - @keyframes nv2-shimmer (loading animation)
+  - @keyframes nv2-spin (loader rotation)
+  - @media (prefers-reduced-motion) handling
 
-### P1 Complete
-- src/ui/sidebar/App.tsx:786-800: Added onDeepSearchComplete callback
-  - Converts deep search results to Insight format (top 5)
-  - Adds to agentInsights signal for InsightStream display
-  - Auto-switches to note view when results arrive
+- src/ui/styles/index.css:19: Added import for search-dropdown.css
+
+### P1 Fixes
+- src/ui/sidebar/components/search/SearchDropdown.tsx:91-107: Fixed itemRefs memory leak
+  - Added useEffect to clean up refs for removed results
+  - Added unmount cleanup to clear all refs
+
+- src/ui/sidebar/components/search/SearchFooter.tsx:13,28: Added deepButtonRef prop
+  - Accepts Ref<HTMLButtonElement> for external focus control
+  - Applied to "Go Deeper" button
+
+- src/ui/sidebar/components/search/SearchDropdown.tsx:7,23,35,164: Wired deepButtonRef through
+  - Imported Ref type from preact
+  - Added to props interface
+  - Passed through to SearchFooter
+
+- src/ui/sidebar/components/Omnibar.tsx:87,482-486,632: Implemented Tab → focus "Go Deeper"
+  - Added deepButtonRef useRef
+  - Tab keydown focuses button via deepButtonRef.current?.focus()
+  - Passed ref to SearchDropdown
 
 ## verify
 typecheck: pass
 build: pass
+dev: deployed to vaultex
 
 ## issues
 none
