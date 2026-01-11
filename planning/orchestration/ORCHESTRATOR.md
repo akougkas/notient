@@ -467,29 +467,34 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ## Session State & Checkpoint
 
-**Last Updated**: 2026-01-11 (Post-Gemini Review)
-**Current Phase**: 🔴 CODE RED - Architectural Fixes
+**Last Updated**: 2026-01-11 (Post-Manual Testing)
+**Current Phase**: 🔴 CODE RED Round 2 - Critical Bug Fixes
 **Active Branch**: `ALPHA-SPEC-SPRINT`
 **Build Status**: ✅ Passing
 **Goal**: MVP today
 
 ---
 
-### 🔴 CODE RED Status
+### 🔴 CODE RED Round 2 Status
 
 | Agent | Task | Status |
 |-------|------|--------|
-| **Archie** | WASM Vector Store migration | 🏃 RUNNING |
-| **Faye** | Error Boundaries + App.tsx refactor | 🏃 RUNNING |
-| **Sage** | Review after both complete | ⏳ WAITING |
+| **Archie** | Chat model decoupling + HNSW race fix | 🎯 READY |
+| **Faye** | Agent Streams wiring + Insights | 🎯 READY |
+| **Sage** | Holistic review after both complete | ⏳ WAITING |
 
-**Source**: Gemini consulting review (`planning/gemini.review.md`)
-**Decisions**: `.claude/interviews/code-red-architecture-1768122230/decisions.md`
+**Source**: CEO Manual Testing (logs in conversation)
 
-**Critical Fixes**:
-1. SimpleVectorStore O(N) → WASM HNSW (Archie)
-2. No Error Boundaries → Wrap UI (Faye)
-3. App.tsx 1300 lines → <200 lines (Faye)
+**Round 1 Completed** ✅:
+1. SimpleVectorStore O(N) → WASM HNSW (Archie) - `736880b`
+2. Error Boundaries → Wrap UI (Faye) - `09c4830`
+3. App.tsx 1300 lines → 470 lines (Faye) - `09c4830`
+
+**Round 2 Critical Bugs Found**:
+1. 🔴 Chat model change triggers FULL reinit (destroys index)
+2. 🔴 HNSW WASM race condition (loads async, IndexManager calls too early)
+3. 🟡 Agent Streams view not populating (wiring bug)
+4. 🟡 Insights stream empty (wiring bug)
 
 ---
 
@@ -578,35 +583,73 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **Monitor Code Red Progress**
-   - Archie: WASM vector store (check REPORT.md)
-   - Faye: Error Boundaries + App.tsx (check REPORT.md)
-   - When both done → assign Sage
-
-2. **Continue Vision Interview**
-   - Shadow Layers architecture (Phase 3+)
-   - Psychological Profiler design
-   - MVP scope for today
-
-3. **After Code Red**
-   - Sage reviews all changes
-   - Test in vaultex
-   - Phase 3: Insights Stream
-
-**Launch Commands** (if not running):
+**CODE RED Round 2 - Launch Commands**:
 ```bash
-# Terminal 1 - Archie
+# Terminal 1 - Archie (backend fixes)
 claude "Read and execute planning/orchestration/archie/TASK.md"
 
-# Terminal 2 - Faye
+# Terminal 2 - Faye (UI wiring fixes)
 claude "Read and execute planning/orchestration/faye/TASK.md"
+
+# Terminal 3 - Sage (AFTER Archie + Faye complete)
+claude "Read and execute planning/orchestration/sage/TASK.md"
 ```
 
-**Key Files**:
-- Gemini Review: `planning/gemini.review.md`
-- Code Red Decisions: `.claude/interviews/code-red-architecture-1768122230/decisions.md`
-- Archie Task: `planning/orchestration/archie/TASK.md`
-- Faye Task: `planning/orchestration/faye/TASK.md`
+**Sequence**:
+1. Launch Archie + Faye in parallel
+2. Wait for both to complete (check REPORT.md files)
+3. Launch Sage for holistic review
+4. CEO runs structured test plan (see below)
+5. Phase 3: Insights Stream (if tests pass)
+
+---
+
+### 📋 CEO Structured Test Plan
+
+**Run this AFTER Archie, Faye, and Sage complete.**
+
+#### Pre-Test Verification
+```bash
+bun run typecheck   # Must pass with 0 errors
+bun run build       # Must succeed
+bun run dev         # Deploy to test vault
+```
+
+#### Test Suite
+
+| # | Category | Test | Steps | Expected |
+|---|----------|------|-------|----------|
+| **1** | **Startup** | Clean load | Reload Obsidian → Open sidebar | No errors in console, sidebar renders |
+| **2** | **Startup** | Index loads | Check console for `[IndexManager] Initialized` | Shows note count > 0 |
+| **3** | **Chat Model** | Switch model (no index) | Click Model pill → Select different model | Chat reconnects, index NOT rebuilt |
+| **4** | **Chat Model** | Switch during indexing | Start reindex → Switch chat model mid-way | Indexing continues uninterrupted |
+| **5** | **Chat Model** | Chat history preserved | Send message → Switch model → Check history | Previous messages still visible |
+| **6** | **Embedding Model** | Switch embedding | Settings → Change Ollama model | Full reinit (expected), new index started |
+| **7** | **Agent Streams** | Quick Action → Running | Click "Find Links" in Vitals | Agent card appears in Streams with spinner |
+| **8** | **Agent Streams** | Agent completes | Wait for agent to finish | Card shows "Completed" + duration + "View Results" |
+| **9** | **Agent Streams** | Multiple agents | Click 2 Quick Actions rapidly | Both appear as separate cards |
+| **10** | **Insights** | Insight appears | Agent completes → Check Vitals tab | One-liner insight in InsightStream |
+| **11** | **Search** | Quick search | Type in Omnibar, wait 1s | Results appear (no errors) |
+| **12** | **Search** | Deep search | Type + click DEEP | Progressive results, more thorough |
+| **13** | **Chat** | Basic chat | Send "What is this note about?" | Response streams in |
+| **14** | **Chat** | Chat with context | Open note → Ask about its content | Response references note content |
+| **15** | **Error Recovery** | Error boundary | Trigger render error (if possible) | Friendly error UI, not crash |
+
+#### Console Checks (No Errors Expected)
+- No `[IndexManager] Failed to load index`
+- No `HNSW library not initialized`
+- No `Uncaught TypeError`
+- No `settings:changed` spam when switching chat model
+
+#### Pass Criteria
+- All 15 tests pass
+- Console has no red errors
+- Build size reasonable (< 2MB with WASM)
+
+#### If Tests Fail
+1. Note which test failed
+2. Copy console errors
+3. Report back for targeted fix
 
 ---
 
