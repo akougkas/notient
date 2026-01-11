@@ -27,6 +27,11 @@ export interface NoteVitals {
     /** Age in days since creation */
     ageDays: number;
   };
+  /** Content metrics for contextual actions */
+  content: {
+    wordCount: number;
+    hasCheckboxes: boolean;
+  };
   title: string;
   path: string;
   paraType: string;
@@ -75,6 +80,11 @@ export class NoteVitalsCalculator {
     // Check if indexed
     const isIndexed = indexManager?.isNoteIndexed(file.path) ?? false;
 
+    // Content metrics for contextual actions
+    const content = await this.app.vault.cachedRead(file);
+    const wordCount = this.countWords(content);
+    const hasCheckboxes = this.detectCheckboxes(metadata);
+
     return {
       health: {
         score: healthScore,
@@ -92,6 +102,10 @@ export class NoteVitalsCalculator {
         createdAt,
         modifiedAt,
         ageDays,
+      },
+      content: {
+        wordCount,
+        hasCheckboxes,
       },
       title: file.basename,
       path: file.path,
@@ -202,5 +216,25 @@ export class NoteVitalsCalculator {
     }
     const date = new Date(mtime);
     return date.toLocaleDateString();
+  }
+
+  /**
+   * Count words in content (excluding frontmatter)
+   */
+  private countWords(content: string): number {
+    // Remove frontmatter (YAML between ---)
+    const withoutFrontmatter = content.replace(/^---[\s\S]*?---\n?/, "");
+    // Split on whitespace and filter empty strings
+    const words = withoutFrontmatter.trim().split(/\s+/).filter(Boolean);
+    return words.length;
+  }
+
+  /**
+   * Detect if note contains checkboxes (task list items)
+   */
+  private detectCheckboxes(metadata: CachedMetadata | null): boolean {
+    // Obsidian's listItems include task property for checkboxes
+    const listItems = metadata?.listItems || [];
+    return listItems.some((item) => item.task !== undefined);
   }
 }

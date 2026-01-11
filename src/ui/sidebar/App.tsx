@@ -189,9 +189,9 @@ function AppContent() {
     // Derive note state for contextual action filtering
     const noteState = vitals
       ? {
-          wordCount: 500, // TODO: Add wordCount to NoteVitals
+          wordCount: vitals.content.wordCount,
           linkCount: vitals.links.backlinks + vitals.links.outlinks,
-          hasCheckboxes: false, // TODO: Add checkbox detection to NoteVitals
+          hasCheckboxes: vitals.content.hasCheckboxes,
         }
       : undefined;
     return createNoteQuickActions(

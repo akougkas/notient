@@ -358,12 +358,21 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Map legacy taskType to new agent type
+   * Map taskType to agent type.
+   * Handles both new agent names and legacy task names.
    */
   private mapTaskTypeToAgent(
     taskType?: string,
   ): "chat" | "note-editor" | "classifier" | "connection" | undefined {
     switch (taskType) {
+      // New agent names (pass through)
+      case "note-editor":
+        return "note-editor";
+      case "classifier":
+        return "classifier";
+      case "connection":
+        return "connection";
+      // Legacy task names (map to new agents)
       case "enrich":
         return "note-editor";
       case "classify":

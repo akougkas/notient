@@ -88,7 +88,8 @@ const args = process.argv.slice(2);
 const command = args[0] || "build";
 const flags = new Set(args.slice(1));
 
-const isDev = command === "dev";
+const isDev = command === "dev" || command === "fast";
+const isFast = command === "fast" || flags.has("--fast") || flags.has("-f");
 const isWatch = flags.has("--watch") || flags.has("-w");
 const isClean = flags.has("--clean") || flags.has("-c");
 const isReset = command === "reset";
@@ -268,6 +269,37 @@ async function copyToVault(): Promise<void> {
   }
 
   logSuccess(`${timestamp()} Copied to vault`);
+}
+
+/**
+ * Enable dev mode in plugin settings (skip auto-indexing for faster testing)
+ */
+async function enableDevMode(): Promise<void> {
+  const dataJsonPath = join(VAULT_PLUGIN, "data.json");
+
+  if (!existsSync(dataJsonPath)) {
+    logWarn("No data.json found, skipping dev mode setup");
+    return;
+  }
+
+  try {
+    const content = await Bun.file(dataJsonPath).text();
+    const settings = JSON.parse(content);
+
+    // Ensure advanced section exists
+    if (!settings.advanced) {
+      settings.advanced = {};
+    }
+
+    // Enable dev mode
+    if (!settings.advanced.devSkipAutoIndex) {
+      settings.advanced.devSkipAutoIndex = true;
+      await Bun.write(dataJsonPath, JSON.stringify(settings, null, 2));
+      logSuccess("Dev mode enabled: auto-indexing disabled for faster testing");
+    }
+  } catch (error) {
+    logWarn(`Could not update settings: ${error}`);
+  }
 }
 
 /**
@@ -563,6 +595,7 @@ async function main() {
       break;
     }
 
+    case "fast":
     case "dev": {
       // Clean if requested
       if (isClean) {
@@ -578,6 +611,12 @@ async function main() {
         const result = await build(true);
         if (!result) process.exit(1);
         await copyToVault();
+
+        // Fast mode: enable dev settings (skip auto-indexing)
+        if (isFast) {
+          await enableDevMode();
+        }
+
         console.log();
         logInfo("Reload Obsidian to see changes");
         logInfo(`Vault: ${VAULT_PLUGIN}`);

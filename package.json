@@ -9,7 +9,7 @@
     "build": "bun run typecheck && bun scripts/build.ts build",
     "build:dev": "bun scripts/build.ts dev",
     "dev": "bun run typecheck && bun run lint && bun scripts/build.ts dev",
-    "dev:fast": "bun scripts/build.ts dev",
+    "dev:fast": "bun scripts/build.ts fast",
     "dev:watch": "bun scripts/build.ts dev --watch",
     "dev:clean": "bun run typecheck && bun run lint && bun scripts/build.ts dev --clean",
     "dev:reset": "bun scripts/build.ts reset",

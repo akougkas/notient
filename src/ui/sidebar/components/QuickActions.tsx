@@ -160,17 +160,26 @@ const CONTEXTUAL_ACTIONS: ContextualActionDef[] = [
 function getContextualActions(noteState?: NoteState): ContextualActionDef[] {
   const state = noteState ?? { wordCount: 500, linkCount: 2, hasCheckboxes: false };
 
-  // Sort by condition match (matching first) then by priority
-  const sorted = [...CONTEXTUAL_ACTIONS].sort((a, b) => {
-    const aMatches = a.condition(state) && a.priority < 10;
-    const bMatches = b.condition(state) && b.priority < 10;
+  // Separate into matching conditionals and fallbacks
+  const matching: ContextualActionDef[] = [];
+  const fallbacks: ContextualActionDef[] = [];
 
-    if (aMatches && !bMatches) return -1;
-    if (!aMatches && bMatches) return 1;
-    return a.priority - b.priority;
-  });
+  for (const action of CONTEXTUAL_ACTIONS) {
+    if (action.priority < 10 && action.condition(state)) {
+      // Conditional action whose condition matches
+      matching.push(action);
+    } else if (action.priority >= 10) {
+      // Fallback action (always available)
+      fallbacks.push(action);
+    }
+    // Skip conditional actions whose conditions don't match
+  }
 
-  return sorted.slice(0, 3);
+  // Sort each group by priority, then combine
+  matching.sort((a, b) => a.priority - b.priority);
+  fallbacks.sort((a, b) => a.priority - b.priority);
+
+  return [...matching, ...fallbacks].slice(0, 3);
 }
 
 // =============================================================================
