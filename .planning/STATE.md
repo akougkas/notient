@@ -76,9 +76,18 @@ Progress: ░░░░░░░░░░ 0% (foundations broken)
 ## Session Continuity
 
 Last session: 2026-01-11
-Stopped at: **EMERGENCY STOP** - Application fundamentally broken
-Resume file: `.planning/EMERGENCY-STOP.md`
-Next: Fix foundations before ANY feature work
+Stopped at: **AWAITING EXTERNAL REVIEW** - Debugging prompt sent to GPT/Gemini
+Resume file: `.planning/.continue-here.md`
+
+**Status:** Paused - waiting for external AI feedback on root cause analysis
+
+**What happened:**
+1. Attempted quick fixes (JSON parsing, disable reranker) - didn't help
+2. Deep code analysis identified 4 smoking guns
+3. Created `.planning/DEBUG-PROMPT-EXTERNAL.md` for external review
+4. Asking GPT/Gemini/Claude for diagnosis, theory, validation approach
+
+**Next:** Resume after external feedback, compare diagnoses, create fix plan
 
 ## Validation Checklist (Must Pass Before Continuing)
 
