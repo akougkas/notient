@@ -15,14 +15,35 @@ import type { ChatMessage } from "../llm/types";
 // =============================================================================
 
 /**
- * Specialized agent types in the system
+ * UI Agent Types - Interface layer that delegates to expert agents.
+ *
+ * Chat is a UI layer, not a routable expert. It handles conversation
+ * and recognizes when to route to experts, but is not itself an "expert"
+ * that other agents route to. This is why we have 12 expert agents,
+ * not 13 — Chat is the UI, not a peer agent.
  */
-export type AgentType =
-  | "chat" // Dialogue with user about current note
+export type UIAgentType = "chat";
+
+/**
+ * Expert Agent Types - Specialized domain experts that produce structured output.
+ *
+ * These are the 12 routable expert agents that handle specific tasks.
+ * ChiefOfStaff routes work to these agents based on intent detection.
+ */
+export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
   | "classifier" // PARA classification, tagging
-  | "link-finder" // Find semantic connections
+  | "link-finder" // Find semantic connections (to be renamed: connection)
   | "context-builder"; // Build context for other agents (internal)
+
+/**
+ * All agent types in the system (union of UI and Expert agents).
+ *
+ * Maintains backwards compatibility while establishing the conceptual
+ * distinction between UI agents (conversational interface) and Expert
+ * agents (domain specialists).
+ */
+export type AgentType = UIAgentType | ExpertAgentType;
 
 /**
  * Agent output types - determines parsing strategy
@@ -37,6 +58,20 @@ export interface AgentConfig {
   type: AgentType;
   /** Display name */
   name: string;
+  /**
+   * Whether this is a UI agent (conversational interface) vs Expert agent (domain specialist).
+   *
+   * UI agents (isUI: true):
+   * - Handle user conversation
+   * - Detect intent and route to experts
+   * - Not routable by other agents
+   *
+   * Expert agents (isUI: false):
+   * - Specialized domain expertise
+   * - Produce structured output
+   * - Routable via ChiefOfStaff
+   */
+  isUI: boolean;
   /** LLM temperature (0.0-2.0) */
   temperature: number;
   /** Maximum output tokens */
@@ -60,6 +95,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   chat: {
     type: "chat",
     name: "Chat Agent",
+    isUI: true, // UI layer - conversational interface, not a routable expert
     temperature: 0.7,
     maxTokens: 2000,
     contextBudget: 12000,
@@ -71,6 +107,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   "note-editor": {
     type: "note-editor",
     name: "Note Editor",
+    isUI: false, // Expert agent - structured output, routable
     temperature: 0.3,
     maxTokens: 1500,
     contextBudget: 8000,
@@ -82,6 +119,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   classifier: {
     type: "classifier",
     name: "Classifier",
+    isUI: false, // Expert agent - structured output, routable
     temperature: 0.2,
     maxTokens: 800,
     contextBudget: 6000,
@@ -93,6 +131,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   "link-finder": {
     type: "link-finder",
     name: "Link Finder",
+    isUI: false, // Expert agent - structured output, routable
     temperature: 0.3,
     maxTokens: 1200,
     contextBudget: 10000,
@@ -104,6 +143,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   "context-builder": {
     type: "context-builder",
     name: "Context Builder",
+    isUI: false, // Expert agent - internal, runs as preflight
     temperature: 0.1,
     maxTokens: 500,
     contextBudget: 4000,
