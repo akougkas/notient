@@ -1,6 +1,6 @@
 # Faye Report
-status: partial
-commit: 0876be2
+status: complete
+commit: 5a9df65
 
 ## did
 
@@ -20,17 +20,15 @@ commit: 0876be2
   - AI unavailable fallback warning
 - styles.css: Added ~300 lines for search dropdown, shimmer, footer, warning, empty states
 
-### P1 Pending
-- Wire deep search to Insights Stream (task item 5)
-- App.tsx needs onDeepSearchComplete callback to add results to Insights
+### P1 Complete
+- src/ui/sidebar/App.tsx:786-800: Added onDeepSearchComplete callback
+  - Converts deep search results to Insight format (top 5)
+  - Adds to agentInsights signal for InsightStream display
+  - Auto-switches to note view when results arrive
 
 ## verify
 typecheck: pass
 build: pass
 
 ## issues
-- Deep search results callback exists (onDeepSearchComplete) but not wired in App.tsx yet
-- Needs App.tsx integration to complete P1
-
-## next
-Wire onDeepSearchComplete in App.tsx to add deep search results to InsightStream
+none
