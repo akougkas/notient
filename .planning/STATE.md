@@ -1,73 +1,91 @@
 # Project State
 
+## EMERGENCY STOP
+
+**Status:** HALTED - Foundation broken
+**See:** `.planning/EMERGENCY-STOP.md` for full details
+
+**Symptoms:**
+- CPU 100%, laptop overheating
+- UI frozen, 1+ minute load time
+- All agents fail to produce output
+- Reranker makes 13+ blocking LLM calls per search
+
+**Root Causes:**
+1. thinkingParser.ts destroys JSON from reasoning models
+2. ollamaReranker.ts blocks UI with sequential LLM calls
+3. No async/streaming for heavy operations
+4. 29K chunks loaded synchronously into memory
+
+**Next Session Must:**
+1. Fix LLM response parsing (thinkingParser.ts, openai-compatible.ts)
+2. Fix or remove reranker blocking calls
+3. Make index loading async
+4. Validate basic functionality before ANY new features
+
+---
+
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2025-01-11)
 
 **Core value:** Reliability — Actions complete or fail gracefully. No crashes. Clear errors.
-**Current focus:** Phase 1 complete — Ready for Phase 2 (Insights Stream)
+**Current focus:** ~~Phase 2 (Insights Stream)~~ → **EMERGENCY: Fix foundations**
 
 ## Current Position
 
-Phase: 1 of 8 (Agent Architecture) — COMPLETE
-Plan: 3/3 in current phase
-Status: Phase complete, transitioning to Phase 2
-Last activity: 2026-01-11 — Completed 01-03-PLAN.md (Quick Actions rewire)
+Phase: EMERGENCY PHASE 0 - Foundation Repair
+Plan: N/A - Diagnostic and repair mode
+Status: **HALTED** - Application non-functional
+Last activity: 2026-01-11 — Emergency stop after discovering critical failures
 
-Progress: ██░░░░░░░░ 12.5% (1 of 8 phases)
+Progress: ░░░░░░░░░░ 0% (foundations broken)
 
-## Performance Metrics
+## Critical Issues (P0)
 
-**Velocity:**
-- Total plans completed: 3
-- Average duration: 18 min
-- Total execution time: 55 min
+1. **LLM Pipeline Broken**
+   - `[lmstudio] Using reasoning_content text (no JSON found)` - repeated
+   - `[Note Editor] JSON parse error` → `Generated 0 edit proposals`
+   - Thinking models return JSON in `reasoning_content`, parser destroys it
 
-**By Phase:**
+2. **Reranker CPU Spin**
+   - 13+ sequential blocking LLM calls per search
+   - Each waits for response before next
+   - Freezes UI completely
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 1. Agent Architecture | 3/3 | 55 min | 18 min |
+3. **Memory Exhaustion**
+   - 29,050 chunks loaded at startup
+   - 22,313 embeddings in memory
+   - No lazy loading, no pagination
 
-**Recent Trend:**
-- Last 5 plans: 01-01 (4 min), 01-02 (6 min), 01-03 (45 min)
-- Trend: 01-03 took longer due to contextual logic debugging
+4. **UI Frozen**
+   - Synchronous index loading blocks thread
+   - Preact re-render storms
+   - Signal subscriptions may leak
 
-## Accumulated Context
+## Files Requiring Surgery
 
-### Decisions
-
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- Chat is UI, not agent (avoids 13th agent) — formalized in types.ts with isUI property
-- 3 pinned + 3 contextual Quick Actions — implemented with condition-based filtering
-- All suggestions shown (user dismisses)
-- Intent-based delegation: signal WHAT (edit/classify/connect) not agent type
-- ConnectionAgent is canonical name (link-finder deprecated)
-- NoteVitals extended with content.wordCount and content.hasCheckboxes
-
-### Deferred Issues
-
-See: .planning/ISSUES.md (5 issues documented)
-
-Critical:
-- ISSUE-001: IndexManager fails to save large indices (RangeError: Invalid string length)
-- ISSUE-004: Agent execution doesn't appear in Agent Streams
-- ISSUE-005: UI crashes on multiple simultaneous agent triggers
-
-Medium:
-- ISSUE-002: IntelligenceDb null reference in getTopicForNote
-- ISSUE-003: Slow initialization and indexing
-
-### Blockers/Concerns
-
-- Large vault indexing is broken (exceeds JSON string limit)
-- Agent Streams wiring incomplete — agents show toast but no dashboard card
+| File | Issue | Priority |
+|------|-------|----------|
+| `src/core/chat/thinkingParser.ts` | Destroys JSON from thinking models | P0 |
+| `src/services/ollamaReranker.ts` | 13+ blocking calls per search | P0 |
+| `src/core/llm/providers/openai-compatible.ts` | Doesn't handle reasoning_content | P0 |
+| `src/services/hnswVectorStore.ts` | Synchronous memory loading | P1 |
+| `src/ui/sidebar/App.tsx` | Re-render storms | P1 |
 
 ## Session Continuity
 
 Last session: 2026-01-11
-Stopped at: Post-Phase-1 hotfixes (agent routing, dev mode, boot issues)
-Resume file: .planning/phases/01-agent-architecture/.continue-here.md
-Next: Verify fixes work, then Phase 2
+Stopped at: **EMERGENCY STOP** - Application fundamentally broken
+Resume file: `.planning/EMERGENCY-STOP.md`
+Next: Fix foundations before ANY feature work
+
+## Validation Checklist (Must Pass Before Continuing)
+
+- [ ] Plugin loads in <3 seconds
+- [ ] CPU stays <20% at idle
+- [ ] Chat produces actual responses
+- [ ] Search completes in <2 seconds
+- [ ] Agents generate valid output (not empty/error)
+- [ ] No "JSON parse error" in console
+- [ ] No repeated "no JSON found" messages
