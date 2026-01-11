@@ -113,13 +113,14 @@ Phase N:
 | 1 | Foundation | ✅ | ✅ | ✅ | ✅ Complete |
 | 2 | Progressive Search | ✅ | ✅ | ✅ | ✅ Complete |
 | 2.5 | Search Polish | ✅ | ✅ | ✅ | ✅ Complete |
-| 3 | Insights Stream | PENDING | PENDING | PENDING | 🎯 **NEXT** |
+| **🔴** | **CODE RED** | READY | READY | READY | 🎯 **ACTIVE** |
+| 3 | Insights Stream | PENDING | PENDING | PENDING | After Code Red |
 | 4 | Chat Refinement | PENDING | PENDING | PENDING | Not Started |
 | 5 | Footer & Recovery | PENDING | PENDING | PENDING | Not Started |
 | 6 | UI Polish | PENDING | PENDING | PENDING | Not Started |
 | 7 | Settings Restructure | PENDING | PENDING | PENDING | Not Started |
 
-**Current Phase**: Awaiting Gemini consulting review, then Phase 3
+**Current Phase**: 🔴 CODE RED - Architectural fixes before new features
 
 ---
 
@@ -558,22 +559,20 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **Review Gemini Consulting Report**
-   - CEO has external architectural review from Gemini
-   - Review findings, prioritize issues
-   - Decide if any fixes needed before Phase 3
+1. **🔴 CODE RED: Architectural Review**
+   - Review Gemini consulting report findings
+   - Prioritize architectural issues
+   - NO new features until architecture is solid
 
-2. **Phase 3: Insights Stream** (after review)
-   - Spec: ALPHA-SPEC.md Part 3
-   - Agent responses, deep search results, proactive suggestions
-   - Inline expansion (no modals), type badges
+2. **Assign Code Red Tasks**
+   - Orchestrator creates tasks based on Gemini findings
+   - All agents focus on fixes, not features
+   - Sage reviews all changes
 
-**Recent Commits (Phase 2 + 2.5)**:
-- `fd21c75` style: Format code per biome rules
-- `4de82e2` docs(orchestration): Phase 2.5 tracking
-- `a3110ce` refactor: Simplify progressive search (Sage)
-- `7314bb1` feat: Settings + orchestrator wiring (Archie)
-- `f06acd4` fix: Search CSS + memory leak (Faye)
+3. **Phase 3** (BLOCKED until Code Red complete)
+
+**Branch**: `ALPHA-SPEC-SPRINT`
+**Build**: ✅ Passing
 
 ---
 

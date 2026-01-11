@@ -1,17 +1,19 @@
-# Sage - Awaiting Phase 3
-status: idle
-phase: pending
+# Sage - 🔴 CODE RED
+status: ready
+phase: code-red
 branch: ALPHA-SPEC-SPRINT
 
 ## await
-Phase 3 implementation complete. Then simplification review.
+Archie and Faye complete Code Red fixes. Then review all changes.
 
-## completed (Phase 2.5)
-- main.ts: Extracted disposeServices() - 50+ lines DRY
-- Omnibar.tsx: Cleaner conditionals, removed redundant config
-- search-dropdown.css: 74 lines reduced (17%)
-- SearchDropdown.tsx: Consolidated useEffect hooks
+## focus
+- Review architectural fixes for correctness
+- Ensure no regressions
+- Simplify where possible (use code-simplifier)
+- NO new features
 
-## reminder
-Use `code-simplifier` subagent for all simplification work.
-Do NOT write code directly.
+## rules
+- Use `code-simplifier` subagent only
+- Do NOT write code directly
+- Verify typecheck + build pass
+- Commit with prefix: `refactor(arch):`
