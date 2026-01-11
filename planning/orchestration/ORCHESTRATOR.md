@@ -467,10 +467,29 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ## Session State & Checkpoint
 
-**Last Updated**: 2026-01-11
-**Current Phase**: Phase 2 (Progressive Search)
+**Last Updated**: 2026-01-11 (Post-Gemini Review)
+**Current Phase**: 🔴 CODE RED - Architectural Fixes
 **Active Branch**: `ALPHA-SPEC-SPRINT`
 **Build Status**: ✅ Passing
+**Goal**: MVP today
+
+---
+
+### 🔴 CODE RED Status
+
+| Agent | Task | Status |
+|-------|------|--------|
+| **Archie** | WASM Vector Store migration | 🏃 RUNNING |
+| **Faye** | Error Boundaries + App.tsx refactor | 🏃 RUNNING |
+| **Sage** | Review after both complete | ⏳ WAITING |
+
+**Source**: Gemini consulting review (`planning/gemini.review.md`)
+**Decisions**: `.claude/interviews/code-red-architecture-1768122230/decisions.md`
+
+**Critical Fixes**:
+1. SimpleVectorStore O(N) → WASM HNSW (Archie)
+2. No Error Boundaries → Wrap UI (Faye)
+3. App.tsx 1300 lines → <200 lines (Faye)
 
 ---
 
@@ -559,20 +578,35 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **🔴 CODE RED: Architectural Review**
-   - Review Gemini consulting report findings
-   - Prioritize architectural issues
-   - NO new features until architecture is solid
+1. **Monitor Code Red Progress**
+   - Archie: WASM vector store (check REPORT.md)
+   - Faye: Error Boundaries + App.tsx (check REPORT.md)
+   - When both done → assign Sage
 
-2. **Assign Code Red Tasks**
-   - Orchestrator creates tasks based on Gemini findings
-   - All agents focus on fixes, not features
+2. **Continue Vision Interview**
+   - Shadow Layers architecture (Phase 3+)
+   - Psychological Profiler design
+   - MVP scope for today
+
+3. **After Code Red**
    - Sage reviews all changes
+   - Test in vaultex
+   - Phase 3: Insights Stream
 
-3. **Phase 3** (BLOCKED until Code Red complete)
+**Launch Commands** (if not running):
+```bash
+# Terminal 1 - Archie
+claude "Read and execute planning/orchestration/archie/TASK.md"
 
-**Branch**: `ALPHA-SPEC-SPRINT`
-**Build**: ✅ Passing
+# Terminal 2 - Faye
+claude "Read and execute planning/orchestration/faye/TASK.md"
+```
+
+**Key Files**:
+- Gemini Review: `planning/gemini.review.md`
+- Code Red Decisions: `.claude/interviews/code-red-architecture-1768122230/decisions.md`
+- Archie Task: `planning/orchestration/archie/TASK.md`
+- Faye Task: `planning/orchestration/faye/TASK.md`
 
 ---
 
