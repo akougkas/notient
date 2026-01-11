@@ -123,7 +123,7 @@ interface AgentContext {
 Chat agent can invoke specialist agents:
 ```typescript
 // Chat agent detects delegation trigger
-"I'll analyze this note for connections. [DELEGATE:link-finder]"
+"I'll analyze this note for connections. [DELEGATE:connect]"
 
 // ChiefOfStaff handles delegation
 private async handleDelegation(request: DelegationRequest): Promise<DelegatedResult>

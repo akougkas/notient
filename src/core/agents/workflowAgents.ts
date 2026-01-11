@@ -11,7 +11,7 @@
  * - /synthesize → SynthesisAgent
  * - /tasks → TaskExtractionAgent
  * - /brand → BrandCheckAgent
- * - /connect → ConnectionAgent (alias for LinkFinderAgent)
+ * - /connect → ConnectionAgent
  * - /challenge → AntagonistAgent
  * - /clipping → ClippingAgent
  */

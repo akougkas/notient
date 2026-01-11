@@ -11,7 +11,7 @@
  * - Tier 2: Agent Specialization (role + mission + output format)
  *
  * Agent Types:
- * - Core Agents: chat, note-editor, classifier, link-finder, context-builder
+ * - Core Agents: chat, note-editor, classifier, connection, context-builder
  * - Workflow Agents: enhance, atomic, synthesis, task, brand, connection, antagonist, clipping
  */
 

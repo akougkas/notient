@@ -18,7 +18,7 @@
  * It is NOT a 13th agent that gets routed to. When a request is identified as a
  * "UI request" (no explicit command, no strong intent signals), it flows through
  * Chat for conversational handling without heavyweight context-builder preflight.
- * Expert agents (note-editor, classifier, link-finder, etc.) are the specialists
+ * Expert agents (note-editor, classifier, connection, etc.) are the specialists
  * that handle structured, domain-specific work.
  */
 
@@ -32,7 +32,7 @@ import { isInternalOutput, isStructuredOutput } from "./base";
 import { ChatAgent } from "./chatAgent";
 import { ClassifierAgent } from "./classifierAgent";
 import { ContextBuilderAgent } from "./contextBuilderAgent";
-import { LinkFinderAgent } from "./linkFinderAgent";
+import { ConnectionAgent } from "./connectionAgent";
 import { NoteEditorAgent } from "./noteEditorAgent";
 import type {
   AgentContext,
@@ -84,7 +84,7 @@ export class ChiefOfStaff {
   private chatAgent: ChatAgent;
   private noteEditorAgent: NoteEditorAgent;
   private classifierAgent: ClassifierAgent;
-  private linkFinderAgent: LinkFinderAgent;
+  private connectionAgent: ConnectionAgent;
   private contextBuilderAgent: ContextBuilderAgent;
 
   // Workflow Agents (Intelligence 2.0) - created on demand
@@ -113,7 +113,7 @@ export class ChiefOfStaff {
     this.chatAgent = new ChatAgent(llm, profile);
     this.noteEditorAgent = new NoteEditorAgent(llm, profile);
     this.classifierAgent = new ClassifierAgent(llm, profile);
-    this.linkFinderAgent = new LinkFinderAgent(llm, profile);
+    this.connectionAgent = new ConnectionAgent(llm, profile);
     this.contextBuilderAgent = new ContextBuilderAgent(
       llm,
       searchPipeline,
@@ -272,7 +272,7 @@ export class ChiefOfStaff {
     this.chatAgent.setProfile(profile);
     this.noteEditorAgent.setProfile(profile);
     this.classifierAgent.setProfile(profile);
-    this.linkFinderAgent.setProfile(profile);
+    this.connectionAgent.setProfile(profile);
     this.contextBuilderAgent.setProfile(profile);
 
     // Propagate to any existing workflow agents
@@ -292,7 +292,7 @@ export class ChiefOfStaff {
     this.chatAgent = new ChatAgent(llm, this.profile);
     this.noteEditorAgent = new NoteEditorAgent(llm, this.profile);
     this.classifierAgent = new ClassifierAgent(llm, this.profile);
-    this.linkFinderAgent = new LinkFinderAgent(llm, this.profile);
+    this.connectionAgent = new ConnectionAgent(llm, this.profile);
 
     // Context builder keeps its search pipeline reference
     this.contextBuilderAgent = new ContextBuilderAgent(
@@ -444,9 +444,9 @@ export class ChiefOfStaff {
         case "link":
         case "links":
           return {
-            primaryAgent: "link-finder",
+            primaryAgent: "connection",
             preflightAgents: ["context-builder"],
-            reason: "Slash command: find links",
+            reason: "Slash command: find connections",
           };
       }
     }
@@ -489,9 +489,9 @@ export class ChiefOfStaff {
     // Strong linking signals
     if (intents.link > 0.7) {
       return {
-        primaryAgent: "link-finder",
+        primaryAgent: "connection",
         preflightAgents: ["context-builder"],
-        reason: "Detected linking intent",
+        reason: "Detected connection intent",
       };
     }
 
@@ -797,7 +797,7 @@ export class ChiefOfStaff {
    */
   private getAgent(
     type: AgentType,
-  ): ChatAgent | NoteEditorAgent | ClassifierAgent | LinkFinderAgent | ContextBuilderAgent {
+  ): ChatAgent | NoteEditorAgent | ClassifierAgent | ConnectionAgent | ContextBuilderAgent {
     switch (type) {
       case "chat":
         return this.chatAgent;
@@ -805,8 +805,8 @@ export class ChiefOfStaff {
         return this.noteEditorAgent;
       case "classifier":
         return this.classifierAgent;
-      case "link-finder":
-        return this.linkFinderAgent;
+      case "connection":
+        return this.connectionAgent;
       case "context-builder":
         return this.contextBuilderAgent;
       default:

@@ -25,7 +25,7 @@
  * │ - Produces conversational output                                       │
  * ├─────────────────────────────────────────────────────────────────────────┤
  * │ EXPERT AGENTS (isUI: false)                                            │
- * │ - note-editor, classifier, link-finder, context-builder                │
+ * │ - note-editor, classifier, connection, context-builder                 │
  * │ - Specialized domain expertise                                         │
  * │ - Produce structured output                                            │
  * │ - Routable via ChiefOfStaff                                            │

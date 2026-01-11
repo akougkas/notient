@@ -187,7 +187,7 @@ export interface PARAContext {
 }
 
 /**
- * Vault graph context for link-finder
+ * Vault graph context for connection agent
  */
 export interface VaultGraphContext {
   backlinks: string[];
@@ -318,7 +318,7 @@ export interface ClassificationOutput {
 }
 
 /**
- * Link suggestions from link-finder agent
+ * Link suggestions from connection agent
  */
 export interface LinkSuggestionsOutput {
   links: Array<{
