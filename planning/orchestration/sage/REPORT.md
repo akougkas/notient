@@ -1,72 +1,123 @@
 # Sage Report - Phase 2 Review
 status: blocked
-commit: none
+commit: 213a9b7
 
-## reviewed
+## Modular CSS Architecture Review
 
-### Backend (src/core/search/progressiveSearch.ts)
-- Three-tier progressive search: INSTANT → EVOLVING → DEEP
-- Proper timeout handling with Promise.race
-- AbortController cleanup: combineSignals uses `{ once: true }` - no leak
+### Structure (Excellent)
+```
+src/ui/styles/
+├── index.css              # Entry point - imports all modules
+├── tokens.css             # Design tokens → Obsidian CSS vars
+├── base.css               # Layout, scrollbars, skeletons, tooltips
+├── utilities.css          # Toggles, badges, ghost buttons, alerts
+├── settings.css           # Settings panel
+├── components/            # 14 component files
+│   ├── omnibar.css        # Search input + command dropdown
+│   ├── agent-streams.css  # Agent activity view
+│   ├── chat-view.css      # Chat interface (19KB)
+│   ├── insight-stream.css # AI insights
+│   └── ...
+└── views/
+    ├── modals.css
+    └── modal-content.css
+```
+
+### Build Pipeline
+- `esbuild` bundles `index.css` → `styles.css` (minified in prod)
+- CSS `@import` resolution + concatenation
+
+### Design System Strengths
+1. **Token-based**: Colors, spacing, fonts map to `--nv2-*` vars → Obsidian vars
+2. **Scoped**: All classes prefixed `nv2-` - zero conflicts
+3. **Accessible**: Focus rings, reduced motion, high contrast
+4. **Component-isolated**: Each UI file has matching CSS file
+5. **Animated**: Stagger delays, FLIP reordering, micro-interactions
+
+### Quality Patterns Found
+- Skeleton shimmer animations (`base.css:306-326`)
+- Success/error flash animations (`base.css:355-392`)
+- Capability pulse animations (`agent-streams.css:40-53`)
+- Ripple effects on buttons (`agent-streams.css:498-513`)
+- ARIA-aware focus styling (`tokens.css:96-109`)
+
+---
+
+## Progressive Search Code Review
+
+### Backend (src/core/search/progressiveSearch.ts) - PASS
+- Three-tier: INSTANT → EVOLVING → DEEP
+- Timeout handling with Promise.race
+- combineSignals uses `{ once: true }` - no memory leak
 - dispose() cancels all active deep searches
-- Event emission: 5 new events properly wired
 
-### Events (src/types/events.ts)
-- 5 new event types: progressive-instant, progressive-evolving, deep-started, deep-complete, deep-cancelled
-- Payload interfaces properly typed with SearchResult[]
+### Events (src/types/events.ts) - PASS
+- 5 new events properly typed with SearchResult[]
 
-### Kernel (src/core/kernel.ts)
-- progressiveSearch registered in ServiceRegistry
-- Added to getService/registerService switches
-- Added to dispose() cleanup sequence
+### Kernel Registration - PASS
+- `progressiveSearch` in ServiceRegistry
+- Proper dispose() sequence
 
-### Omnibar (src/ui/sidebar/components/Omnibar.tsx)
-- Rewrite implements progressive search inline (not via orchestrator)
-- Debounced input with abort on new query
-- Cleanup on unmount: clears timeouts, aborts both search and deep search
-- Click-outside handling for dropdown dismiss
+### Omnibar (src/ui/sidebar/components/Omnibar.tsx) - PASS
+- Progressive search inline (not via orchestrator)
+- Debounced input + abort on new query
+- Cleanup on unmount
 
-### Search Components (src/ui/sidebar/components/search/*.tsx)
-- SearchDropdown: FLIP animation for reorder during evolving phase
-- SearchResultItem: Shimmer loading state, PARA icons
-- SearchFooter: "Go Deeper" button with Shift+Enter hint
-- DeepSearchIndicator: Spinner with cancel button
+### Search Components - PASS (code only)
+- SearchDropdown.tsx: FLIP animation for reorder
+- SearchResultItem.tsx: Shimmer loading, PARA icons
+- SearchFooter.tsx: "Go Deeper" button
+- DeepSearchIndicator.tsx: Cancel button
 
-## issues
+---
 
-### CRITICAL: Missing CSS Styles
-The following classes are used in components but NOT defined in styles.css:
+## BLOCKER: Missing Search CSS
 
-**SearchDropdown:**
-- `.nv2-search-dropdown`
-- `.nv2-search-warning`, `.nv2-search-warning-icon`
-- `.nv2-search-empty`, `.nv2-search-empty-text`, `.nv2-search-empty-hint`
-- `.nv2-search-results`
+The search components reference ~30 classes not in any CSS file:
 
-**SearchResultItem:**
-- `.nv2-search-result`, `.nv2-search-result--selected`, `.nv2-search-result--loading`
-- `.nv2-search-result-icon`, `.nv2-search-result-content`
-- `.nv2-search-result-title`, `.nv2-search-result-meta`
-- `.nv2-search-result-path`, `.nv2-search-result-dot`, `.nv2-search-result-time`
-- `.nv2-search-result-snippet`, `.nv2-search-result-score`
+**Need: `components/search-dropdown.css` (or add to `omnibar.css`)**
 
-**SearchFooter:**
-- `.nv2-search-footer`, `.nv2-search-footer-hint`
-- `.nv2-search-deep-btn`, `.nv2-search-deep-btn--loading`
-- `.nv2-search-deep-icon`, `.nv2-search-deep-icon--spin`
-- `.nv2-search-deep-label`
+```css
+/* SearchDropdown */
+.nv2-search-dropdown
+.nv2-search-warning, .nv2-search-warning-icon
+.nv2-search-empty, .nv2-search-empty-text, .nv2-search-empty-hint
+.nv2-search-results
 
-**DeepSearchIndicator:**
-- `.nv2-deep-search-indicator`
-- `.nv2-deep-search-spinner`, `.nv2-deep-search-text`
-- `.nv2-deep-search-cancel`
+/* SearchResultItem */
+.nv2-search-result
+.nv2-search-result--selected
+.nv2-search-result--loading (shimmer)
+.nv2-search-result-icon
+.nv2-search-result-content
+.nv2-search-result-title
+.nv2-search-result-meta
+.nv2-search-result-path, .nv2-search-result-dot, .nv2-search-result-time
+.nv2-search-result-snippet
+.nv2-search-result-score
+
+/* SearchFooter */
+.nv2-search-footer
+.nv2-search-footer-hint
+.nv2-search-deep-btn, .nv2-search-deep-btn--loading
+.nv2-search-deep-icon, .nv2-search-deep-icon--spin
+.nv2-search-deep-label
+
+/* DeepSearchIndicator */
+.nv2-deep-search-indicator
+.nv2-deep-search-spinner
+.nv2-deep-search-text
+.nv2-deep-search-cancel
+```
 
 ### Minor: itemRefs accumulation
-SearchDropdown.tsx `itemRefs.current` Map is never cleared - stale refs accumulate over session.
+SearchDropdown.tsx `itemRefs.current` Map never cleared - stale refs accumulate.
 
-## verify
+---
+
+## Verify
 typecheck: pass
 build: pass (566.8kb)
 
-## action required
-Faye must add CSS styles for all missing classes before Phase 2 can be marked complete.
+## Action Required
+Faye must create `src/ui/styles/components/search-dropdown.css` and add to `index.css` imports.
