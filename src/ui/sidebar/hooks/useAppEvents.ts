@@ -239,11 +239,25 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
 
     switch (task.status) {
       case "running": {
-        const exists = activeAgents.value.some((a) => a.id === task.id);
-        if (exists) {
+        const existingAgent = activeAgents.value.find((a) => a.id === task.id);
+        if (existingAgent) {
+          // Check if transitioning from queued BEFORE updating
+          const wasQueued = existingAgent.status === "queued";
+
+          // Update existing agent (could be transitioning from queued or updating progress)
           activeAgents.value = activeAgents.value.map((agent) =>
-            agent.id === task.id ? { ...agent, progress: task.progress || 0 } : agent,
+            agent.id === task.id
+              ? { ...agent, status: "running" as const, progress: task.progress || 0 }
+              : agent,
           );
+
+          // Only increment runningCount if transitioning from queued
+          if (wasQueued) {
+            agentStatus.value = {
+              ...agentStatus.value,
+              runningCount: agentStatus.value.runningCount + 1,
+            };
+          }
         } else {
           activeAgents.value = [
             ...activeAgents.value,
@@ -251,7 +265,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
               id: task.id,
               type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
               targetNote: task.noteTitle || "Note",
-              status: "running",
+              status: "running" as const,
               progress: task.progress || 0,
               startedAt: new Date(),
             },
@@ -367,6 +381,25 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           ...agentStatus.value,
           runningCount: Math.max(0, agentStatus.value.runningCount - 1),
         };
+        break;
+      }
+
+      case "queued": {
+        // Add task to activeAgents immediately when queued for instant feedback
+        const exists = activeAgents.value.some((a) => a.id === task.id);
+        if (!exists) {
+          activeAgents.value = [
+            ...activeAgents.value,
+            {
+              id: task.id,
+              type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
+              targetNote: task.noteTitle || "Note",
+              status: "queued" as const,
+              progress: 0,
+              startedAt: new Date(),
+            },
+          ];
+        }
         break;
       }
     }

@@ -1,103 +1,27 @@
 # Faye Report
 status: complete
-commit: 09c4830, 3cf943b, 8cdd620
+commit: 85297a2
 
 ## did
 
-### CODE RED: Error Boundaries + App.tsx Refactor
+### Agent Streams Wiring + Insights Fix (code-red-fixes-2)
 
-- src/ui/sidebar/components/ErrorBoundary.tsx:1-80: NEW - Preact class-based error boundary
-  - Catches render errors in child components
-  - Shows friendly fallback UI with "Try Again" button
-  - Logs errors to console for debugging
-  - withErrorBoundary HOC for wrapping components
+- src/ui/sidebar/App.tsx:175-178: Fixed InsightStream reactivity by adding `agentInsights.value` to useMemo dependency array
+  - Bug: useMemo only had `staticInsights` in deps, missed `agentInsights.value`
+  - Result: InsightStream now re-renders when agents complete and emit insights
 
-- src/ui/sidebar/components/InitializationStateView.tsx:1-130: Extracted from App.tsx
-  - Displays init state (UNINITIALIZED → READY/DEGRADED/FAILED)
-  - getStateDisplay, getDegradedMessage, getFailedMessage, getCrashedMessage helpers
+- src/ui/sidebar/hooks/useAppEvents.ts:387-404: Added missing "queued" status handler
+  - Bug: Switch statement only handled running/completed/failed/cancelled
+  - When task enqueued with status "queued", event was ignored
+  - Fix: Added case for "queued" to show tasks immediately in Agent Streams
 
-- src/ui/sidebar/components/SearchResultsView.tsx:1-55: Extracted from App.tsx
-  - Displays search results from Omnibar
-  - Clear button, result list with snippets and scores
-
-- src/ui/sidebar/hooks/useAppEvents.ts:1-370: NEW - All EventBus subscriptions
-  - services:initialized, init:state-changed, health:changed
-  - index:progress, index:complete
-  - workflow:started, workflow:progress, workflow:completed, workflow:failed, workflow:cancelled
-  - action:proposed, action:applied, action:undone
-  - agent:task-update (running/completed/failed/cancelled)
-
-- src/ui/sidebar/state/appHandlers.ts:1-370: NEW - Handler functions
-  - triggerAgenticAction: Routes agentic quick actions via taskQueue
-  - prefillChatAndSwitch: Sends to chat tab
-  - handleRichChatSend: Chat with streaming support
-  - handleChatAction: Inline actions (apply-links, apply-tags, create-note, open-note)
-
-- src/ui/sidebar/App.tsx: Refactored from 1350 → 470 lines (65% reduction)
-  - Root App() wraps AppContent in ErrorBoundary
-  - Each view wrapped in ErrorBoundary (NoteVitals, AgentStreams, Chat)
-  - Uses useAppEvents hook for all event subscriptions
-  - Uses handlers from appHandlers.ts
-  - NoteVitalsContent, AgentStreamsContent, ChatContent sub-components
-
-- src/ui/styles/components/error-boundary.css: NEW - Error boundary CSS
-  - nv2-error-boundary (centered flex container)
-  - nv2-error-boundary-icon (circular red badge)
-  - nv2-error-boundary-title, -message
-  - nv2-error-boundary-button with hover + focus-visible states
-
-- src/ui/styles/index.css: Added import for error-boundary.css
-
-### Post-Refactor Review (5 passes)
-
-- App.tsx:13,77: Removed unused ActionHistory import and actionHistory variable
-- state/appHandlers.ts:31: Exported ACTION_LABELS for shared use
-- hooks/useAppEvents.ts:12: Imports ACTION_LABELS from appHandlers (no duplication)
-- Sub-components use `any` types (intentional for internal helpers)
-
-## structure
-```
-App.tsx (470 lines)
-├── App() - root with ErrorBoundary wrapper
-├── AppContent() - main logic with useAppEvents hook
-├── NoteVitalsContent() - note view (ErrorBoundary wrapped)
-├── AgentStreamsContent() - agents view (ErrorBoundary wrapped)
-├── ChatContent() - chat view (ErrorBoundary wrapped)
-├── NoteVitalsSkeleton()
-└── EmptyState()
-
-New files:
-├── components/ErrorBoundary.tsx (80 lines)
-├── components/InitializationStateView.tsx (130 lines)
-├── components/SearchResultsView.tsx (55 lines)
-├── hooks/useAppEvents.ts (370 lines)
-├── state/appHandlers.ts (370 lines)
-└── styles/components/error-boundary.css (65 lines)
-```
+- src/ui/sidebar/hooks/useAppEvents.ts:241-278: Fixed "running" status transition handling
+  - Bug: When transitioning from "queued" to "running", runningCount was incremented twice
+  - Fix: Check if existing agent was "queued" before updating, only increment runningCount on state change
 
 ## verify
 typecheck: pass
 build: pass
-error-boundary: tested manually, catches and displays errors correctly
 
 ## issues
-
-### Backend issues observed during UI testing (reported to Archie)
-
-1. **Index version mismatch** → full rebuild every startup
-2. **No guard for agent actions** → GPU freeze during indexing
-3. **Link Finder JSON parse** → silent failures
-
-### Archie's fixes reviewed ✅
-
-| Issue | Fix | Verified |
-|-------|-----|----------|
-| INDEX_VERSION 1→3 | hnswVectorStore.ts:42 | ✅ |
-| Indexing guard | appHandlers.ts:61-65,103-107 | ✅ |
-| indexStatus import | appHandlers.ts:25 | ✅ |
-| Link Finder errors | linkFinderAgent.ts:109-160 | ✅ |
-
-Typecheck passes. Ready for user testing.
-
-## status
-AWAITING next task from orchestrator
+none

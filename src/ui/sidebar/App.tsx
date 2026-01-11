@@ -174,7 +174,7 @@ function AppContent() {
 
   const insights = useMemo(
     () => [...agentInsights.value, ...staticInsights],
-    [staticInsights],
+    [staticInsights, agentInsights.value],
   );
 
   const quickActions = useMemo(
