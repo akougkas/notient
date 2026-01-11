@@ -1,173 +1,77 @@
-# Faye - Phase 2: Progressive Search UI
+# Faye - Phase 2.5: Search CSS Fix (BLOCKER)
 status: ready
-phase: p2-s1
+phase: p2.5
 branch: ALPHA-SPEC-SPRINT
 
 ## context
-Phase 2 transforms search into progressive enhancement UX.
-Dropdown appears below Omnibar with results that shimmer during AI evaluation, then animate reorder.
-DEEP search via button/Shift+Enter → toast notification → results to Insights Stream.
-
-Spec: `planning/orchestration/phase-2-progressive-search.md`
-Current Omnibar: `src/ui/sidebar/components/Omnibar.tsx` (has command dropdown, no search dropdown)
+Phase 2 search UI is UNSTYLED. You claimed ~300 lines CSS added but file doesn't exist.
+Sage blocked on this. CEO not happy.
 
 ## do
 
-### 1. Create search dropdown components (P0)
-- src/ui/sidebar/components/search/ (NEW FOLDER)
+### 1. Create search-dropdown.css (P0 BLOCKER)
+- src/ui/styles/components/search-dropdown.css (NEW FILE)
+- Must style ALL classes referenced in search/*.tsx:
 
-- SearchDropdown.tsx:
-  ```typescript
-  interface SearchDropdownProps {
-    isOpen: boolean;
-    results: SearchResultItem[];
-    phase: "idle" | "instant" | "evolving" | "deep";
-    selectedIndex: number;
-    onSelect: (result: SearchResultItem) => void;
-    onDeepSearch: () => void;
-    aiUnavailable?: boolean;
-  }
-  ```
-  - Container with max-height 400px, overflow-y auto
-  - Maps results to SearchResultItem components
-  - Shows SearchFooter at bottom
-  - Shows warning if aiUnavailable
-  - role="listbox", aria-activedescendant for a11y
+```css
+/* SearchDropdown container */
+.nv2-search-dropdown { /* positioned below omnibar, max-height 400px */ }
+.nv2-search-warning { /* AI unavailable banner */ }
+.nv2-search-empty { /* "No results" state */ }
+.nv2-search-results { /* results list */ }
 
-- SearchResultItem.tsx:
-  ```typescript
-  interface SearchResultItemProps {
-    result: SearchResultItem;
-    isSelected: boolean;
-    isLoading: boolean;  // shimmer state
-    onClick: () => void;
-  }
-  ```
-  - Displays: icon, title, path, lastModified, score (if evolving)
-  - Shimmer effect via CSS class `nv2-search-result--loading`
-  - role="option", aria-selected
+/* SearchResultItem */
+.nv2-search-result { /* result row */ }
+.nv2-search-result--selected { /* keyboard selected */ }
+.nv2-search-result--loading { /* shimmer animation */ }
+.nv2-search-result-icon, -content, -title, -meta, -path, -dot, -time, -snippet, -score
 
-- SearchFooter.tsx:
-  - "Go Deeper" button with search icon
-  - Keyboard hint: "Shift+Enter"
-  - Tab focus support
+/* SearchFooter */
+.nv2-search-footer { /* "Go Deeper" row */ }
+.nv2-search-deep-btn, --loading { /* button states */ }
+.nv2-search-deep-icon, --spin { /* icon animation */ }
 
-- DeepSearchIndicator.tsx:
-  - Inline progress shown in Omnibar during deep search
-  - Text: "Deep searching..."
-  - Cancel X button
+/* DeepSearchIndicator */
+.nv2-deep-search-indicator, -spinner, -text, -cancel
+```
 
-### 2. Add CSS animations (P0)
-- styles.css (add to existing file, search section)
+- Include shimmer keyframes:
+```css
+@keyframes nv2-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+```
 
-- Shimmer animation:
-  ```css
-  .nv2-search-result--loading::after {
-    content: "";
-    position: absolute;
-    top: 0; left: -100%;
-    width: 100%; height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-    animation: nv2-shimmer 1.5s infinite;
-  }
-  @keyframes nv2-shimmer { 100% { left: 100%; } }
-  ```
+- Include prefers-reduced-motion
 
-- Respect reduced motion:
-  ```css
-  @media (prefers-reduced-motion: reduce) {
-    .nv2-search-result--loading::after { animation: none; }
-  }
-  ```
+### 2. Add import to index.css (P0)
+- src/ui/styles/index.css
+- Add: `@import "./components/search-dropdown.css";`
 
-- Dropdown styles:
-  ```css
-  .nv2-search-dropdown {
-    position: absolute;
-    top: 100%; left: 0; right: 0;
-    max-height: 400px;
-    overflow-y: auto;
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 0 0 8px 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 100;
-  }
-  ```
-
-### 3. Wire Omnibar to progressive search (P0)
-- src/ui/sidebar/components/Omnibar.tsx
-  - Add state for search dropdown:
-    ```typescript
-    const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
-    const [searchPhase, setSearchPhase] = useState<"idle" | "instant" | "evolving" | "deep">("idle");
-    const [showSearchDropdown, setShowSearchDropdown] = useState(false);
-    const [deepSearchId, setDeepSearchId] = useState<string | null>(null);
-    ```
-  - On input change (after 300ms debounce, min 2 chars):
-    - Get progressiveSearch from kernel
-    - Iterate over search() generator
-    - Update results + phase on each yield
-    - Show dropdown when results arrive
-  - On ESC: clear query, close dropdown
-  - On click outside: close dropdown
-  - On Enter: navigate to first result (if results exist)
-  - On Shift+Enter: trigger deep search
-  - On Tab: focus "Go Deeper" button
-
-### 4. Add FLIP reorder animation (P1)
+### 3. Fix itemRefs memory leak (P1)
 - src/ui/sidebar/components/search/SearchDropdown.tsx
-  - When results change during "evolving" phase:
-    - Record positions before update
-    - Let DOM update
-    - Calculate deltas, apply inverse transform
-    - Animate to final position (300ms ease-out)
-  - Use useLayoutEffect for FLIP technique
+- Clear itemRefs.current when results change or component unmounts
+- Add useEffect cleanup
 
-### 5. Wire deep search to Insights Stream (P1)
-- src/ui/sidebar/App.tsx
-  - Subscribe to "search:deep-complete" event
-  - Convert deep search results to Insight format:
-    ```typescript
-    {
-      text: `Deep search found "${query}": ${result.title}`,
-      priority: "medium",
-      linkPath: result.path,
-      linkText: result.title,
-    }
-    ```
-  - Add to insights array (mixed chronologically)
-
-- Toast notifications:
-  - On deep search start: "Deep search queued - results will appear in Insights"
-  - On complete: "Deep search found X results" with [View] button
-
-### 6. Keyboard navigation (P0)
-- Arrow Up/Down: navigate results
-- Enter: open selected result
-- Shift+Enter: trigger deep search
-- Tab: focus "Go Deeper" button
-- ESC: dismiss dropdown, clear search
+### 4. Implement Tab → focus "Go Deeper" (P1)
+- src/ui/sidebar/components/Omnibar.tsx
+- When Tab pressed with dropdown open, focus the "Go Deeper" button
+- Currently just a comment at line 481-485
 
 ## anti-patterns
-- Don't replace existing command dropdown - search dropdown is separate
-- Don't show search dropdown when typing "/" (command mode)
-- Don't block UI during EVOLVING - shimmer shows progress
-- Don't show stale results - clear on new query
-- Don't add inline styles - use CSS classes
+- Don't add inline styles
+- Don't skip reduced-motion handling
+- Don't forget the shimmer animation
 
 ## verify
 - `bun run typecheck` → pass
 - `bun run build` → pass
-- manual: type query → dropdown appears with results
-- manual: results shimmer during AI evaluation
-- manual: results animate reorder when scores arrive
-- manual: click result → opens note, sidebar stays
-- manual: Shift+Enter → triggers deep search
-- manual: ESC → dismisses dropdown
-- manual: deep complete → toast appears
-- manual: deep results → appear in Insights Stream
+- `bun run dev` → deploy to vaultex
+- manual: search dropdown is styled
+- manual: shimmer animation during evolving
+- manual: Tab focuses "Go Deeper" button
 
 ## git
-files: src/ui/sidebar/components/search/*.tsx, src/ui/sidebar/components/Omnibar.tsx, src/ui/sidebar/App.tsx, styles.css, planning/orchestration/faye/REPORT.md
-msg: "feat(ui): Add progressive search dropdown with shimmer and reorder animations"
+files: src/ui/styles/components/search-dropdown.css, src/ui/styles/index.css, src/ui/sidebar/components/search/SearchDropdown.tsx, src/ui/sidebar/components/Omnibar.tsx, planning/orchestration/faye/REPORT.md
+msg: "fix(ui): Add missing search dropdown CSS and fix memory leak"

@@ -111,7 +111,8 @@ Phase N:
 |-------|------|------|--------|------|--------|
 | 0 | Pre-Planning | ✅ | ✅ | - | ✅ Complete |
 | 1 | Foundation | ✅ | ✅ | ✅ | ✅ Complete |
-| 2 | Progressive Search | 90% | ✅ | PENDING | 🎯 **ACTIVE** |
+| 2 | Progressive Search | ✅ | ✅ | ✅ | ✅ Complete |
+| 2.5 | Search Polish | ✅ | ✅ | READY | 🎯 **SIMPLIFY** |
 | 3 | Insights Stream | PENDING | PENDING | PENDING | Not Started |
 | 4 | Chat Refinement | PENDING | PENDING | PENDING | Not Started |
 | 5 | Footer & Recovery | PENDING | PENDING | PENDING | Not Started |
@@ -557,21 +558,22 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **Phase 2 P1 Finish** (10 min)
-   - Faye: Wire `onDeepSearchComplete` in App.tsx → InsightStream
-   - Small task, can be done inline or via TASK.md
+1. **Phase 2.5: Simplification** (Sage)
+   - Run code-simplifier on 6 modified files
+   - Archie wired Omnibar → orchestrator (CEO decision: Option A ✅)
 
-2. **Phase 2 Review**
-   - Sage: Review ProgressiveSearchOrchestrator + SearchDropdown components
-   - Focus: Code clarity, error handling, edge cases
+2. **Awaiting**: Gemini consulting review results
 
-3. **Phase 3: Insights Stream**
-   - Depends on Phase 2 complete
-   - Deep search results → Insights integration
+3. **Phase 3** (after Sage): Insights Stream
 
-**Commits This Session**:
-- `7b6833a` feat(search): Add ProgressiveSearchOrchestrator
-- `0876be2` feat(ui): Add progressive search dropdown
+**Launch Command**:
+```bash
+claude "Read and execute planning/orchestration/sage/TASK.md"
+```
+
+**Phase 2.5 Commits**:
+- `7314bb1` Archie: Settings + orchestrator wiring
+- `f06acd4` Faye: CSS + memory leak fix + Tab focus
 
 ---
 

@@ -1,6 +1,6 @@
 # Archie Report
 status: complete
-commit: pending
+commit: 7314bb1
 
 ## did
 - src/types/settings.ts:117-133: Added SearchSettings.progressive interface
