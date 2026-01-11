@@ -121,6 +121,16 @@ export interface SearchSettings {
     enableReranking: boolean;
     minScore: number;
   };
+
+  /** Progressive search settings */
+  progressive: {
+    /** Enable progressive search vs legacy (default: true) */
+    enabled: boolean;
+    /** Display AI scores in results (default: false) */
+    showScores: boolean;
+    /** Auto-trigger deep search for complex queries (default: false) */
+    autoDeep: boolean;
+  };
 }
 
 export interface IndexingSettings {
@@ -184,6 +194,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
   search: {
     preset: "balanced",
     custom: { topK: 10, enableReranking: true, minScore: 0.3 },
+    progressive: { enabled: true, showScores: false, autoDeep: false },
   },
   advanced: {
     debugLogging: false,

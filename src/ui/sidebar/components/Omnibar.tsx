@@ -16,7 +16,7 @@ import {
   parseSlashCommand,
 } from "../../../core/agentic/commandParser";
 import type { ActionOrchestrator } from "../../../core/intelligence/actionOrchestrator";
-import type { SearchPipeline } from "../../../core/search/pipeline";
+import type { ProgressiveSearchOrchestrator } from "../../../core/search/progressiveSearch";
 import type { SearchResult } from "../../../types/search";
 import type { SearchPreset } from "../../../types/settings";
 import { useKernel } from "../context/KernelContext";
@@ -186,7 +186,7 @@ export function Omnibar({
     [],
   );
 
-  // Execute progressive search
+  // Execute progressive search using ProgressiveSearchOrchestrator
   const executeProgressiveSearch = useCallback(
     async (searchQuery: string) => {
       const trimmed = searchQuery.trim();
@@ -202,50 +202,45 @@ export function Omnibar({
       abortRef.current = new AbortController();
       const signal = abortRef.current.signal;
 
-      const searchPipeline = kernel.getService<SearchPipeline>("search");
-      if (!searchPipeline) {
-        console.warn("[Omnibar] SearchPipeline not available");
+      const progressiveSearch = kernel.getService<ProgressiveSearchOrchestrator>("progressiveSearch");
+      if (!progressiveSearch) {
+        console.warn("[Omnibar] ProgressiveSearchOrchestrator not available");
         return;
       }
 
-      setSearchPhase("instant");
       setShowSearchDropdown(true);
       setAiUnavailable(false);
       onSearchStart?.(trimmed);
 
       try {
-        // Phase 1: INSTANT (quick search - no reranking)
-        const instantResults = await searchPipeline.search(trimmed, { enableReranking: false });
-        if (signal.aborted) return;
-
-        const instantItems = instantResults
-          .slice(0, SEARCH_CONFIG.maxDropdownResults)
-          .map((r) => toSearchResultItem(r, "instant", true));
-        setSearchResults(instantItems);
-        onResults?.(instantResults, trimmed);
-
-        // Phase 2: EVOLVING (with AI reranking)
-        setSearchPhase("evolving");
-
-        try {
-          const evolvedResults = await Promise.race([
-            searchPipeline.search(trimmed, { enableReranking: true }),
-            new Promise<SearchResult[]>((_, reject) =>
-              setTimeout(() => reject(new Error("timeout")), SEARCH_CONFIG.evolvingTimeoutMs),
-            ),
-          ]);
+        // Use the orchestrator's generator for progressive search
+        for await (const event of progressiveSearch.search(trimmed, signal)) {
           if (signal.aborted) return;
 
-          const evolvedItems = evolvedResults
-            .slice(0, SEARCH_CONFIG.maxDropdownResults)
-            .map((r) => toSearchResultItem(r, "evolving", false));
-          setSearchResults(evolvedItems);
-          onResults?.(evolvedResults, trimmed);
-        } catch (error) {
-          // AI reranking failed or timed out - keep instant results
-          if (!signal.aborted) {
-            setAiUnavailable(true);
-            setSearchResults((prev) => prev.map((r) => ({ ...r, isLoading: false })));
+          if (event.phase === "instant") {
+            if (event.status === "started") {
+              setSearchPhase("instant");
+            } else if (event.status === "complete" && event.results) {
+              const instantItems = event.results
+                .slice(0, SEARCH_CONFIG.maxDropdownResults)
+                .map((r) => toSearchResultItem(r, "instant", true));
+              setSearchResults(instantItems);
+              onResults?.(event.results, trimmed);
+            }
+          } else if (event.phase === "evolving") {
+            if (event.status === "started") {
+              setSearchPhase("evolving");
+            } else if (event.status === "complete" && event.results) {
+              const evolvedItems = event.results
+                .slice(0, SEARCH_CONFIG.maxDropdownResults)
+                .map((r) => toSearchResultItem(r, "evolving", false));
+              setSearchResults(evolvedItems);
+              onResults?.(event.results, trimmed);
+            } else if (event.status === "failed") {
+              // AI reranking failed - keep instant results
+              setAiUnavailable(true);
+              setSearchResults((prev) => prev.map((r) => ({ ...r, isLoading: false })));
+            }
           }
         }
 
@@ -282,13 +277,13 @@ export function Omnibar({
     [executeProgressiveSearch],
   );
 
-  // Execute deep search
+  // Execute deep search using ProgressiveSearchOrchestrator
   const executeDeepSearch = useCallback(async () => {
     const trimmed = query.trim();
     if (!trimmed) return;
 
-    const searchPipeline = kernel.getService<SearchPipeline>("search");
-    if (!searchPipeline) {
+    const progressiveSearch = kernel.getService<ProgressiveSearchOrchestrator>("progressiveSearch");
+    if (!progressiveSearch) {
       new Notice("Search system not available");
       return;
     }
@@ -296,26 +291,24 @@ export function Omnibar({
     // Abort previous deep search
     deepAbortRef.current?.abort();
     deepAbortRef.current = new AbortController();
+    const signal = deepAbortRef.current.signal;
 
     setIsDeepSearching(true);
     setShowSearchDropdown(false);
     new Notice("Deep search started - results will appear in Insights");
 
     try {
-      const results = await Promise.race([
-        searchPipeline.search(trimmed, { enableReranking: true, topK: 50 }),
-        new Promise<SearchResult[]>((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), SEARCH_CONFIG.deepTimeoutMs),
-        ),
-      ]);
+      const result = await progressiveSearch.deepSearch(trimmed, signal);
 
-      const deepItems = results.map((r) => toSearchResultItem(r, "deep", false));
-      new Notice(`Deep search found ${results.length} results`);
-      onDeepSearchComplete?.(deepItems, trimmed);
-    } catch (error) {
-      if (error instanceof Error && error.message !== "timeout") {
-        console.error("[Omnibar] Deep search failed:", error);
+      if (result.cancelled) {
+        new Notice("Deep search cancelled");
+      } else {
+        const deepItems = result.results.map((r) => toSearchResultItem(r, "deep", false));
+        new Notice(`Deep search found ${result.results.length} results`);
+        onDeepSearchComplete?.(deepItems, trimmed);
       }
+    } catch (error) {
+      console.error("[Omnibar] Deep search failed:", error);
       new Notice("Deep search completed with partial results");
     } finally {
       setIsDeepSearching(false);

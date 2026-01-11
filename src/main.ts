@@ -28,6 +28,7 @@ import { Kernel, type KernelContext } from "./core/kernel";
 // New architecture (Phase 1.8)
 import { LMStudioProvider } from "./core/llm";
 import { SearchPipeline } from "./core/search/pipeline";
+import { ProgressiveSearchOrchestrator } from "./core/search/progressiveSearch";
 import { InitializationStateMachine } from "./core/services";
 import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { HealthMonitor } from "./services/healthMonitor";
@@ -59,6 +60,7 @@ export default class NotientPlugin extends Plugin {
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
+  private progressiveSearch: ProgressiveSearchOrchestrator | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
   // Phase 3: Note intelligence (summaries + health)
@@ -213,6 +215,7 @@ export default class NotientPlugin extends Plugin {
       }
       this.vaultVitals?.dispose();
       this.contextBuilder = null;
+      this.progressiveSearch?.dispose();
       this.searchPipeline?.dispose();
       this.indexer?.dispose();
       if (this.indexManager) {
@@ -406,6 +409,10 @@ export default class NotientPlugin extends Plugin {
       );
       await this.searchPipeline.initialize();
       this.kernel.registerService("search", this.searchPipeline);
+
+      // Progressive search orchestrator (INSTANT → EVOLVING → DEEP)
+      this.progressiveSearch = new ProgressiveSearchOrchestrator(this.searchPipeline, eventBus);
+      this.kernel.registerService("progressiveSearch", this.progressiveSearch);
 
       // Vault context builder (for RAG)
       this.contextBuilder = new VaultContextBuilder(this.kernel);
@@ -994,6 +1001,7 @@ export default class NotientPlugin extends Plugin {
       this.notientAgent = null;
       this.llmProvider?.dispose();
       this.noteIntelligence?.dispose();
+      this.progressiveSearch?.dispose();
       this.searchPipeline?.dispose();
       this.contextBuilder = null;
       this.indexer?.dispose();
