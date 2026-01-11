@@ -1,0 +1,28 @@
+{
+  "roundNumber": 4,
+  "timestamp": "2026-01-10T20:10:00Z",
+  "category": "Decision & Task Update",
+  "questions": [
+    {
+      "id": "q1",
+      "header": "LLM Delegate",
+      "question": "LLM is outputting [DELEGATE:link-finder] for summary requests. Tune it down?",
+      "answer": "Tune prompt",
+      "notes": "Modify chat system prompt to be less eager to delegate. Only delegate for explicit edit/link/classify requests."
+    }
+  ],
+  "decisions": {
+    "linkFinderFix": "Add same JSON sanitization as ClassifierAgent",
+    "chatPromptTuning": "Add guidance to only delegate on explicit requests",
+    "embeddingTimeout": "Optional - low priority"
+  },
+  "taskUpdate": {
+    "archie": "Updated TASK.md with Round 2 fixes: LinkFinder JSON, chat prompt tuning",
+    "faye": "No changes needed - Quick Actions fix already applied and working"
+  },
+  "nextSteps": [
+    "Run Archie to apply Round 2 fixes",
+    "Retest after fixes",
+    "If clean, move to Phase 2 planning"
+  ]
+}

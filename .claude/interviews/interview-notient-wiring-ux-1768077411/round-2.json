@@ -1,0 +1,41 @@
+{
+  "roundNumber": 2,
+  "timestamp": "2026-01-10T19:42:00Z",
+  "category": "Architecture Depth",
+  "questions": [
+    {
+      "id": "q1",
+      "header": "Progressive",
+      "question": "What does 'Progressive Search' in Phase 2 add to existing 3-tier?",
+      "answer": "Stream tiers",
+      "notes": "Show Quick results immediately, stream in Balanced/Deep results as they complete. Additive/progressive display."
+    },
+    {
+      "id": "q2",
+      "header": "Omnibar UX",
+      "question": "How should user control search depth?",
+      "answer": "Modifier keys",
+      "notes": "Default = Balanced. Shift+Enter = Deep. Quick queries auto-detected. Power user shortcut."
+    },
+    {
+      "id": "q3",
+      "header": "Ph 5-7",
+      "question": "What needs replanning for Phases 5-7?",
+      "answer": "Keep iterating on phases 1-4, rest will be redefined",
+      "notes": "Focus on 1-4 first. Phases 5-7 scope will emerge from fixes and iterations."
+    },
+    {
+      "id": "q4",
+      "header": "Retest?",
+      "question": "Retest Archie's fixes before more changes?",
+      "answer": "Retest first",
+      "notes": "Build and test in vaultex with Archie's fixes. Identify remaining issues before Faye's changes."
+    }
+  ],
+  "analysis": "Progressive Search means streaming/additive results across tiers. Omnibar uses modifier keys (Shift+Enter for Deep). Phases 5-7 deferred - focus on 1-4. CRITICAL: Retest Archie's fixes before continuing with Faye's work.",
+  "actionItems": [
+    "Build with Archie's fixes (commit f82965e)",
+    "Test in vaultex: Quick Actions, Chat delegation, reranker",
+    "Document remaining issues before Faye's changes"
+  ]
+}

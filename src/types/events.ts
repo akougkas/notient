@@ -48,7 +48,13 @@ export type EventType =
   | "migration:started"
   | "migration:progress"
   | "migration:completed"
-  | "migration:failed";
+  | "migration:failed"
+  // Progressive search events
+  | "search:progressive-instant"
+  | "search:progressive-evolving"
+  | "search:deep-started"
+  | "search:deep-complete"
+  | "search:deep-cancelled";
 
 /** Event payload mapping */
 export interface EventPayloads {
@@ -89,6 +95,12 @@ export interface EventPayloads {
   "migration:progress": MigrationProgressEvent;
   "migration:completed": MigrationCompletedEvent;
   "migration:failed": MigrationFailedEvent;
+  // Progressive search events
+  "search:progressive-instant": ProgressiveInstantEvent;
+  "search:progressive-evolving": ProgressiveEvolvingEvent;
+  "search:deep-started": DeepSearchStartedEvent;
+  "search:deep-complete": DeepSearchCompleteEvent;
+  "search:deep-cancelled": DeepSearchCancelledEvent;
 }
 
 export interface AgentTaskUpdateEvent {
@@ -288,6 +300,37 @@ export interface MigrationCompletedEvent {
 export interface MigrationFailedEvent {
   migration: import("../core/importer/migrationService").MigrationStatus;
   error: string;
+}
+
+// =============================================================================
+// Progressive Search Events
+// =============================================================================
+
+export interface ProgressiveInstantEvent {
+  query: string;
+  results: SearchResult[];
+}
+
+export interface ProgressiveEvolvingEvent {
+  query: string;
+  results: SearchResult[];
+  reordered: boolean;
+}
+
+export interface DeepSearchStartedEvent {
+  searchId: string;
+  query: string;
+}
+
+export interface DeepSearchCompleteEvent {
+  searchId: string;
+  query: string;
+  results: SearchResult[];
+  durationMs: number;
+}
+
+export interface DeepSearchCancelledEvent {
+  searchId: string;
 }
 
 /** Event listener function type */

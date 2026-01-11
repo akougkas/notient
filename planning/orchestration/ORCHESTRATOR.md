@@ -480,13 +480,21 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 | 1.5: Logging | ✅ DONE | `255eb69` |
 | 2: Implementation | ✅ DONE | `4810494` (Archie), `7483571` (Faye) |
 | 2.5: Simplification | ✅ DONE | `eb9f12c` (Sage) |
-| 3: Baseline Audit | 🎯 NEXT | Full checklist per phase-1-breakdown.md |
+| 3: Wiring Audit | ✅ DONE | Diagnosis complete, 5 bugs found |
+| 3.5: Wiring Fixes | 🎯 ACTIVE | Archie + Faye tasks assigned |
 | 4: Final Review | ⏸️ PENDING | - |
 
 **Stage 2 Fixes Applied**:
 - Archie: Always register services, graceful degradation
 - Faye: useService hook now reactive (useState + useEffect)
 - Sage: Simplified implementation code
+
+**Stage 3 Wiring Bugs Found**:
+1. ChatAgent over-delegates based on LLM output keywords
+2. 2/6 Quick Actions use sendToChat() instead of triggerAgent()
+3. JSON parse failures in Classifier and NoteEditor agents
+4. Reranker service returns garbage ("isyes", "documentno")
+5. Agent results emit twice (sync + async paths)
 
 ---
 
@@ -549,15 +557,25 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **Stage 3: Baseline Audit** (Full Checklist)
-   - Test all Quick Actions, Omnibar, Chat, Agent Streams
-   - Checklist in `phase-1-breakdown.md` lines 141-179
-   - Duration: 1-2 hours
-   - Assign: Archie + Faye parallel
+1. **Stage 3.5: Wiring Fixes** (ACTIVE)
+   - Run Archie + Faye in parallel terminals
+   - Archie: Backend fixes (ChatAgent delegation, JSON parsing, reranker)
+   - Faye: Frontend fixes (Quick Actions consistency, dedupe emissions)
+   - Duration: 1-2 hours per agent
 
-2. **After Phase 1 Complete**:
+2. **After Stage 3.5 Complete**:
+   - Run Sage for code simplification
+   - Stage 4: Final baseline testing
    - User approval for vaultex testing
-   - Plan Phase 2 (Progressive Search)
+
+**Launch Commands**:
+```bash
+# Terminal 1 - Archie (backend wiring fixes)
+claude "Read and execute planning/orchestration/archie/TASK.md"
+
+# Terminal 2 - Faye (frontend wiring fixes)
+claude "Read and execute planning/orchestration/faye/TASK.md"
+```
 
 ---
 

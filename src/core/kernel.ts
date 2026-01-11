@@ -33,6 +33,7 @@ import type { SimpleIndexer } from "./indexer/simpleIndexer";
 import type { ActionOrchestrator } from "./intelligence/actionOrchestrator";
 import type { NoteIntelligenceService } from "./intelligence/noteIntelligence";
 import type { LLMProvider } from "./llm/provider";
+import type { ProgressiveSearchOrchestrator } from "./search/progressiveSearch";
 import type { SearchPipeline } from "./search/pipeline";
 import type { SimpleVaultVitals } from "./vitals/simpleVitals";
 
@@ -66,6 +67,7 @@ export interface ServiceRegistry {
   indexManager: IndexManager;
   indexer: SimpleIndexer;
   search: SearchPipeline;
+  progressiveSearch: ProgressiveSearchOrchestrator;
   context: VaultContextBuilder;
   vitals: SimpleVaultVitals;
   intelligence: NoteIntelligenceService;
@@ -122,6 +124,7 @@ export class Kernel {
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
+  private progressiveSearch: ProgressiveSearchOrchestrator | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
   private vaultVitals: SimpleVaultVitals | null = null;
   private agentTaskQueue: AgentTaskQueue | null = null;
@@ -338,6 +341,9 @@ export class Kernel {
       case "search":
         this.searchPipeline = service as SearchPipeline;
         break;
+      case "progressiveSearch":
+        this.progressiveSearch = service as ProgressiveSearchOrchestrator;
+        break;
       case "context":
         this.contextBuilder = service as VaultContextBuilder;
         break;
@@ -416,6 +422,8 @@ export class Kernel {
         return this.indexer;
       case "search":
         return this.searchPipeline;
+      case "progressiveSearch":
+        return this.progressiveSearch;
       case "context":
         return this.contextBuilder;
       case "vitals":
@@ -477,6 +485,7 @@ export class Kernel {
       // Phase 3 services
       this.intelligence,
       this.contextBuilder,
+      this.progressiveSearch,
       this.searchPipeline,
       this.indexer,
       this.indexManager,

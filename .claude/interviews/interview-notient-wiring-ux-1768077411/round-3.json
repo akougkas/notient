@@ -1,0 +1,44 @@
+{
+  "roundNumber": 3,
+  "timestamp": "2026-01-10T19:55:00Z",
+  "category": "Retest Results",
+  "type": "observation",
+  "testResults": {
+    "fixed": [
+      "Reranker parsing now correctly infers yes/no from malformed responses",
+      "Numeric score extraction working (0.5 parsed from mixed text)",
+      "No more 'Unexpected response' spam with default 0.3 fallback"
+    ],
+    "stillBroken": [
+      {
+        "issue": "LinkFinderAgent JSON parse error",
+        "evidence": "[Link Finder] JSON parse error: Unexpected token '*'",
+        "cause": "LLM outputs markdown ** inside JSON",
+        "fix": "Apply same JSON sanitization as ClassifierAgent"
+      },
+      {
+        "issue": "Chat delegation still happening",
+        "evidence": "[ChiefOfStaff] Delegation: chat -> link-finder after Summary action",
+        "cause": "Either stale build or LLM outputting explicit [DELEGATE:] markers",
+        "fix": "Verify build includes Archie's changes OR check LLM prompt"
+      },
+      {
+        "issue": "Embedding timeouts",
+        "evidence": "Error: Embedding timed out after 30000ms",
+        "cause": "Large files (IOWarp tech reports) exceeding timeout",
+        "fix": "Increase timeout OR chunk large files before embedding"
+      },
+      {
+        "issue": "Empty reranker responses",
+        "evidence": "Could not parse response: \"\", falling back to vector score",
+        "cause": "Occasional model empty output",
+        "fix": "Already has fallback, low priority"
+      }
+    ]
+  },
+  "actionItems": [
+    "Add LinkFinderAgent to Archie's task (same JSON sanitization fix)",
+    "Verify git status - is Archie's commit applied?",
+    "Check if LLM is outputting explicit [DELEGATE:] markers in response"
+  ]
+}
