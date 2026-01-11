@@ -92,7 +92,7 @@ export function useService<T>(name: string): T | null {
     });
 
     return () => unsubscribe();
-  }, [kernel, name]);
+  }, [kernel, name, service]);
 
   return service;
 }

@@ -10,6 +10,27 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
+ * Check if error code indicates Windows file-locking issue.
+ */
+function isRetryableError(code: string | undefined): boolean {
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+
+/**
+ * Fallback rename using copy + delete.
+ * Returns true if successful, false otherwise.
+ */
+async function copyAndDelete(src: string, dest: string): Promise<boolean> {
+  try {
+    await fs.promises.copyFile(src, dest);
+    await fs.promises.unlink(src);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Rename with retry for Windows EPERM issues.
  * Windows can temporarily lock files (antivirus, indexing, etc.)
  */
@@ -25,21 +46,16 @@ async function renameWithRetry(
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      // EPERM, EBUSY, EACCES are all Windows file-locking related
-      const isRetryable = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      const isRetryable = isRetryableError(code);
       const isLastAttempt = attempt === maxRetries - 1;
 
-      if (!isRetryable || isLastAttempt) {
-        // Last resort: try copy + delete instead of rename
-        if (isRetryable) {
-          try {
-            await fs.promises.copyFile(src, dest);
-            await fs.promises.unlink(src);
-            return;
-          } catch {
-            // Copy failed too, throw original error
-          }
-        }
+      if (!isRetryable) {
+        throw error;
+      }
+
+      if (isLastAttempt) {
+        const copySucceeded = await copyAndDelete(src, dest);
+        if (copySucceeded) return;
         throw error;
       }
 

@@ -130,49 +130,137 @@ export async function executeBatchesInOrder(
 }
 
 /**
+ * Try to parse a string as JSON, returning the string if valid, null if not
+ */
+function tryParseJson(content: string): string | null {
+  try {
+    JSON.parse(content);
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Process a single character during balanced brace search
+ * Returns updated state: [inString, isEscaped, depth]
+ */
+function processJsonChar(
+  char: string,
+  inString: boolean,
+  isEscaped: boolean,
+  depth: number,
+): [boolean, boolean, number] {
+  if (isEscaped) {
+    return [inString, false, depth];
+  }
+
+  if (char === "\\") {
+    return [inString, true, depth];
+  }
+
+  if (char === '"') {
+    return [!inString, false, depth];
+  }
+
+  if (inString) {
+    return [inString, false, depth];
+  }
+
+  if (char === "{") {
+    return [inString, false, depth + 1];
+  }
+
+  if (char === "}") {
+    return [inString, false, depth - 1];
+  }
+
+  return [inString, false, depth];
+}
+
+/**
+ * Find the index of the closing brace that balances the opening brace at startIndex
+ * Returns -1 if no balanced closing brace is found
+ */
+function findBalancedBraceEnd(response: string, startIndex: number): number {
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+
+  for (let i = startIndex; i < response.length; i++) {
+    const char = response[i];
+    const [newInString, newIsEscaped, newDepth] = processJsonChar(char, inString, isEscaped, depth);
+    inString = newInString;
+    isEscaped = newIsEscaped;
+    depth = newDepth;
+
+    if (depth === 0 && char === "}") {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * Calculate in-degree for each batch (count of dependencies within the batch set)
+ */
+function calculateInDegrees(
+  batches: ActionBatch[],
+  batchMap: Map<string, ActionBatch>,
+): Map<string, number> {
+  const inDegree = new Map<string, number>();
+
+  for (const batch of batches) {
+    inDegree.set(batch.id, 0);
+  }
+
+  for (const batch of batches) {
+    const validDeps = batch.dependencies.filter((dep) => batchMap.has(dep));
+    inDegree.set(batch.id, validDeps.length);
+  }
+
+  return inDegree;
+}
+
+/**
+ * Process a batch and update in-degrees for dependents
+ */
+function processBatchDependents(
+  batch: ActionBatch,
+  batches: ActionBatch[],
+  inDegree: Map<string, number>,
+  queue: ActionBatch[],
+): void {
+  for (const other of batches) {
+    if (!other.dependencies.includes(batch.id)) {
+      continue;
+    }
+    const newDegree = (inDegree.get(other.id) || 0) - 1;
+    inDegree.set(other.id, newDegree);
+    if (newDegree === 0) {
+      queue.push(other);
+    }
+  }
+}
+
+/**
  * Topological sort of batches based on dependencies
  * Uses Kahn's algorithm for deterministic ordering
  */
 function topologicalSort(batches: ActionBatch[]): ActionBatch[] {
   const batchMap = new Map(batches.map((b) => [b.id, b]));
-  const inDegree = new Map<string, number>();
+  const inDegree = calculateInDegrees(batches, batchMap);
   const result: ActionBatch[] = [];
-
-  // Initialize in-degree for all batches
-  for (const batch of batches) {
-    inDegree.set(batch.id, 0);
-  }
-
-  // Calculate in-degree (count of dependencies that exist in our batch set)
-  for (const batch of batches) {
-    for (const dep of batch.dependencies) {
-      if (batchMap.has(dep)) {
-        inDegree.set(batch.id, (inDegree.get(batch.id) || 0) + 1);
-      }
-    }
-  }
-
-  // Start with batches that have no dependencies (in-degree = 0)
   const queue: ActionBatch[] = batches.filter((b) => (inDegree.get(b.id) || 0) === 0);
 
   while (queue.length > 0) {
     const batch = queue.shift();
-    if (!batch) break; // Shouldn't happen, but satisfy the linter
+    if (!batch) break;
     result.push(batch);
-
-    // Reduce in-degree for batches that depend on this one
-    for (const other of batches) {
-      if (other.dependencies.includes(batch.id)) {
-        const newDegree = (inDegree.get(other.id) || 0) - 1;
-        inDegree.set(other.id, newDegree);
-        if (newDegree === 0) {
-          queue.push(other);
-        }
-      }
-    }
+    processBatchDependents(batch, batches, inDegree, queue);
   }
 
-  // If result doesn't contain all batches, there's a cycle (shouldn't happen with our batch types)
   if (result.length !== batches.length) {
     console.warn("[ActionPipeline] Cycle detected in batch dependencies, returning original order");
     return batches;
@@ -433,77 +521,58 @@ class ActionPipelineImpl implements ActionPipeline {
    * Extract JSON from LLM response with multiple strategies
    */
   private extractJson(response: string): string | null {
-    // Strategy 1: Check for markdown code fences (```json ... ```)
+    return (
+      this.extractJsonFromFence(response) ||
+      this.extractJsonWithBalancedBraces(response) ||
+      this.extractJsonWithGreedyMatch(response)
+    );
+  }
+
+  /**
+   * Try to extract JSON from markdown code fences
+   */
+  private extractJsonFromFence(response: string): string | null {
     const fenceMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) {
-      const fenceContent = fenceMatch[1].trim();
-      // Verify it looks like JSON
-      if (fenceContent.startsWith("{") || fenceContent.startsWith("[")) {
-        // Try to parse to validate, return if valid
-        try {
-          JSON.parse(fenceContent);
-          return fenceContent;
-        } catch {
-          // Continue to other strategies
-        }
-      }
+    if (!fenceMatch) {
+      return null;
     }
 
-    // Strategy 2: Find balanced JSON object braces
+    const fenceContent = fenceMatch[1].trim();
+    if (!fenceContent.startsWith("{") && !fenceContent.startsWith("[")) {
+      return null;
+    }
+
+    return tryParseJson(fenceContent);
+  }
+
+  /**
+   * Try to extract JSON by finding balanced braces
+   */
+  private extractJsonWithBalancedBraces(response: string): string | null {
     const jsonStart = response.indexOf("{");
-    if (jsonStart !== -1) {
-      let depth = 0;
-      let inString = false;
-      let isEscaped = false;
-
-      for (let i = jsonStart; i < response.length; i++) {
-        const char = response[i];
-
-        if (isEscaped) {
-          isEscaped = false;
-          continue;
-        }
-
-        if (char === "\\") {
-          isEscaped = true;
-          continue;
-        }
-
-        if (char === '"' && !isEscaped) {
-          inString = !inString;
-          continue;
-        }
-
-        if (!inString) {
-          if (char === "{") depth++;
-          if (char === "}") {
-            depth--;
-            if (depth === 0) {
-              const candidate = response.slice(jsonStart, i + 1);
-              try {
-                JSON.parse(candidate);
-                return candidate;
-              } catch {
-                // Continue looking for another valid JSON
-              }
-            }
-          }
-        }
-      }
+    if (jsonStart === -1) {
+      return null;
     }
 
-    // Strategy 3: Simple regex fallback (greedy match)
+    const endIndex = findBalancedBraceEnd(response, jsonStart);
+    if (endIndex === -1) {
+      return null;
+    }
+
+    const candidate = response.slice(jsonStart, endIndex + 1);
+    return tryParseJson(candidate);
+  }
+
+  /**
+   * Try to extract JSON with a greedy regex match
+   */
+  private extractJsonWithGreedyMatch(response: string): string | null {
     const simpleMatch = response.match(/\{[\s\S]*\}/);
-    if (simpleMatch) {
-      try {
-        JSON.parse(simpleMatch[0]);
-        return simpleMatch[0];
-      } catch {
-        // Failed
-      }
+    if (!simpleMatch) {
+      return null;
     }
 
-    return null;
+    return tryParseJson(simpleMatch[0]);
   }
 
   /**

@@ -387,6 +387,94 @@ export class TaskModal extends Modal {
     await this.generateResponse();
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Response Generation Helpers
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Handle chunk event during streaming */
+  private handleChunkEvent(content: string): void {
+    this.streamingContent += content;
+    this.updateStreamingBubble();
+    this.scrollToBottom();
+  }
+
+  /** Handle citations event */
+  private handleCitationsEvent(paths: string[], citations: string[]): void {
+    citations.push(...paths);
+    if (!this.task.result) {
+      this.task.result = { type: "chat", data: "", citations: [] };
+    }
+    this.task.result.citations = citations;
+  }
+
+  /** Handle complete event - extract actions from output */
+  private handleCompleteEvent(
+    output:
+      | StructuredOutput
+      | {
+          kind: "conversational";
+          content?: string;
+          delegatedResults?: Array<{ output: StructuredOutput }>;
+        },
+    citations: string[],
+  ): void {
+    let responseContent = this.streamingContent;
+
+    if (output.kind === "conversational") {
+      responseContent = output.content || this.streamingContent;
+      this.extractDelegatedActions(output.delegatedResults);
+    } else if (output.kind === "structured") {
+      const data = output.data as { actions?: ProposedAction[] };
+      if (data.actions) {
+        this.pendingActions = data.actions;
+      }
+    }
+
+    this.session.addAssistantMessage(responseContent);
+    this.task.chatHistory = this.session.getMessages();
+    this.task.result = {
+      type: this.pendingActions.length > 0 ? "action_plan" : "chat",
+      data: responseContent,
+      citations,
+      actions: this.pendingActions.length > 0 ? this.pendingActions : undefined,
+    };
+
+    if (this.pendingActions.length > 0) {
+      this.renderProposedActions();
+    }
+  }
+
+  /** Extract actions from delegated results */
+  private extractDelegatedActions(delegatedResults?: Array<{ output: StructuredOutput }>): void {
+    if (!delegatedResults) return;
+    for (const dr of delegatedResults) {
+      if (dr.output.kind === "structured") {
+        const data = dr.output.data as { actions?: ProposedAction[] };
+        if (data.actions) {
+          this.pendingActions.push(...data.actions);
+        }
+      }
+    }
+  }
+
+  /** Cleanup after streaming completes */
+  private cleanupStreaming(): void {
+    this.isStreamActive = false;
+    this.streamingContent = "";
+    this.streamingBubbleEl = null;
+    this.abortController = null;
+
+    if (this.inputEl) {
+      this.inputEl.disabled = false;
+      this.inputEl.focus();
+    }
+
+    this.renderChatHistory();
+    this.updateSendButton();
+    this.scrollToBottom();
+    this.kernel.eventBus.emit("agent:task-update", { task: this.task });
+  }
+
   /**
    * Generate AI response using NotientAgent (ChiefOfStaff multi-agent system)
    * UI-only: delegates all AI logic to the agent
@@ -405,18 +493,11 @@ export class TaskModal extends Modal {
     this.streamingContent = "";
     this.abortController = new AbortController();
     this.updateSendButton();
+    if (this.inputEl) this.inputEl.disabled = true;
 
-    // Disable input during streaming
-    if (this.inputEl) {
-      this.inputEl.disabled = true;
-    }
-
-    // Convert legacy AgentTask to ChiefOfStaffTask
     const userMessages = this.task.chatHistory.filter((m) => m.role === "user");
-    const query = userMessages[userMessages.length - 1]?.content || "";
-
     const chiefTask: ChiefOfStaffTask = {
-      query,
+      query: userMessages[userMessages.length - 1]?.content || "",
       notePath: this.task.notePath,
       noteTitle: this.task.noteTitle,
       chatHistory: this.task.chatHistory,
@@ -425,106 +506,40 @@ export class TaskModal extends Modal {
     const citations: string[] = [];
 
     try {
-      // Use the agent to execute with streaming
-      // The agent handles: context building, search, prompt construction
       for await (const event of agent.execute(chiefTask, this.abortController.signal)) {
         if (!this.isStreamActive) break;
-
-        switch (event.type) {
-          case "chunk":
-            this.streamingContent += event.content;
-            this.updateStreamingBubble();
-            this.scrollToBottom();
-            break;
-
-          case "citations":
-            // Update task with citations for display
-            citations.push(...event.paths);
-            if (!this.task.result) {
-              this.task.result = { type: "chat", data: "", citations: [] };
-            }
-            this.task.result.citations = citations;
-            break;
-
-          case "complete": {
-            // Map AgentOutput to TaskResult
-            const output = event.output;
-            let responseContent = this.streamingContent;
-
-            if (output.kind === "conversational") {
-              responseContent = output.content || this.streamingContent;
-              // Check for actions from delegated results
-              if (output.delegatedResults) {
-                for (const dr of output.delegatedResults) {
-                  if (dr.output.kind === "structured") {
-                    const data = dr.output.data as { actions?: ProposedAction[] };
-                    if (data.actions) {
-                      this.pendingActions.push(...data.actions);
-                    }
-                  }
-                }
-              }
-            } else if (output.kind === "structured") {
-              const data = output.data as { actions?: ProposedAction[] };
-              if (data.actions) {
-                this.pendingActions = data.actions;
-              }
-            }
-
-            // Save the complete response
-            this.session.addAssistantMessage(responseContent);
-            this.task.chatHistory = this.session.getMessages();
-            this.task.result = {
-              type: this.pendingActions.length > 0 ? "action_plan" : "chat",
-              data: responseContent,
-              citations,
-              actions: this.pendingActions.length > 0 ? this.pendingActions : undefined,
-            };
-
-            // Render pending actions if any
-            if (this.pendingActions.length > 0) {
-              this.renderProposedActions();
-            }
-            break;
-          }
-
-          case "error":
-            throw event.error;
-
-          // Handle new event types (progress, delegation) as no-ops for UI
-          case "started":
-          case "progress":
-          case "delegation-started":
-          case "delegation-complete":
-            // Could add visual feedback here in the future
-            break;
-        }
+        this.processAgentEvent(event, citations);
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
-        // Real error - add error message
         this.addErrorMessage(`Error: ${(error as Error).message || "Unknown error"}`);
       }
-      // If AbortError, we intentionally don't save the partial response
     } finally {
-      this.isStreamActive = false;
-      this.streamingContent = "";
-      this.streamingBubbleEl = null;
-      this.abortController = null;
+      this.cleanupStreaming();
+    }
+  }
 
-      // Re-enable input
-      if (this.inputEl) {
-        this.inputEl.disabled = false;
-        this.inputEl.focus();
-      }
-
-      // Final re-render and button update
-      this.renderChatHistory();
-      this.updateSendButton();
-      this.scrollToBottom();
-
-      // Emit update so sidebar reflects changes
-      this.kernel.eventBus.emit("agent:task-update", { task: this.task });
+  /** Process a single agent event */
+  private processAgentEvent(event: AgentEvent, citations: string[]): void {
+    switch (event.type) {
+      case "chunk":
+        this.handleChunkEvent(event.content);
+        break;
+      case "citations":
+        this.handleCitationsEvent(event.paths, citations);
+        break;
+      case "complete":
+        // biome-ignore lint/suspicious/noExplicitAny: AgentOutput includes multiple kinds
+        this.handleCompleteEvent(event.output as any, citations);
+        break;
+      case "error":
+        throw event.error;
+      // No-op for progress events
+      case "started":
+      case "progress":
+      case "delegation-started":
+      case "delegation-complete":
+        break;
     }
   }
 
@@ -599,112 +614,156 @@ export class TaskModal extends Modal {
       return;
     }
 
-    // Get services
     const trustManager = this.kernel.getService<TrustLevelManager>("trustLevelManager");
     const hasWriteLock = this.kernel.hasWriteLock;
 
-    // Section header
+    this.renderActionsHeader();
+
+    const list = this.actionsContainerEl.createDiv({ cls: "nv2-actions-list" });
+    for (const action of this.pendingActions) {
+      this.renderActionItem(list, action, trustManager ?? undefined, hasWriteLock);
+    }
+
+    this.renderActionsStatusInfo(hasWriteLock);
+    this.scrollToBottom();
+  }
+
+  /** Render the actions section header */
+  private renderActionsHeader(): void {
+    if (!this.actionsContainerEl) return;
+
     const header = this.actionsContainerEl.createDiv({ cls: "nv2-actions-header" });
     header.createEl("h3", { text: "Proposed Actions" });
     header.createSpan({
       cls: "nv2-actions-count",
       text: `(${this.pendingActions.length})`,
     });
+  }
 
-    // Actions list
-    const list = this.actionsContainerEl.createDiv({ cls: "nv2-actions-list" });
+  /** Render a single action item with its controls */
+  private renderActionItem(
+    list: HTMLElement,
+    action: ProposedAction,
+    trustManager: TrustLevelManager | undefined,
+    hasWriteLock: boolean,
+  ): void {
+    const actionEl = list.createDiv({ cls: "nv2-action-item" });
+    const isApplied = this.appliedActionRecordIds.has(action.id);
 
-    for (const action of this.pendingActions) {
-      const actionEl = list.createDiv({ cls: "nv2-action-item" });
-      const isApplied = this.appliedActionRecordIds.has(action.id);
+    this.renderActionRiskBadge(actionEl, action);
+    this.renderActionContent(actionEl, action, isApplied);
+    this.renderActionButtons(actionEl, action, isApplied, trustManager, hasWriteLock);
+  }
 
-      // Risk badge
-      const riskBadge = actionEl.createSpan({
-        cls: `nv2-risk-badge nv2-risk-badge--${action.risk}`,
-        text: action.risk.toUpperCase(),
-      });
-      riskBadge.setAttribute("aria-label", this.getRiskDescription(action.risk));
+  /** Render the risk level badge */
+  private renderActionRiskBadge(container: HTMLElement, action: ProposedAction): void {
+    const riskBadge = container.createSpan({
+      cls: `nv2-risk-badge nv2-risk-badge--${action.risk}`,
+      text: action.risk.toUpperCase(),
+    });
+    riskBadge.setAttribute("aria-label", this.getRiskDescription(action.risk));
+  }
 
-      // Action content
-      const contentEl = actionEl.createDiv({ cls: "nv2-action-content" });
+  /** Render the action content (title, meta, reason) */
+  private renderActionContent(
+    container: HTMLElement,
+    action: ProposedAction,
+    isApplied: boolean,
+  ): void {
+    const contentEl = container.createDiv({ cls: "nv2-action-content" });
 
-      // Title with applied indicator
-      const titleEl = contentEl.createDiv({ cls: "nv2-action-title" });
-      if (isApplied) {
-        const checkIcon = titleEl.createSpan({ cls: "nv2-action-applied-icon" });
-        setIcon(checkIcon, "check-circle");
-        titleEl.createSpan({ text: ` ${action.title}` });
-      } else {
-        titleEl.setText(action.title);
-      }
-
-      // Type and target
-      const metaEl = contentEl.createDiv({ cls: "nv2-action-meta" });
-      metaEl.createSpan({
-        cls: "nv2-action-type",
-        text: this.formatActionType(action.type),
-      });
-      metaEl.createSpan({ text: " → " });
-      metaEl.createSpan({
-        cls: "nv2-action-target",
-        text: action.target.split("/").pop() || action.target,
-      });
-
-      // Reason
-      if (action.reason) {
-        const reasonEl = contentEl.createDiv({ cls: "nv2-action-reason" });
-        reasonEl.createSpan({ text: action.reason });
-      }
-
-      // Buttons container
-      const btnContainer = actionEl.createDiv({ cls: "nv2-action-buttons" });
-
-      if (isApplied) {
-        // Show Undo button for applied actions
-        const undoBtn = new ButtonComponent(btnContainer)
-          .setIcon("undo")
-          .setTooltip("Undo this action")
-          .onClick(() => this.handleUndo(action));
-        undoBtn.buttonEl.addClass("nv2-btn-undo");
-      } else {
-        // Show Apply button for pending actions
-        const trustDecision = trustManager?.evaluate(action, hasWriteLock);
-        const canApply = hasWriteLock && trustDecision?.allowed;
-        const needsConfirm = trustDecision?.requiresConfirmation ?? true;
-
-        let tooltip = "Apply this action";
-        if (!hasWriteLock) {
-          tooltip = "Cannot apply: write lock not held";
-        } else if (!trustDecision?.allowed) {
-          tooltip = trustDecision?.reason || "Action not allowed";
-        } else if (needsConfirm) {
-          tooltip = "Click to apply (requires confirmation)";
-        }
-
-        const applyBtn = new ButtonComponent(btnContainer)
-          .setIcon("check")
-          .setTooltip(tooltip)
-          .setDisabled(!canApply)
-          .onClick(() => this.handleApply(action, needsConfirm));
-
-        applyBtn.buttonEl.addClass("nv2-btn-apply");
-        if (!canApply) {
-          applyBtn.buttonEl.addClass("nv2-btn-disabled");
-        }
-      }
+    const titleEl = contentEl.createDiv({ cls: "nv2-action-title" });
+    if (isApplied) {
+      const checkIcon = titleEl.createSpan({ cls: "nv2-action-applied-icon" });
+      setIcon(checkIcon, "check-circle");
+      titleEl.createSpan({ text: ` ${action.title}` });
+    } else {
+      titleEl.setText(action.title);
     }
 
-    // Status info
-    const infoEl = this.actionsContainerEl.createDiv({ cls: "nv2-actions-info" });
+    const metaEl = contentEl.createDiv({ cls: "nv2-action-meta" });
+    metaEl.createSpan({
+      cls: "nv2-action-type",
+      text: this.formatActionType(action.type),
+    });
+    metaEl.createSpan({ text: " → " });
+    metaEl.createSpan({
+      cls: "nv2-action-target",
+      text: action.target.split("/").pop() || action.target,
+    });
+
+    if (action.reason) {
+      const reasonEl = contentEl.createDiv({ cls: "nv2-action-reason" });
+      reasonEl.createSpan({ text: action.reason });
+    }
+  }
+
+  /** Render the apply/undo buttons for an action */
+  private renderActionButtons(
+    container: HTMLElement,
+    action: ProposedAction,
+    isApplied: boolean,
+    trustManager: TrustLevelManager | undefined,
+    hasWriteLock: boolean,
+  ): void {
+    const btnContainer = container.createDiv({ cls: "nv2-action-buttons" });
+
+    if (isApplied) {
+      const undoBtn = new ButtonComponent(btnContainer)
+        .setIcon("undo")
+        .setTooltip("Undo this action")
+        .onClick(() => this.handleUndo(action));
+      undoBtn.buttonEl.addClass("nv2-btn-undo");
+      return;
+    }
+
+    const trustDecision = trustManager?.evaluate(action, hasWriteLock);
+    const canApply = hasWriteLock && trustDecision?.allowed;
+    const needsConfirm = trustDecision?.requiresConfirmation ?? true;
+    const tooltip = this.getApplyButtonTooltip(hasWriteLock, trustDecision, needsConfirm);
+
+    const applyBtn = new ButtonComponent(btnContainer)
+      .setIcon("check")
+      .setTooltip(tooltip)
+      .setDisabled(!canApply)
+      .onClick(() => this.handleApply(action, needsConfirm));
+
+    applyBtn.buttonEl.addClass("nv2-btn-apply");
+    if (!canApply) {
+      applyBtn.buttonEl.addClass("nv2-btn-disabled");
+    }
+  }
+
+  /** Get the tooltip text for the apply button based on state */
+  private getApplyButtonTooltip(
+    hasWriteLock: boolean,
+    trustDecision: { allowed: boolean; reason?: string } | undefined,
+    needsConfirm: boolean,
+  ): string {
     if (!hasWriteLock) {
-      setIcon(infoEl.createSpan({ cls: "nv2-info-icon nv2-warning" }), "alert-triangle");
-      infoEl.createSpan({ text: "Write lock not held - actions disabled" });
-    } else {
+      return "Cannot apply: write lock not held";
+    }
+    if (!trustDecision?.allowed) {
+      return trustDecision?.reason || "Action not allowed";
+    }
+    if (needsConfirm) {
+      return "Click to apply (requires confirmation)";
+    }
+    return "Apply this action";
+  }
+
+  /** Render the status info bar at the bottom of actions */
+  private renderActionsStatusInfo(hasWriteLock: boolean): void {
+    if (!this.actionsContainerEl) return;
+
+    const infoEl = this.actionsContainerEl.createDiv({ cls: "nv2-actions-info" });
+    if (hasWriteLock) {
       setIcon(infoEl.createSpan({ cls: "nv2-info-icon" }), "info");
       infoEl.createSpan({ text: "Click Apply to execute an action" });
+    } else {
+      setIcon(infoEl.createSpan({ cls: "nv2-info-icon nv2-warning" }), "alert-triangle");
+      infoEl.createSpan({ text: "Write lock not held - actions disabled" });
     }
-
-    this.scrollToBottom();
   }
 
   /**

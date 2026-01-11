@@ -178,51 +178,69 @@ export class OllamaRerankerService {
   }
 
   /**
-   * Parse reranker response to numeric score
-   * Handles various model output formats: "yes", "no", numeric scores, malformed responses
+   * Try to extract a numeric score from the answer.
+   * Returns the normalized score (0-1) or null if not found.
    */
-  private parseRerankerScore(answer: string, fallbackScore: number): number {
-    // 1. Try to extract explicit numeric score (e.g., "0.8", "8/10", "85%")
+  private tryParseNumericScore(answer: string): number | null {
     const numericMatch = answer.match(/(\d+(?:\.\d+)?)\s*(?:\/\s*10|%)?/);
-    if (numericMatch) {
-      let score = Number.parseFloat(numericMatch[0]);
-      // Normalize if it looks like percentage or x/10
-      if (score > 1 && score <= 10) score = score / 10;
-      else if (score > 10 && score <= 100) score = score / 100;
-      if (score >= 0 && score <= 1) {
-        console.log(`[OllamaRerankerService] Parsed numeric score: ${score} from "${answer}"`);
-        return score;
-      }
+    if (!numericMatch) return null;
+
+    let score = Number.parseFloat(numericMatch[0]);
+
+    // Normalize if it looks like percentage or x/10
+    if (score > 1 && score <= 10) {
+      score = score / 10;
+    } else if (score > 10 && score <= 100) {
+      score = score / 100;
     }
 
-    // 2. Look for yes/no anywhere in the response (handles "isyes", "documentno", etc.)
+    if (score >= 0 && score <= 1) {
+      console.log(`[OllamaRerankerService] Parsed numeric score: ${score} from "${answer}"`);
+      return score;
+    }
+
+    return null;
+  }
+
+  /**
+   * Try to parse yes/no from the answer.
+   * Returns the score (0, 0.2, 0.8, or 1) or null if not determinable.
+   */
+  private tryParseYesNo(answer: string): number | null {
     const hasYes = /\byes\b|^yes|yes$/.test(answer);
     const hasNo = /\bno\b|^no|no$/.test(answer);
-
-    // Handle concatenated responses like "isyes" or "documentno"
     const endsWithYes = answer.endsWith("yes");
     const endsWithNo = answer.endsWith("no");
+
+    if (hasYes || endsWithYes) return 1.0;
+    if (hasNo || endsWithNo) return 0.0;
+
     const containsYes = answer.includes("yes");
     const containsNo = answer.includes("no");
 
-    if (hasYes || endsWithYes) {
-      return 1.0;
-    }
-    if (hasNo || endsWithNo) {
-      return 0.0;
-    }
     if (containsYes && !containsNo) {
-      // "yes" somewhere but not as a word boundary
       console.log(`[OllamaRerankerService] Inferred yes from "${answer}"`);
       return 0.8;
     }
     if (containsNo && !containsYes) {
-      // "no" somewhere but not as a word boundary
       console.log(`[OllamaRerankerService] Inferred no from "${answer}"`);
       return 0.2;
     }
 
-    // 3. Fallback to vector similarity score with penalty
+    return null;
+  }
+
+  /**
+   * Parse reranker response to numeric score
+   * Handles various model output formats: "yes", "no", numeric scores, malformed responses
+   */
+  private parseRerankerScore(answer: string, fallbackScore: number): number {
+    const numericScore = this.tryParseNumericScore(answer);
+    if (numericScore !== null) return numericScore;
+
+    const yesNoScore = this.tryParseYesNo(answer);
+    if (yesNoScore !== null) return yesNoScore;
+
     console.warn(
       `[OllamaRerankerService] Could not parse response: "${answer}", falling back to vector score`,
     );

@@ -67,9 +67,8 @@ export function MessageBubble({
   const hasActions = message.actions && message.actions.length > 0;
 
   return (
-    <div
+    <article
       class={`nv2-chat-bubble nv2-chat-bubble--${message.role}`}
-      role="article"
       aria-label={`${isUser ? "You" : "Notient"} said`}
     >
       {/* Avatar for assistant messages */}
@@ -83,9 +82,9 @@ export function MessageBubble({
         </div>
 
         {/* Thinking block (before main content) */}
-        {hasThinking && (
+        {hasThinking && message.thinking && (
           <ThinkingBlock
-            content={message.thinking!}
+            content={message.thinking}
             durationMs={message.thinkingDurationMs}
             defaultExpanded={false}
           />
@@ -96,9 +95,9 @@ export function MessageBubble({
           {isUser ? (
             // User messages: plain text with line breaks
             <div class="nv2-chat-bubble-text">
-              {message.content.split("\n").map((line, i) => (
-                <span key={i}>
-                  {i > 0 && <br />}
+              {message.content.split("\n").map((line, index) => (
+                <span key={`${message.id}-line-${index}`}>
+                  {index > 0 && <br />}
                   {line}
                 </span>
               ))}
@@ -130,9 +129,9 @@ export function MessageBubble({
         {/* Inline actions */}
         {hasActions && onAction && (
           <div class="nv2-chat-actions">
-            {message.actions?.map((action, i) => (
+            {message.actions?.map((action) => (
               <button
-                key={i}
+                key={`${message.id}-${action.type}-${action.label}`}
                 type="button"
                 class="nv2-chat-action-btn"
                 onClick={() => onAction(action)}
@@ -144,9 +143,11 @@ export function MessageBubble({
         )}
 
         {/* Statistics panel */}
-        {hasStats && <StatsPanel statistics={message.statistics!} position="inline" />}
+        {hasStats && message.statistics && (
+          <StatsPanel statistics={message.statistics} position="inline" />
+        )}
       </div>
-    </div>
+    </article>
   );
 }
 

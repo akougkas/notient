@@ -108,106 +108,183 @@ export class ContextBuilderAgent extends BaseAgent {
     yield { type: "started", agentType: "context-builder" };
     yield { type: "progress", agentType: "context-builder", progress: 5 };
 
+    // Phase 1: Search for related content
+    const searchResult = await this.executeSearchPhase(context);
+    yield { type: "progress", agentType: "context-builder", progress: 30 };
+
+    // Phase 2: Summarize context using LLM (if we have results but no summary)
+    let contextSummary = searchResult.contextSummary;
+    if (searchResult.relatedNotes.length > 0 && contextSummary === "No vault context available.") {
+      yield { type: "progress", agentType: "context-builder", progress: 50 };
+      contextSummary = await this.executeSummarizationPhase(context, searchResult);
+    }
+    yield { type: "progress", agentType: "context-builder", progress: 70 };
+
+    // Phase 3: Build final output
+    yield* this.emitFinalOutput(searchResult, contextSummary);
+  }
+
+  /**
+   * Execute search phase and return results
+   */
+  private async executeSearchPhase(context: AgentContext): Promise<{
+    relatedNotes: Array<{ title: string; path: string; text: string }>;
+    searchContext: SearchContext;
+    contextSummary: string;
+  }> {
     const relatedNotes: Array<{ title: string; path: string; text: string }> = [];
     let searchContext: SearchContext = { results: [], query: context.query };
     let contextSummary = "No vault context available.";
 
-    // Phase 1: Search for related content
-    if (this.searchPipeline) {
-      try {
-        // Build search query from user query + note title
-        const searchQuery = `${context.query} ${context.currentNote.title}`.trim();
-
-        this.log(`Searching vault for: "${searchQuery}"`);
-
-        const searchResults = await this.searchPipeline.search(searchQuery, {
-          topK: 7,
-          enableReranking: true,
-        });
-
-        yield { type: "progress", agentType: "context-builder", progress: 30 };
-
-        // Build search context
-        searchContext = {
-          query: searchQuery,
-          results: searchResults.map((r) => ({
-            path: r.path,
-            title: r.title,
-            snippet: r.chunks[0]?.text || "",
-            score: r.bestScore,
-          })),
-        };
-
-        // Extract related notes (exclude current note)
-        for (const result of searchResults) {
-          if (result.path === context.currentNote.path) continue;
-          if (relatedNotes.length >= 5) break;
-
-          const bestChunk = result.chunks[0];
-          relatedNotes.push({
-            title: result.title,
-            path: result.path,
-            text: bestChunk?.text || "",
-          });
-        }
-
-        // Build vault context summary
-        if (this.vaultContextBuilder && searchResults.length > 0) {
-          const vaultContext = this.vaultContextBuilder.buildForQuery(context.query, searchResults);
-          if (vaultContext?.contextSummary) {
-            contextSummary = vaultContext.contextSummary;
-          }
-        }
-
-        yield { type: "progress", agentType: "context-builder", progress: 50 };
-      } catch (error) {
-        this.warn("Search failed, continuing without search context:", error);
-      }
+    if (!this.searchPipeline) {
+      return { relatedNotes, searchContext, contextSummary };
     }
 
-    // Phase 2: Summarize context using LLM (if we have results)
-    if (relatedNotes.length > 0 && contextSummary === "No vault context available.") {
-      try {
-        const summaryContext: AgentContext = {
-          ...context,
-          search: searchContext,
-          relatedNotes,
-        };
+    try {
+      const searchQuery = `${context.query} ${context.currentNote.title}`.trim();
+      this.log(`Searching vault for: "${searchQuery}"`);
 
-        const systemPrompt = this.buildSystemPrompt(summaryContext);
-        const messages = [
-          { role: "system" as const, content: systemPrompt },
-          { role: "user" as const, content: "Summarize the relevant vault context for this note." },
-        ];
+      const searchResults = await this.searchPipeline.search(searchQuery, {
+        topK: 7,
+        enableReranking: true,
+      });
 
-        yield { type: "progress", agentType: "context-builder", progress: 70 };
-
-        contextSummary = await this.completeLLM(messages);
-      } catch (error) {
-        this.warn("Context summarization failed:", error);
-      }
+      searchContext = this.buildSearchContext(searchQuery, searchResults);
+      this.extractRelatedNotes(searchResults, context.currentNote.path, relatedNotes);
+      contextSummary = this.buildVaultContextSummary(context.query, searchResults, contextSummary);
+    } catch (error) {
+      this.warn("Search failed, continuing without search context:", error);
     }
 
-    // Phase 3: Build final output
+    return { relatedNotes, searchContext, contextSummary };
+  }
+
+  /**
+   * Build search context from results
+   */
+  private buildSearchContext(
+    searchQuery: string,
+    searchResults: Array<{
+      path: string;
+      title: string;
+      chunks: Array<{ text: string }>;
+      bestScore: number;
+    }>,
+  ): SearchContext {
+    return {
+      query: searchQuery,
+      results: searchResults.map((r) => ({
+        path: r.path,
+        title: r.title,
+        snippet: r.chunks[0]?.text || "",
+        score: r.bestScore,
+      })),
+    };
+  }
+
+  /**
+   * Extract related notes from search results
+   */
+  private extractRelatedNotes(
+    searchResults: Array<{
+      path: string;
+      title: string;
+      chunks: Array<{ text: string }>;
+    }>,
+    currentNotePath: string,
+    relatedNotes: Array<{ title: string; path: string; text: string }>,
+  ): void {
+    for (const result of searchResults) {
+      if (result.path === currentNotePath) continue;
+      if (relatedNotes.length >= 5) break;
+
+      const bestChunk = result.chunks[0];
+      relatedNotes.push({
+        title: result.title,
+        path: result.path,
+        text: bestChunk?.text || "",
+      });
+    }
+  }
+
+  /**
+   * Build vault context summary from search results
+   */
+  private buildVaultContextSummary(
+    query: string,
+    searchResults: Array<unknown>,
+    defaultSummary: string,
+  ): string {
+    if (!this.vaultContextBuilder || searchResults.length === 0) {
+      return defaultSummary;
+    }
+
+    const vaultContext = this.vaultContextBuilder.buildForQuery(
+      query,
+      searchResults as Parameters<VaultContextBuilder["buildForQuery"]>[1],
+    );
+
+    return vaultContext?.contextSummary || defaultSummary;
+  }
+
+  /**
+   * Execute summarization phase using LLM
+   */
+  private async executeSummarizationPhase(
+    context: AgentContext,
+    searchResult: {
+      relatedNotes: Array<{ title: string; path: string; text: string }>;
+      searchContext: SearchContext;
+    },
+  ): Promise<string> {
+    try {
+      const summaryContext: AgentContext = {
+        ...context,
+        search: searchResult.searchContext,
+        relatedNotes: searchResult.relatedNotes,
+      };
+
+      const systemPrompt = this.buildSystemPrompt(summaryContext);
+      const messages = [
+        { role: "system" as const, content: systemPrompt },
+        { role: "user" as const, content: "Summarize the relevant vault context for this note." },
+      ];
+
+      return await this.completeLLM(messages);
+    } catch (error) {
+      this.warn("Context summarization failed:", error);
+      return "No vault context available.";
+    }
+  }
+
+  /**
+   * Emit final output events
+   */
+  private async *emitFinalOutput(
+    searchResult: {
+      relatedNotes: Array<{ title: string; path: string; text: string }>;
+      searchContext: SearchContext;
+    },
+    contextSummary: string,
+  ): AsyncIterable<AgentEvent> {
     const output: InternalOutput = {
       kind: "internal",
       agentType: "context-builder",
       contextSummary,
-      relatedNotes,
-      searchResults: searchContext,
+      relatedNotes: searchResult.relatedNotes,
+      searchResults: searchResult.searchContext,
     };
 
-    // Emit citations for found notes
-    if (relatedNotes.length > 0) {
+    if (searchResult.relatedNotes.length > 0) {
       yield {
         type: "citations",
         agentType: "context-builder",
-        paths: relatedNotes.map((n) => n.path),
+        paths: searchResult.relatedNotes.map((n) => n.path),
       };
     }
 
     this.log(
-      `Built context: ${relatedNotes.length} related notes, summary: ${contextSummary.slice(0, 50)}...`,
+      `Built context: ${searchResult.relatedNotes.length} related notes, summary: ${contextSummary.slice(0, 50)}...`,
     );
 
     yield { type: "progress", agentType: "context-builder", progress: 100 };

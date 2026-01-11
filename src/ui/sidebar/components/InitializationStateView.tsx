@@ -14,10 +14,8 @@ export function InitializationStateView({ state, context }: InitializationStateV
   const showSpinner = !display.isError && state !== "READY";
 
   return (
-    // biome-ignore lint/a11y/useSemanticElements: role="status" with aria-live is correct pattern for loading states
-    <div
+    <output
       class={`nv2-init-state ${display.isError ? "nv2-init-state--error" : ""}`}
-      role="status"
       aria-live="polite"
     >
       {showSpinner && <div class="nv2-loading-spinner" aria-hidden="true" />}
@@ -41,7 +39,7 @@ export function InitializationStateView({ state, context }: InitializationStateV
           )}
         </div>
       )}
-    </div>
+    </output>
   );
 }
 

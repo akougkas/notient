@@ -277,10 +277,24 @@ export class SetupWizardModal extends Modal {
     container: HTMLElement,
     config: ServiceConfig,
     type: "ollama" | "lmstudio",
-  ) {
+  ): void {
     const card = container.createDiv({ cls: "nv2-wizard-service-card" });
 
-    // Header
+    this.renderServiceHeader(card, config, type);
+    this.renderServiceInputs(card, config, type);
+
+    if (config.status === "connected") {
+      this.renderModelSelect(card, config, type);
+    } else if (config.status === "error") {
+      this.renderServiceError(card, config);
+    }
+  }
+
+  private renderServiceHeader(
+    card: HTMLElement,
+    config: ServiceConfig,
+    type: "ollama" | "lmstudio",
+  ): void {
     const header = card.createDiv({ cls: "nv2-wizard-service-header" });
     const title = header.createDiv({ cls: "nv2-wizard-service-title" });
     const iconEl = title.createSpan({ cls: "nv2-wizard-service-icon" });
@@ -294,22 +308,43 @@ export class SetupWizardModal extends Modal {
       const spinnerEl = statusBadge.createSpan({ cls: "nv2-wizard-spinner" });
       setIcon(spinnerEl, "loader-2");
     }
-    statusBadge.createSpan({
-      text:
-        config.status === "connected"
-          ? "Connected"
-          : config.status === "checking"
-            ? "Checking..."
-            : "Offline",
-    });
+    statusBadge.createSpan({ text: this.getStatusText(config.status) });
+  }
 
-    // Inputs
+  private getStatusText(status: ConnectionStatus): string {
+    switch (status) {
+      case "connected":
+        return "Connected";
+      case "checking":
+        return "Checking...";
+      default:
+        return "Offline";
+    }
+  }
+
+  private renderServiceInputs(
+    card: HTMLElement,
+    config: ServiceConfig,
+    type: "ollama" | "lmstudio",
+  ): void {
     const inputGroup = card.createDiv({ cls: "nv2-wizard-input-group" });
     inputGroup.createDiv({ cls: "nv2-wizard-label", text: "Connection URL" });
 
     const hostRow = inputGroup.createDiv({ cls: "nv2-wizard-host-row" });
+    const triggerCheck =
+      type === "ollama" ? this.debouncedCheckOllama : this.debouncedCheckLMStudio;
 
-    // Helper toggle for Local/Network
+    this.renderHostToggle(hostRow, config, type, triggerCheck);
+    this.renderIpInput(hostRow, config, triggerCheck);
+    this.renderPortInput(hostRow, config, triggerCheck);
+  }
+
+  private renderHostToggle(
+    hostRow: HTMLElement,
+    config: ServiceConfig,
+    type: "ollama" | "lmstudio",
+    triggerCheck: () => void,
+  ): void {
     const toggle = hostRow.createEl("select", {
       cls: "nv2-wizard-input nv2-wizard-input--select",
     });
@@ -319,14 +354,17 @@ export class SetupWizardModal extends Modal {
 
     toggle.addEventListener("change", () => {
       const mode = toggle.value as "local" | "network";
-      const defaults = DEFAULT_IPS[type];
-      config.ip = defaults[mode];
+      config.ip = DEFAULT_IPS[type][mode];
       this.render();
-      if (type === "ollama") this.debouncedCheckOllama();
-      else this.debouncedCheckLMStudio();
+      triggerCheck();
     });
+  }
 
-    // IP Input
+  private renderIpInput(
+    hostRow: HTMLElement,
+    config: ServiceConfig,
+    triggerCheck: () => void,
+  ): void {
     const ipInput = hostRow.createEl("input", {
       type: "text",
       cls: "nv2-wizard-input nv2-wizard-input--ip",
@@ -335,11 +373,15 @@ export class SetupWizardModal extends Modal {
     ipInput.value = config.ip;
     ipInput.addEventListener("input", (e) => {
       config.ip = (e.target as HTMLInputElement).value;
-      if (type === "ollama") this.debouncedCheckOllama();
-      else this.debouncedCheckLMStudio();
+      triggerCheck();
     });
+  }
 
-    // Port Input
+  private renderPortInput(
+    hostRow: HTMLElement,
+    config: ServiceConfig,
+    triggerCheck: () => void,
+  ): void {
     const portInput = hostRow.createEl("input", {
       type: "text",
       cls: "nv2-wizard-input nv2-wizard-input--port",
@@ -348,49 +390,56 @@ export class SetupWizardModal extends Modal {
     portInput.value = config.port;
     portInput.addEventListener("input", (e) => {
       config.port = (e.target as HTMLInputElement).value;
-      if (type === "ollama") this.debouncedCheckOllama();
-      else this.debouncedCheckLMStudio();
+      triggerCheck();
     });
+  }
 
-    // Model Select
-    if (config.status === "connected") {
-      const modelGroup = card.createDiv({
-        cls: "nv2-wizard-input-group nv2-wizard-input-group--model",
-      });
-      modelGroup.createDiv({ cls: "nv2-wizard-label", text: "Model" });
-      const select = modelGroup.createEl("select", { cls: "nv2-wizard-input" });
+  private renderModelSelect(
+    card: HTMLElement,
+    config: ServiceConfig,
+    type: "ollama" | "lmstudio",
+  ): void {
+    const modelGroup = card.createDiv({
+      cls: "nv2-wizard-input-group nv2-wizard-input-group--model",
+    });
+    modelGroup.createDiv({ cls: "nv2-wizard-label", text: "Model" });
+    const select = modelGroup.createEl("select", { cls: "nv2-wizard-input" });
 
-      // Filter embedding models for Ollama if possible
-      const models =
-        type === "ollama"
-          ? config.models.filter(
-              (m) => m.capabilities.includes("embedding") || m.name.includes("embed"),
-            )
-          : config.models;
+    const displayModels = this.getDisplayModels(config, type);
 
-      // Fallback if filtering removes everything
-      const displayModels = models.length > 0 ? models : config.models;
-
-      for (const m of displayModels) {
-        const opt = select.createEl("option", { value: m.name, text: m.name });
-        if (m.name === config.selectedModel) opt.selected = true;
-      }
-
-      select.addEventListener("change", (e) => {
-        config.selectedModel = (e.target as HTMLSelectElement).value;
-        if (type === "ollama") {
-          this.scanForIndexes();
-          this.render();
-        }
-      });
-    } else if (config.status === "error") {
-      const errorEl = card.createDiv({ cls: "nv2-wizard-service-error" });
-      const errorIcon = errorEl.createSpan({ cls: "nv2-wizard-error-icon" });
-      setIcon(errorIcon, "alert-circle");
-      errorEl.createSpan({
-        text: config.error || "Could not connect. Check if the service is running.",
-      });
+    for (const model of displayModels) {
+      const option = select.createEl("option", { value: model.name, text: model.name });
+      if (model.name === config.selectedModel) option.selected = true;
     }
+
+    select.addEventListener("change", (e) => {
+      config.selectedModel = (e.target as HTMLSelectElement).value;
+      if (type === "ollama") {
+        this.scanForIndexes();
+        this.render();
+      }
+    });
+  }
+
+  private getDisplayModels(config: ServiceConfig, type: "ollama" | "lmstudio"): AvailableModel[] {
+    if (type !== "ollama") {
+      return config.models;
+    }
+
+    const embeddingModels = config.models.filter(
+      (model) => model.capabilities.includes("embedding") || model.name.includes("embed"),
+    );
+
+    return embeddingModels.length > 0 ? embeddingModels : config.models;
+  }
+
+  private renderServiceError(card: HTMLElement, config: ServiceConfig): void {
+    const errorEl = card.createDiv({ cls: "nv2-wizard-service-error" });
+    const errorIcon = errorEl.createSpan({ cls: "nv2-wizard-error-icon" });
+    setIcon(errorIcon, "alert-circle");
+    errorEl.createSpan({
+      text: config.error || "Could not connect. Check if the service is running.",
+    });
   }
 
   // --- Step 3: Indexing ---
@@ -453,26 +502,142 @@ export class SetupWizardModal extends Modal {
     this.renderIndexList(indexList);
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Index List Helpers
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Render "Create New" option */
+  private renderCreateNewOption(container: HTMLElement, selectedModel: string): void {
+    const isSelected = this.indexStatus.decision === "rebuild";
+    const row = container.createDiv({
+      cls: `nv2-wizard-index-row ${isSelected ? "selected" : ""}`,
+    });
+
+    const radio = row.createEl("input", { type: "radio", attr: { name: "index-select" } });
+    radio.checked = isSelected;
+
+    const label = row.createDiv({ cls: "nv2-wizard-index-row-label" });
+    const icon = label.createSpan({ cls: "nv2-wizard-index-icon" });
+    setIcon(icon, "plus-circle");
+    label.createSpan({ text: "Create New Index", cls: "nv2-wizard-index-name" });
+    row.createDiv({ cls: "nv2-wizard-index-meta", text: `Fresh index for ${selectedModel}` });
+
+    row.addEventListener("click", () => {
+      this.indexStatus.compatibleFound = false;
+      this.indexStatus.decision = "rebuild";
+      this.result.indexAction = "rebuild";
+      this.result.selectedIndexKey = undefined;
+      this.render();
+    });
+  }
+
+  /** Render a single index row */
+  private renderIndexRow(
+    container: HTMLElement,
+    idx: {
+      path: string;
+      displayName: string;
+      dimension: number;
+      docCount: number;
+      source: string;
+      modelKey: string;
+      isLegacy: boolean;
+      createdAt?: Date | null;
+    },
+    expectedDim: number | null,
+  ): void {
+    const isCompatible = !expectedDim || idx.dimension === expectedDim;
+    const isSelected =
+      this.result.selectedIndexKey === idx.path && this.indexStatus.decision === "resume";
+    const isExternal = idx.source === "vault";
+
+    const row = container.createDiv({
+      cls: `nv2-wizard-index-row ${isSelected ? "selected" : ""} ${!isCompatible ? "incompatible" : ""}`,
+    });
+
+    const radio = row.createEl("input", { type: "radio", attr: { name: "index-select" } });
+    radio.checked = isSelected;
+    radio.disabled = !isCompatible;
+
+    const infoCol = row.createDiv({ cls: "nv2-wizard-index-info" });
+    const titleRow = infoCol.createDiv({ cls: "nv2-wizard-index-title-row" });
+    titleRow.createSpan({ text: idx.displayName, cls: "nv2-wizard-index-name" });
+    titleRow.createSpan({ text: `${idx.dimension}d`, cls: "nv2-wizard-index-dim" });
+    titleRow.createSpan({
+      text: isExternal ? "EXTERNAL" : "PLUGIN",
+      cls: `nv2-wizard-badge ${isExternal ? "external" : "plugin"}`,
+    });
+    if (idx.isLegacy) titleRow.createSpan({ text: "LEGACY", cls: "nv2-wizard-badge legacy" });
+
+    const infoLine = infoCol.createDiv({ cls: "nv2-wizard-index-details" });
+    infoLine.createSpan({ text: `${idx.docCount} chunks` });
+    if (idx.createdAt) {
+      infoLine.createSpan({
+        text: `Created ${idx.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
+      });
+    }
+
+    if (!isCompatible && expectedDim) {
+      const warnEl = row.createDiv({ cls: "nv2-wizard-index-warning" });
+      setIcon(warnEl.createSpan(), "alert-triangle");
+      warnEl.createSpan({ text: `${idx.dimension}d ≠ ${expectedDim}d` });
+      warnEl.title = `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`;
+    }
+
+    if (isExternal && isCompatible) {
+      const lockEl = row.createDiv({ cls: "nv2-wizard-index-lock" });
+      setIcon(lockEl, "lock");
+      lockEl.title = "External index (read-only)";
+    }
+
+    if (isCompatible) {
+      row.addEventListener("click", () => {
+        this.indexStatus.compatibleFound = true;
+        this.indexStatus.existingModel = idx.modelKey;
+        this.indexStatus.existingDim = idx.dimension;
+        this.indexStatus.noteCount = idx.docCount;
+        this.indexStatus.source = idx.source as "vault" | "plugin";
+        this.indexStatus.decision = "resume";
+        this.result.selectedIndexKey = idx.path;
+        this.result.indexAction = "use_existing";
+        this.render();
+      });
+    }
+  }
+
+  /** Render action summary */
+  private renderActionSummary(container: HTMLElement): void {
+    const actionMsg = container.createDiv({ cls: "nv2-wizard-index-action" });
+    const actionIcon = actionMsg.createSpan({ cls: "nv2-wizard-action-icon" });
+
+    if (this.indexStatus.decision === "rebuild") {
+      setIcon(actionIcon, "sparkles");
+      actionMsg.createSpan({ text: "Action: Create new index and scan vault." });
+    } else if (this.indexStatus.source === "vault") {
+      setIcon(actionIcon, "lock");
+      actionMsg.createSpan({ text: "Action: Connect to external index (read-only)." });
+    } else {
+      setIcon(actionIcon, "check-circle");
+      actionMsg.createSpan({ text: "Action: Connect to existing plugin index." });
+    }
+  }
+
   /** Render the list of all available indices with selection */
   private async renderIndexList(container: HTMLElement): Promise<void> {
     try {
-      // Use cached indices if available and not expired
       const now = Date.now();
-      let indices: Awaited<ReturnType<typeof this.indexManager.discoverIndices>>;
-
-      if (this.cachedIndices && now - this.cacheTimestamp < SetupWizardModal.INDEX_CACHE_TTL_MS) {
-        indices = this.cachedIndices;
-      } else {
+      let indices = this.cachedIndices;
+      if (!indices || now - this.cacheTimestamp >= SetupWizardModal.INDEX_CACHE_TTL_MS) {
         indices = await this.indexManager.discoverIndices();
         this.cachedIndices = indices;
         this.cacheTimestamp = now;
       }
+
       container.empty();
 
       if (indices.length === 0) {
         const emptyEl = container.createDiv({ cls: "nv2-wizard-index-empty" });
-        const emptyIcon = emptyEl.createSpan({ cls: "nv2-wizard-empty-icon" });
-        setIcon(emptyIcon, "file-plus");
+        setIcon(emptyEl.createSpan({ cls: "nv2-wizard-empty-icon" }), "file-plus");
         emptyEl.createSpan({ text: "No existing indices found. A new index will be created." });
         this.indexStatus.compatibleFound = false;
         this.indexStatus.decision = "rebuild";
@@ -480,7 +645,6 @@ export class SetupWizardModal extends Modal {
         return;
       }
 
-      // Get selected model's expected dimension (if we can determine it)
       const selectedModel = this.ollama.selectedModel;
       const expectedDim = this.getExpectedDimension(selectedModel);
 
@@ -491,142 +655,24 @@ export class SetupWizardModal extends Modal {
           : "Select an index to use:",
       });
 
-      // "Create New" option
-      const createNewRow = container.createDiv({
-        cls: `nv2-wizard-index-row ${this.indexStatus.decision === "rebuild" ? "selected" : ""}`,
-      });
+      this.renderCreateNewOption(container, selectedModel);
 
-      const createNewRadio = createNewRow.createEl("input", {
-        type: "radio",
-        attr: { name: "index-select" },
-      });
-      createNewRadio.checked = this.indexStatus.decision === "rebuild";
-
-      const createNewLabel = createNewRow.createDiv({ cls: "nv2-wizard-index-row-label" });
-      const createNewIcon = createNewLabel.createSpan({ cls: "nv2-wizard-index-icon" });
-      setIcon(createNewIcon, "plus-circle");
-      createNewLabel.createSpan({ text: "Create New Index", cls: "nv2-wizard-index-name" });
-
-      createNewRow.createDiv({
-        cls: "nv2-wizard-index-meta",
-        text: `Fresh index for ${selectedModel}`,
-      });
-
-      createNewRow.addEventListener("click", () => {
-        this.indexStatus.compatibleFound = false;
-        this.indexStatus.decision = "rebuild";
-        this.result.indexAction = "rebuild";
-        this.result.selectedIndexKey = undefined;
-        this.render();
-      });
-
-      // Sort indices: compatible first (indices already sorted by date from discoverIndices)
+      // Sort: compatible first
       const sortedIndices = [...indices].sort((a, b) => {
         const aCompat = !expectedDim || a.dimension === expectedDim;
         const bCompat = !expectedDim || b.dimension === expectedDim;
-        if (aCompat && !bCompat) return -1;
-        if (!aCompat && bCompat) return 1;
-        return 0; // Preserve date-based order for same compatibility
+        return aCompat === bCompat ? 0 : aCompat ? -1 : 1;
       });
 
-      // Render each index
       for (const idx of sortedIndices) {
-        const isCompatible = !expectedDim || idx.dimension === expectedDim;
-        const isSelected =
-          this.result.selectedIndexKey === idx.path && this.indexStatus.decision === "resume";
-        const isExternal = idx.source === "vault";
-
-        // Format creation date
-        const createdStr = idx.createdAt
-          ? idx.createdAt.toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : null;
-
-        const row = container.createDiv({
-          cls: `nv2-wizard-index-row ${isSelected ? "selected" : ""} ${!isCompatible ? "incompatible" : ""}`,
-        });
-
-        const radio = row.createEl("input", { type: "radio", attr: { name: "index-select" } });
-        radio.checked = isSelected;
-        radio.disabled = !isCompatible;
-
-        const infoCol = row.createDiv({ cls: "nv2-wizard-index-info" });
-
-        const titleRow = infoCol.createDiv({ cls: "nv2-wizard-index-title-row" });
-        titleRow.createSpan({ text: idx.displayName, cls: "nv2-wizard-index-name" });
-        titleRow.createSpan({ text: `${idx.dimension}d`, cls: "nv2-wizard-index-dim" });
-
-        // Source badge
-        titleRow.createSpan({
-          text: isExternal ? "EXTERNAL" : "PLUGIN",
-          cls: `nv2-wizard-badge ${isExternal ? "external" : "plugin"}`,
-        });
-
-        // Legacy badge
-        if (idx.isLegacy) {
-          titleRow.createSpan({ text: "LEGACY", cls: "nv2-wizard-badge legacy" });
-        }
-
-        // Secondary info line with date and count
-        const infoLine = infoCol.createDiv({ cls: "nv2-wizard-index-details" });
-        infoLine.createSpan({ text: `${idx.docCount} chunks` });
-        if (createdStr) {
-          infoLine.createSpan({ text: `Created ${createdStr}` });
-        }
-
-        // Compatibility indicator
-        if (!isCompatible && expectedDim) {
-          const warnEl = row.createDiv({ cls: "nv2-wizard-index-warning" });
-          const warnIcon = warnEl.createSpan();
-          setIcon(warnIcon, "alert-triangle");
-          warnEl.createSpan({ text: `${idx.dimension}d ≠ ${expectedDim}d` });
-          warnEl.title = `Index has ${idx.dimension} dimensions but ${this.ollama.selectedModel} requires ${expectedDim} dimensions`;
-        }
-
-        // External index notice
-        if (isExternal && isCompatible) {
-          const lockEl = row.createDiv({ cls: "nv2-wizard-index-lock" });
-          setIcon(lockEl, "lock");
-          lockEl.title = "External index (read-only)";
-        }
-
-        if (isCompatible) {
-          row.addEventListener("click", () => {
-            this.indexStatus.compatibleFound = true;
-            this.indexStatus.existingModel = idx.modelKey;
-            this.indexStatus.existingDim = idx.dimension;
-            this.indexStatus.noteCount = idx.docCount;
-            this.indexStatus.source = idx.source;
-            this.indexStatus.decision = "resume";
-            this.result.selectedIndexKey = idx.path;
-            this.result.indexAction = "use_existing";
-            this.render();
-          });
-        }
+        this.renderIndexRow(container, idx, expectedDim);
       }
 
-      // Action summary
-      const actionMsg = container.createDiv({ cls: "nv2-wizard-index-action" });
-      const actionIcon = actionMsg.createSpan({ cls: "nv2-wizard-action-icon" });
-
-      if (this.indexStatus.decision === "rebuild") {
-        setIcon(actionIcon, "sparkles");
-        actionMsg.createSpan({ text: "Action: Create new index and scan vault." });
-      } else if (this.indexStatus.source === "vault") {
-        setIcon(actionIcon, "lock");
-        actionMsg.createSpan({ text: "Action: Connect to external index (read-only)." });
-      } else {
-        setIcon(actionIcon, "check-circle");
-        actionMsg.createSpan({ text: "Action: Connect to existing plugin index." });
-      }
+      this.renderActionSummary(container);
     } catch (e) {
       container.empty();
       const errorEl = container.createDiv({ cls: "nv2-wizard-index-error" });
-      const errorIcon = errorEl.createSpan();
-      setIcon(errorIcon, "alert-circle");
+      setIcon(errorEl.createSpan(), "alert-circle");
       errorEl.createSpan({ text: `Error loading indices: ${e}` });
     }
   }

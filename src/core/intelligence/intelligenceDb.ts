@@ -237,9 +237,11 @@ export class IntelligenceDb {
    * Uses the first tag's root segment as the topic name.
    */
   private getTopicForNote(_notePath: string, noteTags: string[]): string {
-    if (noteTags.length === 0) return "_uncategorized";
+    // Filter out null/undefined/empty tags (can occur from malformed frontmatter)
+    const validTags = noteTags.filter((t): t is string => typeof t === "string" && t.length > 0);
+    if (validTags.length === 0) return "_uncategorized";
 
-    const primaryTag = noteTags[0]
+    const primaryTag = validTags[0]
       .replace(/^#/, "")
       .split("/")[0]
       .toLowerCase()

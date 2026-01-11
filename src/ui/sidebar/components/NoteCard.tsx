@@ -124,17 +124,17 @@ function TagsRow({ tags }: TagsRowProps) {
   const remaining = cleanTags.length - visibleCount;
 
   return (
-    <div class="nv2-note-card-tags" role="list" aria-label="Tags">
+    <ul class="nv2-note-card-tags" aria-label="Tags">
       {visible.map((tag) => (
-        <span key={tag} class="nv2-tag" role="listitem">
+        <li key={tag} class="nv2-tag">
           #{tag}
-        </span>
+        </li>
       ))}
       {remaining > 0 && (
-        <span class="nv2-tag nv2-tag--more" title={cleanTags.slice(visibleCount).join(", ")}>
+        <li class="nv2-tag nv2-tag--more" title={cleanTags.slice(visibleCount).join(", ")}>
           +{remaining}
-        </span>
+        </li>
       )}
-    </div>
+    </ul>
   );
 }

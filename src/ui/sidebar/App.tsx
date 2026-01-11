@@ -121,8 +121,9 @@ function AppContent() {
 
   useEffect(() => {
     isServicesReady.value = kernel.isServicesInitialized;
-  }, [kernel]);
+  }, [kernel.isServicesInitialized]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: signal subscription - track specific properties
   useEffect(() => {
     if (noteVitals.value) {
       chatContext.value = {
@@ -179,10 +180,7 @@ function AppContent() {
     [insightGenerator, noteVitals.value],
   );
 
-  const insights = useMemo(
-    () => [...agentInsights.value, ...staticInsights],
-    [staticInsights, agentInsights.value],
-  );
+  const insights = useMemo(() => [...agentInsights.value, ...staticInsights], [staticInsights]);
 
   const quickActions = useMemo(() => {
     const vitals = noteVitals.value;

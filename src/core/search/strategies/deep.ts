@@ -259,64 +259,105 @@ Example: ["term1", "term2", "term3"]`;
 
     for (const result of topResults) {
       if (options.signal?.aborted) break;
-
-      // Get metadata for outgoing links
-      const metadata = this.context.kernel.obsidian.getMetadataByPath(result.path);
-      if (!metadata?.links) continue;
-
-      // Explore linked notes
-      for (const link of metadata.links.slice(0, 5)) {
-        // Limit links per note
-        // Resolve link to path
-        const linkedPath = this.resolveLink(link, result.path);
-        if (!linkedPath || seenPaths.has(linkedPath)) continue;
-
-        seenPaths.add(linkedPath);
-
-        // Check if linked file exists
-        const linkedFile = this.context.kernel.obsidian.getFileByPath(linkedPath);
-        if (!linkedFile) continue;
-
-        // Create a result for the linked note
-        const graphResult: SearchResult = {
-          noteId: this.pathToNoteId(linkedPath),
-          path: linkedPath,
-          title: linkedFile.basename,
-          bestScore: result.bestScore * 0.7, // Reduce score for graph results
-          paraType: this.getParaType(linkedPath),
-          mtimeMs: linkedFile.stat.mtime,
-          reasoning: `Linked from "${result.title}"`,
-          chunks: [
-            {
-              chunkId: `${this.pathToNoteId(linkedPath)}-graph`,
-              noteId: this.pathToNoteId(linkedPath),
-              path: linkedPath,
-              title: linkedFile.basename,
-              headingPath: [],
-              tier: "note" as const,
-              kind: "paragraph" as const,
-              parentChunkId: null,
-              blockRef: null,
-              startLine: null,
-              endLine: null,
-              tokenEstimate: 0,
-              text: "",
-              score: result.bestScore * 0.7,
-              paraType: this.getParaType(linkedPath),
-              reasoning: `Linked from "${result.title}"`,
-            },
-          ],
-        };
-
-        graphResults.push(graphResult);
-
-        if (graphResults.length >= options.topK) break;
-      }
-
       if (graphResults.length >= options.topK) break;
+
+      const newResults = this.exploreLinksFromResult(
+        result,
+        seenPaths,
+        options.topK - graphResults.length,
+      );
+      graphResults.push(...newResults);
     }
 
     return graphResults;
+  }
+
+  /**
+   * Explore links from a single result
+   */
+  private exploreLinksFromResult(
+    result: SearchResult,
+    seenPaths: Set<string>,
+    maxResults: number,
+  ): SearchResult[] {
+    const metadata = this.context.kernel.obsidian.getMetadataByPath(result.path);
+    if (!metadata?.links) return [];
+
+    const results: SearchResult[] = [];
+    const linksToExplore = metadata.links.slice(0, 5);
+
+    for (const link of linksToExplore) {
+      if (results.length >= maxResults) break;
+
+      const graphResult = this.createGraphResultFromLink(link, result, seenPaths);
+      if (graphResult) {
+        results.push(graphResult);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Create a graph result from a link if valid
+   */
+  private createGraphResultFromLink(
+    link: string,
+    sourceResult: SearchResult,
+    seenPaths: Set<string>,
+  ): SearchResult | null {
+    const linkedPath = this.resolveLink(link, sourceResult.path);
+    if (!linkedPath || seenPaths.has(linkedPath)) return null;
+
+    seenPaths.add(linkedPath);
+
+    const linkedFile = this.context.kernel.obsidian.getFileByPath(linkedPath);
+    if (!linkedFile) return null;
+
+    const derivedScore = sourceResult.bestScore * 0.7;
+    const noteId = this.pathToNoteId(linkedPath);
+    const reasoning = `Linked from "${sourceResult.title}"`;
+
+    return {
+      noteId,
+      path: linkedPath,
+      title: linkedFile.basename,
+      bestScore: derivedScore,
+      paraType: this.getParaType(linkedPath),
+      mtimeMs: linkedFile.stat.mtime,
+      reasoning,
+      chunks: [this.createGraphChunk(linkedPath, linkedFile.basename, derivedScore, reasoning)],
+    };
+  }
+
+  /**
+   * Create a chunk for a graph result
+   */
+  private createGraphChunk(
+    path: string,
+    title: string,
+    score: number,
+    reasoning: string,
+  ): ChunkSearchResult {
+    const noteId = this.pathToNoteId(path);
+    return {
+      chunkId: `${noteId}-graph`,
+      noteId,
+      path,
+      title,
+      headingPath: [],
+      tier: "note" as const,
+      kind: "paragraph" as const,
+      parentChunkId: null,
+      blockRef: null,
+      startLine: null,
+      endLine: null,
+      tokenEstimate: 0,
+      text: "",
+      score,
+      paraType: this.getParaType(path),
+      reasoning,
+    };
   }
 
   /**

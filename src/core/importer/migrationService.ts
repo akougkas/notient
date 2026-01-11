@@ -101,17 +101,47 @@ export class MigrationService {
   }
 
   /**
-   * Run the migration pipeline
+   * Import a single file into the vault.
    */
-  private async runMigration(migration: MigrationStatus, files: string[]): Promise<void> {
+  private async importSingleFile(
+    vault: import("obsidian").Vault,
+    filePath: string,
+    sourcePath: string,
+    destFolder: string,
+    migration: MigrationStatus,
+  ): Promise<void> {
+    const content = readFileSync(filePath, "utf-8");
+    const result = normalizeMarkdownFile(content);
+
+    const relativePath = relative(sourcePath, filePath);
+    const targetPath = join(destFolder, relativePath).replace(/\\/g, "/");
+
+    const parentPath = targetPath.split("/").slice(0, -1).join("/");
+    if (parentPath && !vault.getAbstractFileByPath(parentPath)) {
+      await vault.createFolder(parentPath);
+    }
+
+    const existing = vault.getAbstractFileByPath(targetPath);
+    if (existing) {
+      await vault.modify(existing as import("obsidian").TFile, result.normalized);
+    } else {
+      await vault.create(targetPath, result.normalized);
+    }
+
+    migration.progress.filesImported++;
+    migration.progress.linksConverted += result.conversions.length;
+  }
+
+  /**
+   * Phase 1: Import all files into the vault.
+   */
+  private async runImportPhase(migration: MigrationStatus, files: string[]): Promise<void> {
     const vault = this.kernel.obsidian.vault;
     const { sourcePath, destFolder } = migration;
 
-    // Phase 1: Import files
     migration.status = "importing";
     this.eventBus.emit("migration:progress", { migration, phase: "importing" });
 
-    // Ensure destination folder exists
     const destExists = vault.getAbstractFileByPath(destFolder);
     if (!destExists) {
       await vault.createFolder(destFolder);
@@ -119,32 +149,8 @@ export class MigrationService {
 
     for (const filePath of files) {
       try {
-        // Read and normalize content
-        const content = readFileSync(filePath, "utf-8");
-        const result = normalizeMarkdownFile(content);
+        await this.importSingleFile(vault, filePath, sourcePath, destFolder, migration);
 
-        // Calculate target path
-        const relativePath = relative(sourcePath, filePath);
-        const targetPath = join(destFolder, relativePath).replace(/\\/g, "/");
-
-        // Ensure parent folder exists
-        const parentPath = targetPath.split("/").slice(0, -1).join("/");
-        if (parentPath && !vault.getAbstractFileByPath(parentPath)) {
-          await vault.createFolder(parentPath);
-        }
-
-        // Create or update file
-        const existing = vault.getAbstractFileByPath(targetPath);
-        if (existing) {
-          await vault.modify(existing as import("obsidian").TFile, result.normalized);
-        } else {
-          await vault.create(targetPath, result.normalized);
-        }
-
-        migration.progress.filesImported++;
-        migration.progress.linksConverted += result.conversions.length;
-
-        // Emit progress every 10 files
         if (migration.progress.filesImported % 10 === 0) {
           this.eventBus.emit("migration:progress", { migration, phase: "importing" });
         }
@@ -154,8 +160,12 @@ export class MigrationService {
     }
 
     this.eventBus.emit("migration:progress", { migration, phase: "importing" });
+  }
 
-    // Phase 2: Trigger indexing
+  /**
+   * Phase 2: Trigger indexing for imported files.
+   */
+  private async runIndexingPhase(migration: MigrationStatus): Promise<void> {
     migration.status = "indexing";
     this.eventBus.emit("migration:progress", { migration, phase: "indexing" });
 
@@ -163,18 +173,24 @@ export class MigrationService {
       syncVault(): Promise<{ added: number; updated: number }>;
     }>("indexer");
 
-    if (indexer) {
-      try {
-        const indexResult = await indexer.syncVault();
-        console.log(
-          `[MigrationService] Indexed: ${indexResult.added} added, ${indexResult.updated} updated`,
-        );
-      } catch (error) {
-        console.warn("[MigrationService] Indexing failed:", error);
-      }
-    }
+    if (!indexer) return;
 
-    // Phase 3: Queue agent workflows (optional, if WorkflowRunner available)
+    try {
+      const indexResult = await indexer.syncVault();
+      console.log(
+        `[MigrationService] Indexed: ${indexResult.added} added, ${indexResult.updated} updated`,
+      );
+    } catch (error) {
+      console.warn("[MigrationService] Indexing failed:", error);
+    }
+  }
+
+  /**
+   * Phase 3: Queue agent workflows for analysis.
+   */
+  private async runAnalysisPhase(migration: MigrationStatus): Promise<void> {
+    const { destFolder } = migration;
+
     migration.status = "analyzing";
     this.eventBus.emit("migration:progress", { migration, phase: "analyzing" });
 
@@ -187,31 +203,37 @@ export class MigrationService {
       }): Promise<{ success: boolean }>;
     }>("workflowRunner");
 
-    if (workflowRunner) {
-      try {
-        // Queue /connect workflow for the imported folder
-        await workflowRunner.startFromCommand({
-          command: "connect",
-          mode: "bulk",
-          scope: "folder",
-          target: destFolder,
-        });
-        console.log(`[MigrationService] Queued /connect for ${destFolder}`);
+    if (!workflowRunner) return;
 
-        // Queue /tasks workflow
-        await workflowRunner.startFromCommand({
-          command: "tasks",
-          mode: "bulk",
-          scope: "folder",
-          target: destFolder,
-        });
-        console.log(`[MigrationService] Queued /tasks for ${destFolder}`);
-      } catch (error) {
-        console.warn("[MigrationService] Failed to queue workflows:", error);
-      }
+    try {
+      await workflowRunner.startFromCommand({
+        command: "connect",
+        mode: "bulk",
+        scope: "folder",
+        target: destFolder,
+      });
+      console.log(`[MigrationService] Queued /connect for ${destFolder}`);
+
+      await workflowRunner.startFromCommand({
+        command: "tasks",
+        mode: "bulk",
+        scope: "folder",
+        target: destFolder,
+      });
+      console.log(`[MigrationService] Queued /tasks for ${destFolder}`);
+    } catch (error) {
+      console.warn("[MigrationService] Failed to queue workflows:", error);
     }
+  }
 
-    // Complete
+  /**
+   * Run the migration pipeline
+   */
+  private async runMigration(migration: MigrationStatus, files: string[]): Promise<void> {
+    await this.runImportPhase(migration, files);
+    await this.runIndexingPhase(migration);
+    await this.runAnalysisPhase(migration);
+
     migration.status = "complete";
     migration.completedAt = Date.now();
     this.eventBus.emit("migration:completed", { migration });

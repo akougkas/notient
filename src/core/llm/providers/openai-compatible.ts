@@ -168,20 +168,41 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const data = await response.json();
     const message = data.choices?.[0]?.message;
-    // Support both regular content and reasoning_content (for thinking models like DeepSeek, Falcon H1R)
-    let content = message?.content || "";
 
-    // If content is empty but reasoning_content exists, use that instead
-    if (!content && message?.reasoning_content) {
-      content = message.reasoning_content;
-      console.log(`[${this.name}] Using reasoning_content from thinking model`);
+    // Support both regular content and reasoning_content (for thinking models)
+    let content = message?.content || "";
+    const reasoning = message?.reasoning_content || "";
+
+    // Thinking models (DeepSeek R1, Falcon H1R, Qwen QwQ) put answer in content
+    // and reasoning in reasoning_content. If content is empty, the model failed
+    // to produce output - try to salvage from reasoning.
+    if (!content && reasoning) {
+      // Strip <think> tags first, then look for JSON
+      const strippedReasoning = reasoning.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+      // Try to find JSON in the stripped reasoning
+      const jsonMatch = strippedReasoning.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        content = jsonMatch[0];
+        console.log(`[${this.name}] Extracted JSON from reasoning_content`);
+      } else if (strippedReasoning.length > 0) {
+        // No JSON but have text - use it (might be prose response)
+        content = strippedReasoning;
+        console.log(`[${this.name}] Using reasoning_content text (no JSON found)`);
+      } else {
+        // Only had thinking tags, no actual output
+        console.warn(`[${this.name}] Model only produced <think> content, no answer`);
+        content = reasoning; // Return raw for debugging
+      }
+    }
+
+    // Also strip <think> tags from content itself (some models include it there)
+    if (content.includes("<think>")) {
+      content = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
     }
 
     if (!content) {
-      console.warn(
-        `[${this.name}] Empty content in response. Full response:`,
-        JSON.stringify(data).slice(0, 500),
-      );
+      console.warn(`[${this.name}] Empty response from model`);
     }
 
     return content;

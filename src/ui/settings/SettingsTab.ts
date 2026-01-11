@@ -148,107 +148,108 @@ function isValidUrl(url: string): boolean {
   }
 }
 
-export function validateSettings(settings: NotientSettings): SettingsValidation {
-  const errors: SettingsError[] = [];
-  const warnings: SettingsWarning[] = [];
+// ──────────────────────────────────────────────────────────────────────────
+// Validation Helpers
+// ──────────────────────────────────────────────────────────────────────────
 
-  // Ollama validation
-  if (settings.ollama.enabled) {
-    if (!settings.ollama.host) {
-      errors.push({ field: "ollama.host", message: "Ollama host is required" });
-    } else if (!isValidUrl(settings.ollama.host)) {
-      errors.push({
-        field: "ollama.host",
-        message: "Invalid URL format (expected http://host:port)",
-      });
-    }
-    if (!settings.ollama.embeddingModel || settings.ollama.embeddingModel.trim() === "") {
-      warnings.push({
-        field: "ollama.embeddingModel",
-        message: "No embedding model selected",
-      });
-    }
-  }
+function validateOllama(
+  settings: NotientSettings,
+  errors: SettingsError[],
+  warnings: SettingsWarning[],
+): void {
+  if (!settings.ollama.enabled) return;
+  if (!settings.ollama.host)
+    errors.push({ field: "ollama.host", message: "Ollama host is required" });
+  else if (!isValidUrl(settings.ollama.host))
+    errors.push({
+      field: "ollama.host",
+      message: "Invalid URL format (expected http://host:port)",
+    });
+  if (!settings.ollama.embeddingModel?.trim())
+    warnings.push({ field: "ollama.embeddingModel", message: "No embedding model selected" });
+}
 
-  // LM Studio validation
-  if (settings.lmstudio.enabled) {
-    if (!settings.lmstudio.host) {
-      errors.push({ field: "lmstudio.host", message: "LM Studio host is required" });
-    } else if (!isValidUrl(settings.lmstudio.host)) {
-      errors.push({
-        field: "lmstudio.host",
-        message: "Invalid URL format (expected http://host:port)",
-      });
-    }
-    if (!settings.lmstudio.reasoningModel || settings.lmstudio.reasoningModel.trim() === "") {
-      warnings.push({
-        field: "lmstudio.reasoningModel",
-        message: "No reasoning model selected",
-      });
-    }
-  }
+function validateLMStudio(
+  settings: NotientSettings,
+  errors: SettingsError[],
+  warnings: SettingsWarning[],
+): void {
+  if (!settings.lmstudio.enabled) return;
+  if (!settings.lmstudio.host)
+    errors.push({ field: "lmstudio.host", message: "LM Studio host is required" });
+  else if (!isValidUrl(settings.lmstudio.host))
+    errors.push({
+      field: "lmstudio.host",
+      message: "Invalid URL format (expected http://host:port)",
+    });
+  if (!settings.lmstudio.reasoningModel?.trim())
+    warnings.push({ field: "lmstudio.reasoningModel", message: "No reasoning model selected" });
+}
 
-  // Indexing validation
-  if (settings.indexing.chunkSize < 32) {
+function validateIndexing(settings: NotientSettings, errors: SettingsError[]): void {
+  if (settings.indexing.chunkSize < 32)
     errors.push({
       field: "indexing.chunkSize",
       message: "Chunk size must be at least 32 characters",
     });
-  }
-  if (settings.indexing.chunkSize > 8192) {
+  if (settings.indexing.chunkSize > 8192)
     errors.push({
       field: "indexing.chunkSize",
       message: "Chunk size must be at most 8192 characters",
     });
-  }
+}
 
-  // Agent history validation
-  if (settings.agent.history.maxEntries < 1) {
+function validateAgentHistory(settings: NotientSettings, errors: SettingsError[]): void {
+  if (settings.agent.history.maxEntries < 1)
     errors.push({
       field: "agent.history.maxEntries",
       message: "Max history entries must be positive",
     });
-  }
-  if (settings.agent.history.maxAgeDays < 1) {
+  if (settings.agent.history.maxAgeDays < 1)
     errors.push({
       field: "agent.history.maxAgeDays",
       message: "Max history age must be at least 1 day",
     });
-  }
+}
 
-  // Chat retention validation
-  if (settings.chatRetention.maxMessagesPerNote < 1) {
+function validateChatRetention(settings: NotientSettings, errors: SettingsError[]): void {
+  if (settings.chatRetention.maxMessagesPerNote < 1)
     errors.push({
       field: "chatRetention.maxMessagesPerNote",
       message: "Max messages per note must be positive",
     });
-  }
-  if (settings.chatRetention.maxAgeDays < 1) {
+  if (settings.chatRetention.maxAgeDays < 1)
     errors.push({
       field: "chatRetention.maxAgeDays",
       message: "Chat retention must be at least 1 day",
     });
-  }
+}
 
-  // Bulk workflow validation
-  if (settings.agent.bulk.maxNotesPerWorkflow < 1) {
+function validateBulkWorkflow(settings: NotientSettings, errors: SettingsError[]): void {
+  if (settings.agent.bulk.maxNotesPerWorkflow < 1)
     errors.push({
       field: "agent.bulk.maxNotesPerWorkflow",
       message: "Max notes per workflow must be positive",
     });
-  }
-  if (settings.agent.bulk.delayBetweenTasksMs < 0) {
+  if (settings.agent.bulk.delayBetweenTasksMs < 0)
     errors.push({
       field: "agent.bulk.delayBetweenTasksMs",
       message: "Delay between tasks cannot be negative",
     });
-  }
+}
 
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-  };
+export function validateSettings(settings: NotientSettings): SettingsValidation {
+  const errors: SettingsError[] = [];
+  const warnings: SettingsWarning[] = [];
+
+  validateOllama(settings, errors, warnings);
+  validateLMStudio(settings, errors, warnings);
+  validateIndexing(settings, errors);
+  validateAgentHistory(settings, errors);
+  validateChatRetention(settings, errors);
+  validateBulkWorkflow(settings, errors);
+
+  return { valid: errors.length === 0, errors, warnings };
 }
 
 interface ServiceNetworkConfig {
@@ -545,97 +546,133 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // Service status row
     const statusRow = statusBox.createDiv({ cls: "notient-settings-status-row" });
-
-    // Ollama status
-    const ollamaStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
-    ollamaStatus.createSpan({ cls: `notient-settings-dot status-${health.ollama.status}` });
-    ollamaStatus.createSpan({ text: "Ollama" });
-    if (caps.embedding) {
-      ollamaStatus.createSpan({ text: "(embeddings)", cls: "notient-settings-cap" });
-    }
-
-    // LM Studio status
-    const lmStatus = statusRow.createDiv({ cls: "notient-settings-status-item" });
-    lmStatus.createSpan({ cls: `notient-settings-dot status-${health.lmstudio.status}` });
-    lmStatus.createSpan({ text: "LM Studio" });
-    if (caps.reasoning) {
-      lmStatus.createSpan({ text: "(chat + rerank)", cls: "notient-settings-cap" });
-    }
+    this.renderServiceStatusItem(
+      statusRow,
+      "Ollama",
+      health.ollama.status,
+      caps.embedding ? "(embeddings)" : null,
+    );
+    this.renderServiceStatusItem(
+      statusRow,
+      "LM Studio",
+      health.lmstudio.status,
+      caps.reasoning ? "(chat + rerank)" : null,
+    );
 
     // Capabilities row
     const capRow = statusBox.createDiv({ cls: "notient-settings-cap-row" });
+    this.renderCapabilitiesRow(capRow, caps, isReady);
 
-    // Index stats
+    // Reconnect button
+    this.renderReconnectButton(statusBox, isReady);
+  }
+
+  private renderServiceStatusItem(
+    container: HTMLElement,
+    name: string,
+    status: string,
+    capability: string | null,
+  ): void {
+    const item = container.createDiv({ cls: "notient-settings-status-item" });
+    item.createSpan({ cls: `notient-settings-dot status-${status}` });
+    item.createSpan({ text: name });
+    if (capability) {
+      item.createSpan({ text: capability, cls: "notient-settings-cap" });
+    }
+  }
+
+  private renderCapabilitiesRow(
+    capRow: HTMLElement,
+    caps: { search: boolean; reasoning: boolean; indexing: boolean; embedding: boolean },
+    isReady: boolean,
+  ): void {
     if (isReady) {
-      const indexManager = this.kernel.getService<{
-        getIndexedCount(): number;
-        getActiveModelKey(): string;
-      }>("indexManager");
-
-      if (indexManager) {
-        const count = indexManager.getIndexedCount();
-        const model = indexManager.getActiveModelKey();
-        const statsEl = capRow.createSpan({ cls: "notient-settings-stats" });
-        const statsIcon = statsEl.createSpan({ cls: "notient-settings-stats-icon" });
-        setIcon(statsIcon, "bar-chart-2");
-        statsEl.createSpan({ text: `${count} notes ready for search` });
-        if (model) {
-          capRow.createSpan({ text: `(${model})`, cls: "notient-settings-model-tag" });
-        }
-      }
-
-      // Show capability icons
-      const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
-      if (caps.search) {
-        const searchIcon = capIcons.createSpan({
-          cls: "notient-settings-cap-icon",
-          attr: { title: "Search ready" },
-        });
-        setIcon(searchIcon, "search");
-      }
-      if (caps.reasoning) {
-        const chatIcon = capIcons.createSpan({
-          cls: "notient-settings-cap-icon",
-          attr: { title: "Chat & rerank ready" },
-        });
-        setIcon(chatIcon, "bot");
-      }
-      if (caps.indexing) {
-        const indexIcon = capIcons.createSpan({
-          cls: "notient-settings-cap-icon",
-          attr: { title: "Indexing available" },
-        });
-        setIcon(indexIcon, "file-text");
-      }
+      this.renderReadyCapabilities(capRow, caps);
     } else if (this.kernel.isServicesInitializing) {
-      const initEl = capRow.createSpan({ cls: "notient-settings-info-dim notient-settings-init" });
-      const spinnerIcon = initEl.createSpan({ cls: "notient-settings-spinner" });
-      setIcon(spinnerIcon, "loader-2");
-      initEl.createSpan({ text: "Connecting to your AI..." });
+      this.renderInitializingState(capRow);
     } else {
-      const warnEl = capRow.createSpan({ cls: "notient-settings-warning" });
-      const warnIcon = warnEl.createSpan({ cls: "notient-settings-warning-icon" });
-      setIcon(warnIcon, "alert-triangle");
-      warnEl.createSpan({ text: "Run the setup wizard to get started" });
+      this.renderSetupWarning(capRow);
+    }
+  }
+
+  private renderReadyCapabilities(
+    capRow: HTMLElement,
+    caps: { search: boolean; reasoning: boolean; indexing: boolean },
+  ): void {
+    const indexManager = this.kernel.getService<{
+      getIndexedCount(): number;
+      getActiveModelKey(): string;
+    }>("indexManager");
+
+    if (indexManager) {
+      const count = indexManager.getIndexedCount();
+      const model = indexManager.getActiveModelKey();
+      const statsEl = capRow.createSpan({ cls: "notient-settings-stats" });
+      const statsIcon = statsEl.createSpan({ cls: "notient-settings-stats-icon" });
+      setIcon(statsIcon, "bar-chart-2");
+      statsEl.createSpan({ text: `${count} notes ready for search` });
+      if (model) {
+        capRow.createSpan({ text: `(${model})`, cls: "notient-settings-model-tag" });
+      }
     }
 
-    // Add Reconnect button when services are ready or failed
-    if (isReady || (!this.kernel.isServicesInitializing && this.settings.setupComplete)) {
-      const actionRow = statusBox.createDiv({ cls: "notient-settings-action-row" });
-      const reconnectBtn = actionRow.createEl("button", { cls: "notient-settings-reconnect-btn" });
-      const reconnectIcon = reconnectBtn.createSpan({ cls: "notient-settings-btn-icon" });
-      setIcon(reconnectIcon, "refresh-cw");
-      reconnectBtn.createSpan({ text: "Reconnect Services" });
-      reconnectBtn.addEventListener("click", async () => {
-        reconnectBtn.disabled = true;
-        reconnectBtn.empty();
-        const spinnerIcon = reconnectBtn.createSpan({ cls: "notient-settings-spinner" });
-        setIcon(spinnerIcon, "loader-2");
-        reconnectBtn.createSpan({ text: "Reconnecting..." });
-        await this.onSettingsChange(this.settings, ["ollama.host", "lmstudio.host"]);
-        setTimeout(() => this.display(), 2000);
+    const capIcons = capRow.createDiv({ cls: "notient-settings-cap-icons" });
+    if (caps.search) {
+      const searchIcon = capIcons.createSpan({
+        cls: "notient-settings-cap-icon",
+        attr: { title: "Search ready" },
       });
+      setIcon(searchIcon, "search");
     }
+    if (caps.reasoning) {
+      const chatIcon = capIcons.createSpan({
+        cls: "notient-settings-cap-icon",
+        attr: { title: "Chat & rerank ready" },
+      });
+      setIcon(chatIcon, "bot");
+    }
+    if (caps.indexing) {
+      const indexIcon = capIcons.createSpan({
+        cls: "notient-settings-cap-icon",
+        attr: { title: "Indexing available" },
+      });
+      setIcon(indexIcon, "file-text");
+    }
+  }
+
+  private renderInitializingState(capRow: HTMLElement): void {
+    const initEl = capRow.createSpan({ cls: "notient-settings-info-dim notient-settings-init" });
+    const spinnerIcon = initEl.createSpan({ cls: "notient-settings-spinner" });
+    setIcon(spinnerIcon, "loader-2");
+    initEl.createSpan({ text: "Connecting to your AI..." });
+  }
+
+  private renderSetupWarning(capRow: HTMLElement): void {
+    const warnEl = capRow.createSpan({ cls: "notient-settings-warning" });
+    const warnIcon = warnEl.createSpan({ cls: "notient-settings-warning-icon" });
+    setIcon(warnIcon, "alert-triangle");
+    warnEl.createSpan({ text: "Run the setup wizard to get started" });
+  }
+
+  private renderReconnectButton(statusBox: HTMLElement, isReady: boolean): void {
+    const showButton =
+      isReady || (!this.kernel.isServicesInitializing && this.settings.setupComplete);
+    if (!showButton) return;
+
+    const actionRow = statusBox.createDiv({ cls: "notient-settings-action-row" });
+    const reconnectBtn = actionRow.createEl("button", { cls: "notient-settings-reconnect-btn" });
+    const reconnectIcon = reconnectBtn.createSpan({ cls: "notient-settings-btn-icon" });
+    setIcon(reconnectIcon, "refresh-cw");
+    reconnectBtn.createSpan({ text: "Reconnect Services" });
+    reconnectBtn.addEventListener("click", async () => {
+      reconnectBtn.disabled = true;
+      reconnectBtn.empty();
+      const spinnerIcon = reconnectBtn.createSpan({ cls: "notient-settings-spinner" });
+      setIcon(spinnerIcon, "loader-2");
+      reconnectBtn.createSpan({ text: "Reconnecting..." });
+      await this.onSettingsChange(this.settings, ["ollama.host", "lmstudio.host"]);
+      setTimeout(() => this.display(), 2000);
+    });
   }
 
   private renderServiceSection(

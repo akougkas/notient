@@ -61,6 +61,7 @@ export function RichChatView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
+  // biome-ignore lint/correctness/useExhaustiveDependencies: signals auto-subscribe, scroll triggers on content change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.value.length, streamingContent.value, streamingThinking.value]);
@@ -94,7 +95,7 @@ export function RichChatView({
   const hasActivities = activities.value.length > 0;
 
   return (
-    <div class="nv2-chat-view nv2-chat-view--rich" role="region" aria-label="Chat with Notient">
+    <section class="nv2-chat-view nv2-chat-view--rich" aria-label="Chat with Notient">
       {/* Section 1: Context Bar */}
       <header class="nv2-chat-context">
         {hasContext ? (
@@ -132,6 +133,7 @@ export function RichChatView({
       )}
 
       {/* Section 3: Message Stream */}
+      {/* biome-ignore lint/a11y/useSemanticElements: role="log" is valid ARIA for live regions */}
       <main class="nv2-chat-messages" role="log" aria-live="polite">
         {!hasMessages && !isStreaming.value ? (
           <EmptyState hasContext={hasContext} onSendMessage={onSendMessage} />
@@ -181,7 +183,7 @@ export function RichChatView({
           {isStreaming.value ? <span class="nv2-chat-send-spinner" /> : <Icon name="arrow-up" />}
         </button>
       </footer>
-    </div>
+    </section>
   );
 }
 

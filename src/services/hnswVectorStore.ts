@@ -17,7 +17,7 @@
 import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
 import type { ChunkKind, ChunkTier, EmbeddedChunk, NoteChunk } from "../types/indexer";
-import type { ChunkSearchResult, SearchOptions } from "../types/search";
+import type { ChunkSearchResult, ParaType, SearchOptions } from "../types/search";
 import type { VectorStore, VectorStoreInitOptions } from "./vectorStore";
 
 // ============================================================================
@@ -605,34 +605,133 @@ export class HNSWVectorStore implements VectorStore {
     this.dirty = true;
   }
 
-  /**
-   * Search using HNSW algorithm - O(log N) complexity.
-   */
-  async search(queryEmbedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]> {
-    if (this.disposed || this.docs.size === 0) return [];
-    if (!this.index) return [];
+  // ──────────────────────────────────────────────────────────────────────────
+  // Search Helpers
+  // ──────────────────────────────────────────────────────────────────────────
 
-    const query = new Float32Array(queryEmbedding);
-
-    // Build filter function based on options
+  /** Build pre-filter valid labels set */
+  private buildValidLabels(options: SearchOptions): Set<number> {
     const allowedTiers = options.tier
       ? new Set(Array.isArray(options.tier) ? options.tier : [options.tier])
       : null;
     const allowedNoteIds = options.noteIds?.length ? new Set(options.noteIds) : null;
 
-    // Pre-compute valid labels based on filters
     const validLabels = new Set<number>();
     for (const [label, doc] of this.docs) {
       if (allowedTiers && !allowedTiers.has(doc.tier)) continue;
       if (allowedNoteIds && !allowedNoteIds.has(doc.noteId)) continue;
       validLabels.add(label);
     }
+    return validLabels;
+  }
 
-    // HNSW search with filter
+  /** Calculate lexical-boosted score */
+  private calculateBoostedScore(baseScore: number, doc: StoredDoc, queryTerms: string[]): number {
+    if (queryTerms.length === 0) return baseScore;
+
+    const LEXICAL_BOOST = 0.15;
+    const TITLE_BOOST = 0.25;
+
+    const textLower = doc.text.toLowerCase();
+    const titleLower = doc.title.toLowerCase();
+    const pathLower = doc.path.toLowerCase();
+
+    const titleMatch = queryTerms.some(
+      (term) => titleLower.includes(term) || pathLower.includes(term),
+    );
+    if (titleMatch) return Math.min(0.99, baseScore + TITLE_BOOST);
+
+    const textMatch = queryTerms.some((term) => textLower.includes(term));
+    if (textMatch) return Math.min(0.99, baseScore + LEXICAL_BOOST);
+
+    return baseScore;
+  }
+
+  /** Check if document passes post-filters */
+  private passesPostFilters(doc: StoredDoc, options: SearchOptions, paraType: string): boolean {
+    if (options.paraType && paraType !== options.paraType) return false;
+    if (options.folderPaths?.length) {
+      if (!options.folderPaths.some((p) => doc.path.startsWith(p))) return false;
+    }
+    if (options.tags?.length) {
+      if (!options.tags.some((t) => doc.tags.includes(t))) return false;
+    }
+    return true;
+  }
+
+  /** Build search result from document */
+  private buildSearchResult(
+    doc: StoredDoc,
+    score: number,
+    paraType: ParaType,
+    includeContent: boolean,
+  ): ChunkSearchResult {
+    return {
+      chunkId: doc.chunkId,
+      noteId: doc.noteId,
+      path: doc.path,
+      title: doc.title,
+      headingPath: doc.headingPath,
+      tier: doc.tier,
+      kind: doc.kind,
+      parentChunkId: doc.parentChunkId,
+      blockRef: doc.blockRef,
+      startLine: doc.startLine,
+      endLine: doc.endLine,
+      tokenEstimate: doc.tokenEstimate,
+      text: includeContent ? doc.text : "",
+      score,
+      paraType,
+    };
+  }
+
+  /** Process a single neighbor and return a result if valid, null otherwise */
+  private processNeighbor(
+    label: number,
+    distance: number,
+    queryTerms: string[],
+    options: SearchOptions,
+    perNoteCounts: Map<string, number>,
+  ): ChunkSearchResult | null {
+    if (label < 0) return null;
+
+    const doc = this.docs.get(label);
+    if (!doc) return null;
+
+    const score = this.calculateBoostedScore(1 - distance, doc, queryTerms);
+    if (score < options.minScore) return null;
+
+    const paraType = this.paraDetector.detectType(doc.path);
+    if (!this.passesPostFilters(doc, options, paraType)) return null;
+
+    if (typeof options.maxPerNote === "number" && options.maxPerNote > 0) {
+      const current = perNoteCounts.get(doc.noteId) ?? 0;
+      if (current >= options.maxPerNote) return null;
+      perNoteCounts.set(doc.noteId, current + 1);
+    }
+
+    return this.buildSearchResult(doc, score, paraType, options.includeContent ?? false);
+  }
+
+  /** Extract query terms from query text */
+  private extractQueryTerms(queryText: string | undefined): string[] {
+    if (!queryText) return [];
+    return queryText
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length >= 2);
+  }
+
+  /**
+   * Search using HNSW algorithm - O(log N) complexity.
+   */
+  async search(queryEmbedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]> {
+    if (this.disposed || this.docs.size === 0 || !this.index) return [];
+
+    const query = new Float32Array(queryEmbedding);
+    const validLabels = this.buildValidLabels(options);
     const filterFn =
       validLabels.size < this.docs.size ? (label: number) => validLabels.has(label) : undefined;
-
-    // Request more results than needed to account for post-filtering
     const searchK = Math.min(options.topK * 3, this.docs.size);
 
     let neighbors: number[];
@@ -647,92 +746,19 @@ export class HNSWVectorStore implements VectorStore {
       return [];
     }
 
-    // Convert distances to similarity scores
-    // For cosine: distance = 1 - similarity, so similarity = 1 - distance
-    // For L2: we use normalized vectors, so this approximation works
+    const queryTerms = this.extractQueryTerms(options.queryText);
     const results: ChunkSearchResult[] = [];
-    const perNoteCounts: Map<string, number> = new Map();
+    const perNoteCounts = new Map<string, number>();
 
-    // Hybrid search: prepare query terms
-    const queryTerms = options.queryText
-      ? options.queryText
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((t) => t.length >= 2)
-      : [];
-
-    const LEXICAL_BOOST = 0.15;
-    const TITLE_BOOST = 0.25;
-
-    for (let i = 0; i < neighbors.length; i++) {
-      if (results.length >= options.topK) break;
-
-      const label = neighbors[i];
-      if (label < 0) continue; // Invalid result
-
-      const doc = this.docs.get(label);
-      if (!doc) continue;
-
-      // Convert distance to similarity (cosine metric)
-      let score = 1 - distances[i];
-
-      // Apply lexical boost
-      if (queryTerms.length > 0) {
-        const textLower = doc.text.toLowerCase();
-        const titleLower = doc.title.toLowerCase();
-        const pathLower = doc.path.toLowerCase();
-
-        const titleMatch = queryTerms.some(
-          (term) => titleLower.includes(term) || pathLower.includes(term),
-        );
-        const textMatch = queryTerms.some((term) => textLower.includes(term));
-
-        if (titleMatch) {
-          score = Math.min(0.99, score + TITLE_BOOST);
-        } else if (textMatch) {
-          score = Math.min(0.99, score + LEXICAL_BOOST);
-        }
-      }
-
-      if (score < options.minScore) continue;
-
-      const paraType = this.paraDetector.detectType(doc.path);
-
-      // Post-filters
-      if (options.paraType && paraType !== options.paraType) continue;
-      if (options.folderPaths?.length) {
-        const matches = options.folderPaths.some((p) => doc.path.startsWith(p));
-        if (!matches) continue;
-      }
-      if (options.tags?.length) {
-        const hasTag = options.tags.some((t) => doc.tags.includes(t));
-        if (!hasTag) continue;
-      }
-
-      // Per-note cap
-      if (typeof options.maxPerNote === "number" && options.maxPerNote > 0) {
-        const current = perNoteCounts.get(doc.noteId) ?? 0;
-        if (current >= options.maxPerNote) continue;
-        perNoteCounts.set(doc.noteId, current + 1);
-      }
-
-      results.push({
-        chunkId: doc.chunkId,
-        noteId: doc.noteId,
-        path: doc.path,
-        title: doc.title,
-        headingPath: doc.headingPath,
-        tier: doc.tier,
-        kind: doc.kind,
-        parentChunkId: doc.parentChunkId,
-        blockRef: doc.blockRef,
-        startLine: doc.startLine,
-        endLine: doc.endLine,
-        tokenEstimate: doc.tokenEstimate,
-        text: options.includeContent ? doc.text : "",
-        score,
-        paraType,
-      });
+    for (let i = 0; i < neighbors.length && results.length < options.topK; i++) {
+      const result = this.processNeighbor(
+        neighbors[i],
+        distances[i],
+        queryTerms,
+        options,
+        perNoteCounts,
+      );
+      if (result) results.push(result);
     }
 
     return results;

@@ -80,6 +80,78 @@ export class OllamaService {
   }
 
   /**
+   * Extract capabilities from model_info object.
+   * Keys are prefixed with model family (e.g., "bert.context_length").
+   */
+  private parseModelInfo(modelInfo: Record<string, unknown>): {
+    contextLength: number | null;
+    embeddingDimension: number | null;
+    architecture: string | null;
+  } {
+    let contextLength: number | null = null;
+    let embeddingDimension: number | null = null;
+    let architecture: string | null = null;
+
+    for (const [key, value] of Object.entries(modelInfo)) {
+      if (key.endsWith(".context_length") && typeof value === "number") {
+        contextLength = value;
+        architecture = key.split(".")[0];
+      }
+      if (key.endsWith(".embedding_length") && typeof value === "number") {
+        embeddingDimension = value;
+        if (!architecture) {
+          architecture = key.split(".")[0];
+        }
+      }
+    }
+
+    // Also check general_architecture field if present
+    if (!architecture && modelInfo["general.architecture"]) {
+      architecture = String(modelInfo["general.architecture"]);
+    }
+
+    return { contextLength, embeddingDimension, architecture };
+  }
+
+  /**
+   * Build ModelCapabilities from parsed values, probing for dimension if needed.
+   */
+  private async buildCapabilities(
+    model: string,
+    parsed: {
+      contextLength: number | null;
+      embeddingDimension: number | null;
+      architecture: string | null;
+    },
+  ): Promise<ModelCapabilities> {
+    const { contextLength, architecture } = parsed;
+    let { embeddingDimension } = parsed;
+
+    // If we couldn't find dimension in model_info, probe with a test embedding
+    if (embeddingDimension === null) {
+      embeddingDimension = await this.probeEmbeddingDimension(model);
+    }
+
+    const caps: ModelCapabilities = {
+      model,
+      embeddingDimension: embeddingDimension ?? MODEL_DEFAULTS.FALLBACK_EMBEDDING_DIMENSION,
+      contextLength: contextLength ?? MODEL_DEFAULTS.FALLBACK_CONTEXT_TOKENS,
+      architecture,
+      discovered: contextLength !== null || embeddingDimension !== null,
+    };
+
+    const charsPerToken = caps.architecture?.toLowerCase().includes("bert")
+      ? 2.5
+      : MODEL_DEFAULTS.CHARS_PER_TOKEN;
+    const maxChars = Math.floor(caps.contextLength * charsPerToken * 0.8);
+    console.log(
+      `[OllamaService] Discovered ${model}: arch=${caps.architecture}, ctx=${caps.contextLength}, dim=${caps.embeddingDimension}, maxChars=${maxChars}`,
+    );
+
+    return caps;
+  }
+
+  /**
    * Discover model capabilities via Ollama /api/show endpoint.
    * Falls back to conservative defaults if discovery fails.
    */
@@ -100,55 +172,9 @@ export class OllamaService {
 
       const data = await response.json();
       const modelInfo = data.model_info || {};
+      const parsed = this.parseModelInfo(modelInfo);
 
-      // Extract capabilities from model_info - keys are prefixed with model family
-      // e.g., "bert.context_length", "bert.embedding_length", "nomic_bert.context_length"
-      let contextLength: number | null = null;
-      let embeddingDimension: number | null = null;
-      let architecture: string | null = null;
-
-      for (const [key, value] of Object.entries(modelInfo)) {
-        if (key.endsWith(".context_length") && typeof value === "number") {
-          contextLength = value;
-          // Extract architecture from key prefix (e.g., "bert" from "bert.context_length")
-          architecture = key.split(".")[0];
-        }
-        if (key.endsWith(".embedding_length") && typeof value === "number") {
-          embeddingDimension = value;
-          if (!architecture) {
-            architecture = key.split(".")[0];
-          }
-        }
-      }
-
-      // Also check general_architecture field if present
-      if (!architecture && modelInfo["general.architecture"]) {
-        architecture = String(modelInfo["general.architecture"]);
-      }
-
-      // If we couldn't find capabilities in model_info, probe with a test embedding
-      if (embeddingDimension === null) {
-        embeddingDimension = await this.probeEmbeddingDimension(model);
-      }
-
-      // Use discovered values or fallbacks
-      const caps: ModelCapabilities = {
-        model,
-        embeddingDimension: embeddingDimension ?? MODEL_DEFAULTS.FALLBACK_EMBEDDING_DIMENSION,
-        contextLength: contextLength ?? MODEL_DEFAULTS.FALLBACK_CONTEXT_TOKENS,
-        architecture,
-        discovered: contextLength !== null || embeddingDimension !== null,
-      };
-
-      // Calculate effective max chars for this model
-      const charsPerToken = caps.architecture?.toLowerCase().includes("bert")
-        ? 2.5
-        : MODEL_DEFAULTS.CHARS_PER_TOKEN;
-      const maxChars = Math.floor(caps.contextLength * charsPerToken * 0.8);
-      console.log(
-        `[OllamaService] Discovered ${model}: arch=${caps.architecture}, ctx=${caps.contextLength}, dim=${caps.embeddingDimension}, maxChars=${maxChars}`,
-      );
-      return caps;
+      return await this.buildCapabilities(model, parsed);
     } catch (error) {
       console.warn(`[OllamaService] Discovery failed for ${model}:`, error);
       return this.fallbackCapabilities(model);
@@ -203,52 +229,64 @@ export class OllamaService {
   }
 
   /**
+   * Check if error is retryable (timeout or connection error).
+   */
+  private isRetryableError(message: string): { retryable: boolean; reason: string } {
+    if (message.includes("timed out")) {
+      return { retryable: true, reason: "timeout" };
+    }
+    if (message.includes("fetch failed") || message.includes("ECONNREFUSED")) {
+      return { retryable: true, reason: "connection" };
+    }
+    return { retryable: false, reason: "" };
+  }
+
+  /**
+   * Validate service state for embedding operations.
+   * @throws Error if service is not ready
+   */
+  private validateEmbedState(): string {
+    if (this.disposed) {
+      throw new Error("Service is disposed");
+    }
+    if (!this.client) {
+      throw new Error("Ollama client not initialized");
+    }
+    const model = this.kernel.settings.ollama.embeddingModel;
+    if (!model) {
+      throw new Error("No embedding model configured");
+    }
+    return model;
+  }
+
+  /**
    * Generate embedding for a single text (used for search queries).
    * Has longer timeout and retry logic since search should work even during indexing.
    *
    * @throws Error if embedding fails after retries
    */
   async embed(text: string): Promise<EmbeddingResult> {
-    if (this.disposed) {
-      throw new Error("Service is disposed");
-    }
-
-    if (!this.client) {
-      throw new Error("Ollama client not initialized");
-    }
-
-    const model = this.kernel.settings.ollama.embeddingModel;
-    if (!model) {
-      throw new Error("No embedding model configured");
-    }
-
-    // Retry with longer timeout for search during heavy indexing
+    const model = this.validateEmbedState();
     const MAX_RETRIES = 3;
     const TIMEOUT_MS = 60000; // 60s for search queries
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        return {
-          embedding: (await this.embedRequest(text, model, { timeoutMs: TIMEOUT_MS }))[0],
-          model,
-        };
+        const embedding = (await this.embedRequest(text, model, { timeoutMs: TIMEOUT_MS }))[0];
+        return { embedding, model };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const isTimeout = message.includes("timed out");
-        const isConnectionError =
-          message.includes("fetch failed") || message.includes("ECONNREFUSED");
+        const { retryable, reason } = this.isRetryableError(message);
 
-        if ((isTimeout || isConnectionError) && attempt < MAX_RETRIES) {
-          const delay = Math.min(500 * 2 ** attempt, 2000); // Exponential backoff, max 2s
-          console.log(
-            `[OllamaService] Embed failed (${isTimeout ? "timeout" : "connection"}), ` +
-              `retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
-          );
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
+        if (!retryable || attempt >= MAX_RETRIES) {
+          throw new Error(`Embedding failed: ${message}`);
         }
 
-        throw new Error(`Embedding failed: ${message}`);
+        const delay = Math.min(500 * 2 ** attempt, 2000);
+        console.log(
+          `[OllamaService] Embed failed (${reason}), retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
 
@@ -321,6 +359,48 @@ export class OllamaService {
   }
 
   /**
+   * Create an AbortController that chains with an optional upstream signal.
+   */
+  private createChainedAbortController(upstreamSignal?: AbortSignal): {
+    controller: AbortController;
+    cleanup: () => void;
+  } {
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort();
+
+    if (upstreamSignal?.aborted) {
+      controller.abort();
+    } else if (upstreamSignal) {
+      upstreamSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    const cleanup = (): void => {
+      upstreamSignal?.removeEventListener("abort", onAbort);
+    };
+
+    return { controller, cleanup };
+  }
+
+  /**
+   * Parse and validate embed response from Ollama.
+   */
+  private async parseEmbedResponse(response: Response): Promise<number[][]> {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      const suffix = text ? ` - ${text}` : "";
+      throw new Error(
+        `Ollama /api/embed failed: ${response.status} ${response.statusText}${suffix}`,
+      );
+    }
+
+    const data = (await response.json()) as { embeddings: number[][] };
+    if (!data?.embeddings || !Array.isArray(data.embeddings)) {
+      throw new Error("Ollama /api/embed returned invalid response");
+    }
+    return data.embeddings;
+  }
+
+  /**
    * Direct Ollama embed call with timeout + abort support.
    * Passes num_ctx option to request appropriate context window.
    */
@@ -332,48 +412,24 @@ export class OllamaService {
     const host = this.kernel.settings.ollama.host.replace(/\/$/, "");
     const url = `${host}/api/embed`;
 
-    // Timeout + optional upstream abort
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    if (options.signal) {
-      if (options.signal.aborted) {
-        controller.abort();
-      } else {
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
+    const { controller, cleanup } = this.createChainedAbortController(options.signal);
     const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
 
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model,
           input,
           truncate: true,
           keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
-          // Pass num_ctx to request appropriate context window for the model
           ...(options.contextTokens && { options: { num_ctx: options.contextTokens } }),
         }),
         signal: controller.signal,
       });
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `Ollama /api/embed failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`,
-        );
-      }
-
-      const data = (await response.json()) as { embeddings: number[][] };
-      if (!data?.embeddings || !Array.isArray(data.embeddings)) {
-        throw new Error("Ollama /api/embed returned invalid response");
-      }
-      return data.embeddings;
+      return await this.parseEmbedResponse(response);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(`Embedding timed out after ${options.timeoutMs}ms`);
@@ -381,9 +437,7 @@ export class OllamaService {
       throw error;
     } finally {
       clearTimeout(timeoutId);
-      if (options.signal) {
-        options.signal.removeEventListener("abort", onAbort);
-      }
+      cleanup();
     }
   }
 

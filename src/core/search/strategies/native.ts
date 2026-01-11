@@ -106,46 +106,81 @@ export class NativeSearch {
     fullQuery: string,
     options: StrategySearchOptions,
   ): Promise<NativeMatch | null> {
-    // Null safety for file properties
     if (!file.path || !file.basename) return null;
 
+    const metadata = this.obsidian.getFileMetadata(file);
+    const tags = this.extractTags(metadata);
+
+    if (!this.passesTagFilter(tags, options.tags)) return null;
+
+    const scoringContext = this.computeMetadataScores(file, metadata, queryTerms, fullQuery);
+    let { totalScore, bestMatchType } = scoringContext;
+
+    const contentResult = await this.scoreContent(file, queryTerms, fullQuery, options, totalScore);
+    totalScore += contentResult.score;
+
+    if (totalScore < options.minScore) return null;
+
+    return {
+      path: file.path,
+      title: file.basename,
+      matchType: bestMatchType,
+      snippet: contentResult.snippet,
+      score: Math.min(1.0, totalScore),
+    };
+  }
+
+  /**
+   * Extract normalized tags from metadata
+   */
+  private extractTags(metadata: ReturnType<ObsidianFacade["getFileMetadata"]>): string[] {
+    return (metadata.tags ?? [])
+      .filter((t): t is string => typeof t === "string")
+      .map((t) => t.toLowerCase());
+  }
+
+  /**
+   * Check if tags pass the filter
+   */
+  private passesTagFilter(tags: string[], filterTags: string[] | undefined): boolean {
+    if (!filterTags?.length) return true;
+
+    return filterTags.some((filterTag) => {
+      if (!filterTag) return false;
+      return tags.some((t) => t.includes(filterTag.toLowerCase()));
+    });
+  }
+
+  /**
+   * Compute scores from metadata (title, path, tags, headings)
+   */
+  private computeMetadataScores(
+    file: TFile,
+    metadata: ReturnType<ObsidianFacade["getFileMetadata"]>,
+    queryTerms: string[],
+    fullQuery: string,
+  ): { totalScore: number; bestMatchType: NativeMatch["matchType"] } {
     const path = file.path.toLowerCase();
     const title = file.basename.toLowerCase();
 
-    // Get metadata for tags/headings (cached, fast)
-    const metadata = this.obsidian.getFileMetadata(file);
-    // Filter out null/undefined tags before processing
-    const tags = (metadata.tags ?? [])
-      .filter((t): t is string => typeof t === "string")
-      .map((t) => t.toLowerCase());
-
-    // Apply tag filter if specified
-    if (options.tags?.length) {
-      const hasMatchingTag = options.tags.some((filterTag) => {
-        if (!filterTag) return false;
-        return tags.some((t) => t.includes(filterTag.toLowerCase()));
-      });
-      if (!hasMatchingTag) return null;
-    }
-
     let totalScore = 0;
     let bestMatchType: NativeMatch["matchType"] = "content";
-    let snippet: string | undefined;
 
-    // 1. Title matching (highest priority)
+    // Title matching (highest priority)
     const titleScore = this.scoreTextMatch(title, queryTerms, fullQuery);
     if (titleScore > 0) {
       totalScore += titleScore * MATCH_WEIGHTS.title;
       if (titleScore > 0.5) bestMatchType = "title";
     }
 
-    // 2. Path matching
+    // Path matching
     const pathScore = this.scoreTextMatch(path, queryTerms, fullQuery);
     if (pathScore > 0) {
-      totalScore += pathScore * MATCH_WEIGHTS.path * 0.5; // Reduce path weight slightly
+      totalScore += pathScore * MATCH_WEIGHTS.path * 0.5;
     }
 
-    // 3. Tag matching
+    // Tag matching
+    const tags = this.extractTags(metadata);
     const tagScore = this.scoreTagMatch(tags, queryTerms);
     if (tagScore > 0) {
       totalScore += tagScore * MATCH_WEIGHTS.tag;
@@ -154,7 +189,7 @@ export class NativeSearch {
       }
     }
 
-    // 4. Heading matching
+    // Heading matching
     const headings = (metadata.headings ?? []).map((h) => h.heading.toLowerCase());
     const headingScore = this.scoreTextMatch(headings.join(" "), queryTerms, fullQuery);
     if (headingScore > 0) {
@@ -164,36 +199,39 @@ export class NativeSearch {
       }
     }
 
-    // 5. Content matching (read file only if needed and no good match yet)
-    if (options.includeContent && totalScore < 0.5) {
-      try {
-        const content = await this.obsidian.readFile(file);
-        const contentLower = content.toLowerCase();
-        const contentScore = this.scoreTextMatch(contentLower, queryTerms, fullQuery);
+    return { totalScore, bestMatchType };
+  }
 
-        if (contentScore > 0) {
-          totalScore += contentScore * MATCH_WEIGHTS.content;
-
-          // Extract snippet around first match
-          snippet = this.extractSnippet(content, queryTerms[0]);
-        }
-      } catch {
-        // File read error - skip content scoring
-      }
+  /**
+   * Score content if needed
+   */
+  private async scoreContent(
+    file: TFile,
+    queryTerms: string[],
+    fullQuery: string,
+    options: StrategySearchOptions,
+    currentScore: number,
+  ): Promise<{ score: number; snippet: string | undefined }> {
+    if (!options.includeContent || currentScore >= 0.5) {
+      return { score: 0, snippet: undefined };
     }
 
-    if (totalScore < options.minScore) return null;
+    try {
+      const content = await this.obsidian.readFile(file);
+      const contentLower = content.toLowerCase();
+      const contentScore = this.scoreTextMatch(contentLower, queryTerms, fullQuery);
 
-    // Normalize score to 0-1 range (cap at 1.0)
-    const normalizedScore = Math.min(1.0, totalScore);
+      if (contentScore > 0) {
+        return {
+          score: contentScore * MATCH_WEIGHTS.content,
+          snippet: this.extractSnippet(content, queryTerms[0]),
+        };
+      }
+    } catch {
+      // File read error - skip content scoring
+    }
 
-    return {
-      path: file.path,
-      title: file.basename,
-      matchType: bestMatchType,
-      snippet,
-      score: normalizedScore,
-    };
+    return { score: 0, snippet: undefined };
   }
 
   /**

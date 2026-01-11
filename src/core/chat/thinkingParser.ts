@@ -34,6 +34,59 @@ export class ThinkingParser {
     this.config = { ...DEFAULT_THINKING_CONFIG, ...config };
   }
 
+  /** Result of processing buffer while inside a thinking block */
+  private processThinkingBlock(): {
+    thinkingChunk: string;
+    thinkingJustEnded: boolean;
+    shouldBreak: boolean;
+  } {
+    const endIndex = this.buffer.indexOf(this.config.endTag);
+
+    if (endIndex !== -1) {
+      const thinking = this.buffer.slice(0, endIndex);
+      this.thinkingContent += thinking;
+      this.buffer = this.buffer.slice(endIndex + this.config.endTag.length);
+      this.inThinkingBlock = false;
+      return { thinkingChunk: thinking, thinkingJustEnded: true, shouldBreak: false };
+    }
+
+    if (this.mightContainPartialTag(this.buffer, this.config.endTag)) {
+      return { thinkingChunk: "", thinkingJustEnded: false, shouldBreak: true };
+    }
+
+    const thinking = this.buffer;
+    this.thinkingContent += thinking;
+    this.buffer = "";
+    return { thinkingChunk: thinking, thinkingJustEnded: false, shouldBreak: false };
+  }
+
+  /** Result of processing buffer while outside a thinking block */
+  private processContentBlock(): {
+    contentChunk: string;
+    thinkingJustStarted: boolean;
+    shouldBreak: boolean;
+  } {
+    const startIndex = this.buffer.indexOf(this.config.startTag);
+
+    if (startIndex !== -1) {
+      const beforeThinking = this.buffer.slice(0, startIndex);
+      this.mainContent += beforeThinking;
+      this.buffer = this.buffer.slice(startIndex + this.config.startTag.length);
+      this.inThinkingBlock = true;
+      this.thinkingStartTime = Date.now();
+      return { contentChunk: beforeThinking, thinkingJustStarted: true, shouldBreak: false };
+    }
+
+    if (this.mightContainPartialTag(this.buffer, this.config.startTag)) {
+      return { contentChunk: "", thinkingJustStarted: false, shouldBreak: true };
+    }
+
+    const content = this.buffer;
+    this.mainContent += content;
+    this.buffer = "";
+    return { contentChunk: content, thinkingJustStarted: false, shouldBreak: false };
+  }
+
   /**
    * Process a chunk of streamed content
    * Call this for each chunk received from the LLM
@@ -54,49 +107,17 @@ export class ThinkingParser {
     let thinkingJustStarted = false;
     let thinkingJustEnded = false;
 
-    // Process buffer looking for tags
     while (this.buffer.length > 0) {
       if (this.inThinkingBlock) {
-        // Look for end tag
-        const endIndex = this.buffer.indexOf(this.config.endTag);
-        if (endIndex !== -1) {
-          // Found end tag - extract thinking content
-          const thinking = this.buffer.slice(0, endIndex);
-          thinkingChunk += thinking;
-          this.thinkingContent += thinking;
-          this.buffer = this.buffer.slice(endIndex + this.config.endTag.length);
-          this.inThinkingBlock = false;
-          thinkingJustEnded = true;
-        } else if (this.mightContainPartialTag(this.buffer, this.config.endTag)) {
-          // Might have partial end tag at end of buffer - wait for more data
-          break;
-        } else {
-          // No end tag visible - all is thinking content
-          thinkingChunk += this.buffer;
-          this.thinkingContent += this.buffer;
-          this.buffer = "";
-        }
+        const result = this.processThinkingBlock();
+        thinkingChunk += result.thinkingChunk;
+        thinkingJustEnded = thinkingJustEnded || result.thinkingJustEnded;
+        if (result.shouldBreak) break;
       } else {
-        // Not in thinking block - look for start tag
-        const startIndex = this.buffer.indexOf(this.config.startTag);
-        if (startIndex !== -1) {
-          // Found start tag
-          const beforeThinking = this.buffer.slice(0, startIndex);
-          contentChunk += beforeThinking;
-          this.mainContent += beforeThinking;
-          this.buffer = this.buffer.slice(startIndex + this.config.startTag.length);
-          this.inThinkingBlock = true;
-          this.thinkingStartTime = Date.now();
-          thinkingJustStarted = true;
-        } else if (this.mightContainPartialTag(this.buffer, this.config.startTag)) {
-          // Might have partial start tag at end of buffer - wait for more data
-          break;
-        } else {
-          // No start tag visible - all is main content
-          contentChunk += this.buffer;
-          this.mainContent += this.buffer;
-          this.buffer = "";
-        }
+        const result = this.processContentBlock();
+        contentChunk += result.contentChunk;
+        thinkingJustStarted = thinkingJustStarted || result.thinkingJustStarted;
+        if (result.shouldBreak) break;
       }
     }
 

@@ -112,6 +112,7 @@ export function SearchDropdown({
   return (
     <div
       class="nv2-search-dropdown"
+      // biome-ignore lint/a11y/useSemanticElements: no native listbox element exists
       role="listbox"
       aria-label="Search results"
       aria-activedescendant={
@@ -120,7 +121,11 @@ export function SearchDropdown({
       tabIndex={0}
     >
       {showWarning && (
-        <div class="nv2-search-warning" role="alert">
+        <div
+          class="nv2-search-warning"
+          // biome-ignore lint/a11y/useSemanticElements: no native alert element exists
+          role="alert"
+        >
           <span class="nv2-search-warning-icon" aria-hidden="true">
             ⚠️
           </span>

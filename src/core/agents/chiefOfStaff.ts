@@ -145,75 +145,133 @@ export class ChiefOfStaff {
    * Execute a task with streaming events
    */
   async *execute(task: ChiefOfStaffTask, signal?: AbortSignal): AsyncIterable<AgentEvent> {
-    // Create session
     this.currentSession = this.createSession(task.notePath);
 
-    try {
-      // Phase 1: Load current note content
-      const noteContext = await this.loadNoteContext(task.notePath, task.noteTitle);
-      if (!noteContext) {
-        yield {
-          type: "error",
-          agentType: "context-builder",
-          error: new Error("Failed to load note"),
-        };
+    // Phase 1: Load current note content
+    const noteContext = await this.loadNoteContext(task.notePath, task.noteTitle);
+    if (!noteContext) {
+      yield this.createNoteLoadError();
+      return;
+    }
+
+    // Phase 2: Check for workflow commands first
+    if (this.shouldExecuteWorkflow(task)) {
+      const workflowType = task.targetWorkflow || this.extractWorkflowType(task.query);
+      if (workflowType) {
+        console.log(`[ChiefOfStaff] Executing workflow: ${workflowType}`);
+        yield* this.executeWorkflow(workflowType, task, noteContext, signal);
         return;
       }
+    }
 
-      // Phase 2: Check for workflow commands first
-      if (task.targetWorkflow || isWorkflowCommand(task.query.split(" ")[0])) {
-        const workflowType = task.targetWorkflow || this.extractWorkflowType(task.query);
-        if (workflowType) {
-          console.log(`[ChiefOfStaff] Executing workflow: ${workflowType}`);
-          yield* this.executeWorkflow(workflowType, task, noteContext, signal);
-          return;
+    // Phase 3: Determine routing and run preflight agents
+    const routing = this.determineRouting(task);
+    console.log(`[ChiefOfStaff] Routing: ${routing.primaryAgent} (reason: ${routing.reason})`);
+
+    const contextOutput = await this.runPreflightAgentsWithEvents(
+      task,
+      noteContext,
+      routing,
+      signal,
+      (event) => this.emitEvent(event),
+    );
+    yield* this.getPreflightEvents();
+    if (signal?.aborted) return;
+
+    // Phase 4: Execute primary agent
+    yield* this.executePrimaryAgent(task, noteContext, routing, contextOutput, signal);
+  }
+
+  // Temporary event buffer for preflight phase
+  private preflightEventBuffer: AgentEvent[] = [];
+
+  /**
+   * Check if task should be handled as a workflow
+   */
+  private shouldExecuteWorkflow(task: ChiefOfStaffTask): boolean {
+    return Boolean(task.targetWorkflow || isWorkflowCommand(task.query.split(" ")[0]));
+  }
+
+  /**
+   * Create error event for failed note load
+   */
+  private createNoteLoadError(): AgentEvent {
+    return {
+      type: "error",
+      agentType: "context-builder",
+      error: new Error("Failed to load note"),
+    };
+  }
+
+  /**
+   * Emit event to buffer during preflight
+   */
+  private emitEvent(event: AgentEvent): void {
+    this.preflightEventBuffer.push(event);
+  }
+
+  /**
+   * Get buffered preflight events
+   */
+  private async *getPreflightEvents(): AsyncIterable<AgentEvent> {
+    for (const event of this.preflightEventBuffer) {
+      yield event;
+    }
+    this.preflightEventBuffer = [];
+  }
+
+  /**
+   * Run preflight agents and collect context output
+   */
+  private async runPreflightAgentsWithEvents(
+    task: ChiefOfStaffTask,
+    noteContext: NoteContext,
+    routing: RoutingDecision,
+    signal: AbortSignal | undefined,
+    onEvent: (event: AgentEvent) => void,
+  ): Promise<InternalOutput | null> {
+    let contextOutput: InternalOutput | null = null;
+
+    for (const preflightAgent of routing.preflightAgents) {
+      if (signal?.aborted) break;
+      if (preflightAgent !== "context-builder") continue;
+
+      this.currentSession?.activeAgents.add(preflightAgent);
+      const preflightContext = this.buildBaseContext(task, noteContext, null);
+
+      for await (const event of this.contextBuilderAgent.execute(preflightContext, signal)) {
+        onEvent(event);
+        if (event.type === "complete" && isInternalOutput(event.output)) {
+          contextOutput = event.output;
+          this.currentSession?.completedAgents.set("context-builder", event.output);
         }
       }
+    }
 
-      // Phase 3: Determine routing for core agents
-      const routing = this.determineRouting(task);
-      console.log(`[ChiefOfStaff] Routing: ${routing.primaryAgent} (reason: ${routing.reason})`);
+    return contextOutput;
+  }
 
-      // Phase 3: Run preflight agents (context-builder)
-      let contextOutput: InternalOutput | null = null;
+  /**
+   * Execute the primary agent with full context
+   */
+  private async *executePrimaryAgent(
+    task: ChiefOfStaffTask,
+    noteContext: NoteContext,
+    routing: RoutingDecision,
+    contextOutput: InternalOutput | null,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    if (signal?.aborted) return;
 
-      for (const preflightAgent of routing.preflightAgents) {
-        if (signal?.aborted) return;
+    this.currentSession?.activeAgents.add(routing.primaryAgent);
+    const fullContext = this.buildFullContext(task, noteContext, contextOutput);
 
-        this.currentSession.activeAgents.add(preflightAgent);
-
-        if (preflightAgent === "context-builder") {
-          const preflightContext = this.buildBaseContext(task, noteContext, null);
-
-          for await (const event of this.contextBuilderAgent.execute(preflightContext, signal)) {
-            yield event;
-
-            if (event.type === "complete" && isInternalOutput(event.output)) {
-              contextOutput = event.output;
-              this.currentSession.completedAgents.set("context-builder", event.output);
-            }
-          }
-        }
+    const agent = this.getAgent(routing.primaryAgent);
+    for await (const event of agent.execute(fullContext, signal)) {
+      yield event;
+      if (event.type === "complete") {
+        this.currentSession?.completedAgents.set(routing.primaryAgent, event.output);
       }
-
-      // Phase 4: Build full context with preflight results
-      const fullContext = this.buildFullContext(task, noteContext, contextOutput);
-
-      // Phase 5: Execute primary agent
-      if (signal?.aborted) return;
-
-      this.currentSession.activeAgents.add(routing.primaryAgent);
-
-      const agent = this.getAgent(routing.primaryAgent);
-      for await (const event of agent.execute(fullContext, signal)) {
-        yield event;
-
-        if (event.type === "complete") {
-          this.currentSession.completedAgents.set(routing.primaryAgent, event.output);
-        }
-      }
-    } finally {
-      // Session cleanup happens naturally, no explicit cleanup needed
     }
   }
 

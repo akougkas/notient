@@ -129,7 +129,7 @@ export function MarkdownRenderer({ content, onLinkClick, className }: MarkdownRe
     return () => {
       containerRef.current?.removeEventListener("click", handleClick);
     };
-  }, [onLinkClick, html]);
+  }, [onLinkClick]);
 
   return (
     <div

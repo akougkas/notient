@@ -409,6 +409,80 @@ export class IndexManagementPanel {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Inventory Row Helpers
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Render model cell with active indicator and warnings */
+  private renderModelCell(
+    cell: HTMLElement,
+    idx: IndexInfo,
+    isActive: boolean,
+    isCompatible: boolean,
+    currentDim: number,
+  ): void {
+    if (isActive) cell.createSpan({ cls: "notient-settings-active-dot", text: "●" });
+    cell.createSpan({ text: idx.displayName });
+    if (!isCompatible && !isActive) {
+      const warnIcon = cell.createSpan({ cls: "notient-settings-warn-icon" });
+      setIcon(warnIcon, "alert-triangle");
+      warnIcon.title = `Dimension mismatch (needs ${currentDim}d)`;
+    }
+  }
+
+  /** Render action buttons for a row */
+  private renderActionButtons(
+    cell: HTMLElement,
+    idx: IndexInfo,
+    isCompatible: boolean,
+    anyOpInProgress: boolean,
+    indexManager: IndexManagerInterface,
+  ): void {
+    const isSwitching =
+      this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
+    const switchBtn = cell.createEl("button", {
+      cls: "notient-settings-action-btn-small",
+      text: isSwitching ? "..." : "Use",
+    });
+    switchBtn.disabled = !isCompatible || anyOpInProgress;
+    if (!isCompatible) switchBtn.title = "Dimension mismatch";
+    if (!anyOpInProgress && isCompatible) {
+      switchBtn.addEventListener("click", async () => {
+        this.operationInProgress = { type: "switch", path: idx.path };
+        this.onRefresh();
+        try {
+          await indexManager.switchToIndex(idx.path);
+        } finally {
+          this.operationInProgress = { type: null };
+        }
+      });
+    }
+
+    if (idx.source !== "vault") {
+      const isDeleting =
+        this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
+      const delBtn = cell.createEl("button", {
+        cls: "notient-settings-action-btn-small mod-warning",
+        text: isDeleting ? "..." : "Delete",
+      });
+      delBtn.disabled = anyOpInProgress;
+      if (!anyOpInProgress) {
+        delBtn.addEventListener("click", async () => {
+          if (!confirm(`Delete index "${idx.displayName}"?`)) return;
+          this.operationInProgress = { type: "delete", path: idx.path };
+          this.onRefresh();
+          try {
+            await indexManager.deleteIndexByPath(idx.path);
+            this.kernel.obsidian.notice(`Deleted ${idx.displayName}`);
+          } finally {
+            this.operationInProgress = { type: null };
+            this.onRefresh();
+          }
+        });
+      }
+    }
+  }
+
   private renderInventoryRow(
     tbody: HTMLElement,
     idx: IndexInfo,
@@ -424,17 +498,7 @@ export class IndexManagementPanel {
     const row = tbody.createEl("tr", { cls: isActive ? "active" : "" });
 
     // Model column
-    const modelCell = row.createEl("td");
-    if (isActive) {
-      const dot = modelCell.createSpan({ cls: "notient-settings-active-dot" });
-      dot.textContent = "●";
-    }
-    modelCell.createSpan({ text: idx.displayName });
-    if (!isCompatible && !isActive) {
-      const warnIcon = modelCell.createSpan({ cls: "notient-settings-warn-icon" });
-      setIcon(warnIcon, "alert-triangle");
-      warnIcon.title = `Dimension mismatch (needs ${currentDim}d)`;
-    }
+    this.renderModelCell(row.createEl("td"), idx, isActive, isCompatible, currentDim);
 
     // Stats column
     const statsCell = row.createEl("td");
@@ -442,61 +506,15 @@ export class IndexManagementPanel {
     statsCell.createSpan({ text: ` ${idx.docCount.toLocaleString()} chunks` });
 
     // Source column
-    const sourceCell = row.createEl("td");
-    sourceCell.createSpan({
+    row.createEl("td").createSpan({
       text: isExternal ? "Vault" : "Plugin",
       cls: `notient-settings-source-badge ${isExternal ? "external" : "plugin"}`,
     });
 
     // Actions column
     const actionsCell = row.createEl("td", { cls: "notient-settings-actions-cell" });
-
     if (!isActive) {
-      // Switch button
-      const isSwitching =
-        this.operationInProgress.type === "switch" && this.operationInProgress.path === idx.path;
-      const switchBtn = actionsCell.createEl("button", {
-        cls: "notient-settings-action-btn-small",
-        text: isSwitching ? "..." : "Use",
-      });
-      switchBtn.disabled = !isCompatible || anyOpInProgress;
-      if (!isCompatible) switchBtn.title = "Dimension mismatch";
-      if (!anyOpInProgress && isCompatible) {
-        switchBtn.addEventListener("click", async () => {
-          this.operationInProgress = { type: "switch", path: idx.path };
-          this.onRefresh();
-          try {
-            await indexManager.switchToIndex(idx.path);
-          } finally {
-            this.operationInProgress = { type: null };
-          }
-        });
-      }
-
-      // Delete button (only for plugin indices)
-      if (!isExternal) {
-        const isDeleting =
-          this.operationInProgress.type === "delete" && this.operationInProgress.path === idx.path;
-        const delBtn = actionsCell.createEl("button", {
-          cls: "notient-settings-action-btn-small mod-warning",
-          text: isDeleting ? "..." : "Delete",
-        });
-        delBtn.disabled = anyOpInProgress;
-        if (!anyOpInProgress) {
-          delBtn.addEventListener("click", async () => {
-            if (!confirm(`Delete index "${idx.displayName}"?`)) return;
-            this.operationInProgress = { type: "delete", path: idx.path };
-            this.onRefresh();
-            try {
-              await indexManager.deleteIndexByPath(idx.path);
-              this.kernel.obsidian.notice(`Deleted ${idx.displayName}`);
-            } finally {
-              this.operationInProgress = { type: null };
-              this.onRefresh();
-            }
-          });
-        }
-      }
+      this.renderActionButtons(actionsCell, idx, isCompatible, anyOpInProgress, indexManager);
     } else {
       actionsCell.createSpan({ text: "Active", cls: "notient-settings-active-label" });
     }

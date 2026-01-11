@@ -265,6 +265,97 @@ interface ActiveAgentCardProps {
   onDismiss?: () => void;
 }
 
+function AgentStatusIndicator({ status }: { status: ActiveAgent["status"] }) {
+  switch (status) {
+    case "running":
+      return <span class="nv2-agent-spinner" aria-hidden="true" />;
+    case "paused":
+      return <Icon name="pause" className="nv2-agent-paused-icon" />;
+    case "queued":
+      return <Icon name="clock" className="nv2-agent-queued-icon" />;
+    case "completed":
+      return <Icon name="check-circle" className="nv2-agent-completed-icon" />;
+  }
+}
+
+interface AgentActionsProps {
+  status: ActiveAgent["status"];
+  onPause?: () => void;
+  onStop?: () => void;
+  onViewResults?: () => void;
+  onDismiss?: () => void;
+}
+
+function AgentActions({ status, onPause, onStop, onViewResults, onDismiss }: AgentActionsProps) {
+  switch (status) {
+    case "running":
+      return (
+        <>
+          <button type="button" class="nv2-btn-sm" onClick={onPause} aria-label="Pause agent">
+            Pause
+          </button>
+          <button
+            type="button"
+            class="nv2-btn-sm nv2-btn-danger"
+            onClick={onStop}
+            aria-label="Stop agent"
+          >
+            Stop
+          </button>
+        </>
+      );
+    case "paused":
+      return (
+        <button
+          type="button"
+          class="nv2-btn-sm nv2-btn-primary"
+          onClick={onPause}
+          aria-label="Resume agent"
+        >
+          Resume
+        </button>
+      );
+    case "queued":
+      return (
+        <button type="button" class="nv2-btn-sm" onClick={onStop} aria-label="Cancel queued agent">
+          Cancel
+        </button>
+      );
+    case "completed":
+      return (
+        <>
+          <button
+            type="button"
+            class="nv2-btn-sm nv2-btn-primary"
+            onClick={onViewResults}
+            aria-label="View agent results"
+          >
+            View Results
+          </button>
+          <button type="button" class="nv2-btn-sm" onClick={onDismiss} aria-label="Dismiss agent">
+            Dismiss
+          </button>
+        </>
+      );
+  }
+}
+
+function getAgentTimeDisplay(agent: ActiveAgent): { text: string; className: string } | null {
+  if (agent.status === "completed" && agent.resultData?.stats?.durationMs) {
+    return {
+      text: `${(agent.resultData.stats.durationMs / 1000).toFixed(1)}s`,
+      className: "nv2-agent-duration",
+    };
+  }
+  if (agent.startedAt) {
+    return {
+      text: formatElapsed(Date.now() - agent.startedAt.getTime()),
+      className: "nv2-agent-elapsed",
+    };
+  }
+  return null;
+}
+
 function ActiveAgentCard({
   agent,
   onPause,
@@ -272,47 +363,29 @@ function ActiveAgentCard({
   onViewResults,
   onDismiss,
 }: ActiveAgentCardProps) {
-  const isRunning = agent.status === "running";
-  const isPaused = agent.status === "paused";
-  const isQueued = agent.status === "queued";
-  const isCompleted = agent.status === "completed";
-
-  const elapsed = agent.startedAt ? formatElapsed(Date.now() - agent.startedAt.getTime()) : "";
-  const duration = agent.resultData?.stats?.durationMs
-    ? `${(agent.resultData.stats.durationMs / 1000).toFixed(1)}s`
-    : "";
-
   const statusLabel = agent.status.charAt(0).toUpperCase() + agent.status.slice(1);
+  const timeDisplay = getAgentTimeDisplay(agent);
 
   return (
     <article
       class={`nv2-agent-card nv2-agent-card--${agent.status}`}
       aria-label={`${formatAgentType(agent.type)} agent ${statusLabel}`}
     >
-      {/* Status Indicator */}
       <div class="nv2-agent-status-indicator">
-        {isRunning && <span class="nv2-agent-spinner" aria-hidden="true" />}
-        {isPaused && <Icon name="pause" className="nv2-agent-paused-icon" />}
-        {isQueued && <Icon name="clock" className="nv2-agent-queued-icon" />}
-        {isCompleted && <Icon name="check-circle" className="nv2-agent-completed-icon" />}
+        <AgentStatusIndicator status={agent.status} />
       </div>
 
       <div class="nv2-agent-body">
         <div class="nv2-agent-header">
           <span class="nv2-agent-type">{formatAgentType(agent.type)}</span>
-          {isCompleted && duration ? (
-            <span class="nv2-agent-duration">{duration}</span>
-          ) : elapsed ? (
-            <span class="nv2-agent-elapsed">{elapsed}</span>
-          ) : null}
+          {timeDisplay && <span class={timeDisplay.className}>{timeDisplay.text}</span>}
         </div>
 
         <div class="nv2-agent-target" title={agent.targetNote}>
           {truncate(agent.targetNote, 28)}
         </div>
 
-        {/* Progress bar for running agents */}
-        {isRunning && agent.progress !== undefined && (
+        {agent.status === "running" && agent.progress !== undefined && (
           <div class="nv2-agent-progress">
             <div class="nv2-progress-bar">
               {/* biome-ignore lint/a11y/useFocusableInteractive: progress bars are informational, not interactive */}
@@ -329,70 +402,20 @@ function ActiveAgentCard({
           </div>
         )}
 
-        {/* Insight preview for completed agents */}
-        {isCompleted && agent.resultData?.insightSummary && (
+        {agent.status === "completed" && agent.resultData?.insightSummary && (
           <div class="nv2-agent-insight-preview">
             {truncate(agent.resultData.insightSummary, 60)}
           </div>
         )}
 
-        {/* Action buttons */}
         <div class="nv2-agent-actions">
-          {isRunning && (
-            <>
-              <button type="button" class="nv2-btn-sm" onClick={onPause} aria-label="Pause agent">
-                Pause
-              </button>
-              <button
-                type="button"
-                class="nv2-btn-sm nv2-btn-danger"
-                onClick={onStop}
-                aria-label="Stop agent"
-              >
-                Stop
-              </button>
-            </>
-          )}
-          {isPaused && (
-            <button
-              type="button"
-              class="nv2-btn-sm nv2-btn-primary"
-              onClick={onPause}
-              aria-label="Resume agent"
-            >
-              Resume
-            </button>
-          )}
-          {isQueued && (
-            <button
-              type="button"
-              class="nv2-btn-sm"
-              onClick={onStop}
-              aria-label="Cancel queued agent"
-            >
-              Cancel
-            </button>
-          )}
-          {isCompleted && (
-            <>
-              <button
-                type="button"
-                class="nv2-btn-sm nv2-btn-primary"
-                onClick={onViewResults}
-                aria-label="View agent results"
-              >
-                View Results
-              </button>
-              <button
-                type="button"
-                class="nv2-btn-sm"
-                onClick={onDismiss}
-                aria-label="Dismiss agent"
-              >
-                Dismiss
-              </button>
-            </>
-          )}
+          <AgentActions
+            status={agent.status}
+            onPause={onPause}
+            onStop={onStop}
+            onViewResults={onViewResults}
+            onDismiss={onDismiss}
+          />
         </div>
       </div>
     </article>

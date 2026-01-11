@@ -82,11 +82,11 @@ export function useNoteVitals(): UseNoteVitalsResult {
   // Subscribe to workspace changes
   useEffect(() => {
     // Initial load (will be skipped if services not ready, then triggered by event above)
-    void refresh();
+    void refreshRef.current?.();
 
     // Subscribe to active leaf changes
     const leafChangeRef = app.workspace.on("active-leaf-change", () => {
-      void refresh();
+      void refreshRef.current?.();
     });
 
     // Subscribe to file modifications
@@ -97,7 +97,7 @@ export function useNoteVitals(): UseNoteVitalsResult {
         "extension" in file &&
         (file as TFile).extension === "md"
       ) {
-        void refresh();
+        void refreshRef.current?.();
       }
     });
 
@@ -105,7 +105,7 @@ export function useNoteVitals(): UseNoteVitalsResult {
       app.workspace.offref(leafChangeRef);
       app.vault.offref(modifyRef);
     };
-  }, [app, calculator]);
+  }, [app]);
 
   return {
     noteVitals: noteVitalsSignal,

@@ -69,10 +69,33 @@ export abstract class BaseAgent {
 
   /**
    * Build LLM completion options based on agent config
+   * Adjusts temperature for thinking models (DeepSeek, Falcon H1R, Qwen QwQ)
    */
   protected getCompletionOptions(): CompletionOptions {
+    let temperature = this.config.temperature;
+
+    // Thinking models need higher temperature for quality output
+    // They use extended reasoning which gets suppressed at low temps
+    // Access model name through the provider (protected property)
+    const llmAny = this.llm as { model?: string };
+    const modelName = llmAny.model?.toLowerCase() || "";
+
+    const isThinkingModel =
+      modelName.includes("deepseek") ||
+      modelName.includes("falcon") ||
+      modelName.includes("qwq") ||
+      modelName.includes("r1");
+
+    if (isThinkingModel && temperature < 0.7) {
+      // Thinking models need at least 0.7-1.0 temperature
+      temperature = Math.max(0.7, temperature);
+      console.log(
+        `[${this.config.name}] Adjusted temperature ${this.config.temperature} → ${temperature} for thinking model`,
+      );
+    }
+
     return {
-      temperature: this.config.temperature,
+      temperature,
       maxTokens: this.config.maxTokens,
     };
   }
@@ -181,11 +204,17 @@ ${truncatedContent}
 
   /**
    * Parse JSON from LLM output with robust error handling
+   * Handles thinking model output with <think> tags
    */
   protected parseJSON<T>(jsonStr: string): T | null {
     try {
-      // Strip markdown code fences
       let cleaned = jsonStr.trim();
+
+      // Strip thinking model tags (DeepSeek, Falcon H1R, Qwen QwQ)
+      // These models wrap reasoning in <think>...</think>
+      cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+      // Strip markdown code fences
       if (cleaned.startsWith("```json")) {
         cleaned = cleaned.slice(7);
       } else if (cleaned.startsWith("```")) {
@@ -196,18 +225,110 @@ ${truncatedContent}
       }
       cleaned = cleaned.trim();
 
-      // Extract JSON object/array
+      // Extract JSON object/array - use non-greedy match from first { or [
+      // to find the balanced closing bracket
       const jsonMatch = cleaned.match(/[\[{][\s\S]*[\]}]/);
       if (!jsonMatch) {
-        console.warn(`[${this.config.name}] No JSON found in output`);
+        console.warn(
+          `[${this.config.name}] No JSON found in output. Preview:`,
+          cleaned.slice(0, 200),
+        );
         return null;
       }
 
-      return JSON.parse(jsonMatch[0]) as T;
+      // Try parsing the extracted JSON
+      const extracted = jsonMatch[0];
+      try {
+        return JSON.parse(extracted) as T;
+      } catch {
+        // If greedy match failed, try to find balanced braces
+        const balanced = this.extractBalancedJson(cleaned);
+        if (balanced) {
+          return JSON.parse(balanced) as T;
+        }
+        throw new Error("JSON extraction failed");
+      }
     } catch (error) {
       console.warn(`[${this.config.name}] JSON parse error:`, error);
       return null;
     }
+  }
+
+  /**
+   * Extract balanced JSON from a string (handles nested structures)
+   */
+  private extractBalancedJson(text: string): string | null {
+    const startIdx = text.search(/[\[{]/);
+    if (startIdx === -1) return null;
+
+    const startChar = text[startIdx];
+    const endChar = startChar === "{" ? "}" : "]";
+
+    const endIdx = this.findBalancedEndIndex(text, startIdx, startChar, endChar);
+    if (endIdx === -1) return null;
+
+    return text.slice(startIdx, endIdx + 1);
+  }
+
+  /**
+   * Find the index of the balanced closing bracket
+   */
+  private findBalancedEndIndex(
+    text: string,
+    startIdx: number,
+    startChar: string,
+    endChar: string,
+  ): number {
+    let depth = 0;
+    let inString = false;
+    let isEscaped = false;
+
+    for (let i = startIdx; i < text.length; i++) {
+      const char = text[i];
+      const result = this.processJsonChar(char, inString, isEscaped, depth, startChar, endChar);
+
+      inString = result.inString;
+      isEscaped = result.isEscaped;
+      depth = result.depth;
+
+      if (result.foundEnd) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Process a single character during JSON bracket balancing
+   */
+  private processJsonChar(
+    char: string,
+    inString: boolean,
+    isEscaped: boolean,
+    depth: number,
+    startChar: string,
+    endChar: string,
+  ): { inString: boolean; isEscaped: boolean; depth: number; foundEnd: boolean } {
+    if (isEscaped) {
+      return { inString, isEscaped: false, depth, foundEnd: false };
+    }
+    if (char === "\\") {
+      return { inString, isEscaped: true, depth, foundEnd: false };
+    }
+    if (char === '"') {
+      return { inString: !inString, isEscaped: false, depth, foundEnd: false };
+    }
+    if (inString) {
+      return { inString, isEscaped: false, depth, foundEnd: false };
+    }
+    if (char === startChar) {
+      return { inString, isEscaped: false, depth: depth + 1, foundEnd: false };
+    }
+    if (char === endChar) {
+      const newDepth = depth - 1;
+      return { inString, isEscaped: false, depth: newDepth, foundEnd: newDepth === 0 };
+    }
+    return { inString, isEscaped: false, depth, foundEnd: false };
   }
 
   /**

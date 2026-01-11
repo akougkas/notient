@@ -510,8 +510,8 @@ export default class NotientPlugin extends Plugin {
       this.agentTaskQueue = new AgentTaskQueue(null, eventBus);
       this.kernel.registerService("taskQueue", this.agentTaskQueue);
 
-      // Create NotientAgent if LLM Provider available
-      if (this.llmProvider) {
+      // Create NotientAgent if LLM Provider initialized successfully
+      if (this.llmProvider && !lmStudioFailed) {
         const currentProfile = this.profileManager?.get();
         this.notientAgent = new NotientAgent(
           this.llmProvider,

@@ -63,19 +63,23 @@ export class IndexDashboardModal extends Modal {
     contentEl.empty();
     if (title) contentEl.appendChild(title);
 
-    // Stats grid
-    const statsGrid = contentEl.createDiv({ cls: "notient-stats-grid" });
+    this.renderStatsGrid(contentEl);
+    this.renderSectionHeader(contentEl);
+    this.renderIndexList(contentEl);
+  }
+
+  private renderStatsGrid(container: HTMLElement): void {
+    const statsGrid = container.createDiv({ cls: "notient-stats-grid" });
+    const statusText = this.indexStatus.isIndexing ? "Indexing" : "Ready";
+    const dimensionText = this.currentSystemDim > 0 ? `${this.currentSystemDim}d` : "-";
 
     this.createStatCard(statsGrid, String(this.indexStatus.noteCount), "Notes Indexed");
-    this.createStatCard(statsGrid, this.indexStatus.isIndexing ? "Indexing" : "Ready", "Status");
-    this.createStatCard(
-      statsGrid,
-      this.currentSystemDim > 0 ? `${this.currentSystemDim}d` : "-",
-      "Dimension",
-    );
+    this.createStatCard(statsGrid, statusText, "Status");
+    this.createStatCard(statsGrid, dimensionText, "Dimension");
+  }
 
-    // Section header
-    const headerDiv = contentEl.createDiv({ cls: "notient-section-header" });
+  private renderSectionHeader(container: HTMLElement): void {
+    const headerDiv = container.createDiv({ cls: "notient-section-header" });
     headerDiv.createEl("h4", { text: "Available Indices" });
 
     const refreshBtn = headerDiv.createEl("button", {
@@ -87,65 +91,99 @@ export class IndexDashboardModal extends Modal {
       await this.loadIndices();
       this.renderContent();
     });
+  }
 
-    // Index list
-    const listDiv = contentEl.createDiv({ cls: "notient-index-list" });
+  private renderIndexList(container: HTMLElement): void {
+    const listDiv = container.createDiv({ cls: "notient-index-list" });
 
     if (this.isLoading) {
-      const loadingDiv = listDiv.createDiv({ cls: "notient-loading-state" });
-      loadingDiv.createSpan({ cls: "notient-spinner" });
-      loadingDiv.createSpan({ text: " Loading indices..." });
+      this.renderLoadingState(listDiv);
       return;
     }
 
     if (this.indices.length === 0) {
-      listDiv.createDiv({
-        text: "No indices found on disk.",
-        cls: "notient-empty-state",
-      });
+      this.renderEmptyState(listDiv);
       return;
     }
 
     for (const idx of this.indices) {
-      const isCompatible = idx.dimension === this.currentSystemDim;
-      const isActive = this.kernel.settings.indexing.activeIndexPath === idx.path;
+      this.renderIndexItem(listDiv, idx);
+    }
+  }
 
-      const itemDiv = listDiv.createDiv({
-        cls: `notient-index-item ${!isCompatible ? "notient-index-item--incompatible" : ""} ${isActive ? "notient-index-item--active" : ""}`,
-      });
+  private renderLoadingState(container: HTMLElement): void {
+    const loadingDiv = container.createDiv({ cls: "notient-loading-state" });
+    loadingDiv.createSpan({ cls: "notient-spinner" });
+    loadingDiv.createSpan({ text: " Loading indices..." });
+  }
 
-      const infoDiv = itemDiv.createDiv({ cls: "notient-index-info" });
-      const nameRow = infoDiv.createDiv({ cls: "notient-index-name-row" });
-      nameRow.createSpan({ text: idx.displayName, cls: "notient-index-name" });
+  private renderEmptyState(container: HTMLElement): void {
+    container.createDiv({
+      text: "No indices found on disk.",
+      cls: "notient-empty-state",
+    });
+  }
 
-      if (idx.source === "vault") {
-        nameRow.createSpan({ text: "External", cls: "notient-badge notient-badge--subtle" });
-      }
-      if (isActive) {
-        nameRow.createSpan({ text: "Active", cls: "notient-badge notient-badge--active" });
-      }
+  private renderIndexItem(container: HTMLElement, idx: DiscoveredIndex): void {
+    const isCompatible = idx.dimension === this.currentSystemDim;
+    const isActive = this.kernel.settings.indexing.activeIndexPath === idx.path;
 
-      infoDiv.createDiv({
-        text: `${idx.dimension}d \u2022 ${idx.docCount} docs \u2022 ${this.formatDate(idx.createdAt)}`,
-        cls: "notient-index-meta",
-      });
+    const itemClasses = this.buildIndexItemClasses(isCompatible, isActive);
+    const itemDiv = container.createDiv({ cls: itemClasses });
 
-      if (!isActive) {
-        const loadBtn = itemDiv.createEl("button", {
-          text: isCompatible ? "Load" : "Incompatible",
-          cls: "mod-muted",
-          attr: {
-            disabled: !isCompatible ? "true" : null,
-            title: !isCompatible
-              ? `Dimension mismatch: Index is ${idx.dimension}d, System is ${this.currentSystemDim}d`
-              : "Load this index",
-          },
-        });
+    this.renderIndexInfo(itemDiv, idx, isActive);
+    this.renderIndexActions(itemDiv, idx, isCompatible, isActive);
+  }
 
-        if (isCompatible) {
-          loadBtn.addEventListener("click", () => this.handleSwitchIndex(idx.path));
-        }
-      }
+  private buildIndexItemClasses(isCompatible: boolean, isActive: boolean): string {
+    let classes = "notient-index-item";
+    if (!isCompatible) classes += " notient-index-item--incompatible";
+    if (isActive) classes += " notient-index-item--active";
+    return classes;
+  }
+
+  private renderIndexInfo(container: HTMLElement, idx: DiscoveredIndex, isActive: boolean): void {
+    const infoDiv = container.createDiv({ cls: "notient-index-info" });
+    const nameRow = infoDiv.createDiv({ cls: "notient-index-name-row" });
+    nameRow.createSpan({ text: idx.displayName, cls: "notient-index-name" });
+
+    if (idx.source === "vault") {
+      nameRow.createSpan({ text: "External", cls: "notient-badge notient-badge--subtle" });
+    }
+    if (isActive) {
+      nameRow.createSpan({ text: "Active", cls: "notient-badge notient-badge--active" });
+    }
+
+    infoDiv.createDiv({
+      text: `${idx.dimension}d \u2022 ${idx.docCount} docs \u2022 ${this.formatDate(idx.createdAt)}`,
+      cls: "notient-index-meta",
+    });
+  }
+
+  private renderIndexActions(
+    container: HTMLElement,
+    idx: DiscoveredIndex,
+    isCompatible: boolean,
+    isActive: boolean,
+  ): void {
+    if (isActive) return;
+
+    const buttonText = isCompatible ? "Load" : "Incompatible";
+    const buttonTitle = isCompatible
+      ? "Load this index"
+      : `Dimension mismatch: Index is ${idx.dimension}d, System is ${this.currentSystemDim}d`;
+
+    const loadBtn = container.createEl("button", {
+      text: buttonText,
+      cls: "mod-muted",
+      attr: {
+        disabled: !isCompatible ? "true" : null,
+        title: buttonTitle,
+      },
+    });
+
+    if (isCompatible) {
+      loadBtn.addEventListener("click", () => this.handleSwitchIndex(idx.path));
     }
   }
 

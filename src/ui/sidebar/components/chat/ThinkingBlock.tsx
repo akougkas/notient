@@ -45,7 +45,7 @@ export function ThinkingBlock({
     if (isStreaming && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
-  }, [isStreaming, content, streamingContent?.value]);
+  }, [isStreaming]);
 
   // Get display content
   const displayContent = streamingContent?.value || content;
@@ -96,12 +96,12 @@ export function ThinkingBlock({
       </button>
 
       {isExpanded && (
-        <div id="thinking-content" ref={contentRef} class="nv2-thinking-content" role="region">
+        <section id="thinking-content" ref={contentRef} class="nv2-thinking-content">
           <pre class="nv2-thinking-text">
             {displayContent}
             {isStreaming && <span class="nv2-thinking-cursor" />}
           </pre>
-        </div>
+        </section>
       )}
     </div>
   );

@@ -722,50 +722,97 @@ interface Change {
   newEnd: number;
 }
 
+interface MatchResult {
+  found: boolean;
+  oldOffset: number;
+  newOffset: number;
+}
+
+/** Check if two lines at given indices match */
+function linesMatch(
+  oldLines: string[],
+  newLines: string[],
+  oldIdx: number,
+  newIdx: number,
+): boolean {
+  return (
+    oldIdx < oldLines.length && newIdx < newLines.length && oldLines[oldIdx] === newLines[newIdx]
+  );
+}
+
+/** Skip matching lines and return updated indices */
+function skipMatchingLines(
+  oldLines: string[],
+  newLines: string[],
+  startOldIdx: number,
+  startNewIdx: number,
+): { oldIdx: number; newIdx: number } {
+  let oldIdx = startOldIdx;
+  let newIdx = startNewIdx;
+  while (linesMatch(oldLines, newLines, oldIdx, newIdx)) {
+    oldIdx++;
+    newIdx++;
+  }
+  return { oldIdx, newIdx };
+}
+
+/** Search for a match within lookahead window */
+function searchForMatch(
+  oldLines: string[],
+  newLines: string[],
+  oldIdx: number,
+  newIdx: number,
+  maxLookahead: number,
+): MatchResult {
+  for (let ahead = 1; ahead <= maxLookahead; ahead++) {
+    const result = checkOffsetsAtDistance(oldLines, newLines, oldIdx, newIdx, ahead);
+    if (result.found) {
+      return result;
+    }
+  }
+  return { found: false, oldOffset: 0, newOffset: 0 };
+}
+
+/** Check all offset combinations at a given distance */
+function checkOffsetsAtDistance(
+  oldLines: string[],
+  newLines: string[],
+  oldIdx: number,
+  newIdx: number,
+  distance: number,
+): MatchResult {
+  for (let oldOffset = 0; oldOffset <= distance; oldOffset++) {
+    const newOffset = distance - oldOffset;
+    if (linesMatch(oldLines, newLines, oldIdx + oldOffset, newIdx + newOffset)) {
+      return { found: true, oldOffset, newOffset };
+    }
+  }
+  return { found: false, oldOffset: 0, newOffset: 0 };
+}
+
 /** Find regions where old and new content differ */
 function findChanges(newLines: string[], oldLines: string[]): Change[] {
   const changes: Change[] = [];
   let oldIdx = 0;
   let newIdx = 0;
+  const maxLookahead = 20;
 
   while (oldIdx < oldLines.length || newIdx < newLines.length) {
-    // Skip matching lines
-    while (
-      oldIdx < oldLines.length &&
-      newIdx < newLines.length &&
-      oldLines[oldIdx] === newLines[newIdx]
-    ) {
-      oldIdx++;
-      newIdx++;
-    }
+    const skipped = skipMatchingLines(oldLines, newLines, oldIdx, newIdx);
+    oldIdx = skipped.oldIdx;
+    newIdx = skipped.newIdx;
 
     if (oldIdx >= oldLines.length && newIdx >= newLines.length) {
       break;
     }
 
-    // Found a difference - find extent
     const changeStart = { old: oldIdx, new: newIdx };
+    const match = searchForMatch(oldLines, newLines, oldIdx, newIdx, maxLookahead);
 
-    // Scan forward to find where they match again
-    let foundMatch = false;
-    outer: for (let ahead = 1; ahead <= 20; ahead++) {
-      for (let oldOffset = 0; oldOffset <= ahead; oldOffset++) {
-        const newOffset = ahead - oldOffset;
-        if (
-          oldIdx + oldOffset < oldLines.length &&
-          newIdx + newOffset < newLines.length &&
-          oldLines[oldIdx + oldOffset] === newLines[newIdx + newOffset]
-        ) {
-          oldIdx += oldOffset;
-          newIdx += newOffset;
-          foundMatch = true;
-          break outer;
-        }
-      }
-    }
-
-    if (!foundMatch) {
-      // No match found within lookahead - consume rest
+    if (match.found) {
+      oldIdx += match.oldOffset;
+      newIdx += match.newOffset;
+    } else {
       oldIdx = oldLines.length;
       newIdx = newLines.length;
     }
@@ -781,6 +828,108 @@ function findChanges(newLines: string[], oldLines: string[]): Change[] {
   return changes;
 }
 
+/** Parsed hunk from unified diff */
+interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: string[];
+}
+
+/** Result of processing hunk lines for reverse application */
+interface HunkApplication {
+  deleteCount: number;
+  insertLines: string[];
+}
+
+/** Check if a line is a diff content line (starts with +, -, or space) */
+function isDiffContentLine(line: string): boolean {
+  return line.startsWith("+") || line.startsWith("-") || line.startsWith(" ");
+}
+
+/** Parse a hunk header line into a DiffHunk structure */
+function parseHunkHeader(line: string): DiffHunk | null {
+  const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+  if (!match) {
+    return null;
+  }
+  return {
+    oldStart: Number.parseInt(match[1], 10),
+    oldCount: match[2] ? Number.parseInt(match[2], 10) : 1,
+    newStart: Number.parseInt(match[3], 10),
+    newCount: match[4] ? Number.parseInt(match[4], 10) : 1,
+    lines: [],
+  };
+}
+
+/** Parse all hunks from diff lines */
+function parseHunks(diffLines: string[]): DiffHunk[] {
+  const hunks: DiffHunk[] = [];
+  let currentHunk: DiffHunk | null = null;
+
+  for (const line of diffLines) {
+    if (line.startsWith("@@")) {
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+      currentHunk = parseHunkHeader(line);
+      continue;
+    }
+
+    if (currentHunk && isDiffContentLine(line)) {
+      currentHunk.lines.push(line);
+    }
+  }
+
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+
+  return hunks;
+}
+
+/** Process a single diff line for reverse application */
+function processReverseDiffLine(line: string): { delete: boolean; insert: string | null } {
+  const content = line.slice(1);
+
+  if (line.startsWith("+")) {
+    return { delete: true, insert: null };
+  }
+  if (line.startsWith("-")) {
+    return { delete: false, insert: content };
+  }
+  if (line.startsWith(" ")) {
+    return { delete: true, insert: content };
+  }
+  return { delete: false, insert: null };
+}
+
+/** Calculate delete count and insert lines for a hunk in reverse application */
+function calculateHunkApplication(hunkLines: string[]): HunkApplication {
+  let deleteCount = 0;
+  const insertLines: string[] = [];
+
+  for (const line of hunkLines) {
+    const result = processReverseDiffLine(line);
+    if (result.delete) {
+      deleteCount++;
+    }
+    if (result.insert !== null) {
+      insertLines.push(result.insert);
+    }
+  }
+
+  return { deleteCount, insertLines };
+}
+
+/** Apply a single hunk to result lines (mutates resultLines) */
+function applyHunkToLines(resultLines: string[], hunk: DiffHunk): void {
+  const startIdx = hunk.newStart - 1;
+  const { deleteCount, insertLines } = calculateHunkApplication(hunk.lines);
+  resultLines.splice(startIdx, deleteCount, ...insertLines);
+}
+
 /**
  * Apply a reverse diff to restore original content.
  * The diff was created with new→old, so + lines are additions (to remove)
@@ -791,78 +940,14 @@ function findChanges(newLines: string[], oldLines: string[]): Change[] {
  * @returns Restored content
  */
 export function applyReverseDiff(currentContent: string, diff: string): string {
-  const lines = diff.split("\n");
+  const diffLines = diff.split("\n");
   const resultLines = currentContent.split("\n");
 
-  // Parse hunks and apply in reverse order to maintain line numbers
-  const hunks: Array<{
-    oldStart: number;
-    oldCount: number;
-    newStart: number;
-    newCount: number;
-    lines: string[];
-  }> = [];
-
-  let currentHunk: (typeof hunks)[0] | null = null;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      if (currentHunk) {
-        hunks.push(currentHunk);
-      }
-      const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
-      if (match) {
-        currentHunk = {
-          oldStart: Number.parseInt(match[1], 10),
-          oldCount: match[2] ? Number.parseInt(match[2], 10) : 1,
-          newStart: Number.parseInt(match[3], 10),
-          newCount: match[4] ? Number.parseInt(match[4], 10) : 1,
-          lines: [],
-        };
-      }
-    } else if (
-      currentHunk &&
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
-    ) {
-      currentHunk.lines.push(line);
-    }
-  }
-
-  if (currentHunk) {
-    hunks.push(currentHunk);
-  }
-
-  // Apply hunks in reverse order (bottom to top)
+  const hunks = parseHunks(diffLines);
   hunks.reverse();
 
   for (const hunk of hunks) {
-    // For reverse application:
-    // - '+' lines exist in current, need to be removed
-    // - '-' lines were removed, need to be added back
-    // - ' ' lines are context, should remain
-
-    const startIdx = hunk.newStart - 1; // 0-indexed
-    let deleteCount = 0;
-    const insertLines: string[] = [];
-
-    for (const line of hunk.lines) {
-      const content = line.slice(1);
-      if (line.startsWith("+")) {
-        // This line exists in current (was added), remove it
-        deleteCount++;
-      } else if (line.startsWith("-")) {
-        // This line was removed, add it back
-        insertLines.push(content);
-      } else if (line.startsWith(" ")) {
-        // Context line - keep it but also increment delete counter
-        // since we're replacing the whole hunk region
-        deleteCount++;
-        insertLines.push(content);
-      }
-    }
-
-    // Apply the changes
-    resultLines.splice(startIdx, deleteCount, ...insertLines);
+    applyHunkToLines(resultLines, hunk);
   }
 
   return resultLines.join("\n");

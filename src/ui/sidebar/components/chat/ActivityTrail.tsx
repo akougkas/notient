@@ -57,9 +57,10 @@ export function ActivityTrail({
   isStreaming = false,
   maxItems = 4,
 }: ActivityTrailProps) {
-  const trailRef = useRef<HTMLDivElement>(null);
+  const trailRef = useRef<HTMLOutputElement>(null);
 
   // Auto-scroll to latest activity
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activities triggers scroll when changed
   useEffect(() => {
     if (trailRef.current) {
       trailRef.current.scrollLeft = trailRef.current.scrollWidth;
@@ -72,7 +73,7 @@ export function ActivityTrail({
   const visibleActivities = activities.slice(-maxItems);
 
   return (
-    <div class="nv2-activity-trail" ref={trailRef} role="status" aria-live="polite">
+    <output class="nv2-activity-trail" ref={trailRef} aria-live="polite">
       {visibleActivities.map((activity, index) => {
         const isLast = index === visibleActivities.length - 1;
         const isActive = isLast && isStreaming && activity.phase !== "complete";
@@ -96,7 +97,7 @@ export function ActivityTrail({
           </div>
         );
       })}
-    </div>
+    </output>
   );
 }
 

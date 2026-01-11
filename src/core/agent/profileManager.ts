@@ -190,52 +190,70 @@ export class ProfileManager {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // Check required fields
-    if (!profile.version) {
-      errors.push("Missing version field");
-    } else if (profile.version !== PROFILE_VERSION) {
-      warnings.push(`Profile version ${profile.version} may need migration`);
-    }
-
-    if (!profile.domain) {
-      errors.push("Missing domain field");
-    } else if (!profile.domain.primary && !profile.domain.secondary?.length) {
-      warnings.push("Profile has no domain expertise configured");
-    }
-
-    if (!profile.para) {
-      errors.push("Missing para field");
-    }
-
-    // Validate PARA paths exist in vault (warnings only)
-    if (profile.para) {
-      for (const projectPath of profile.para.projects) {
-        if (!this.folderExists(projectPath)) {
-          warnings.push(`Project folder not found: ${projectPath}`);
-        }
-      }
-      for (const areaPath of profile.para.areas) {
-        if (!this.folderExists(areaPath)) {
-          warnings.push(`Area folder not found: ${areaPath}`);
-        }
-      }
-      for (const resourcePath of profile.para.resources) {
-        if (!this.folderExists(resourcePath)) {
-          warnings.push(`Resource folder not found: ${resourcePath}`);
-        }
-      }
-      for (const archivePath of profile.para.archives) {
-        if (!this.folderExists(archivePath)) {
-          warnings.push(`Archive folder not found: ${archivePath}`);
-        }
-      }
-    }
+    this.validateVersion(profile, errors, warnings);
+    this.validateDomain(profile, errors, warnings);
+    this.validatePara(profile, errors, warnings);
 
     return {
       valid: errors.length === 0,
       errors,
       warnings,
     };
+  }
+
+  /**
+   * Validate profile version field
+   */
+  private validateVersion(profile: UserProfile, errors: string[], warnings: string[]): void {
+    if (!profile.version) {
+      errors.push("Missing version field");
+      return;
+    }
+
+    if (profile.version !== PROFILE_VERSION) {
+      warnings.push(`Profile version ${profile.version} may need migration`);
+    }
+  }
+
+  /**
+   * Validate profile domain field
+   */
+  private validateDomain(profile: UserProfile, errors: string[], warnings: string[]): void {
+    if (!profile.domain) {
+      errors.push("Missing domain field");
+      return;
+    }
+
+    const hasNoDomainExpertise = !profile.domain.primary && !profile.domain.secondary?.length;
+    if (hasNoDomainExpertise) {
+      warnings.push("Profile has no domain expertise configured");
+    }
+  }
+
+  /**
+   * Validate profile PARA field and folder paths
+   */
+  private validatePara(profile: UserProfile, errors: string[], warnings: string[]): void {
+    if (!profile.para) {
+      errors.push("Missing para field");
+      return;
+    }
+
+    this.validateParaFolders(profile.para.projects, "Project", warnings);
+    this.validateParaFolders(profile.para.areas, "Area", warnings);
+    this.validateParaFolders(profile.para.resources, "Resource", warnings);
+    this.validateParaFolders(profile.para.archives, "Archive", warnings);
+  }
+
+  /**
+   * Validate that PARA folder paths exist in vault
+   */
+  private validateParaFolders(paths: string[], category: string, warnings: string[]): void {
+    for (const path of paths) {
+      if (!this.folderExists(path)) {
+        warnings.push(`${category} folder not found: ${path}`);
+      }
+    }
   }
 
   /**

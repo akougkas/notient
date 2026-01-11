@@ -70,6 +70,15 @@ export function triggerAgenticAction(
   prompt: string,
   agentType: AgenticTaskType,
 ): void {
+  // Always log to console for debugging - helps identify first-click issues
+  console.log("[triggerAgenticAction]", {
+    agentType,
+    hasTaskQueue: !!taskQueue,
+    hasNoteVitals: !!noteVitals.value,
+    notePath: noteVitals.value?.path,
+    isIndexing: indexStatus.value.isIndexing,
+  });
+
   debugLog("triggerAgenticAction", "called", {
     agentType,
     hasTaskQueue: !!taskQueue,
@@ -79,12 +88,14 @@ export function triggerAgenticAction(
 
   // Guard: Don't allow agent actions while indexing to prevent GPU contention
   if (indexStatus.value.isIndexing) {
+    console.warn("[triggerAgenticAction] Blocked: indexing in progress");
     new Notice("Please wait for indexing to complete before running agents");
     return;
   }
 
   if (taskQueue && noteVitals.value) {
     try {
+      console.log("[triggerAgenticAction] Enqueueing task for", noteVitals.value.path);
       taskQueue.enqueue({
         agent: "chat",
         taskType: agentType, // taskQueue field name preserved for compatibility
@@ -96,9 +107,14 @@ export function triggerAgenticAction(
       activeView.value = "agents";
       new Notice(`${ACTION_LABELS[agentType]} started`);
     } catch (err) {
+      console.error("[triggerAgenticAction] Enqueue failed:", err);
       new Notice(err instanceof Error ? err.message : "Failed to start agent");
     }
   } else {
+    console.warn("[triggerAgenticAction] Services unavailable", {
+      hasTaskQueue: !!taskQueue,
+      hasNoteVitals: !!noteVitals.value,
+    });
     debugError("triggerAgenticAction", "services unavailable", {
       hasTaskQueue: !!taskQueue,
       hasNoteVitals: !!noteVitals.value,
@@ -296,7 +312,6 @@ interface ApplyActionOptions {
 
 /**
  * Helper to apply an action and show appropriate notices.
- * Encapsulates the common pattern of calling applyConfirmed and handling results.
  */
 async function applyActionWithNotice({
   actionApplier,
@@ -334,99 +349,131 @@ function buildAction(
 }
 
 /**
+ * Handle "open-note" action - opens a note in the editor.
+ */
+function handleOpenNote(obsidian: ObsidianFacade, payload?: Record<string, unknown>): void {
+  const path = (payload as { path?: string })?.path;
+  if (path) {
+    obsidian.openFile(path);
+  }
+}
+
+/**
+ * Handle "apply-links" action - adds related links to current note.
+ */
+async function handleApplyLinks(
+  actionApplier: ActionApplier,
+  currentPath: string,
+  payload?: Record<string, unknown>,
+): Promise<void> {
+  const links = (payload as { links?: string[] })?.links || [];
+  if (links.length === 0) {
+    new Notice("No links to apply");
+    return;
+  }
+  await applyActionWithNotice({
+    actionApplier,
+    action: buildAction(
+      "append_related_links",
+      currentPath,
+      `Add ${links.length} related links`,
+      "User applied links from chat",
+      { links },
+    ),
+    successMessage: `Added ${links.length} links`,
+  });
+}
+
+/**
+ * Handle "apply-tags" action - adds tags to current note frontmatter.
+ */
+async function handleApplyTags(
+  actionApplier: ActionApplier,
+  currentPath: string,
+  payload?: Record<string, unknown>,
+): Promise<void> {
+  const tags = (payload as { tags?: string[] })?.tags || [];
+  if (tags.length === 0) {
+    new Notice("No tags to apply");
+    return;
+  }
+  await applyActionWithNotice({
+    actionApplier,
+    action: buildAction(
+      "frontmatter_add_tags",
+      currentPath,
+      `Add ${tags.length} tags`,
+      "User applied tags from chat",
+      { tags },
+    ),
+    successMessage: `Added ${tags.length} tags`,
+  });
+}
+
+/**
+ * Handle "create-note" action - creates a new note with content.
+ */
+async function handleCreateNote(
+  actionApplier: ActionApplier,
+  obsidian: ObsidianFacade,
+  payload?: Record<string, unknown>,
+): Promise<void> {
+  const typedPayload = payload as { path?: string; content?: string } | undefined;
+  const notePath = typedPayload?.path;
+  const noteContent = typedPayload?.content;
+  if (!notePath || !noteContent) {
+    new Notice("Missing path or content");
+    return;
+  }
+  await applyActionWithNotice({
+    actionApplier,
+    action: buildAction(
+      "create_note",
+      notePath,
+      `Create ${notePath.split("/").pop()}`,
+      "User created note from chat",
+      { path: notePath, content: noteContent },
+    ),
+    successMessage: `Created ${notePath}`,
+    onSuccess: () => obsidian.openFile(notePath),
+  });
+}
+
+/**
  * Handle inline actions from chat messages.
  */
 export async function handleChatAction(
   { actionApplier, obsidian }: HandleChatActionDeps,
   action: ChatAction,
 ): Promise<void> {
-  const currentPath = chatContext.value.notePath;
+  if (action.type === "open-note") {
+    handleOpenNote(obsidian, action.payload);
+    return;
+  }
 
-  if (!currentPath && action.type !== "open-note" && action.type !== "create-note") {
+  if (action.type === "create-note") {
+    if (!actionApplier) {
+      new Notice("Action system not available");
+      return;
+    }
+    await handleCreateNote(actionApplier, obsidian, action.payload);
+    return;
+  }
+
+  const currentPath = chatContext.value.notePath;
+  if (!currentPath) {
     new Notice("No note context for this action");
     return;
   }
 
-  switch (action.type) {
-    case "open-note": {
-      const path = (action.payload as { path?: string })?.path;
-      if (path) {
-        obsidian.openFile(path);
-      }
-      break;
-    }
+  if (!actionApplier) {
+    new Notice("Action system not available");
+    return;
+  }
 
-    case "apply-links": {
-      if (!actionApplier || !currentPath) {
-        new Notice("Action system not available");
-        return;
-      }
-      const links = (action.payload as { links?: string[] })?.links || [];
-      if (links.length === 0) {
-        new Notice("No links to apply");
-        return;
-      }
-      await applyActionWithNotice({
-        actionApplier,
-        action: buildAction(
-          "append_related_links",
-          currentPath,
-          `Add ${links.length} related links`,
-          "User applied links from chat",
-          { links },
-        ),
-        successMessage: `Added ${links.length} links`,
-      });
-      break;
-    }
-
-    case "apply-tags": {
-      if (!actionApplier || !currentPath) {
-        new Notice("Action system not available");
-        return;
-      }
-      const tags = (action.payload as { tags?: string[] })?.tags || [];
-      if (tags.length === 0) {
-        new Notice("No tags to apply");
-        return;
-      }
-      await applyActionWithNotice({
-        actionApplier,
-        action: buildAction(
-          "frontmatter_add_tags",
-          currentPath,
-          `Add ${tags.length} tags`,
-          "User applied tags from chat",
-          { tags },
-        ),
-        successMessage: `Added ${tags.length} tags`,
-      });
-      break;
-    }
-
-    case "create-note": {
-      if (!actionApplier) {
-        new Notice("Action system not available");
-        return;
-      }
-      const payload = action.payload as { path?: string; content?: string };
-      if (!payload?.path || !payload?.content) {
-        new Notice("Missing path or content");
-        return;
-      }
-      await applyActionWithNotice({
-        actionApplier,
-        action: buildAction(
-          "create_note",
-          payload.path,
-          `Create ${payload.path.split("/").pop()}`,
-          "User created note from chat",
-          { path: payload.path, content: payload.content },
-        ),
-        successMessage: `Created ${payload.path}`,
-        onSuccess: () => obsidian.openFile(payload.path!),
-      });
-      break;
-    }
+  if (action.type === "apply-links") {
+    await handleApplyLinks(actionApplier, currentPath, action.payload);
+  } else if (action.type === "apply-tags") {
+    await handleApplyTags(actionApplier, currentPath, action.payload);
   }
 }

@@ -396,155 +396,227 @@ export class AgentTaskQueue {
   }
 
   /**
+   * Map agent type to result type for structured outputs
+   */
+  private mapAgentTypeToResultType(agentType: string | undefined): TaskResult["type"] {
+    if (agentType === "note-editor") return "action_plan";
+    if (agentType === "classifier") return "classification";
+    if (agentType === "connection") return "links";
+    return "chat";
+  }
+
+  /**
+   * Build TaskResult from conversational output
+   */
+  private buildConversationalResult(
+    output: ConversationalOutput,
+    fullResponse: string,
+    citations: string[],
+    actions: ProposedAction[],
+  ): { result: TaskResult; resultData: unknown; actions: ProposedAction[] } {
+    const resultData = output.content || fullResponse;
+    const allActions = [...actions];
+
+    // Include delegated results' actions
+    if (output.delegatedResults) {
+      for (const dr of output.delegatedResults) {
+        allActions.push(...this.extractActions(dr.output));
+      }
+    }
+
+    return {
+      result: {
+        type: "chat",
+        data: resultData,
+        citations,
+        actions: allActions.length > 0 ? allActions : undefined,
+      },
+      resultData,
+      actions: allActions,
+    };
+  }
+
+  /**
+   * Build TaskResult from structured output
+   */
+  private buildStructuredResult(
+    output: StructuredOutput,
+    citations: string[],
+  ): { result: TaskResult; resultData: unknown; actions: ProposedAction[] } {
+    const resultType = this.mapAgentTypeToResultType(output.agentType);
+    const resultData = output.data;
+    const actions = this.extractActions(output);
+
+    return {
+      result: {
+        type: resultType,
+        data: resultData,
+        citations,
+        actions: actions.length > 0 ? actions : undefined,
+      },
+      resultData,
+      actions,
+    };
+  }
+
+  /**
+   * Persist assistant message to conversation store
+   */
+  private persistAssistantMessage(notePath: string, content: string): void {
+    if (!this.conversationStore) return;
+
+    const assistantMessage: ExtendedChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content,
+      timestamp: new Date(),
+    };
+    this.conversationStore.appendMessage(notePath, assistantMessage);
+  }
+
+  /**
+   * Handle the complete event from agent execution
+   */
+  private handleCompleteEvent(
+    event: AgentEvent & { type: "complete" },
+    task: AgentTask,
+    fullResponse: string,
+    citations: string[],
+    actions: ProposedAction[],
+  ): void {
+    const output = event.output;
+    let built: { result: TaskResult; resultData: unknown; actions: ProposedAction[] };
+
+    if (output.kind === "conversational") {
+      built = this.buildConversationalResult(output, fullResponse, citations, actions);
+    } else if (output.kind === "structured") {
+      built = this.buildStructuredResult(output, citations);
+    } else {
+      // Internal output (context-builder) - treat as chat
+      built = {
+        result: { type: "chat", data: fullResponse, citations },
+        resultData: fullResponse,
+        actions: [],
+      };
+    }
+
+    // Format assistant content for chat history
+    const assistantContent =
+      typeof built.resultData === "string"
+        ? built.resultData
+        : fullResponse || JSON.stringify(built.resultData);
+
+    task.chatHistory.push({
+      role: "assistant",
+      content: assistantContent,
+    });
+    task.result = built.result;
+
+    // Persist to conversation store
+    if (task.notePath) {
+      this.persistAssistantMessage(task.notePath, assistantContent);
+    }
+  }
+
+  /**
+   * Process a single agent event during task execution
+   */
+  private processAgentEvent(
+    event: AgentEvent,
+    task: AgentTask,
+    state: { fullResponse: string; citations: string[]; actions: ProposedAction[] },
+  ): void {
+    if (event.type === "started") {
+      task.progress = 5;
+      this.emitUpdate(task);
+      return;
+    }
+
+    if (event.type === "progress") {
+      task.progress = event.progress;
+      this.emitUpdate(task);
+      return;
+    }
+
+    if (event.type === "chunk") {
+      state.fullResponse += event.content;
+      return;
+    }
+
+    if (event.type === "citations") {
+      state.citations.push(...event.paths);
+      return;
+    }
+
+    if (event.type === "delegation-started") {
+      task.progress = Math.min(task.progress || 0, 50) + 10;
+      this.emitUpdate(task);
+      return;
+    }
+
+    if (event.type === "delegation-complete") {
+      if (event.result.output.kind === "structured") {
+        state.actions.push(...this.extractActions(event.result.output));
+      }
+      return;
+    }
+
+    if (event.type === "complete") {
+      this.handleCompleteEvent(event, task, state.fullResponse, state.citations, state.actions);
+      return;
+    }
+
+    if (event.type === "error") {
+      throw event.error;
+    }
+  }
+
+  /**
+   * Create fallback result when no complete event received
+   */
+  private createFallbackResult(
+    task: AgentTask,
+    fullResponse: string,
+    citations: string[],
+    actions: ProposedAction[],
+  ): void {
+    if (task.result || !fullResponse) return;
+
+    task.chatHistory.push({
+      role: "assistant",
+      content: fullResponse,
+    });
+    task.result = {
+      type: "chat",
+      data: fullResponse,
+      citations,
+      actions: actions.length > 0 ? actions : undefined,
+    };
+  }
+
+  /**
    * Execute a task using the ChiefOfStaff (multi-agent system)
    */
   private async executeTask(task: AgentTask): Promise<void> {
-    // Guard: should never happen since enqueue checks, but TypeScript needs this
     if (!this.agent) {
       throw new Error("Agent not available");
     }
 
-    // Create abort controller for this task
     this.currentAbortController = new AbortController();
-
-    // Convert to ChiefOfStaff task format
     const chiefTask = this.toChiefOfStaffTask(task);
-
-    let fullResponse = "";
-    const citations: string[] = [];
-    let actions: ProposedAction[] = [];
+    const state = { fullResponse: "", citations: [] as string[], actions: [] as ProposedAction[] };
 
     try {
       for await (const event of this.agent.execute(chiefTask, this.currentAbortController.signal)) {
         if (task.status !== "running") break;
-
-        // Map AgentEvent to AgentStreamEvent equivalent
-        switch (event.type) {
-          case "started":
-            task.progress = 5;
-            this.emitUpdate(task);
-            break;
-
-          case "progress":
-            task.progress = event.progress;
-            this.emitUpdate(task);
-            break;
-
-          case "chunk":
-            fullResponse += event.content;
-            break;
-
-          case "citations":
-            citations.push(...event.paths);
-            break;
-
-          case "delegation-started":
-            // Emit as progress update
-            task.progress = Math.min(task.progress || 0, 50) + 10;
-            this.emitUpdate(task);
-            break;
-
-          case "delegation-complete":
-            // Extract any actions from delegated result
-            if (event.result.output.kind === "structured") {
-              const delegatedActions = this.extractActions(event.result.output);
-              actions.push(...delegatedActions);
-            }
-            break;
-
-          case "complete": {
-            // Convert AgentOutput to TaskResult
-            const output = event.output;
-            let resultType: TaskResult["type"] = "chat";
-            let resultData: unknown = fullResponse;
-
-            if (output.kind === "conversational") {
-              resultType = "chat";
-              resultData = output.content || fullResponse;
-              // Include delegated results' actions
-              if (output.delegatedResults) {
-                for (const dr of output.delegatedResults) {
-                  const drActions = this.extractActions(dr.output);
-                  actions.push(...drActions);
-                }
-              }
-            } else if (output.kind === "structured") {
-              // Determine result type from agent
-              switch (output.agentType) {
-                case "note-editor":
-                  resultType = "action_plan";
-                  break;
-                case "classifier":
-                  resultType = "classification";
-                  break;
-                case "connection":
-                  resultType = "links";
-                  break;
-                default:
-                  resultType = "chat";
-              }
-              resultData = output.data;
-              actions = this.extractActions(output);
-            }
-
-            // Build TaskResult
-            const result: TaskResult = {
-              type: resultType,
-              data: resultData,
-              citations,
-              actions: actions.length > 0 ? actions : undefined,
-            };
-
-            // Add assistant response to chat history
-            const assistantContent =
-              typeof resultData === "string"
-                ? resultData
-                : fullResponse || JSON.stringify(resultData);
-
-            task.chatHistory.push({
-              role: "assistant",
-              content: assistantContent,
-            });
-            task.result = result;
-
-            // Phase 2: Persist assistant message to ConversationStore
-            if (this.conversationStore && task.notePath) {
-              const assistantMessage: ExtendedChatMessage = {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: assistantContent,
-                timestamp: new Date(),
-              };
-              this.conversationStore.appendMessage(task.notePath, assistantMessage);
-            }
-            break;
-          }
-
-          case "error":
-            throw event.error;
-        }
+        this.processAgentEvent(event, task, state);
       }
     } catch (error) {
-      if ((error as Error).name === "AbortError") {
-        // Task was cancelled - don't save partial response
-        return;
-      }
+      if ((error as Error).name === "AbortError") return;
       throw error;
     }
 
-    // If no complete event but we have content, create result
-    if (!task.result && fullResponse) {
-      task.chatHistory.push({
-        role: "assistant",
-        content: fullResponse,
-      });
-      task.result = {
-        type: "chat",
-        data: fullResponse,
-        citations,
-        actions: actions.length > 0 ? actions : undefined,
-      };
-    }
+    this.createFallbackResult(task, state.fullResponse, state.citations, state.actions);
   }
 
   /**

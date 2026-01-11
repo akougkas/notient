@@ -30,6 +30,14 @@ import {
   type DelegationDetection,
 } from "./types";
 
+/** Thinking state accumulated during streaming */
+interface ThinkingState {
+  fullContent: string;
+  fullThinking: string;
+  thinkingTimeMs: number;
+  generationStartTime: number;
+}
+
 /** Maximum length for reasoning summary */
 const REASONING_SUMMARY_MAX_LENGTH = 200;
 
@@ -98,6 +106,74 @@ export class ChatService {
   }
 
   /**
+   * Process a parsed chunk and yield appropriate events.
+   * Returns updated thinking state.
+   */
+  private *processThinkingChunk(
+    parsed: ReturnType<ThinkingParser["processChunk"]>,
+    thinkingParser: ThinkingParser,
+    state: ThinkingState,
+  ): Generator<ChatStreamEvent, ThinkingState> {
+    const updatedState = { ...state };
+
+    if (parsed.thinkingJustStarted) {
+      yield { type: "activity", message: "Reasoning...", phase: "thinking" };
+    }
+
+    if (parsed.thinkingChunk) {
+      updatedState.fullThinking += parsed.thinkingChunk;
+      yield { type: "thinking", content: parsed.thinkingChunk };
+    }
+
+    if (parsed.thinkingJustEnded) {
+      updatedState.thinkingTimeMs = thinkingParser.getThinkingDurationMs();
+      updatedState.generationStartTime = Date.now();
+      yield {
+        type: "thinking-complete",
+        content: thinkingParser.getThinkingContent(),
+        durationMs: updatedState.thinkingTimeMs,
+      };
+      yield { type: "activity", message: "Generating response...", phase: "generating" };
+    }
+
+    if (parsed.contentChunk) {
+      updatedState.fullContent += parsed.contentChunk;
+      yield { type: "chunk", content: parsed.contentChunk };
+    }
+
+    return updatedState;
+  }
+
+  /**
+   * Build chat statistics from accumulated state.
+   */
+  private buildStatistics(
+    startTime: number,
+    contextTimeMs: number,
+    contextSize: number,
+    state: ThinkingState,
+  ): ChatStatistics {
+    const totalTimeMs = Date.now() - startTime;
+    const generationTimeMs = totalTimeMs - state.thinkingTimeMs - contextTimeMs;
+    const tokenCount =
+      estimateTokenCount(state.fullContent) + estimateTokenCount(state.fullThinking);
+    const thinkingTokenCount = estimateTokenCount(state.fullThinking);
+    const tokensPerSecond = generationTimeMs > 0 ? (tokenCount / generationTimeMs) * 1000 : 0;
+
+    return {
+      responseTimeMs: totalTimeMs,
+      thinkingTimeMs: state.thinkingTimeMs,
+      generationTimeMs,
+      tokenCount,
+      tokensPerSecond,
+      contextWindowUsed: contextSize,
+      contextWindowMax: this.config.contextWindowMax,
+      modelName: this.config.modelName,
+      thinkingTokenCount,
+    };
+  }
+
+  /**
    * Chat with streaming response
    *
    * @param message - User's message
@@ -123,8 +199,6 @@ export class ChatService {
         message: `Detected ${delegation.targetAgent} intent - will delegate...`,
         phase: "delegation",
       };
-      // Note: Actual delegation would be handled by caller
-      // This service just detects and signals - caller routes to ChiefOfStaff
     }
 
     // Build context
@@ -134,81 +208,44 @@ export class ChatService {
     const systemPrompt = this.buildSystemPrompt(noteContext);
     const messages = this.buildMessages(systemPrompt, message, history);
     const contextSize = messages.reduce((acc, m) => acc + m.content.length, 0);
-
     const contextTimeMs = Date.now() - contextStartTime;
 
-    // Initialize thinking parser and statistics tracking
+    // Initialize thinking parser and state
     const thinkingParser = new ThinkingParser(this.config.thinkingConfig);
-    let thinkingTimeMs = 0;
-    let generationStartTime = Date.now();
-    let fullContent = "";
-    let fullThinking = "";
-    let tokenCount = 0;
+    let state: ThinkingState = {
+      fullContent: "",
+      fullThinking: "",
+      thinkingTimeMs: 0,
+      generationStartTime: Date.now(),
+    };
 
     try {
-      // Stream from LLM
       yield { type: "activity", message: "Generating response...", phase: "generating" };
 
       for await (const chunk of this.llm.stream(messages, { temperature: 0.7 }, signal)) {
         const parsed = thinkingParser.processChunk(chunk);
+        const generator = this.processThinkingChunk(parsed, thinkingParser, state);
 
-        // Handle thinking tokens
-        if (parsed.thinkingJustStarted) {
-          yield { type: "activity", message: "Reasoning...", phase: "thinking" };
+        let result = generator.next();
+        while (!result.done) {
+          yield result.value;
+          result = generator.next();
         }
-
-        if (parsed.thinkingChunk) {
-          fullThinking += parsed.thinkingChunk;
-          yield { type: "thinking", content: parsed.thinkingChunk };
-        }
-
-        if (parsed.thinkingJustEnded) {
-          thinkingTimeMs = thinkingParser.getThinkingDurationMs();
-          generationStartTime = Date.now(); // Reset generation timer after thinking
-          yield {
-            type: "thinking-complete",
-            content: thinkingParser.getThinkingContent(),
-            durationMs: thinkingTimeMs,
-          };
-          yield { type: "activity", message: "Generating response...", phase: "generating" };
-        }
-
-        // Handle main content
-        if (parsed.contentChunk) {
-          fullContent += parsed.contentChunk;
-          yield { type: "chunk", content: parsed.contentChunk };
-        }
+        state = result.value;
       }
 
       // Finalize parsing
       const finalParsed = thinkingParser.finalize();
-      fullContent = finalParsed.content;
-      fullThinking = finalParsed.thinking || "";
+      state.fullContent = finalParsed.content;
+      state.fullThinking = finalParsed.thinking || "";
 
-      // Calculate statistics
-      const totalTimeMs = Date.now() - startTime;
-      const generationTimeMs = totalTimeMs - thinkingTimeMs - contextTimeMs;
-      tokenCount = estimateTokenCount(fullContent) + estimateTokenCount(fullThinking);
-      const thinkingTokenCount = estimateTokenCount(fullThinking);
-      const tokensPerSecond = generationTimeMs > 0 ? (tokenCount / generationTimeMs) * 1000 : 0;
-
-      const statistics: ChatStatistics = {
-        responseTimeMs: totalTimeMs,
-        thinkingTimeMs,
-        generationTimeMs,
-        tokenCount,
-        tokensPerSecond,
-        contextWindowUsed: contextSize,
-        contextWindowMax: this.config.contextWindowMax,
-        modelName: this.config.modelName,
-        thinkingTokenCount,
-      };
+      const statistics = this.buildStatistics(startTime, contextTimeMs, contextSize, state);
 
       yield { type: "activity", message: "Complete", phase: "complete" };
       yield {
         type: "complete",
-        content: fullContent,
-        thinking: fullThinking || null,
+        content: state.fullContent,
+        thinking: state.fullThinking || null,
         statistics,
       };
     } catch (error) {

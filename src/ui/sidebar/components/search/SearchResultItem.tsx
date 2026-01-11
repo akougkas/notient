@@ -26,13 +26,23 @@ interface SearchResultItemProps {
 export function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
   const timeAgo = formatTimeAgo(result.lastModified);
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
     <div
       class={`nv2-search-result${isSelected ? " nv2-search-result--selected" : ""}${result.isLoading ? " nv2-search-result--loading" : ""}`}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       onMouseDown={(e) => e.preventDefault()}
+      // biome-ignore lint/a11y/useSemanticElements: option requires select parent which doesn't fit this UX
       role="option"
       aria-selected={isSelected}
+      tabIndex={0}
       data-noteid={result.noteId}
     >
       <Icon name={getParaIcon(result.paraType)} className="nv2-search-result-icon" />

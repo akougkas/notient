@@ -128,11 +128,13 @@ export function Omnibar({
   }, [searchPreset]);
 
   // Reset command selected index when suggestions change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset index on suggestions length change
   useEffect(() => {
     setCommandSelectedIndex(0);
   }, [commandSuggestions.length]);
 
   // Reset search selected index when results change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset index on results length change
   useEffect(() => {
     setSearchSelectedIndex(0);
   }, [searchResults.length]);
@@ -191,6 +193,59 @@ export function Omnibar({
     [],
   );
 
+  // Handle instant phase events
+  const handleInstantPhase = useCallback(
+    (event: { status: string; results?: SearchResult[] }, query: string) => {
+      if (event.status === "started") {
+        setSearchPhase("instant");
+        return;
+      }
+      if (event.status === "complete" && event.results) {
+        const items = event.results
+          .slice(0, SEARCH_CONFIG.maxDropdownResults)
+          .map((r) => toSearchResultItem(r, "instant", true));
+        setSearchResults(items);
+        onResults?.(event.results, query);
+      }
+    },
+    [onResults, toSearchResultItem],
+  );
+
+  // Handle evolving phase events
+  const handleEvolvingPhase = useCallback(
+    (event: { status: string; results?: SearchResult[] }, query: string) => {
+      if (event.status === "started") {
+        setSearchPhase("evolving");
+        return;
+      }
+      if (event.status === "complete" && event.results) {
+        const items = event.results
+          .slice(0, SEARCH_CONFIG.maxDropdownResults)
+          .map((r) => toSearchResultItem(r, "evolving", false));
+        setSearchResults(items);
+        onResults?.(event.results, query);
+        return;
+      }
+      if (event.status === "failed") {
+        setAiUnavailable(true);
+        setSearchResults((prev) => prev.map((r) => ({ ...r, isLoading: false })));
+      }
+    },
+    [onResults, toSearchResultItem],
+  );
+
+  // Process search event from progressive search orchestrator
+  const processSearchEvent = useCallback(
+    (event: { phase: string; status: string; results?: SearchResult[] }, query: string) => {
+      if (event.phase === "instant") {
+        handleInstantPhase(event, query);
+      } else if (event.phase === "evolving") {
+        handleEvolvingPhase(event, query);
+      }
+    },
+    [handleInstantPhase, handleEvolvingPhase],
+  );
+
   // Execute progressive search using ProgressiveSearchOrchestrator
   const executeProgressiveSearch = useCallback(
     async (searchQuery: string) => {
@@ -202,64 +257,32 @@ export function Omnibar({
         return;
       }
 
-      // Abort previous search
       abortRef.current?.abort();
       abortRef.current = new AbortController();
       const signal = abortRef.current.signal;
 
       const progressiveSearch =
         kernel.getService<ProgressiveSearchOrchestrator>("progressiveSearch");
-      if (!progressiveSearch) {
-        console.warn("[Omnibar] ProgressiveSearchOrchestrator not available");
-        return;
-      }
+      if (!progressiveSearch) return;
 
       setShowSearchDropdown(true);
       setAiUnavailable(false);
       onSearchStart?.(trimmed);
 
       try {
-        // Use the orchestrator's generator for progressive search
         for await (const event of progressiveSearch.search(trimmed, signal)) {
           if (signal.aborted) return;
-
-          if (event.phase === "instant") {
-            if (event.status === "started") {
-              setSearchPhase("instant");
-            } else if (event.status === "complete" && event.results) {
-              const instantItems = event.results
-                .slice(0, SEARCH_CONFIG.maxDropdownResults)
-                .map((r) => toSearchResultItem(r, "instant", true));
-              setSearchResults(instantItems);
-              onResults?.(event.results, trimmed);
-            }
-          } else if (event.phase === "evolving") {
-            if (event.status === "started") {
-              setSearchPhase("evolving");
-            } else if (event.status === "complete" && event.results) {
-              const evolvedItems = event.results
-                .slice(0, SEARCH_CONFIG.maxDropdownResults)
-                .map((r) => toSearchResultItem(r, "evolving", false));
-              setSearchResults(evolvedItems);
-              onResults?.(event.results, trimmed);
-            } else if (event.status === "failed") {
-              // AI reranking failed - keep instant results
-              setAiUnavailable(true);
-              setSearchResults((prev) => prev.map((r) => ({ ...r, isLoading: false })));
-            }
-          }
+          processSearchEvent(event, trimmed);
         }
-
         setSearchPhase("idle");
       } catch (error) {
         if (!signal.aborted) {
-          console.error("[Omnibar] Search failed:", error);
           setSearchResults([]);
           setSearchPhase("idle");
         }
       }
     },
-    [kernel, onResults, onSearchStart, toSearchResultItem],
+    [kernel, onSearchStart, processSearchEvent],
   );
 
   // Debounced search trigger
@@ -321,11 +344,62 @@ export function Omnibar({
     new Notice("Deep search cancelled");
   }, []);
 
+  // Execute single-note command
+  const executeSingleCommand = useCallback(
+    async (parsed: { command: string; actionType?: string }) => {
+      const activeFile = kernel.obsidian.getActiveFile();
+      if (!activeFile) {
+        kernel.obsidian.notice("No active note. Open a note first.");
+        return;
+      }
+
+      const actionOrchestrator = kernel.getService<ActionOrchestrator>("actionOrchestrator");
+      if (!actionOrchestrator || !parsed.actionType) {
+        kernel.obsidian.notice("Action system not available");
+        return;
+      }
+
+      const content = await kernel.obsidian.readFile(activeFile);
+      kernel.obsidian.notice(`Running /${parsed.command} on "${activeFile.basename}"...`);
+
+      const context = {
+        notePath: activeFile.path,
+        noteTitle: activeFile.basename,
+        noteContent: content,
+      };
+
+      // biome-ignore lint/suspicious/noExplicitAny: actionType validated above
+      for await (const event of actionOrchestrator.execute(parsed.actionType as any, context)) {
+        if (event.type === "complete") kernel.obsidian.notice(`/${parsed.command} completed`);
+        else if (event.type === "error")
+          kernel.obsidian.notice(`/${parsed.command} failed: ${event.error}`);
+      }
+    },
+    [kernel],
+  );
+
+  // Execute workflow command
+  const executeWorkflowCommand = useCallback(
+    // biome-ignore lint/suspicious/noExplicitAny: ParsedCommand passed from parser
+    async (parsed: any) => {
+      const workflowRunner = kernel.getService("workflowRunner");
+      if (!workflowRunner) {
+        kernel.obsidian.notice("Workflow system not available");
+        return;
+      }
+
+      kernel.obsidian.notice(
+        `Starting /${parsed.command} on ${parsed.scope}${parsed.target ? `:${parsed.target}` : ""}...`,
+      );
+      await workflowRunner.startFromCommand(parsed);
+    },
+    [kernel],
+  );
+
   // Execute slash command
   const executeCommand = useCallback(
     async (commandStr: string) => {
       const parseResult = parseSlashCommand(commandStr, kernel.obsidian);
-
       if (!parseResult.success) {
         kernel.obsidian.notice(`Error: ${parseResult.error.message}`);
         return;
@@ -333,62 +407,17 @@ export function Omnibar({
 
       const { parsed } = parseResult;
 
-      if (parsed.mode === "single") {
-        const activeFile = kernel.obsidian.getActiveFile();
-        if (!activeFile) {
-          kernel.obsidian.notice("No active note. Open a note first.");
-          return;
-        }
-
-        const actionOrchestrator = kernel.getService<ActionOrchestrator>("actionOrchestrator");
-        if (!actionOrchestrator || !parsed.actionType) {
-          kernel.obsidian.notice("Action system not available");
-          return;
-        }
-
-        const content = await kernel.obsidian.readFile(activeFile);
-        kernel.obsidian.notice(`Running /${parsed.command} on "${activeFile.basename}"...`);
-
-        try {
-          const context = {
-            notePath: activeFile.path,
-            noteTitle: activeFile.basename,
-            noteContent: content,
-          };
-
-          for await (const event of actionOrchestrator.execute(parsed.actionType, context)) {
-            if (event.type === "complete") {
-              kernel.obsidian.notice(`/${parsed.command} completed`);
-            } else if (event.type === "error") {
-              kernel.obsidian.notice(`/${parsed.command} failed: ${event.error}`);
-            }
-          }
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          kernel.obsidian.notice(`Command failed: ${msg}`);
-        }
-      } else {
-        const workflowRunner = kernel.getService("workflowRunner");
-        if (!workflowRunner) {
-          kernel.obsidian.notice("Workflow system not available");
-          return;
-        }
-
-        kernel.obsidian.notice(
-          `Starting /${parsed.command} on ${parsed.scope}${parsed.target ? `:${parsed.target}` : ""}...`,
-        );
-
-        try {
-          await workflowRunner.startFromCommand(parsed);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          kernel.obsidian.notice(`Workflow failed: ${msg}`);
-        }
+      try {
+        if (parsed.mode === "single") await executeSingleCommand(parsed);
+        else await executeWorkflowCommand(parsed);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        kernel.obsidian.notice(`Command failed: ${msg}`);
       }
 
       setQuery("");
     },
-    [kernel],
+    [kernel, executeSingleCommand, executeWorkflowCommand],
   );
 
   // Handle result selection
@@ -421,94 +450,97 @@ export function Omnibar({
     [triggerDebouncedSearch],
   );
 
-  // Handle key press
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      // Command mode navigation
-      if (showCommandDropdown) {
-        if (e.key === "ArrowDown") {
+  // Handle command dropdown key navigation - returns true if handled
+  const handleCommandNavKey = useCallback(
+    (e: KeyboardEvent): boolean => {
+      if (!showCommandDropdown) return false;
+      const cmd = commandSuggestions[commandSelectedIndex];
+      switch (e.key) {
+        case "ArrowDown":
           e.preventDefault();
           setCommandSelectedIndex((i) => Math.min(i + 1, commandSuggestions.length - 1));
-          return;
-        }
-        if (e.key === "ArrowUp") {
+          return true;
+        case "ArrowUp":
           e.preventDefault();
           setCommandSelectedIndex((i) => Math.max(i - 1, 0));
-          return;
-        }
-        if (e.key === "Enter" && commandSuggestions[commandSelectedIndex]) {
-          e.preventDefault();
-          const cmd = commandSuggestions[commandSelectedIndex];
-          if (cmd.command.endsWith(":")) {
-            setQuery(cmd.command);
-          } else {
-            executeCommand(cmd.command);
+          return true;
+        case "Enter":
+          if (cmd) {
+            e.preventDefault();
+            cmd.command.endsWith(":") ? setQuery(cmd.command) : executeCommand(cmd.command);
+            return true;
           }
-          return;
-        }
-        if (e.key === "Tab" && commandSuggestions[commandSelectedIndex]) {
-          e.preventDefault();
-          setQuery(commandSuggestions[commandSelectedIndex].command);
-          return;
-        }
+          return false;
+        case "Tab":
+          if (cmd) {
+            e.preventDefault();
+            setQuery(cmd.command);
+            return true;
+          }
+          return false;
+        default:
+          return false;
       }
+    },
+    [showCommandDropdown, commandSuggestions, commandSelectedIndex, executeCommand],
+  );
 
-      // Search mode navigation
-      if (showSearchDropdown && searchResults.length > 0) {
-        if (e.key === "ArrowDown") {
+  // Handle search dropdown key navigation - returns true if handled
+  const handleSearchNavKey = useCallback(
+    (e: KeyboardEvent): boolean => {
+      if (!showSearchDropdown || searchResults.length === 0) return false;
+      switch (e.key) {
+        case "ArrowDown":
           e.preventDefault();
           setSearchSelectedIndex((i) => Math.min(i + 1, searchResults.length - 1));
-          return;
-        }
-        if (e.key === "ArrowUp") {
+          return true;
+        case "ArrowUp":
           e.preventDefault();
           setSearchSelectedIndex((i) => Math.max(i - 1, 0));
-          return;
-        }
-        if (e.key === "Enter" && !e.shiftKey && searchResults[searchSelectedIndex]) {
+          return true;
+        case "Enter":
+          if (!e.shiftKey && searchResults[searchSelectedIndex]) {
+            e.preventDefault();
+            handleResultSelect(searchResults[searchSelectedIndex]);
+            return true;
+          }
+          return false;
+        case "Tab":
           e.preventDefault();
-          handleResultSelect(searchResults[searchSelectedIndex]);
-          return;
-        }
-        if (e.key === "Tab") {
-          e.preventDefault();
-          // Focus "Go Deeper" button
           deepButtonRef.current?.focus();
-          return;
-        }
+          return true;
+        default:
+          return false;
       }
+    },
+    [showSearchDropdown, searchResults, searchSelectedIndex, handleResultSelect],
+  );
 
-      // Enter key handling
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (e.shiftKey && !isCommandMode) {
-          executeDeepSearch();
-        } else if (isCommandMode) {
-          executeCommand(query);
-        } else if (searchResults[searchSelectedIndex]) {
-          handleResultSelect(searchResults[searchSelectedIndex]);
-        } else {
-          executeProgressiveSearch(query);
-        }
+  // Handle Enter key press
+  const handleEnterKey = useCallback(
+    (e: KeyboardEvent) => {
+      e.preventDefault();
+      // Shift+Enter triggers deep search (non-command mode only)
+      if (e.shiftKey && !isCommandMode) {
+        executeDeepSearch();
         return;
       }
-
-      // Escape to clear and dismiss
-      if (e.key === "Escape") {
-        setQuery("");
-        setSearchResults([]);
-        setShowSearchDropdown(false);
-        setSearchPhase("idle");
-        inputRef.current?.blur();
+      // Command mode: execute the command
+      if (isCommandMode) {
+        executeCommand(query);
+        return;
       }
+      // Search mode with selected result: open the result
+      if (searchResults[searchSelectedIndex]) {
+        handleResultSelect(searchResults[searchSelectedIndex]);
+        return;
+      }
+      // Fallback: trigger progressive search
+      executeProgressiveSearch(query);
     },
     [
       query,
-      showCommandDropdown,
-      showSearchDropdown,
-      commandSelectedIndex,
       searchSelectedIndex,
-      commandSuggestions,
       searchResults,
       isCommandMode,
       executeCommand,
@@ -516,6 +548,33 @@ export function Omnibar({
       executeProgressiveSearch,
       handleResultSelect,
     ],
+  );
+
+  // Handle Escape key press
+  const handleEscapeKey = useCallback(() => {
+    setQuery("");
+    setSearchResults([]);
+    setShowSearchDropdown(false);
+    setSearchPhase("idle");
+    inputRef.current?.blur();
+  }, []);
+
+  // Handle key press
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (handleCommandNavKey(e)) return;
+      if (handleSearchNavKey(e)) return;
+
+      if (e.key === "Enter") {
+        handleEnterKey(e);
+        return;
+      }
+
+      if (e.key === "Escape") {
+        handleEscapeKey();
+      }
+    },
+    [handleCommandNavKey, handleSearchNavKey, handleEnterKey, handleEscapeKey],
   );
 
   // Handle focus/blur
@@ -596,6 +655,8 @@ export function Omnibar({
 
       {/* Command suggestions dropdown */}
       {showCommandDropdown && (
+        // biome-ignore lint/a11y/useFocusableInteractive: listbox is focused via input
+        // biome-ignore lint/a11y/useSemanticElements: no native listbox element exists
         <div class="nv2-omnibar-dropdown" ref={commandDropdownRef} role="listbox">
           {commandSuggestions.map((suggestion, idx) => (
             <CommandItem
@@ -645,6 +706,13 @@ function CommandItem({ suggestion, isSelected, onClick }: CommandItemProps) {
     }
   }, [suggestion.icon]);
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   const itemClass = [
     "nv2-command-item",
     isSelected && "nv2-command-item--selected",
@@ -657,9 +725,12 @@ function CommandItem({ suggestion, isSelected, onClick }: CommandItemProps) {
     <div
       class={itemClass}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       onMouseDown={(e) => e.preventDefault()}
+      // biome-ignore lint/a11y/useSemanticElements: option requires select parent which doesn't fit this UX
       role="option"
       aria-selected={isSelected}
+      tabIndex={0}
     >
       <span class="nv2-command-icon" ref={iconRef} />
       <div class="nv2-command-content">

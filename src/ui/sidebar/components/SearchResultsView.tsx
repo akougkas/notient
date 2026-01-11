@@ -13,7 +13,7 @@ interface SearchResultsViewProps {
 
 export function SearchResultsView({ results, query, onOpenNote, onClear }: SearchResultsViewProps) {
   return (
-    <div class="nv2-search-results" role="region" aria-label="Search results">
+    <section class="nv2-search-results" aria-label="Search results">
       <div class="nv2-search-results-header">
         <span class="nv2-search-results-title">Results for "{query}"</span>
         <button
@@ -54,6 +54,6 @@ export function SearchResultsView({ results, query, onOpenNote, onClear }: Searc
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }

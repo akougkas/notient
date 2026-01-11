@@ -112,7 +112,6 @@ export function PulseTimeline({
   return (
     <div
       class={`nv2-pulse-timeline nv2-pulse-timeline--${healthStatus} ${isDormant ? "nv2-pulse-timeline--dormant" : ""}`}
-      role="img"
       aria-label={`Note created ${formatRelative(createdAt)}, last edited ${formatRelative(modifiedAt)}`}
     >
       {/* Timeline track */}

@@ -232,180 +232,207 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     );
   });
 
-  // Agent task updates
+  // Agent task updates - dispatch to handlers
   useEventBus("agent:task-update", (data) => {
     const task = data.task;
-    const isAgenticTask = task.taskType && task.taskType !== "chat";
-
-    if (!isAgenticTask) return;
+    if (!task.taskType || task.taskType === "chat") return;
 
     switch (task.status) {
-      case "running": {
-        const existingAgent = activeAgents.value.find((a) => a.id === task.id);
-        if (existingAgent) {
-          // Check if transitioning from queued BEFORE updating
-          const wasQueued = existingAgent.status === "queued";
-
-          // Update existing agent (could be transitioning from queued or updating progress)
-          activeAgents.value = activeAgents.value.map((agent) =>
-            agent.id === task.id
-              ? { ...agent, status: "running" as const, progress: task.progress || 0 }
-              : agent,
-          );
-
-          // Only increment runningCount if transitioning from queued
-          if (wasQueued) {
-            agentStatus.value = {
-              ...agentStatus.value,
-              runningCount: agentStatus.value.runningCount + 1,
-            };
-          }
-        } else {
-          activeAgents.value = [
-            ...activeAgents.value,
-            {
-              id: task.id,
-              type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
-              targetNote: task.noteTitle || "Note",
-              status: "running" as const,
-              progress: task.progress || 0,
-              startedAt: new Date(),
-            },
-          ];
-          agentStatus.value = {
-            ...agentStatus.value,
-            runningCount: agentStatus.value.runningCount + 1,
-          };
-        }
+      case "running":
+        handleTaskRunning(task);
         break;
-      }
-
-      case "completed": {
-        const agent = activeAgents.value.find((a) => a.id === task.id);
-        if (agent) {
-          const resultContent =
-            typeof task.result?.data === "string"
-              ? task.result.data
-              : JSON.stringify(task.result?.data || {}, null, 2);
-
-          const insightSummary =
-            resultContent.length > 100 ? `${resultContent.slice(0, 100).trim()}...` : resultContent;
-
-          const durationMs = agent.startedAt ? Date.now() - agent.startedAt.getTime() : 0;
-
-          const resultData: AgentResultData = {
-            content: resultContent,
-            structured: task.result?.data,
-            citations: task.result?.citations,
-            insightSummary,
-            stats: { durationMs },
-          };
-
-          activeAgents.value = activeAgents.value.map((a) =>
-            a.id === task.id
-              ? {
-                  ...a,
-                  status: "completed" as const,
-                  completedAt: new Date(),
-                  progress: 100,
-                  resultData,
-                }
-              : a,
-          );
-
-          agentStatus.value = {
-            ...agentStatus.value,
-            runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-          };
-
-          if (task.result?.actions && task.result.actions.length > 0) {
-            const newPendingActions = task.result.actions.map((action) => ({
-              id: action.id,
-              actionType: action.type,
-              targetNote: agent.targetNote,
-              summary: action.title,
-              riskLevel: action.risk,
-            }));
-            pendingActions.value = [...pendingActions.value, ...newPendingActions];
-            agentStatus.value = {
-              ...agentStatus.value,
-              pendingReviewCount: agentStatus.value.pendingReviewCount + newPendingActions.length,
-            };
-          }
-
-          const newInsight: Insight = {
-            text: `${ACTION_LABELS[task.taskType || "agent"] || "Agent result"}: ${insightSummary}`,
-            action: "View in Agents",
-            actionIcon: "bot",
-            actionCallback: () => {
-              activeView.value = "agents";
-            },
-            priority: "high",
-          };
-          agentInsights.value = [newInsight, ...agentInsights.value.slice(0, 4)];
-        }
-        new Notice(`${task.taskType || "Agent"} completed`);
+      case "completed":
+        handleTaskCompleted(task);
         break;
-      }
-
-      case "failed": {
-        const failedAgent = activeAgents.value.find((a) => a.id === task.id);
-        activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
-        agentStatus.value = {
-          ...agentStatus.value,
-          runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-        };
-
-        if (failedAgent) {
-          recentActivity.value = [
-            {
-              id: `activity-${Date.now()}`,
-              status: "failed",
-              actionType: task.taskType || "agent",
-              targetNote: failedAgent.targetNote,
-              summary: `${failedAgent.type} failed`,
-              completedAt: new Date(),
-              canUndo: false,
-              error: task.error,
-            },
-            ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
-          ];
-        }
-        new Notice(`Agent failed: ${task.error || "Unknown error"}`);
+      case "failed":
+        handleTaskFailed(task);
         break;
-      }
-
-      case "cancelled": {
-        const agent = activeAgents.value.find((a) => a.id === task.id);
-        const wasRunning = agent?.status === "running";
-        activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
-        if (wasRunning) {
-          agentStatus.value = {
-            ...agentStatus.value,
-            runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-          };
-        }
+      case "cancelled":
+        handleTaskCancelled(task);
         break;
-      }
-
-      case "queued": {
-        // Add task to activeAgents immediately when queued for instant feedback
-        const exists = activeAgents.value.some((a) => a.id === task.id);
-        if (!exists) {
-          activeAgents.value = [
-            ...activeAgents.value,
-            {
-              id: task.id,
-              type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
-              targetNote: task.noteTitle || "Note",
-              status: "queued" as const,
-              progress: 0,
-              startedAt: new Date(),
-            },
-          ];
-        }
+      case "queued":
+        handleTaskQueued(task);
         break;
-      }
     }
   });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task Status Handlers
+// ──────────────────────────────────────────────────────────────────────────
+
+interface TaskData {
+  id: string;
+  taskType?: string;
+  noteTitle?: string;
+  progress?: number;
+  result?: {
+    data?: unknown;
+    citations?: string[];
+    actions?: Array<{ id: string; type: string; title: string; risk: string }>;
+  };
+  error?: string;
+}
+
+function handleTaskRunning(task: TaskData): void {
+  const existingAgent = activeAgents.value.find((a) => a.id === task.id);
+  if (existingAgent) {
+    const wasQueued = existingAgent.status === "queued";
+    activeAgents.value = activeAgents.value.map((agent) =>
+      agent.id === task.id
+        ? { ...agent, status: "running" as const, progress: task.progress || 0 }
+        : agent,
+    );
+    if (wasQueued) {
+      agentStatus.value = {
+        ...agentStatus.value,
+        runningCount: agentStatus.value.runningCount + 1,
+      };
+    }
+  } else {
+    activeAgents.value = [
+      ...activeAgents.value,
+      {
+        id: task.id,
+        type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
+        targetNote: task.noteTitle || "Note",
+        status: "running" as const,
+        progress: task.progress || 0,
+        startedAt: new Date(),
+      },
+    ];
+    agentStatus.value = { ...agentStatus.value, runningCount: agentStatus.value.runningCount + 1 };
+  }
+}
+
+function handleTaskCompleted(task: TaskData): void {
+  const agent = activeAgents.value.find((a) => a.id === task.id);
+  if (!agent) {
+    new Notice(`${task.taskType || "Agent"} completed`);
+    return;
+  }
+
+  const resultData = buildResultData(task, agent);
+  updateAgentAsCompleted(task.id, resultData);
+  agentStatus.value = {
+    ...agentStatus.value,
+    runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+  };
+
+  if (task.result?.actions?.length) {
+    addPendingActions(task.result.actions, agent.targetNote);
+  }
+
+  addCompletionInsight(task.taskType || "agent", resultData.insightSummary || "");
+  new Notice(`${task.taskType || "Agent"} completed`);
+}
+
+function buildResultData(task: TaskData, agent: { startedAt?: Date }): AgentResultData {
+  const resultContent =
+    typeof task.result?.data === "string"
+      ? task.result.data
+      : JSON.stringify(task.result?.data || {}, null, 2);
+  const insightSummary =
+    resultContent.length > 100 ? `${resultContent.slice(0, 100).trim()}...` : resultContent;
+  const durationMs = agent.startedAt ? Date.now() - agent.startedAt.getTime() : 0;
+
+  return {
+    content: resultContent,
+    structured: task.result?.data,
+    citations: task.result?.citations,
+    insightSummary,
+    stats: { durationMs },
+  };
+}
+
+function updateAgentAsCompleted(taskId: string, resultData: AgentResultData): void {
+  activeAgents.value = activeAgents.value.map((a) =>
+    a.id === taskId
+      ? { ...a, status: "completed" as const, completedAt: new Date(), progress: 100, resultData }
+      : a,
+  );
+}
+
+function addPendingActions(
+  actions: Array<{ id: string; type: string; title: string; risk: string }>,
+  targetNote: string,
+): void {
+  const newPendingActions = actions.map((action) => ({
+    id: action.id,
+    actionType: action.type,
+    targetNote,
+    summary: action.title,
+    riskLevel: action.risk as "low" | "medium" | "high",
+  }));
+  pendingActions.value = [...pendingActions.value, ...newPendingActions];
+  agentStatus.value = {
+    ...agentStatus.value,
+    pendingReviewCount: agentStatus.value.pendingReviewCount + newPendingActions.length,
+  };
+}
+
+function addCompletionInsight(taskType: string | undefined, summary: string): void {
+  const newInsight: Insight = {
+    text: `${ACTION_LABELS[taskType || "agent"] || "Agent result"}: ${summary}`,
+    action: "View in Agents",
+    actionIcon: "bot",
+    actionCallback: () => {
+      activeView.value = "agents";
+    },
+    priority: "high",
+  };
+  agentInsights.value = [newInsight, ...agentInsights.value.slice(0, 4)];
+}
+
+function handleTaskFailed(task: TaskData): void {
+  const failedAgent = activeAgents.value.find((a) => a.id === task.id);
+  activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
+  agentStatus.value = {
+    ...agentStatus.value,
+    runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+  };
+
+  if (failedAgent) {
+    recentActivity.value = [
+      {
+        id: `activity-${Date.now()}`,
+        status: "failed",
+        actionType: task.taskType || "agent",
+        targetNote: failedAgent.targetNote,
+        summary: `${failedAgent.type} failed`,
+        completedAt: new Date(),
+        canUndo: false,
+        error: task.error,
+      },
+      ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
+    ];
+  }
+  new Notice(`Agent failed: ${task.error || "Unknown error"}`);
+}
+
+function handleTaskCancelled(task: TaskData): void {
+  const agent = activeAgents.value.find((a) => a.id === task.id);
+  const wasRunning = agent?.status === "running";
+  activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
+  if (wasRunning) {
+    agentStatus.value = {
+      ...agentStatus.value,
+      runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+    };
+  }
+}
+
+function handleTaskQueued(task: TaskData): void {
+  if (activeAgents.value.some((a) => a.id === task.id)) return;
+  activeAgents.value = [
+    ...activeAgents.value,
+    {
+      id: task.id,
+      type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
+      targetNote: task.noteTitle || "Note",
+      status: "queued" as const,
+      progress: 0,
+      startedAt: new Date(),
+    },
+  ];
 }
