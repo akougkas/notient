@@ -5,11 +5,12 @@
  * Reusable between TaskModal, potential future chat views.
  */
 
+import { CHAT_LIMITS } from "../constants";
 import type { ChatMessage } from "../llm/types";
 import type { ChatAttachment, ChatConfig, ExtendedChatMessage } from "./types";
 
 const DEFAULT_CONFIG: Required<ChatConfig> = {
-  maxHistoryLength: 100,
+  maxHistoryLength: CHAT_LIMITS.MAX_HISTORY_LENGTH,
   maxLLMMessages: 10,
 };
 

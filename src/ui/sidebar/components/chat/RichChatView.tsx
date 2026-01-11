@@ -14,9 +14,8 @@
 
 import type { Signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
-import type { ActivityPhase, ChatStatistics } from "../../../../core/chat/types";
 import { Icon } from "../Icon";
-import { ActivityTrail, createActivityItem } from "./ActivityTrail";
+import { type ActivityItem, ActivityTrail, createActivityItem } from "./ActivityTrail";
 import {
   type MessageAction,
   MessageBubble,
@@ -27,13 +26,6 @@ import {
 export interface ChatContext {
   notePath: string | null;
   noteTitle: string | null;
-}
-
-interface ActivityItem {
-  id: string;
-  message: string;
-  phase: ActivityPhase;
-  timestamp: Date;
 }
 
 interface RichChatViewProps {

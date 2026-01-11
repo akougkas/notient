@@ -2,29 +2,16 @@
  * DeepSearchIndicator - Inline progress shown in Omnibar during deep search
  */
 
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
+import { Icon } from "../Icon";
 
 interface DeepSearchIndicatorProps {
   onCancel: () => void;
 }
 
 export function DeepSearchIndicator({ onCancel }: DeepSearchIndicatorProps) {
-  const spinnerRef = useRef<HTMLSpanElement>(null);
-  const cancelRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (spinnerRef.current) {
-      setIcon(spinnerRef.current, "loader");
-    }
-    if (cancelRef.current) {
-      setIcon(cancelRef.current, "x");
-    }
-  }, []);
-
   return (
     <div class="nv2-deep-search-indicator">
-      <span class="nv2-deep-search-spinner" ref={spinnerRef} aria-hidden="true" />
+      <Icon name="loader" className="nv2-deep-search-spinner" />
       <span class="nv2-deep-search-text">Deep searching...</span>
       <button
         type="button"
@@ -33,7 +20,7 @@ export function DeepSearchIndicator({ onCancel }: DeepSearchIndicatorProps) {
         title="Cancel deep search"
         aria-label="Cancel deep search"
       >
-        <span ref={cancelRef} aria-hidden="true" />
+        <Icon name="x" />
       </button>
     </div>
   );

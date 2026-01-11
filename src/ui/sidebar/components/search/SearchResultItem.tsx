@@ -2,8 +2,8 @@
  * SearchResultItem - Individual search result with shimmer loading state
  */
 
-import { setIcon } from "obsidian";
-import { useEffect, useRef } from "preact/hooks";
+import { formatTimeAgo, truncatePath } from "../../utils/formatters";
+import { Icon } from "../Icon";
 
 export interface SearchResultItemData {
   noteId: string;
@@ -24,15 +24,6 @@ interface SearchResultItemProps {
 }
 
 export function SearchResultItem({ result, isSelected, onClick }: SearchResultItemProps) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (iconRef.current) {
-      const icon = getParaIcon(result.paraType);
-      setIcon(iconRef.current, icon);
-    }
-  }, [result.paraType]);
-
   const timeAgo = formatTimeAgo(result.lastModified);
 
   return (
@@ -44,7 +35,7 @@ export function SearchResultItem({ result, isSelected, onClick }: SearchResultIt
       aria-selected={isSelected}
       data-noteid={result.noteId}
     >
-      <span class="nv2-search-result-icon" ref={iconRef} aria-hidden="true" />
+      <Icon name={getParaIcon(result.paraType)} className="nv2-search-result-icon" />
       <div class="nv2-search-result-content">
         <span class="nv2-search-result-title">{result.title}</span>
         <div class="nv2-search-result-meta">
@@ -85,25 +76,3 @@ function getParaIcon(paraType?: string): string {
   }
 }
 
-function truncatePath(path: string, maxLen = 40): string {
-  if (path.length <= maxLen) return path;
-  const parts = path.split("/");
-  if (parts.length <= 2) return path.slice(0, maxLen) + "...";
-  return `.../${parts.slice(-2).join("/")}`;
-}
-
-function formatTimeAgo(timestamp: number): string {
-  const ms = Date.now() - timestamp;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 4) return `${weeks}w ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
-}

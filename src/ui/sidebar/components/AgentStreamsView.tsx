@@ -10,6 +10,7 @@
 
 import type { Signal } from "@preact/signals";
 import type { AgentType } from "../../../core/agent/types";
+import { formatTimeAgo, truncate } from "../utils/formatters";
 import { Icon } from "./Icon";
 
 /**
@@ -280,13 +281,7 @@ function ActiveAgentCard({
     ? `${(agent.resultData.stats.durationMs / 1000).toFixed(1)}s`
     : "";
 
-  const statusLabel = isRunning
-    ? "Running"
-    : isPaused
-      ? "Paused"
-      : isQueued
-        ? "Queued"
-        : "Completed";
+  const statusLabel = agent.status.charAt(0).toUpperCase() + agent.status.slice(1);
 
   return (
     <article
@@ -537,17 +532,3 @@ function formatElapsed(ms: number): string {
   return `${minutes}m ago`;
 }
 
-function formatTimeAgo(date: Date): string {
-  const ms = Date.now() - date.getTime();
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
-}
-
-function truncate(str: string, len: number): string {
-  if (str.length <= len) return str;
-  return `${str.slice(0, len)}...`;
-}

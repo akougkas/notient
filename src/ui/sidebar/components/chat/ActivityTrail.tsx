@@ -9,7 +9,7 @@ import { useEffect, useRef } from "preact/hooks";
 import type { ActivityPhase } from "../../../../core/chat/types";
 import { Icon } from "../Icon";
 
-interface ActivityItem {
+export interface ActivityItem {
   id: string;
   message: string;
   phase: ActivityPhase;

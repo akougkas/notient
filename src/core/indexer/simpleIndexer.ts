@@ -104,83 +104,91 @@ export class SimpleIndexer {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
 
-    // If signal provided, listen for abort
+    // Store abort handler for cleanup
+    const abortHandler = (): void => {
+      this.aborted = true;
+      console.log("[SimpleIndexer] Received abort signal");
+    };
+
     if (signal) {
-      signal.addEventListener("abort", () => {
-        this.aborted = true;
-        console.log("[SimpleIndexer] Received abort signal");
-      });
+      signal.addEventListener("abort", abortHandler);
     }
-
-    console.log("[SimpleIndexer] Starting vault sync...");
-
-    // Scan vault
-    this.updateProgress({ phase: "scanning", startedAt: startTime });
-    const changes = await this.scanForChanges();
-    await this.yieldToUI();
-
-    if (changes.toIndex.length === 0 && changes.toRemove.length === 0) {
-      console.log("[SimpleIndexer] No changes detected");
-      this.updateProgress({ phase: "complete" });
-      return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: Date.now() - startTime };
-    }
-
-    console.log(
-      `[SimpleIndexer] Found ${changes.toIndex.length} to index, ${changes.toRemove.length} to remove`,
-    );
-
-    // Remove deleted notes
-    for (const path of changes.toRemove) {
-      const noteId = generateNoteId(path);
-      await this.indexManager.removeNote(path, noteId);
-    }
-
-    // Index new/changed notes
-    this.updateProgress({ total: changes.toIndex.length, completed: 0 });
-    this.indexManager.beginBulkUpdate();
-
-    let added = 0;
-    let updated = 0;
-    let errors = 0;
 
     try {
-      for (let i = 0; i < changes.toIndex.length; i += PROCESS_BATCH_SIZE) {
-        if (this.disposed || this.aborted) break;
+      console.log("[SimpleIndexer] Starting vault sync...");
 
-        const batch = changes.toIndex.slice(i, i + PROCESS_BATCH_SIZE);
-        const results = await this.processBatch(batch);
+      // Scan vault
+      this.updateProgress({ phase: "scanning", startedAt: startTime });
+      const changes = await this.scanForChanges();
+      await this.yieldToUI();
 
-        added += results.added;
-        updated += results.updated;
-        errors += results.errors;
-
-        this.updateProgress({ completed: Math.min(i + batch.length, changes.toIndex.length) });
-        await this.yieldToUI();
+      if (changes.toIndex.length === 0 && changes.toRemove.length === 0) {
+        console.log("[SimpleIndexer] No changes detected");
+        this.updateProgress({ phase: "complete" });
+        return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: Date.now() - startTime };
       }
+
+      console.log(
+        `[SimpleIndexer] Found ${changes.toIndex.length} to index, ${changes.toRemove.length} to remove`,
+      );
+
+      // Remove deleted notes
+      for (const path of changes.toRemove) {
+        const noteId = generateNoteId(path);
+        await this.indexManager.removeNote(path, noteId);
+      }
+
+      // Index new/changed notes
+      this.updateProgress({ total: changes.toIndex.length, completed: 0 });
+      this.indexManager.beginBulkUpdate();
+
+      let added = 0;
+      let updated = 0;
+      let errors = 0;
+
+      try {
+        for (let i = 0; i < changes.toIndex.length; i += PROCESS_BATCH_SIZE) {
+          if (this.disposed || this.aborted) break;
+
+          const batch = changes.toIndex.slice(i, i + PROCESS_BATCH_SIZE);
+          const results = await this.processBatch(batch);
+
+          added += results.added;
+          updated += results.updated;
+          errors += results.errors;
+
+          this.updateProgress({ completed: Math.min(i + batch.length, changes.toIndex.length) });
+          await this.yieldToUI();
+        }
+      } finally {
+        await this.indexManager.endBulkUpdate();
+      }
+
+      this.indexManager.recordFullIndex();
+      this.updateProgress({ phase: "complete", current: null });
+
+      const durationMs = Date.now() - startTime;
+      console.log(
+        `[SimpleIndexer] Sync complete: ${added} added, ${updated} updated, ${changes.toRemove.length} removed, ${errors} errors in ${durationMs}ms`,
+      );
+
+      this.eventBus.emit("index:complete", {
+        totalIndexed: added + updated,
+        durationMs,
+      });
+
+      return {
+        added,
+        updated,
+        removed: changes.toRemove.length,
+        errors,
+        durationMs,
+      };
     } finally {
-      await this.indexManager.endBulkUpdate();
+      if (signal) {
+        signal.removeEventListener("abort", abortHandler);
+      }
     }
-
-    this.indexManager.recordFullIndex();
-    this.updateProgress({ phase: "complete", current: null });
-
-    const durationMs = Date.now() - startTime;
-    console.log(
-      `[SimpleIndexer] Sync complete: ${added} added, ${updated} updated, ${changes.toRemove.length} removed, ${errors} errors in ${durationMs}ms`,
-    );
-
-    this.eventBus.emit("index:complete", {
-      totalIndexed: added + updated,
-      durationMs,
-    });
-
-    return {
-      added,
-      updated,
-      removed: changes.toRemove.length,
-      errors,
-      durationMs,
-    };
   }
 
   /**

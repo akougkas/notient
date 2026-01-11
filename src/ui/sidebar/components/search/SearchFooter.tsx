@@ -2,9 +2,8 @@
  * SearchFooter - "Go Deeper" button with keyboard hint
  */
 
-import { setIcon } from "obsidian";
 import type { JSX, Ref } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { Icon } from "../Icon";
 
 interface SearchFooterProps {
   onDeepSearch: () => void;
@@ -19,14 +18,6 @@ export function SearchFooter({
   disabled,
   deepButtonRef,
 }: SearchFooterProps): JSX.Element {
-  const iconRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, isDeepSearching ? "loader" : "search");
-    }
-  }, [isDeepSearching]);
-
   const buttonClass = isDeepSearching
     ? "nv2-search-deep-btn nv2-search-deep-btn--loading"
     : "nv2-search-deep-btn";
@@ -45,7 +36,7 @@ export function SearchFooter({
         disabled={disabled || isDeepSearching}
         aria-label="Trigger deep search"
       >
-        <span class={iconClass} ref={iconRef} aria-hidden="true" />
+        <Icon name={isDeepSearching ? "loader" : "search"} className={iconClass} />
         <span class="nv2-search-deep-label">{isDeepSearching ? "Searching..." : "Go Deeper"}</span>
       </button>
       <span class="nv2-search-footer-hint">

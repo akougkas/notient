@@ -6,7 +6,7 @@
  */
 
 import type { TrustPolicy } from "../../types/settings";
-import type { ACTION_RISK_MAP, ProposedAction, RiskLevel, TrustDecision } from "./types";
+import type { ProposedAction, RiskLevel, TrustDecision } from "./types";
 
 /**
  * Default trust policy (conservative)

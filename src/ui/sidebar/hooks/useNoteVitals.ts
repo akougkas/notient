@@ -114,21 +114,3 @@ export function useNoteVitals(): UseNoteVitalsResult {
     refresh,
   };
 }
-
-/**
- * Get backlink preview text for the current note
- */
-export function useBacklinkPreview(): string {
-  const app = useApp();
-  const kernel = useKernel();
-
-  const calculator = useMemo(() => {
-    const paraDetector = new ParaDetector(kernel.settings);
-    return new NoteVitalsCalculator(app, paraDetector);
-  }, [app, kernel.settings]);
-
-  const activeFile = app.workspace.getActiveFile();
-  if (!activeFile) return "";
-
-  return calculator.getBacklinkPreview(activeFile);
-}

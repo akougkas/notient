@@ -22,7 +22,7 @@ import type {
   SearchResult,
 } from "../../types/search";
 import { SEARCH_PRESETS, type SearchPreset } from "../../types/settings";
-import { CACHE_CONFIG } from "../constants";
+import { CACHE_CONFIG, SEARCH_LIMITS } from "../constants";
 import type { EventBus } from "../events/eventBus";
 import type { Kernel } from "../kernel";
 import {
@@ -279,8 +279,8 @@ export class SearchPipeline {
       const metadata = this.kernel.obsidian.getMetadataByPath(path);
       const noteTags = metadata?.tags ?? [];
 
-      // Use first 1000 chars as query
-      const queryText = content.slice(0, 1000);
+      // Use first N chars as query
+      const queryText = content.slice(0, SEARCH_LIMITS.FIND_RELATED_QUERY_CHARS);
 
       // Check if embeddings available
       if (!this.ollamaService.isReady()) {

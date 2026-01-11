@@ -9,6 +9,7 @@ import { Notice } from "obsidian";
 import type { Signal } from "@preact/signals";
 import type { AgentTaskQueue } from "../../../core/agent";
 import type { ActionApplier } from "../../../core/agentic";
+import type { ProposedAction, RiskLevel } from "../../../core/agentic";
 import type { ChatService, ChatStatistics } from "../../../core/chat";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
 import type { ObsidianFacade } from "../../../adapters/obsidianFacade";
@@ -271,6 +272,52 @@ export interface ChatAction {
   payload?: Record<string, unknown>;
 }
 
+interface ApplyActionOptions {
+  actionApplier: ActionApplier;
+  action: ProposedAction;
+  successMessage: string;
+  onSuccess?: () => void;
+}
+
+/**
+ * Helper to apply an action and show appropriate notices.
+ * Encapsulates the common pattern of calling applyConfirmed and handling results.
+ */
+async function applyActionWithNotice({
+  actionApplier,
+  action,
+  successMessage,
+  onSuccess,
+}: ApplyActionOptions): Promise<void> {
+  const result = await actionApplier.applyConfirmed(action);
+  if (result.success) {
+    new Notice(successMessage);
+    onSuccess?.();
+  } else {
+    new Notice(`Failed: ${result.error}`);
+  }
+}
+
+function buildAction(
+  type: ProposedAction["type"],
+  target: string,
+  title: string,
+  reason: string,
+  payload: Record<string, unknown>,
+  risk: RiskLevel = "low",
+): ProposedAction {
+  return {
+    id: `action-${Date.now()}`,
+    type,
+    target,
+    title,
+    risk,
+    reason,
+    requiresWriteLock: true,
+    payload,
+  } as ProposedAction;
+}
+
 /**
  * Handle inline actions from chat messages.
  */
@@ -304,21 +351,17 @@ export async function handleChatAction(
         new Notice("No links to apply");
         return;
       }
-      const result = await actionApplier.applyConfirmed({
-        id: `action-${Date.now()}`,
-        type: "append_related_links",
-        target: currentPath,
-        title: `Add ${links.length} related links`,
-        risk: "low",
-        reason: "User applied links from chat",
-        requiresWriteLock: true,
-        payload: { links },
+      await applyActionWithNotice({
+        actionApplier,
+        action: buildAction(
+          "append_related_links",
+          currentPath,
+          `Add ${links.length} related links`,
+          "User applied links from chat",
+          { links },
+        ),
+        successMessage: `Added ${links.length} links`,
       });
-      if (result.success) {
-        new Notice(`Added ${links.length} links`);
-      } else {
-        new Notice(`Failed: ${result.error}`);
-      }
       break;
     }
 
@@ -332,21 +375,17 @@ export async function handleChatAction(
         new Notice("No tags to apply");
         return;
       }
-      const result = await actionApplier.applyConfirmed({
-        id: `action-${Date.now()}`,
-        type: "frontmatter_add_tags",
-        target: currentPath,
-        title: `Add ${tags.length} tags`,
-        risk: "low",
-        reason: "User applied tags from chat",
-        requiresWriteLock: true,
-        payload: { tags },
+      await applyActionWithNotice({
+        actionApplier,
+        action: buildAction(
+          "frontmatter_add_tags",
+          currentPath,
+          `Add ${tags.length} tags`,
+          "User applied tags from chat",
+          { tags },
+        ),
+        successMessage: `Added ${tags.length} tags`,
       });
-      if (result.success) {
-        new Notice(`Added ${tags.length} tags`);
-      } else {
-        new Notice(`Failed: ${result.error}`);
-      }
       break;
     }
 
@@ -360,22 +399,18 @@ export async function handleChatAction(
         new Notice("Missing path or content");
         return;
       }
-      const result = await actionApplier.applyConfirmed({
-        id: `action-${Date.now()}`,
-        type: "create_note",
-        target: payload.path,
-        title: `Create ${payload.path.split("/").pop()}`,
-        risk: "low",
-        reason: "User created note from chat",
-        requiresWriteLock: true,
-        payload: { path: payload.path, content: payload.content },
+      await applyActionWithNotice({
+        actionApplier,
+        action: buildAction(
+          "create_note",
+          payload.path,
+          `Create ${payload.path.split("/").pop()}`,
+          "User created note from chat",
+          { path: payload.path, content: payload.content },
+        ),
+        successMessage: `Created ${payload.path}`,
+        onSuccess: () => obsidian.openFile(payload.path!),
       });
-      if (result.success) {
-        new Notice(`Created ${payload.path}`);
-        obsidian.openFile(payload.path);
-      } else {
-        new Notice(`Failed: ${result.error}`);
-      }
       break;
     }
   }

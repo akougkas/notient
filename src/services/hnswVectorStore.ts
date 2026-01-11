@@ -135,7 +135,8 @@ export class HNSWVectorStore implements VectorStore {
 
   // HNSW library ready state (async WASM loading)
   private isLibraryReady = false;
-  private libraryReadyResolve: (() => void) | null = null;
+  private libraryReadyResolve!: () => void;
+  private libraryReadyReject!: (error: Error) => void;
   private libraryReadyPromise: Promise<void>;
 
   // Note states
@@ -144,9 +145,10 @@ export class HNSWVectorStore implements VectorStore {
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
-    // Set up promise that resolves when HNSW lib is ready
-    this.libraryReadyPromise = new Promise<void>((resolve) => {
+    // Set up promise that resolves when HNSW lib is ready (or rejects on failure)
+    this.libraryReadyPromise = new Promise<void>((resolve, reject) => {
       this.libraryReadyResolve = resolve;
+      this.libraryReadyReject = reject;
     });
   }
 
@@ -224,10 +226,12 @@ export class HNSWVectorStore implements VectorStore {
       this.initialized = true;
       this.isLibraryReady = true;
       // Resolve the ready promise so waitForReady() callers can proceed
-      this.libraryReadyResolve?.();
+      this.libraryReadyResolve();
       console.log("[HNSWVectorStore] HNSW library loaded");
     } catch (error) {
       console.error("[HNSWVectorStore] Failed to load HNSW library:", error);
+      const initError = error instanceof Error ? error : new Error(String(error));
+      this.libraryReadyReject(initError);
       throw new Error(`HNSW initialization failed: ${error}`);
     }
   }

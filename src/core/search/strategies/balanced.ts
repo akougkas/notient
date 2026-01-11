@@ -16,6 +16,7 @@
 import type { LMStudioService } from "../../../services/lmstudio";
 import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
+import { SEARCH_LIMITS } from "../../constants";
 import type { LLMProvider } from "../../llm/provider";
 import type { RankedResult, RerankCandidate } from "../../llm/types";
 import { NativeSearch } from "./native";
@@ -206,7 +207,9 @@ export class BalancedSearchStrategy implements SearchStrategy {
     const candidateNoteIds = Array.from(new Set(noteCandidates.map((c) => c.noteId)));
 
     // Stage 2: Get chunks within candidate notes
-    const chunkCandidateK = enableReranking ? 120 : Math.max(60, options.topK * 6);
+    const chunkCandidateK = enableReranking
+      ? SEARCH_LIMITS.RERANK_CANDIDATE_K
+      : Math.max(SEARCH_LIMITS.NO_RERANK_MULTIPLIER, options.topK * 6);
     const chunksPerNote = enableReranking ? 5 : 3;
 
     let chunkCandidates = await this.context.vectorStore.search(queryEmbedding, {

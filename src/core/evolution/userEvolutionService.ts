@@ -47,6 +47,7 @@ export class UserEvolutionService {
     });
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: AgentTask type varies by event payload structure
   private analyzeTaskForEvolution(taskPayload: any): void {
     // Simple heuristic updates
     if (taskPayload.type === "synthesis") {

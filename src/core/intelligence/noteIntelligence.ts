@@ -490,12 +490,14 @@ ${cleaned.slice(0, 6000)}`; // limit context window
       const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] || extractJsonBlock(raw);
       if (!jsonStr) return null;
 
+      // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - structure varies by model output
       const data = JSON.parse(jsonStr) as {
         entities?: any[];
         suggestedTags?: any[];
       };
 
       const entities: IntelligenceEntity[] = (data.entities || [])
+        // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - entity shape varies
         .map((e: any) => ({
           name: String(e.name || "").trim(),
           type: ["person", "project", "tool", "concept", "org", "other"].includes(e.type)
@@ -506,6 +508,7 @@ ${cleaned.slice(0, 6000)}`; // limit context window
         .filter((e) => e.name.length > 0);
 
       const suggestedTags: IntelligenceSuggestedTag[] = (data.suggestedTags || [])
+        // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - tag shape varies
         .map((t: any) => ({
           tag: String(t.tag || "")
             .replace(/^#/, "")

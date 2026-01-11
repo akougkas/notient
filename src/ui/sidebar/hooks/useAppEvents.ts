@@ -7,6 +7,8 @@
 
 import { Notice } from "obsidian";
 import type { ChatService } from "../../../core/chat";
+import { UI_LIMITS } from "../../../core/constants";
+import type { Insight } from "../../../services/insightGenerator";
 import type { AgentResultData } from "../components/AgentStreamsView";
 import { useEventBus } from "../context/KernelContext";
 import { ACTION_LABELS } from "../state/appHandlers";
@@ -145,7 +147,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           completedAt: new Date(),
           canUndo: false,
         },
-        ...recentActivity.value.slice(0, 9),
+        ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
       ];
     }
   });
@@ -170,7 +172,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           canUndo: false,
           error: data.error,
         },
-        ...recentActivity.value.slice(0, 9),
+        ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
       ];
     }
   });
@@ -220,7 +222,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         completedAt: new Date(record.timestamp),
         canUndo: true,
       },
-      ...recentActivity.value.slice(0, 9),
+      ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
     ];
   });
 
@@ -333,7 +335,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
             };
           }
 
-          const newInsight: import("../../../services/insightGenerator").Insight = {
+          const newInsight: Insight = {
             text: `${ACTION_LABELS[task.taskType || "agent"] || "Agent result"}: ${insightSummary}`,
             action: "View in Agents",
             actionIcon: "bot",
@@ -368,7 +370,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
               canUndo: false,
               error: task.error,
             },
-            ...recentActivity.value.slice(0, 9),
+            ...recentActivity.value.slice(0, UI_LIMITS.MAX_RECENT_ACTIVITY_COUNT),
           ];
         }
         new Notice(`Agent failed: ${task.error || "Unknown error"}`);
@@ -376,11 +378,15 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
       }
 
       case "cancelled": {
+        const agent = activeAgents.value.find((a) => a.id === task.id);
+        const wasRunning = agent?.status === "running";
         activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
-        agentStatus.value = {
-          ...agentStatus.value,
-          runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-        };
+        if (wasRunning) {
+          agentStatus.value = {
+            ...agentStatus.value,
+            runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+          };
+        }
         break;
       }
 

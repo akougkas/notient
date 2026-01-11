@@ -5,9 +5,9 @@
  * Shows response time, token counts, tokens/sec, context usage, and model info.
  */
 
-import { setIcon } from "obsidian";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import type { ChatStatistics } from "../../../../core/chat/types";
+import { Icon } from "../Icon";
 
 interface StatsPanelProps {
   /** Statistics data */
@@ -16,19 +16,6 @@ interface StatsPanelProps {
   visible?: boolean;
   /** Position: inline after message or floating */
   position?: "inline" | "floating";
-}
-
-/**
- * Icon component
- */
-function Icon({ name, className }: { name: string; className?: string }) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, name);
-    }
-  }, [name]);
-  return <span ref={iconRef} class={className} aria-hidden="true" />;
 }
 
 /**

@@ -24,6 +24,30 @@ import {
   type RestructureNoteAction,
 } from "./types";
 
+/**
+ * Build a YAML frontmatter string from a data object.
+ * Arrays are formatted as YAML lists, other values are JSON-stringified.
+ */
+function buildFrontmatter(data: Record<string, unknown>): string {
+  if (!data || Object.keys(data).length === 0) {
+    return "";
+  }
+
+  const lines = ["---"];
+  for (const [key, value] of Object.entries(data)) {
+    if (Array.isArray(value)) {
+      lines.push(`${key}:`);
+      for (const item of value) {
+        lines.push(`  - ${item}`);
+      }
+    } else {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    }
+  }
+  lines.push("---", "");
+  return lines.join("\n");
+}
+
 /** Result of applying an action */
 export interface ApplyResult {
   success: boolean;
@@ -622,19 +646,8 @@ export class ActionApplier {
     }
 
     // Build content with frontmatter
-    let content = "";
-    if (payload.frontmatter && Object.keys(payload.frontmatter).length > 0) {
-      content += "---\n";
-      for (const [key, value] of Object.entries(payload.frontmatter)) {
-        if (Array.isArray(value)) {
-          content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
-        } else {
-          content += `${key}: ${JSON.stringify(value)}\n`;
-        }
-      }
-      content += "---\n\n";
-    }
-    content += payload.content;
+    const frontmatterBlock = payload.frontmatter ? buildFrontmatter(payload.frontmatter) : "";
+    const content = frontmatterBlock + payload.content;
 
     // Create the file
     const result = await this.obsidian.createFile(notePath, content);
@@ -687,19 +700,8 @@ export class ActionApplier {
       }
 
       // Build content with frontmatter
-      let content = "";
-      if (note.frontmatter && Object.keys(note.frontmatter).length > 0) {
-        content += "---\n";
-        for (const [key, value] of Object.entries(note.frontmatter)) {
-          if (Array.isArray(value)) {
-            content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
-          } else {
-            content += `${key}: ${JSON.stringify(value)}\n`;
-          }
-        }
-        content += "---\n\n";
-      }
-      content += note.content;
+      const frontmatterBlock = note.frontmatter ? buildFrontmatter(note.frontmatter) : "";
+      const content = frontmatterBlock + note.content;
 
       // Create the file
       const result = await this.obsidian.createFile(notePath, content);
@@ -883,23 +885,12 @@ type: task-list
     }
 
     // Build content with frontmatter
-    let content = "";
     const frontmatter = payload.frontmatter || {
       created: new Date().toISOString().split("T")[0],
       tags: ["synthesis"],
       type: "synthesis",
     };
-
-    content += "---\n";
-    for (const [key, value] of Object.entries(frontmatter)) {
-      if (Array.isArray(value)) {
-        content += `${key}:\n${value.map((v) => `  - ${v}`).join("\n")}\n`;
-      } else {
-        content += `${key}: ${JSON.stringify(value)}\n`;
-      }
-    }
-    content += "---\n\n";
-    content += payload.content;
+    let content = buildFrontmatter(frontmatter) + payload.content;
 
     // Add source notes if present
     if (payload.sourceNotes && payload.sourceNotes.length > 0) {

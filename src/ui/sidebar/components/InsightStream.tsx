@@ -5,8 +5,7 @@
  * with priority levels (high, medium, low) and inline actions.
  */
 
-import { setIcon } from "obsidian";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback } from "preact/hooks";
 import type { Insight } from "../../../services/insightGenerator";
 import { Icon } from "./Icon";
 
@@ -149,14 +148,6 @@ interface InsightActionProps {
 }
 
 function InsightAction({ action, icon, primary, onClick }: InsightActionProps) {
-  const iconRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (iconRef.current && icon) {
-      setIcon(iconRef.current, icon);
-    }
-  }, [icon]);
-
   return (
     <button
       type="button"
@@ -164,7 +155,7 @@ function InsightAction({ action, icon, primary, onClick }: InsightActionProps) {
       onClick={onClick}
       aria-label={action}
     >
-      {icon && <span class="nv2-insight-action-icon" ref={iconRef} aria-hidden="true" />}
+      {icon && <Icon name={icon} className="nv2-insight-action-icon" />}
       <span>{action}</span>
     </button>
   );

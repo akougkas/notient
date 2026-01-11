@@ -105,6 +105,32 @@ export const MODEL_DEFAULTS = {
   CHARS_PER_TOKEN: 4,
 } as const;
 
+/** Chat service limits */
+export const CHAT_LIMITS = {
+  /** Maximum content length for note context in chat prompts */
+  MAX_CONTENT_LENGTH: 4000,
+  /** Maximum chat history messages to retain */
+  MAX_HISTORY_LENGTH: 100,
+  /** Default context window size for chat */
+  DEFAULT_CONTEXT_WINDOW_MAX: 8192,
+} as const;
+
+/** Search pipeline limits */
+export const SEARCH_LIMITS = {
+  /** Character limit for query text in findRelated */
+  FIND_RELATED_QUERY_CHARS: 1000,
+  /** Candidate multiplier for reranking (k * multiplier) */
+  RERANK_CANDIDATE_K: 120,
+  /** Candidate multiplier when reranking disabled */
+  NO_RERANK_MULTIPLIER: 60,
+} as const;
+
+/** UI limits */
+export const UI_LIMITS = {
+  /** Maximum recent activity items to display */
+  MAX_RECENT_ACTIVITY_COUNT: 9,
+} as const;
+
 /** Shared LLM prompts */
 export const LLM_PROMPTS = {
   /** System prompt for reranking search results */

@@ -6,8 +6,8 @@
  * [📝 Summarize] [🏷️ Suggest Tags] [📋 Extract Tasks]
  */
 
-import { setIcon } from "obsidian";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback } from "preact/hooks";
+import { Icon } from "./Icon";
 import { debugLog } from "../../../utils/debugLog";
 
 export interface QuickAction {
@@ -41,14 +41,6 @@ interface ActionButtonProps {
 }
 
 function ActionButton({ action }: ActionButtonProps) {
-  const iconRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (iconRef.current) {
-      setIcon(iconRef.current, action.icon);
-    }
-  }, [action.icon]);
-
   const handleClick = useCallback(() => {
     debugLog("QuickActions", `${action.id} clicked`);
     action.onClick();
@@ -62,7 +54,7 @@ function ActionButton({ action }: ActionButtonProps) {
       title={action.description || action.label}
       aria-label={action.description || action.label}
     >
-      <span class="nv2-quick-action-icon" ref={iconRef} aria-hidden="true" />
+      <Icon name={action.icon} className="nv2-quick-action-icon" />
       <span class="nv2-quick-action-label">{action.label}</span>
     </button>
   );

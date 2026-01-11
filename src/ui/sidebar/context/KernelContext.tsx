@@ -13,7 +13,7 @@ import type { App } from "obsidian";
 import { createContext } from "preact";
 import { useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Kernel } from "../../../core/kernel";
-import type { EventListener, EventPayloads, EventType } from "../../../types/events";
+import type { EventListener, EventType } from "../../../types/events";
 import { debugLog } from "../../../utils/debugLog";
 
 // ============ Context ============
@@ -114,38 +114,4 @@ export function useEventBus<T extends EventType>(event: T, callback: EventListen
     const unsubscribe = kernel.eventBus.on(event, handler);
     return () => unsubscribe();
   }, [kernel.eventBus, event]);
-}
-
-/**
- * Track whether services have been initialized
- * @returns Object with isInitialized boolean and optional error
- */
-export function useServicesInitialized(): { isInitialized: boolean; error: string | null } {
-  const kernel = useKernel();
-  const [isInitialized, setIsInitialized] = useState(kernel.isServicesInitialized);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Check current state in case we missed the event
-    if (kernel.isServicesInitialized) {
-      setIsInitialized(true);
-    }
-
-    const unsubInit = kernel.eventBus.on("services:initialized", () => {
-      setIsInitialized(true);
-      setError(null);
-    });
-
-    const unsubFail = kernel.eventBus.on("services:failed", (payload) => {
-      setIsInitialized(false);
-      setError(payload.reason);
-    });
-
-    return () => {
-      unsubInit();
-      unsubFail();
-    };
-  }, [kernel]);
-
-  return { isInitialized, error };
 }

@@ -7,29 +7,36 @@
  * - Footer: Navigation Deck (view switcher)
  */
 
+import type { Signal } from "@preact/signals";
 import { Notice, setIcon } from "obsidian";
+import type { JSX } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
 import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
+import type { Kernel } from "../../core/kernel";
+import type { Insight, InsightGenerator as InsightGeneratorType } from "../../services/insightGenerator";
 import { InsightGenerator } from "../../services/insightGenerator";
+import type { NoteVitals } from "../../services/noteVitalsCalculator";
+import type { SearchResult } from "../../types/search";
 import { IndexDashboardModal } from "../modals/IndexDashboardModal";
 import { ModelSelectorModal } from "../modals/ModelSelectorModal";
-import { AgentStreamsView } from "./components/AgentStreamsView";
+import { type ActiveAgent, AgentStreamsView } from "./components/AgentStreamsView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { InitializationStateView } from "./components/InitializationStateView";
 import { InsightStream } from "./components/InsightStream";
 import { NavDeck } from "./components/NavDeck";
 import { NoteCard } from "./components/NoteCard";
 import { Omnibar } from "./components/Omnibar";
-import { QuickActions, createNoteQuickActions } from "./components/QuickActions";
+import { type QuickAction, QuickActions, createNoteQuickActions } from "./components/QuickActions";
 import { SearchResultsView } from "./components/SearchResultsView";
+import type { SearchResultItemData } from "./components/search/SearchResultItem";
 import { SystemDashboard } from "./components/SystemDashboard";
 import { VitalsCards } from "./components/VitalsCards";
-import { RichChatView } from "./components/chat";
+import { type MessageAction, RichChatView } from "./components/chat";
 import { useApp, useKernel, useService } from "./context/KernelContext";
 import { useAppEvents } from "./hooks/useAppEvents";
-import { useBacklinkPreview, useNoteVitals } from "./hooks/useNoteVitals";
+import { useNoteVitals } from "./hooks/useNoteVitals";
 import {
   handleChatAction,
   handleRichChatSend,
@@ -71,7 +78,6 @@ function AppContent() {
   const kernel = useKernel();
   const app = useApp();
   const { noteVitals, isLoading } = useNoteVitals();
-  const backlinkPreview = useBacklinkPreview();
   const taskQueue = useService<AgentTaskQueue>("taskQueue");
   const actionApplier = useService<ActionApplier>("actionApplier");
   const workflowRunner = useService<WorkflowRunner>("workflowRunner");
@@ -83,6 +89,7 @@ function AppContent() {
     const llm = kernel.getService("llmProvider");
     if (llm) {
       const service = new ChatService(llm, undefined, {
+        // biome-ignore lint/suspicious/noExplicitAny: Accessing protected 'model' property on LLMProvider implementation
         modelName: (llm as any).model || "unknown",
         contextWindowMax: 8192,
         thinkingConfig: {
@@ -225,7 +232,6 @@ function AppContent() {
               noteVitals={noteVitals}
               isLoading={isLoading}
               hasNote={hasNote}
-              backlinkPreview={backlinkPreview}
               quickActions={quickActions}
               insights={insights}
               openFile={openFile}
@@ -253,20 +259,28 @@ function AppContent() {
 
 // Sub-components to keep AppContent clean
 
+interface NoteVitalsContentProps {
+  noteVitals: Signal<NoteVitals | null>;
+  isLoading: Signal<boolean>;
+  hasNote: boolean;
+  quickActions: QuickAction[];
+  insights: Insight[];
+  openFile: (path: string) => Promise<void>;
+}
+
 function NoteVitalsContent({
   noteVitals,
   isLoading,
   hasNote,
-  backlinkPreview,
   quickActions,
   insights,
   openFile,
-}: any) {
+}: NoteVitalsContentProps): JSX.Element {
   return (
     <>
       <Omnibar
         placeholder="Search notes..."
-        onResults={(results: any, query: string) => {
+        onResults={(results: SearchResult[], query: string) => {
           searchResults.value = results;
           searchQuery.value = query;
         }}
@@ -275,8 +289,8 @@ function NoteVitalsContent({
           searchResults.value = [];
           searchQuery.value = "";
         }}
-        onDeepSearchComplete={(results: any, query: string) => {
-          const deepInsights = results.slice(0, 5).map((result: any) => ({
+        onDeepSearchComplete={(results: SearchResultItemData[], query: string) => {
+          const deepInsights = results.slice(0, 5).map((result) => ({
             text: `Deep search for "${query}": ${result.title}`,
             linkText: result.title,
             linkPath: result.path,
@@ -304,7 +318,7 @@ function NoteVitalsContent({
           <NoteVitalsSkeleton />
         ) : hasNote ? (
           <>
-            <NoteCard noteVitals={noteVitals.value!} backlinkPreview={backlinkPreview} />
+            <NoteCard noteVitals={noteVitals.value!} />
             <VitalsCards vitals={noteVitals.value!} />
             <QuickActions actions={quickActions} />
             <InsightStream insights={insights} onOpenFile={openFile} />
@@ -316,7 +330,12 @@ function NoteVitalsContent({
   );
 }
 
-function AgentStreamsContent({ workflowRunner, kernel }: any) {
+interface AgentStreamsContentProps {
+  workflowRunner: WorkflowRunner | null;
+  kernel: Kernel;
+}
+
+function AgentStreamsContent({ workflowRunner, kernel }: AgentStreamsContentProps): JSX.Element {
   return (
     <AgentStreamsView
       activeAgents={activeAgents}
@@ -379,10 +398,9 @@ function AgentStreamsContent({ workflowRunner, kernel }: any) {
         );
         new Notice(`Undone: ${activity.summary}`);
       }}
-      onViewResults={(agent: any) => {
+      onViewResults={(agent: ActiveAgent) => {
         if (agent.resultData) {
           new Notice(`${agent.type} completed. Results available.`);
-          console.log("[AgentResults]", agent.resultData.content);
         }
       }}
       onDismissAgent={(id: string) => {
@@ -392,7 +410,13 @@ function AgentStreamsContent({ workflowRunner, kernel }: any) {
   );
 }
 
-function ChatContent({ onRichChatSend, kernel, actionApplier }: any) {
+interface ChatContentProps {
+  onRichChatSend: (message: string) => Promise<void>;
+  kernel: Kernel;
+  actionApplier: ActionApplier | null;
+}
+
+function ChatContent({ onRichChatSend, kernel, actionApplier }: ChatContentProps): JSX.Element {
   return (
     <RichChatView
       context={chatContext}
@@ -410,10 +434,10 @@ function ChatContent({ onRichChatSend, kernel, actionApplier }: any) {
       onOpenNote={(path: string) => {
         kernel.obsidian.openFile(path);
       }}
-      onAction={async (action: any) => {
+      onAction={async (action: MessageAction) => {
         await handleChatAction(
           { actionApplier, obsidian: kernel.obsidian },
-          action,
+          { type: action.type, payload: action.payload as Record<string, unknown> | undefined },
         );
       }}
       showStats={true}
@@ -439,9 +463,9 @@ function NoteVitalsSkeleton() {
       <div class="nv2-section">
         <div class="nv2-skeleton nv2-skeleton-text nv2-skeleton-text--short" />
         <div class="nv2-quick-actions">
-          <div class="nv2-skeleton" style={{ height: "54px" }} />
-          <div class="nv2-skeleton" style={{ height: "54px" }} />
-          <div class="nv2-skeleton" style={{ height: "54px" }} />
+          <div class="nv2-skeleton nv2-skeleton--quick-action" />
+          <div class="nv2-skeleton nv2-skeleton--quick-action" />
+          <div class="nv2-skeleton nv2-skeleton--quick-action" />
         </div>
       </div>
     </div>

@@ -17,6 +17,7 @@
 import type { UserProfile } from "../../types/profile";
 import { buildBaseIdentity } from "../agent/identity";
 import type { AgentType } from "../agents/types";
+import { CHAT_LIMITS } from "../constants";
 import type { LLMProvider } from "../llm/provider";
 import type { ChatMessage } from "../llm/types";
 import { ThinkingParser, estimateTokenCount } from "./thinkingParser";
@@ -358,10 +359,9 @@ No specific note is currently selected. Answer general questions or ask the user
     }
 
     // Truncate content if too long
-    const maxContentLength = 4000;
     const content =
-      note.content.length > maxContentLength
-        ? `${note.content.slice(0, maxContentLength)}...\n[Content truncated - ${note.wordCount} words total]`
+      note.content.length > CHAT_LIMITS.MAX_CONTENT_LENGTH
+        ? `${note.content.slice(0, CHAT_LIMITS.MAX_CONTENT_LENGTH)}...\n[Content truncated - ${note.wordCount} words total]`
         : note.content;
 
     lines.push(`\nContent:\n${content}`);

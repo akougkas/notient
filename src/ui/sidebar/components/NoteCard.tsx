@@ -11,7 +11,6 @@ import { PulseTimeline } from "./PulseTimeline";
 
 interface NoteCardProps {
   noteVitals: NoteVitals;
-  backlinkPreview?: string;
 }
 
 // Note type icons for the "Sentient Note" personality

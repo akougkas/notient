@@ -4,6 +4,7 @@
  * Types for the reusable chat system.
  */
 
+import { CHAT_LIMITS } from "../constants";
 import type { ChatMessage } from "../llm/types";
 
 // ============================================================================
@@ -226,7 +227,7 @@ export interface DelegationKeywordConfig {
  */
 export const DEFAULT_CHAT_CONFIG: ChatServiceConfig = {
   modelName: "unknown",
-  contextWindowMax: 8192,
+  contextWindowMax: CHAT_LIMITS.DEFAULT_CONTEXT_WINDOW_MAX,
   thinkingConfig: {
     startTag: "<think>",
     endTag: "</think>",
