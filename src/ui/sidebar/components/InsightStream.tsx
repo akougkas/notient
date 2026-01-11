@@ -36,13 +36,14 @@ export function InsightStream({ insights, onOpenFile }: InsightStreamProps) {
         AI Insights
         {highPriorityCount > 0 && <span class="nv2-insight-badge">{highPriorityCount}</span>}
       </h3>
+      {/* biome-ignore lint/a11y/useSemanticElements: role="feed" is correct ARIA pattern for dynamic content streams */}
       <div class="nv2-insight-stream" role="feed" aria-busy="false">
         {sortedInsights.length === 0 ? (
           <InsightEmptyState />
         ) : (
           sortedInsights.map((insight, index) => (
             <InsightItem
-              key={insight.text + index}
+              key={`insight-${insight.text.slice(0, 20)}-${index}`}
               insight={insight}
               onOpenFile={onOpenFile}
               isFirst={index === 0}

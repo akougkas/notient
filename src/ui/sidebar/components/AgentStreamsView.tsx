@@ -107,6 +107,7 @@ export function AgentStreamsView({
   const isEmpty = !hasActiveAgents && !hasPendingActions && !hasRecentActivity;
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: role="region" is valid ARIA landmark
     <div class="nv2-agent-streams" role="region" aria-label="Agent activity">
       {/* Section 0: Capability Cards (per PRD: Search, Context, Chat) */}
       <CapabilityCards capabilities={capabilities} />
@@ -314,6 +315,7 @@ function ActiveAgentCard({
         {isRunning && agent.progress !== undefined && (
           <div class="nv2-agent-progress">
             <div class="nv2-progress-bar">
+              {/* biome-ignore lint/a11y/useFocusableInteractive: progress bars are informational, not interactive */}
               <div
                 class="nv2-progress-fill nv2-progress-fill--animated"
                 style={{ width: `${agent.progress}%` }}
@@ -500,6 +502,7 @@ function RecentActivityCard({ activity, onUndo }: RecentActivityCardProps) {
         )}
       </div>
       {activity.error && (
+        // biome-ignore lint/a11y/useSemanticElements: role="alert" is correct ARIA pattern for error messages
         <div class="nv2-activity-error" role="alert">
           {activity.error}
         </div>

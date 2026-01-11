@@ -9,11 +9,20 @@
         "noExcessiveCognitiveComplexity": "warn"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "warn",
+        "noArrayIndexKey": "warn"
       },
       "style": {
         "noNonNullAssertion": "warn",
         "useConst": "error"
+      },
+      "a11y": {
+        "useSemanticElements": "warn",
+        "useFocusableInteractive": "warn",
+        "useKeyWithClickEvents": "warn"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "warn"
       }
     }
   },

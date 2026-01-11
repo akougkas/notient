@@ -234,6 +234,7 @@ export function QuickActions({ actions }: QuickActionsProps) {
   return (
     <section class="nv2-quick-actions-section" aria-label="Quick actions">
       <h3 class="nv2-section-label">Quick Actions</h3>
+      {/* biome-ignore lint/a11y/useSemanticElements: role="toolbar" is correct ARIA pattern for action groups */}
       <div class="nv2-quick-actions" role="toolbar" aria-label="Note actions">
         {actions.map((action) => (
           <ActionButton key={action.id} action={action} />
@@ -251,7 +252,7 @@ function ActionButton({ action }: ActionButtonProps) {
   const handleClick = useCallback(() => {
     debugLog("QuickActions", `${action.id} clicked`);
     action.onClick();
-  }, [action.onClick]);
+  }, [action.id, action.onClick]);
 
   return (
     <button

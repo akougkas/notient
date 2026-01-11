@@ -35,7 +35,9 @@ export function NavDeck({ activeView, agentStatus }: NavDeckProps) {
             key={tab.id}
             type="button"
             class={`nv2-nav-item ${isActive ? "nv2-nav-item--active" : ""} ${isRunning ? "nv2-nav-item--pulse" : ""}`}
-            onClick={() => (activeView.value = tab.id)}
+            onClick={() => {
+              activeView.value = tab.id;
+            }}
             aria-selected={isActive}
             aria-current={isActive ? "page" : undefined}
             role="tab"

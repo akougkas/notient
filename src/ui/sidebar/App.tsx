@@ -130,7 +130,7 @@ function AppContent() {
         noteTitle: noteVitals.value.title,
       };
     }
-  }, [noteVitals.value?.path]);
+  }, [noteVitals.value?.path, noteVitals.value?.title]);
 
   // Subscribe to all system events
   useAppEvents({ chatService, createChatService });
@@ -223,6 +223,7 @@ function AppContent() {
         onModelClick={openModelSelector}
         onIndexClick={openIndexDashboard}
         onSettingsClick={() => {
+          // biome-ignore lint/suspicious/noExplicitAny: Obsidian internal API not fully typed
           const setting = (app as any).setting;
           if (setting) {
             setting.open();
@@ -324,10 +325,10 @@ function NoteVitalsContent({
       {searchResults.value.length === 0 &&
         (isLoading.value ? (
           <NoteVitalsSkeleton />
-        ) : hasNote ? (
+        ) : hasNote && noteVitals.value ? (
           <>
-            <NoteCard noteVitals={noteVitals.value!} />
-            <VitalsCards vitals={noteVitals.value!} />
+            <NoteCard noteVitals={noteVitals.value} />
+            <VitalsCards vitals={noteVitals.value} />
             <QuickActions actions={quickActions} />
             <InsightStream insights={insights} onOpenFile={openFile} />
           </>
@@ -489,6 +490,7 @@ function EmptyState() {
   }, []);
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: role="status" is correct ARIA pattern here
     <div class="nv2-empty-state" role="status">
       <div class="nv2-empty-state-icon" ref={iconRef} aria-hidden="true" />
       <div class="nv2-empty-state-title">No Note Open</div>

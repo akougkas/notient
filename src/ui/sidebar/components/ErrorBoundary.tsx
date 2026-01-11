@@ -59,6 +59,7 @@ function DefaultErrorFallback({
   onReset: () => void;
 }) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: role="alert" is correct ARIA pattern for error display
     <div class="nv2-error-boundary" role="alert">
       <div class="nv2-error-boundary-icon">!</div>
       <div class="nv2-error-boundary-title">Something went wrong</div>

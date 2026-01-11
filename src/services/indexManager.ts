@@ -389,7 +389,9 @@ export class IndexManager {
           createdAt: data.meta.createdAt,
           updatedAt: data.meta.updatedAt,
         },
+        // biome-ignore lint/suspicious/noExplicitAny: Legacy v2/v3 index format compatibility
         docs: data.docs as any,
+        // biome-ignore lint/suspicious/noExplicitAny: HNSW state is opaque binary data
         state: state as any,
       });
 
@@ -1267,7 +1269,8 @@ export class IndexManager {
       // 4. Write chunk files
       console.log(`[IndexManager] Writing ${noteChunksMap.size} chunk files...`);
       for (const [noteId, chunks] of noteChunksMap) {
-        const meta = noteMetaMap.get(noteId)!;
+        const meta = noteMetaMap.get(noteId);
+        if (!meta) continue; // Skip if metadata missing (shouldn't happen)
         await this.chunkStore.saveNoteChunks(
           noteId,
           meta.path,

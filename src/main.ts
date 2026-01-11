@@ -398,7 +398,8 @@ export default class NotientPlugin extends Plugin {
 
       // Initialize index manager (discovers/loads index, populates vectorStore)
       // Note: vectorStore.initialize() must be called first so HNSW WASM is ready
-      this.indexManager = new IndexManager(this.kernel, this.vectorStore!);
+      if (!this.vectorStore) throw new Error("VectorStore not initialized");
+      this.indexManager = new IndexManager(this.kernel, this.vectorStore);
       await this.indexManager.initialize();
       this.kernel.registerService("indexManager", this.indexManager);
 
@@ -409,11 +410,12 @@ export default class NotientPlugin extends Plugin {
       });
 
       // Initialize indexer
+      if (!this.ollamaService) throw new Error("OllamaService not initialized");
       this.indexer = new SimpleIndexer(
         this.kernel,
         eventBus,
         this.indexManager,
-        this.ollamaService!,
+        this.ollamaService,
       );
       await this.indexer.initialize();
       this.kernel.registerService("indexer", this.indexer);
@@ -428,12 +430,12 @@ export default class NotientPlugin extends Plugin {
         });
       }
 
-      // Initialize search pipeline
+      // Initialize search pipeline (ollamaService and vectorStore already validated above)
       this.searchPipeline = new SearchPipeline(
         this.kernel,
         eventBus,
-        this.ollamaService!,
-        this.vectorStore!,
+        this.ollamaService,
+        this.vectorStore,
       );
       await this.searchPipeline.initialize();
       this.kernel.registerService("search", this.searchPipeline);
@@ -450,7 +452,7 @@ export default class NotientPlugin extends Plugin {
       this.vaultVitals = new SimpleVaultVitals(
         this.kernel,
         eventBus,
-        this.vectorStore!,
+        this.vectorStore,
         this.indexManager,
       );
       this.kernel.registerService("vitals", this.vaultVitals);
