@@ -10,7 +10,7 @@
 import { Notice, setIcon } from "obsidian";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { AgentTaskQueue } from "../../core/agent";
-import type { ActionApplier, ActionHistory, WorkflowRunner } from "../../core/agentic";
+import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import { InsightGenerator } from "../../services/insightGenerator";
 import { IndexDashboardModal } from "../modals/IndexDashboardModal";
@@ -74,7 +74,6 @@ function AppContent() {
   const backlinkPreview = useBacklinkPreview();
   const taskQueue = useService<AgentTaskQueue>("taskQueue");
   const actionApplier = useService<ActionApplier>("actionApplier");
-  const actionHistory = useService<ActionHistory>("actionHistory");
   const workflowRunner = useService<WorkflowRunner>("workflowRunner");
 
   // ChatService state

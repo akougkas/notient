@@ -9,6 +9,7 @@ import { Notice } from "obsidian";
 import type { ChatService } from "../../../core/chat";
 import type { AgentResultData } from "../components/AgentStreamsView";
 import { useEventBus } from "../context/KernelContext";
+import { ACTION_LABELS } from "../state/appHandlers";
 import {
   activeAgents,
   activeView,
@@ -236,13 +237,6 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
 
     if (!isAgenticTask) return;
 
-    const actionLabels: Record<string, string> = {
-      link: "Link Finder",
-      enrich: "Note Editor",
-      classify: "Classifier",
-      analyze: "Context Builder",
-    };
-
     switch (task.status) {
       case "running": {
         const exists = activeAgents.value.some((a) => a.id === task.id);
@@ -255,7 +249,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
             ...activeAgents.value,
             {
               id: task.id,
-              type: actionLabels[task.taskType || ""] || task.taskType || "Agent",
+              type: ACTION_LABELS[task.taskType || ""] || task.taskType || "Agent",
               targetNote: task.noteTitle || "Note",
               status: "running",
               progress: task.progress || 0,
@@ -326,7 +320,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           }
 
           const newInsight: import("../../../services/insightGenerator").Insight = {
-            text: `${actionLabels[task.taskType || "agent"] || "Agent result"}: ${insightSummary}`,
+            text: `${ACTION_LABELS[task.taskType || "agent"] || "Agent result"}: ${insightSummary}`,
             action: "View in Agents",
             actionIcon: "bot",
             actionCallback: () => {

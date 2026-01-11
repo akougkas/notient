@@ -28,7 +28,8 @@ import {
 
 export type AgenticTaskType = "link" | "enrich" | "classify" | "analyze";
 
-const ACTION_LABELS: Record<string, string> = {
+/** Human-readable labels for agent task types */
+export const ACTION_LABELS: Record<string, string> = {
   link: "Link Finder",
   enrich: "Note Editor",
   classify: "Classifier",

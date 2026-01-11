@@ -1,6 +1,6 @@
 # Faye Report
 status: complete
-commit: pending
+commit: 09c4830 + pending
 
 ## did
 
@@ -40,11 +40,20 @@ commit: pending
   - Uses handlers from appHandlers.ts
   - NoteVitalsContent, AgentStreamsContent, ChatContent sub-components
 
-- styles.css:4415-4464: Added error boundary CSS
+- src/ui/styles/components/error-boundary.css: NEW - Error boundary CSS (proper source location)
   - nv2-error-boundary (centered flex container)
   - nv2-error-boundary-icon (circular red badge)
   - nv2-error-boundary-title, -message
-  - nv2-error-boundary-button (accent retry button)
+  - nv2-error-boundary-button with hover + focus-visible states
+
+- src/ui/styles/index.css: Added import for error-boundary.css
+
+### Post-Refactor Review (5 passes)
+
+- App.tsx:13,77: Removed unused ActionHistory import and actionHistory variable
+- state/appHandlers.ts:31: Exported ACTION_LABELS for shared use
+- hooks/useAppEvents.ts:12: Imports ACTION_LABELS from appHandlers (no duplication)
+- Sub-components use `any` types (intentional for internal helpers - props are well-defined by caller)
 
 ## structure
 ```
@@ -61,8 +70,9 @@ New files:
 ├── components/ErrorBoundary.tsx (80 lines)
 ├── components/InitializationStateView.tsx (130 lines)
 ├── components/SearchResultsView.tsx (55 lines)
-├── hooks/useAppEvents.ts (280 lines)
-└── state/appHandlers.ts (280 lines)
+├── hooks/useAppEvents.ts (370 lines)
+├── state/appHandlers.ts (370 lines)
+└── styles/components/error-boundary.css (65 lines)
 ```
 
 ## verify
