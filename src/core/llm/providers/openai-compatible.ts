@@ -177,22 +177,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
     // and reasoning in reasoning_content. If content is empty, the model failed
     // to produce output - try to salvage from reasoning.
     if (!content && reasoning) {
-      // Strip <think> tags first, then look for JSON
-      const strippedReasoning = reasoning.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-
-      // Try to find JSON in the stripped reasoning
-      const jsonMatch = strippedReasoning.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      // IMPORTANT: Look for JSON in the ENTIRE reasoning first (including inside <think> tags)
+      // Some models put structured output inside thinking blocks
+      const jsonMatch = reasoning.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
       if (jsonMatch) {
         content = jsonMatch[0];
         console.log(`[${this.name}] Extracted JSON from reasoning_content`);
-      } else if (strippedReasoning.length > 0) {
-        // No JSON but have text - use it (might be prose response)
-        content = strippedReasoning;
-        console.log(`[${this.name}] Using reasoning_content text (no JSON found)`);
       } else {
-        // Only had thinking tags, no actual output
-        console.warn(`[${this.name}] Model only produced <think> content, no answer`);
-        content = reasoning; // Return raw for debugging
+        // No JSON found - strip <think> tags and use remaining prose
+        const strippedReasoning = reasoning.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+        if (strippedReasoning.length > 0) {
+          content = strippedReasoning;
+          console.log(`[${this.name}] Using reasoning_content prose (no JSON found)`);
+        } else {
+          // Only had thinking tags, no actual output
+          console.warn(`[${this.name}] Model only produced <think> content, no answer`);
+          content = reasoning; // Return raw for debugging
+        }
       }
     }
 

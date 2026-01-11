@@ -87,11 +87,34 @@ export class OllamaRerankerService {
   /**
    * Rerank candidates using Qwen3 reranker
    *
-   * @param query - The search query
+   * DISABLED: LLM reranking is temporarily disabled to fix CPU spin.
+   * The old implementation made 13+ sequential blocking LLM calls per search,
+   * causing 100% CPU and UI freeze. Until we implement batch reranking
+   * (one LLM call for all candidates), we fall back to vector scores.
+   *
+   * @param query - The search query (unused while disabled)
    * @param candidates - Candidates to rerank
-   * @returns Ranked results sorted by relevance
+   * @returns Ranked results sorted by vector similarity
    */
-  async rerank(query: string, candidates: RerankCandidate[]): Promise<RankedResult[]> {
+  async rerank(_query: string, candidates: RerankCandidate[]): Promise<RankedResult[]> {
+    // TEMPORARILY DISABLED - was causing CPU spin with 13+ blocking LLM calls
+    // TODO: Re-enable with batch reranking (one LLM call for all candidates)
+    if (candidates.length === 0) return [];
+
+    console.log(
+      `[OllamaRerankerService] LLM reranking disabled - using vector scores for ${candidates.length} candidates`,
+    );
+    return this.fallbackToVectorScores(candidates);
+  }
+
+  /**
+   * DISABLED: Old per-candidate reranking that caused CPU spin
+   * Keeping for reference when implementing batch reranking
+   */
+  private async _rerankPerCandidate_DISABLED(
+    query: string,
+    candidates: RerankCandidate[],
+  ): Promise<RankedResult[]> {
     if (!this.isReady()) {
       console.warn("[OllamaRerankerService] Not ready, returning vector scores");
       return this.fallbackToVectorScores(candidates);
