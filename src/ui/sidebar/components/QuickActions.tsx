@@ -61,88 +61,83 @@ function ActionButton({ action }: ActionButtonProps) {
 }
 
 /**
- * Callbacks for Quick Actions
- * All 6 actions now route through Agent Streams for consistent UX
+ * Callbacks for Quick Actions.
+ * All actions route through Agent Streams via ChiefOfStaff.
  */
 export interface QuickActionCallbacks {
-  /** Trigger agentic background workflow (shows in Agent Streams) */
-  triggerAgent: (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => void;
-  /** Send to conversational chat (kept for Chat input, not used by Quick Actions) */
+  /** Trigger expert agent (shows in Agent Streams) */
+  triggerAgent: (prompt: string, agentType: "note-editor" | "classifier" | "connection") => void;
+  /** Send to conversational chat (for contextual actions that need chat) */
   sendToChat: (prompt: string) => void;
 }
 
 /**
- * Factory function to create standard quick actions for a note
- * Per spec: 6 actions, smart-filtered to show 4-6 most relevant
- *
- * All 6 actions are agentic: run in background, show results in Agent Streams
+ * Factory function to create quick actions for a note.
+ * Temporary: Returns 6 actions using new agent types.
+ * Task 2 will refactor to pinned + contextual structure.
  */
 export function createNoteQuickActions(
   noteTitle: string,
   callbacks: QuickActionCallbacks,
 ): QuickAction[] {
-  const { triggerAgent } = callbacks;
+  const { triggerAgent, sendToChat } = callbacks;
 
   return [
     {
-      id: "find-connections",
-      icon: "search",
-      label: "Find",
-      primary: true,
-      description: "Find related notes (Agent)",
-      onClick: () =>
-        triggerAgent(
-          `Find notes semantically related to "${noteTitle}" and explain the connections`,
-          "link",
-        ),
-    },
-    {
-      id: "link-ideas",
-      icon: "link",
-      label: "Link",
-      primary: false,
-      description: "Suggest links (Agent)",
-      onClick: () =>
-        triggerAgent(
-          `Suggest internal wiki-links to add to "${noteTitle}" that connect it to related notes`,
-          "link",
-        ),
-    },
-    {
-      id: "enrich",
+      id: "enhance",
       icon: "sparkles",
-      label: "Enrich",
-      primary: false,
-      description: "Enrich with context (Agent)",
+      label: "Enhance",
+      primary: true,
+      description: "Enhance note content (Note Editor)",
       onClick: () =>
         triggerAgent(
-          `Enrich and expand "${noteTitle}" with additional context, examples, and insights`,
-          "enrich",
+          `Enhance and expand "${noteTitle}" with additional context, examples, and insights`,
+          "note-editor",
         ),
     },
     {
-      id: "suggest-tags",
+      id: "classify",
       icon: "tag",
-      label: "Tags",
-      primary: false,
-      description: "Suggest tags (Agent)",
+      label: "Classify",
+      primary: true,
+      description: "Classify and suggest tags (Classifier)",
       onClick: () =>
         triggerAgent(
           `Classify and suggest relevant tags for "${noteTitle}" based on its content`,
-          "classify",
+          "classifier",
         ),
     },
-
+    {
+      id: "connect",
+      icon: "link",
+      label: "Connect",
+      primary: true,
+      description: "Find connections (Connection Agent)",
+      onClick: () =>
+        triggerAgent(
+          `Find notes semantically related to "${noteTitle}" and suggest internal links`,
+          "connection",
+        ),
+    },
     {
       id: "summarize",
       icon: "file-text",
       label: "Summary",
       primary: false,
-      description: "Generate summary (Agent)",
+      description: "Generate summary",
+      onClick: () =>
+        sendToChat(`Create a concise summary of "${noteTitle}" that captures the key points`),
+    },
+    {
+      id: "find-related",
+      icon: "search",
+      label: "Related",
+      primary: false,
+      description: "Find related notes",
       onClick: () =>
         triggerAgent(
-          `Create a concise summary of "${noteTitle}" that captures the key points`,
-          "analyze",
+          `Find notes semantically related to "${noteTitle}" and explain the connections`,
+          "connection",
         ),
     },
     {
@@ -150,12 +145,9 @@ export function createNoteQuickActions(
       icon: "check-square",
       label: "Tasks",
       primary: false,
-      description: "Extract tasks (Agent)",
+      description: "Extract action items",
       onClick: () =>
-        triggerAgent(
-          `Extract any actionable items or tasks mentioned in "${noteTitle}"`,
-          "analyze",
-        ),
+        sendToChat(`Extract any actionable items or tasks mentioned in "${noteTitle}"`),
     },
   ];
 }

@@ -18,8 +18,8 @@ export interface Insight {
 }
 
 export interface InsightGeneratorCallbacks {
-  /** Trigger agentic action (shows in Agent Streams) */
-  triggerAgent: (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => void;
+  /** Trigger expert agent (shows in Agent Streams) */
+  triggerAgent: (prompt: string, agentType: "note-editor" | "classifier" | "connection") => void;
   showNotice: (message: string) => void;
 }
 
@@ -43,7 +43,7 @@ export class InsightGenerator {
         actionCallback: () => {
           this.callbacks.triggerAgent(
             `Find notes that could be linked to "${noteVitals.title}" and explain the connections`,
-            "link",
+            "connection",
           );
         },
         priority: "high",
@@ -56,7 +56,7 @@ export class InsightGenerator {
         actionCallback: () => {
           this.callbacks.triggerAgent(
             `Analyze the link structure of "${noteVitals.title}" and suggest improvements`,
-            "link",
+            "connection",
           );
         },
         priority: "high",
@@ -73,7 +73,7 @@ export class InsightGenerator {
         actionCallback: () => {
           this.callbacks.triggerAgent(
             `Classify "${noteVitals.title}" and suggest the best PARA category based on its content`,
-            "classify",
+            "classifier",
           );
         },
         priority: "low",

@@ -8,9 +8,25 @@ import type { ProposedAction } from "../agentic/types";
 import type { ChatMessage } from "../llm/types";
 
 /**
- * Types of tasks the agent can perform
+ * Types of tasks the agent can perform.
+ *
+ * New agent-based types: "note-editor", "classifier", "connection"
+ * Legacy task-based types maintained for backwards compatibility:
+ *   - "enrich" → maps to "note-editor"
+ *   - "link" → maps to "connection"
+ *   - "classify" → maps to "classifier"
+ *   - "analyze" → internal (context-builder)
+ *   - "chat" → UI layer
  */
-export type TaskType = "enrich" | "link" | "classify" | "analyze" | "chat";
+export type TaskType =
+  | "note-editor"
+  | "classifier"
+  | "connection"
+  | "enrich"
+  | "link"
+  | "classify"
+  | "analyze"
+  | "chat";
 
 /**
  * Execution status of a task

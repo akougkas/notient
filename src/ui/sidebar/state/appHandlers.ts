@@ -28,14 +28,30 @@ import {
   isChatThinking,
 } from "../state";
 
-export type AgenticTaskType = "link" | "enrich" | "classify" | "analyze";
+/**
+ * Agent types that can be triggered via Quick Actions.
+ * Maps directly to ExpertAgentType (not UI agents like "chat").
+ * "context-builder" is internal and not user-triggerable.
+ */
+export type AgenticTaskType = "note-editor" | "classifier" | "connection";
 
-/** Human-readable labels for agent task types */
+/**
+ * Human-readable labels for all task types (new agent-based + legacy).
+ * Covers both Quick Action agent types and legacy task types
+ * for backwards compatibility in event handling.
+ */
 export const ACTION_LABELS: Record<string, string> = {
-  link: "Link Finder",
+  // New agent-based types (Quick Actions use these)
+  "note-editor": "Note Editor",
+  classifier: "Classifier",
+  connection: "Connection Agent",
+  // Legacy task-based types (for backwards compat in events)
   enrich: "Note Editor",
+  link: "Connection Agent",
   classify: "Classifier",
   analyze: "Context Builder",
+  chat: "Chat",
+  agent: "Agent",
 };
 
 interface TriggerAgenticActionDeps {
@@ -44,16 +60,18 @@ interface TriggerAgenticActionDeps {
 }
 
 /**
- * Trigger an agentic action (link, enrich, classify, analyze) for the current note.
+ * Trigger an agent action for the current note.
  * Routes through ChiefOfStaff via taskQueue.
+ *
+ * @param agentType - Expert agent type to invoke (note-editor, classifier, connection)
  */
 export function triggerAgenticAction(
   { taskQueue, noteVitals }: TriggerAgenticActionDeps,
   prompt: string,
-  taskType: AgenticTaskType,
+  agentType: AgenticTaskType,
 ): void {
   debugLog("triggerAgenticAction", "called", {
-    taskType,
+    agentType,
     hasTaskQueue: !!taskQueue,
     hasNoteVitals: !!noteVitals.value,
     isIndexing: indexStatus.value.isIndexing,
@@ -69,14 +87,14 @@ export function triggerAgenticAction(
     try {
       taskQueue.enqueue({
         agent: "chat",
-        taskType,
+        taskType: agentType, // taskQueue field name preserved for compatibility
         notePath: noteVitals.value.path,
         noteTitle: noteVitals.value.title,
         chatHistory: [{ role: "user", content: prompt }],
       });
 
       activeView.value = "agents";
-      new Notice(`${ACTION_LABELS[taskType]} started`);
+      new Notice(`${ACTION_LABELS[agentType]} started`);
     } catch (err) {
       new Notice(err instanceof Error ? err.message : "Failed to start agent");
     }

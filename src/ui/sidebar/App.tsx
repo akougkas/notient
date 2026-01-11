@@ -134,8 +134,8 @@ function AppContent() {
 
   // Handler callbacks
   const onTriggerAgenticAction = useCallback(
-    (prompt: string, taskType: "link" | "enrich" | "classify" | "analyze") => {
-      triggerAgenticAction({ taskQueue, noteVitals }, prompt, taskType);
+    (prompt: string, agentType: "note-editor" | "classifier" | "connection") => {
+      triggerAgenticAction({ taskQueue, noteVitals }, prompt, agentType);
     },
     [taskQueue, noteVitals],
   );
