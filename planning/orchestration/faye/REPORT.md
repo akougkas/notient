@@ -1,6 +1,6 @@
 # Faye Report
 status: complete
-commit: 09c4830 + pending
+commit: 09c4830, 3cf943b
 
 ## did
 
@@ -88,4 +88,25 @@ build: pass
 - One view crashing no longer crashes entire sidebar
 
 ## issues
-none
+
+### Backend issues observed during UI testing (for Archie)
+
+1. **Index version mismatch triggers full rebuild**
+   - Index found with version=1 (unsupported), moved to .deleted
+   - Triggers 895 file reindex on every startup
+   - Heavy GPU load from embeddings
+
+2. **No guard for agent actions during indexing**
+   - UI allows triggering Link Finder while reindex is running
+   - Both compete for GPU/Ollama resources
+   - Causes application freeze
+
+3. **Link Finder JSON parse error**
+   - `[Link Finder] JSON parse error:` (empty)
+   - LLM returned unparseable response (likely Ollama overloaded)
+   - Returns 0 suggestions silently
+
+**UI wiring verified correct** - these are backend/service layer issues:
+- `triggerAgenticAction` correctly calls `taskQueue.enqueue()`
+- EventBus subscriptions correctly update signals
+- Error boundary correctly caught and displayed test error
