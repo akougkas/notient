@@ -26,6 +26,18 @@ Imagine a research assistant who:
 
 That's Notient. It's the **Research Chief of Staff** you didn't know you needed.
 
+### The Process (Not Just a Tagline)
+
+```
+Vaults that breathe  →  Notes that think  →  Knowledge that evolves
+     (awareness)           (intelligence)          (growth)
+```
+
+This is **sequential**, not parallel:
+1. **Vault awareness** (holistic health, pulse, structure) **enables**
+2. **Note intelligence** (individual agency, suggestions) which **produces**
+3. **Knowledge evolution** (learning, connecting, growing over time)
+
 ### The Sentient Notes Philosophy
 
 - **Every note has a pulse** — Health scores, freshness indicators, connectivity metrics
@@ -159,36 +171,30 @@ Real-time intelligence for the active note:
 |-----------|------------|---------|
 | **Reasoning** | LM Studio | OpenAI-compatible API. Chat, classification, reranking. |
 | **Embeddings** | Ollama | Vector embeddings for semantic search. |
-| **Vector Store** | Custom | Brute-force cosine similarity. Pure JS, zero deps. |
+| **Vector Store** | WASM HNSW | High-performance approximate nearest neighbor. Scales to 100K+ notes. |
 | **Storage** | Local | Everything in `.obsidian/plugins/notient/` |
 
 Privacy-first. No telemetry. No cloud calls. Period.
 
 ---
 
-## The Two-Tier Identity System
+## Agent Architecture
 
-Every agent shares a core identity while having specialized expertise:
+**Key clarification**: Agents are **capabilities**, not personas. They have expertise and specialization, not voice or personality. The Chief of Staff IS Notient—it orchestrates everything.
 
-### Tier 1: Research Chief of Staff (Shared by All)
+### Two-Tier System
 
-The foundation that makes all agents sound like *Notient*:
-- **Analytical** — Data-driven, evidence-based reasoning
-- **Grounded** — Never invents, always cites sources (`[[Note#Heading]]`)
-- **Professional** — Formal but accessible tone
-- **Proactive** — Surfaces insights without being asked
-- **Transparent** — Shows reasoning, not just conclusions
-- **Domain-Aware** — Adapts to your field via user profile
+**Tier 1: Core Identity (Shared)**
+- Analytical, grounded, professional
+- Always cites sources (`[[Note#Heading]]`)
+- Domain-aware via user profile
 
-### Tier 2: Agent Specialization (Unique per Agent)
+**Tier 2: Specialization (Per Capability)**
+- Each agent has distinct expertise area
+- Output varies: conversational (Chat) vs structured (Editors)
+- Chief of Staff routes to appropriate capability
 
-What makes each agent distinct:
-- **Role** — Content Architect, Knowledge Taxonomist, etc.
-- **Mission** — Specific purpose and expertise areas
-- **Output** — Conversational (Chat) vs Structured JSON (editors)
-- **Delegation** — Which specialists they can invoke
-
-**Result:** Consistent voice across 13 agents. Each with distinct expertise.
+**Result:** Unified intelligence layer with specialized capabilities.
 
 ### User Profile Adaptation
 
@@ -240,6 +246,25 @@ Notient pioneers a new paradigm:
 **Future:** Fully contextual interface where the UI itself is AI-driven
 
 *Software that talks back.*
+
+---
+
+## Current Status
+
+**Version**: 0.4.0-beta (in development)
+
+| Component | Status |
+|-----------|--------|
+| Progressive Search | ✅ Working |
+| Chat with Notes | ✅ Working |
+| Quick Actions | ✅ Working (6 actions) |
+| Note Vitals | ✅ Working |
+| 13 Agent Capabilities | ✅ Implemented |
+| WASM Vector Store | 🔄 Upgrading |
+| Insights Stream | 🔧 Fixing |
+| Error Boundaries | 🔄 Adding |
+
+**Spec**: See `planning/BETA-SPEC.md` for full product specification.
 
 ---
 

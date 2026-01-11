@@ -1,6 +1,8 @@
 # Notient - Product Requirements Document
 
 > **Vision:** "Notient replaces Smart Connections as #1 Obsidian AI plugin"
+>
+> **Specification:** See `planning/BETA-SPEC.md` for current product specification.
 
 ## Executive Summary
 
@@ -50,7 +52,7 @@ Notient is a free, open-source Obsidian community plugin that transforms notes f
 - **Build:** Bun + esbuild (with Biome for linting)
 - **LLM (Reasoning):** LM Studio (OpenAI-compatible API) - search orchestration, classification, chat
 - **LLM (Embeddings):** Ollama (local or remote on LAN)
-- **Vector Store:** Custom brute-force cosine similarity (pure JS, zero dependencies)
+- **Vector Store:** WASM HNSW (hnswlib-wasm) for high-performance approximate nearest neighbor
 - **UI Framework:** Obsidian API + native components
 
 ### Architecture Overview (v3.0)
@@ -508,6 +510,6 @@ Accessible via ribbon icon or command palette. Vault-wide operations:
 
 ---
 
-*Last updated: 2026-01-06*
+*Last updated: 2026-01-11*
 *Author: Anthony Kougkas*
-*Version: 3.0 (Phase 1 Complete - Ready for Phase 2)*
+*Version: 4.0 (Beta Development - See BETA-SPEC.md)*
