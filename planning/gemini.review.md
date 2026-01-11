@@ -97,22 +97,38 @@ UI components import global signals directly from `state.ts`.
 2.  **Memory System**: Start indexing *conversations*, not just notes, allowing the agent to remember past context.
 
 ### Horizon 3: Sentience (Months 3+)
-*Goal: The OS that Dreams*
-1.  **Dream Mode**: An agent that wakes up when the user is idle (`onUserIdle`), finding connections between old notes and generating "Synthesis" suggestions.
-2.  **Voice**: Direct integration with local Whisper for voice commands.
+*Goal: The OS that Dreams (Shadow Layers & Symbiosis)*
+1.  **Shadow Layers (The Dream UI)**: The AI never touches your raw text. It projects "Shadow Layers"—metadata/comments on top of notes (like vellum). We preserve the sanctity of the user's files while overlaying synthetic insight.
+2.  **Symbiosis Engine (Psych Profiler)**: A dedicated vector index for *User Axioms*. The system learns your biases and beliefs to challenge them, not just mirror them.
+3.  **Heavy Compute Dreaming**: We are targeting RTX 5090 class hardware. The "Dreaming Agent" will use 20B+ parameter models (GPT-OSS, Nemotron-3, Mistral) to run branching, multi-threaded dream sequences that explore topic adjacencies while you sleep.
 
 ---
 
-## ❓ 6. Questions for Leadership
+## 🏛️ 6. The CEO's Mandates (Directives for Engineering)
+
+### 1. The Interaction Model: "Shadow Layers"
+*   **Directive**: "The notes can be alive at night."
+*   **Constraint**: The AI must not destructively edit files. It must behave like a layer of vellum over the notes.
+*   **Implementation**: We need a "Meta-Canvas" architecture that renders `markdown + shadow_layer_json` into a single view.
+
+### 2. The Identity Model: "The Challenger"
+*   **Directive**: "Create an AI second brain that complements and challenges the user."
+*   **Requirement**: Build a **Psychological Profiler Service**.
+*   **Implementation**: A specialized agent that extracts core beliefs from user writing and indexes them. The "Dreaming" process references this profile to find contradictions or blind spots.
+
+### 3. The Resource Contract: "Heavy Metal"
+*   **Directive**: "We are using an RTX 5090 32GB... benchmark three powerful models... full context."
+*   **Implication**: We are **NOT** constrained by mobile or weak laptop specs for the "Dreaming" mode.
+*   **Tech Stack**: We can use high-parameter models (Nemotron-3-nano, GPT-OSS:20b) and run parallel "Dream Branches" on distinct threads. Optimize for maximum intelligence, not minimum RAM.
+
+---
+
+## ❓ 7. Remaining Questions for Engineering
 
 ### To the Head of Engineering:
-1.  **The Vector Strategy**: "We are hitting the limits of in-memory JS arrays. exact-match search is fast, but semantic search is heavy. Are we willing to bundle a WASM blob (approx. 2MB) to get 100x retrieval speed, or is package size a hard constraint?"
-2.  **Testing Culture**: "I see zero unit tests for the complex Agent Logic (`ChiefOfStaff`). How do we ensure that adding a new 'Editor Agent' doesn't break the 'Chat Agent'? Can we institute a CI pipeline for agent flows?"
+1.  **The Vector Strategy**: "We are hitting the limits of in-memory JS arrays. exact-match search is fast, but semantic search is heavy. With the CEO's 'Heavy Metal' mandate, can we assume a local vector DB sidecar (e.g., Qdrant/Weaviate via Docker) is acceptable, or must we stick to in-process WASM?"
+2.  **Testing Culture**: "I see zero unit tests for the complex Agent Logic (`ChiefOfStaff`). How do we ensure that adding a new 'Psych Profiler' doesn't break the 'Chat Agent'? Can we institute a CI pipeline for agent flows?"
 3.  **Event Safety**: "The Event Bus payloads are loosely typed in practice. Are we open to switching to a strict Discriminated Union pattern for all events to prevent runtime type errors?"
-
-### To the CEO:
-1.  **Identity Vision**: "Currently, the 'User Evolution' system is empty. Is the goal for Notient to *mirror* the user (mimic their style) or to *complement* them (challenge their bias)? This changes how we build the `ProfileManager`."
-2.  **The 'Sentience' Promise**: "We call it 'Notient' (implying sentience). True sentience requires proactivity—doing things without being asked. Are we comfortable with the plugin running background agents that modify the vault while the user sleeps? This is a high-trust feature."
 
 ---
 
