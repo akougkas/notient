@@ -92,6 +92,9 @@ export default class NotientPlugin extends Plugin {
   private initStateMachine: InitializationStateMachine | null = null;
   private servicesInitialized = false;
 
+  // Indexing control
+  private indexingAbortController: AbortController | null = null;
+
   async onload(): Promise<void> {
     console.log("[Notient] Loading plugin...");
 
@@ -143,16 +146,20 @@ export default class NotientPlugin extends Plugin {
 
       // Listen for LLM settings changes to reinitialize services
       this.kernel.eventBus.on("settings:changed", async ({ changedFields }) => {
-        const llmFields = [
-          "ollama.host",
-          "ollama.embeddingModel",
-          "lmstudio.host",
-          "lmstudio.reasoningModel",
-        ];
-        const needsReinit = changedFields.some((f) => llmFields.includes(f));
-        if (needsReinit && this.servicesInitialized) {
-          console.log("[Notient] LLM settings changed, reinitializing services...");
+        // Embedding model changes require full reinit (index depends on embedding dimension)
+        const embeddingFields = ["ollama.host", "ollama.embeddingModel"];
+        // Chat model changes only need chat service reconnect (preserves index)
+        const chatFields = ["lmstudio.host", "lmstudio.reasoningModel"];
+
+        const needsFullReinit = changedFields.some((f) => embeddingFields.includes(f));
+        const needsChatReinit = changedFields.some((f) => chatFields.includes(f));
+
+        if (needsFullReinit && this.servicesInitialized) {
+          console.log("[Notient] Embedding settings changed, reinitializing all services...");
           await this.reinitializeServices();
+        } else if (needsChatReinit && this.servicesInitialized) {
+          console.log("[Notient] Chat model changed, reconnecting chat services...");
+          await this.reinitializeChatOnly();
         }
       });
 
@@ -378,8 +385,9 @@ export default class NotientPlugin extends Plugin {
         progress: { stage: "index", percent: 50, message: "Loading vector store..." },
       });
 
-      // Create vector store using HNSW algorithm (O(log N) search)
+      // Create and initialize vector store (loads HNSW WASM)
       this.vectorStore = new HNSWVectorStore(this.kernel);
+      await this.vectorStore.initialize();
       this.kernel.registerService("vectorStore", this.vectorStore);
 
       this.initStateMachine.updateProgress({
@@ -389,6 +397,7 @@ export default class NotientPlugin extends Plugin {
       });
 
       // Initialize index manager (discovers/loads index, populates vectorStore)
+      // Note: vectorStore.initialize() must be called first so HNSW WASM is ready
       this.indexManager = new IndexManager(this.kernel, this.vectorStore!);
       await this.indexManager.initialize();
       this.kernel.registerService("indexManager", this.indexManager);
@@ -994,6 +1003,10 @@ export default class NotientPlugin extends Plugin {
 
   private async reinitializeServices(): Promise<void> {
     try {
+      // Abort any ongoing indexing before disposing
+      this.indexingAbortController?.abort();
+      this.indexingAbortController = null;
+
       await this.disposeServices();
 
       // Reset state machine for fresh start
@@ -1013,6 +1026,82 @@ export default class NotientPlugin extends Plugin {
     } catch (error) {
       console.error("[Notient] Reinitialization failed:", error);
       this.kernel.obsidian.notice("Setup failed. Check console for details.");
+    }
+  }
+
+  /**
+   * Reinitialize only chat-related services.
+   * Preserves: vectorStore, indexManager, indexer, searchPipeline, conversationStore
+   * Recreates: lmStudioService, llmProvider, notientAgent, agentTaskQueue
+   */
+  private async reinitializeChatOnly(): Promise<void> {
+    console.log("[Notient] Chat model changed, reconnecting...");
+
+    try {
+      // Dispose chat services only (in reverse initialization order)
+      this.agentTaskQueue = null;
+      this.notientAgent = null;
+
+      this.llmProvider?.dispose();
+      this.llmProvider = null;
+
+      this.lmStudioService?.dispose();
+      this.lmStudioService = null;
+
+      // Recreate LM Studio service
+      if (this.settings.lmstudio.enabled && this.settings.lmstudio.reasoningModel) {
+        try {
+          this.lmStudioService = new LMStudioService(this.kernel);
+          await this.lmStudioService.initialize();
+          this.kernel.registerService("lmstudio", this.lmStudioService);
+          console.log("[Notient] LM Studio service reconnected");
+        } catch (lmError) {
+          console.warn("[Notient] LM Studio reconnection failed:", lmError);
+        }
+      }
+
+      // Recreate LLM Provider
+      this.llmProvider = new LMStudioProvider(
+        this.settings.lmstudio.host,
+        this.settings.lmstudio.reasoningModel,
+      );
+      try {
+        await this.llmProvider.initialize();
+        this.kernel.registerService("llmProvider", this.llmProvider);
+      } catch (llmError) {
+        console.warn("[Notient] LLM Provider reconnection failed:", llmError);
+      }
+
+      // Recreate AgentTaskQueue (always create for graceful degradation)
+      this.agentTaskQueue = new AgentTaskQueue(null, this.kernel.eventBus);
+      this.kernel.registerService("taskQueue", this.agentTaskQueue);
+
+      // Recreate NotientAgent if LLM Provider available
+      if (this.llmProvider && this.searchPipeline && this.contextBuilder) {
+        const currentProfile = this.profileManager?.get();
+        this.notientAgent = new NotientAgent(
+          this.llmProvider,
+          this.searchPipeline,
+          this.contextBuilder,
+          this.kernel.obsidian,
+          currentProfile,
+        );
+        this.kernel.registerService("agent", this.notientAgent);
+
+        // Wire agent to taskQueue
+        this.agentTaskQueue.setAgent(this.notientAgent);
+      }
+
+      // Wire conversation store to taskQueue (preserves existing chat history)
+      if (this.conversationStore) {
+        this.agentTaskQueue.setConversationStore(this.conversationStore);
+      }
+
+      this.kernel.obsidian.notice("Chat model reconnected");
+      console.log("[Notient] Chat services reinitialized");
+    } catch (error) {
+      console.error("[Notient] Chat reinit failed:", error);
+      this.kernel.obsidian.notice("Chat reconnection failed. Check console for details.");
     }
   }
 
@@ -1101,33 +1190,45 @@ export default class NotientPlugin extends Plugin {
       return;
     }
 
+    // Create AbortController for this indexing session
+    this.indexingAbortController = new AbortController();
+    const signal = this.indexingAbortController.signal;
+
     try {
       const stats = await this.indexManager.getStats();
       console.log("[Notient] Starting indexing:", { action, state: stats.state });
 
       if (action === "rebuild") {
         console.log("[Notient] Full reindex requested");
-        const result = await this.indexer.fullReindex();
-        this.kernel.obsidian.notice(
-          `Indexing complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
-          5000,
-        );
+        const result = await this.indexer.fullReindex(signal);
+        if (!signal.aborted) {
+          this.kernel.obsidian.notice(
+            `Indexing complete: ${result.added + result.updated} notes in ${Math.round(result.durationMs / 1000)}s`,
+            5000,
+          );
+        }
       } else {
         // Sync - incremental indexing
-        const result = await this.indexer.syncVault();
+        const result = await this.indexer.syncVault(signal);
 
-        if (result.added > 0 || result.updated > 0) {
-          this.kernel.obsidian.notice(
-            `Sync complete: ${result.added} new, ${result.updated} updated`,
-            3000,
-          );
-        } else {
-          this.kernel.obsidian.notice("Index up to date", 2000);
+        if (!signal.aborted) {
+          if (result.added > 0 || result.updated > 0) {
+            this.kernel.obsidian.notice(
+              `Sync complete: ${result.added} new, ${result.updated} updated`,
+              3000,
+            );
+          } else {
+            this.kernel.obsidian.notice("Index up to date", 2000);
+          }
         }
       }
     } catch (error) {
-      console.error("[Notient] Indexing failed:", error);
-      this.kernel.obsidian.notice("Indexing failed. Check console for details.");
+      if (!signal.aborted) {
+        console.error("[Notient] Indexing failed:", error);
+        this.kernel.obsidian.notice("Indexing failed. Check console for details.");
+      }
+    } finally {
+      this.indexingAbortController = null;
     }
   }
 

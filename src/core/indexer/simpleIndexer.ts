@@ -74,8 +74,9 @@ export class SimpleIndexer {
 
   /**
    * Sync the entire vault - only indexes changed notes
+   * @param signal Optional AbortSignal to cancel the operation
    */
-  async syncVault(): Promise<IndexResult> {
+  async syncVault(signal?: AbortSignal): Promise<IndexResult> {
     if (this.disposed) {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
@@ -86,15 +87,30 @@ export class SimpleIndexer {
     }
 
     // v3: No crash detection - just run the sync
-    return await this.doSyncVault();
+    return await this.doSyncVault(signal);
   }
 
   /**
    * Internal sync implementation - assumes lock is already held
+   * @param signal Optional AbortSignal to cancel the operation
    */
-  private async doSyncVault(): Promise<IndexResult> {
+  private async doSyncVault(signal?: AbortSignal): Promise<IndexResult> {
     const startTime = Date.now();
     this.aborted = false;
+
+    // Check if already aborted before starting
+    if (signal?.aborted) {
+      console.log("[SimpleIndexer] Sync aborted before start");
+      return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
+    }
+
+    // If signal provided, listen for abort
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        this.aborted = true;
+        console.log("[SimpleIndexer] Received abort signal");
+      });
+    }
 
     console.log("[SimpleIndexer] Starting vault sync...");
 
@@ -169,9 +185,15 @@ export class SimpleIndexer {
 
   /**
    * Full reindex - clears everything and rebuilds
+   * @param signal Optional AbortSignal to cancel the operation
    */
-  async fullReindex(): Promise<IndexResult> {
+  async fullReindex(signal?: AbortSignal): Promise<IndexResult> {
     if (this.disposed || !this.kernel.hasWriteLock) {
+      return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
+    }
+
+    // Check if already aborted
+    if (signal?.aborted) {
       return { added: 0, updated: 0, removed: 0, errors: 0, durationMs: 0 };
     }
 
@@ -179,7 +201,7 @@ export class SimpleIndexer {
     console.log("[SimpleIndexer] Starting full reindex - clearing existing index...");
     await this.indexManager.clearAll();
     console.log("[SimpleIndexer] Index cleared, starting fresh sync...");
-    return await this.doSyncVault();
+    return await this.doSyncVault(signal);
   }
 
   /**

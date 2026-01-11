@@ -133,12 +133,21 @@ export class HNSWVectorStore implements VectorStore {
   private paraDetector: ParaDetector;
   private initialized = false;
 
+  // HNSW library ready state (async WASM loading)
+  private isLibraryReady = false;
+  private libraryReadyResolve: (() => void) | null = null;
+  private libraryReadyPromise: Promise<void>;
+
   // Note states
   private noteStates: Map<string, NoteState> = new Map();
   private lastFullIndexAt: number | null = null;
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
+    // Set up promise that resolves when HNSW lib is ready
+    this.libraryReadyPromise = new Promise<void>((resolve) => {
+      this.libraryReadyResolve = resolve;
+    });
   }
 
   // ============ Configuration ============
@@ -213,11 +222,23 @@ export class HNSWVectorStore implements VectorStore {
       const { loadHnswlib } = await import("hnswlib-wasm");
       this.lib = await loadHnswlib();
       this.initialized = true;
+      this.isLibraryReady = true;
+      // Resolve the ready promise so waitForReady() callers can proceed
+      this.libraryReadyResolve?.();
       console.log("[HNSWVectorStore] HNSW library loaded");
     } catch (error) {
       console.error("[HNSWVectorStore] Failed to load HNSW library:", error);
       throw new Error(`HNSW initialization failed: ${error}`);
     }
+  }
+
+  /**
+   * Wait for HNSW library to be ready.
+   * Used by IndexManager to ensure lib is loaded before calling loadFromData().
+   */
+  async waitForReady(): Promise<void> {
+    if (this.isLibraryReady) return;
+    await this.libraryReadyPromise;
   }
 
   private ensureIndex(): void {

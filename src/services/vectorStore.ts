@@ -68,6 +68,12 @@ export interface VectorStore {
   isReady(): boolean;
 
   /**
+   * Wait for the store to be ready (async initialization).
+   * Call this before loadFromData() to ensure WASM/async resources are loaded.
+   */
+  waitForReady?(): Promise<void>;
+
+  /**
    * Dispose of the store
    */
   dispose(): Promise<void>;

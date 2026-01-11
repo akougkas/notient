@@ -316,6 +316,10 @@ export class IndexManager {
     console.log(`[IndexManager] Loading index from: ${indexPath}`);
 
     try {
+      // Wait for vector store to be ready before loading data
+      // This prevents race condition where WASM hasn't finished loading
+      await this.vectorStore.waitForReady?.();
+
       const exists = await fs.promises
         .access(indexPath)
         .then(() => true)
