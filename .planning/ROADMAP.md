@@ -29,7 +29,7 @@ None (internal Obsidian plugin patterns)
 **Goal**: Consolidate from 13 agents to 12-agent model (Chat as UI, not agent). Rewire Quick Actions to call expert agents via ChiefOfStaff. Implement 3 pinned + 3 contextual model.
 **Depends on**: Nothing (first phase)
 **Research**: Unlikely (internal refactoring, existing patterns)
-**Plans**: TBD
+**Plans**: 3 (01-Chat as UI, 02-Connection Rename, 03-Quick Actions)
 
 Key work:
 - Deprecate ChatAgent as standalone agent
@@ -136,7 +136,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Agent Architecture | 0/TBD | Not started | - |
+| 1. Agent Architecture | 0/3 | Planned | - |
 | 2. Insights Stream | 0/TBD | Not started | - |
 | 3. Agent Command Center | 0/TBD | Not started | - |
 | 4. Chat Enhancement | 0/TBD | Not started | - |
