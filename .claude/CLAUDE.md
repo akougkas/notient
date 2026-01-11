@@ -59,6 +59,62 @@ bun run format           # Format code
 
 ---
 
+## Git Infrastructure
+
+### Branch Hierarchy
+
+```
+main                         ← Tagged releases only (production-ready)
+  └── beta-spec              ← Active development (CEO workspace)
+        └── sage/simplify    ← Quality gate (review + simplify before promoting)
+              ├── archie/backend  ← Heavy backend work
+              └── faye/frontend   ← Heavy frontend work
+```
+
+### Worktree Layout
+
+| Path | Branch | Owner |
+|------|--------|-------|
+| `~/projects/notient/` | `beta-spec` | CEO (main workspace) |
+| `~/projects/_worktrees/notient-sage/` | `sage/simplify` | Sage |
+| `~/projects/_worktrees/notient-archie/` | `archie/backend` | Archie |
+| `~/projects/_worktrees/notient-faye/` | `faye/frontend` | Faye |
+
+### Workflow
+
+1. **Archie/Faye** do heavy work in their worktrees
+2. **Sage** merges their work, reviews, simplifies
+3. **CEO** merges `sage/simplify` → `beta-spec` when clean
+4. **Milestone complete?** `beta-spec` → `main` + tag
+
+### Quick Commands
+
+```bash
+# Launch agent in worktree
+cd ~/projects/_worktrees/notient-archie && claude
+
+# Merge agent work through Sage
+cd ~/projects/_worktrees/notient-sage
+git merge archie/backend  # or faye/frontend
+
+# Promote to beta-spec
+cd ~/projects/notient
+git merge sage/simplify
+
+# Reset rogue agent
+cd ~/projects/_worktrees/notient-archie
+git reset --hard sage/simplify
+```
+
+### Rules
+
+- **Never push agent branches** — All work is local
+- **Sage is the gatekeeper** — Only reviewed code reaches beta-spec
+- **Worktrees are disposable** — Reset freely if agent goes rogue
+- **Main stays clean** — Only tagged releases
+
+---
+
 ## Component Architecture
 
 ### Core Layers
