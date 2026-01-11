@@ -21,7 +21,11 @@ import type { SearchResult } from "../../../types/search";
 import type { SearchPreset } from "../../../types/settings";
 import { useKernel } from "../context/KernelContext";
 import { DeepSearchIndicator } from "./search/DeepSearchIndicator";
-import { SearchDropdown, type SearchPhase, type SearchResultItemData } from "./search/SearchDropdown";
+import {
+  SearchDropdown,
+  type SearchPhase,
+  type SearchResultItemData,
+} from "./search/SearchDropdown";
 
 // ============================================================================
 // Constants
@@ -30,9 +34,6 @@ import { SearchDropdown, type SearchPhase, type SearchResultItemData } from "./s
 const SEARCH_CONFIG = {
   debounceMs: 300,
   minQueryLength: 2,
-  instantTimeoutMs: 500,
-  evolvingTimeoutMs: 3000,
-  deepTimeoutMs: 15000,
   maxDropdownResults: 10,
 };
 
@@ -173,7 +174,11 @@ export function Omnibar({
 
   // Convert SearchResult to SearchResultItemData
   const toSearchResultItem = useCallback(
-    (result: SearchResult, tier: "instant" | "evolving" | "deep", isLoading: boolean): SearchResultItemData => ({
+    (
+      result: SearchResult,
+      tier: "instant" | "evolving" | "deep",
+      isLoading: boolean,
+    ): SearchResultItemData => ({
       noteId: result.noteId || result.path,
       path: result.path,
       title: result.title,
@@ -202,7 +207,8 @@ export function Omnibar({
       abortRef.current = new AbortController();
       const signal = abortRef.current.signal;
 
-      const progressiveSearch = kernel.getService<ProgressiveSearchOrchestrator>("progressiveSearch");
+      const progressiveSearch =
+        kernel.getService<ProgressiveSearchOrchestrator>("progressiveSearch");
       if (!progressiveSearch) {
         console.warn("[Omnibar] ProgressiveSearchOrchestrator not available");
         return;
@@ -261,13 +267,6 @@ export function Omnibar({
     (searchQuery: string) => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
-      }
-
-      if (!searchQuery.trim() || searchQuery.trim().length < SEARCH_CONFIG.minQueryLength) {
-        setSearchResults([]);
-        setShowSearchDropdown(false);
-        setSearchPhase("idle");
-        return;
       }
 
       debounceRef.current = setTimeout(() => {
@@ -406,18 +405,17 @@ export function Omnibar({
   // Handle input change
   const handleInput = useCallback(
     (e: Event) => {
-      const target = e.target as HTMLInputElement;
-      const value = target.value;
+      const value = (e.target as HTMLInputElement).value;
       setQuery(value);
 
-      // Only trigger search if not in command mode
-      if (!isSlashCommand(value)) {
-        triggerDebouncedSearch(value);
-      } else {
-        // Clear search results when entering command mode
+      if (isSlashCommand(value)) {
+        // Abort any pending search and clear results
+        abortRef.current?.abort();
         setSearchResults([]);
         setShowSearchDropdown(false);
         setSearchPhase("idle");
+      } else {
+        triggerDebouncedSearch(value);
       }
     },
     [triggerDebouncedSearch],
@@ -480,19 +478,14 @@ export function Omnibar({
         }
       }
 
-      // Shift+Enter for deep search
-      if (e.key === "Enter" && e.shiftKey && !isCommandMode) {
+      // Enter key handling
+      if (e.key === "Enter") {
         e.preventDefault();
-        executeDeepSearch();
-        return;
-      }
-
-      // Enter to execute search (if no results selected)
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        if (isCommandMode) {
+        if (e.shiftKey && !isCommandMode) {
+          executeDeepSearch();
+        } else if (isCommandMode) {
           executeCommand(query);
-        } else if (searchResults.length > 0 && searchResults[searchSelectedIndex]) {
+        } else if (searchResults[searchSelectedIndex]) {
           handleResultSelect(searchResults[searchSelectedIndex]);
         } else {
           executeProgressiveSearch(query);
@@ -550,11 +543,16 @@ export function Omnibar({
     [executeCommand],
   );
 
+  const containerClass = [
+    "nv2-omnibar",
+    isFocused && "nv2-omnibar--focused",
+    isCommandMode && "nv2-omnibar--command",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div
-      ref={containerRef}
-      class={`nv2-omnibar${isFocused ? " nv2-omnibar--focused" : ""}${isCommandMode ? " nv2-omnibar--command" : ""}`}
-    >
+    <div ref={containerRef} class={containerClass}>
       <div class="nv2-omnibar-wrapper">
         <div class="nv2-omnibar-icon" ref={iconRef} />
         {isDeepSearching ? (
@@ -589,11 +587,10 @@ export function Omnibar({
               <span class="nv2-mode-pill-label">{PRESET_DISPLAY[searchPreset].label}</span>
             </button>
           )}
-          {isSearching ? (
-            <div class="nv2-omnibar-spinner" />
-          ) : !isDeepSearching ? (
+          {isSearching && <div class="nv2-omnibar-spinner" />}
+          {!isSearching && !isDeepSearching && (
             <span class="nv2-omnibar-kbd">{isCommandMode ? "Tab" : "Enter"}</span>
-          ) : null}
+          )}
         </div>
       </div>
 
@@ -648,9 +645,17 @@ function CommandItem({ suggestion, isSelected, onClick }: CommandItemProps) {
     }
   }, [suggestion.icon]);
 
+  const itemClass = [
+    "nv2-command-item",
+    isSelected && "nv2-command-item--selected",
+    suggestion.mode === "bulk" && "nv2-command-item--bulk",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div
-      class={`nv2-command-item${isSelected ? " nv2-command-item--selected" : ""}${suggestion.mode === "bulk" ? " nv2-command-item--bulk" : ""}`}
+      class={itemClass}
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
       role="option"

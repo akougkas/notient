@@ -1,123 +1,51 @@
-# Sage Report - Phase 2 Review
-status: blocked
-commit: 213a9b7
+# Sage Report - Phase 2.5 Simplification
+status: complete
+commit: pending
 
-## Modular CSS Architecture Review
+## Simplified Files
 
-### Structure (Excellent)
-```
-src/ui/styles/
-├── index.css              # Entry point - imports all modules
-├── tokens.css             # Design tokens → Obsidian CSS vars
-├── base.css               # Layout, scrollbars, skeletons, tooltips
-├── utilities.css          # Toggles, badges, ghost buttons, alerts
-├── settings.css           # Settings panel
-├── components/            # 14 component files
-│   ├── omnibar.css        # Search input + command dropdown
-│   ├── agent-streams.css  # Agent activity view
-│   ├── chat-view.css      # Chat interface (19KB)
-│   ├── insight-stream.css # AI insights
-│   └── ...
-└── views/
-    ├── modals.css
-    └── modal-content.css
-```
+### 1. src/types/settings.ts
+- Removed duplicate JSDoc comment
+- Extracted `ProgressiveSearchSettings` into named interface
+- Removed stale phase comments
 
-### Build Pipeline
-- `esbuild` bundles `index.css` → `styles.css` (minified in prod)
-- CSS `@import` resolution + concatenation
+### 2. src/main.ts
+- Extracted shared `disposeServices()` method (~50 lines DRY)
+- Simplified `onunload()` from 60+ lines to ~15 lines
+- Simplified `reinitializeServices()` from 75+ lines to ~22 lines
+- Reorganized service field declarations with logical grouping
+- Removed outdated phase comments
 
-### Design System Strengths
-1. **Token-based**: Colors, spacing, fonts map to `--nv2-*` vars → Obsidian vars
-2. **Scoped**: All classes prefixed `nv2-` - zero conflicts
-3. **Accessible**: Focus rings, reduced motion, high contrast
-4. **Component-isolated**: Each UI file has matching CSS file
-5. **Animated**: Stagger delays, FLIP reordering, micro-interactions
+### 3. src/ui/sidebar/components/Omnibar.tsx
+- Removed unused timeout constants from SEARCH_CONFIG
+- Simplified `triggerDebouncedSearch` (removed redundant validation)
+- Improved `handleInput` clarity (positive case first)
+- Consolidated Enter key handling into single block
+- Replaced nested ternaries with explicit conditionals
+- Improved class name building with array-filter-join pattern
 
-### Quality Patterns Found
-- Skeleton shimmer animations (`base.css:306-326`)
-- Success/error flash animations (`base.css:355-392`)
-- Capability pulse animations (`agent-streams.css:40-53`)
-- Ripple effects on buttons (`agent-streams.css:498-513`)
-- ARIA-aware focus styling (`tokens.css:96-109`)
+### 4. src/ui/styles/components/search-dropdown.css
+- Removed duplicate animations (reuse from base.css)
+- Consistent design token usage throughout
+- Reduced section header noise
+- Consolidated selectors with shared properties
+- Used `inset: 0` shorthand
+- Simplified reduced-motion section
+- **74 lines reduced (~17%)**
 
----
+### 5. src/ui/sidebar/components/search/SearchDropdown.tsx
+- Consolidated two `useEffect` hooks into one
+- Cleanup now runs on both results change AND unmount
+- More thorough ref cleanup
 
-## Progressive Search Code Review
-
-### Backend (src/core/search/progressiveSearch.ts) - PASS
-- Three-tier: INSTANT → EVOLVING → DEEP
-- Timeout handling with Promise.race
-- combineSignals uses `{ once: true }` - no memory leak
-- dispose() cancels all active deep searches
-
-### Events (src/types/events.ts) - PASS
-- 5 new events properly typed with SearchResult[]
-
-### Kernel Registration - PASS
-- `progressiveSearch` in ServiceRegistry
-- Proper dispose() sequence
-
-### Omnibar (src/ui/sidebar/components/Omnibar.tsx) - PASS
-- Progressive search inline (not via orchestrator)
-- Debounced input + abort on new query
-- Cleanup on unmount
-
-### Search Components - PASS (code only)
-- SearchDropdown.tsx: FLIP animation for reorder
-- SearchResultItem.tsx: Shimmer loading, PARA icons
-- SearchFooter.tsx: "Go Deeper" button
-- DeepSearchIndicator.tsx: Cancel button
-
----
-
-## BLOCKER: Missing Search CSS
-
-The search components reference ~30 classes not in any CSS file:
-
-**Need: `components/search-dropdown.css` (or add to `omnibar.css`)**
-
-```css
-/* SearchDropdown */
-.nv2-search-dropdown
-.nv2-search-warning, .nv2-search-warning-icon
-.nv2-search-empty, .nv2-search-empty-text, .nv2-search-empty-hint
-.nv2-search-results
-
-/* SearchResultItem */
-.nv2-search-result
-.nv2-search-result--selected
-.nv2-search-result--loading (shimmer)
-.nv2-search-result-icon
-.nv2-search-result-content
-.nv2-search-result-title
-.nv2-search-result-meta
-.nv2-search-result-path, .nv2-search-result-dot, .nv2-search-result-time
-.nv2-search-result-snippet
-.nv2-search-result-score
-
-/* SearchFooter */
-.nv2-search-footer
-.nv2-search-footer-hint
-.nv2-search-deep-btn, .nv2-search-deep-btn--loading
-.nv2-search-deep-icon, .nv2-search-deep-icon--spin
-.nv2-search-deep-label
-
-/* DeepSearchIndicator */
-.nv2-deep-search-indicator
-.nv2-deep-search-spinner
-.nv2-deep-search-text
-.nv2-deep-search-cancel
-```
-
-### Minor: itemRefs accumulation
-SearchDropdown.tsx `itemRefs.current` Map never cleared - stale refs accumulate.
-
----
+### 6. src/ui/sidebar/components/search/SearchFooter.tsx
+- Extracted class name logic into named variables
+- Added explicit `JSX.Element` return type
+- Formatted destructured props vertically
 
 ## Verify
 typecheck: pass
-build: pass (566.8kb)
+build: pass (569.3kb main.js, 85.4kb styles.css)
 
-## Action Required
-Faye must create `src/ui/styles/components/search-dropdown.css` and add to `index.css` imports.
+## Issues
+none

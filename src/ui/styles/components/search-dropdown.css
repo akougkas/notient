@@ -1,39 +1,29 @@
 /* =============================================================================
    SEARCH DROPDOWN - Progressive Search Results
 
-   Dropdown for displaying search results with shimmer loading states,
-   FLIP reordering animations, and deep search controls.
-   Uses nv2-* prefix for consistency with design system.
+   Dropdown for search results with shimmer loading and deep search controls.
+   Reuses nv2-dropdown-appear animation from omnibar.css.
    ============================================================================= */
 
-/* =============================================================================
-   Container
-   ============================================================================= */
-
+/* Container */
 .nv2-search-dropdown {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + var(--nv2-space-sm));
   left: 0;
   right: 0;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--nv2-radius-lg);
-  box-shadow:
-    0 4px 6px -1px rgba(0, 0, 0, 0.1),
-    0 10px 20px -2px rgba(0, 0, 0, 0.15),
-    0 0 0 1px rgba(0, 0, 0, 0.05);
-  max-height: 400px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  animation: nv2-dropdown-appear 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--nv2-shadow-lg), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  animation: nv2-dropdown-appear var(--nv2-duration-normal) var(--nv2-ease-in-out);
   z-index: var(--nv2-z-dropdown);
 }
 
-/* =============================================================================
-   Warning Banner (AI Unavailable)
-   ============================================================================= */
-
+/* Warning Banner */
 .nv2-search-warning {
   display: flex;
   align-items: center;
@@ -42,7 +32,7 @@
   background: color-mix(in srgb, var(--color-orange) 12%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--color-orange) 25%, transparent);
   color: var(--color-orange);
-  font-size: var(--font-smaller);
+  font-size: var(--nv2-text-sm);
 }
 
 .nv2-search-warning-icon {
@@ -50,18 +40,15 @@
   line-height: 1;
 }
 
-/* =============================================================================
-   Empty State
-   ============================================================================= */
-
+/* Empty State */
 .nv2-search-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--nv2-space-xs);
   padding: var(--nv2-space-xl) var(--nv2-space-md);
   text-align: center;
-  gap: var(--nv2-space-xs);
 }
 
 .nv2-search-empty-text {
@@ -71,25 +58,20 @@
 
 .nv2-search-empty-hint {
   color: var(--text-faint);
-  font-size: var(--font-smaller);
+  font-size: var(--nv2-text-sm);
 }
 
-/* =============================================================================
-   Results List
-   ============================================================================= */
-
+/* Results List */
 .nv2-search-results {
-  padding: var(--nv2-space-xs) 0;
-  overflow-y: auto;
   flex: 1;
   min-height: 0;
+  padding: var(--nv2-space-xs) 0;
+  overflow-y: auto;
 }
 
-/* =============================================================================
-   Search Result Item
-   ============================================================================= */
-
+/* Result Item */
 .nv2-search-result {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: var(--nv2-space-sm);
@@ -100,8 +82,7 @@
   border-left: 3px solid transparent;
   text-align: left;
   cursor: pointer;
-  transition: all 0.1s ease;
-  position: relative;
+  transition: all var(--nv2-transition-fast);
 }
 
 .nv2-search-result:hover,
@@ -114,19 +95,15 @@
   background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
 }
 
-/* Loading shimmer state */
+/* Loading shimmer - uses skeleton-shimmer from base.css */
 .nv2-search-result--loading {
-  position: relative;
   overflow: hidden;
 }
 
 .nv2-search-result--loading::before {
   content: "";
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -134,25 +111,22 @@
     transparent 100%
   );
   background-size: 200% 100%;
-  animation: nv2-shimmer 1.5s ease-in-out infinite;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
   pointer-events: none;
 }
 
-/* =============================================================================
-   Result Icon
-   ============================================================================= */
-
+/* Result Icon */
 .nv2-search-result-icon {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
+  margin-top: 2px;
+  flex-shrink: 0;
   background: var(--background-modifier-hover);
   border-radius: var(--nv2-radius-md);
   color: var(--text-muted);
-  flex-shrink: 0;
-  margin-top: 2px;
 }
 
 .nv2-search-result-icon svg {
@@ -165,10 +139,7 @@
   color: var(--interactive-accent);
 }
 
-/* =============================================================================
-   Result Content
-   ============================================================================= */
-
+/* Result Content */
 .nv2-search-result-content {
   flex: 1;
   min-width: 0;
@@ -180,7 +151,6 @@
 .nv2-search-result-title {
   font-weight: var(--nv2-font-medium);
   color: var(--text-normal);
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -190,80 +160,69 @@
   display: flex;
   align-items: center;
   gap: var(--nv2-space-xs);
-  font-size: 11px;
+  font-size: var(--nv2-text-xs);
   color: var(--text-muted);
 }
 
 .nv2-search-result-path {
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 180px;
 }
 
-.nv2-search-result-dot {
-  color: var(--text-faint);
-  flex-shrink: 0;
-}
-
+.nv2-search-result-dot,
 .nv2-search-result-time {
   flex-shrink: 0;
   color: var(--text-faint);
 }
 
 .nv2-search-result-snippet {
-  display: block;
-  font-size: var(--font-smaller);
+  margin-top: var(--nv2-space-xs);
+  font-size: var(--nv2-text-sm);
   color: var(--text-muted);
-  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
 }
 
-/* =============================================================================
-   Result Score Badge
-   ============================================================================= */
-
+/* Score Badge */
 .nv2-search-result-score {
   flex-shrink: 0;
   padding: 2px 6px;
+  font-family: var(--nv2-font-mono);
+  font-size: 10px;
+  font-weight: var(--nv2-font-medium);
   background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
   border-radius: var(--nv2-radius-sm);
   color: var(--interactive-accent);
-  font-size: 10px;
-  font-family: var(--font-monospace);
-  font-weight: var(--nv2-font-medium);
 }
 
-/* =============================================================================
-   Search Footer (Go Deeper)
-   ============================================================================= */
-
+/* Footer */
 .nv2-search-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--nv2-space-md);
   padding: var(--nv2-space-sm) var(--nv2-space-md);
-  border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
+/* Deep Search Button */
 .nv2-search-deep-btn {
   display: flex;
   align-items: center;
   gap: var(--nv2-space-xs);
   padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  font-size: var(--nv2-text-sm);
+  font-weight: var(--nv2-font-medium);
   background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--interactive-accent) 25%, transparent);
   border-radius: var(--nv2-radius-md);
   color: var(--interactive-accent);
-  font-size: var(--font-smaller);
-  font-weight: var(--nv2-font-medium);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--nv2-transition-normal);
 }
 
 .nv2-search-deep-btn:hover:not(:disabled) {
@@ -306,27 +265,25 @@
   line-height: 1;
 }
 
+/* Footer Hint */
 .nv2-search-footer-hint {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--nv2-space-xs);
   font-size: 10px;
   color: var(--text-faint);
 }
 
 .nv2-search-footer-hint kbd {
-  padding: 1px 4px;
-  font-family: var(--font-monospace);
+  padding: 1px var(--nv2-space-xs);
+  font-family: var(--nv2-font-mono);
   font-size: 9px;
   background: var(--background-modifier-hover);
-  border-radius: 3px;
   border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
 }
 
-/* =============================================================================
-   Deep Search Indicator (Inline in Omnibar)
-   ============================================================================= */
-
+/* Deep Search Indicator (Inline in Omnibar) */
 .nv2-deep-search-indicator {
   display: flex;
   align-items: center;
@@ -338,10 +295,10 @@
 
 .nv2-deep-search-spinner {
   display: flex;
+  flex-shrink: 0;
   width: 16px;
   height: 16px;
   color: var(--interactive-accent);
-  flex-shrink: 0;
 }
 
 .nv2-deep-search-spinner svg {
@@ -352,8 +309,8 @@
 
 .nv2-deep-search-text {
   flex: 1;
-  color: var(--text-muted);
   font-size: var(--font-ui-medium);
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -363,6 +320,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 20px;
   height: 20px;
   padding: 0;
@@ -371,8 +329,7 @@
   border-radius: var(--nv2-radius-sm);
   color: var(--text-muted);
   cursor: pointer;
-  transition: all 0.1s ease;
-  flex-shrink: 0;
+  transition: all var(--nv2-transition-fast);
 }
 
 .nv2-deep-search-cancel:hover {
@@ -385,41 +342,10 @@
   height: 14px;
 }
 
-/* =============================================================================
-   Animations
-   ============================================================================= */
-
-@keyframes nv2-shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-@keyframes nv2-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* =============================================================================
-   Reduced Motion
-   ============================================================================= */
-
+/* Reduced Motion - shimmer handled by tokens.css global rule */
 @media (prefers-reduced-motion: reduce) {
-  .nv2-search-dropdown {
-    animation: none;
-  }
-
   .nv2-search-result--loading::before {
     animation: none;
     background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
-  }
-
-  .nv2-search-deep-icon--spin,
-  .nv2-deep-search-spinner svg {
-    animation-duration: 2s;
   }
 }

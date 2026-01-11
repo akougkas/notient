@@ -25,7 +25,6 @@ export interface NotientSettings {
   };
 
   /** Indexing configuration */
-  /** Indexing configuration */
   indexing: IndexingSettings;
 
   /** PARA folder mappings */
@@ -54,8 +53,6 @@ export interface NotientSettings {
 
   /** Setup wizard completion flag */
   setupComplete: boolean;
-
-  // Phase 2 additions
 
   /** Agent settings (trust, history, bulk operations) */
   agent: AgentSettings;
@@ -114,6 +111,18 @@ export interface ChatRetention {
 
 export type SearchPreset = "quick" | "balanced" | "thorough" | "custom";
 
+/**
+ * Progressive search configuration
+ */
+export interface ProgressiveSearchSettings {
+  /** Enable progressive search vs legacy (default: true) */
+  enabled: boolean;
+  /** Display AI scores in results (default: false) */
+  showScores: boolean;
+  /** Auto-trigger deep search for complex queries (default: false) */
+  autoDeep: boolean;
+}
+
 export interface SearchSettings {
   preset: SearchPreset;
   custom: {
@@ -121,16 +130,7 @@ export interface SearchSettings {
     enableReranking: boolean;
     minScore: number;
   };
-
-  /** Progressive search settings */
-  progressive: {
-    /** Enable progressive search vs legacy (default: true) */
-    enabled: boolean;
-    /** Display AI scores in results (default: false) */
-    showScores: boolean;
-    /** Auto-trigger deep search for complex queries (default: false) */
-    autoDeep: boolean;
-  };
+  progressive: ProgressiveSearchSettings;
 }
 
 export interface IndexingSettings {
@@ -201,7 +201,6 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     keepAliveMs: 300000, // 5 minutes
   },
   setupComplete: false,
-  // Phase 2 defaults
   agent: {
     trustPolicy: {
       autoApplyLowRisk: false,

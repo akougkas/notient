@@ -15,7 +15,6 @@ import { Notice, Plugin } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
 import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
-// Phase 2: Conversation persistence + Agentic services
 import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
@@ -25,7 +24,6 @@ import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
 import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
 import { Kernel, type KernelContext } from "./core/kernel";
-// New architecture (Phase 1.8)
 import { LMStudioProvider } from "./core/llm";
 import { SearchPipeline } from "./core/search/pipeline";
 import { ProgressiveSearchOrchestrator } from "./core/search/progressiveSearch";
@@ -51,47 +49,47 @@ export default class NotientPlugin extends Plugin {
   private settings!: NotientSettings;
   private settingTab!: NotientSettingTab;
 
-  // Services - initialized lazily
+  // LLM providers
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
   private ollamaReranker: OllamaRerankerService | null = null;
   private lmStudioService: LMStudioService | null = null;
+  private llmProvider: LMStudioProvider | null = null;
+
+  // Indexing and search
   private vectorStore: SimpleVectorStore | null = null;
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
   private progressiveSearch: ProgressiveSearchOrchestrator | null = null;
   private contextBuilder: VaultContextBuilder | null = null;
+
+  // Intelligence and vitals
   private vaultVitals: SimpleVaultVitals | null = null;
-  // Phase 3: Note intelligence (summaries + health)
   private noteIntelligence: NoteIntelligenceService | null = null;
-  // New architecture (Phase 1.8)
-  private llmProvider: LMStudioProvider | null = null;
+  private actionOrchestrator: ActionOrchestrator | null = null;
+
+  // Agent system
   private notientAgent: NotientAgent | null = null;
   private agentTaskQueue: AgentTaskQueue | null = null;
-
-  // Phase 2: Conversation persistence + Agentic services
   private conversationStore: ConversationStore | null = null;
+
+  // Agentic actions
   private actionHistory: ActionHistory | null = null;
   private trustLevelManager: TrustLevelManager | null = null;
   private actionApplier: ActionApplier | null = null;
   private workflowRunner: WorkflowRunner | null = null;
-  // Intelligence 2.0
-  private actionOrchestrator: ActionOrchestrator | null = null;
 
-  // Identity system
+  // Identity and evolution
   private profileManager: ProfileManager | null = null;
-
-  // Evolution system (PART 1.3)
   private userEvolution: UserEvolutionService | null = null;
 
-  // Import bridge service
+  // Import and migration
   private importerService: ImporterService | null = null;
   private migrationService: MigrationService | null = null;
 
-  // State machine for initialization
+  // Initialization state
   private initStateMachine: InitializationStateMachine | null = null;
-
   private servicesInitialized = false;
 
   async onload(): Promise<void> {
@@ -180,53 +178,7 @@ export default class NotientPlugin extends Plugin {
     console.log("[Notient] Unloading plugin...");
 
     try {
-      // Dispose services in reverse order
-      // Phase 2: Flush agentic services first
-      if (this.workflowRunner) {
-        this.workflowRunner.dispose();
-        this.workflowRunner = null;
-      }
-      if (this.actionApplier) {
-        this.actionApplier = null;
-      }
-      if (this.actionOrchestrator) {
-        this.actionOrchestrator = null;
-      }
-      if (this.trustLevelManager) {
-        this.trustLevelManager = null;
-      }
-      if (this.actionHistory) {
-        await this.actionHistory.dispose();
-        this.actionHistory = null;
-      }
-      if (this.conversationStore) {
-        await this.conversationStore.dispose();
-        this.conversationStore = null;
-      }
-
-      this.agentTaskQueue = null;
-      this.notientAgent = null;
-      this.llmProvider?.dispose();
-      this.noteIntelligence?.dispose();
-      // Unload evolution service
-      if (this.userEvolution) {
-        await this.userEvolution.unload();
-        this.userEvolution = null;
-      }
-      this.vaultVitals?.dispose();
-      this.contextBuilder = null;
-      this.progressiveSearch?.dispose();
-      this.searchPipeline?.dispose();
-      this.indexer?.dispose();
-      if (this.indexManager) {
-        await this.indexManager.dispose();
-      }
-      if (this.vectorStore) {
-        await this.vectorStore.dispose();
-      }
-      this.lmStudioService?.dispose();
-      this.ollamaService?.dispose();
-      this.healthMonitor?.dispose();
+      await this.disposeServices();
 
       // Dispose state machine
       this.initStateMachine?.dispose();
@@ -239,6 +191,73 @@ export default class NotientPlugin extends Plugin {
     }
 
     console.log("[Notient] Plugin unloaded");
+  }
+
+  /**
+   * Dispose all services in reverse initialization order.
+   * Used by both onunload() and reinitializeServices().
+   */
+  private async disposeServices(): Promise<void> {
+    // Agentic services first (depend on other services)
+    this.workflowRunner?.dispose();
+    this.workflowRunner = null;
+    this.actionApplier = null;
+    this.actionOrchestrator = null;
+    this.trustLevelManager = null;
+
+    if (this.actionHistory) {
+      await this.actionHistory.dispose();
+      this.actionHistory = null;
+    }
+    if (this.conversationStore) {
+      await this.conversationStore.dispose();
+      this.conversationStore = null;
+    }
+
+    // Agent system
+    this.agentTaskQueue = null;
+    this.notientAgent = null;
+    this.llmProvider?.dispose();
+    this.llmProvider = null;
+
+    // Intelligence and evolution
+    this.noteIntelligence?.dispose();
+    this.noteIntelligence = null;
+    if (this.userEvolution) {
+      await this.userEvolution.unload();
+      this.userEvolution = null;
+    }
+
+    // Search and context
+    this.vaultVitals?.dispose();
+    this.progressiveSearch?.dispose();
+    this.searchPipeline?.dispose();
+    this.contextBuilder = null;
+    this.searchPipeline = null;
+
+    // Indexing
+    this.indexer?.dispose();
+    this.indexer = null;
+    if (this.indexManager) {
+      await this.indexManager.dispose();
+      this.indexManager = null;
+    }
+    if (this.vectorStore) {
+      await this.vectorStore.dispose();
+      this.vectorStore = null;
+    }
+
+    // LLM providers
+    this.lmStudioService?.dispose();
+    this.lmStudioService = null;
+    this.ollamaService?.dispose();
+    this.ollamaService = null;
+
+    // Health monitor
+    this.healthMonitor?.dispose();
+    this.healthMonitor = null;
+
+    this.servicesInitialized = false;
   }
 
   /**
@@ -500,7 +519,9 @@ export default class NotientPlugin extends Plugin {
           this.notientAgent?.setProfile(event.profile);
         });
       } else {
-        console.warn("[Notient] LLM provider not available - agent tasks will fail with clear error");
+        console.warn(
+          "[Notient] LLM provider not available - agent tasks will fail with clear error",
+        );
       }
 
       // ConversationStore
@@ -973,72 +994,17 @@ export default class NotientPlugin extends Plugin {
 
   private async reinitializeServices(): Promise<void> {
     try {
-      // Dispose old services
-      // Phase 2: Flush agentic services first
-      if (this.workflowRunner) {
-        this.workflowRunner.dispose();
-        this.workflowRunner = null;
-      }
-      if (this.actionApplier) {
-        this.actionApplier = null;
-      }
-      if (this.actionOrchestrator) {
-        this.actionOrchestrator = null;
-      }
-      if (this.trustLevelManager) {
-        this.trustLevelManager = null;
-      }
-      if (this.actionHistory) {
-        await this.actionHistory.dispose();
-        this.actionHistory = null;
-      }
-      if (this.conversationStore) {
-        await this.conversationStore.dispose();
-        this.conversationStore = null;
-      }
+      await this.disposeServices();
 
-      this.agentTaskQueue = null;
-      this.notientAgent = null;
-      this.llmProvider?.dispose();
-      this.noteIntelligence?.dispose();
-      this.progressiveSearch?.dispose();
-      this.searchPipeline?.dispose();
-      this.contextBuilder = null;
-      this.indexer?.dispose();
-      if (this.indexManager) {
-        await this.indexManager.dispose();
-      }
-      if (this.vectorStore) {
-        await this.vectorStore.dispose();
-      }
-      this.lmStudioService?.dispose();
-      this.ollamaService?.dispose();
-      // Dispose HealthMonitor to stop its polling interval (prevents memory leak)
-      this.healthMonitor?.dispose();
-
-      this.llmProvider = null;
-      this.noteIntelligence = null;
-      this.searchPipeline = null;
-      this.contextBuilder = null;
-      this.indexer = null;
-      this.indexManager = null;
-      this.vectorStore = null;
-      this.lmStudioService = null;
-      this.ollamaService = null;
-      this.healthMonitor = null;
-      this.agentTaskQueue = null;
-      this.servicesInitialized = false;
-
-      // Reset state machine to UNINITIALIZED for fresh start
+      // Reset state machine for fresh start
       this.initStateMachine?.dispose();
       this.initStateMachine = new InitializationStateMachine({
         eventBus: this.kernel.eventBus,
-        onStateChange: (ctx) => {
-          console.log("[Notient] Init state:", ctx.state, ctx.capabilities);
+        onStateChange: (context) => {
+          console.log("[Notient] Init state:", context.state, context.capabilities);
         },
       });
 
-      // Reinitialize
       await this.initializeServicesAsync();
 
       if (this.servicesInitialized) {

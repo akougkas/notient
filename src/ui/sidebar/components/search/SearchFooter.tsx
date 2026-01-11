@@ -3,7 +3,7 @@
  */
 
 import { setIcon } from "obsidian";
-import type { Ref } from "preact";
+import type { JSX, Ref } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 
 interface SearchFooterProps {
@@ -13,7 +13,12 @@ interface SearchFooterProps {
   deepButtonRef?: Ref<HTMLButtonElement>;
 }
 
-export function SearchFooter({ onDeepSearch, isDeepSearching, disabled, deepButtonRef }: SearchFooterProps) {
+export function SearchFooter({
+  onDeepSearch,
+  isDeepSearching,
+  disabled,
+  deepButtonRef,
+}: SearchFooterProps): JSX.Element {
   const iconRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -22,24 +27,26 @@ export function SearchFooter({ onDeepSearch, isDeepSearching, disabled, deepButt
     }
   }, [isDeepSearching]);
 
+  const buttonClass = isDeepSearching
+    ? "nv2-search-deep-btn nv2-search-deep-btn--loading"
+    : "nv2-search-deep-btn";
+
+  const iconClass = isDeepSearching
+    ? "nv2-search-deep-icon nv2-search-deep-icon--spin"
+    : "nv2-search-deep-icon";
+
   return (
     <div class="nv2-search-footer">
       <button
         ref={deepButtonRef}
         type="button"
-        class={`nv2-search-deep-btn${isDeepSearching ? " nv2-search-deep-btn--loading" : ""}`}
+        class={buttonClass}
         onClick={onDeepSearch}
         disabled={disabled || isDeepSearching}
         aria-label="Trigger deep search"
       >
-        <span
-          class={`nv2-search-deep-icon${isDeepSearching ? " nv2-search-deep-icon--spin" : ""}`}
-          ref={iconRef}
-          aria-hidden="true"
-        />
-        <span class="nv2-search-deep-label">
-          {isDeepSearching ? "Searching..." : "Go Deeper"}
-        </span>
+        <span class={iconClass} ref={iconRef} aria-hidden="true" />
+        <span class="nv2-search-deep-label">{isDeepSearching ? "Searching..." : "Go Deeper"}</span>
       </button>
       <span class="nv2-search-footer-hint">
         <kbd>Shift</kbd>+<kbd>Enter</kbd>

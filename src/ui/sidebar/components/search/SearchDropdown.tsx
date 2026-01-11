@@ -91,23 +91,18 @@ export function SearchDropdown({
     }
   }, [phase]);
 
-  // Clean up itemRefs when results change to prevent memory leak
+  // Clean up stale refs when results change, and clear all on unmount
   useEffect(() => {
-    // Remove refs for results that no longer exist
     const currentIds = new Set(results.map((r) => r.noteId));
     for (const id of itemRefs.current.keys()) {
       if (!currentIds.has(id)) {
         itemRefs.current.delete(id);
       }
     }
-  }, [results]);
-
-  // Clear all refs on unmount
-  useEffect(() => {
     return () => {
       itemRefs.current.clear();
     };
-  }, []);
+  }, [results]);
 
   if (!isOpen) return null;
 
@@ -119,7 +114,9 @@ export function SearchDropdown({
       class="nv2-search-dropdown"
       role="listbox"
       aria-label="Search results"
-      aria-activedescendant={hasResults ? `search-result-${results[selectedIndex]?.noteId}` : undefined}
+      aria-activedescendant={
+        hasResults ? `search-result-${results[selectedIndex]?.noteId}` : undefined
+      }
     >
       {showWarning && (
         <div class="nv2-search-warning" role="alert">
