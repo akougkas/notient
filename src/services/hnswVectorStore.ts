@@ -38,8 +38,8 @@ const HNSW_CONFIG = {
   initialMaxElements: 50000,
 };
 
-/** Index file version */
-const INDEX_VERSION = 1;
+/** Index file version - must match IndexManager expectations (v3) */
+const INDEX_VERSION = 3;
 
 // ============================================================================
 // Types

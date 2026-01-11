@@ -106,24 +106,41 @@ export class LinkFinderAgent extends BaseAgent {
    * Parse link suggestions from LLM
    * Robust handling: sanitizes control chars and markdown, handles parse failures gracefully
    */
-  protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput {
+  protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput & { parseError?: string } {
     let parsed: LinkSuggestionsOutput | null = null;
+    let parseError: string | undefined;
 
-    try {
-      // Sanitize control characters that break JSON.parse
-      let sanitized = rawOutput
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
-        .replace(/\r\n/g, "\n") // Normalize line endings
-        .replace(/\r/g, "\n");
+    // Log raw output for debugging (truncated)
+    const truncatedRaw = rawOutput.length > 500 ? `${rawOutput.slice(0, 500)}...(${rawOutput.length} chars)` : rawOutput;
+    this.log(`Raw LLM output: ${truncatedRaw || "(empty)"}`);
 
-      // Remove markdown formatting inside JSON strings (common LLM mistake)
-      // e.g., "reason": **"Some text"** → "reason": "Some text"
-      sanitized = sanitized.replace(/\*\*"([^"]+)"\*\*/g, '"$1"');
-      sanitized = sanitized.replace(/\*\*([^*]+)\*\*/g, "$1");
+    // Check for empty response
+    if (!rawOutput || rawOutput.trim().length === 0) {
+      parseError = "LLM returned empty response (possible timeout or overload)";
+      this.warn(parseError);
+    } else {
+      try {
+        // Sanitize control characters that break JSON.parse
+        let sanitized = rawOutput
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
+          .replace(/\r\n/g, "\n") // Normalize line endings
+          .replace(/\r/g, "\n");
 
-      parsed = this.parseJSON<LinkSuggestionsOutput>(sanitized);
-    } catch (error) {
-      this.warn("JSON parse failed, returning empty links:", error);
+        // Remove markdown formatting inside JSON strings (common LLM mistake)
+        // e.g., "reason": **"Some text"** → "reason": "Some text"
+        sanitized = sanitized.replace(/\*\*"([^"]+)"\*\*/g, '"$1"');
+        sanitized = sanitized.replace(/\*\*([^*]+)\*\*/g, "$1");
+
+        parsed = this.parseJSON<LinkSuggestionsOutput>(sanitized);
+
+        if (!parsed) {
+          parseError = "No valid JSON found in LLM response";
+          this.warn(parseError);
+        }
+      } catch (error) {
+        parseError = `JSON parse error: ${error instanceof Error ? error.message : String(error)}`;
+        this.warn(parseError);
+      }
     }
 
     // Graceful fallback: return empty links on any parse failure
@@ -138,6 +155,7 @@ export class LinkFinderAgent extends BaseAgent {
       agentType: "link-finder",
       schema: "LinkSuggestionsOutput",
       data: { links: validLinks },
+      parseError,
     };
   }
 
@@ -175,7 +193,12 @@ export class LinkFinderAgent extends BaseAgent {
         yield { type: "citations", agentType: "link-finder", paths: citationPaths };
       }
 
-      this.log(`Found ${linkOutput.links.length} link suggestions`);
+      // Log with distinction between parse error vs no links found
+      if (output.parseError) {
+        this.warn(`Parse error (returning ${linkOutput.links.length} links): ${output.parseError}`);
+      } else {
+        this.log(`Found ${linkOutput.links.length} link suggestions`);
+      }
 
       yield { type: "progress", agentType: "link-finder", progress: 100 };
       yield { type: "complete", agentType: "link-finder", output };

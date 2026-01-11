@@ -1,35 +1,34 @@
 # Archie Report
 status: complete
-commit: 8087d1c
+commit: 736880b, 43196a6
 
 ## did
+
+### Commit 736880b: HNSW Vector Store
 - src/services/hnswVectorStore.ts: Created HNSW vector store using hnswlib-wasm (O(log N) search)
 - src/services/chunkStore.ts: Extracted ChunkStore to separate file (model-agnostic)
 - src/services/simpleVectorStore.ts: DELETED (replaced by HNSW)
-- src/main.ts:8,37,60,381-383: Updated to use HNSWVectorStore directly
-- src/core/kernel.ts:113,307: Updated comments to reference HNSW
-- src/services/indexManager.ts:5,22,26: Updated imports and comments
+- src/main.ts: Updated to use HNSWVectorStore directly
 - package.json: Added hnswlib-wasm@0.8.2
 
-## research summary
-| Library | Algorithm | Bundle | Status |
-|---------|-----------|--------|--------|
-| hnswlib-wasm | HNSW (O(log N)) | ~600KB | **Selected** - mature, browser-native |
-| usearch | HNSW | unknown | Node.js primary, WASM unclear |
-| voy | k-d tree | 75KB | Wrong algorithm for high-dim vectors |
-| vectra | Brute-force | N/A | No improvement over current |
+### Commit 43196a6: Backend Fixes (from Faye's testing)
+- src/services/hnswVectorStore.ts:42: Fixed INDEX_VERSION 1→3 (was causing full reindex every startup)
+- src/ui/sidebar/state/appHandlers.ts:61-65,103-107: Added indexing guards to block agent actions during indexing
+- src/core/agents/linkFinderAgent.ts:109-160: Improved error handling with raw output logging and parse error tracking
 
-## implementation
-- HNSWVectorStore is now the ONLY vector store (no feature flag)
-- HNSW parameters: M=16, efConstruction=200, efSearch=100
-- HNSW manages labels internally via addItems() return values
-- Batch add/delete via addItems() and markDeleteItems()
-- ChunkStore separated for model-agnostic chunk storage
-- Full VectorStore interface compatibility maintained
+## issues fixed
+
+| Issue | Root Cause | Fix |
+|-------|------------|-----|
+| Full reindex every startup | INDEX_VERSION=1 rejected by IndexManager (expects 2 or 3) | Changed to INDEX_VERSION=3 |
+| GPU freeze during indexing | No guard for agent actions, compete for Ollama | Added isIndexing check before triggerAgenticAction |
+| Link Finder silent failures | No rawOutput logging, parse errors silently swallowed | Added logging, parseError tracking |
 
 ## verify
-typecheck: pass (excluding Faye's in-progress work)
+typecheck: pass
 build: pass (1.2MB bundle with WASM)
 
-## issues
-none - clean implementation, no backwards compatibility concerns per CEO direction
+## notes
+- HNSW parameters: M=16, efConstruction=200, efSearch=100
+- Indexing guard shows Notice: "Please wait for indexing to complete before running agents"
+- Link Finder now logs truncated raw output for debugging parse failures

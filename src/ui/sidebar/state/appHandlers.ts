@@ -22,6 +22,7 @@ import {
   chatMessages,
   chatStreamingContent,
   chatStreamingThinking,
+  indexStatus,
   isChatStreaming,
   isChatThinking,
 } from "../state";
@@ -54,7 +55,14 @@ export function triggerAgenticAction(
     taskType,
     hasTaskQueue: !!taskQueue,
     hasNoteVitals: !!noteVitals.value,
+    isIndexing: indexStatus.value.isIndexing,
   });
+
+  // Guard: Don't allow agent actions while indexing to prevent GPU contention
+  if (indexStatus.value.isIndexing) {
+    new Notice("Please wait for indexing to complete before running agents");
+    return;
+  }
 
   if (taskQueue && noteVitals.value) {
     try {
@@ -92,6 +100,12 @@ export function prefillChatAndSwitch(
   { taskQueue, noteVitals }: PrefillChatDeps,
   prompt: string,
 ): void {
+  // Guard: Don't allow chat while indexing to prevent GPU contention
+  if (indexStatus.value.isIndexing) {
+    new Notice("Please wait for indexing to complete before using chat");
+    return;
+  }
+
   if (taskQueue && noteVitals.value) {
     try {
       taskQueue.enqueue({
