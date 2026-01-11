@@ -184,14 +184,22 @@ function AppContent() {
     [staticInsights, agentInsights.value],
   );
 
-  const quickActions = useMemo(
-    () =>
-      createNoteQuickActions(noteVitals.value?.title || "this note", {
-        triggerAgent: onTriggerAgenticAction,
-        sendToChat: onPrefillChatAndSwitch,
-      }),
-    [noteVitals.value?.title, onTriggerAgenticAction, onPrefillChatAndSwitch],
-  );
+  const quickActions = useMemo(() => {
+    const vitals = noteVitals.value;
+    // Derive note state for contextual action filtering
+    const noteState = vitals
+      ? {
+          wordCount: 500, // TODO: Add wordCount to NoteVitals
+          linkCount: vitals.links.backlinks + vitals.links.outlinks,
+          hasCheckboxes: false, // TODO: Add checkbox detection to NoteVitals
+        }
+      : undefined;
+    return createNoteQuickActions(
+      vitals?.title || "this note",
+      { triggerAgent: onTriggerAgenticAction, sendToChat: onPrefillChatAndSwitch },
+      noteState,
+    );
+  }, [noteVitals.value, onTriggerAgenticAction, onPrefillChatAndSwitch]);
 
   // Modal handlers
   const openModelSelector = useCallback(() => {
