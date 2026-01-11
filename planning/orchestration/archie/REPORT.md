@@ -1,30 +1,35 @@
 # Archie Report
 status: complete
-commit: 7314bb1
+commit: 8087d1c
 
 ## did
-- src/types/settings.ts:117-133: Added SearchSettings.progressive interface
-  - enabled: boolean (default true) - toggle progressive vs legacy
-  - showScores: boolean (default false) - display AI scores in results
-  - autoDeep: boolean (default false) - auto-trigger deep for complex queries
-- src/types/settings.ts:197: Added progressive defaults to DEFAULT_SETTINGS.search
-- src/main.ts:31: Added ProgressiveSearchOrchestrator import
-- src/main.ts:63: Added progressiveSearch member variable
-- src/main.ts:412-414: Instantiated and registered ProgressiveSearchOrchestrator after SearchPipeline
-- src/main.ts:218,1004: Added progressiveSearch?.dispose() cleanup in both unload paths
-- src/ui/sidebar/components/Omnibar.tsx:19: Changed import from SearchPipeline to ProgressiveSearchOrchestrator
-- src/ui/sidebar/components/Omnibar.tsx:189-257: Refactored executeProgressiveSearch to use orchestrator's generator
-- src/ui/sidebar/components/Omnibar.tsx:280-316: Refactored executeDeepSearch to use orchestrator's deepSearch
+- src/services/hnswVectorStore.ts: Created HNSW vector store using hnswlib-wasm (O(log N) search)
+- src/services/chunkStore.ts: Extracted ChunkStore to separate file (model-agnostic)
+- src/services/simpleVectorStore.ts: DELETED (replaced by HNSW)
+- src/main.ts:8,37,60,381-383: Updated to use HNSWVectorStore directly
+- src/core/kernel.ts:113,307: Updated comments to reference HNSW
+- src/services/indexManager.ts:5,22,26: Updated imports and comments
+- package.json: Added hnswlib-wasm@0.8.2
 
-## architecture
-CEO decision: Wire Omnibar to ProgressiveSearchOrchestrator (Option A)
-- Omnibar now uses kernel.getService("progressiveSearch") instead of inline search logic
-- Progressive search generator yields INSTANT then EVOLVING events
-- Deep search uses orchestrator's async deepSearch() with AbortController support
+## research summary
+| Library | Algorithm | Bundle | Status |
+|---------|-----------|--------|--------|
+| hnswlib-wasm | HNSW (O(log N)) | ~600KB | **Selected** - mature, browser-native |
+| usearch | HNSW | unknown | Node.js primary, WASM unclear |
+| voy | k-d tree | 75KB | Wrong algorithm for high-dim vectors |
+| vectra | Brute-force | N/A | No improvement over current |
+
+## implementation
+- HNSWVectorStore is now the ONLY vector store (no feature flag)
+- HNSW parameters: M=16, efConstruction=200, efSearch=100
+- HNSW manages labels internally via addItems() return values
+- Batch add/delete via addItems() and markDeleteItems()
+- ChunkStore separated for model-agnostic chunk storage
+- Full VectorStore interface compatibility maintained
 
 ## verify
-typecheck: pass
-build: pass
+typecheck: pass (excluding Faye's in-progress work)
+build: pass (1.2MB bundle with WASM)
 
 ## issues
-none
+none - clean implementation, no backwards compatibility concerns per CEO direction

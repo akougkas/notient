@@ -2,7 +2,7 @@
  * Index Manager
  *
  * Unified management of vector index and note state tracking.
- * OWNS ALL FILE I/O - SimpleVectorStore is pure in-memory.
+ * OWNS ALL FILE I/O - VectorStore implementations are pure in-memory.
  *
  * Responsibilities:
  * - Discover existing index files on disk
@@ -19,11 +19,11 @@ import type { Kernel } from "../core/kernel";
 import type { EmbeddedChunk, NoteChunk, StoredChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 import { atomicWriteFile } from "../utils/atomicWrite";
-import { ChunkStore } from "./simpleVectorStore";
+import { ChunkStore } from "./chunkStore";
 import { formatIndexTimestamp, parseIndexTimestamp } from "./storagePaths";
 import type { VectorStore } from "./vectorStore";
 
-/** Index file version - must match SimpleVectorStore */
+/** Index file version - must match VectorStore implementations */
 const INDEX_VERSION = 3;
 
 /** Regex to parse v3 index filename: idx_{timestamp}_v{version}_{model}_{dim}d.json */

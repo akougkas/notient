@@ -110,7 +110,7 @@ export class Kernel {
   private _capabilities: CapabilityStatus = {
     embedding: false,
     reasoning: false,
-    vectorStore: true, // SimpleVectorStore is pure JS, always available
+    vectorStore: true, // HNSWVectorStore uses WASM, always available
     indexing: false,
     search: false,
   };
@@ -304,7 +304,7 @@ export class Kernel {
     this._capabilities = {
       embedding: hasOllama,
       reasoning: hasLMStudio,
-      vectorStore: true, // SimpleVectorStore is always available (pure JS)
+      vectorStore: true, // HNSWVectorStore is always available (WASM)
       indexing: hasOllama && hasLock,
       search: hasOllama,
     };

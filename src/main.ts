@@ -5,7 +5,7 @@
  * SAFETY: Plugin must always load. Services initialize lazily after setup.
  *
  * Architecture (Simplified):
- * - SimpleVectorStore: Brute-force cosine similarity, JSON persistence
+ * - HNSWVectorStore: HNSW algorithm (O(log N) search), WASM-based
  * - IndexManager: Coordinates vector store and note state
  * - SimpleIndexer: Batch processing with UI yields, no JobQueue
  * - SearchPipeline: Cached semantic search
@@ -34,7 +34,7 @@ import { IndexManager } from "./services/indexManager";
 import { LMStudioService } from "./services/lmstudio";
 import { OllamaService } from "./services/ollama";
 import { OllamaRerankerService } from "./services/ollamaReranker";
-import { SimpleVectorStore } from "./services/simpleVectorStore";
+import { HNSWVectorStore } from "./services/hnswVectorStore";
 import type { NotientSettings } from "./types/settings";
 import { NotientDashboardView } from "./ui/dashboard/DashboardView";
 import { ImportModal } from "./ui/modals/ImportModal";
@@ -57,7 +57,7 @@ export default class NotientPlugin extends Plugin {
   private llmProvider: LMStudioProvider | null = null;
 
   // Indexing and search
-  private vectorStore: SimpleVectorStore | null = null;
+  private vectorStore: HNSWVectorStore | null = null;
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
   private searchPipeline: SearchPipeline | null = null;
@@ -378,8 +378,8 @@ export default class NotientPlugin extends Plugin {
         progress: { stage: "index", percent: 50, message: "Loading vector store..." },
       });
 
-      // Create vector store (pure in-memory - IndexManager handles file I/O)
-      this.vectorStore = new SimpleVectorStore(this.kernel);
+      // Create vector store using HNSW algorithm (O(log N) search)
+      this.vectorStore = new HNSWVectorStore(this.kernel);
       this.kernel.registerService("vectorStore", this.vectorStore);
 
       this.initStateMachine.updateProgress({
