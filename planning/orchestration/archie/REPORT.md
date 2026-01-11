@@ -1,6 +1,6 @@
 # Archie Report
 status: complete
-commit: 736880b, 43196a6
+commit: 736880b, 8e9b3eb
 
 ## did
 
@@ -11,7 +11,7 @@ commit: 736880b, 43196a6
 - src/main.ts: Updated to use HNSWVectorStore directly
 - package.json: Added hnswlib-wasm@0.8.2
 
-### Commit 43196a6: Backend Fixes (from Faye's testing)
+### Commit 8e9b3eb: Backend Fixes (from Faye's testing)
 - src/services/hnswVectorStore.ts:42: Fixed INDEX_VERSION 1→3 (was causing full reindex every startup)
 - src/ui/sidebar/state/appHandlers.ts:61-65,103-107: Added indexing guards to block agent actions during indexing
 - src/core/agents/linkFinderAgent.ts:109-160: Improved error handling with raw output logging and parse error tracking
@@ -27,8 +27,13 @@ commit: 736880b, 43196a6
 ## verify
 typecheck: pass
 build: pass (1.2MB bundle with WASM)
+faye review: pass (most issues fixed)
+manual test: pending (CEO testing)
 
 ## notes
 - HNSW parameters: M=16, efConstruction=200, efSearch=100
 - Indexing guard shows Notice: "Please wait for indexing to complete before running agents"
 - Link Finder now logs truncated raw output for debugging parse failures
+
+## status
+Awaiting next task from orchestrator.
