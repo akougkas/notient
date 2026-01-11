@@ -262,7 +262,7 @@ export class StoragePaths {
   getArchivedEmbeddingPath(modelKey: string, dimension: number, timestamp: string): string {
     return path.join(
       this.embeddingsArchived,
-      `${sanitizeModelKey(modelKey)}-${dimension}d-${timestamp}.json`
+      `${sanitizeModelKey(modelKey)}-${dimension}d-${timestamp}.json`,
     );
   }
 

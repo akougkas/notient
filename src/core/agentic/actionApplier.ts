@@ -397,13 +397,28 @@ export class ActionApplier {
         return this.applyCreateNote(action as CreateNoteAction, taskId, workflowId, reasoning);
 
       case "batch_create_notes":
-        return this.applyBatchCreateNotes(action as BatchCreateNotesAction, taskId, workflowId, reasoning);
+        return this.applyBatchCreateNotes(
+          action as BatchCreateNotesAction,
+          taskId,
+          workflowId,
+          reasoning,
+        );
 
       case "restructure_note":
-        return this.applyRestructureNote(action as RestructureNoteAction, taskId, workflowId, reasoning);
+        return this.applyRestructureNote(
+          action as RestructureNoteAction,
+          taskId,
+          workflowId,
+          reasoning,
+        );
 
       case "create_task_note":
-        return this.applyCreateTaskNote(action as CreateTaskNoteAction, taskId, workflowId, reasoning);
+        return this.applyCreateTaskNote(
+          action as CreateTaskNoteAction,
+          taskId,
+          workflowId,
+          reasoning,
+        );
 
       case "create_synthesis_note":
         return this.applyCreateSynthesisNote(
@@ -422,7 +437,12 @@ export class ActionApplier {
         );
 
       case "batch_append_links":
-        return this.applyBatchAppendLinks(action as BatchAppendLinksAction, taskId, workflowId, reasoning);
+        return this.applyBatchAppendLinks(
+          action as BatchAppendLinksAction,
+          taskId,
+          workflowId,
+          reasoning,
+        );
 
       case "highlight_text_issues":
         console.warn("[ActionApplier] Action type 'highlight_text_issues' is not yet implemented");

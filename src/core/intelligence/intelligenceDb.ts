@@ -366,12 +366,12 @@ export class IntelligenceDb {
       const timestamp = Date.now();
       const deletedPath = path.join(
         this.storagePaths.tempDeleted,
-        `intelligence-legacy-${timestamp}.json`
+        `intelligence-legacy-${timestamp}.json`,
       );
       await fs.promises.rename(legacyPath, deletedPath);
 
       console.log(
-        `[IntelligenceDb] Migration complete: ${this.topics.size} topics, legacy moved to ${deletedPath}`
+        `[IntelligenceDb] Migration complete: ${this.topics.size} topics, legacy moved to ${deletedPath}`,
       );
     } catch (error) {
       console.error("[IntelligenceDb] Migration failed:", error);

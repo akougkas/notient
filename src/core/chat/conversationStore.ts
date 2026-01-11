@@ -17,11 +17,7 @@ import * as path from "node:path";
 import type { StoragePaths } from "../../services/storagePaths";
 import { atomicWriteFile } from "../../utils/atomicWrite";
 import { generateNoteId } from "../indexer/simpleChunker";
-import type {
-  ConversationFile,
-  ExtendedChatMessage,
-  StoredChatMessage,
-} from "./types";
+import type { ConversationFile, ExtendedChatMessage, StoredChatMessage } from "./types";
 
 /** Schema version for per-note files */
 const CONVERSATION_VERSION = 2;
@@ -167,7 +163,8 @@ export class ConversationStore {
     }
 
     // Determine status based on content
-    const status = message.role === "assistant" ? (message.content ? "success" : "failed") : undefined;
+    const status =
+      message.role === "assistant" ? (message.content ? "success" : "failed") : undefined;
 
     // Create stored message
     const stored: StoredChatMessage = {
@@ -261,7 +258,8 @@ export class ConversationStore {
     const filePath = this.storagePaths.getConversationPath(noteId);
 
     // Move to _deleted for audit trail (async, fire-and-forget)
-    fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true })
+    fs.promises
+      .mkdir(this.storagePaths.tempDeleted, { recursive: true })
       .then(() => {
         const deletedPath = path.join(
           this.storagePaths.tempDeleted,

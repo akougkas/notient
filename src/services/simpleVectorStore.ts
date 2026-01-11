@@ -16,12 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
-import type {
-  EmbeddedChunk,
-  NoteChunk,
-  NoteChunkFile,
-  StoredChunk,
-} from "../types/indexer";
+import type { EmbeddedChunk, NoteChunk, NoteChunkFile, StoredChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 import type { StoragePaths } from "./storagePaths";
 import type { VectorStore } from "./vectorStore";
@@ -229,7 +224,9 @@ export class ChunkStore {
           await this.loadNoteChunks(noteId);
         }
       }
-      console.log(`[ChunkStore] Loaded ${this.chunks.size} chunks from ${this.noteChunks.size} notes`);
+      console.log(
+        `[ChunkStore] Loaded ${this.chunks.size} chunks from ${this.noteChunks.size} notes`,
+      );
     } catch {
       // Directory might not exist yet
       console.log("[ChunkStore] No existing chunks directory");

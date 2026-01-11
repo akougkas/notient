@@ -54,12 +54,13 @@ export function SearchResultItem({ result, isSelected, onClick }: SearchResultIt
           <span class="nv2-search-result-dot">·</span>
           <span class="nv2-search-result-time">{timeAgo}</span>
         </div>
-        {result.snippet && (
-          <span class="nv2-search-result-snippet">{result.snippet}</span>
-        )}
+        {result.snippet && <span class="nv2-search-result-snippet">{result.snippet}</span>}
       </div>
       {result.tier === "evolving" && !result.isLoading && (
-        <span class="nv2-search-result-score" title={`Relevance: ${Math.round(result.score * 100)}%`}>
+        <span
+          class="nv2-search-result-score"
+          title={`Relevance: ${Math.round(result.score * 100)}%`}
+        >
           {result.score.toFixed(2)}
         </span>
       )}

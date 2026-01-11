@@ -412,7 +412,14 @@ export class SimpleIndexer {
         chunkId: c.chunkId,
         embedding: c.embedding,
       }));
-      await this.indexManager.indexNoteSeparated(noteId, notePath, mtimeMs, contentHash, chunks, embeddings);
+      await this.indexManager.indexNoteSeparated(
+        noteId,
+        notePath,
+        mtimeMs,
+        contentHash,
+        chunks,
+        embeddings,
+      );
     } else {
       await this.indexManager.removeNote(notePath, noteId);
       await this.indexManager.addChunks(embeddedChunks);

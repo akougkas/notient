@@ -659,7 +659,11 @@ export class ActionHistory {
  * Create a unified diff for undo purposes.
  * The diff is created from newContent to oldContent (reversed) so applying it restores original.
  */
-export function createUnifiedDiff(newContent: string, oldContent: string, filePath: string): string {
+export function createUnifiedDiff(
+  newContent: string,
+  oldContent: string,
+  filePath: string,
+): string {
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
   const output: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
@@ -678,7 +682,11 @@ export function createUnifiedDiff(newContent: string, oldContent: string, filePa
 
     const hunkOldStart = change.oldStart - (change.newStart - contextStart) + 1;
     const hunkNewStart = contextStart + 1;
-    const hunkOldCount = change.oldEnd - change.oldStart + (contextEnd - change.newEnd) + (change.newStart - contextStart);
+    const hunkOldCount =
+      change.oldEnd -
+      change.oldStart +
+      (contextEnd - change.newEnd) +
+      (change.newStart - contextStart);
     const hunkNewCount = contextEnd - contextStart;
 
     output.push(`@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@`);
@@ -812,7 +820,10 @@ export function applyReverseDiff(currentContent: string, diff: string): string {
           lines: [],
         };
       }
-    } else if (currentHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))) {
+    } else if (
+      currentHunk &&
+      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+    ) {
       currentHunk.lines.push(line);
     }
   }
