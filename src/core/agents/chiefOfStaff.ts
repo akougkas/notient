@@ -12,6 +12,14 @@
  * 3. Handle agent-to-agent delegation
  * 4. Aggregate results from multiple agents
  * 5. Manage agent sessions for awareness
+ *
+ * UI vs Expert Agent Distinction:
+ * Chat is the UI layer — a conversational interface that delegates to expert agents.
+ * It is NOT a 13th agent that gets routed to. When a request is identified as a
+ * "UI request" (no explicit command, no strong intent signals), it flows through
+ * Chat for conversational handling without heavyweight context-builder preflight.
+ * Expert agents (note-editor, classifier, link-finder, etc.) are the specialists
+ * that handle structured, domain-specific work.
  */
 
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
@@ -320,6 +328,71 @@ export class ChiefOfStaff {
   // ===========================================================================
 
   /**
+   * Check if this is a simple UI request that doesn't need expert routing.
+   *
+   * UI requests are handled efficiently by Chat without heavyweight preflight:
+   * - No explicit /command
+   * - No strong intent signals (edit < 0.5, classify < 0.5, link < 0.5)
+   * - Target is "chat" or undefined
+   *
+   * @returns true if this should be handled as a UI request (simple conversational)
+   */
+  private isUIRequest(task: ChiefOfStaffTask): boolean {
+    // Explicit expert target means NOT a UI request
+    if (task.targetAgent && task.targetAgent !== "chat") {
+      return false;
+    }
+
+    // Explicit workflow target means NOT a UI request
+    if (task.targetWorkflow) {
+      return false;
+    }
+
+    const query = task.query.toLowerCase();
+
+    // Slash commands target specific agents, not UI
+    if (query.startsWith("/")) {
+      return false;
+    }
+
+    // Check intent signals
+    const intents = this.detectIntents(query);
+    const hasStrongIntent = intents.edit >= 0.5 || intents.classify >= 0.5 || intents.link >= 0.5;
+
+    return !hasStrongIntent;
+  }
+
+  /**
+   * Check if a UI request is simple enough to skip context-builder preflight.
+   *
+   * Simple queries that can be answered conversationally without vault search:
+   * - Short queries (< 20 words)
+   * - No question marks (not a factual question needing vault lookup)
+   * - No request keywords (not asking for specific information)
+   */
+  private isSimpleUIRequest(task: ChiefOfStaffTask): boolean {
+    const query = task.query;
+    const wordCount = query.split(/\s+/).length;
+
+    // Long queries likely need context
+    if (wordCount >= 20) {
+      return false;
+    }
+
+    // Questions likely need vault search
+    if (query.includes("?")) {
+      return false;
+    }
+
+    // Request keywords suggest needing context
+    const requestKeywords = ["find", "search", "show", "what", "where", "when", "how", "why", "tell"];
+    const queryLower = query.toLowerCase();
+    const hasRequestKeyword = requestKeywords.some((keyword) => queryLower.includes(keyword));
+
+    return !hasRequestKeyword;
+  }
+
+  /**
    * Determine which agent should handle this task
    */
   private determineRouting(task: ChiefOfStaffTask): RoutingDecision {
@@ -368,6 +441,20 @@ export class ChiefOfStaff {
       }
     }
 
+    // Check if this is a UI request (conversational, no strong intent)
+    if (this.isUIRequest(task)) {
+      // For simple UI requests, skip context-builder for efficiency
+      const skipPreflight = this.isSimpleUIRequest(task);
+
+      return {
+        primaryAgent: "chat",
+        preflightAgents: skipPreflight ? [] : ["context-builder"],
+        reason: skipPreflight
+          ? "UI handling - simple conversational (no preflight)"
+          : "UI handling - conversational with context",
+      };
+    }
+
     // Intent detection from natural language
     const intents = this.detectIntents(query);
 
@@ -398,11 +485,11 @@ export class ChiefOfStaff {
       };
     }
 
-    // Default: chat (can delegate if needed)
+    // Default: chat with context (has some intent but not strong enough for expert)
     return {
       primaryAgent: "chat",
       preflightAgents: ["context-builder"],
-      reason: "Default conversational routing",
+      reason: "Default conversational routing with context",
     };
   }
 
