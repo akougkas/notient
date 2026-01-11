@@ -778,6 +778,26 @@ export function App() {
                 searchResults.value = results;
                 searchQuery.value = query;
               }}
+              onResultSelect={(path) => {
+                openFile(path);
+                searchResults.value = [];
+                searchQuery.value = "";
+              }}
+              onDeepSearchComplete={(results, query) => {
+                // Convert deep search results to insights
+                const deepInsights = results.slice(0, 5).map((result) => ({
+                  text: `Deep search for "${query}": ${result.title}`,
+                  linkText: result.title,
+                  linkPath: result.path,
+                  priority: "high" as const,
+                }));
+                // Add to agent insights (appears at top of InsightStream)
+                agentInsights.value = [...deepInsights, ...agentInsights.value.slice(0, 4)];
+                // Switch to note view to show insights
+                if (activeView.value !== "note") {
+                  activeView.value = "note";
+                }
+              }}
             />
             {/* Search Results (when available) */}
             {searchResults.value.length > 0 && (
