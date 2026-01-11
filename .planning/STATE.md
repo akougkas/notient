@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2025-01-11)
 ## Current Position
 
 Phase: 1 of 8 (Agent Architecture)
-Plan: 0/3 (Ready to execute 01-01)
-Status: Planned
-Last activity: 2025-01-11 — Phase 1 planned (3 plans)
+Plan: 1/3 in current phase
+Status: In progress
+Last activity: 2026-01-11 — Completed 01-01-PLAN.md
 
-Progress: ░░░░░░░░░░ 0%
+Progress: █░░░░░░░░░ 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 4 min
+- Total execution time: 4 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| — | — | — | — |
+| 1. Agent Architecture | 1/3 | 4 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: —
+- Last 5 plans: 01-01 (4 min)
 - Trend: —
 
 ## Accumulated Context
@@ -40,9 +40,10 @@ Progress: ░░░░░░░░░░ 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Chat is UI, not agent (avoids 13th agent)
+- Chat is UI, not agent (avoids 13th agent) — formalized in types.ts with isUI property
 - 3 pinned + 3 contextual Quick Actions
 - All suggestions shown (user dismisses)
+- Intent-based delegation: signal WHAT (edit/classify/link) not agent type
 
 ### Deferred Issues
 
@@ -54,6 +55,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2025-01-11
-Stopped at: Roadmap initialization complete
+Last session: 2026-01-11
+Stopped at: Completed 01-01-PLAN.md (Chat as UI layer)
 Resume file: None

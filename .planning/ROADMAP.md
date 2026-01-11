@@ -14,7 +14,7 @@ None (internal Obsidian plugin patterns)
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions
+- [ ] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions (1/3 plans)
 - [ ] **Phase 2: Insights Stream** — Wire agent results + proactive suggestions
 - [ ] **Phase 3: Agent Command Center** — Connect AgentStreamsView to services
 - [ ] **Phase 4: Chat Enhancement** — Contextual chips, inline agent results
@@ -136,7 +136,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Agent Architecture | 0/3 | Planned | - |
+| 1. Agent Architecture | 1/3 | In progress | - |
 | 2. Insights Stream | 0/TBD | Not started | - |
 | 3. Agent Command Center | 0/TBD | Not started | - |
 | 4. Chat Enhancement | 0/TBD | Not started | - |
