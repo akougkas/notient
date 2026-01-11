@@ -109,16 +109,16 @@ Phase N:
 
 | Phase | Name | Faye | Archie | Sage | Status |
 |-------|------|------|--------|------|--------|
-| 0 | Pre-Planning | - | - | - | 🎯 **ACTIVE** |
-| 1 | Foundation | PENDING | PENDING | PENDING | Not Started |
-| 2 | Progressive Search | PENDING | PENDING | PENDING | Not Started |
+| 0 | Pre-Planning | ✅ | ✅ | - | ✅ Complete |
+| 1 | Foundation | ✅ | ✅ | ✅ | ✅ Complete |
+| 2 | Progressive Search | 90% | ✅ | PENDING | 🎯 **ACTIVE** |
 | 3 | Insights Stream | PENDING | PENDING | PENDING | Not Started |
 | 4 | Chat Refinement | PENDING | PENDING | PENDING | Not Started |
 | 5 | Footer & Recovery | PENDING | PENDING | PENDING | Not Started |
 | 6 | UI Polish | PENDING | PENDING | PENDING | Not Started |
 | 7 | Settings Restructure | PENDING | PENDING | PENDING | Not Started |
 
-**Current Phase**: Phase 0 (Pre-Planning) - Context gathering, audit, breakdown
+**Current Phase**: Phase 2 (Progressive Search) - Backend orchestrator + UI dropdown
 
 ---
 
@@ -465,8 +465,8 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 
 ## Session State & Checkpoint
 
-**Last Updated**: 2026-01-10 19:00
-**Current Phase**: Phase 1 Stage 3 (Baseline Audit)
+**Last Updated**: 2026-01-11
+**Current Phase**: Phase 2 (Progressive Search)
 **Active Branch**: `ALPHA-SPEC-SPRINT`
 **Build Status**: ✅ Passing
 
@@ -481,8 +481,8 @@ claude "Read and execute planning/orchestration/faye/TASK.md"
 | 2: Implementation | ✅ DONE | `4810494` (Archie), `7483571` (Faye) |
 | 2.5: Simplification | ✅ DONE | `eb9f12c` (Sage) |
 | 3: Wiring Audit | ✅ DONE | Diagnosis complete, 5 bugs found |
-| 3.5: Wiring Fixes | 🎯 ACTIVE | Archie + Faye tasks assigned |
-| 4: Final Review | ⏸️ PENDING | - |
+| 3.5: Wiring Fixes | ✅ DONE | Archie + Faye completed |
+| 4: Final Review | ✅ DONE | Phase 1 complete |
 
 **Stage 2 Fixes Applied**:
 - Archie: Always register services, graceful degradation
@@ -557,25 +557,21 @@ User interview confirmed dependency-based ordering:
 
 ### Next Actions
 
-1. **Stage 3.5: Wiring Fixes** (ACTIVE)
-   - Run Archie + Faye in parallel terminals
-   - Archie: Backend fixes (ChatAgent delegation, JSON parsing, reranker)
-   - Faye: Frontend fixes (Quick Actions consistency, dedupe emissions)
-   - Duration: 1-2 hours per agent
+1. **Phase 2 P1 Finish** (10 min)
+   - Faye: Wire `onDeepSearchComplete` in App.tsx → InsightStream
+   - Small task, can be done inline or via TASK.md
 
-2. **After Stage 3.5 Complete**:
-   - Run Sage for code simplification
-   - Stage 4: Final baseline testing
-   - User approval for vaultex testing
+2. **Phase 2 Review**
+   - Sage: Review ProgressiveSearchOrchestrator + SearchDropdown components
+   - Focus: Code clarity, error handling, edge cases
 
-**Launch Commands**:
-```bash
-# Terminal 1 - Archie (backend wiring fixes)
-claude "Read and execute planning/orchestration/archie/TASK.md"
+3. **Phase 3: Insights Stream**
+   - Depends on Phase 2 complete
+   - Deep search results → Insights integration
 
-# Terminal 2 - Faye (frontend wiring fixes)
-claude "Read and execute planning/orchestration/faye/TASK.md"
-```
+**Commits This Session**:
+- `7b6833a` feat(search): Add ProgressiveSearchOrchestrator
+- `0876be2` feat(ui): Add progressive search dropdown
 
 ---
 

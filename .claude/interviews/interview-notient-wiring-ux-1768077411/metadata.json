@@ -2,26 +2,40 @@
   "sessionId": "interview-notient-wiring-ux-1768077411",
   "topic": "Notient Phase 1 Wiring Fixes - UX Decisions & Phase 2+ Planning",
   "startedAt": "2026-01-10T19:30:11Z",
-  "lastRoundAt": "2026-01-10T20:10:00Z",
+  "lastRoundAt": "2026-01-10T20:35:00Z",
   "model": "opus",
-  "totalRounds": 4,
+  "totalRounds": 7,
   "maxRounds": 20,
   "questionsPerRound": 4,
   "status": "in_progress",
   "specFile": null,
-  "context": {
-    "currentPhase": "Phase 1 Stage 3.5",
-    "wiringBugsFound": 5,
-    "bugsFixed": 3,
-    "bugsRemaining": 2
+  "coverage": {
+    "phase1Wiring": "complete",
+    "phase2ProgressiveSearch": "complete",
+    "phase3InsightsStream": "partial",
+    "phase4ChatRefinement": "not_started"
   },
   "decisions": {
-    "quickActions": "All 6 use triggerAgent() → Agent Streams",
-    "reranker": "Parsing fixed, model is correct",
-    "chatDelegation": "Keep smart delegation, but tune prompt to be less eager",
-    "searchUX": "Stream tiers (Quick results first, then Balanced/Deep)",
-    "omnibarControl": "Modifier keys (Shift+Enter for Deep)",
-    "phases5to7": "Defer until 1-4 complete"
+    "phase1": {
+      "quickActions": "All 6 use triggerAgent() → Agent Streams",
+      "reranker": "Parsing fixed, model correct",
+      "chatDelegation": "Keep smart delegation, tune prompt to be less eager"
+    },
+    "phase2": {
+      "searchFlow": "Progressive: INSTANT → EVOLVING → DEEP (opt-in)",
+      "resultsUI": "Dropdown below Omnibar",
+      "loadingUX": "Shimmer on items with animated reordering",
+      "deepTrigger": "Both button ('Go Deeper') and Shift+Enter",
+      "presetMapping": "Keep as fallback, Progressive is default",
+      "debounce": "300ms",
+      "aiFallback": "Show subtle warning, keep results",
+      "dismissBehavior": "Immediate clear on ESC/click-outside",
+      "navigation": "Open note, keep sidebar",
+      "deepDisplay": "Mixed chronologically in Insights Stream",
+      "deepNotification": "Toast + inline update",
+      "deepCancel": "Via Omnibar X button",
+      "deepConcurrency": "One at a time"
+    }
   },
   "archieStatus": {
     "round1": "complete (commit f82965e)",
