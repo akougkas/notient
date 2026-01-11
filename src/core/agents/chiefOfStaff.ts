@@ -31,8 +31,8 @@ import type { SearchPipeline } from "../search/pipeline";
 import { isInternalOutput, isStructuredOutput } from "./base";
 import { ChatAgent } from "./chatAgent";
 import { ClassifierAgent } from "./classifierAgent";
-import { ContextBuilderAgent } from "./contextBuilderAgent";
 import { ConnectionAgent } from "./connectionAgent";
+import { ContextBuilderAgent } from "./contextBuilderAgent";
 import { NoteEditorAgent } from "./noteEditorAgent";
 import type {
   AgentContext,
@@ -252,10 +252,15 @@ export class ChiefOfStaff {
     const primaryOutput = outputs.find((o) => o.kind === "conversational") || outputs[0];
     const supportingOutputs = outputs.filter((o) => o !== primaryOutput && o.kind !== "internal");
 
+    // Session should always exist after execute() completes
+    if (!this.currentSession) {
+      throw new Error("Session not initialized after execute()");
+    }
+
     return {
       primary: primaryOutput,
       supporting: supportingOutputs,
-      session: this.currentSession!,
+      session: this.currentSession,
       allCitations: [...new Set(allCitations)],
       proposedActions,
     };

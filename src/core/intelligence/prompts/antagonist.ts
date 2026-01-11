@@ -24,7 +24,7 @@ TONE:
 
 export const ANTAGONIST_PROMPT: AgentPrompt = {
   system: SYSTEM_PROMPT,
-  userTemplate: `Analyze the following note and provide a rigorous critique:\n\n{{noteContent}}`,
+  userTemplate: "Analyze the following note and provide a rigorous critique:\n\n{{noteContent}}",
   outputSchema: {
     type: "object",
     properties: {

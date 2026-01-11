@@ -15,8 +15,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { StoragePaths } from "../../services/storagePaths";
+import { atomicWriteFile } from "../../utils/atomicWrite";
 import type {
   IntelligenceFile,
   IntelligenceMeta,
@@ -135,7 +135,7 @@ export class IntelligenceDb {
     if (!this.topics.has(newTopic)) {
       this.topics.set(newTopic, new Map());
     }
-    this.topics.get(newTopic)!.set(notePath, record);
+    this.topics.get(newTopic)?.set(notePath, record);
     this.dirtyTopics.add(newTopic);
 
     this.scheduleSave();
@@ -355,7 +355,7 @@ export class IntelligenceDb {
         if (!this.topics.has(topic)) {
           this.topics.set(topic, new Map());
         }
-        this.topics.get(topic)!.set(notePath, record);
+        this.topics.get(topic)?.set(notePath, record);
         this.dirtyTopics.add(topic);
       }
 

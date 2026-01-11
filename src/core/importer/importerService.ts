@@ -245,7 +245,7 @@ export class ImporterService {
     const allFiles = vault.getMarkdownFiles();
 
     for (const file of allFiles) {
-      if (file.path.startsWith(folderPath + "/")) {
+      if (file.path.startsWith(`${folderPath}/`)) {
         if (recursive || !file.path.slice(folderPath.length + 1).includes("/")) {
           files.push(file);
         }

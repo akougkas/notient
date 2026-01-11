@@ -15,7 +15,10 @@ import type { AgentTaskQueue } from "../../core/agent";
 import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
-import type { Insight, InsightGenerator as InsightGeneratorType } from "../../services/insightGenerator";
+import type {
+  Insight,
+  InsightGenerator as InsightGeneratorType,
+} from "../../services/insightGenerator";
 import { InsightGenerator } from "../../services/insightGenerator";
 import type { NoteVitals } from "../../services/noteVitalsCalculator";
 import type { SearchResult } from "../../types/search";
@@ -30,19 +33,13 @@ import { NoteCard } from "./components/NoteCard";
 import { Omnibar } from "./components/Omnibar";
 import { type QuickAction, QuickActions, createNoteQuickActions } from "./components/QuickActions";
 import { SearchResultsView } from "./components/SearchResultsView";
-import type { SearchResultItemData } from "./components/search/SearchResultItem";
 import { SystemDashboard } from "./components/SystemDashboard";
 import { VitalsCards } from "./components/VitalsCards";
 import { type MessageAction, RichChatView } from "./components/chat";
+import type { SearchResultItemData } from "./components/search/SearchResultItem";
 import { useApp, useKernel, useService } from "./context/KernelContext";
 import { useAppEvents } from "./hooks/useAppEvents";
 import { useNoteVitals } from "./hooks/useNoteVitals";
-import {
-  handleChatAction,
-  handleRichChatSend,
-  prefillChatAndSwitch,
-  triggerAgenticAction,
-} from "./state/appHandlers";
 import {
   activeAgents,
   activeView,
@@ -65,6 +62,12 @@ import {
   searchQuery,
   searchResults,
 } from "./state";
+import {
+  handleChatAction,
+  handleRichChatSend,
+  prefillChatAndSwitch,
+  triggerAgenticAction,
+} from "./state/appHandlers";
 
 export function App() {
   return (
@@ -149,10 +152,7 @@ function AppContent() {
 
   const onRichChatSend = useCallback(
     async (message: string) => {
-      await handleRichChatSend(
-        { chatService, noteVitals, obsidian: kernel.obsidian },
-        message,
-      );
+      await handleRichChatSend({ chatService, noteVitals, obsidian: kernel.obsidian }, message);
     },
     [chatService, noteVitals, kernel.obsidian],
   );

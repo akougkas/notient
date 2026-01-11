@@ -11,8 +11,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { NoteChunkFile, StoredChunk } from "../types/indexer";
-import type { StoragePaths } from "./storagePaths";
 import { atomicWriteFile } from "../utils/atomicWrite";
+import type { StoragePaths } from "./storagePaths";
 
 const CHUNKER_VERSION = "tsi-v2";
 

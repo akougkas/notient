@@ -7,8 +7,8 @@
  */
 
 import { useCallback } from "preact/hooks";
-import { Icon } from "./Icon";
 import { debugLog } from "../../../utils/debugLog";
+import { Icon } from "./Icon";
 
 // =============================================================================
 // Types
@@ -138,7 +138,8 @@ const CONTEXTUAL_ACTIONS: ContextualActionDef[] = [
     condition: () => true, // Always available as fallback
     type: "agent",
     agentType: "connection",
-    buildPrompt: (title) => `Suggest internal wiki-links to add to "${title}" that connect it to related notes`,
+    buildPrompt: (title) =>
+      `Suggest internal wiki-links to add to "${title}" that connect it to related notes`,
   },
   {
     id: "brainstorm",

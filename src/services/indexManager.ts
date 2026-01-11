@@ -1251,7 +1251,7 @@ export class IndexManager {
         if (!noteChunksMap.has(doc.noteId)) {
           noteChunksMap.set(doc.noteId, []);
         }
-        noteChunksMap.get(doc.noteId)!.push(storedChunk);
+        noteChunksMap.get(doc.noteId)?.push(storedChunk);
 
         // Track note metadata (first chunk wins)
         if (!noteMetaMap.has(doc.noteId)) {

@@ -33,8 +33,8 @@ import type { SimpleIndexer } from "./indexer/simpleIndexer";
 import type { ActionOrchestrator } from "./intelligence/actionOrchestrator";
 import type { NoteIntelligenceService } from "./intelligence/noteIntelligence";
 import type { LLMProvider } from "./llm/provider";
-import type { ProgressiveSearchOrchestrator } from "./search/progressiveSearch";
 import type { SearchPipeline } from "./search/pipeline";
+import type { ProgressiveSearchOrchestrator } from "./search/progressiveSearch";
 import type { SimpleVaultVitals } from "./vitals/simpleVitals";
 
 // NotientAgent is now ChiefOfStaff (re-exported from agent/index.ts)

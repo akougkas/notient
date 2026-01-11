@@ -21,7 +21,7 @@ export function NavDeck({ activeView, agentStatus }: NavDeckProps) {
   const { runningCount, pendingReviewCount } = agentStatus.value;
 
   return (
-    <nav class="nv2-nav-deck" role="navigation" aria-label="Main Navigation">
+    <nav class="nv2-nav-deck" aria-label="Main Navigation">
       {TABS.map((tab) => {
         const isActive = activeView.value === tab.id;
         const isAgents = tab.id === "agents";

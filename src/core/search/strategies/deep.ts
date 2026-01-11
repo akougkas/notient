@@ -184,7 +184,11 @@ Example: ["term1", "term2", "term3"]`;
       { role: "user", content: prompt },
     ];
 
-    const response = llm.complete ? await llm.complete(messages) : await llm.chat!(messages);
+    const response = llm.complete ? await llm.complete(messages) : await llm.chat?.(messages);
+
+    if (!response) {
+      return [];
+    }
 
     // Parse JSON array from response
     try {
@@ -328,7 +332,7 @@ Example: ["term1", "term2", "term3"]`;
 
     // If it doesn't have an extension, add .md
     if (!target.endsWith(".md")) {
-      target = target + ".md";
+      target = `${target}.md`;
     }
 
     // Try exact path first
@@ -513,7 +517,7 @@ Example: ["term1", "term2", "term3"]`;
       for (const folder of folders) {
         if (!folder) continue;
         const lowerFolder = folder.toLowerCase();
-        if (lowerPath.startsWith(lowerFolder + "/") || lowerPath === lowerFolder) {
+        if (lowerPath.startsWith(`${lowerFolder}/`) || lowerPath === lowerFolder) {
           return type;
         }
       }

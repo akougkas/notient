@@ -185,7 +185,7 @@ export class OllamaRerankerService {
     // 1. Try to extract explicit numeric score (e.g., "0.8", "8/10", "85%")
     const numericMatch = answer.match(/(\d+(?:\.\d+)?)\s*(?:\/\s*10|%)?/);
     if (numericMatch) {
-      let score = parseFloat(numericMatch[0]);
+      let score = Number.parseFloat(numericMatch[0]);
       // Normalize if it looks like percentage or x/10
       if (score > 1 && score <= 10) score = score / 10;
       else if (score > 10 && score <= 100) score = score / 100;
@@ -207,13 +207,16 @@ export class OllamaRerankerService {
 
     if (hasYes || endsWithYes) {
       return 1.0;
-    } else if (hasNo || endsWithNo) {
+    }
+    if (hasNo || endsWithNo) {
       return 0.0;
-    } else if (containsYes && !containsNo) {
+    }
+    if (containsYes && !containsNo) {
       // "yes" somewhere but not as a word boundary
       console.log(`[OllamaRerankerService] Inferred yes from "${answer}"`);
       return 0.8;
-    } else if (containsNo && !containsYes) {
+    }
+    if (containsNo && !containsYes) {
       // "no" somewhere but not as a word boundary
       console.log(`[OllamaRerankerService] Inferred no from "${answer}"`);
       return 0.2;
@@ -233,7 +236,7 @@ export class OllamaRerankerService {
     // Truncate document if too long (max ~2000 chars for efficiency)
     const maxDocLen = 2000;
     const truncatedDoc =
-      document.length > maxDocLen ? document.slice(0, maxDocLen).trimEnd() + "..." : document;
+      document.length > maxDocLen ? `${document.slice(0, maxDocLen).trimEnd()}...` : document;
 
     return `<|im_start|>system
 ${QWEN3_PROMPT.system}

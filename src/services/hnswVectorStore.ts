@@ -102,7 +102,7 @@ interface PersistedIndex {
 // ============================================================================
 
 // Import types from hnswlib-wasm
-import type { HnswlibModule, HierarchicalNSW } from "hnswlib-wasm";
+import type { HierarchicalNSW, HnswlibModule } from "hnswlib-wasm";
 
 type HNSWIndex = HierarchicalNSW;
 type HNSWLib = HnswlibModule;
@@ -535,7 +535,7 @@ export class HNSWVectorStore implements VectorStore {
       // replaceDeleted=true allows reusing deleted labels
       assignedLabels = this.index.addItems(embeddings, true);
     } catch (error) {
-      console.error(`[HNSWVectorStore] Failed to add batch:`, error);
+      console.error("[HNSWVectorStore] Failed to add batch:", error);
       return;
     }
 
@@ -629,7 +629,8 @@ export class HNSWVectorStore implements VectorStore {
     }
 
     // HNSW search with filter
-    const filterFn = validLabels.size < this.docs.size ? (label: number) => validLabels.has(label) : undefined;
+    const filterFn =
+      validLabels.size < this.docs.size ? (label: number) => validLabels.has(label) : undefined;
 
     // Request more results than needed to account for post-filtering
     const searchK = Math.min(options.topK * 3, this.docs.size);
@@ -681,7 +682,9 @@ export class HNSWVectorStore implements VectorStore {
         const titleLower = doc.title.toLowerCase();
         const pathLower = doc.path.toLowerCase();
 
-        const titleMatch = queryTerms.some((term) => titleLower.includes(term) || pathLower.includes(term));
+        const titleMatch = queryTerms.some(
+          (term) => titleLower.includes(term) || pathLower.includes(term),
+        );
         const textMatch = queryTerms.some((term) => textLower.includes(term));
 
         if (titleMatch) {

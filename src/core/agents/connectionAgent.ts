@@ -106,12 +106,18 @@ export class ConnectionAgent extends BaseAgent {
    * Parse link suggestions from LLM
    * Robust handling: sanitizes control chars and markdown, handles parse failures gracefully
    */
-  protected parseOutput(rawOutput: string, context: AgentContext): StructuredOutput & { parseError?: string } {
+  protected parseOutput(
+    rawOutput: string,
+    context: AgentContext,
+  ): StructuredOutput & { parseError?: string } {
     let parsed: LinkSuggestionsOutput | null = null;
     let parseError: string | undefined;
 
     // Log raw output for debugging (truncated)
-    const truncatedRaw = rawOutput.length > 500 ? `${rawOutput.slice(0, 500)}...(${rawOutput.length} chars)` : rawOutput;
+    const truncatedRaw =
+      rawOutput.length > 500
+        ? `${rawOutput.slice(0, 500)}...(${rawOutput.length} chars)`
+        : rawOutput;
     this.log(`Raw LLM output: ${truncatedRaw || "(empty)"}`);
 
     // Check for empty response
@@ -120,11 +126,7 @@ export class ConnectionAgent extends BaseAgent {
       this.warn(parseError);
     } else {
       try {
-        // Sanitize control characters that break JSON.parse
-        let sanitized = rawOutput
-          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
-          .replace(/\r\n/g, "\n") // Normalize line endings
-          .replace(/\r/g, "\n");
+        let sanitized = this.sanitizeLLMOutput(rawOutput);
 
         // Remove markdown formatting inside JSON strings (common LLM mistake)
         // e.g., "reason": **"Some text"** → "reason": "Some text"
@@ -171,7 +173,8 @@ export class ConnectionAgent extends BaseAgent {
       { role: "system" as const, content: systemPrompt },
       {
         role: "user" as const,
-        content: `Find semantic connections between this note and other notes in the vault. Prioritize meaningful, non-obvious connections. Output only valid JSON.`,
+        content:
+          "Find semantic connections between this note and other notes in the vault. Prioritize meaningful, non-obvious connections. Output only valid JSON.",
       },
     ];
 
@@ -213,9 +216,8 @@ export class ConnectionAgent extends BaseAgent {
   private extractExistingLinks(content: string): string[] {
     const links: string[] = [];
     const wikiLinkRegex = /\[\[([^\]|#]+)(?:[#|][^\]]+)?\]\]/g;
-    let match;
 
-    while ((match = wikiLinkRegex.exec(content)) !== null) {
+    for (const match of content.matchAll(wikiLinkRegex)) {
       const noteName = match[1].trim();
       if (!links.includes(noteName)) {
         links.push(noteName);

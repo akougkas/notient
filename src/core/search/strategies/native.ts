@@ -61,7 +61,7 @@ export class NativeSearch {
     // Apply folder filter
     if (options.folderPaths?.length) {
       files = files.filter((f) =>
-        options.folderPaths!.some((folder) => folder && f.path?.startsWith(folder)),
+        options.folderPaths?.some((folder) => folder && f.path?.startsWith(folder)),
       );
     }
 
@@ -257,7 +257,7 @@ export class NativeSearch {
 
     if (index === -1) {
       // No match found, return beginning
-      return content.slice(0, SNIPPET_LENGTH).trim() + "…";
+      return `${content.slice(0, SNIPPET_LENGTH).trim()}…`;
     }
 
     // Calculate snippet bounds
@@ -267,8 +267,8 @@ export class NativeSearch {
     let snippet = content.slice(start, end).trim();
 
     // Add ellipsis if truncated
-    if (start > 0) snippet = "…" + snippet;
-    if (end < content.length) snippet = snippet + "…";
+    if (start > 0) snippet = `…${snippet}`;
+    if (end < content.length) snippet = `${snippet}…`;
 
     // Clean up whitespace
     snippet = snippet.replace(/\s+/g, " ");

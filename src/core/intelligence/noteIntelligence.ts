@@ -490,32 +490,36 @@ ${cleaned.slice(0, 6000)}`; // limit context window
       const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] || extractJsonBlock(raw);
       if (!jsonStr) return null;
 
-      // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - structure varies by model output
       const data = JSON.parse(jsonStr) as {
-        entities?: any[];
-        suggestedTags?: any[];
+        entities?: unknown[];
+        suggestedTags?: unknown[];
       };
 
       const entities: IntelligenceEntity[] = (data.entities || [])
-        // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - entity shape varies
-        .map((e: any) => ({
-          name: String(e.name || "").trim(),
-          type: ["person", "project", "tool", "concept", "org", "other"].includes(e.type)
-            ? e.type
-            : "other",
-          context: e.context ? String(e.context).slice(0, 100) : undefined,
-        }))
+        .map((e: unknown) => {
+          const entity = e as Record<string, unknown>;
+          const entityType = String(entity.type || "other");
+          return {
+            name: String(entity.name || "").trim(),
+            type: ["person", "project", "tool", "concept", "org", "other"].includes(entityType)
+              ? (entityType as IntelligenceEntity["type"])
+              : "other",
+            context: entity.context ? String(entity.context).slice(0, 100) : undefined,
+          };
+        })
         .filter((e) => e.name.length > 0);
 
       const suggestedTags: IntelligenceSuggestedTag[] = (data.suggestedTags || [])
-        // biome-ignore lint/suspicious/noExplicitAny: LLM JSON response - tag shape varies
-        .map((t: any) => ({
-          tag: String(t.tag || "")
-            .replace(/^#/, "")
-            .trim(),
-          confidence: Number(t.confidence || 0.5),
-          reason: String(t.reason || ""),
-        }))
+        .map((t: unknown) => {
+          const tag = t as Record<string, unknown>;
+          return {
+            tag: String(tag.tag || "")
+              .replace(/^#/, "")
+              .trim(),
+            confidence: Number(tag.confidence || 0.5),
+            reason: String(tag.reason || ""),
+          };
+        })
         .filter((t) => t.tag.length > 0 && t.confidence > 0.4);
 
       return { entities, suggestedTags };

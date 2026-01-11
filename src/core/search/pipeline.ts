@@ -154,7 +154,10 @@ export class SearchPipeline {
 
     try {
       // Get strategy for preset
-      const strategy = this.strategies.get(preset) ?? this.strategies.get("balanced")!;
+      const strategy = this.strategies.get(preset) ?? this.strategies.get("balanced");
+      if (!strategy) {
+        throw new Error(`No search strategy found for preset "${preset}" or fallback "balanced"`);
+      }
 
       // Build strategy options
       const strategyOptions: StrategySearchOptions = {
@@ -205,7 +208,8 @@ export class SearchPipeline {
       if (preset === "thorough") {
         console.log("[SearchPipeline] Deep search failed, falling back to balanced");
         return this.searchWithFallback(query, "balanced", options);
-      } else if (preset === "balanced") {
+      }
+      if (preset === "balanced") {
         console.log("[SearchPipeline] Balanced search failed, falling back to quick");
         return this.searchWithFallback(query, "quick", options);
       }

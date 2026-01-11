@@ -113,7 +113,7 @@ export function MessageBubble({
         {hasCitations && (
           <div class="nv2-chat-citations">
             <span class="nv2-chat-citations-label">Sources:</span>
-            {message.citations!.map((path) => (
+            {message.citations?.map((path) => (
               <button
                 key={path}
                 type="button"
@@ -130,7 +130,7 @@ export function MessageBubble({
         {/* Inline actions */}
         {hasActions && onAction && (
           <div class="nv2-chat-actions">
-            {message.actions!.map((action, i) => (
+            {message.actions?.map((action, i) => (
               <button
                 key={i}
                 type="button"

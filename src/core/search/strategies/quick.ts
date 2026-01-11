@@ -182,7 +182,7 @@ export class QuickSearchStrategy implements SearchStrategy {
       for (const folder of folders) {
         if (!folder) continue;
         const lowerFolder = folder.toLowerCase();
-        if (lowerPath.startsWith(lowerFolder + "/") || lowerPath === lowerFolder) {
+        if (lowerPath.startsWith(`${lowerFolder}/`) || lowerPath === lowerFolder) {
           return type;
         }
       }

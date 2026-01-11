@@ -90,8 +90,9 @@ export class ConversationStore {
    */
   async loadConversation(noteId: string): Promise<StoredChatMessage[]> {
     // Check cache first
-    if (this.loaded.has(noteId)) {
-      return this.loaded.get(noteId)!;
+    const cached = this.loaded.get(noteId);
+    if (cached) {
+      return cached;
     }
 
     const filePath = this.storagePaths.getConversationPath(noteId);

@@ -11,7 +11,6 @@ import { UI_LIMITS } from "../../../core/constants";
 import type { Insight } from "../../../services/insightGenerator";
 import type { AgentResultData } from "../components/AgentStreamsView";
 import { useEventBus } from "../context/KernelContext";
-import { ACTION_LABELS } from "../state/appHandlers";
 import {
   activeAgents,
   activeView,
@@ -25,6 +24,7 @@ import {
   providerStatus,
   recentActivity,
 } from "../state";
+import { ACTION_LABELS } from "../state/appHandlers";
 
 interface UseAppEventsOptions {
   chatService: ChatService | null;
@@ -289,9 +289,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
               : JSON.stringify(task.result?.data || {}, null, 2);
 
           const insightSummary =
-            resultContent.length > 100
-              ? resultContent.slice(0, 100).trim() + "..."
-              : resultContent;
+            resultContent.length > 100 ? `${resultContent.slice(0, 100).trim()}...` : resultContent;
 
           const durationMs = agent.startedAt ? Date.now() - agent.startedAt.getTime() : 0;
 

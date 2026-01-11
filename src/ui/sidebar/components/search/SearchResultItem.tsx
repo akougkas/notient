@@ -75,4 +75,3 @@ function getParaIcon(paraType?: string): string {
       return "file-text";
   }
 }
-

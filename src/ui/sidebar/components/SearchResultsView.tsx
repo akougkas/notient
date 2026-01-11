@@ -11,12 +11,7 @@ interface SearchResultsViewProps {
   onClear: () => void;
 }
 
-export function SearchResultsView({
-  results,
-  query,
-  onOpenNote,
-  onClear,
-}: SearchResultsViewProps) {
+export function SearchResultsView({ results, query, onOpenNote, onClear }: SearchResultsViewProps) {
   return (
     <div class="nv2-search-results" role="region" aria-label="Search results">
       <div class="nv2-search-results-header">

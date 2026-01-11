@@ -79,12 +79,7 @@ export class ClassifierAgent extends BaseAgent {
     let parsed: ClassificationOutput | null = null;
 
     try {
-      // Sanitize control characters that break JSON.parse
-      const sanitized = rawOutput
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars (keep \n, \r, \t)
-        .replace(/\r\n/g, "\n") // Normalize line endings
-        .replace(/\r/g, "\n");
-
+      const sanitized = this.sanitizeLLMOutput(rawOutput);
       parsed = this.parseJSON<ClassificationOutput>(sanitized);
     } catch (error) {
       this.warn("JSON parse failed, using defaults:", error);
@@ -119,7 +114,8 @@ export class ClassifierAgent extends BaseAgent {
       { role: "system" as const, content: systemPrompt },
       {
         role: "user" as const,
-        content: `Classify this note using PARA methodology. Consider its content, structure, and purpose. Output only valid JSON.`,
+        content:
+          "Classify this note using PARA methodology. Consider its content, structure, and purpose. Output only valid JSON.",
       },
     ];
 

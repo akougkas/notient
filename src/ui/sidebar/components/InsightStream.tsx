@@ -90,7 +90,6 @@ function InsightItem({ insight, onOpenFile, isFirst }: InsightItemProps) {
   return (
     <article
       class={`nv2-insight ${config.className} ${isFirst ? "nv2-insight--featured" : ""}`}
-      role="article"
       aria-label={`${config.label}: ${insight.text}`}
     >
       <div class="nv2-insight-indicator" title={config.label}>

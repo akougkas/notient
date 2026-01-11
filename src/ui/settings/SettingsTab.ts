@@ -1326,7 +1326,8 @@ export class NotientSettingTab extends PluginSettingTab {
 
     // CLI hint for power users
     const cliHint = section.createDiv({ cls: "notient-settings-info-dim" });
-    cliHint.innerHTML = `<small>Power users: Use <code>bun run import -s /source -v /vault</code> for CLI imports.</small>`;
+    cliHint.innerHTML =
+      "<small>Power users: Use <code>bun run import -s /source -v /vault</code> for CLI imports.</small>";
   }
 
   private renderAdvancedSection(containerEl: HTMLElement): void {

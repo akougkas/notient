@@ -46,6 +46,6 @@ export function truncate(str: string, maxLength: number): string {
 export function truncatePath(path: string, maxLength = 40): string {
   if (path.length <= maxLength) return path;
   const parts = path.split("/");
-  if (parts.length <= 2) return path.slice(0, maxLength) + "...";
+  if (parts.length <= 2) return `${path.slice(0, maxLength)}...`;
   return `.../${parts.slice(-2).join("/")}`;
 }

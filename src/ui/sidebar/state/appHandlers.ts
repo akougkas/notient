@@ -5,17 +5,17 @@
  * All handlers are pure functions that operate on signals and services.
  */
 
-import { Notice } from "obsidian";
 import type { Signal } from "@preact/signals";
+import { Notice } from "obsidian";
+import type { ObsidianFacade } from "../../../adapters/obsidianFacade";
 import type { AgentTaskQueue } from "../../../core/agent";
 import type { ActionApplier } from "../../../core/agentic";
 import type { ProposedAction, RiskLevel } from "../../../core/agentic";
 import type { ChatService, ChatStatistics } from "../../../core/chat";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
-import type { ObsidianFacade } from "../../../adapters/obsidianFacade";
+import { debugError, debugLog } from "../../../utils/debugLog";
 import type { RichChatMessage } from "../components/chat";
 import { createActivityItem } from "../components/chat";
-import { debugError, debugLog } from "../../../utils/debugLog";
 import {
   activeView,
   chatActivities,
@@ -271,10 +271,7 @@ export async function handleRichChatSend(
     chatStreamingContent.value = "";
     chatStreamingThinking.value = "";
     isChatThinking.value = false;
-    chatActivities.value = [
-      ...chatActivities.value,
-      createActivityItem("Complete", "complete"),
-    ];
+    chatActivities.value = [...chatActivities.value, createActivityItem("Complete", "complete")];
   }
 }
 

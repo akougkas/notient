@@ -370,8 +370,6 @@ export class AgentTaskQueue {
         return "classifier";
       case "link":
         return "connection";
-      case "chat":
-      case "analyze":
       default:
         return undefined; // Let ChiefOfStaff route automatically
     }

@@ -239,7 +239,7 @@ export class OllamaService {
           message.includes("fetch failed") || message.includes("ECONNREFUSED");
 
         if ((isTimeout || isConnectionError) && attempt < MAX_RETRIES) {
-          const delay = Math.min(500 * Math.pow(2, attempt), 2000); // Exponential backoff, max 2s
+          const delay = Math.min(500 * 2 ** attempt, 2000); // Exponential backoff, max 2s
           console.log(
             `[OllamaService] Embed failed (${isTimeout ? "timeout" : "connection"}), ` +
               `retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,

@@ -26,7 +26,7 @@ export function SystemDashboard({
   const activeModel = lmstudio.model || ollama.model || "Select Model";
 
   return (
-    <header class="nv2-dashboard" role="banner">
+    <header class="nv2-dashboard">
       {/* Left: Brand */}
       <div class="nv2-dashboard-brand">
         <span class="nv2-brand-text">Notient</span>

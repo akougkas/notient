@@ -234,9 +234,8 @@ export class ChatAgent extends BaseAgent {
   private extractCitations(text: string): string[] {
     const citations: string[] = [];
     const wikiLinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-    let match;
 
-    while ((match = wikiLinkRegex.exec(text)) !== null) {
+    for (const match of text.matchAll(wikiLinkRegex)) {
       const noteName = match[1].split("#")[0]; // Remove heading/block refs
       if (!citations.includes(noteName)) {
         citations.push(noteName);

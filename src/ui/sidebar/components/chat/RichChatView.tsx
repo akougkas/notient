@@ -96,7 +96,7 @@ export function RichChatView({
   return (
     <div class="nv2-chat-view nv2-chat-view--rich" role="region" aria-label="Chat with Notient">
       {/* Section 1: Context Bar */}
-      <header class="nv2-chat-context" role="status">
+      <header class="nv2-chat-context">
         {hasContext ? (
           <>
             <Icon name="file-text" className="nv2-chat-context-icon" />

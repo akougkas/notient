@@ -7,7 +7,7 @@
 import { normalizePath } from "obsidian";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { Kernel } from "../kernel";
-import { createUnifiedDiff, type ActionHistory } from "./actionHistory";
+import { type ActionHistory, createUnifiedDiff } from "./actionHistory";
 import type { TrustLevelManager } from "./trustLevelManager";
 import {
   type AppendReviewSectionAction,

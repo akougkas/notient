@@ -117,6 +117,7 @@ export function SearchDropdown({
       aria-activedescendant={
         hasResults ? `search-result-${results[selectedIndex]?.noteId}` : undefined
       }
+      tabIndex={0}
     >
       {showWarning && (
         <div class="nv2-search-warning" role="alert">

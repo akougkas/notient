@@ -286,7 +286,6 @@ function ActiveAgentCard({
   return (
     <article
       class={`nv2-agent-card nv2-agent-card--${agent.status}`}
-      role="article"
       aria-label={`${formatAgentType(agent.type)} agent ${statusLabel}`}
     >
       {/* Status Indicator */}
@@ -416,7 +415,6 @@ function PendingActionCard({ action, onApply, onDismiss }: PendingActionCardProp
   return (
     <article
       class={`nv2-pending-card ${risk.className}`}
-      role="article"
       aria-label={`${action.actionType}: ${action.summary}`}
     >
       <div class="nv2-pending-header">
@@ -475,7 +473,6 @@ function RecentActivityCard({ activity, onUndo }: RecentActivityCardProps) {
   return (
     <article
       class={`nv2-activity-card ${status.className}`}
-      role="article"
       aria-label={`${status.label}: ${activity.summary}`}
     >
       <div class="nv2-activity-main">
@@ -531,4 +528,3 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ago`;
 }
-

@@ -224,7 +224,7 @@ export class ImportModal extends Modal {
     // Find markdown files
     const allFiles = this.app.vault.getMarkdownFiles();
     const files = allFiles.filter((f) => {
-      if (!f.path.startsWith(this.selectedFolder + "/")) return false;
+      if (!f.path.startsWith(`${this.selectedFolder}/`)) return false;
       if (!this.recursive) {
         const relativePath = f.path.slice(this.selectedFolder.length + 1);
         if (relativePath.includes("/")) return false;

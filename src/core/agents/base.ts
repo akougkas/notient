@@ -166,6 +166,20 @@ ${truncatedContent}
   }
 
   /**
+   * Sanitize LLM output for safe JSON parsing
+   * Removes control characters and normalizes line endings
+   */
+  protected sanitizeLLMOutput(rawOutput: string): string {
+    // Remove control characters that break JSON.parse (keep \n, \r, \t)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Intentional control char removal from LLM output
+    const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+    return rawOutput
+      .replace(controlCharRegex, "")
+      .replace(/\r\n/g, "\n") // Normalize line endings
+      .replace(/\r/g, "\n");
+  }
+
+  /**
    * Parse JSON from LLM output with robust error handling
    */
   protected parseJSON<T>(jsonStr: string): T | null {
