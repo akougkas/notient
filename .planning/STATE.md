@@ -79,18 +79,22 @@ Progress: ██░░░░░░░░ ~15% (1 plan complete, more root causes
 
 ## Session Continuity
 
-Last session: 2026-01-11
-Stopped at: **Completed 00-01-PLAN.md** - Async loading bottlenecks fixed
-Resume file: N/A
+Last session: 2026-01-12
+Stopped at: **BLOCKED - UI freeze persists. Option C failed. SDK migration required.**
+Resume file: `.planning/phases/00-foundation-repair/.continue-here.md`
 
 **What happened this session:**
-1. Executed 00-01-PLAN.md (async loading bottlenecks)
-2. Parallelized ChunkStore file loading (batch size 50)
-3. Added yields before IndexManager JSON parsing
-4. Added stage-based startup progress logging
-5. All 3 tasks committed atomically
+1. Structured output works (logs prove it: 435 chars, project confidence 0.95)
+2. UI freeze happens AFTER classification completes
+3. Option C (setTimeout) FAILED - freeze still occurs
+4. Conducted 8-round architecture interview (SDK migration decided)
+5. Created SDK migration plan in .continue-here.md
 
-**Next:** Check for 00-02-PLAN.md or proceed to next phase issue
+**Next session MUST:**
+1. Execute SDK migration (Option B) - no more debugging REST API
+2. `bun add @lmstudio/sdk ollama`
+3. Create `lmstudio-sdk.ts` and `ollama-sdk.ts` per plan in .continue-here.md
+4. Delete old REST-based provider code
 
 ## Validation Checklist (Must Pass Before Continuing)
 
