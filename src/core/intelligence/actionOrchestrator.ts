@@ -5,8 +5,8 @@
  * Central coordinator for Intelligence 2.0 Genetic UI actions.
  */
 
-import type { LMStudioService } from "../../services/lmstudio";
 import type { UserProfile } from "../../types/profile";
+import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import type { ActionPipeline, ActionPipelineConfig, PipelineEvent } from "./actionPipeline";
 import { createActionPipeline } from "./actionPipeline";
@@ -88,7 +88,7 @@ export class ActionOrchestrator {
   private profileProvider: ProfileProvider;
 
   constructor(
-    private llm: LMStudioService,
+    private llm: LLMProvider,
     private search: SearchPipeline,
     profileProvider?: ProfileProvider,
   ) {

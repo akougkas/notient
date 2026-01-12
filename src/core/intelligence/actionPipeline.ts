@@ -5,8 +5,8 @@
  * Handles preparation, analysis, planning, batching, and progressive disclosure.
  */
 
-import type { LMStudioService } from "../../services/lmstudio";
 import type { ProposedAction, RiskLevel } from "../agentic/types";
+import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import type { WorkflowComplexity } from "./actionOrchestrator";
 import type { AgentPrompt, IntelligenceActionType } from "./prompts";
@@ -299,7 +299,7 @@ export interface ActionPipelineConfig {
     config?: Record<string, unknown>;
   };
   triggerConfig?: Record<string, unknown>;
-  llm: LMStudioService;
+  llm: LLMProvider;
   search: SearchPipeline;
   /** Set of existing vault paths for duplicate detection */
   existingPaths?: Set<string>;
@@ -473,8 +473,8 @@ class ActionPipelineImpl implements ActionPipeline {
       { role: "user" as const, content: userPrompt },
     ];
 
-    // Use the chatStream method from LMStudioService
-    for await (const chunk of llm.chatStream(messages)) {
+    // Use the stream method from LLMProvider
+    for await (const chunk of llm.stream(messages)) {
       yield chunk;
     }
   }

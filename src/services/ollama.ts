@@ -1,9 +1,12 @@
 /**
  * Ollama Embeddings Service
  *
- * Wrapper around the Ollama JS SDK for generating embeddings.
+ * Uses native Ollama JS SDK for generating embeddings.
  * Discovers model capabilities at runtime via /api/show.
  * Restricts to localhost only for privacy.
+ *
+ * SDK Migration: Now uses ollama.embed() instead of raw fetch.
+ * This provides better async handling and error messages.
  */
 
 import { Ollama } from "ollama";
@@ -152,26 +155,23 @@ export class OllamaService {
   }
 
   /**
-   * Discover model capabilities via Ollama /api/show endpoint.
+   * Discover model capabilities via Ollama SDK show() method.
    * Falls back to conservative defaults if discovery fails.
    */
   private async discoverCapabilities(model: string): Promise<ModelCapabilities> {
-    const host = this.kernel.settings.ollama.host.replace(/\/$/, "");
+    if (!this.client) {
+      console.warn("[OllamaService] Client not initialized, using fallbacks");
+      return this.fallbackCapabilities(model);
+    }
 
     try {
-      const response = await fetch(`${host}/api/show`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
-      });
-
-      if (!response.ok) {
-        console.warn(`[OllamaService] /api/show failed: ${response.status}, using fallbacks`);
-        return this.fallbackCapabilities(model);
-      }
-
-      const data = await response.json();
-      const modelInfo = data.model_info || {};
+      const data = await this.client.show({ model });
+      // SDK returns model_info as Map, convert to Record for parsing
+      const rawInfo = data.model_info;
+      const modelInfo: Record<string, unknown> =
+        rawInfo instanceof Map
+          ? Object.fromEntries(rawInfo)
+          : ((rawInfo as Record<string, unknown>) ?? {});
       const parsed = this.parseModelInfo(modelInfo);
 
       return await this.buildCapabilities(model, parsed);
@@ -382,57 +382,45 @@ export class OllamaService {
   }
 
   /**
-   * Parse and validate embed response from Ollama.
-   */
-  private async parseEmbedResponse(response: Response): Promise<number[][]> {
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      const suffix = text ? ` - ${text}` : "";
-      throw new Error(
-        `Ollama /api/embed failed: ${response.status} ${response.statusText}${suffix}`,
-      );
-    }
-
-    const data = (await response.json()) as { embeddings: number[][] };
-    if (!data?.embeddings || !Array.isArray(data.embeddings)) {
-      throw new Error("Ollama /api/embed returned invalid response");
-    }
-    return data.embeddings;
-  }
-
-  /**
-   * Direct Ollama embed call with timeout + abort support.
-   * Passes num_ctx option to request appropriate context window.
+   * Ollama embed call using native SDK with timeout + abort support.
+   * Uses SDK's embed method for proper async handling.
    */
   private async embedRequest(
     input: string | string[],
     model: string,
     options: { timeoutMs: number; signal?: AbortSignal; contextTokens?: number },
   ): Promise<number[][]> {
-    const host = this.kernel.settings.ollama.host.replace(/\/$/, "");
-    const url = `${host}/api/embed`;
+    if (!this.client) {
+      throw new Error("Ollama client not initialized");
+    }
 
     const { controller, cleanup } = this.createChainedAbortController(options.signal);
     const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          input,
-          truncate: true,
-          keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
-          ...(options.contextTokens && { options: { num_ctx: options.contextTokens } }),
-        }),
-        signal: controller.signal,
+      // Use SDK's embed method
+      const response = await this.client.embed({
+        model,
+        input: Array.isArray(input) ? input : [input],
+        truncate: true,
+        keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
+        options: options.contextTokens ? { num_ctx: options.contextTokens } : undefined,
       });
 
-      return await this.parseEmbedResponse(response);
+      // SDK returns { embeddings: number[][] }
+      if (!response?.embeddings || !Array.isArray(response.embeddings)) {
+        throw new Error("Ollama SDK embed returned invalid response");
+      }
+
+      return response.embeddings;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(`Embedding timed out after ${options.timeoutMs}ms`);
+      }
+      // Re-throw SDK errors with context
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes("fetch failed") || errorMessage.includes("ECONNREFUSED")) {
+        throw new Error(`Cannot connect to Ollama: ${errorMessage}`);
       }
       throw error;
     } finally {
