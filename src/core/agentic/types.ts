@@ -595,3 +595,54 @@ export const INTELLIGENCE_2_ACTION_TYPES: ProposedActionType[] = [
 
 /** Action types reserved for Phase 3 */
 export const RESERVED_ACTION_TYPES: ProposedActionType[] = ["merge_notes", "trash_note"];
+
+// =============================================================================
+// Insight Container (Agent Output Grouping)
+// =============================================================================
+
+/**
+ * A suggestion from an agent (not yet applied)
+ * ID format: sug_{uuid8}
+ */
+export interface Suggestion {
+  /** Unique identifier (sug_{uuid8}) */
+  id: string;
+  /** The suggestion content */
+  content: string;
+  /** Related notes that informed this suggestion */
+  relatedNotes?: string[];
+  /** Confidence score (0-1) */
+  confidence: number;
+}
+
+/**
+ * Insight container - groups agent outputs with reasoning
+ * ID format: ins_{uuid8}
+ *
+ * This is the primary output container for all agent executions.
+ * It bundles actions, suggestions, and reasoning together for:
+ * - User-facing display (InsightStream summary)
+ * - Pending actions review
+ * - Provenance tracking (developer debugging)
+ */
+export interface Insight {
+  /** Unique identifier (ins_{uuid8}) */
+  id: string;
+  /** When the insight was created */
+  timestamp: number;
+  /** Which agent produced this insight */
+  agentType: string;
+  /** Context about the target note */
+  noteContext: {
+    path: string;
+    title: string;
+  };
+  /** Agent's reasoning for its decisions */
+  reasoning: string;
+  /** Proposed actions (each has act_{uuid8} ID) */
+  actions: ProposedAction[];
+  /** Suggestions (not applied, each has sug_{uuid8} ID) */
+  suggestions: Suggestion[];
+  /** One-liner summary for InsightStream UI */
+  summary: string;
+}

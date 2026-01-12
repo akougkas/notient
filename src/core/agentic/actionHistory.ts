@@ -12,6 +12,7 @@ import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { StoragePaths } from "../../services/storagePaths";
 import { atomicWriteFile } from "../../utils/atomicWrite";
 import type { EventBus } from "../events/eventBus";
+import { deriveRecordId } from "../ids";
 import type {
   ActionsArchiveFile,
   AppliedActionRecord,
@@ -129,7 +130,7 @@ export class ActionHistory {
     taskId?: string,
   ): AppliedActionRecord {
     const record: AppliedActionRecord = {
-      id: `action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: deriveRecordId(action.id),
       timestamp: Date.now(),
       workflowId,
       taskId,

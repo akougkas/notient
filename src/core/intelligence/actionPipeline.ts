@@ -6,6 +6,7 @@
  */
 
 import type { ProposedAction, RiskLevel } from "../agentic/types";
+import { generateId } from "../ids";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import type { WorkflowComplexity } from "./actionOrchestrator";
@@ -594,9 +595,11 @@ class ActionPipelineImpl implements ActionPipeline {
     return converter ? converter() : [];
   }
 
-  /** Generate unique action ID */
-  private genId(prefix: string): string {
-    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  /** Generate unique action ID (standardized format: act_{uuid8}) */
+  private genId(_prefix: string): string {
+    // Prefix parameter kept for backwards compatibility but ignored
+    // All actions use standardized act_ prefix per ID architecture spec
+    return generateId("act");
   }
 
   /** Get today's date in YYYY-MM-DD format */

@@ -16,6 +16,7 @@ import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { AgentTaskQueue } from "../agent/taskQueue";
 import type { TaskType } from "../agent/types";
 import type { EventBus } from "../events/eventBus";
+import { generateId } from "../ids";
 import type { Kernel } from "../kernel";
 import type { ParsedCommand } from "./commandParser";
 import type { ProposedAction, RiskLevel, WorkflowRun, WorkflowScope, WorkflowSpec } from "./types";
@@ -86,7 +87,7 @@ export class WorkflowRunner {
 
     // Create workflow spec
     const spec: WorkflowSpec = {
-      id: crypto.randomUUID(),
+      id: generateId("wfl"),
       command: parsed.command,
       scope,
       targets: limitedTargets,

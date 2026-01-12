@@ -12,6 +12,7 @@ import type { AgentTaskQueue } from "../../../core/agent";
 import type { ActionApplier } from "../../../core/agentic";
 import type { ProposedAction, RiskLevel } from "../../../core/agentic";
 import type { ChatService, ChatStatistics } from "../../../core/chat";
+import { generateId } from "../../../core/ids";
 import type { NoteVitals } from "../../../services/noteVitalsCalculator";
 import { debugError, debugLog } from "../../../utils/debugLog";
 import type { RichChatMessage } from "../components/chat";
@@ -192,7 +193,7 @@ export async function handleRichChatSend(
     chatMessages.value = [
       ...chatMessages.value,
       {
-        id: `error-${Date.now()}`,
+        id: generateId("msg"),
         role: "assistant",
         content: "Chat service is not available. Please wait for initialization.",
         timestamp: new Date(),
@@ -205,7 +206,7 @@ export async function handleRichChatSend(
   chatMessages.value = [
     ...chatMessages.value,
     {
-      id: `user-${Date.now()}`,
+      id: generateId("msg"),
       role: "user",
       content: message,
       timestamp: new Date(),
@@ -245,7 +246,7 @@ export async function handleRichChatSend(
     chatMessages.value = [
       ...chatMessages.value,
       {
-        id: `assistant-${Date.now()}`,
+        id: generateId("msg"),
         role: "assistant",
         content: state.fullContent,
         timestamp: new Date(),
@@ -258,7 +259,7 @@ export async function handleRichChatSend(
     chatMessages.value = [
       ...chatMessages.value,
       {
-        id: `error-${Date.now()}`,
+        id: generateId("msg"),
         role: "assistant",
         content: `Sorry, something went wrong: ${error instanceof Error ? error.message : "Unknown error"}`,
         timestamp: new Date(),
@@ -315,7 +316,7 @@ function buildAction(
   risk: RiskLevel = "low",
 ): ProposedAction {
   const action = {
-    id: `action-${Date.now()}`,
+    id: generateId("act"),
     type,
     target,
     title,
@@ -545,7 +546,7 @@ export function handleChatSlashCommand(deps: TriggerAgenticActionDeps, message: 
   chatMessages.value = [
     ...chatMessages.value,
     {
-      id: `user-${Date.now()}`,
+      id: generateId("msg"),
       role: "user",
       content: message,
       timestamp: new Date(),
@@ -553,7 +554,7 @@ export function handleChatSlashCommand(deps: TriggerAgenticActionDeps, message: 
   ];
 
   // Add placeholder assistant message (will be updated with results)
-  const assistantMsgId = `assistant-${Date.now()}`;
+  const assistantMsgId = generateId("msg");
   chatMessages.value = [
     ...chatMessages.value,
     {

@@ -7,6 +7,7 @@
 
 import { useEffect, useRef } from "preact/hooks";
 import type { ActivityPhase } from "../../../../core/chat/types";
+import { generateId } from "../../../../core/ids";
 import { Icon } from "../Icon";
 
 export interface ActivityItem {
@@ -118,7 +119,7 @@ export function ActivityIndicator({ message, phase }: { message: string; phase: 
  */
 export function createActivityItem(message: string, phase: ActivityPhase): ActivityItem {
   return {
-    id: crypto.randomUUID(),
+    id: generateId("stm"),
     message,
     phase,
     timestamp: new Date(),

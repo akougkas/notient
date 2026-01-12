@@ -6,6 +6,7 @@
  */
 
 import { CHAT_LIMITS } from "../constants";
+import { generateId } from "../ids";
 import type { ChatMessage } from "../llm/types";
 import type { ChatAttachment, ChatConfig, ExtendedChatMessage } from "./types";
 
@@ -33,7 +34,7 @@ export class ChatSession {
    */
   addUserMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage {
     const message: ExtendedChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId("msg"),
       role: "user",
       content,
       timestamp: new Date(),
@@ -54,7 +55,7 @@ export class ChatSession {
    */
   addAssistantMessage(content: string, attachments?: ChatAttachment[]): ExtendedChatMessage {
     const message: ExtendedChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId("msg"),
       role: "assistant",
       content,
       timestamp: new Date(),
@@ -74,7 +75,7 @@ export class ChatSession {
    */
   addSystemMessage(content: string): ExtendedChatMessage {
     const message: ExtendedChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId("msg"),
       role: "system",
       content,
       timestamp: new Date(),
@@ -171,7 +172,7 @@ export class ChatSession {
   importFromChatMessages(messages: ChatMessage[]): void {
     this.history = messages.map((m) => ({
       ...m,
-      id: crypto.randomUUID(),
+      id: generateId("msg"),
       timestamp: new Date(),
     }));
     this.trimHistory();

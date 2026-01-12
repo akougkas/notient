@@ -3,7 +3,12 @@
  */
 
 import type { AgentTask } from "../core/agent/types";
-import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
+import type {
+  AppliedActionRecord,
+  Insight,
+  ProposedAction,
+  WorkflowRun,
+} from "../core/agentic/types";
 import type { IntelligenceRecord } from "../core/intelligence/types";
 import type { IndexProgress } from "./indexer";
 import type { SearchResult } from "./search";
@@ -40,6 +45,8 @@ export type EventType =
   | "action:undone"
   | "action:apply-requested"
   | "action:undo-requested"
+  // Insight events (agent output containers)
+  | "insight:created"
   // Identity system events
   | "profile:updated"
   // Lock management events
@@ -86,6 +93,8 @@ export interface EventPayloads {
   "action:undone": ActionUndoneEvent;
   "action:apply-requested": ActionApplyRequestedEvent;
   "action:undo-requested": ActionUndoRequestedEvent;
+  // Insight events (agent output containers)
+  "insight:created": InsightCreatedEvent;
   // Identity system events
   "profile:updated": ProfileUpdatedEvent;
   // Lock management events
@@ -258,6 +267,17 @@ export interface ActionApplyRequestedEvent {
 export interface ActionUndoRequestedEvent {
   /** ID of the action record to undo */
   actionId: string;
+}
+
+// =============================================================================
+// Insight Events (Agent Output Containers)
+// =============================================================================
+
+export interface InsightCreatedEvent {
+  /** The insight container with actions, suggestions, and reasoning */
+  insight: Insight;
+  /** Source of the insight (e.g., "task:tsk_abc123" or "workflow:wf_xyz789") */
+  source: string;
 }
 
 // =============================================================================

@@ -9,6 +9,7 @@ import { batch } from "@preact/signals";
 import { Notice } from "obsidian";
 import type { ChatService } from "../../../core/chat";
 import { UI_LIMITS } from "../../../core/constants";
+import { generateId } from "../../../core/ids";
 import type { Insight } from "../../../services/insightGenerator";
 import type { AgentResultData } from "../components/AgentStreamsView";
 import { useEventBus } from "../context/KernelContext";
@@ -24,6 +25,7 @@ import {
   initState,
   isServicesReady,
   pendingActions,
+  pendingActionSources,
   providerStatus,
   recentActivity,
 } from "../state";
@@ -150,7 +152,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         if (agent) {
           recentActivity.value = [
             {
-              id: `activity-${Date.now()}`,
+              id: generateId("stm"),
               status: "success",
               actionType: "workflow",
               targetNote: agent.targetNote,
@@ -178,7 +180,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         if (agent) {
           recentActivity.value = [
             {
-              id: `activity-${Date.now()}`,
+              id: generateId("stm"),
               status: "failed",
               actionType: "workflow",
               targetNote: agent.targetNote,
@@ -226,6 +228,10 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
             riskLevel: action.risk,
           },
         ];
+        // Store original ProposedAction for when we need to apply it
+        const updatedSources = new Map(pendingActionSources.value);
+        updatedSources.set(action.id, action);
+        pendingActionSources.value = updatedSources;
       });
     });
   });
@@ -239,6 +245,10 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),
         };
         pendingActions.value = pendingActions.value.filter((a) => a.id !== record.action.id);
+        // Clean up stored original action
+        const updatedSources = new Map(pendingActionSources.value);
+        updatedSources.delete(record.action.id);
+        pendingActionSources.value = updatedSources;
         recentActivity.value = [
           {
             id: record.id,
@@ -491,7 +501,7 @@ function handleTaskFailed(task: TaskData): void {
       if (failedAgent) {
         recentActivity.value = [
           {
-            id: `activity-${Date.now()}`,
+            id: generateId("stm"),
             status: "failed",
             actionType: task.taskType || "agent",
             targetNote: failedAgent.targetNote,

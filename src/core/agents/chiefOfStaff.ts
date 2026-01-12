@@ -20,6 +20,7 @@
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { UserProfile } from "../../types/profile";
 import type { ProposedAction } from "../agentic/types";
+import { generateId } from "../ids";
 import type { VaultContextBuilder } from "../context/vaultContextBuilder";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
@@ -703,7 +704,7 @@ export class ChiefOfStaff {
    */
   private createSession(notePath: string): AgentSession {
     const result = {
-      id: crypto.randomUUID(),
+      id: generateId("ses"),
       activeAgents: new Set<ExpertAgentType>(),
       completedAgents: new Map(),
       startedAt: new Date(),

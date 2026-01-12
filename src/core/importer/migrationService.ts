@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { normalizeMarkdownFile } from "../../../tools/import-bridge/normalizer";
 import type { EventBus } from "../events/eventBus";
+import { generateId } from "../ids";
 import type { Kernel } from "../kernel";
 
 /** Migration status for tracking */
@@ -65,7 +66,7 @@ export class MigrationService {
 
     // Create migration status
     const migration: MigrationStatus = {
-      id: crypto.randomUUID(),
+      id: generateId("mig"),
       sourcePath,
       destFolder: destFolder || "imports",
       status: "pending",

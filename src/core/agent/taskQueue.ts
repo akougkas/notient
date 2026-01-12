@@ -23,6 +23,7 @@ import type { AgentEvent, ConversationalOutput, StructuredOutput } from "../agen
 import type { ConversationStore } from "../chat/conversationStore";
 import type { ExtendedChatMessage } from "../chat/types";
 import type { EventBus } from "../events/eventBus";
+import { generateId } from "../ids";
 import type { AgentStreamEvent, AgentTask, TaskResult } from "./types";
 
 /**
@@ -93,7 +94,7 @@ export class AgentTaskQueue {
       throw new Error("Task queue is full. Please wait for current tasks to complete.");
     }
 
-    const id = crypto.randomUUID();
+    const id = generateId("tsk");
 
     // Phase 2: Handle conversation persistence
     const newMessages = task.chatHistory || [];
@@ -127,7 +128,7 @@ export class AgentTaskQueue {
         const msg = uniqueNewMessages[i];
         if (msg.role === "user") {
           const userMessage: ExtendedChatMessage = {
-            id: crypto.randomUUID(),
+            id: generateId("msg"),
             role: "user",
             content: msg.content,
             timestamp: new Date(),
@@ -181,7 +182,6 @@ export class AgentTaskQueue {
         this.currentTask = null;
         queueMicrotask(() => this.processNext());
       }
-    } else {
     }
   }
 
@@ -313,7 +313,6 @@ export class AgentTaskQueue {
    * Protected against concurrent invocations.
    */
   private async processNext(): Promise<void> {
-    console.log("[TaskQueue] Processing next task");
     // Guard against concurrent processing
     if (this.processing || this.currentTask) {
       return;
@@ -341,10 +340,8 @@ export class AgentTaskQueue {
    * Execute a single task with error handling and status updates.
    */
   private async runTask(task: AgentTask): Promise<void> {
-    console.log(`[TaskQueue] Running task: ${task.id}`);
     try {
       await this.executeTask(task);
-      console.log(`[TaskQueue] Task completed: ${task.id}`);
 
       if (task.status === "running") {
         task.status = "completed";
@@ -352,7 +349,6 @@ export class AgentTaskQueue {
         task.progress = 100;
       }
     } catch (error) {
-      console.log(`[TaskQueue] Task failed: ${task.id}`, error);
       if (task.status === "running") {
         task.status = "failed";
         task.error = error instanceof Error ? error.message : String(error);
@@ -372,7 +368,6 @@ export class AgentTaskQueue {
   private scheduleNextIfQueued(): void {
     const hasQueued = this.tasks.some((t) => t.status === "queued");
     if (hasQueued) {
-      console.log("[TaskQueue] Scheduling next task");
       queueMicrotask(() => this.processNext());
     }
   }
@@ -526,7 +521,7 @@ export class AgentTaskQueue {
     }
 
     const assistantMessage: ExtendedChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId("msg"),
       role: "assistant",
       content,
       timestamp: new Date(),
@@ -572,9 +567,37 @@ export class AgentTaskQueue {
     });
     task.result = built.result;
 
+    // Emit action:proposed for each action (populates pendingActions in UI)
+    if (built.actions.length > 0 && task.notePath) {
+      this.emitProposedActions(built.actions, task);
+    }
+
     // Persist assistant message to conversation store (async, debounced)
     if (task.notePath) {
       this.persistAssistantMessage(task.notePath, assistantContent);
+    }
+  }
+
+  /**
+   * Emit action:proposed events for actions that need user review.
+   * Ensures each action has an ID and links back to the source task.
+   */
+  private emitProposedActions(actions: ProposedAction[], task: AgentTask): void {
+    for (const action of actions) {
+      // Ensure action has an ID (agent may not generate one)
+      if (!action.id) {
+        action.id = generateId("act");
+      }
+
+      // Emit event for UI to pick up
+      this.eventBus.emit("action:proposed", {
+        action,
+        noteContext: {
+          path: task.notePath || "",
+          title: task.noteTitle || task.notePath || "Unknown",
+        },
+        source: `task:${task.id}`,
+      });
     }
   }
 
@@ -691,7 +714,6 @@ export class AgentTaskQueue {
   private emitUpdate(task: AgentTask): void {
     if (this.onTaskUpdateCallback) {
       this.onTaskUpdateCallback(task);
-    } else {
     }
     this.eventBus.emit("agent:task-update", { task });
   }

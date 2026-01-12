@@ -58,6 +58,7 @@ import {
   isChatThinking,
   isServicesReady,
   pendingActions,
+  pendingActionSources,
   providerStatus,
   recentActivity,
   searchQuery,
@@ -377,38 +378,27 @@ function AgentStreamsContent({ workflowRunner, kernel }: AgentStreamsContentProp
         });
       }}
       onApplyAction={(id: string) => {
-        const action = pendingActions.value.find((a) => a.id === id);
-        if (!action) {
+        const uiAction = pendingActions.value.find((a) => a.id === id);
+        if (!uiAction) {
           return;
         }
-        kernel.eventBus.emit("action:apply-requested", { actionId: id });
-        queueMicrotask(() => {
-          batch(() => {
-            recentActivity.value = [
-              {
-                id: `activity-${Date.now()}`,
-                status: "success",
-                actionType: action.actionType,
-                targetNote: action.targetNote,
-                summary: action.summary,
-                completedAt: new Date(),
-                canUndo: true,
-              },
-              ...recentActivity.value.slice(0, 9),
-            ];
-            pendingActions.value = pendingActions.value.filter((a) => a.id !== id);
-            agentStatus.value = {
-              ...agentStatus.value,
-              pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),
-            };
-          });
-          new Notice(`Applied: ${action.summary}`);
-        });
+        // Get original ProposedAction to pass to handler
+        const originalAction = pendingActionSources.value.get(id);
+        if (!originalAction) {
+          new Notice("Action not found. It may have expired.");
+          return;
+        }
+        // Emit with original action - UI update happens via action:applied event
+        kernel.eventBus.emit("action:apply-requested", { actionId: id, action: originalAction });
       }}
       onDismissAction={(id: string) => {
         queueMicrotask(() => {
           batch(() => {
             pendingActions.value = pendingActions.value.filter((a) => a.id !== id);
+            // Clean up stored original action
+            const updatedSources = new Map(pendingActionSources.value);
+            updatedSources.delete(id);
+            pendingActionSources.value = updatedSources;
             agentStatus.value = {
               ...agentStatus.value,
               pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),

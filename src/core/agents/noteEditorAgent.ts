@@ -12,6 +12,7 @@
 import type { UserProfile } from "../../types/profile";
 import type { ProposedAction, ProposedActionType, RiskLevel } from "../agentic/types";
 import { SUPPORTED_ACTION_TYPES } from "../agentic/types";
+import { generateId } from "../ids";
 import type { LLMProvider } from "../llm/provider";
 import { buildAgentSystemPrompt } from "./agentIdentity";
 import { BaseAgent } from "./base";
@@ -178,8 +179,8 @@ export class NoteEditorAgent extends BaseAgent {
       // Enforce target path (security)
       const normalizedTarget = targetPath;
 
-      // Generate unique ID
-      const id = `action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // Generate unique ID (standardized format: act_{uuid8})
+      const id = generateId("act");
       if (seenIds.has(id)) continue;
       seenIds.add(id);
 
