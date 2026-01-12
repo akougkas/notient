@@ -20,6 +20,9 @@ export interface LLMProvider {
   /** Provider identifier */
   readonly name: string;
 
+  /** Current model identifier */
+  readonly model: string;
+
   /** Whether the provider is initialized and ready */
   readonly isReady: boolean;
 

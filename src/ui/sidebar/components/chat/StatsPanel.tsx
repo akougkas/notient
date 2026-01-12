@@ -149,7 +149,10 @@ export function StatsPanel({ statistics, visible = true, position = "inline" }: 
           <div class="nv2-stats-section-title">Model</div>
           <div class="nv2-stats-row">
             <span class="nv2-stats-label">Name</span>
-            <span class="nv2-stats-value nv2-stats-model-name" title={statistics.modelName}>
+            <span
+              class="nv2-stats-value nv2-stats-model-name"
+              title={String(statistics.modelName || "Unknown")}
+            >
               {truncateModelName(statistics.modelName)}
             </span>
           </div>
@@ -169,7 +172,9 @@ export function StatsPanel({ statistics, visible = true, position = "inline" }: 
 /**
  * Truncate long model names for display
  */
-function truncateModelName(name: string): string {
+function truncateModelName(name: unknown): string {
+  // Defensive: handle non-string values
+  if (typeof name !== "string" || !name) return "Unknown";
   if (name.length <= 24) return name;
   // Try to show the model name part, not the path
   const parts = name.split("/");

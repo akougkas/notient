@@ -24,7 +24,7 @@ import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
 import { NoteIntelligenceService } from "./core/intelligence/noteIntelligence";
 import { Kernel, type KernelContext } from "./core/kernel";
-import { LMStudioProvider } from "./core/llm";
+import { LMStudioSDKProvider } from "./core/llm";
 import { SearchPipeline } from "./core/search/pipeline";
 import { ProgressiveSearchOrchestrator } from "./core/search/progressiveSearch";
 import { InitializationStateMachine } from "./core/services";
@@ -32,7 +32,6 @@ import { SimpleVaultVitals } from "./core/vitals/simpleVitals";
 import { HealthMonitor } from "./services/healthMonitor";
 import { HNSWVectorStore } from "./services/hnswVectorStore";
 import { IndexManager } from "./services/indexManager";
-import { LMStudioService } from "./services/lmstudio";
 import { OllamaService } from "./services/ollama";
 import { OllamaRerankerService } from "./services/ollamaReranker";
 import type { NotientSettings } from "./types/settings";
@@ -53,8 +52,7 @@ export default class NotientPlugin extends Plugin {
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
   private ollamaReranker: OllamaRerankerService | null = null;
-  private lmStudioService: LMStudioService | null = null;
-  private llmProvider: LMStudioProvider | null = null;
+  private llmProvider: LMStudioSDKProvider | null = null;
 
   // Indexing and search
   private vectorStore: HNSWVectorStore | null = null;
@@ -255,8 +253,6 @@ export default class NotientPlugin extends Plugin {
     }
 
     // LLM providers
-    this.lmStudioService?.dispose();
-    this.lmStudioService = null;
     this.ollamaService?.dispose();
     this.ollamaService = null;
 
@@ -359,22 +355,9 @@ export default class NotientPlugin extends Plugin {
         message: "Connecting to LM Studio...",
       });
 
-      // Initialize LM Studio (optional - Scenario P2)
-      if (hasReasoningModel && lmstudioEnabled) {
-        try {
-          this.lmStudioService = new LMStudioService(this.kernel);
-          await this.lmStudioService.initialize();
-          this.kernel.registerService("lmstudio", this.lmStudioService);
-          console.log("[Notient] LM Studio service initialized");
-        } catch (lmError) {
-          // Scenario P2: LM Studio down → continue in degraded mode
-          console.warn(
-            "[Notient] LM Studio initialization failed (chat/reranking disabled):",
-            lmError,
-          );
-          lmStudioFailed = true;
-        }
-      } else {
+      // LM Studio check (optional - Scenario P2)
+      // Note: Legacy LMStudioService removed. LMStudioSDKProvider handles connection later.
+      if (!hasReasoningModel || !lmstudioEnabled) {
         lmStudioFailed = true;
       }
 
@@ -466,7 +449,7 @@ export default class NotientPlugin extends Plugin {
       }
 
       // LLM Provider for agent
-      this.llmProvider = new LMStudioProvider(
+      this.llmProvider = new LMStudioSDKProvider(
         this.settings.lmstudio.host,
         this.settings.lmstudio.reasoningModel,
       );
@@ -593,11 +576,11 @@ export default class NotientPlugin extends Plugin {
       );
       this.kernel.registerService("workflowRunner", this.workflowRunner);
 
-      // ActionOrchestrator (requires lmstudio + search)
-      if (this.lmStudioService && this.searchPipeline) {
+      // ActionOrchestrator (requires llmProvider + search)
+      if (this.llmProvider && this.searchPipeline) {
         const profileProvider = () => this.profileManager?.get();
         this.actionOrchestrator = new ActionOrchestrator(
-          this.lmStudioService,
+          this.llmProvider,
           this.searchPipeline,
           profileProvider,
         );
@@ -1040,7 +1023,7 @@ export default class NotientPlugin extends Plugin {
   /**
    * Reinitialize only chat-related services.
    * Preserves: vectorStore, indexManager, indexer, searchPipeline, conversationStore
-   * Recreates: lmStudioService, llmProvider, notientAgent, agentTaskQueue
+   * Recreates: llmProvider, notientAgent, agentTaskQueue
    */
   private async reinitializeChatOnly(): Promise<void> {
     console.log("[Notient] Chat model changed, reconnecting...");
@@ -1053,23 +1036,8 @@ export default class NotientPlugin extends Plugin {
       this.llmProvider?.dispose();
       this.llmProvider = null;
 
-      this.lmStudioService?.dispose();
-      this.lmStudioService = null;
-
-      // Recreate LM Studio service
-      if (this.settings.lmstudio.enabled && this.settings.lmstudio.reasoningModel) {
-        try {
-          this.lmStudioService = new LMStudioService(this.kernel);
-          await this.lmStudioService.initialize();
-          this.kernel.registerService("lmstudio", this.lmStudioService);
-          console.log("[Notient] LM Studio service reconnected");
-        } catch (lmError) {
-          console.warn("[Notient] LM Studio reconnection failed:", lmError);
-        }
-      }
-
       // Recreate LLM Provider
-      this.llmProvider = new LMStudioProvider(
+      this.llmProvider = new LMStudioSDKProvider(
         this.settings.lmstudio.host,
         this.settings.lmstudio.reasoningModel,
       );

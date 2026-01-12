@@ -12,7 +12,6 @@ import type { App, Plugin } from "obsidian";
 import { ObsidianFacade } from "../adapters/obsidianFacade";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { IndexManager } from "../services/indexManager";
-import type { LMStudioService } from "../services/lmstudio";
 import type { OllamaService } from "../services/ollama";
 import type { OllamaRerankerService } from "../services/ollamaReranker";
 import { StoragePaths } from "../services/storagePaths";
@@ -62,7 +61,6 @@ export interface ServiceRegistry {
   healthMonitor: HealthMonitor;
   ollama: OllamaService;
   ollamaReranker: OllamaRerankerService;
-  lmstudio: LMStudioService;
   vectorStore: VectorStore;
   indexManager: IndexManager;
   indexer: SimpleIndexer;
@@ -119,7 +117,6 @@ export class Kernel {
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
   private ollamaReranker: OllamaRerankerService | null = null;
-  private lmStudioService: LMStudioService | null = null;
   private vectorStore: VectorStore | null = null;
   private indexManager: IndexManager | null = null;
   private indexer: SimpleIndexer | null = null;
@@ -148,88 +145,121 @@ export class Kernel {
   private userEvolution: UserEvolutionService | null = null;
 
   constructor(private context: KernelContext) {
+    console.log("[kernel:constructor] TRACE: START");
     this._eventBus = new EventBus();
+    console.log("[kernel:constructor] TRACE: EventBus created");
     setGlobalEventBus(this._eventBus);
+    console.log("[kernel:constructor] TRACE: Global event bus set");
 
     this._obsidian = new ObsidianFacade(context.app);
+    console.log("[kernel:constructor] TRACE: ObsidianFacade created");
     this._storagePaths = new StoragePaths(context.app);
+    console.log("[kernel:constructor] TRACE: StoragePaths created");
     this._vaultLock = new VaultLock(this._storagePaths, (reason, error) => {
+      console.log(`[kernel:vaultLock:callback] TRACE: Lock lost reason=${reason}`);
       this._eventBus.emit("lock:lost", { reason, error });
     });
+    console.log("[kernel:constructor] TRACE: VaultLock created");
     this._abortController = new AbortController();
+    console.log("[kernel:constructor] TRACE: AbortController created");
+    console.log("[kernel:constructor] TRACE: END");
   }
 
   // ============ Getters ============
 
   get eventBus(): EventBus {
+    console.log("[kernel:get:eventBus] TRACE: Accessing eventBus");
     return this._eventBus;
   }
 
   get storagePaths(): StoragePaths {
+    console.log("[kernel:get:storagePaths] TRACE: Accessing storagePaths");
     return this._storagePaths;
   }
 
   get vaultLock(): VaultLock {
+    console.log("[kernel:get:vaultLock] TRACE: Accessing vaultLock");
     return this._vaultLock;
   }
 
   get obsidian(): ObsidianFacade {
+    console.log("[kernel:get:obsidian] TRACE: Accessing obsidian");
     return this._obsidian;
   }
 
   get abortSignal(): AbortSignal {
+    console.log("[kernel:get:abortSignal] TRACE: Accessing abortSignal");
     return this._abortController.signal;
   }
 
   get settings(): NotientSettings {
+    console.log("[kernel:get:settings] TRACE: Accessing settings");
     return this.context.settings;
   }
 
   /** Update settings reference (used after settings change) */
   updateSettings(settings: NotientSettings): void {
+    console.log("[kernel:updateSettings] TRACE: START");
     this.context.settings = settings;
+    console.log("[kernel:updateSettings] TRACE: END");
   }
 
   /** Save current settings to disk */
   async saveSettings(): Promise<void> {
+    console.log("[kernel:saveSettings] TRACE: START");
     const { saveSettings } = await import("../ui/settings");
+    console.log("[kernel:saveSettings] TRACE: Imported saveSettings, calling...");
     await saveSettings(this.context.plugin, this.context.settings);
+    console.log("[kernel:saveSettings] TRACE: END");
   }
 
   get capabilities(): Readonly<CapabilityStatus> {
+    console.log("[kernel:get:capabilities] TRACE: Accessing capabilities");
     return { ...this._capabilities };
   }
 
   get serviceHealth(): Readonly<ServiceState> {
+    console.log("[kernel:get:serviceHealth] TRACE: Accessing serviceHealth");
     return { ...this._serviceHealth };
   }
 
   get isInitialized(): boolean {
+    console.log(`[kernel:get:isInitialized] TRACE: value=${this._initialized}`);
     return this._initialized;
   }
 
   get hasWriteLock(): boolean {
-    return this._vaultLock.isHeld();
+    console.log("[kernel:get:hasWriteLock] TRACE: START");
+    const held = this._vaultLock.isHeld();
+    console.log(`[kernel:get:hasWriteLock] TRACE: END value=${held}`);
+    return held;
   }
 
   get isServicesInitializing(): boolean {
+    console.log(`[kernel:get:isServicesInitializing] TRACE: value=${this._servicesInitializing}`);
     return this._servicesInitializing;
   }
 
   get isServicesInitialized(): boolean {
+    console.log(`[kernel:get:isServicesInitialized] TRACE: value=${this._servicesInitialized}`);
     return this._servicesInitialized;
   }
 
   /** Mark services as initializing (called by main.ts) */
   setServicesInitializing(value: boolean): void {
+    console.log(`[kernel:setServicesInitializing] TRACE: START value=${value}`);
     this._servicesInitializing = value;
+    console.log("[kernel:setServicesInitializing] TRACE: END");
   }
 
   /** Mark services as initialized and emit event (called by main.ts) */
   setServicesInitialized(): void {
+    console.log("[kernel:setServicesInitialized] TRACE: START");
     this._servicesInitializing = false;
     this._servicesInitialized = true;
+    console.log("[kernel:setServicesInitialized] TRACE: Emitting services:initialized event");
     this._eventBus.emit("services:initialized", {});
+    console.log("[kernel:setServicesInitialized] TRACE: END");
   }
 
   // ============ Lifecycle ============
@@ -238,7 +268,9 @@ export class Kernel {
    * Initialize kernel
    */
   async initialize(): Promise<void> {
+    console.log("[kernel:initialize] TRACE: START");
     if (this._initialized || this._disposed) {
+      console.log("[kernel:initialize] TRACE: END (already initialized or disposed)");
       return;
     }
 
@@ -246,7 +278,7 @@ export class Kernel {
 
     try {
       // 1. Ensure storage directories (with timeout protection)
-      console.log("[Kernel] Step 1: Ensuring directories...");
+      console.log("[kernel:initialize] TRACE: Step 1 - Ensuring directories...");
       try {
         await Promise.race([
           this._storagePaths.ensureDirectories(),
@@ -254,32 +286,38 @@ export class Kernel {
             setTimeout(() => reject(new Error("Directory creation timeout")), 5000),
           ),
         ]);
-        console.log("[Kernel] Step 1: Directories ready");
+        console.log("[kernel:initialize] TRACE: Step 1 - Directories ready");
       } catch (dirError) {
-        console.warn("[Kernel] Directory creation failed, continuing anyway:", dirError);
+        console.warn(
+          "[kernel:initialize] TRACE: Directory creation failed, continuing anyway:",
+          dirError,
+        );
       }
 
       // 2. Try to acquire write lock (with timeout - allows for 3 retries with backoff)
-      console.log("[Kernel] Step 2: Acquiring lock...");
+      console.log("[kernel:initialize] TRACE: Step 2 - Acquiring lock...");
       try {
         const hasLock = await Promise.race([
           this._vaultLock.tryAcquire(),
           new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
         ]);
         if (!hasLock) {
-          console.warn("[Kernel] Could not acquire write lock - running in read-only mode");
+          console.warn(
+            "[kernel:initialize] TRACE: Could not acquire write lock - running in read-only mode",
+          );
         }
-        console.log("[Kernel] Step 2: Lock status =", hasLock);
+        console.log(`[kernel:initialize] TRACE: Step 2 - Lock status=${hasLock}`);
       } catch (lockError) {
-        console.warn("[Kernel] Lock acquisition failed:", lockError);
+        console.warn("[kernel:initialize] TRACE: Lock acquisition failed:", lockError);
       }
 
       this._initialized = true;
-      console.log("[Kernel] Initialization complete");
+      console.log("[kernel:initialize] TRACE: END (initialization complete)");
     } catch (error) {
-      console.error("[Kernel] Initialization failed:", error);
+      console.error("[kernel:initialize] TRACE: Initialization failed:", error);
       // Don't throw - let plugin continue
       this._initialized = true; // Mark as initialized anyway
+      console.log("[kernel:initialize] TRACE: END (marked initialized despite error)");
     }
   }
 
@@ -287,19 +325,30 @@ export class Kernel {
    * Update external service health status
    */
   updateServiceHealth(service: keyof ServiceState, health: ServiceHealth): void {
+    console.log(
+      `[kernel:updateServiceHealth] TRACE: START service=${service} status=${health.status}`,
+    );
     this._serviceHealth[service] = health;
+    console.log("[kernel:updateServiceHealth] TRACE: Calling updateCapabilities");
     this.updateCapabilities();
 
+    console.log("[kernel:updateServiceHealth] TRACE: Emitting health:changed event");
     this._eventBus.emit("health:changed", { service, health });
+    console.log("[kernel:updateServiceHealth] TRACE: END");
   }
 
   /**
    * Recalculate capabilities based on service health
    */
   private updateCapabilities(): void {
+    console.log("[kernel:updateCapabilities] TRACE: START");
     const hasOllama = this._serviceHealth.ollama.status === "healthy";
     const hasLMStudio = this._serviceHealth.lmstudio.status === "healthy";
     const hasLock = this._vaultLock.isHeld();
+
+    console.log(
+      `[kernel:updateCapabilities] TRACE: hasOllama=${hasOllama} hasLMStudio=${hasLMStudio} hasLock=${hasLock}`,
+    );
 
     this._capabilities = {
       embedding: hasOllama,
@@ -308,6 +357,9 @@ export class Kernel {
       indexing: hasOllama && hasLock,
       search: hasOllama,
     };
+    console.log(
+      `[kernel:updateCapabilities] TRACE: END capabilities=${JSON.stringify(this._capabilities)}`,
+    );
   }
 
   /**
@@ -316,6 +368,7 @@ export class Kernel {
    * @param service - The service instance
    */
   registerService<K extends ServiceName>(name: K, service: ServiceRegistry[K]): void {
+    console.log(`[kernel:registerService] TRACE: START name=${name}`);
     switch (name) {
       case "healthMonitor":
         this.healthMonitor = service as HealthMonitor;
@@ -325,9 +378,6 @@ export class Kernel {
         break;
       case "ollamaReranker":
         this.ollamaReranker = service as OllamaRerankerService;
-        break;
-      case "lmstudio":
-        this.lmStudioService = service as LMStudioService;
         break;
       case "vectorStore":
         this.vectorStore = service as VectorStore;
@@ -388,6 +438,7 @@ export class Kernel {
         this.userEvolution = service as UserEvolutionService;
         break;
     }
+    console.log(`[kernel:registerService] TRACE: END registered=${name}`);
   }
 
   /**
@@ -405,64 +456,90 @@ export class Kernel {
   getService<K extends ServiceName>(name: K): ServiceRegistry[K] | null;
   getService<T>(name: string): T | null;
   getService<K extends ServiceName | string>(name: K): unknown {
+    console.log(`[kernel:getService] TRACE: START name=${name}`);
+    let result: unknown = null;
     switch (name) {
       case "healthMonitor":
-        return this.healthMonitor;
+        result = this.healthMonitor;
+        break;
       case "ollama":
-        return this.ollamaService;
+        result = this.ollamaService;
+        break;
       case "ollamaReranker":
-        return this.ollamaReranker;
-      case "lmstudio":
-        return this.lmStudioService;
+        result = this.ollamaReranker;
+        break;
       case "vectorStore":
-        return this.vectorStore;
+        result = this.vectorStore;
+        break;
       case "indexManager":
-        return this.indexManager;
+        result = this.indexManager;
+        break;
       case "indexer":
-        return this.indexer;
+        result = this.indexer;
+        break;
       case "search":
-        return this.searchPipeline;
+        result = this.searchPipeline;
+        break;
       case "progressiveSearch":
-        return this.progressiveSearch;
+        result = this.progressiveSearch;
+        break;
       case "context":
-        return this.contextBuilder;
+        result = this.contextBuilder;
+        break;
       case "vitals":
-        return this.vaultVitals;
+        result = this.vaultVitals;
+        break;
       case "intelligence":
-        return this.intelligence;
+        result = this.intelligence;
+        break;
       case "taskQueue":
-        return this.agentTaskQueue;
+        result = this.agentTaskQueue;
+        break;
       case "llmProvider":
-        return this.llmProvider;
+        result = this.llmProvider;
+        break;
       case "agent":
-        return this.notientAgent;
+        result = this.notientAgent;
+        break;
       // Phase 2 services
       case "conversationStore":
-        return this.conversationStore;
+        result = this.conversationStore;
+        break;
       case "actionHistory":
-        return this.actionHistory;
+        result = this.actionHistory;
+        break;
       case "workflowRunner":
-        return this.workflowRunner;
+        result = this.workflowRunner;
+        break;
       case "trustLevelManager":
-        return this.trustLevelManager;
+        result = this.trustLevelManager;
+        break;
       case "actionApplier":
-        return this.actionApplier;
+        result = this.actionApplier;
+        break;
       case "actionOrchestrator":
-        return this.actionOrchestrator;
+        result = this.actionOrchestrator;
+        break;
       case "profileManager":
-        return this.profileManager;
+        result = this.profileManager;
+        break;
       case "userEvolution":
-        return this.userEvolution;
+        result = this.userEvolution;
+        break;
       default:
-        return null;
+        result = null;
     }
+    console.log(`[kernel:getService] TRACE: END name=${name} found=${result !== null}`);
+    return result;
   }
 
   /**
    * Dispose of all services and cleanup
    */
   dispose(): void {
+    console.log("[kernel:dispose] TRACE: START");
     if (this._disposed) {
+      console.log("[kernel:dispose] TRACE: END (already disposed)");
       return;
     }
 
@@ -470,6 +547,7 @@ export class Kernel {
     this._disposed = true;
 
     // Abort any pending operations
+    console.log("[kernel:dispose] TRACE: Aborting pending operations");
     this._abortController.abort();
 
     // Dispose services in reverse order
@@ -490,28 +568,34 @@ export class Kernel {
       this.indexer,
       this.indexManager,
       this.vectorStore,
-      this.lmStudioService,
       this.ollamaReranker,
       this.ollamaService,
       this.healthMonitor,
     ];
 
-    for (const service of disposables) {
+    console.log(`[kernel:dispose] TRACE: Disposing ${disposables.length} services`);
+    for (let i = 0; i < disposables.length; i++) {
+      const service = disposables[i];
       if (service && typeof (service as { dispose?: () => void }).dispose === "function") {
         try {
+          console.log(`[kernel:dispose] TRACE: Disposing service ${i}`);
           (service as { dispose: () => void }).dispose();
+          console.log(`[kernel:dispose] TRACE: Service ${i} disposed`);
         } catch (error) {
-          console.error("[Kernel] Error disposing service:", error);
+          console.error(`[kernel:dispose] TRACE: Error disposing service ${i}:`, error);
         }
       }
     }
 
     // Release lock
+    console.log("[kernel:dispose] TRACE: Disposing vaultLock");
     this._vaultLock.dispose();
 
     // Dispose event bus last
+    console.log("[kernel:dispose] TRACE: Disposing eventBus");
     this._eventBus.dispose();
 
+    console.log("[kernel:dispose] TRACE: END");
     console.log("[Kernel] Disposed");
   }
 }

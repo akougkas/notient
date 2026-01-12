@@ -17,5 +17,4 @@ export type {
 export type { LLMProvider } from "./provider";
 
 // Implementations
-export { OpenAICompatibleProvider } from "./providers/openai-compatible";
-export { LMStudioProvider } from "./providers/lmstudio";
+export { LMStudioSDKProvider } from "./providers/lmstudio-sdk";

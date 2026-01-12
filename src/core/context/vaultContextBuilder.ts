@@ -42,8 +42,7 @@ export class VaultContextBuilder {
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
-    // @ts-ignore - Service injection in v0.1
-    this.userEvolution = kernel.getService("user-evolution") as UserEvolutionService;
+    this.userEvolution = kernel.getService("userEvolution") as UserEvolutionService;
   }
 
   /**
