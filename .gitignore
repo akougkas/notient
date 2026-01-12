@@ -42,3 +42,8 @@ repomix-output.xml
 .claude/logs/
 .claude/bin/
 .claude/settings.local.json
+# Gemini (mirrors Claude patterns)
+.gemini/logs/
+.gemini/orchestration/*/queue/*.task
+.gemini/orchestration/*/responses/*.response
+.gemini/settings.local.json

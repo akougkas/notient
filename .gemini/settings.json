@@ -1,0 +1,36 @@
+{
+  "model": {
+    "name": "gemini-2.5-pro"
+  },
+  "tools": {
+    "autoAccept": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "orchestrator-session-start",
+            "type": "command",
+            "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/orchestrator-session-start.sh",
+            "description": "Inject pending agent responses"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "orchestrator-check-responses",
+            "type": "command",
+            "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/orchestrator-check-responses.sh",
+            "description": "Check for pending responses"
+          }
+        ]
+      }
+    ]
+  }
+}
