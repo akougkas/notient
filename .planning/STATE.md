@@ -3,58 +3,50 @@
 ## Current Position
 
 **Phase:** 0 of 8 — Foundation Repair (EMERGENCY)
-**Plan:** 2/4 complete (00-01, 00-01-FIX done; 00-03 next, 00-02 last)
-**Status:** **BLOCKED** on UAT-003
+**Status:** **AWAITING LOGS** — UAT-003 (UI freeze after agent completion)
 
-Progress: ██░░░░░░░░ ~5% (Phase 1 complete, Phase 0 blocked)
+Progress: ████████░░ ~80%
 
-## Blocker
+## Session Summary (2026-01-11)
 
-**UAT-003: UI crash after agent trigger**
+### Nuclear Tests Performed (Both Failed)
+1. ❌ Commented out `eventBus.emit("agent:task-update")` → Still freezes
+2. ❌ Commented out `persistAssistantMessage()` → Still freezes
 
-Click Quick Action → LLM responds correctly (logs show valid JSON) → then UI freezes, CPU 100%, must kill Obsidian.
+**Conclusion:** Problem is NOT in EventBus or ConversationStore.
 
-**Decision:** Migrate from REST API to native SDKs (`@lmstudio/sdk`, `ollama`)
+### Comprehensive Instrumentation Deployed
+5 parallel agents instrumented the entire codebase with TRACE logging:
+- Agent code (chiefOfStaff, classifierAgent, base)
+- TaskQueue (25+ methods)
+- LLM providers (lmstudio-sdk, ollama, ollamaReranker)
+- UI events (useAppEvents, appHandlers, App.tsx)
+- Core services (kernel, eventBus, chatService)
 
-## Phase Status
+Build deployed: `main.js 9.7mb`
 
-| Phase | Status | Notes |
-|-------|--------|-------|
-| 0. Foundation Repair | **BLOCKED** | UAT-003 unresolved |
-| 1. Agent Architecture | **COMPLETE** | 3/3 plans done |
-| 2-8 | Not started | Blocked by Phase 0 |
+## What We Know
 
-## Uncommitted Work
+- Freeze happens AFTER `[Classifier] Classification: project` log
+- LLM returns successfully (440 chars structured output)
+- NOT EventBus emit (disabled, still freezes)
+- NOT ConversationStore persistence (disabled, still freezes)
+- CPU spikes, fans spin, UI locks
 
-14 files modified with debugging attempts. Need to commit as WIP before SDK migration.
+## Next Session: Analyze Logs
 
-See: `.planning/phases/00-foundation-repair/.continue-here.md`
+1. User tests with instrumented build
+2. Capture console output before/during freeze
+3. Find last TRACE log before spike = culprit
+4. Fix by commenting out the offending code
 
-## Next Session
+## Resume Command
 
-**Run:** `/gsd:execute-plan .planning/phases/00-foundation-repair/00-03-PLAN.md`
-
-Or quick start:
 ```bash
 /gsd:resume-work
 ```
 
-## Validation Checklist (Must Pass)
-
-- [ ] Plugin loads in <3 seconds
-- [ ] CPU stays <20% at idle
-- [ ] Chat produces actual responses
-- [ ] Search completes in <2 seconds
-- [ ] Agents generate valid output
-- [ ] No "JSON parse error" in console
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `.planning/phases/00-foundation-repair/.continue-here.md` | Detailed resume context |
-| `.planning/ROADMAP.md` | Phase overview |
-| `.planning/PROJECT.md` | Product vision |
+Then paste console logs from freeze test.
 
 ---
-*Last updated: 2026-01-12*
+*Last updated: 2026-01-11*
