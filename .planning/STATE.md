@@ -3,50 +3,37 @@
 ## Current Position
 
 **Phase:** 0 of 8 — Foundation Repair (EMERGENCY)
-**Status:** **AWAITING LOGS** — UAT-003 (UI freeze after agent completion)
+**Status:** UI FREEZE FIXED - Cleanup in progress
 
-Progress: ████████░░ ~80%
+Progress: █████████░ ~90%
 
 ## Session Summary (2026-01-11)
 
-### Nuclear Tests Performed (Both Failed)
-1. ❌ Commented out `eventBus.emit("agent:task-update")` → Still freezes
-2. ❌ Commented out `persistAssistantMessage()` → Still freezes
+### MAJOR BREAKTHROUGH: Infinite Loop Fixed
 
-**Conclusion:** Problem is NOT in EventBus or ConversationStore.
+**Root cause found**: `taskQueue.ts:processNext()` had `queueMicrotask(() => this.processNext())` in finally block that ran unconditionally even when queue was empty → infinite loop → CPU spike → UI freeze.
 
-### Comprehensive Instrumentation Deployed
-5 parallel agents instrumented the entire codebase with TRACE logging:
-- Agent code (chiefOfStaff, classifierAgent, base)
-- TaskQueue (25+ methods)
-- LLM providers (lmstudio-sdk, ollama, ollamaReranker)
-- UI events (useAppEvents, appHandlers, App.tsx)
-- Core services (kernel, eventBus, chatService)
+**Fix**: Created `scheduleNextIfQueued()` that only schedules when `tasks.some(t => t.status === "queued")` returns true.
 
-Build deployed: `main.js 9.7mb`
+**Commit**: `eff6f21`
 
-## What We Know
+### Remaining Cleanup
+1. Remove excessive TRACE logging (agent prompt ready)
+2. Optimize health event emission (only emit on status change)
+3. Test for residual CPU spikes
 
-- Freeze happens AFTER `[Classifier] Classification: project` log
-- LLM returns successfully (440 chars structured output)
-- NOT EventBus emit (disabled, still freezes)
-- NOT ConversationStore persistence (disabled, still freezes)
-- CPU spikes, fans spin, UI locks
+### Plugin Data Audit
+- Total: 1.2GB
+- Active: 494MB index, 50MB chunks, 1.4MB intelligence
+- Garbage: 616MB (old indices, deleted chunks, tmp files)
 
-## Next Session: Analyze Logs
-
-1. User tests with instrumented build
-2. Capture console output before/during freeze
-3. Find last TRACE log before spike = culprit
-4. Fix by commenting out the offending code
-
-## Resume Command
+## Resume
 
 ```bash
 /gsd:resume-work
 ```
 
-Then paste console logs from freeze test.
+See `.planning/phases/00-foundation-repair/.continue-here.md` for full context.
 
 ---
 *Last updated: 2026-01-11*
