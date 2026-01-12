@@ -234,7 +234,7 @@ export class IndexManager {
       } else {
         // No existing index - generate path for new one
         this.activeIndexPath = this.generateIndexPath();
-        console.log(`[IndexManager] No index found, will create new`);
+        console.log("[IndexManager] No index found, will create new");
       }
     }
 
@@ -254,9 +254,7 @@ export class IndexManager {
 
     const noteCount = this.vectorStore.getIndexedNoteCount?.() ?? 0;
     const elapsed = Math.round(performance.now() - startTime);
-    console.log(
-      `[IndexManager] Initialized: ${noteCount} notes in ${elapsed}ms`,
-    );
+    console.log(`[IndexManager] Initialized: ${noteCount} notes in ${elapsed}ms`);
   }
 
   // ============ Index Discovery ============

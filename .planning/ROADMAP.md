@@ -164,7 +164,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 0. Foundation Repair | 0/TBD | **EMERGENCY** | - |
+| 0. Foundation Repair | 1/TBD | **IN PROGRESS** | - |
 | 1. Agent Architecture | 2/3 | Blocked by Phase 0 | - |
 | 2. Insights Stream | 0/TBD | Not started | - |
 | 3. Agent Command Center | 0/TBD | Not started | - |
