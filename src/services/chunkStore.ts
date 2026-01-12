@@ -151,7 +151,8 @@ export class ChunkStore {
       const BATCH_SIZE = 50;
       const batches = this.chunkArray(jsonFiles, BATCH_SIZE);
 
-      for (const batch of batches) {
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
         await Promise.all(
           batch.map(async (file) => {
             const noteId = file.replace(".json", "");
@@ -159,6 +160,10 @@ export class ChunkStore {
             loaded++;
           }),
         );
+        // Log progress every 5 batches (250 files) for visibility
+        if ((i + 1) % 5 === 0 || i === batches.length - 1) {
+          console.log(`[ChunkStore] Progress: ${loaded}/${total} files loaded`);
+        }
         // Yield to event loop between batches so UI can render
         await new Promise((resolve) => setTimeout(resolve, 0));
       }

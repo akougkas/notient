@@ -178,6 +178,7 @@ export class IndexManager {
   }
 
   async initialize(): Promise<void> {
+    const startTime = performance.now();
     const activePath = this.kernel.settings.indexing.activeIndexPath;
 
     // Determine if this is a user-provided external index (read-only)
@@ -185,7 +186,8 @@ export class IndexManager {
       ? activePath.includes("system/index") || activePath.includes("system\\index")
       : false;
 
-    // Get model info from Ollama first (we need this for discovery)
+    // Stage 1: Get model info
+    console.log("[IndexManager] Stage 1/4: Getting model info...");
     const ollama = this.kernel.getService<{
       getModelKey(): string;
       getDimension(): Promise<number>;
@@ -198,46 +200,46 @@ export class IndexManager {
     this.modelKey = ollama.getModelKey();
     this.dimension = await ollama.getDimension();
 
-    console.log(`[IndexManager] Initializing for model=${this.modelKey}, dim=${this.dimension}`);
+    console.log(`[IndexManager] Model: ${this.modelKey}, dim=${this.dimension}`);
 
     // Set model config on VectorStore
     this.vectorStore.setModelConfig?.(this.modelKey, this.dimension);
 
-    // Phase 2: Check for new structure and load chunks
+    // Stage 2: Load chunks
+    console.log("[IndexManager] Stage 2/4: Loading chunk store...");
     this.useNewStructure = this.kernel.storagePaths.hasNewStructure();
     if (this.useNewStructure) {
-      console.log("[IndexManager] Loading chunks from new structure...");
       await this.chunkStore.loadAll();
     }
 
-    // Phase 2: Check for legacy index and migrate if needed
+    // Check for legacy index and migrate if needed
     if (!this.useNewStructure && (await this.hasLegacyIndex())) {
       console.log("[IndexManager] Detected legacy index, will migrate...");
       await this.migrateLegacyIndex();
       this.useNewStructure = true;
     }
 
-    // Load index
+    // Stage 3: Load vector index
+    console.log("[IndexManager] Stage 3/4: Loading vector index...");
     if (activePath) {
       // User specified a path in settings
-      console.log(`[IndexManager] Loading from settings path: ${activePath}`);
       this.activeIndexPath = activePath;
       await this.loadIndexFromPath(activePath);
     } else {
       // Discover existing index
       const discovered = await this.discoverBestIndex();
       if (discovered) {
-        console.log(`[IndexManager] Discovered existing index: ${discovered}`);
         this.activeIndexPath = discovered;
         await this.loadIndexFromPath(discovered);
       } else {
         // No existing index - generate path for new one
         this.activeIndexPath = this.generateIndexPath();
-        console.log(`[IndexManager] No index found, will create: ${this.activeIndexPath}`);
+        console.log(`[IndexManager] No index found, will create new`);
       }
     }
 
-    // Initialize vector store (it's now just in-memory setup)
+    // Stage 4: Initialize vector store
+    console.log("[IndexManager] Stage 4/4: Initializing vector store...");
     await this.vectorStore.initialize();
 
     // Cache metadata in settings for UI
@@ -251,8 +253,9 @@ export class IndexManager {
     this.cleanupDeletedFolder().catch(() => {});
 
     const noteCount = this.vectorStore.getIndexedNoteCount?.() ?? 0;
+    const elapsed = Math.round(performance.now() - startTime);
     console.log(
-      `[IndexManager] Initialized: modelKey=${this.modelKey}, notes=${noteCount}, path=${this.activeIndexPath}`,
+      `[IndexManager] Initialized: ${noteCount} notes in ${elapsed}ms`,
     );
   }
 
