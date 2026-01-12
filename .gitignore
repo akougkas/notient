@@ -29,3 +29,16 @@ bun.lockb
 repomix-output.xml
 .claude/get-shit-done
 .claude/commands/gsd
+
+# Agent Orchestration (runtime data)
+.claude/orchestration/*/TASK.md
+.claude/orchestration/*/REPORT.md
+.claude/orchestration/*/status.json
+.claude/orchestration/*/queue/*.task
+.claude/orchestration/*/responses/*.response
+.claude/orchestration/signals/
+.claude/orchestration/state/
+.claude/orchestration/logs/
+.claude/logs/
+.claude/bin/
+.claude/settings.local.json

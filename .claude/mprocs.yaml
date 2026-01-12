@@ -1,0 +1,68 @@
+# Notient Multi-Agent Orchestration (Queue-Based v2)
+# Usage: mprocs -c .claude/mprocs.yaml
+#
+# Processes:
+#   repos        - File browser with git status (yazi)
+#   orchestrator - Interactive session, coordinates agents
+#   archie       - Queue processor (backend engineer)
+#   sage         - Queue processor (code quality)
+#   faye         - Queue processor (frontend engineer)
+#
+# New Workflow (Queue-Based):
+#   1. Orchestrator writes .task file to agent's queue/
+#   2. Agent queue processor picks up task, runs Claude CLI
+#   3. Agent writes .response file to responses/
+#   4. Orchestrator checks responses/ for results
+#
+# Advantages:
+#   - Deterministic: One task at a time, clear input/output
+#   - Lightweight: No persistent Claude sessions for agents
+#   - Recoverable: Queue persists, restart without losing tasks
+#   - Streamable: See Claude output in real-time per agent pane
+
+server: 127.0.0.1:4050
+log_dir: <CONFIG_DIR>/logs
+
+procs:
+  repos:
+    cwd: /home/akougkas/projects/notient
+    shell: "YAZI_CONFIG_HOME=/home/akougkas/projects/notient/.claude/yazi-config /home/akougkas/projects/notient/.claude/bin/yazi"
+    autostart: true
+    stop: "SIGTERM"
+
+  orchestrator:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ORCHESTRATOR: "1"
+    cmd:
+      - claude
+      - --dangerously-skip-permissions
+      - --model
+      - haiku
+      - "Read @.claude/orchestration/orchestrator/CLAUDE.md and confirm ready."
+    autostart: true
+    stop: "SIGTERM"
+
+  archie:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_AGENT: "archie"
+    shell: "uv run .claude/agents/queue-processor.py archie"
+    autostart: true
+    stop: "SIGTERM"
+
+  sage:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_AGENT: "sage"
+    shell: "uv run .claude/agents/queue-processor.py sage"
+    autostart: true
+    stop: "SIGTERM"
+
+  faye:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_AGENT: "faye"
+    shell: "uv run .claude/agents/queue-processor.py faye"
+    autostart: true
+    stop: "SIGTERM"
