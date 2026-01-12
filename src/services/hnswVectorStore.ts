@@ -245,7 +245,7 @@ export class HNSWVectorStore implements VectorStore {
     await this.libraryReadyPromise;
   }
 
-  private ensureIndex(): void {
+  private ensureIndex(mode: "init" | "load" = "init"): void {
     if (!this.lib) {
       throw new Error("HNSW library not initialized");
     }
@@ -253,21 +253,185 @@ export class HNSWVectorStore implements VectorStore {
       // Constructor: (spaceName, numDimensions, autoSaveFilename)
       // Empty string for autoSaveFilename disables auto-save
       this.index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
-      // initIndex: (maxElements, m, efConstruction, randomSeed)
-      this.index.initIndex(
-        HNSW_CONFIG.initialMaxElements,
-        HNSW_CONFIG.M,
-        HNSW_CONFIG.efConstruction,
-        100, // random seed
-      );
-      this.index.setEfSearch(HNSW_CONFIG.efSearch);
-      console.log(
-        `[HNSWVectorStore] Index created: ${this.dimension}d, M=${HNSW_CONFIG.M}, ef=${HNSW_CONFIG.efSearch}`,
-      );
+      if (mode === "init") {
+        // initIndex: (maxElements, m, efConstruction, randomSeed)
+        this.index.initIndex(
+          HNSW_CONFIG.initialMaxElements,
+          HNSW_CONFIG.M,
+          HNSW_CONFIG.efConstruction,
+          100, // random seed
+        );
+        this.index.setEfSearch(HNSW_CONFIG.efSearch);
+        console.log(
+          `[HNSWVectorStore] Index created: ${this.dimension}d, M=${HNSW_CONFIG.M}, ef=${HNSW_CONFIG.efSearch}`,
+        );
+      }
     }
   }
 
   // ============ Data Transfer API ============
+
+  private async syncFs(read: boolean): Promise<void> {
+    if (!this.lib) return;
+    await new Promise<void>((resolve, reject) => {
+      try {
+        this.lib?.EmscriptenFileSystemManager.syncFS(read, () => resolve());
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async persistNativeIndex(options: { hnswFilename: string }): Promise<void> {
+    if (this.disposed) return;
+    if (!this.lib || !this.index) return;
+    if (!options.hnswFilename) return;
+
+    try {
+      await this.syncFs(true).catch(() => {});
+      await this.index.writeIndex(options.hnswFilename);
+      await this.syncFs(false);
+    } catch (error) {
+      console.warn("[HNSWVectorStore] Failed to persist native index:", error);
+    }
+  }
+
+  async loadFromDataAsync(
+    data: {
+      meta: {
+        modelKey: string;
+        dimension: number;
+        createdAt: number;
+        updatedAt: number;
+      };
+      docs: Array<{
+        chunkId: string;
+        noteId: string;
+        path: string;
+        title: string;
+        headingPath: string[];
+        tier: ChunkTier;
+        kind: ChunkKind;
+        parentChunkId: string | null;
+        blockRef: string | null;
+        startLine: number | null;
+        endLine: number | null;
+        tokenEstimate: number;
+        importance?: number;
+        chunkIndex: number;
+        text: string;
+        embedding: number[];
+        label?: number;
+        mtimeMs: number;
+        contentHash: string;
+        tags: string[];
+        frontmatter: Record<string, unknown>;
+      }>;
+      state?: {
+        lastFullIndexAt: number | null;
+        notes: Record<string, NoteState>;
+      };
+    },
+    options?: { hnswFilename?: string },
+  ): Promise<void> {
+    this.modelKey = data.meta.modelKey;
+    this.dimension = data.meta.dimension;
+    this.createdAt = data.meta.createdAt || Date.now();
+
+    // Clear existing data
+    this.docs.clear();
+    this.chunkIdToLabel.clear();
+    this.labelToChunkId.clear();
+    this.noteIdToLabels.clear();
+    this.embeddings.clear();
+
+    // Reset native index instance so we can readIndex() into a fresh object
+    this.index = null;
+
+    const hnswFilename = options?.hnswFilename ?? null;
+
+    // Attempt fast-path: load HNSW graph from IDBFS, then only hydrate JS-side metadata maps.
+    if (hnswFilename && this.lib) {
+      try {
+        await this.syncFs(true);
+        const exists = this.lib.EmscriptenFileSystemManager.checkFileExists(hnswFilename);
+        if (exists) {
+          const index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
+          this.index = index;
+          const maxElements = Math.max(HNSW_CONFIG.initialMaxElements, data.docs.length);
+          const ok = await index.readIndex(hnswFilename, maxElements);
+          if (ok) {
+            index.setEfSearch(HNSW_CONFIG.efSearch);
+
+            for (let i = 0; i < data.docs.length; i++) {
+              const persisted = data.docs[i];
+              const embedding = new Float32Array(persisted.embedding);
+              const label = typeof persisted.label === "number" ? persisted.label : i;
+
+              const doc: StoredDoc = {
+                chunkId: persisted.chunkId,
+                noteId: persisted.noteId,
+                path: persisted.path,
+                title: persisted.title,
+                headingPath: persisted.headingPath,
+                tier: persisted.tier,
+                kind: persisted.kind,
+                parentChunkId: persisted.parentChunkId,
+                blockRef: persisted.blockRef,
+                startLine: persisted.startLine,
+                endLine: persisted.endLine,
+                tokenEstimate: persisted.tokenEstimate,
+                importance: persisted.importance,
+                chunkIndex: persisted.chunkIndex,
+                text: persisted.text,
+                mtimeMs: persisted.mtimeMs,
+                contentHash: persisted.contentHash,
+                tags: persisted.tags,
+                frontmatter: persisted.frontmatter,
+              };
+
+              this.docs.set(label, doc);
+              this.chunkIdToLabel.set(persisted.chunkId, label);
+              this.labelToChunkId.set(label, persisted.chunkId);
+              this.embeddings.set(label, embedding);
+
+              if (!this.noteIdToLabels.has(persisted.noteId)) {
+                this.noteIdToLabels.set(persisted.noteId, new Set());
+              }
+              this.noteIdToLabels.get(persisted.noteId)?.add(label);
+            }
+
+            // Load state
+            this.noteStates.clear();
+            this.lastFullIndexAt = null;
+            if (data.state) {
+              this.lastFullIndexAt = data.state.lastFullIndexAt;
+              for (const [notePath, state] of Object.entries(data.state.notes)) {
+                this.noteStates.set(notePath, state);
+              }
+            }
+
+            this.dirty = false;
+            console.log(
+              `[HNSWVectorStore] Loaded ${this.docs.size} chunks, ${this.noteStates.size} note states`,
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn("[HNSWVectorStore] Native index load failed, falling back:", error);
+      }
+    }
+
+    // Slow-path: rebuild from embeddings (synchronous, can block). Kept for compatibility + migration.
+    this.index = null;
+    this.loadFromData(data);
+
+    // Best-effort persist for the next startup
+    if (hnswFilename) {
+      await this.persistNativeIndex({ hnswFilename });
+    }
+  }
 
   loadFromData(data: {
     meta: {
@@ -431,6 +595,7 @@ export class HNSWVectorStore implements VectorStore {
       chunkIndex: number;
       text: string;
       embedding: number[];
+      label?: number;
       mtimeMs: number;
       contentHash: string;
       tags: string[];
@@ -454,6 +619,7 @@ export class HNSWVectorStore implements VectorStore {
       chunkIndex: number;
       text: string;
       embedding: number[];
+      label?: number;
       mtimeMs: number;
       contentHash: string;
       tags: string[];
@@ -467,6 +633,7 @@ export class HNSWVectorStore implements VectorStore {
       persistedDocs.push({
         ...doc,
         embedding: Array.from(embedding),
+        label,
       });
     }
 

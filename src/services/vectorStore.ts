@@ -196,6 +196,73 @@ export interface VectorStore {
   }): void;
 
   /**
+   * Async variant of loadFromData() for implementations that need async I/O
+   * (e.g., loading a native/WASM index from a virtual filesystem).
+   *
+   * Called by IndexManager after reading and parsing JSON.
+   */
+  loadFromDataAsync?(
+    data: {
+      meta: {
+        modelKey: string;
+        dimension: number;
+        createdAt: number;
+        updatedAt: number;
+      };
+      docs: Array<{
+        chunkId: string;
+        noteId: string;
+        path: string;
+        title: string;
+        headingPath: string[];
+        tier: ChunkTier;
+        kind: ChunkKind;
+        parentChunkId: string | null;
+        blockRef: string | null;
+        startLine: number | null;
+        endLine: number | null;
+        tokenEstimate: number;
+        importance?: number;
+        chunkIndex: number;
+        text: string;
+        embedding: number[];
+        /** Optional label for native index compatibility (v3+) */
+        label?: number;
+        mtimeMs: number;
+        contentHash: string;
+        tags: string[];
+        frontmatter: Record<string, unknown>;
+      }>;
+      state?: {
+        lastFullIndexAt: number | null;
+        notes: Record<
+          string,
+          {
+            path: string;
+            mtimeMs: number;
+            contentHash: string;
+            chunkCount: number;
+            embeddedAt: number;
+          }
+        >;
+      };
+    },
+    options?: {
+      /**
+       * Optional native index filename for WASM-backed stores (e.g. hnswlib-wasm).
+       * This should be unique per vault/index snapshot to avoid collisions.
+       */
+      hnswFilename?: string;
+    },
+  ): Promise<void>;
+
+  /**
+   * Optional: persist any native/WASM index data (separate from JSON) to the
+   * store's native filesystem (e.g. Emscripten/IDBFS).
+   */
+  persistNativeIndex?(options: { hnswFilename: string }): Promise<void>;
+
+  /**
    * Export current data for persistence.
    * Called by IndexManager when saving to disk.
    */
@@ -240,6 +307,8 @@ export interface VectorStore {
       chunkIndex: number;
       text: string;
       embedding: number[];
+      /** Optional label for native index compatibility (v3+) */
+      label?: number;
       mtimeMs: number;
       contentHash: string;
       tags: string[];

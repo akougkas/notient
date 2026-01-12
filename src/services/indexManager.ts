@@ -43,6 +43,16 @@ interface ParsedIndexName {
   format: "v3" | "v2" | "legacy";
 }
 
+/** Simple stable hash (FNV-1a 32-bit) for deriving cache keys without crypto deps */
+function hashStringFNV1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 /** Rich metadata for discovered indices - used by UI surfaces */
 export interface DiscoveredIndex {
   path: string;
@@ -158,6 +168,13 @@ export class IndexManager {
     private vectorStore: VectorStore,
   ) {
     this.chunkStore = new ChunkStore(kernel.storagePaths);
+  }
+
+  private getHnswFilenameForIndexPath(indexPath: string): string {
+    const base = path.basename(indexPath, ".json");
+    const vaultKey = this.kernel.storagePaths.pluginRoot;
+    const vaultHash = hashStringFNV1a32Hex(vaultKey);
+    return `notient-hnsw-${vaultHash}-${base}.dat`;
   }
 
   async initialize(): Promise<void> {
@@ -382,7 +399,8 @@ export class IndexManager {
       }
 
       // Load into VectorStore
-      this.vectorStore.loadFromData?.({
+      const hnswFilename = this.getHnswFilenameForIndexPath(indexPath);
+      const payload = {
         meta: {
           modelKey: data.meta.modelKey,
           dimension: data.meta.dimension,
@@ -393,7 +411,20 @@ export class IndexManager {
         docs: data.docs as any,
         // biome-ignore lint/suspicious/noExplicitAny: HNSW state is opaque binary data
         state: state as any,
-      });
+      };
+
+      if (this.vectorStore.loadFromDataAsync) {
+        await this.vectorStore.loadFromDataAsync(
+          // biome-ignore lint/suspicious/noExplicitAny: Legacy v2/v3 index format compatibility
+          payload as any,
+          { hnswFilename },
+        );
+      } else {
+        this.vectorStore.loadFromData?.(
+          // biome-ignore lint/suspicious/noExplicitAny: Legacy v2/v3 index format compatibility
+          payload as any,
+        );
+      }
 
       // If we migrated from v2, mark dirty to save as v3
       if (version === 2) {
@@ -502,6 +533,11 @@ export class IndexManager {
 
       await atomicWriteFile(this.activeIndexPath, JSON.stringify(data));
       this.vectorStore.clearDirty?.();
+
+      const hnswFilename = this.getHnswFilenameForIndexPath(this.activeIndexPath);
+      await this.vectorStore
+        .persistNativeIndex?.({ hnswFilename })
+        .catch((error) => console.warn("[IndexManager] Native index persist failed:", error));
 
       console.log(
         `[IndexManager] Saved ${data.meta.docCount} chunks, ${Object.keys(data.meta.state.notes).length} notes to ${path.basename(this.activeIndexPath)}`,

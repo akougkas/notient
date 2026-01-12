@@ -11,9 +11,10 @@ None (internal Obsidian plugin patterns)
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
+- Integer phases (0, 1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
+- [ ] **Phase 0: Foundation Repair** — Fix critical performance blockers (EMERGENCY)
 - [ ] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions (2/3 plans)
 - [ ] **Phase 2: Insights Stream** — Wire agent results + proactive suggestions
 - [ ] **Phase 3: Agent Command Center** — Connect AgentStreamsView to services
@@ -24,6 +25,33 @@ None (internal Obsidian plugin patterns)
 - [ ] **Phase 8: Personal Validation** — Daily use on real vault for 1 week
 
 ## Phase Details
+
+### Phase 0: Foundation Repair (EMERGENCY)
+**Goal**: Fix critical performance blockers causing CPU 100%, UI freeze, and 30+ second load times. Must pass validation checklist before ANY feature work continues.
+**Depends on**: Nothing (prerequisite for all phases)
+**Research**: Complete (Gemini audit + GPT fixes + internal verification)
+**Plans**: TBD
+
+**Root Causes (Verified):**
+1. `hnswVectorStore.loadFromData()` - synchronous WASM, no yields (P0)
+2. `chunkStore.loadAll()` - sequential await in loop, 542 files (P0)
+3. `indexManager` - JSON.parse 300MB on main thread (P0)
+4. `chiefOfStaff` - singleton session race condition (P1)
+5. `chatAgent` - O(N²) regex on streaming (P1)
+6. `RichChatView` - scroll yanking, no virtualization (P2)
+7. `progressiveSearch` - no abort on timeout (P2)
+
+**GPT Contribution (needs cleanup):**
+- Native HNSW caching via IDBFS (good, keep)
+- Debug fetch() calls throughout (remove)
+- Global counter in useAppEvents (remove)
+
+**Validation Checklist (MUST PASS):**
+- [ ] Plugin loads in <3 seconds
+- [ ] CPU stays <20% at idle
+- [ ] Chat produces actual responses
+- [ ] Search completes in <2 seconds
+- [ ] No console errors
 
 ### Phase 1: Agent Architecture
 **Goal**: Consolidate from 13 agents to 12-agent model (Chat as UI, not agent). Rewire Quick Actions to call expert agents via ChiefOfStaff. Implement 3 pinned + 3 contextual model.
@@ -132,11 +160,12 @@ Key work:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Agent Architecture | 2/3 | In progress | - |
+| 0. Foundation Repair | 0/TBD | **EMERGENCY** | - |
+| 1. Agent Architecture | 2/3 | Blocked by Phase 0 | - |
 | 2. Insights Stream | 0/TBD | Not started | - |
 | 3. Agent Command Center | 0/TBD | Not started | - |
 | 4. Chat Enhancement | 0/TBD | Not started | - |

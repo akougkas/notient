@@ -34,12 +34,12 @@ See: .planning/PROJECT.md (updated 2025-01-11)
 
 ## Current Position
 
-Phase: EMERGENCY PHASE 0 - Foundation Repair
-Plan: N/A - Diagnostic and repair mode
-Status: **HALTED** - Application non-functional
-Last activity: 2026-01-11 — Emergency stop after discovering critical failures
+Phase: **Phase 0: Foundation Repair** (EMERGENCY)
+Plan: 0/TBD - Ready for planning
+Status: **ACTIVE** - External analysis complete, ready to plan fixes
+Last activity: 2026-01-11 — Gemini audit verified, GPT fixes reviewed, Phase 0 formalized
 
-Progress: ░░░░░░░░░░ 0% (foundations broken)
+Progress: ░░░░░░░░░░ 0% (ready to plan)
 
 ## Critical Issues (P0)
 
@@ -76,18 +76,17 @@ Progress: ░░░░░░░░░░ 0% (foundations broken)
 ## Session Continuity
 
 Last session: 2026-01-11
-Stopped at: **AWAITING EXTERNAL REVIEW** - Debugging prompt sent to GPT/Gemini
-Resume file: `.planning/.continue-here.md`
+Stopped at: **Phase 0 formalized** - Ready for `/gsd:plan-phase 0`
+Resume file: N/A (no mid-plan checkpoint)
 
-**Status:** Paused - waiting for external AI feedback on root cause analysis
+**What happened this session:**
+1. Received Gemini deep audit (3 rounds) - confirmed all root causes
+2. Received GPT fixes - native HNSW caching (good) + debug code (bad)
+3. Verified 6 claims with parallel Explore agents - 5/6 TRUE, 1 PARTIAL
+4. Created formal Phase 0 in roadmap with verified root causes
+5. GPT's changes NOT committed (need cleanup first)
 
-**What happened:**
-1. Attempted quick fixes (JSON parsing, disable reranker) - didn't help
-2. Deep code analysis identified 4 smoking guns
-3. Created `.planning/DEBUG-PROMPT-EXTERNAL.md` for external review
-4. Asking GPT/Gemini/Claude for diagnosis, theory, validation approach
-
-**Next:** Resume after external feedback, compare diagnoses, create fix plan
+**Next:** Plan Phase 0 with `/gsd:plan-phase 0`
 
 ## Validation Checklist (Must Pass Before Continuing)
 
