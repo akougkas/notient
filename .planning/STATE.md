@@ -3,7 +3,7 @@
 ## Current Position
 
 **Phase:** 0 of 8 — Foundation Repair (EMERGENCY)
-**Plan:** 2/3 complete (00-01, 00-01-FIX done; 00-02 blocked)
+**Plan:** 2/4 complete (00-01, 00-01-FIX done; 00-03 next, 00-02 last)
 **Status:** **BLOCKED** on UAT-003
 
 Progress: ██░░░░░░░░ ~5% (Phase 1 complete, Phase 0 blocked)
@@ -32,11 +32,12 @@ See: `.planning/phases/00-foundation-repair/.continue-here.md`
 
 ## Next Session
 
-1. Commit current changes (WIP)
-2. Install SDKs: `bun add @lmstudio/sdk ollama`
-3. Create SDK-based providers
-4. Test Quick Actions
-5. If works: Run 00-02-PLAN validation
+**Run:** `/gsd:execute-plan .planning/phases/00-foundation-repair/00-03-PLAN.md`
+
+Or quick start:
+```bash
+/gsd:resume-work
+```
 
 ## Validation Checklist (Must Pass)
 

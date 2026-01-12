@@ -164,7 +164,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 0. Foundation Repair | 2/3 | **BLOCKED** (UAT-003) | - |
+| 0. Foundation Repair | 2/4 | **BLOCKED** (UAT-003) | - |
 | 1. Agent Architecture | 3/3 | **COMPLETE** | 2026-01-11 |
 | 2. Insights Stream | 0/TBD | Blocked by Phase 0 | - |
 | 3. Agent Command Center | 0/TBD | Blocked by Phase 0 | - |
@@ -177,6 +177,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 **Phase 0 Detail:**
 - 00-01-PLAN: Async loading ✓ COMPLETE
 - 00-01-FIX-PLAN: HNSW batching ✓ EXECUTED (needs SUMMARY)
-- 00-02-PLAN: Validation ❌ BLOCKED by UAT-003
+- 00-03-PLAN: SDK migration ⏳ NEXT
+- 00-02-PLAN: Validation ⏳ AFTER 00-03
 
-**Blocker:** UAT-003 - UI crash after agent trigger. Decision: SDK migration.
+**Blocker:** UAT-003 - UI crash after agent trigger. Decision: SDK migration (00-03).
