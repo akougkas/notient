@@ -1,0 +1,46 @@
+{
+  "roundNumber": 3,
+  "timestamp": "2026-01-11T19:58:00.000Z",
+  "category": "ChiefOfStaff Orchestration",
+  "questions": [
+    {
+      "id": "q1",
+      "header": "Preflight",
+      "question": "Should CoS always run context-builder first?",
+      "answer": "ChiefOfStaff decides - it IS the brain",
+      "customResponse": true,
+      "insight": "Agents are STUPID TOOLS that execute predetermined workflows. ChiefOfStaff is the REASONING BRAIN. CoS decides what context each agent needs, how to use embeddings, etc. All operations need context - CoS determines WHICH context."
+    },
+    {
+      "id": "q2",
+      "header": "Parallelism",
+      "question": "Can CoS run multiple agents in parallel?",
+      "answer": "Yes - parallel, sequential, or DAG pipelines",
+      "customResponse": true,
+      "insight": "ChiefOfStaff can orchestrate agents in ANY pattern: parallel, sequential, or complex DAGs. It depends on the task and context. For empty note classification, CoS might call multiple experts (vault context, recent actions, links) before deciding."
+    },
+    {
+      "id": "q3",
+      "header": "Synthesis",
+      "question": "How should CoS synthesize results for InsightStream?",
+      "answer": "Agent provides summary",
+      "answerIndex": 1
+    },
+    {
+      "id": "q4",
+      "header": "CoS Memory",
+      "question": "Should CoS have memory of recent tasks?",
+      "answer": "Session memory",
+      "answerIndex": 1
+    }
+  ],
+  "analysis": "CRITICAL INSIGHT: ChiefOfStaff is an AUTONOMOUS BACKGROUND AGENT. It receives signals, reasons, triggers agents (possibly in parallel/DAG), processes results, and may trigger MORE agents until satisfied. Only then does it present to human. Agents are 'stupid tools' - CoS is the brain. Each agent can make multiple LLM rounds internally. This is the 'sentient note' vision.",
+  "keyInsights": [
+    "Agents = stupid tools executing workflows",
+    "ChiefOfStaff = reasoning brain, autonomous background agent",
+    "CoS decides context, triggers agents, processes results, may loop",
+    "Execution can be parallel, sequential, or DAG-based",
+    "CoS keeps reasoning until satisfied to present to human",
+    "This makes notes 'sentient' - intelligence depends on note complexity"
+  ]
+}

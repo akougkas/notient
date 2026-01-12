@@ -1,0 +1,38 @@
+{
+  "roundNumber": 2,
+  "timestamp": "2026-01-11T19:55:00.000Z",
+  "category": "Two-Tier Architecture",
+  "questions": [
+    {
+      "id": "q1",
+      "header": "IC Location",
+      "question": "Where should Intent Classifier (1B model) run?",
+      "answer": "Ollama (same as embeddings)",
+      "answerIndex": 0
+    },
+    {
+      "id": "q2",
+      "header": "IC Output",
+      "question": "What should Intent Classifier output?",
+      "answer": "Label + confidence",
+      "answerIndex": 1
+    },
+    {
+      "id": "q3",
+      "header": "QA Bypass",
+      "question": "Should Quick Actions bypass Intent Classifier?",
+      "answer": "Bypass IC completely",
+      "customResponse": true,
+      "insight": "ALL clickable UI elements (Quick Actions, InsightStream actions, Vitals page actions) bypass IC and go DIRECTLY to ChiefOfStaff. ChiefOfStaff orchestrates expert agents, synthesizes, reasons, and surfaces insights back to Vitals page."
+    },
+    {
+      "id": "q4",
+      "header": "Chat Trigger",
+      "question": "When Chat UI detects explicit trigger, should it call IC or ChiefOfStaff?",
+      "answer": "Direct to ChiefOfStaff",
+      "answerIndex": 0
+    }
+  ],
+  "analysis": "Intent Classifier runs on Ollama (like embeddings), outputs {intent, confidence}. ALL clickable UI elements bypass IC and go directly to ChiefOfStaff. This includes Quick Actions, InsightStream clickable items, and Vitals page actions. The flow is: Clickable → CoS → expert agents → synthesize/reason → insight → surface in UI.",
+  "keyInsight": "InsightStream and Vitals page are the feedback loop. Expert agent results get synthesized by CoS and surfaced as insights. These insights may have clickable actions that trigger the same pipeline."
+}

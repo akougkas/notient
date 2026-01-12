@@ -1,0 +1,52 @@
+{
+  "roundNumber": 1,
+  "timestamp": "2026-01-11T19:52:00.000Z",
+  "category": "Foundation",
+  "questions": [
+    {
+      "id": "q1",
+      "header": "Chat Routing",
+      "question": "When a user types in the Chat UI, should the message ALWAYS go through ChiefOfStaff for intent detection, or should conversational messages go directly to the LLM while only explicit triggers route to ChiefOfStaff?",
+      "options": [
+        { "label": "Always via ChiefOfStaff", "description": "Every chat message analyzed for intent" },
+        { "label": "Direct LLM + triggers", "description": "Chat goes directly to LLM, explicit triggers route to ChiefOfStaff" },
+        { "label": "Hybrid with confidence", "description": "ChiefOfStaff checks intent confidence" }
+      ],
+      "answer": "Direct LLM + triggers",
+      "answerIndex": 1
+    },
+    {
+      "id": "q2",
+      "header": "Trigger Mode",
+      "question": "Should Chat UI action triggers be explicit or implicit?",
+      "options": [
+        { "label": "Explicit only", "description": "Keywords or slash commands" },
+        { "label": "Implicit detection", "description": "Natural language parsing" },
+        { "label": "Explicit + opt-in implicit", "description": "User chooses" }
+      ],
+      "answer": "Explicit only",
+      "answerIndex": 0
+    },
+    {
+      "id": "q3",
+      "header": "CoS Engine",
+      "question": "Should ChiefOfStaff be LLM-based or rule-based?",
+      "answer": "NEW CONCEPT PROPOSED: Two-tier architecture with small 1B intent classifier SEPARATE from ChiefOfStaff (reasoning brain). Intent classifier handles routing, CoS handles orchestration.",
+      "customResponse": true,
+      "insight": "User identifies missing component: Intent Classifier (small LLM) for fast routing. Separate from ChiefOfStaff which does complex reasoning."
+    },
+    {
+      "id": "q4",
+      "header": "Schema Style",
+      "question": "Should 12 expert agents have custom schemas or shared envelope?",
+      "options": [
+        { "label": "Fully custom schemas", "description": "Each agent defines own schema" },
+        { "label": "Common envelope", "description": "Unified wrapper with data field" },
+        { "label": "Base + extensions", "description": "Shared base, agent-specific extensions" }
+      ],
+      "answer": "Base + extensions",
+      "answerIndex": 2
+    }
+  ],
+  "analysis": "User wants explicit triggers (no implicit intent detection), direct LLM for chat conversation, and proposes a TWO-TIER architecture: (1) Small 1B Intent Classifier for fast routing, (2) ChiefOfStaff as reasoning brain for orchestration. Schemas should be base + extensions for type safety with shared structure."
+}
