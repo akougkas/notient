@@ -14,8 +14,8 @@ None (internal Obsidian plugin patterns)
 - Integer phases (0, 1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 0: Foundation Repair** — Fix critical performance blockers (EMERGENCY) — **BLOCKED**
-- [x] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions (3/3 plans) — **COMPLETE**
+- [ ] **Phase 0: Foundation Repair** — Fix 4 critical issues from code audit — **IN PROGRESS**
+- [ ] **Phase 1: Agent Architecture** — TBD (re-scope after Phase 0)
 - [ ] **Phase 2: Insights Stream** — Wire agent results + proactive suggestions
 - [ ] **Phase 3: Agent Command Center** — Connect AgentStreamsView to services
 - [ ] **Phase 4: Chat Enhancement** — Contextual chips, inline agent results
@@ -26,32 +26,31 @@ None (internal Obsidian plugin patterns)
 
 ## Phase Details
 
-### Phase 0: Foundation Repair (EMERGENCY)
-**Goal**: Fix critical performance blockers causing CPU 100%, UI freeze, and 30+ second load times. Must pass validation checklist before ANY feature work continues.
+### Phase 0: Foundation Repair
+**Goal**: Fix 4 critical issues identified in code audit (2026-01-12). Must pass validation before feature work.
 **Depends on**: Nothing (prerequisite for all phases)
-**Research**: Complete (Gemini audit + GPT fixes + internal verification)
-**Plans**: TBD
+**Plan**: `.planning/phases/00-foundation-repair/PLAN.md`
 
-**Root Causes (Verified):**
-1. `hnswVectorStore.loadFromData()` - synchronous WASM, no yields (P0)
-2. `chunkStore.loadAll()` - sequential await in loop, 542 files (P0)
-3. `indexManager` - JSON.parse 300MB on main thread (P0)
-4. `chiefOfStaff` - singleton session race condition (P1)
-5. `chatAgent` - O(N²) regex on streaming (P1)
-6. `RichChatView` - scroll yanking, no virtualization (P2)
-7. `progressiveSearch` - no abort on timeout (P2)
+**Critical Issues (from audit):**
 
-**GPT Contribution (needs cleanup):**
-- Native HNSW caching via IDBFS (good, keep)
-- Debug fetch() calls throughout (remove)
-- Global counter in useAppEvents (remove)
+| # | Issue | Severity | Est. |
+|---|-------|----------|------|
+| 1 | Sequential embeddings — indexing 8x slower | CRITICAL | 2h |
+| 2 | Action ID mismatch — Quick Actions broken | CRITICAL | 4h |
+| 3 | Reranker JSON parsing — silent search failures | HIGH | 3h |
+| 4 | FS.syncfs race — console noise | LOW | 1h |
 
-**Validation Checklist (MUST PASS):**
-- [ ] Plugin loads in <3 seconds
-- [ ] CPU stays <20% at idle
-- [ ] Chat produces actual responses
-- [ ] Search completes in <2 seconds
-- [ ] No console errors
+**Previous Work (Fixed):**
+- ✓ Infinite loop in `taskQueue.processNext()` (commit `eff6f21`)
+- ✓ HNSW batching for faster load
+- ✓ Native HNSW caching via IDBFS
+
+**Validation Checklist:**
+- [ ] Indexing <2 minutes for 895 notes
+- [ ] Quick Actions produce applicable results
+- [ ] Search reranking returns ranked results
+- [ ] No FS.syncfs warnings during indexing
+- [ ] CPU <20% at idle
 
 ### Phase 1: Agent Architecture
 **Goal**: Consolidate from 13 agents to 12-agent model (Chat as UI, not agent). Rewire Quick Actions to call expert agents via ChiefOfStaff. Implement 3 pinned + 3 contextual model.
@@ -162,22 +161,26 @@ Key work:
 **Execution Order:**
 Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 0. Foundation Repair | 2/4 | **BLOCKED** (UAT-003) | - |
-| 1. Agent Architecture | 3/3 | **COMPLETE** | 2026-01-11 |
-| 2. Insights Stream | 0/TBD | Blocked by Phase 0 | - |
-| 3. Agent Command Center | 0/TBD | Blocked by Phase 0 | - |
-| 4. Chat Enhancement | 0/TBD | Blocked by Phase 0 | - |
-| 5. Search Enhancement | 0/TBD | Blocked by Phase 0 | - |
-| 6. Reliability Hardening | 0/TBD | Blocked by Phase 0 | - |
-| 7. Settings Refactor | 0/TBD | Blocked by Phase 0 | - |
-| 8. Personal Validation | 0/TBD | Blocked by Phase 0 | - |
+| Phase | Status | Completed |
+|-------|--------|-----------|
+| 0. Foundation Repair | **IN PROGRESS** (0/8 issues) | - |
+| 1. Agent Architecture | **TBD** (re-scope after Phase 0) | - |
+| 2. Insights Stream | Blocked by Phase 0 | - |
+| 3. Agent Command Center | Blocked by Phase 0 | - |
+| 4. Chat Enhancement | Blocked by Phase 0 | - |
+| 5. Search Enhancement | Blocked by Phase 0 | - |
+| 6. Reliability Hardening | Blocked by Phase 0 | - |
+| 7. Settings Refactor | Blocked by Phase 0 | - |
+| 8. Personal Validation | Blocked by Phase 0 | - |
 
-**Phase 0 Detail:**
-- 00-01-PLAN: Async loading ✓ COMPLETE
-- 00-01-FIX-PLAN: HNSW batching ✓ EXECUTED (needs SUMMARY)
-- 00-03-PLAN: SDK migration ⏳ NEXT
-- 00-02-PLAN: Validation ⏳ AFTER 00-03
+**Phase 0 Issues:**
+1. [ ] Reranker JSON parsing (3h) — NEXT
+2. [ ] action:proposed event (1h)
+3. [ ] Action applier wiring (2h)
+4. [ ] Action ID mismatch (4h)
+5. [ ] Sequential embeddings (2h)
+6. [ ] Dead ChatAgent (30m)
+7. [ ] FS.syncfs race (1h)
+8. [ ] Capability cards (1h)
 
-**Blocker:** UAT-003 - UI crash after agent trigger. Decision: SDK migration (00-03).
+**Total estimated**: ~14.5 hours

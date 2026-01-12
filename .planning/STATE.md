@@ -2,30 +2,50 @@
 
 ## Current Position
 
-**Phase:** 0 of 8 — Foundation Repair (EMERGENCY)
-**Status:** UI FREEZE FIXED - Cleanup in progress
+**Phase:** 0 of 8 — Foundation Repair
+**Status:** Code audit complete, executing fixes
+**Progress:** ░░░░░░░░░░ 0%
 
-Progress: █████████░ ~90%
+## Session Summary (2026-01-12)
 
-## Session Summary (2026-01-11)
+### Code Audit Complete
 
-### MAJOR BREAKTHROUGH: Infinite Loop Fixed
+Comprehensive analysis identified 8 issues (merged from Phase 0 + Phase 1):
 
-**Root cause found**: `taskQueue.ts:processNext()` had `queueMicrotask(() => this.processNext())` in finally block that ran unconditionally even when queue was empty → infinite loop → CPU spike → UI freeze.
+| # | Issue | Severity | Est. |
+|---|-------|----------|------|
+| 1 | Sequential embeddings | CRITICAL | 2h |
+| 2 | Action ID mismatch | CRITICAL | 4h |
+| 3 | Reranker JSON parsing | HIGH | 3h |
+| 4 | FS.syncfs race | LOW | 1h |
+| 5 | Dead ChatAgent | LOW | 30m |
+| 6 | action:proposed event | CRITICAL | 1h |
+| 7 | Action applier wiring | CRITICAL | 2h |
+| 8 | Capability cards | LOW | 1h |
 
-**Fix**: Created `scheduleNextIfQueued()` that only schedules when `tasks.some(t => t.status === "queued")` returns true.
+### Previous Work (2026-01-11)
 
-**Commit**: `eff6f21`
+- **Fixed**: Infinite loop in `taskQueue.processNext()` (commit `eff6f21`)
+- **Fixed**: HNSW batching for faster load
+- **Archived**: Previous scattered PLANs → `.planning/phases/00-foundation-repair/_archive/`
 
-### Remaining Cleanup
-1. Remove excessive TRACE logging (agent prompt ready)
-2. Optimize health event emission (only emit on status change)
-3. Test for residual CPU spikes
+## Active Plan
 
-### Plugin Data Audit
-- Total: 1.2GB
-- Active: 494MB index, 50MB chunks, 1.4MB intelligence
-- Garbage: 616MB (old indices, deleted chunks, tmp files)
+**File**: `.planning/phases/00-foundation-repair/PLAN.md`
+
+**Execution Order** (see PLAN.md for details):
+1. Reranker JSON (3h) — NEXT
+2. action:proposed event (1h)
+3. Action applier (2h)
+4. Action ID (4h)
+5. Embeddings (2h)
+6. Dead ChatAgent (30m)
+7. FS.syncfs (1h)
+8. Capability cards (1h)
+
+## Blockers
+
+None — ready to execute fixes.
 
 ## Resume
 
@@ -33,7 +53,7 @@ Progress: █████████░ ~90%
 /gsd:resume-work
 ```
 
-See `.planning/phases/00-foundation-repair/.continue-here.md` for full context.
+Then continue with Issue 3 fix (reranker JSON parsing).
 
 ---
-*Last updated: 2026-01-11*
+*Last updated: 2026-01-12*
