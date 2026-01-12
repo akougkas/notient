@@ -129,25 +129,59 @@ export class ChunkStore {
 
   /**
    * Load all chunks from disk (for startup)
+   * Uses parallel loading with batched concurrency for performance
    */
   async loadAll(): Promise<void> {
     const notesDir = this.storagePaths.chunksNotes;
 
     try {
       const files = await fs.promises.readdir(notesDir);
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          const noteId = file.replace(".json", "");
-          await this.loadNoteChunks(noteId);
-        }
+      const jsonFiles = files.filter((f) => f.endsWith(".json"));
+      const total = jsonFiles.length;
+
+      if (total === 0) {
+        console.log("[ChunkStore] No chunk files to load");
+        return;
       }
+
+      const startTime = performance.now();
+      let loaded = 0;
+
+      // Load in parallel batches to avoid file descriptor exhaustion
+      const BATCH_SIZE = 50;
+      const batches = this.chunkArray(jsonFiles, BATCH_SIZE);
+
+      for (const batch of batches) {
+        await Promise.all(
+          batch.map(async (file) => {
+            const noteId = file.replace(".json", "");
+            await this.loadNoteChunks(noteId);
+            loaded++;
+          }),
+        );
+        // Yield to event loop between batches so UI can render
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const elapsed = Math.round(performance.now() - startTime);
       console.log(
-        `[ChunkStore] Loaded ${this.chunks.size} chunks from ${this.noteChunks.size} notes`,
+        `[ChunkStore] Loaded ${this.chunks.size} chunks from ${this.noteChunks.size} notes in ${elapsed}ms`,
       );
     } catch {
       // Directory might not exist yet
       console.log("[ChunkStore] No existing chunks directory");
     }
+  }
+
+  /**
+   * Split array into chunks of specified size
+   */
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
   }
 
   /**
