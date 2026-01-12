@@ -350,58 +350,85 @@ export class HNSWVectorStore implements VectorStore {
 
     const hnswFilename = options?.hnswFilename ?? null;
 
+    // Timing metrics for profiling
+    const timings = { syncFs: 0, readIndex: 0, metadata: 0, state: 0 };
+
     // Attempt fast-path: load HNSW graph from IDBFS, then only hydrate JS-side metadata maps.
     if (hnswFilename && this.lib) {
       try {
+        let start = performance.now();
         await this.syncFs(true);
+        timings.syncFs = performance.now() - start;
+
         const exists = this.lib.EmscriptenFileSystemManager.checkFileExists(hnswFilename);
         if (exists) {
           const index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
           this.index = index;
           const maxElements = Math.max(HNSW_CONFIG.initialMaxElements, data.docs.length);
+
+          start = performance.now();
           const ok = await index.readIndex(hnswFilename, maxElements);
+          timings.readIndex = performance.now() - start;
+
           if (ok) {
             index.setEfSearch(HNSW_CONFIG.efSearch);
 
-            for (let i = 0; i < data.docs.length; i++) {
-              const persisted = data.docs[i];
-              const embedding = new Float32Array(persisted.embedding);
-              const label = typeof persisted.label === "number" ? persisted.label : i;
+            // Process metadata in batches to prevent UI freeze
+            start = performance.now();
+            const BATCH_SIZE = 1000;
+            const totalDocs = data.docs.length;
 
-              const doc: StoredDoc = {
-                chunkId: persisted.chunkId,
-                noteId: persisted.noteId,
-                path: persisted.path,
-                title: persisted.title,
-                headingPath: persisted.headingPath,
-                tier: persisted.tier,
-                kind: persisted.kind,
-                parentChunkId: persisted.parentChunkId,
-                blockRef: persisted.blockRef,
-                startLine: persisted.startLine,
-                endLine: persisted.endLine,
-                tokenEstimate: persisted.tokenEstimate,
-                importance: persisted.importance,
-                chunkIndex: persisted.chunkIndex,
-                text: persisted.text,
-                mtimeMs: persisted.mtimeMs,
-                contentHash: persisted.contentHash,
-                tags: persisted.tags,
-                frontmatter: persisted.frontmatter,
-              };
+            for (let batchStart = 0; batchStart < totalDocs; batchStart += BATCH_SIZE) {
+              const batchEnd = Math.min(batchStart + BATCH_SIZE, totalDocs);
 
-              this.docs.set(label, doc);
-              this.chunkIdToLabel.set(persisted.chunkId, label);
-              this.labelToChunkId.set(label, persisted.chunkId);
-              this.embeddings.set(label, embedding);
+              // Process batch
+              for (let i = batchStart; i < batchEnd; i++) {
+                const persisted = data.docs[i];
+                const embedding = new Float32Array(persisted.embedding);
+                const label = typeof persisted.label === "number" ? persisted.label : i;
 
-              if (!this.noteIdToLabels.has(persisted.noteId)) {
-                this.noteIdToLabels.set(persisted.noteId, new Set());
+                const doc: StoredDoc = {
+                  chunkId: persisted.chunkId,
+                  noteId: persisted.noteId,
+                  path: persisted.path,
+                  title: persisted.title,
+                  headingPath: persisted.headingPath,
+                  tier: persisted.tier,
+                  kind: persisted.kind,
+                  parentChunkId: persisted.parentChunkId,
+                  blockRef: persisted.blockRef,
+                  startLine: persisted.startLine,
+                  endLine: persisted.endLine,
+                  tokenEstimate: persisted.tokenEstimate,
+                  importance: persisted.importance,
+                  chunkIndex: persisted.chunkIndex,
+                  text: persisted.text,
+                  mtimeMs: persisted.mtimeMs,
+                  contentHash: persisted.contentHash,
+                  tags: persisted.tags,
+                  frontmatter: persisted.frontmatter,
+                };
+
+                this.docs.set(label, doc);
+                this.chunkIdToLabel.set(persisted.chunkId, label);
+                this.labelToChunkId.set(label, persisted.chunkId);
+                this.embeddings.set(label, embedding);
+
+                if (!this.noteIdToLabels.has(persisted.noteId)) {
+                  this.noteIdToLabels.set(persisted.noteId, new Set());
+                }
+                this.noteIdToLabels.get(persisted.noteId)?.add(label);
               }
-              this.noteIdToLabels.get(persisted.noteId)?.add(label);
+
+              // Yield to event loop between batches for UI responsiveness
+              if (batchEnd < totalDocs) {
+                await new Promise((resolve) => setTimeout(resolve, 0));
+              }
             }
+            timings.metadata = performance.now() - start;
 
             // Load state
+            start = performance.now();
             this.noteStates.clear();
             this.lastFullIndexAt = null;
             if (data.state) {
@@ -410,10 +437,14 @@ export class HNSWVectorStore implements VectorStore {
                 this.noteStates.set(notePath, state);
               }
             }
+            timings.state = performance.now() - start;
 
             this.dirty = false;
+            const total = Math.round(
+              timings.syncFs + timings.readIndex + timings.metadata + timings.state,
+            );
             console.log(
-              `[HNSWVectorStore] Loaded ${this.docs.size} chunks, ${this.noteStates.size} note states`,
+              `[HNSWVectorStore] Loaded ${this.docs.size} chunks in ${total}ms (syncFs=${Math.round(timings.syncFs)}ms, readIndex=${Math.round(timings.readIndex)}ms, metadata=${Math.round(timings.metadata)}ms, state=${Math.round(timings.state)}ms)`,
             );
             return;
           }
