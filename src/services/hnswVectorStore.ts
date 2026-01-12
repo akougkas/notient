@@ -288,9 +288,11 @@ export class HNSWVectorStore implements VectorStore {
     if (!options.hnswFilename) return;
 
     try {
+      console.log(`[HNSWVectorStore] Persisting native index: ${options.hnswFilename}`);
       await this.syncFs(true).catch(() => {});
       await this.index.writeIndex(options.hnswFilename);
       await this.syncFs(false);
+      console.log("[HNSWVectorStore] Native index persisted successfully");
     } catch (error) {
       console.warn("[HNSWVectorStore] Failed to persist native index:", error);
     }
@@ -361,6 +363,7 @@ export class HNSWVectorStore implements VectorStore {
         timings.syncFs = performance.now() - start;
 
         const exists = this.lib.EmscriptenFileSystemManager.checkFileExists(hnswFilename);
+        console.log(`[HNSWVectorStore] Native index check: file=${hnswFilename}, exists=${exists}`);
         if (exists) {
           const index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
           this.index = index;
@@ -369,6 +372,9 @@ export class HNSWVectorStore implements VectorStore {
           start = performance.now();
           const ok = await index.readIndex(hnswFilename, maxElements);
           timings.readIndex = performance.now() - start;
+          console.log(
+            `[HNSWVectorStore] Native index read: ok=${ok}, time=${Math.round(timings.readIndex)}ms`,
+          );
 
           if (ok) {
             index.setEfSearch(HNSW_CONFIG.efSearch);
@@ -455,6 +461,9 @@ export class HNSWVectorStore implements VectorStore {
     }
 
     // Slow-path: rebuild from embeddings (synchronous, can block). Kept for compatibility + migration.
+    console.log(
+      "[HNSWVectorStore] Using slow-path: rebuilding index from embeddings (this will take 30+ seconds)",
+    );
     this.index = null;
     this.loadFromData(data);
 
