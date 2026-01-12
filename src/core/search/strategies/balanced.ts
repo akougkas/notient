@@ -7,13 +7,12 @@
  * Pipeline:
  * 1. Generate query embedding (Ollama)
  * 2. Vector similarity search (VectorStore)
- * 3. LLM reranking (LM Studio, if available)
+ * 3. LLM reranking (if available)
  * 4. Aggregate chunks to notes
  *
  * Falls back to Quick search if embeddings unavailable.
  */
 
-import type { LMStudioService } from "../../../services/lmstudio";
 import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import { SEARCH_LIMITS } from "../../constants";
@@ -27,7 +26,7 @@ import type {
   StrategySearchOptions,
 } from "./types";
 
-/** Reranker abstraction (OllamaRerankerService, LLMProvider, or legacy LMStudioService) */
+/** Reranker abstraction (OllamaRerankerService or LLMProvider) */
 type Reranker = {
   rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
 };
@@ -243,13 +242,9 @@ export class BalancedSearchStrategy implements SearchStrategy {
       return ollamaReranker;
     }
 
-    // Priority 2: LLM Provider (falls back to chat-based reranking)
+    // Priority 2: LLM Provider (chat-based reranking)
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
     if (provider?.isReady) return provider;
-
-    // Priority 3: Legacy LM Studio service
-    const legacy = this.context.kernel.getService<LMStudioService>("lmstudio");
-    if (legacy?.isReady()) return legacy;
 
     return null;
   }

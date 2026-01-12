@@ -14,7 +14,6 @@
  * Falls back to Balanced if LLM unavailable for expansion.
  */
 
-import type { LMStudioService } from "../../../services/lmstudio";
 import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import type { LLMProvider } from "../../llm/provider";
@@ -35,8 +34,7 @@ type Reranker = {
 
 /** LLM abstraction for query expansion */
 type LLMChat = {
-  complete?(messages: ChatMessage[]): Promise<string>;
-  chat?(messages: ChatMessage[]): Promise<string>;
+  complete(messages: ChatMessage[]): Promise<string>;
 };
 
 /**
@@ -184,7 +182,7 @@ Example: ["term1", "term2", "term3"]`;
       { role: "user", content: prompt },
     ];
 
-    const response = llm.complete ? await llm.complete(messages) : await llm.chat?.(messages);
+    const response = await llm.complete(messages);
 
     if (!response) {
       return [];
@@ -500,9 +498,6 @@ Example: ["term1", "term2", "term3"]`;
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
     if (provider?.isReady) return provider;
 
-    const legacy = this.context.kernel.getService<LMStudioService>("lmstudio");
-    if (legacy?.isReady()) return legacy;
-
     return null;
   }
 
@@ -516,13 +511,9 @@ Example: ["term1", "term2", "term3"]`;
       return ollamaReranker;
     }
 
-    // Priority 2: LLM Provider (falls back to chat-based reranking)
+    // Priority 2: LLM Provider (chat-based reranking)
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
     if (provider?.isReady) return provider;
-
-    // Priority 3: Legacy LM Studio service
-    const legacy = this.context.kernel.getService<LMStudioService>("lmstudio");
-    if (legacy?.isReady()) return legacy;
 
     return null;
   }
