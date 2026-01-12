@@ -10,7 +10,7 @@ import { Notice } from "obsidian";
 import type { ChatService } from "../../../core/chat";
 import { UI_LIMITS } from "../../../core/constants";
 import { generateId } from "../../../core/ids";
-import type { Insight } from "../../../services/insightGenerator";
+import type { VitalsHint } from "../../../services/insightGenerator";
 import type { AgentResultData } from "../components/AgentStreamsView";
 import { useEventBus } from "../context/KernelContext";
 import {
@@ -209,33 +209,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     });
   });
 
-  // Action events
-  useEventBus("action:proposed", (data) => {
-    queueMicrotask(() => {
-      const action = data.action;
-      batch(() => {
-        agentStatus.value = {
-          ...agentStatus.value,
-          pendingReviewCount: agentStatus.value.pendingReviewCount + 1,
-        };
-        pendingActions.value = [
-          ...pendingActions.value,
-          {
-            id: action.id,
-            actionType: action.type,
-            targetNote: data.noteContext.title || action.target,
-            summary: action.title,
-            riskLevel: action.risk,
-          },
-        ];
-        // Store original ProposedAction for when we need to apply it
-        const updatedSources = new Map(pendingActionSources.value);
-        updatedSources.set(action.id, action);
-        pendingActionSources.value = updatedSources;
-      });
-    });
-  });
-
+  // Action lifecycle events (actions come from insight:created above)
   useEventBus("action:applied", (data) => {
     queueMicrotask(() => {
       const record = data.record;
@@ -270,6 +244,53 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
       recentActivity.value = recentActivity.value.map((a) =>
         a.id === data.recordId ? { ...a, status: "undone" as const, canUndo: false } : a,
       );
+    });
+  });
+
+  // Insight events - primary agent output flow (per ID-ARCHITECTURE-SPEC.md)
+  // Agent returns → ChiefOfStaff/TaskQueue wraps in Insight container → emit insight:created
+  // → UI extracts actions from Insight for pending review
+  useEventBus("insight:created", (data) => {
+    queueMicrotask(() => {
+      const { insight } = data;
+
+      batch(() => {
+        // Extract actions from Insight for pending review
+        for (const action of insight.actions) {
+          agentStatus.value = {
+            ...agentStatus.value,
+            pendingReviewCount: agentStatus.value.pendingReviewCount + 1,
+          };
+          pendingActions.value = [
+            ...pendingActions.value,
+            {
+              id: action.id,
+              actionType: action.type,
+              targetNote: insight.noteContext.title || action.target,
+              summary: action.title,
+              riskLevel: action.risk,
+            },
+          ];
+          // Store original ProposedAction for when we need to apply it
+          const updatedSources = new Map(pendingActionSources.value);
+          updatedSources.set(action.id, action);
+          pendingActionSources.value = updatedSources;
+        }
+
+        // Add insight summary to InsightStream UI as a VitalsHint
+        if (insight.summary) {
+          const newHint: VitalsHint = {
+            text: `${insight.agentType}: ${insight.summary}`,
+            action: "View Actions",
+            actionIcon: "bot",
+            actionCallback: () => {
+              activeView.value = "agents";
+            },
+            priority: "high",
+          };
+          agentInsights.value = [newHint, ...agentInsights.value.slice(0, 4)];
+        }
+      });
     });
   });
 
@@ -457,7 +478,7 @@ function addPendingActions(
 }
 
 function addCompletionInsight(taskType: string | undefined, summary: string): void {
-  const newInsight: Insight = {
+  const newHint: VitalsHint = {
     text: `${ACTION_LABELS[taskType || "agent"] || "Agent result"}: ${summary}`,
     action: "View in Agents",
     actionIcon: "bot",
@@ -466,7 +487,7 @@ function addCompletionInsight(taskType: string | undefined, summary: string): vo
     },
     priority: "high",
   };
-  agentInsights.value = [newInsight, ...agentInsights.value.slice(0, 4)];
+  agentInsights.value = [newHint, ...agentInsights.value.slice(0, 4)];
 }
 
 /**

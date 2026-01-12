@@ -19,4 +19,4 @@ export { InsightStream } from "./components/InsightStream";
 export { NoteVitalsCalculator } from "@services/noteVitalsCalculator";
 export type { NoteVitals, IndexManagerLike } from "@services/noteVitalsCalculator";
 export { InsightGenerator } from "@services/insightGenerator";
-export type { Insight, InsightGeneratorCallbacks } from "@services/insightGenerator";
+export type { VitalsHint, InsightGeneratorCallbacks } from "@services/insightGenerator";

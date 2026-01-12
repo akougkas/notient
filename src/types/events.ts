@@ -39,13 +39,12 @@ export type EventType =
   | "workflow:cancelled"
   | "workflow:failed"
   | "workflow:reviewDismissed"
-  // Phase 2: Action events
-  | "action:proposed"
+  // Action lifecycle events (actions extracted from insight:created)
   | "action:applied"
   | "action:undone"
   | "action:apply-requested"
   | "action:undo-requested"
-  // Insight events (agent output containers)
+  // Insight events (primary agent output flow)
   | "insight:created"
   // Identity system events
   | "profile:updated"
@@ -87,13 +86,12 @@ export interface EventPayloads {
   "workflow:cancelled": WorkflowCancelledEvent;
   "workflow:failed": WorkflowFailedEvent;
   "workflow:reviewDismissed": WorkflowReviewDismissedEvent;
-  // Phase 2: Action events
-  "action:proposed": ActionProposedEvent;
+  // Action lifecycle events (actions extracted from insight:created)
   "action:applied": ActionAppliedEvent;
   "action:undone": ActionUndoneEvent;
   "action:apply-requested": ActionApplyRequestedEvent;
   "action:undo-requested": ActionUndoRequestedEvent;
-  // Insight events (agent output containers)
+  // Insight events (primary agent output flow)
   "insight:created": InsightCreatedEvent;
   // Identity system events
   "profile:updated": ProfileUpdatedEvent;
@@ -234,20 +232,8 @@ export interface WorkflowReviewDismissedEvent {
 }
 
 // =============================================================================
-// Phase 2: Action Events
+// Action Lifecycle Events (actions come from insight:created)
 // =============================================================================
-
-export interface ActionProposedEvent {
-  /** The proposed action awaiting user review */
-  action: ProposedAction;
-  /** Context about the target note */
-  noteContext: {
-    path: string;
-    title: string;
-  };
-  /** Source of the proposal (workflow, agent, etc.) */
-  source?: string;
-}
 
 export interface ActionAppliedEvent {
   record: AppliedActionRecord;

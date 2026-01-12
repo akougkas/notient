@@ -6,11 +6,11 @@
  */
 
 import { useCallback } from "preact/hooks";
-import type { Insight } from "../../../services/insightGenerator";
+import type { VitalsHint } from "../../../services/insightGenerator";
 import { Icon } from "./Icon";
 
 interface InsightStreamProps {
-  insights: Insight[];
+  insights: VitalsHint[];
   onOpenFile: (path: string) => void;
 }
 
@@ -67,7 +67,7 @@ function InsightEmptyState() {
 }
 
 interface InsightItemProps {
-  insight: Insight;
+  insight: VitalsHint;
   onOpenFile: (path: string) => void;
   isFirst?: boolean;
 }

@@ -17,7 +17,7 @@
  * Invalid task types will cause the task to fail - no silent fallback to chat.
  */
 
-import type { ProposedAction } from "../agentic/types";
+import type { Insight, ProposedAction } from "../agentic/types";
 import type { ChiefOfStaff, ChiefOfStaffTask } from "../agents/chiefOfStaff";
 import type { AgentEvent, ConversationalOutput, StructuredOutput } from "../agents/types";
 import type { ConversationStore } from "../chat/conversationStore";
@@ -567,9 +567,12 @@ export class AgentTaskQueue {
     });
     task.result = built.result;
 
-    // Emit action:proposed for each action (populates pendingActions in UI)
+    // Emit insight:created (wraps actions in Insight container)
+    // This is the primary event flow: Agent → Insight container → UI extracts actions
     if (built.actions.length > 0 && task.notePath) {
-      this.emitProposedActions(built.actions, task);
+      // Get agentType from structured output if available
+      const agentType = output.kind === "structured" ? output.agentType : undefined;
+      this.emitInsightCreated(built.actions, task, fullResponse, agentType);
     }
 
     // Persist assistant message to conversation store (async, debounced)
@@ -579,26 +582,86 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Emit action:proposed events for actions that need user review.
-   * Ensures each action has an ID and links back to the source task.
+   * Emit insight:created event with an Insight container.
+   * This is the correct event flow per ID-ARCHITECTURE-SPEC.md:
+   * Agent returns → Create Insight container → emit insight:created once
+   * → UI extracts actions from Insight for pending review
    */
-  private emitProposedActions(actions: ProposedAction[], task: AgentTask): void {
+  private emitInsightCreated(
+    actions: ProposedAction[],
+    task: AgentTask,
+    fullResponse: string,
+    agentType: string | undefined,
+  ): void {
+    // Ensure all actions have IDs
     for (const action of actions) {
-      // Ensure action has an ID (agent may not generate one)
       if (!action.id) {
         action.id = generateId("act");
       }
-
-      // Emit event for UI to pick up
-      this.eventBus.emit("action:proposed", {
-        action,
-        noteContext: {
-          path: task.notePath || "",
-          title: task.noteTitle || task.notePath || "Unknown",
-        },
-        source: `task:${task.id}`,
-      });
     }
+
+    // Extract reasoning from the response (first paragraph or up to 500 chars)
+    const reasoning = this.extractReasoning(fullResponse);
+
+    // Generate a 1-liner summary for InsightStream UI
+    const summary = this.generateSummary(actions, agentType);
+
+    // Create Insight container
+    const insight: Insight = {
+      id: generateId("ins"),
+      timestamp: Date.now(),
+      agentType: agentType || task.taskType || "unknown",
+      noteContext: {
+        path: task.notePath || "",
+        title: task.noteTitle || "Unknown",
+      },
+      reasoning,
+      actions,
+      suggestions: [], // Future: extract suggestions from agent output
+      summary,
+    };
+
+    // Emit single insight:created event (UI extracts actions for pending review)
+    this.eventBus.emit("insight:created", {
+      insight,
+      source: `task:${task.id}`,
+    });
+  }
+
+  /**
+   * Extract reasoning from agent response.
+   * Looks for reasoning patterns or takes first substantive paragraph.
+   */
+  private extractReasoning(response: string): string {
+    if (!response) return "No reasoning provided.";
+
+    // Try to find explicit reasoning section
+    const reasoningMatch = response.match(/(?:reasoning|rationale|explanation):\s*(.+?)(?:\n\n|$)/is);
+    if (reasoningMatch) {
+      return reasoningMatch[1].trim().slice(0, 500);
+    }
+
+    // Otherwise take the first substantive text (skip JSON)
+    const cleanResponse = response.replace(/```[\s\S]*?```/g, "").trim();
+    const firstParagraph = cleanResponse.split("\n\n")[0] || cleanResponse;
+    return firstParagraph.slice(0, 500) || "No reasoning provided.";
+  }
+
+  /**
+   * Generate a 1-liner summary for InsightStream UI.
+   */
+  private generateSummary(actions: ProposedAction[], agentType: string | undefined): string {
+    if (actions.length === 0) return "No actions proposed.";
+
+    const actionTypes = [...new Set(actions.map((a) => a.type))];
+    const actionCount = actions.length;
+
+    if (actionCount === 1) {
+      return actions[0].title || `Proposed ${actions[0].type}`;
+    }
+
+    const agentLabel = agentType === "note-editor" ? "Edit" : agentType || "Agent";
+    return `${agentLabel}: ${actionCount} actions (${actionTypes.join(", ")})`;
   }
 
   /**

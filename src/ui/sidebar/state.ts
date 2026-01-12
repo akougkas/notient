@@ -7,7 +7,7 @@
 
 import { signal } from "@preact/signals";
 import type { ProposedAction } from "../../core/agentic/types";
-import type { Insight } from "../../services/insightGenerator";
+import type { VitalsHint } from "../../services/insightGenerator";
 import type { SearchResult } from "../../types/search";
 import type { InitializationContext, InitializationState } from "../../types/services";
 import type { ActiveAgent, PendingAction, RecentActivity } from "./components/AgentStreamsView";
@@ -53,8 +53,8 @@ export const pendingActions = signal<PendingAction[]>([]);
 /** Original ProposedAction objects keyed by ID - used when applying actions */
 export const pendingActionSources = signal<Map<string, ProposedAction>>(new Map());
 export const recentActivity = signal<RecentActivity[]>([]);
-/** Dynamic insights from completed agents (displayed in Vitals InsightStream) */
-export const agentInsights = signal<Insight[]>([]);
+/** Dynamic hints from completed agents (displayed in Vitals InsightStream) */
+export const agentInsights = signal<VitalsHint[]>([]);
 
 // -----------------------------------------------------------------------------
 // Chat View State

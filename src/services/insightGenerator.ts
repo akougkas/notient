@@ -1,12 +1,23 @@
 /**
- * InsightGenerator - Generate actionable insights from note vitals
+ * InsightGenerator - Generate actionable hints from note vitals
  *
  * Extracted from sidebar.ts to separate business logic from view rendering.
+ *
+ * NOTE: This generates VitalsHint (UI hints for Note Vitals), NOT to be confused with
+ * Insight (agent output container) in src/core/agentic/types.ts.
+ * - VitalsHint: UI hints displayed in Note Vitals based on note health metrics
+ * - Insight: Agent output container grouping actions, suggestions, and reasoning
  */
 
 import type { NoteVitals } from "./noteVitalsCalculator";
 
-export interface Insight {
+/**
+ * VitalsHint - UI hints displayed in Note Vitals panel
+ * Based on note health metrics (connections, classification, index status)
+ *
+ * Not to be confused with Insight (agent output container) in src/core/agentic/types.ts
+ */
+export interface VitalsHint {
   text: string;
   linkText?: string;
   linkPath?: string;
@@ -27,12 +38,12 @@ export class InsightGenerator {
   constructor(private callbacks: InsightGeneratorCallbacks) {}
 
   /**
-   * Generate insights based on note vitals
+   * Generate vitals hints based on note health metrics
    */
-  generate(noteVitals: NoteVitals | null): Insight[] {
+  generate(noteVitals: NoteVitals | null): VitalsHint[] {
     if (!noteVitals) return [];
 
-    const insights: Insight[] = [];
+    const insights: VitalsHint[] = [];
 
     // Insight about connections
     if (noteVitals.links.backlinks === 0 && noteVitals.links.outlinks === 0) {

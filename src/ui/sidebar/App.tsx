@@ -17,7 +17,7 @@ import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
 import type {
-  Insight,
+  VitalsHint,
   InsightGenerator as InsightGeneratorType,
 } from "../../services/insightGenerator";
 import { InsightGenerator } from "../../services/insightGenerator";
@@ -268,7 +268,7 @@ interface NoteVitalsContentProps {
   isLoading: Signal<boolean>;
   hasNote: boolean;
   quickActions: QuickAction[];
-  insights: Insight[];
+  insights: VitalsHint[];
   openFile: (path: string) => Promise<void>;
 }
 
