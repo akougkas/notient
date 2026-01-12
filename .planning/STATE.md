@@ -2,58 +2,48 @@
 
 ## Current Position
 
-**Phase:** 0 of 8 — Foundation Repair
-**Status:** Code audit complete, executing fixes
-**Progress:** ░░░░░░░░░░ 0%
+**Phase**: Universe — Foundation Refactor
+**Status**: ACTIVE
+**Plan**: `PHASE-UNIVERSE.md`
 
-## Session Summary (2026-01-12)
+## Phase Universe Progress
 
-### Code Audit Complete
+| Deliverable | Status | Est. |
+|-------------|--------|------|
+| D1: SQLite Data Layer | NOT STARTED | 8h |
+| D2: HNSW Worker Isolation | NOT STARTED | 8h |
+| D3: Event Wiring Completion | NOT STARTED | 6h |
+| D4: Orchestration Simplification | NOT STARTED | 6h |
+| D5: Absorb Phase 0 Issues | NOT STARTED | 4h |
 
-Comprehensive analysis identified 8 issues (merged from Phase 0 + Phase 1):
+**Total**: 32 hours (~2 weeks)
 
-| # | Issue | Severity | Est. |
-|---|-------|----------|------|
-| 1 | Sequential embeddings | CRITICAL | 2h |
-| 2 | Action ID mismatch | CRITICAL | 4h |
-| 3 | Reranker JSON parsing | HIGH | 3h |
-| 4 | FS.syncfs race | LOW | 1h |
-| 5 | Dead ChatAgent | LOW | 30m |
-| 6 | action:proposed event | CRITICAL | 1h |
-| 7 | Action applier wiring | CRITICAL | 2h |
-| 8 | Capability cards | LOW | 1h |
+## Validation Criteria
 
-### Previous Work (2026-01-11)
-
-- **Fixed**: Infinite loop in `taskQueue.processNext()` (commit `eff6f21`)
-- **Fixed**: HNSW batching for faster load
-- **Archived**: Previous scattered PLANs → `.planning/phases/00-foundation-repair/_archive/`
-
-## Active Plan
-
-**File**: `.planning/phases/00-foundation-repair/PLAN.md`
-
-**Execution Order** (see PLAN.md for details):
-1. Reranker JSON (3h) — NEXT
-2. action:proposed event (1h)
-3. Action applier (2h)
-4. Action ID (4h)
-5. Embeddings (2h)
-6. Dead ChatAgent (30m)
-7. FS.syncfs (1h)
-8. Capability cards (1h)
-
-## Blockers
-
-None — ready to execute fixes.
+- [ ] Startup <1s to UI shell
+- [ ] Quick Actions work end-to-end
+- [ ] Apply button applies actions
+- [ ] Search reranking works
+- [ ] No main-thread HNSW
+- [ ] All data in SQLite
+- [ ] CPU <5% at idle
 
 ## Resume
 
 ```bash
-/gsd:resume-work
+# Read the plan
+cat .planning/PHASE-UNIVERSE.md
+
+# Start with D1: SQLite Data Layer
+# Create src/core/db/schema.ts first
 ```
 
-Then continue with Issue 3 fix (reranker JSON parsing).
+## Previous Work (Archived)
+
+- Old 8-phase roadmap → `.planning/_archive/pre-universe/ROADMAP.md`
+- Phase 0 tracking → `.planning/_archive/pre-universe/STATE.md`
+- ID System implemented → `docs/ID-SYSTEM.md`
+- Infinite loop fixed → commit `eff6f21`
 
 ---
-*Last updated: 2026-01-12*
+*Last updated: 2026-01-12 — Phase Universe begins*

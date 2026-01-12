@@ -10,64 +10,67 @@ Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transfo
 
 **Reliability**: Actions complete or fail gracefully. No crashes. Clear errors. This is the non-negotiable foundation that enables trust.
 
+## Current Phase: Universe (Foundation Refactor)
+
+> **All feature work paused until Phase Universe completes.**
+> See `PHASE-UNIVERSE.md` for full specification.
+
+Phase Universe replaces the previous 8-phase roadmap with a focused foundational refactor:
+
+| Deliverable | Description | Status |
+|-------------|-------------|--------|
+| D1: SQLite Data Layer | sql.js WASM, replace JSON files | NOT STARTED |
+| D2: HNSW Worker | Vector ops in Web Worker, never main thread | NOT STARTED |
+| D3: Event Wiring | Fix action:proposed, applier, capability cards | NOT STARTED |
+| D4: Orchestration | Simplify ChiefOfStaff + TaskManager boundaries | NOT STARTED |
+| D5: Cleanup | Absorb remaining Phase 0 issues | NOT STARTED |
+
+**Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle.
+
 ## Requirements
 
 ### Validated
 
-<!-- Shipped and confirmed working. Inferred from existing codebase. -->
+<!-- Shipped and confirmed working. -->
 
-- ✓ Kernel-based service architecture with DI — existing
-- ✓ Multi-agent system (ChiefOfStaff orchestrating agents) — existing
-- ✓ LLM abstraction (LM Studio reasoning, Ollama embeddings) — existing
-- ✓ HNSW vector search with O(log N) performance — existing (CODE RED complete)
-- ✓ Progressive search (INSTANT → EVOLVING → DEEP) — existing
-- ✓ Streaming chat with thinking block parsing — existing
-- ✓ Trust-level system (low/medium/high risk) — existing
-- ✓ Three-tab sidebar (Note Vitals | Agent Streams | Chat) — existing
-- ✓ Error boundaries in sidebar — existing (CODE RED complete)
-- ✓ App.tsx refactored (<500 lines) — existing (CODE RED complete)
-- ✓ Action history with time-bucketed storage and undo — existing
-- ✓ Per-note intelligence records (health, entities, suggestions) — existing
+- ✓ Kernel-based service architecture with DI
+- ✓ Multi-agent system (ChiefOfStaff orchestrating agents)
+- ✓ LLM abstraction (LM Studio reasoning, Ollama embeddings)
+- ✓ HNSW vector search with O(log N) performance
+- ✓ Progressive search (INSTANT → EVOLVING → DEEP)
+- ✓ Streaming chat with thinking block parsing
+- ✓ Trust-level system (low/medium/high risk)
+- ✓ Three-tab sidebar (Note Vitals | Agent Streams | Chat)
+- ✓ Error boundaries in sidebar
+- ✓ Action history with undo
+- ✓ Per-note intelligence records
+- ✓ Centralized ID system (`src/core/ids.ts`)
 
-### Active
+### Paused (Post-Universe)
 
-<!-- Current scope. Building toward these for Beta. -->
+<!-- Will be re-evaluated after Phase Universe completes. -->
 
 **Architecture**
-- [ ] 12-agent system: 9 user-facing + 3 infrastructure (Chat is UI, not agent)
-- [ ] Chat as thin UI layer that delegates to expert agents when needed
-- [ ] Quick Actions rewired to call expert agents via ChiefOfStaff
-- [ ] Quick Actions model: 3 pinned (Enhance, Classify, Connect) + 3 contextual
-- [ ] LinkFinder deprecated → Connection agent handles semantic links
+- [ ] 12-agent system: 9 user-facing + 3 infrastructure
+- [ ] Quick Actions model: 3 pinned + 3 contextual
 
 **Insights Stream**
-- [ ] Wire agent results to InsightStream (1-liner + expand)
-- [ ] Wire proactive AI suggestions from IntelligenceRecord
-- [ ] All suggestions shown (user can dismiss), not filtered by confidence
+- [ ] Wire agent results to InsightStream
+- [ ] Wire proactive AI suggestions
 
-**Agent Command Center (Agent Streams View)**
-- [ ] Wire AgentStreamsView to ActionHistory service
-- [ ] Wire to AgentTaskQueue for active agents
-- [ ] Wire to TrustLevelManager for pending review
+**Agent Command Center**
+- [ ] Wire AgentStreamsView to services
 - [ ] Full control: pause, cancel, modify, re-run
 
 **Chat Experience**
-- [ ] Contextual suggestion chips (based on note type/state)
-- [ ] Pre-built prompts with metadata arguments
-- [ ] Chat streams agent results inline (no tab switching)
+- [ ] Contextual suggestion chips
+- [ ] Chat streams agent results inline
 
 **Search Enhancement**
-- [ ] Confidence badges (High/Medium/Low) on results
-- [ ] AI justification text on hover/expand
-
-**Reliability Hardening**
-- [ ] JSON parsing robustness for agent outputs
-- [ ] Timeout handling with user feedback
-- [ ] Input/output validation for LLM calls
-- [ ] Agent failure handling for autonomous actions
+- [ ] Confidence badges + AI justification
 
 **Settings Refactor**
-- [ ] Extract SettingsTab into panel components
+- [ ] Extract SettingsTab into panels
 
 ### Out of Scope
 
@@ -104,6 +107,12 @@ Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transfo
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
+| **SQLite for metadata** | JSON doesn't scale. Typed queries. Instant startup. | Phase Universe |
+| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | Phase Universe |
+| **sql.js WASM + explicit flush** | Portable, safe sync via Obsidian adapter | Phase Universe |
+| **ChiefOfStaff = single event source** | Clear data flow. Agents never emit to UI. | Phase Universe |
+| **TaskManager with named queues** | Support interactive + background + future cron | Phase Universe |
+| **Centralized ID system** | `src/core/ids.ts` — consistent format, no chaos | ✓ Implemented |
 | Chat is UI, not agent | Avoids 13th agent, Chat delegates to experts | — Pending |
 | 3 pinned + 3 contextual Quick Actions | Enhance/Classify/Connect always visible, rest dynamic | — Pending |
 | All suggestions shown | Aggressive ambient intelligence, user dismisses | — Pending |
@@ -114,4 +123,4 @@ Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transfo
 | No keyboard shortcuts | Conflicts across layers, stay visual-first | — Pending |
 
 ---
-*Last updated: 2025-01-11 after initialization*
+*Last updated: 2026-01-12 — Phase Universe begins*
