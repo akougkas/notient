@@ -181,6 +181,9 @@ export class NoteIntelligenceService {
     // Get tags once for consistency (used for health, summary, and topic sharding)
     const noteTags = metadata?.tags ?? [];
 
+    // Capture previous record for change detection
+    const previous = db.get(notePath);
+
     const health = this.computeHealth(
       notePath,
       noteTags,
@@ -225,7 +228,32 @@ export class NoteIntelligenceService {
     // Pass tags for topic-based sharding (Phase 3)
     db.upsert(notePath, record, noteTags);
 
-    this.eventBus.emit("intelligence:updated", { path: notePath, record });
+    // Only emit if record meaningfully changed
+    if (this.hasRecordChanged(previous, record)) {
+      this.eventBus.emit("intelligence:updated", { path: notePath, record });
+    }
+  }
+
+  private hasRecordChanged(
+    previous: IntelligenceRecord | null,
+    current: IntelligenceRecord,
+  ): boolean {
+    if (!previous) return true;
+
+    // Compare key fields that affect UI
+    if (previous.summaryShort !== current.summaryShort) return true;
+    if (previous.triageAction?.type !== current.triageAction?.type) return true;
+    if (previous.triageAction?.target !== current.triageAction?.target) return true;
+
+    // Compare suggested tags by tag names
+    const previousTags = previous.suggestedTags.map((t) => t.tag).sort();
+    const currentTags = current.suggestedTags.map((t) => t.tag).sort();
+    if (previousTags.length !== currentTags.length) return true;
+    for (let i = 0; i < previousTags.length; i++) {
+      if (previousTags[i] !== currentTags[i]) return true;
+    }
+
+    return false;
   }
 
   private getLLM(): LLMProvider | null {

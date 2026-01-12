@@ -17,12 +17,7 @@ export type { ApplyResult } from "./actionApplier";
 export { TrustLevelManager } from "./trustLevelManager";
 
 // Command parsing (Milestone 2.4)
-export {
-  parseSlashCommand,
-  isSlashCommand,
-  getCommandSuggestions,
-  getCommandDescription,
-} from "./commandParser";
+export { parseSlashCommand, isSlashCommand, getCommandSuggestions } from "./commandParser";
 export type {
   SlashCommand,
   ParsedCommand,

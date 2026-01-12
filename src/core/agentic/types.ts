@@ -571,9 +571,6 @@ export const ACTION_RISK_MAP: Record<ProposedActionType, RiskLevel> = {
 // Validation Constants
 // =============================================================================
 
-/** Maximum actions per LLM response */
-export const MAX_ACTIONS_PER_RESPONSE = 10;
-
 /** Action types that are currently supported (Phase 2) */
 export const SUPPORTED_ACTION_TYPES: ProposedActionType[] = [
   "frontmatter_set",

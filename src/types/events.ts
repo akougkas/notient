@@ -2,9 +2,9 @@
  * Typed event definitions for the EventBus
  */
 
+import type { AgentTask } from "../core/agent/types";
 import type { AppliedActionRecord, ProposedAction, WorkflowRun } from "../core/agentic/types";
 import type { IntelligenceRecord } from "../core/intelligence/types";
-import type { AgentTask } from "./agentTask";
 import type { IndexProgress } from "./indexer";
 import type { SearchResult } from "./search";
 import type { InitializationContext, InitializationState, ServiceHealth } from "./services";

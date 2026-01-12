@@ -13,54 +13,6 @@ import type { ActiveAgent, PendingAction, RecentActivity } from "./components/Ag
 import type { ActivityItem, ChatContext, RichChatMessage } from "./components/chat";
 import type { AgentStatus, IndexStatus, ProviderStatus, SidebarView } from "./types";
 
-/**
- * Reset all sidebar state to initial values.
- * Useful for cleanup or testing.
- */
-export function resetSidebarState(): void {
-  // Initialization state
-  isServicesReady.value = false;
-  initState.value = "UNINITIALIZED";
-  initContext.value = null;
-
-  // View state
-  activeView.value = "note";
-
-  // Provider/Index/Agent status
-  providerStatus.value = {
-    lmstudio: { connected: false, model: null },
-    ollama: { connected: false, model: null },
-  };
-  indexStatus.value = {
-    noteCount: 0,
-    lastSyncedAt: null,
-    isIndexing: false,
-  };
-  agentStatus.value = {
-    runningCount: 0,
-    pendingReviewCount: 0,
-  };
-
-  // Agent Streams view state
-  activeAgents.value = [];
-  pendingActions.value = [];
-  recentActivity.value = [];
-  agentInsights.value = [];
-
-  // Chat view state
-  chatContext.value = { notePath: null, noteTitle: null };
-  chatMessages.value = [];
-  isChatStreaming.value = false;
-  chatStreamingContent.value = "";
-  chatStreamingThinking.value = "";
-  isChatThinking.value = false;
-  chatActivities.value = [];
-
-  // Search state
-  searchResults.value = [];
-  searchQuery.value = "";
-}
-
 // -----------------------------------------------------------------------------
 // Initialization State
 // -----------------------------------------------------------------------------
@@ -111,6 +63,8 @@ export const chatStreamingContent = signal("");
 export const chatStreamingThinking = signal("");
 export const isChatThinking = signal(false);
 export const chatActivities = signal<ActivityItem[]>([]);
+/** Task IDs from chat slash commands - maps taskId -> chatMessageId for result mirroring */
+export const chatSlashCommandTasks = signal<Map<string, string>>(new Map());
 
 // -----------------------------------------------------------------------------
 // Search State

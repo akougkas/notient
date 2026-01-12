@@ -59,8 +59,12 @@ export class SimpleVaultVitals {
       paraDistribution,
     };
 
+    const vitalsChanged = this.hasVitalsChanged(vitals);
     this.lastVitals = vitals;
-    this.eventBus.emit("vitals:updated", { vitals });
+
+    if (vitalsChanged) {
+      this.eventBus.emit("vitals:updated", { vitals });
+    }
 
     return vitals;
   }
@@ -288,6 +292,24 @@ export class SimpleVaultVitals {
       organization: Math.round(organization),
       processing: Math.round(processing),
     };
+  }
+
+  /**
+   * Check if vitals have meaningfully changed
+   */
+  private hasVitalsChanged(vitals: VaultVitalsData): boolean {
+    if (!this.lastVitals) {
+      return true;
+    }
+
+    const previous = this.lastVitals;
+
+    return (
+      vitals.counts.totalNotes !== previous.counts.totalNotes ||
+      vitals.processing.indexedCount !== previous.processing.indexedCount ||
+      vitals.processing.errorCount !== previous.processing.errorCount ||
+      vitals.connectivity.averageLinksPerNote !== previous.connectivity.averageLinksPerNote
+    );
   }
 
   /**

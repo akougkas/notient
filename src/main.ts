@@ -33,7 +33,6 @@ import { HealthMonitor } from "./services/healthMonitor";
 import { HNSWVectorStore } from "./services/hnswVectorStore";
 import { IndexManager } from "./services/indexManager";
 import { OllamaService } from "./services/ollama";
-import { OllamaRerankerService } from "./services/ollamaReranker";
 import type { NotientSettings } from "./types/settings";
 import { NotientDashboardView } from "./ui/dashboard/DashboardView";
 import { ImportModal } from "./ui/modals/ImportModal";
@@ -51,7 +50,6 @@ export default class NotientPlugin extends Plugin {
   // LLM providers
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
-  private ollamaReranker: OllamaRerankerService | null = null;
   private llmProvider: LMStudioSDKProvider | null = null;
 
   // Indexing and search
@@ -334,19 +332,6 @@ export default class NotientPlugin extends Plugin {
         this.kernel.setServicesInitializing(false);
         this.kernel.obsidian.notice("Cannot connect to Ollama. Is it running on port 11434?");
         return;
-      }
-
-      // Initialize dedicated reranker (optional - continues without if unavailable)
-      try {
-        this.ollamaReranker = new OllamaRerankerService(this.kernel);
-        await this.ollamaReranker.initialize();
-        this.kernel.registerService("ollamaReranker", this.ollamaReranker);
-        console.log("[Notient] Ollama reranker service initialized");
-      } catch (rerankerError) {
-        console.warn(
-          "[Notient] Ollama reranker initialization failed (will use LLM fallback):",
-          rerankerError,
-        );
       }
 
       this.initStateMachine.updateProgress({

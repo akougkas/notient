@@ -55,8 +55,5 @@ export class UserEvolutionService {
     } else if (taskPayload.type === "clipping") {
       this.updateState({ evolutionaryStage: "gathering", currentFocus: "Exploration" });
     }
-
-    // Update recent topics if available
-    // (Placeholder for topic extraction logic)
   }
 }

@@ -105,10 +105,3 @@ export function createEmptyProfile(): UserProfile {
     },
   };
 }
-
-/**
- * Check if a profile has meaningful domain data
- */
-export function hasProfileDomain(profile: UserProfile | undefined): boolean {
-  return Boolean(profile?.domain?.primary?.trim());
-}

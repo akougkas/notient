@@ -70,19 +70,3 @@ function DefaultErrorFallback({
     </div>
   );
 }
-
-/**
- * Wrap a view component with error boundary for isolation
- */
-export function withErrorBoundary<P extends object>(
-  WrappedComponent: (props: P) => ComponentChildren,
-  name: string,
-): (props: P) => ComponentChildren {
-  return function BoundedComponent(props: P) {
-    return (
-      <ErrorBoundary name={name}>
-        <WrappedComponent {...props} />
-      </ErrorBoundary>
-    );
-  };
-}

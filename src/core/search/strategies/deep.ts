@@ -14,7 +14,6 @@
  * Falls back to Balanced if LLM unavailable for expansion.
  */
 
-import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import type { LLMProvider } from "../../llm/provider";
 import type { ChatMessage, RankedResult, RerankCandidate } from "../../llm/types";
@@ -26,11 +25,6 @@ import type {
   StrategyContext,
   StrategySearchOptions,
 } from "./types";
-
-/** Reranker abstraction */
-type Reranker = {
-  rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
-};
 
 /** LLM abstraction for query expansion */
 type LLMChat = {
@@ -448,7 +442,7 @@ Example: ["term1", "term2", "term3"]`;
   private async finalRerank(
     query: string,
     results: SearchResult[],
-    reranker: Reranker,
+    reranker: LLMProvider,
     expandedTerms: string[],
   ): Promise<SearchResult[]> {
     const RERANK_LIMIT = 15;
@@ -502,20 +496,11 @@ Example: ["term1", "term2", "term3"]`;
   }
 
   /**
-   * Get reranker service (prioritizes dedicated Ollama reranker, falls back to LLM)
+   * Get LLM provider for reranking
    */
-  private getReranker(): Reranker | null {
-    // Priority 1: Dedicated Ollama reranker (Qwen3-Reranker-4B)
-    const ollamaReranker = this.context.kernel.getService<OllamaRerankerService>("ollamaReranker");
-    if (ollamaReranker?.isReady()) {
-      return ollamaReranker;
-    }
-
-    // Priority 2: LLM Provider (chat-based reranking)
+  private getReranker(): LLMProvider | null {
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
-    if (provider?.isReady) return provider;
-
-    return null;
+    return provider?.isReady ? provider : null;
   }
 
   /**

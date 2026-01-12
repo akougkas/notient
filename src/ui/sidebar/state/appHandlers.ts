@@ -21,6 +21,7 @@ import {
   chatActivities,
   chatContext,
   chatMessages,
+  chatSlashCommandTasks,
   chatStreamingContent,
   chatStreamingThinking,
   indexStatus,
@@ -64,22 +65,13 @@ interface TriggerAgenticActionDeps {
  * Routes through ChiefOfStaff via taskQueue.
  *
  * @param agentType - Expert agent type to invoke (note-editor, classifier, connection)
+ * @returns Task ID if successfully enqueued, undefined otherwise
  */
 export function triggerAgenticAction(
   { taskQueue, noteVitals }: TriggerAgenticActionDeps,
   prompt: string,
   agentType: AgenticTaskType,
-): void {
-  console.log("[appHandlers:triggerAgenticAction] TRACE: START");
-  // Always log to console for debugging - helps identify first-click issues
-  console.log("[appHandlers:triggerAgenticAction] TRACE: params", {
-    agentType,
-    hasTaskQueue: !!taskQueue,
-    hasNoteVitals: !!noteVitals.value,
-    notePath: noteVitals.value?.path,
-    isIndexing: indexStatus.value.isIndexing,
-  });
-
+): string | undefined {
   debugLog("triggerAgenticAction", "called", {
     agentType,
     hasTaskQueue: !!taskQueue,
@@ -89,19 +81,13 @@ export function triggerAgenticAction(
 
   // Guard: Don't allow agent actions while indexing to prevent GPU contention
   if (indexStatus.value.isIndexing) {
-    console.warn("[appHandlers:triggerAgenticAction] TRACE: Blocked - indexing in progress");
     new Notice("Please wait for indexing to complete before running agents");
-    console.log("[appHandlers:triggerAgenticAction] TRACE: END (blocked by indexing)");
-    return;
+    return undefined;
   }
 
   if (taskQueue && noteVitals.value) {
     try {
-      console.log(
-        "[appHandlers:triggerAgenticAction] TRACE: Enqueueing task for",
-        noteVitals.value.path,
-      );
-      taskQueue.enqueue({
+      const taskId = taskQueue.enqueue({
         agent: "chat",
         taskType: agentType, // taskQueue field name preserved for compatibility
         notePath: noteVitals.value.path,
@@ -109,31 +95,23 @@ export function triggerAgenticAction(
         chatHistory: [{ role: "user", content: prompt }],
       });
 
-      console.log("[appHandlers:triggerAgenticAction] TRACE: Before queueMicrotask for activeView");
       queueMicrotask(() => {
-        console.log("[appHandlers:triggerAgenticAction] TRACE: In microtask");
-        console.log("[appHandlers:triggerAgenticAction] TRACE: Before activeView.value assignment");
         activeView.value = "agents";
-        console.log("[appHandlers:triggerAgenticAction] TRACE: After activeView.value assignment");
       });
       new Notice(`${ACTION_LABELS[agentType]} started`);
-      console.log("[appHandlers:triggerAgenticAction] TRACE: END (success)");
+      return taskId;
     } catch (err) {
-      console.error("[appHandlers:triggerAgenticAction] TRACE: Enqueue failed:", err);
+      debugError("triggerAgenticAction", "enqueue failed", err);
       new Notice(err instanceof Error ? err.message : "Failed to start agent");
-      console.log("[appHandlers:triggerAgenticAction] TRACE: END (error)");
+      return undefined;
     }
   } else {
-    console.warn("[appHandlers:triggerAgenticAction] TRACE: Services unavailable", {
-      hasTaskQueue: !!taskQueue,
-      hasNoteVitals: !!noteVitals.value,
-    });
     debugError("triggerAgenticAction", "services unavailable", {
       hasTaskQueue: !!taskQueue,
       hasNoteVitals: !!noteVitals.value,
     });
     new Notice("Agent system not available");
-    console.log("[appHandlers:triggerAgenticAction] TRACE: END (services unavailable)");
+    return undefined;
   }
 }
 
@@ -143,6 +121,66 @@ interface HandleRichChatDeps {
   obsidian: ObsidianFacade;
 }
 
+interface ChatStreamState {
+  fullContent: string;
+  fullThinking: string;
+  statistics: ChatStatistics | null;
+}
+
+type ActivityPhase = "context" | "thinking" | "generating" | "complete";
+
+type ChatStreamEvent =
+  | { type: "started" }
+  | { type: "activity"; message: string; phase: ActivityPhase }
+  | { type: "thinking"; content: string }
+  | { type: "thinking-complete"; content: string }
+  | { type: "chunk"; content: string }
+  | { type: "complete"; content: string; thinking?: string; statistics: ChatStatistics }
+  | { type: "error"; error: Error };
+
+function processChatEvent(event: ChatStreamEvent, state: ChatStreamState): ChatStreamState {
+  switch (event.type) {
+    case "started":
+      chatActivities.value = [createActivityItem("Starting...", "context")];
+      return state;
+    case "activity":
+      chatActivities.value = [
+        ...chatActivities.value,
+        createActivityItem(event.message, event.phase),
+      ];
+      return state;
+    case "thinking":
+      if (!isChatThinking.value) isChatThinking.value = true;
+      state.fullThinking += event.content;
+      chatStreamingThinking.value = state.fullThinking;
+      return state;
+    case "thinking-complete":
+      isChatThinking.value = false;
+      state.fullThinking = event.content;
+      chatStreamingThinking.value = state.fullThinking;
+      return state;
+    case "chunk":
+      state.fullContent += event.content;
+      chatStreamingContent.value = state.fullContent;
+      return state;
+    case "complete":
+      state.fullContent = event.content;
+      state.fullThinking = event.thinking || "";
+      state.statistics = event.statistics;
+      return state;
+    case "error":
+      throw event.error;
+  }
+}
+
+function resetChatStreamState(): void {
+  isChatStreaming.value = false;
+  chatStreamingContent.value = "";
+  chatStreamingThinking.value = "";
+  isChatThinking.value = false;
+  chatActivities.value = [...chatActivities.value, createActivityItem("Complete", "complete")];
+}
+
 /**
  * Handle sending a chat message with streaming support.
  */
@@ -150,249 +188,84 @@ export async function handleRichChatSend(
   { chatService, noteVitals, obsidian }: HandleRichChatDeps,
   message: string,
 ): Promise<void> {
-  console.log("[appHandlers:handleRichChatSend] TRACE: START");
   if (!chatService || !chatContext.value.notePath) {
-    console.log("[appHandlers:handleRichChatSend] TRACE: No chat service or context");
-    const errorMsg: RichChatMessage = {
-      id: `error-${Date.now()}`,
-      role: "assistant",
-      content: "Chat service is not available. Please wait for initialization.",
-      timestamp: new Date(),
-    };
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatMessages.value assignment (error)",
-    );
-    chatMessages.value = [...chatMessages.value, errorMsg];
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatMessages.value assignment (error)",
-    );
-    console.log("[appHandlers:handleRichChatSend] TRACE: END (no service)");
+    chatMessages.value = [
+      ...chatMessages.value,
+      {
+        id: `error-${Date.now()}`,
+        role: "assistant",
+        content: "Chat service is not available. Please wait for initialization.",
+        timestamp: new Date(),
+      },
+    ];
     return;
   }
 
   // Add user message immediately
-  console.log("[appHandlers:handleRichChatSend] TRACE: Adding user message");
-  const userMsg: RichChatMessage = {
-    id: `user-${Date.now()}`,
-    role: "user",
-    content: message,
-    timestamp: new Date(),
-  };
-  console.log(
-    "[appHandlers:handleRichChatSend] TRACE: Before chatMessages.value assignment (user)",
-  );
-  chatMessages.value = [...chatMessages.value, userMsg];
-  console.log("[appHandlers:handleRichChatSend] TRACE: After chatMessages.value assignment (user)");
+  chatMessages.value = [
+    ...chatMessages.value,
+    {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: message,
+      timestamp: new Date(),
+    },
+  ];
 
-  // Clear previous streaming state
-  console.log("[appHandlers:handleRichChatSend] TRACE: Clearing streaming state");
-  console.log("[appHandlers:handleRichChatSend] TRACE: Before isChatStreaming.value assignment");
+  // Initialize streaming state
   isChatStreaming.value = true;
-  console.log("[appHandlers:handleRichChatSend] TRACE: After isChatStreaming.value assignment");
-  console.log(
-    "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingContent.value assignment",
-  );
   chatStreamingContent.value = "";
-  console.log(
-    "[appHandlers:handleRichChatSend] TRACE: After chatStreamingContent.value assignment",
-  );
-  console.log(
-    "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingThinking.value assignment",
-  );
   chatStreamingThinking.value = "";
-  console.log(
-    "[appHandlers:handleRichChatSend] TRACE: After chatStreamingThinking.value assignment",
-  );
-  console.log("[appHandlers:handleRichChatSend] TRACE: Before isChatThinking.value assignment");
   isChatThinking.value = false;
-  console.log("[appHandlers:handleRichChatSend] TRACE: After isChatThinking.value assignment");
-  console.log("[appHandlers:handleRichChatSend] TRACE: Before chatActivities.value assignment");
   chatActivities.value = [];
-  console.log("[appHandlers:handleRichChatSend] TRACE: After chatActivities.value assignment");
 
   // Build note context
-  console.log("[appHandlers:handleRichChatSend] TRACE: Building note context");
-  let noteContext = null;
-  if (noteVitals.value) {
-    const content = (await obsidian.readFileByPath(noteVitals.value.path)) || "";
-    noteContext = {
-      title: noteVitals.value.title,
-      path: noteVitals.value.path,
-      content,
-      wordCount: content.split(/\s+/).filter(Boolean).length,
-    };
-  }
+  const noteContext = noteVitals.value
+    ? {
+        title: noteVitals.value.title,
+        path: noteVitals.value.path,
+        content: (await obsidian.readFileByPath(noteVitals.value.path)) || "",
+        wordCount: 0,
+      }
+    : null;
+  if (noteContext) noteContext.wordCount = noteContext.content.split(/\s+/).filter(Boolean).length;
 
-  // Build chat history for context
-  console.log("[appHandlers:handleRichChatSend] TRACE: Building chat history");
+  // Build chat history
   const history = chatMessages.value
     .filter((m) => m.role !== "assistant" || !m.id.startsWith("error-"))
     .slice(-10)
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-  let fullContent = "";
-  let fullThinking = "";
-  let statistics: ChatStatistics | null = null;
+  const state: ChatStreamState = { fullContent: "", fullThinking: "", statistics: null };
 
   try {
-    console.log("[appHandlers:handleRichChatSend] TRACE: Starting chat stream");
     for await (const event of chatService.chat(message, noteContext, history)) {
-      console.log("[appHandlers:handleRichChatSend] TRACE: Chat event:", event.type);
-      switch (event.type) {
-        case "started":
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before chatActivities.value assignment (started)",
-          );
-          chatActivities.value = [createActivityItem("Starting...", "context")];
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After chatActivities.value assignment (started)",
-          );
-          break;
-
-        case "activity":
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before chatActivities.value assignment (activity)",
-          );
-          chatActivities.value = [
-            ...chatActivities.value,
-            createActivityItem(event.message, event.phase),
-          ];
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After chatActivities.value assignment (activity)",
-          );
-          break;
-
-        case "thinking":
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before isChatThinking.value assignment (thinking)",
-          );
-          isChatThinking.value = true;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After isChatThinking.value assignment (thinking)",
-          );
-          fullThinking += event.content;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingThinking.value assignment (thinking)",
-          );
-          chatStreamingThinking.value = fullThinking;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After chatStreamingThinking.value assignment (thinking)",
-          );
-          break;
-
-        case "thinking-complete":
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before isChatThinking.value assignment (thinking-complete)",
-          );
-          isChatThinking.value = false;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After isChatThinking.value assignment (thinking-complete)",
-          );
-          fullThinking = event.content;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingThinking.value assignment (thinking-complete)",
-          );
-          chatStreamingThinking.value = fullThinking;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After chatStreamingThinking.value assignment (thinking-complete)",
-          );
-          break;
-
-        case "chunk":
-          fullContent += event.content;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingContent.value assignment (chunk)",
-          );
-          chatStreamingContent.value = fullContent;
-          console.log(
-            "[appHandlers:handleRichChatSend] TRACE: After chatStreamingContent.value assignment (chunk)",
-          );
-          break;
-
-        case "complete":
-          console.log("[appHandlers:handleRichChatSend] TRACE: Chat complete");
-          fullContent = event.content;
-          fullThinking = event.thinking || "";
-          statistics = event.statistics;
-          break;
-
-        case "error":
-          console.log("[appHandlers:handleRichChatSend] TRACE: Chat error:", event.error);
-          throw event.error;
-      }
+      processChatEvent(event as ChatStreamEvent, state);
     }
-
-    // Add assistant message with full content
-    console.log("[appHandlers:handleRichChatSend] TRACE: Adding assistant message");
-    const assistantMsg: RichChatMessage = {
-      id: `assistant-${Date.now()}`,
-      role: "assistant",
-      content: fullContent,
-      timestamp: new Date(),
-      thinking: fullThinking || null,
-      thinkingDurationMs: statistics?.thinkingTimeMs,
-      statistics: statistics || undefined,
-    };
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatMessages.value assignment (assistant)",
-    );
-    chatMessages.value = [...chatMessages.value, assistantMsg];
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatMessages.value assignment (assistant)",
-    );
+    chatMessages.value = [
+      ...chatMessages.value,
+      {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content: state.fullContent,
+        timestamp: new Date(),
+        thinking: state.fullThinking || null,
+        thinkingDurationMs: state.statistics?.thinkingTimeMs,
+        statistics: state.statistics || undefined,
+      },
+    ];
   } catch (error) {
-    console.log("[appHandlers:handleRichChatSend] TRACE: Caught error:", error);
-    const errorMsg: RichChatMessage = {
-      id: `error-${Date.now()}`,
-      role: "assistant",
-      content: `Sorry, something went wrong: ${error instanceof Error ? error.message : "Unknown error"}`,
-      timestamp: new Date(),
-    };
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatMessages.value assignment (error in catch)",
-    );
-    chatMessages.value = [...chatMessages.value, errorMsg];
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatMessages.value assignment (error in catch)",
-    );
+    chatMessages.value = [
+      ...chatMessages.value,
+      {
+        id: `error-${Date.now()}`,
+        role: "assistant",
+        content: `Sorry, something went wrong: ${error instanceof Error ? error.message : "Unknown error"}`,
+        timestamp: new Date(),
+      },
+    ];
   } finally {
-    console.log("[appHandlers:handleRichChatSend] TRACE: In finally block");
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before isChatStreaming.value assignment (finally)",
-    );
-    isChatStreaming.value = false;
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After isChatStreaming.value assignment (finally)",
-    );
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingContent.value assignment (finally)",
-    );
-    chatStreamingContent.value = "";
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatStreamingContent.value assignment (finally)",
-    );
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatStreamingThinking.value assignment (finally)",
-    );
-    chatStreamingThinking.value = "";
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatStreamingThinking.value assignment (finally)",
-    );
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before isChatThinking.value assignment (finally)",
-    );
-    isChatThinking.value = false;
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After isChatThinking.value assignment (finally)",
-    );
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: Before chatActivities.value assignment (finally)",
-    );
-    chatActivities.value = [...chatActivities.value, createActivityItem("Complete", "complete")];
-    console.log(
-      "[appHandlers:handleRichChatSend] TRACE: After chatActivities.value assignment (finally)",
-    );
-    console.log("[appHandlers:handleRichChatSend] TRACE: END");
+    resetChatStreamState();
   }
 }
 
@@ -424,17 +297,13 @@ async function applyActionWithNotice({
   successMessage,
   onSuccess,
 }: ApplyActionOptions): Promise<void> {
-  console.log("[appHandlers:applyActionWithNotice] TRACE: START");
   const result = await actionApplier.applyConfirmed(action);
   if (result.success) {
-    console.log("[appHandlers:applyActionWithNotice] TRACE: Success");
     new Notice(successMessage);
     onSuccess?.();
   } else {
-    console.log("[appHandlers:applyActionWithNotice] TRACE: Failed:", result.error);
     new Notice(`Failed: ${result.error}`);
   }
-  console.log("[appHandlers:applyActionWithNotice] TRACE: END");
 }
 
 function buildAction(
@@ -445,7 +314,6 @@ function buildAction(
   payload: Record<string, unknown>,
   risk: RiskLevel = "low",
 ): ProposedAction {
-  console.log("[appHandlers:buildAction] TRACE: START", type, target);
   const action = {
     id: `action-${Date.now()}`,
     type,
@@ -456,7 +324,6 @@ function buildAction(
     requiresWriteLock: true,
     payload,
   } as ProposedAction;
-  console.log("[appHandlers:buildAction] TRACE: END");
   return action;
 }
 
@@ -464,15 +331,11 @@ function buildAction(
  * Handle "open-note" action - opens a note in the editor.
  */
 function handleOpenNote(obsidian: ObsidianFacade, payload?: Record<string, unknown>): void {
-  console.log("[appHandlers:handleOpenNote] TRACE: START");
   const path = (payload as { path?: string })?.path;
   if (path) {
-    console.log("[appHandlers:handleOpenNote] TRACE: Opening file:", path);
     obsidian.openFile(path);
   } else {
-    console.log("[appHandlers:handleOpenNote] TRACE: No path provided");
   }
-  console.log("[appHandlers:handleOpenNote] TRACE: END");
 }
 
 /**
@@ -483,15 +346,11 @@ async function handleApplyLinks(
   currentPath: string,
   payload?: Record<string, unknown>,
 ): Promise<void> {
-  console.log("[appHandlers:handleApplyLinks] TRACE: START");
   const links = (payload as { links?: string[] })?.links || [];
   if (links.length === 0) {
-    console.log("[appHandlers:handleApplyLinks] TRACE: No links to apply");
     new Notice("No links to apply");
-    console.log("[appHandlers:handleApplyLinks] TRACE: END (no links)");
     return;
   }
-  console.log("[appHandlers:handleApplyLinks] TRACE: Applying", links.length, "links");
   await applyActionWithNotice({
     actionApplier,
     action: buildAction(
@@ -503,7 +362,6 @@ async function handleApplyLinks(
     ),
     successMessage: `Added ${links.length} links`,
   });
-  console.log("[appHandlers:handleApplyLinks] TRACE: END");
 }
 
 /**
@@ -514,15 +372,11 @@ async function handleApplyTags(
   currentPath: string,
   payload?: Record<string, unknown>,
 ): Promise<void> {
-  console.log("[appHandlers:handleApplyTags] TRACE: START");
   const tags = (payload as { tags?: string[] })?.tags || [];
   if (tags.length === 0) {
-    console.log("[appHandlers:handleApplyTags] TRACE: No tags to apply");
     new Notice("No tags to apply");
-    console.log("[appHandlers:handleApplyTags] TRACE: END (no tags)");
     return;
   }
-  console.log("[appHandlers:handleApplyTags] TRACE: Applying", tags.length, "tags");
   await applyActionWithNotice({
     actionApplier,
     action: buildAction(
@@ -534,7 +388,6 @@ async function handleApplyTags(
     ),
     successMessage: `Added ${tags.length} tags`,
   });
-  console.log("[appHandlers:handleApplyTags] TRACE: END");
 }
 
 /**
@@ -545,17 +398,13 @@ async function handleCreateNote(
   obsidian: ObsidianFacade,
   payload?: Record<string, unknown>,
 ): Promise<void> {
-  console.log("[appHandlers:handleCreateNote] TRACE: START");
   const typedPayload = payload as { path?: string; content?: string } | undefined;
   const notePath = typedPayload?.path;
   const noteContent = typedPayload?.content;
   if (!notePath || !noteContent) {
-    console.log("[appHandlers:handleCreateNote] TRACE: Missing path or content");
     new Notice("Missing path or content");
-    console.log("[appHandlers:handleCreateNote] TRACE: END (missing data)");
     return;
   }
-  console.log("[appHandlers:handleCreateNote] TRACE: Creating note:", notePath);
   await applyActionWithNotice({
     actionApplier,
     action: buildAction(
@@ -567,11 +416,9 @@ async function handleCreateNote(
     ),
     successMessage: `Created ${notePath}`,
     onSuccess: () => {
-      console.log("[appHandlers:handleCreateNote:onSuccess] TRACE: Opening created file");
       obsidian.openFile(notePath);
     },
   });
-  console.log("[appHandlers:handleCreateNote] TRACE: END");
 }
 
 /**
@@ -581,37 +428,28 @@ export async function handleChatAction(
   { actionApplier, obsidian }: HandleChatActionDeps,
   action: ChatAction,
 ): Promise<void> {
-  console.log("[appHandlers:handleChatAction] TRACE: START", action.type);
   if (action.type === "open-note") {
     handleOpenNote(obsidian, action.payload);
-    console.log("[appHandlers:handleChatAction] TRACE: END (open-note)");
     return;
   }
 
   if (action.type === "create-note") {
     if (!actionApplier) {
-      console.log("[appHandlers:handleChatAction] TRACE: No action applier for create-note");
       new Notice("Action system not available");
-      console.log("[appHandlers:handleChatAction] TRACE: END (no applier)");
       return;
     }
     await handleCreateNote(actionApplier, obsidian, action.payload);
-    console.log("[appHandlers:handleChatAction] TRACE: END (create-note)");
     return;
   }
 
   const currentPath = chatContext.value.notePath;
   if (!currentPath) {
-    console.log("[appHandlers:handleChatAction] TRACE: No note context");
     new Notice("No note context for this action");
-    console.log("[appHandlers:handleChatAction] TRACE: END (no context)");
     return;
   }
 
   if (!actionApplier) {
-    console.log("[appHandlers:handleChatAction] TRACE: No action applier");
     new Notice("Action system not available");
-    console.log("[appHandlers:handleChatAction] TRACE: END (no applier)");
     return;
   }
 
@@ -620,5 +458,122 @@ export async function handleChatAction(
   } else if (action.type === "apply-tags") {
     await handleApplyTags(actionApplier, currentPath, action.payload);
   }
-  console.log("[appHandlers:handleChatAction] TRACE: END");
+}
+
+// ============================================================================
+// Chat Slash Commands
+// ============================================================================
+
+/**
+ * Chat slash command definitions.
+ * Maps slash commands to agent types.
+ */
+const CHAT_SLASH_COMMANDS: Record<
+  string,
+  { agentType: AgenticTaskType; label: string; prompt: string }
+> = {
+  "/enrich": {
+    agentType: "note-editor",
+    label: "Note Editor",
+    prompt: "Analyze and enrich this note with improvements, structure, and depth.",
+  },
+  "/classify": {
+    agentType: "classifier",
+    label: "Classifier",
+    prompt: "Classify this note and suggest appropriate tags and categories.",
+  },
+  "/link": {
+    agentType: "connection",
+    label: "Connection Agent",
+    prompt: "Find related notes and suggest connections for this note.",
+  },
+  "/connect": {
+    agentType: "connection",
+    label: "Connection Agent",
+    prompt: "Find related notes and suggest connections for this note.",
+  },
+};
+
+/**
+ * Result of parsing a chat slash command.
+ */
+export interface ChatSlashCommandResult {
+  isSlashCommand: boolean;
+  agentType?: AgenticTaskType;
+  label?: string;
+  prompt?: string;
+  command?: string;
+}
+
+/**
+ * Parse a message to check if it's a chat slash command.
+ * Returns the agent type and prompt if it's a valid command.
+ */
+export function parseChatSlashCommand(message: string): ChatSlashCommandResult {
+  const trimmed = message.trim().toLowerCase();
+
+  for (const [command, config] of Object.entries(CHAT_SLASH_COMMANDS)) {
+    if (trimmed === command || trimmed.startsWith(`${command} `)) {
+      return {
+        isSlashCommand: true,
+        agentType: config.agentType,
+        label: config.label,
+        prompt: config.prompt,
+        command: command.slice(1), // Remove leading /
+      };
+    }
+  }
+
+  return { isSlashCommand: false };
+}
+
+/**
+ * Handle a chat slash command by triggering the appropriate agent.
+ * Adds a user message to chat and triggers the agent.
+ * Returns true if the command was handled, false otherwise.
+ *
+ * Results are mirrored to both InsightStream and Chat UI via chatSlashCommandTasks tracking.
+ */
+export function handleChatSlashCommand(deps: TriggerAgenticActionDeps, message: string): boolean {
+  const parsed = parseChatSlashCommand(message);
+
+  if (!parsed.isSlashCommand || !parsed.agentType || !parsed.prompt) {
+    return false;
+  }
+
+  // Add user message showing the command
+  chatMessages.value = [
+    ...chatMessages.value,
+    {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: message,
+      timestamp: new Date(),
+    },
+  ];
+
+  // Add placeholder assistant message (will be updated with results)
+  const assistantMsgId = `assistant-${Date.now()}`;
+  chatMessages.value = [
+    ...chatMessages.value,
+    {
+      id: assistantMsgId,
+      role: "assistant",
+      content: `Running ${parsed.label}...`,
+      timestamp: new Date(),
+    },
+  ];
+
+  // Trigger the agent and track for result mirroring
+  const taskId = triggerAgenticAction(deps, parsed.prompt, parsed.agentType);
+
+  if (taskId) {
+    // Track mapping so we can update the placeholder when task completes
+    chatSlashCommandTasks.value = new Map([
+      ...chatSlashCommandTasks.value,
+      [taskId, assistantMsgId],
+    ]);
+  }
+
+  return true;
 }

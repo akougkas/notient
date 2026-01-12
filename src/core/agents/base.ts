@@ -29,10 +29,8 @@ export abstract class BaseAgent {
     protected readonly llm: LLMProvider,
     agentType: AgentType,
   ) {
-    console.log(`[base:constructor] TRACE: START agentType=${agentType}`);
     this.agentType = agentType;
     this.config = AGENT_CONFIGS[agentType];
-    console.log("[base:constructor] TRACE: END");
   }
 
   // ===========================================================================
@@ -62,8 +60,6 @@ export abstract class BaseAgent {
    * Get agent configuration
    */
   getConfig(): Readonly<AgentConfig> {
-    console.log("[base:getConfig] TRACE: START");
-    console.log("[base:getConfig] TRACE: END");
     return this.config;
   }
 
@@ -71,9 +67,7 @@ export abstract class BaseAgent {
    * Check if this agent can delegate to another
    */
   canDelegateTo(targetAgent: AgentType): boolean {
-    console.log(`[base:canDelegateTo] TRACE: START targetAgent=${targetAgent}`);
     const result = this.config.canDelegate && this.config.delegationTargets.includes(targetAgent);
-    console.log(`[base:canDelegateTo] TRACE: END result=${result}`);
     return result;
   }
 
@@ -83,7 +77,6 @@ export abstract class BaseAgent {
    * Adds structured output schema for expert agents
    */
   protected getCompletionOptions(): CompletionOptions {
-    console.log("[base:getCompletionOptions] TRACE: START");
     let temperature = this.config.temperature;
 
     // Thinking models need higher temperature for quality output
@@ -120,7 +113,6 @@ export abstract class BaseAgent {
       }
     }
 
-    console.log(`[base:getCompletionOptions] TRACE: END temperature=${temperature}`);
     return options;
   }
 
@@ -129,7 +121,6 @@ export abstract class BaseAgent {
    * Respects context budget
    */
   protected formatNoteForPrompt(note: NoteContext, maxChars?: number): string {
-    console.log(`[base:formatNoteForPrompt] TRACE: START note.title=${note.title}`);
     const limit = maxChars ?? Math.floor(this.config.contextBudget * 0.5);
     const truncatedContent =
       note.content.length > limit
@@ -143,7 +134,6 @@ ${note.frontmatter ? `Frontmatter: ${JSON.stringify(note.frontmatter, null, 2)}`
 
 ${truncatedContent}
 === END CURRENT NOTE ===`;
-    console.log(`[base:formatNoteForPrompt] TRACE: END resultLength=${result.length}`);
     return result;
   }
 
@@ -156,9 +146,7 @@ ${truncatedContent}
     maxNotes = 5,
     maxCharsPerNote = 400,
   ): string {
-    console.log(`[base:formatRelatedNotes] TRACE: START notesCount=${notes.length}`);
     if (!notes.length) {
-      console.log("[base:formatRelatedNotes] TRACE: END (empty notes)");
       return "";
     }
 
@@ -172,7 +160,6 @@ ${truncatedContent}
       .join("\n\n");
 
     const result = `RELATED NOTES FROM VAULT:\n${formatted}`;
-    console.log(`[base:formatRelatedNotes] TRACE: END resultLength=${result.length}`);
     return result;
   }
 
@@ -181,24 +168,17 @@ ${truncatedContent}
    * Keeps last N messages to stay within budget
    */
   protected formatChatHistory(history: ChatMessage[], maxMessages = 10): ChatMessage[] {
-    console.log(
-      `[base:formatChatHistory] TRACE: START historyLength=${history.length} maxMessages=${maxMessages}`,
-    );
-    const result = history.slice(-maxMessages);
-    console.log(`[base:formatChatHistory] TRACE: END resultLength=${result.length}`);
-    return result;
+    return history.slice(-maxMessages);
   }
 
   /**
    * Build messages array for LLM call
    */
   protected buildMessages(systemPrompt: string, context: AgentContext): ChatMessage[] {
-    console.log(`[base:buildMessages] TRACE: START systemPromptLength=${systemPrompt.length}`);
     const result = [
       { role: "system" as const, content: systemPrompt },
       ...this.formatChatHistory(context.chatHistory),
     ];
-    console.log(`[base:buildMessages] TRACE: END messagesCount=${result.length}`);
     return result;
   }
 
@@ -206,28 +186,20 @@ ${truncatedContent}
    * Stream LLM response with proper error handling
    */
   protected async *streamLLM(messages: ChatMessage[], signal?: AbortSignal): AsyncIterable<string> {
-    console.log(`[base:streamLLM] TRACE: START messagesCount=${messages.length}`);
     try {
-      console.log("[base:streamLLM] TRACE: before llm.stream for-await loop");
       let chunkCount = 0;
       for await (const chunk of this.llm.stream(messages, this.getCompletionOptions(), signal)) {
         chunkCount++;
         if (signal?.aborted) {
-          console.log(`[base:streamLLM] TRACE: aborted at chunk ${chunkCount}`);
           throw new DOMException("Aborted", "AbortError");
         }
-        console.log(`[base:streamLLM] TRACE: yielding chunk ${chunkCount}`);
         yield chunk;
-        console.log(`[base:streamLLM] TRACE: yielded chunk ${chunkCount}`);
       }
-      console.log(`[base:streamLLM] TRACE: END (completed ${chunkCount} chunks)`);
     } catch (error) {
       if ((error as Error).name === "AbortError") {
-        console.log("[base:streamLLM] TRACE: END (aborted)");
         throw error;
       }
       console.error(`[${this.config.name}] LLM stream error:`, error);
-      console.log("[base:streamLLM] TRACE: END (error)");
       throw error;
     }
   }
@@ -236,9 +208,13 @@ ${truncatedContent}
    * Non-streaming LLM completion
    */
   protected async completeLLM(messages: ChatMessage[]): Promise<string> {
-    console.log(`[BaseAgent:${this.agentType}] TRACE: completeLLM START`);
+    const startTime = Date.now();
+    console.log(`[BaseAgent:${this.agentType}] completeLLM START`);
     const result = await this.llm.complete(messages, this.getCompletionOptions());
-    console.log(`[BaseAgent:${this.agentType}] TRACE: completeLLM END (${result.length} chars)`);
+    const duration = Date.now() - startTime;
+    console.log(
+      `[BaseAgent:${this.agentType}] completeLLM END (${result.length} chars, ${duration}ms)`,
+    );
     return result;
   }
 
@@ -247,7 +223,6 @@ ${truncatedContent}
    * Removes control characters and normalizes line endings
    */
   protected sanitizeLLMOutput(rawOutput: string): string {
-    console.log(`[base:sanitizeLLMOutput] TRACE: START inputLength=${rawOutput.length}`);
     // Remove control characters that break JSON.parse (keep \n, \r, \t)
     // biome-ignore lint/suspicious/noControlCharactersInRegex: Intentional control char removal from LLM output
     const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
@@ -255,7 +230,6 @@ ${truncatedContent}
       .replace(controlCharRegex, "")
       .replace(/\r\n/g, "\n") // Normalize line endings
       .replace(/\r/g, "\n");
-    console.log(`[base:sanitizeLLMOutput] TRACE: END outputLength=${result.length}`);
     return result;
   }
 
@@ -264,14 +238,12 @@ ${truncatedContent}
    * Handles thinking model output with <think> tags
    */
   protected parseJSON<T>(jsonStr: string): T | null {
-    console.log(`[base:parseJSON] TRACE: START inputLength=${jsonStr.length}`);
     try {
       let cleaned = jsonStr.trim();
 
       // Strip thinking model tags (DeepSeek, Falcon H1R, Qwen QwQ)
       // These models wrap reasoning in <think>...</think>
       cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-      console.log(`[base:parseJSON] TRACE: after stripping think tags, length=${cleaned.length}`);
 
       // Strip markdown code fences
       if (cleaned.startsWith("```json")) {
@@ -283,7 +255,6 @@ ${truncatedContent}
         cleaned = cleaned.slice(0, -3);
       }
       cleaned = cleaned.trim();
-      console.log(`[base:parseJSON] TRACE: after stripping fences, length=${cleaned.length}`);
 
       // Extract JSON object/array - use non-greedy match from first { or [
       // to find the balanced closing bracket
@@ -293,7 +264,6 @@ ${truncatedContent}
           `[${this.config.name}] No JSON found in output. Preview:`,
           cleaned.slice(0, 200),
         );
-        console.log("[base:parseJSON] TRACE: END (no JSON found)");
         return null;
       }
 
@@ -301,22 +271,18 @@ ${truncatedContent}
       const extracted = jsonMatch[0];
       try {
         const result = JSON.parse(extracted) as T;
-        console.log("[base:parseJSON] TRACE: END (success)");
         return result;
       } catch {
-        console.log("[base:parseJSON] TRACE: greedy match failed, trying balanced extraction");
         // If greedy match failed, try to find balanced braces
         const balanced = this.extractBalancedJson(cleaned);
         if (balanced) {
           const result = JSON.parse(balanced) as T;
-          console.log("[base:parseJSON] TRACE: END (success via balanced)");
           return result;
         }
         throw new Error("JSON extraction failed");
       }
     } catch (error) {
       console.warn(`[${this.config.name}] JSON parse error:`, error);
-      console.log("[base:parseJSON] TRACE: END (error)");
       return null;
     }
   }
@@ -325,10 +291,8 @@ ${truncatedContent}
    * Extract balanced JSON from a string (handles nested structures)
    */
   private extractBalancedJson(text: string): string | null {
-    console.log(`[base:extractBalancedJson] TRACE: START textLength=${text.length}`);
     const startIdx = text.search(/[\[{]/);
     if (startIdx === -1) {
-      console.log("[base:extractBalancedJson] TRACE: END (no start bracket found)");
       return null;
     }
 
@@ -337,12 +301,10 @@ ${truncatedContent}
 
     const endIdx = this.findBalancedEndIndex(text, startIdx, startChar, endChar);
     if (endIdx === -1) {
-      console.log("[base:extractBalancedJson] TRACE: END (no balanced end found)");
       return null;
     }
 
     const result = text.slice(startIdx, endIdx + 1);
-    console.log(`[base:extractBalancedJson] TRACE: END resultLength=${result.length}`);
     return result;
   }
 
@@ -355,7 +317,6 @@ ${truncatedContent}
     startChar: string,
     endChar: string,
   ): number {
-    console.log(`[base:findBalancedEndIndex] TRACE: START startIdx=${startIdx}`);
     let depth = 0;
     let inString = false;
     let isEscaped = false;
@@ -369,11 +330,9 @@ ${truncatedContent}
       depth = result.depth;
 
       if (result.foundEnd) {
-        console.log(`[base:findBalancedEndIndex] TRACE: END foundAt=${i}`);
         return i;
       }
     }
-    console.log("[base:findBalancedEndIndex] TRACE: END (not found)");
     return -1;
   }
 
@@ -417,10 +376,8 @@ ${truncatedContent}
     targetAgent: AgentType,
     instruction: string,
   ): DelegationRequest | null {
-    console.log(`[base:createDelegationRequest] TRACE: START targetAgent=${targetAgent}`);
     if (!this.canDelegateTo(targetAgent)) {
       console.warn(`[${this.config.name}] Cannot delegate to ${targetAgent}`);
-      console.log("[base:createDelegationRequest] TRACE: END (cannot delegate)");
       return null;
     }
 
@@ -433,7 +390,6 @@ ${truncatedContent}
         includeSearch: true,
       },
     };
-    console.log("[base:createDelegationRequest] TRACE: END (success)");
     return result;
   }
 

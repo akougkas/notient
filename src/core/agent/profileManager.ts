@@ -95,16 +95,40 @@ export class ProfileManager {
     }
 
     try {
+      // Check if profile actually changed before emitting
+      const previousProfile = this.profile;
+      const hasChanged = this.profileChanged(previousProfile, profile);
+
       await atomicWriteFile(this.profilePath, JSON.stringify(profile, null, 2));
       this.profile = profile;
       console.log("[ProfileManager] Saved profile:", profile.domain?.primary || "(no domain)");
 
-      // Emit event so subscribers (e.g., NotientAgent) can update
-      this.kernel.eventBus.emit("profile:updated", { profile });
+      // Emit event only if profile content changed
+      if (hasChanged) {
+        this.kernel.eventBus.emit("profile:updated", { profile });
+      }
     } catch (error) {
       console.error("[ProfileManager] Failed to save profile:", error);
       throw error;
     }
+  }
+
+  /**
+   * Check if profile content has changed
+   */
+  private profileChanged(previous: UserProfile | undefined, current: UserProfile): boolean {
+    if (!previous) {
+      return true;
+    }
+
+    // Compare key fields that matter for subscribers
+    const primaryChanged = previous.domain?.primary !== current.domain?.primary;
+    const secondaryChanged =
+      JSON.stringify(previous.domain?.secondary) !== JSON.stringify(current.domain?.secondary);
+    const keywordsChanged =
+      JSON.stringify(previous.domain?.keywords) !== JSON.stringify(current.domain?.keywords);
+
+    return primaryChanged || secondaryChanged || keywordsChanged;
   }
 
   /**

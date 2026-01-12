@@ -13,7 +13,6 @@
  * Falls back to Quick search if embeddings unavailable.
  */
 
-import type { OllamaRerankerService } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import { SEARCH_LIMITS } from "../../constants";
 import type { LLMProvider } from "../../llm/provider";
@@ -25,11 +24,6 @@ import type {
   StrategyContext,
   StrategySearchOptions,
 } from "./types";
-
-/** Reranker abstraction (OllamaRerankerService or LLMProvider) */
-type Reranker = {
-  rerank: (query: string, candidates: RerankCandidate[]) => Promise<RankedResult[]>;
-};
 
 /**
  * Balanced search strategy - vector search with LLM reranking
@@ -233,20 +227,11 @@ export class BalancedSearchStrategy implements SearchStrategy {
   }
 
   /**
-   * Get reranker service (prioritizes dedicated Ollama reranker, falls back to LLM)
+   * Get LLM provider for reranking
    */
-  private getReranker(): Reranker | null {
-    // Priority 1: Dedicated Ollama reranker (Qwen3-Reranker-4B)
-    const ollamaReranker = this.context.kernel.getService<OllamaRerankerService>("ollamaReranker");
-    if (ollamaReranker?.isReady()) {
-      return ollamaReranker;
-    }
-
-    // Priority 2: LLM Provider (chat-based reranking)
+  private getReranker(): LLMProvider | null {
     const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
-    if (provider?.isReady) return provider;
-
-    return null;
+    return provider?.isReady ? provider : null;
   }
 
   /**
@@ -255,7 +240,7 @@ export class BalancedSearchStrategy implements SearchStrategy {
   private async rerankChunks(
     query: string,
     chunks: ChunkSearchResult[],
-    reranker: Reranker,
+    reranker: LLMProvider,
   ): Promise<ChunkSearchResult[]> {
     const RERANK_LIMIT = 25;
 

@@ -49,38 +49,28 @@ export class OllamaService {
   /** Cached model capabilities - discovered at initialization */
   private capabilities: ModelCapabilities | null = null;
 
-  constructor(private kernel: Kernel) {
-    console.log("[ollama:constructor] TRACE: START");
-    console.log("[ollama:constructor] TRACE: END");
-  }
+  constructor(private kernel: Kernel) {}
 
   /**
    * Initialize the service and discover model capabilities
    */
   async initialize(): Promise<void> {
-    console.log("[ollama:initialize] TRACE: START");
     const settings = this.kernel.settings;
 
     if (!settings.ollama.enabled) {
       console.log("[OllamaService] Ollama is disabled");
-      console.log("[ollama:initialize] TRACE: END (disabled)");
       return;
     }
 
     const model = settings.ollama.embeddingModel;
     console.log(`[OllamaService] Initializing with host=${settings.ollama.host}, model=${model}`);
-    console.log(
-      `[ollama:initialize] TRACE: creating Ollama client with host=${settings.ollama.host}`,
-    );
 
     this.client = new Ollama({
       host: settings.ollama.host,
     });
-    console.log("[ollama:initialize] TRACE: Ollama client created");
 
     // Discover model capabilities at initialization
     if (model) {
-      console.log("[ollama:initialize] TRACE: discovering capabilities");
       this.capabilities = await this.discoverCapabilities(model);
       console.log(
         `[OllamaService] Model capabilities: dim=${this.capabilities.embeddingDimension}, ` +
@@ -90,7 +80,6 @@ export class OllamaService {
     } else {
       console.warn("[OllamaService] No embedding model configured!");
     }
-    console.log("[ollama:initialize] TRACE: END");
   }
 
   /**
@@ -102,7 +91,6 @@ export class OllamaService {
     embeddingDimension: number | null;
     architecture: string | null;
   } {
-    console.log("[ollama:parseModelInfo] TRACE: START");
     let contextLength: number | null = null;
     let embeddingDimension: number | null = null;
     let architecture: string | null = null;
@@ -125,10 +113,6 @@ export class OllamaService {
       architecture = String(modelInfo["general.architecture"]);
     }
 
-    console.log(
-      `[ollama:parseModelInfo] TRACE: contextLength=${contextLength}, embeddingDimension=${embeddingDimension}, architecture=${architecture}`,
-    );
-    console.log("[ollama:parseModelInfo] TRACE: END");
     return { contextLength, embeddingDimension, architecture };
   }
 
@@ -143,15 +127,12 @@ export class OllamaService {
       architecture: string | null;
     },
   ): Promise<ModelCapabilities> {
-    console.log("[ollama:buildCapabilities] TRACE: START");
     const { contextLength, architecture } = parsed;
     let { embeddingDimension } = parsed;
 
     // If we couldn't find dimension in model_info, probe with a test embedding
     if (embeddingDimension === null) {
-      console.log("[ollama:buildCapabilities] TRACE: probing embedding dimension");
       embeddingDimension = await this.probeEmbeddingDimension(model);
-      console.log(`[ollama:buildCapabilities] TRACE: probed dimension=${embeddingDimension}`);
     }
 
     const caps: ModelCapabilities = {
@@ -170,7 +151,6 @@ export class OllamaService {
       `[OllamaService] Discovered ${model}: arch=${caps.architecture}, ctx=${caps.contextLength}, dim=${caps.embeddingDimension}, maxChars=${maxChars}`,
     );
 
-    console.log("[ollama:buildCapabilities] TRACE: END");
     return caps;
   }
 
@@ -179,34 +159,25 @@ export class OllamaService {
    * Falls back to conservative defaults if discovery fails.
    */
   private async discoverCapabilities(model: string): Promise<ModelCapabilities> {
-    console.log("[ollama:discoverCapabilities] TRACE: START");
-    console.log(`[ollama:discoverCapabilities] TRACE: model=${model}`);
     if (!this.client) {
       console.warn("[OllamaService] Client not initialized, using fallbacks");
-      console.log("[ollama:discoverCapabilities] TRACE: END (no client fallback)");
       return this.fallbackCapabilities(model);
     }
 
     try {
-      console.log("[ollama:discoverCapabilities] TRACE: calling client.show");
       const data = await this.client.show({ model });
-      console.log("[ollama:discoverCapabilities] TRACE: client.show returned");
       // SDK returns model_info as Map, convert to Record for parsing
       const rawInfo = data.model_info;
       const modelInfo: Record<string, unknown> =
         rawInfo instanceof Map
           ? Object.fromEntries(rawInfo)
           : ((rawInfo as Record<string, unknown>) ?? {});
-      console.log("[ollama:discoverCapabilities] TRACE: parsing model info");
       const parsed = this.parseModelInfo(modelInfo);
 
-      console.log("[ollama:discoverCapabilities] TRACE: building capabilities");
       const result = await this.buildCapabilities(model, parsed);
-      console.log("[ollama:discoverCapabilities] TRACE: END");
       return result;
     } catch (error) {
       console.warn(`[OllamaService] Discovery failed for ${model}:`, error);
-      console.log("[ollama:discoverCapabilities] TRACE: END (error fallback)");
       return this.fallbackCapabilities(model);
     }
   }
@@ -215,18 +186,11 @@ export class OllamaService {
    * Probe embedding dimension by generating a test embedding
    */
   private async probeEmbeddingDimension(model: string): Promise<number | null> {
-    console.log("[ollama:probeEmbeddingDimension] TRACE: START");
     try {
-      console.log("[ollama:probeEmbeddingDimension] TRACE: calling embedRequest for test");
       const embeddings = await this.embedRequest("test", model, { timeoutMs: 15000 });
-      console.log("[ollama:probeEmbeddingDimension] TRACE: embedRequest returned");
       const result = embeddings[0]?.length ?? null;
-      console.log(`[ollama:probeEmbeddingDimension] TRACE: dimension=${result}`);
-      console.log("[ollama:probeEmbeddingDimension] TRACE: END");
       return result;
     } catch (error) {
-      console.log(`[ollama:probeEmbeddingDimension] TRACE: error: ${error}`);
-      console.log("[ollama:probeEmbeddingDimension] TRACE: END (error)");
       return null;
     }
   }
@@ -235,7 +199,6 @@ export class OllamaService {
    * Create fallback capabilities when discovery fails
    */
   private fallbackCapabilities(model: string): ModelCapabilities {
-    console.log("[ollama:fallbackCapabilities] TRACE: START");
     const result = {
       model,
       embeddingDimension: MODEL_DEFAULTS.FALLBACK_EMBEDDING_DIMENSION,
@@ -243,7 +206,6 @@ export class OllamaService {
       architecture: null,
       discovered: false,
     };
-    console.log("[ollama:fallbackCapabilities] TRACE: END");
     return result;
   }
 
@@ -253,17 +215,12 @@ export class OllamaService {
    * Modern models like nomic use ~4 chars/token.
    */
   private getCharsPerToken(): number {
-    console.log("[ollama:getCharsPerToken] TRACE: START");
     const arch = this.capabilities?.architecture?.toLowerCase() ?? "";
     // BERT-based architectures use more aggressive tokenization
     if (arch.includes("bert")) {
-      console.log("[ollama:getCharsPerToken] TRACE: END (bert: 2.5)");
       return 2.5; // Conservative for WordPiece tokenization
     }
     // Default for other architectures
-    console.log(
-      `[ollama:getCharsPerToken] TRACE: END (default: ${MODEL_DEFAULTS.CHARS_PER_TOKEN})`,
-    );
     return MODEL_DEFAULTS.CHARS_PER_TOKEN;
   }
 
@@ -271,11 +228,6 @@ export class OllamaService {
    * Get current model capabilities (discovered or fallback)
    */
   getCapabilities(): ModelCapabilities | null {
-    console.log("[ollama:getCapabilities] TRACE: START");
-    console.log(
-      `[ollama:getCapabilities] TRACE: returning capabilities=${this.capabilities !== null}`,
-    );
-    console.log("[ollama:getCapabilities] TRACE: END");
     return this.capabilities;
   }
 
@@ -283,16 +235,12 @@ export class OllamaService {
    * Check if error is retryable (timeout or connection error).
    */
   private isRetryableError(message: string): { retryable: boolean; reason: string } {
-    console.log("[ollama:isRetryableError] TRACE: START");
     if (message.includes("timed out")) {
-      console.log("[ollama:isRetryableError] TRACE: END (timeout)");
       return { retryable: true, reason: "timeout" };
     }
     if (message.includes("fetch failed") || message.includes("ECONNREFUSED")) {
-      console.log("[ollama:isRetryableError] TRACE: END (connection)");
       return { retryable: true, reason: "connection" };
     }
-    console.log("[ollama:isRetryableError] TRACE: END (not retryable)");
     return { retryable: false, reason: "" };
   }
 
@@ -301,21 +249,16 @@ export class OllamaService {
    * @throws Error if service is not ready
    */
   private validateEmbedState(): string {
-    console.log("[ollama:validateEmbedState] TRACE: START");
     if (this.disposed) {
-      console.log("[ollama:validateEmbedState] TRACE: END (disposed)");
       throw new Error("Service is disposed");
     }
     if (!this.client) {
-      console.log("[ollama:validateEmbedState] TRACE: END (no client)");
       throw new Error("Ollama client not initialized");
     }
     const model = this.kernel.settings.ollama.embeddingModel;
     if (!model) {
-      console.log("[ollama:validateEmbedState] TRACE: END (no model)");
       throw new Error("No embedding model configured");
     }
-    console.log(`[ollama:validateEmbedState] TRACE: END (valid, model=${model})`);
     return model;
   }
 
@@ -326,29 +269,19 @@ export class OllamaService {
    * @throws Error if embedding fails after retries
    */
   async embed(text: string): Promise<EmbeddingResult> {
-    console.log("[ollama:embed] TRACE: START");
-    console.log(`[ollama:embed] TRACE: text.length=${text.length}`);
     const model = this.validateEmbedState();
     const MAX_RETRIES = 3;
     const TIMEOUT_MS = 60000; // 60s for search queries
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        console.log(`[ollama:embed] TRACE: attempt ${attempt + 1}/${MAX_RETRIES + 1}`);
-        console.log("[ollama:embed] TRACE: calling embedRequest");
         const embedding = (await this.embedRequest(text, model, { timeoutMs: TIMEOUT_MS }))[0];
-        console.log(
-          `[ollama:embed] TRACE: embedRequest returned, embedding.length=${embedding.length}`,
-        );
-        console.log("[ollama:embed] TRACE: END");
         return { embedding, model };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.log(`[ollama:embed] TRACE: error: ${message}`);
         const { retryable, reason } = this.isRetryableError(message);
 
         if (!retryable || attempt >= MAX_RETRIES) {
-          console.log("[ollama:embed] TRACE: END (throwing)");
           throw new Error(`Embedding failed: ${message}`);
         }
 
@@ -356,12 +289,10 @@ export class OllamaService {
         console.log(
           `[OllamaService] Embed failed (${reason}), retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`,
         );
-        console.log(`[ollama:embed] TRACE: waiting ${delay}ms before retry`);
         await new Promise((r) => setTimeout(r, delay));
       }
     }
 
-    console.log("[ollama:embed] TRACE: END (failed after retries)");
     throw new Error("Embedding failed after retries");
   }
 
@@ -373,16 +304,12 @@ export class OllamaService {
    * @returns Embedding result or null if unavailable
    */
   async tryEmbed(text: string): Promise<EmbeddingResult | null> {
-    console.log("[ollama:tryEmbed] TRACE: START");
-    console.log(`[ollama:tryEmbed] TRACE: text.length=${text.length}`);
     try {
       const result = await this.embed(text);
-      console.log("[ollama:tryEmbed] TRACE: END (success)");
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[OllamaService] tryEmbed failed: ${message}`);
-      console.log("[ollama:tryEmbed] TRACE: END (null)");
       return null;
     }
   }
@@ -392,26 +319,20 @@ export class OllamaService {
    * Uses discovered model capabilities to truncate appropriately.
    */
   async embedBatch(texts: string[]): Promise<BatchEmbeddingResult> {
-    console.log("[ollama:embedBatch] TRACE: START");
-    console.log(`[ollama:embedBatch] TRACE: texts.length=${texts.length}`);
     if (this.disposed) {
-      console.log("[ollama:embedBatch] TRACE: END (disposed)");
       throw new Error("Service is disposed");
     }
 
     if (!this.client) {
-      console.log("[ollama:embedBatch] TRACE: END (no client)");
       throw new Error("Ollama client not initialized");
     }
 
     const model = this.kernel.settings.ollama.embeddingModel;
     if (!model) {
-      console.log("[ollama:embedBatch] TRACE: END (no model)");
       throw new Error("No embedding model configured");
     }
 
     if (texts.length === 0) {
-      console.log("[ollama:embedBatch] TRACE: END (empty)");
       return { embeddings: [], model };
     }
 
@@ -421,9 +342,7 @@ export class OllamaService {
     // Convert to chars using architecture-aware ratio with 20% safety margin
     const charsPerToken = this.getCharsPerToken();
     const maxChars = Math.floor(contextTokens * charsPerToken * 0.8);
-    console.log(`[ollama:embedBatch] TRACE: maxChars=${maxChars}, contextTokens=${contextTokens}`);
 
-    console.log("[ollama:embedBatch] TRACE: truncating texts");
     const truncatedTexts = texts.map((text) => {
       if (text.length > maxChars) {
         // Truncate at word boundary if possible
@@ -434,15 +353,10 @@ export class OllamaService {
       return text;
     });
 
-    console.log("[ollama:embedBatch] TRACE: calling embedRequest");
     const embeddings = await this.embedRequest(truncatedTexts, model, {
       timeoutMs: 30000,
       contextTokens,
     });
-    console.log(
-      `[ollama:embedBatch] TRACE: embedRequest returned, embeddings.length=${embeddings.length}`,
-    );
-    console.log("[ollama:embedBatch] TRACE: END");
     return {
       embeddings,
       model,
@@ -456,12 +370,10 @@ export class OllamaService {
     controller: AbortController;
     cleanup: () => void;
   } {
-    console.log("[ollama:createChainedAbortController] TRACE: START");
     const controller = new AbortController();
     const onAbort = (): void => controller.abort();
 
     if (upstreamSignal?.aborted) {
-      console.log("[ollama:createChainedAbortController] TRACE: upstream already aborted");
       controller.abort();
     } else if (upstreamSignal) {
       upstreamSignal.addEventListener("abort", onAbort, { once: true });
@@ -471,7 +383,6 @@ export class OllamaService {
       upstreamSignal?.removeEventListener("abort", onAbort);
     };
 
-    console.log("[ollama:createChainedAbortController] TRACE: END");
     return { controller, cleanup };
   }
 
@@ -484,24 +395,21 @@ export class OllamaService {
     model: string,
     options: { timeoutMs: number; signal?: AbortSignal; contextTokens?: number },
   ): Promise<number[][]> {
-    console.log("[ollama:embedRequest] TRACE: START");
-    console.log(`[ollama:embedRequest] TRACE: model=${model}, timeoutMs=${options.timeoutMs}`);
+    const startTime = Date.now();
     const inputCount = Array.isArray(input) ? input.length : 1;
-    console.log(`[ollama:embedRequest] TRACE: inputCount=${inputCount}`);
+    console.log(
+      `[Ollama] embedRequest START: model=${model}, count=${inputCount}, timeout=${options.timeoutMs}ms`,
+    );
     if (!this.client) {
-      console.log("[ollama:embedRequest] TRACE: END (no client)");
       throw new Error("Ollama client not initialized");
     }
 
-    console.log("[ollama:embedRequest] TRACE: creating chained abort controller");
     const { controller, cleanup } = this.createChainedAbortController(options.signal);
     const timeoutId = setTimeout(() => {
-      console.log("[ollama:embedRequest] TRACE: timeout triggered, aborting");
       controller.abort();
     }, options.timeoutMs);
 
     try {
-      console.log("[ollama:embedRequest] TRACE: calling client.embed");
       // Use SDK's embed method
       const response = await this.client.embed({
         model,
@@ -510,18 +418,14 @@ export class OllamaService {
         keep_alive: `${this.kernel.settings.advanced.keepAliveMs}ms`,
         options: options.contextTokens ? { num_ctx: options.contextTokens } : undefined,
       });
-      console.log("[ollama:embedRequest] TRACE: client.embed returned");
 
       // SDK returns { embeddings: number[][] }
       if (!response?.embeddings || !Array.isArray(response.embeddings)) {
-        console.log("[ollama:embedRequest] TRACE: invalid response");
         throw new Error("Ollama SDK embed returned invalid response");
       }
 
-      console.log(
-        `[ollama:embedRequest] TRACE: response.embeddings.length=${response.embeddings.length}`,
-      );
-      console.log("[ollama:embedRequest] TRACE: END");
+      const duration = Date.now() - startTime;
+      console.log(`[Ollama] embedRequest END: ${duration}ms`);
       return response.embeddings;
     } catch (error) {
       throw this.wrapEmbedError(error, options.timeoutMs);
@@ -549,11 +453,8 @@ export class OllamaService {
    * Get the current model's embedding dimension (from discovered capabilities)
    */
   async getDimension(): Promise<number> {
-    console.log("[ollama:getDimension] TRACE: START");
     const result =
       this.capabilities?.embeddingDimension ?? MODEL_DEFAULTS.FALLBACK_EMBEDDING_DIMENSION;
-    console.log(`[ollama:getDimension] TRACE: returning ${result}`);
-    console.log("[ollama:getDimension] TRACE: END");
     return result;
   }
 
@@ -562,10 +463,8 @@ export class OllamaService {
    * Used for scoping vector store storage
    */
   getModelKey(): string {
-    console.log("[ollama:getModelKey] TRACE: START");
     const model = this.kernel.settings.ollama.embeddingModel;
     if (!model) {
-      console.log("[ollama:getModelKey] TRACE: END (no model, throwing)");
       throw new Error(
         "Cannot generate model key: no embedding model configured. " +
           "Please set an embedding model in Notient settings.",
@@ -574,8 +473,6 @@ export class OllamaService {
     const dim = this.capabilities?.embeddingDimension ?? "unknown";
     // Sanitize for filesystem
     const result = `${model.replace(/[^a-zA-Z0-9-]/g, "_")}_d${dim}`;
-    console.log(`[ollama:getModelKey] TRACE: returning ${result}`);
-    console.log("[ollama:getModelKey] TRACE: END");
     return result;
   }
 
@@ -583,10 +480,7 @@ export class OllamaService {
    * Check if service is ready
    */
   isReady(): boolean {
-    console.log("[ollama:isReady] TRACE: START");
     const result = !this.disposed && this.client !== null;
-    console.log(`[ollama:isReady] TRACE: returning ${result}`);
-    console.log("[ollama:isReady] TRACE: END");
     return result;
   }
 
@@ -594,9 +488,7 @@ export class OllamaService {
    * Dispose of the service
    */
   dispose(): void {
-    console.log("[ollama:dispose] TRACE: START");
     this.disposed = true;
     this.client = null;
-    console.log("[ollama:dispose] TRACE: END");
   }
 }
