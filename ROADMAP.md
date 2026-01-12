@@ -13,6 +13,13 @@
 > - **Related:** Links to issues, CONTINUE.md sections, or other docs
 
 ---
+## CEO TASKS (various priorities)
+
+- Fix header and footer
+- Add Obsidian skills
+- Design Notient Agent tools (edit note)
+- 
+
 
 ## High Priority (Future)
 
