@@ -331,6 +331,138 @@ export interface LinkSuggestionsOutput {
 }
 
 // =============================================================================
+// JSON Schemas for Structured Output (LM Studio API)
+// =============================================================================
+
+import type { JsonSchemaFormat } from "../llm/types";
+
+/**
+ * JSON Schema for ClassificationOutput
+ * Used with LM Studio structured output API
+ */
+export const CLASSIFICATION_SCHEMA: JsonSchemaFormat = {
+  type: "json_schema",
+  json_schema: {
+    name: "classification_output",
+    strict: true,
+    schema: {
+      type: "object",
+      properties: {
+        paraCategory: {
+          type: "string",
+          enum: ["project", "area", "resource", "archive", "inbox"],
+        },
+        confidence: { type: "number" },
+        reasoning: { type: "string" },
+        suggestedTags: {
+          type: "array",
+          items: { type: "string" },
+        },
+        suggestedFolder: { type: "string" },
+      },
+      required: ["paraCategory", "confidence", "reasoning", "suggestedTags"],
+      additionalProperties: false,
+    },
+  },
+};
+
+/**
+ * JSON Schema for LinkSuggestionsOutput
+ * Used with LM Studio structured output API
+ */
+export const LINK_SUGGESTIONS_SCHEMA: JsonSchemaFormat = {
+  type: "json_schema",
+  json_schema: {
+    name: "link_suggestions_output",
+    strict: true,
+    schema: {
+      type: "object",
+      properties: {
+        links: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              targetPath: { type: "string" },
+              targetTitle: { type: "string" },
+              relevanceScore: { type: "number" },
+              connectionType: {
+                type: "string",
+                enum: ["conceptual", "methodological", "problem-solution", "hierarchical"],
+              },
+              reason: { type: "string" },
+            },
+            required: ["targetPath", "targetTitle", "relevanceScore", "connectionType", "reason"],
+          },
+        },
+      },
+      required: ["links"],
+      additionalProperties: false,
+    },
+  },
+};
+
+/**
+ * JSON Schema for NoteEditOutput
+ * Used with LM Studio structured output API
+ */
+export const NOTE_EDIT_SCHEMA: JsonSchemaFormat = {
+  type: "json_schema",
+  json_schema: {
+    name: "note_edit_output",
+    strict: true,
+    schema: {
+      type: "object",
+      properties: {
+        actions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: {
+                type: "string",
+                enum: [
+                  "frontmatter_set",
+                  "frontmatter_add_tags",
+                  "append_section",
+                  "append_related_links",
+                  "move_note",
+                ],
+              },
+              title: { type: "string" },
+              reason: { type: "string" },
+              target: { type: "string" },
+              payload: { type: "object" },
+            },
+            required: ["type", "title", "reason", "target", "payload"],
+          },
+        },
+      },
+      required: ["actions"],
+      additionalProperties: false,
+    },
+  },
+};
+
+/**
+ * Get the JSON schema for a structured output agent
+ */
+export function getAgentSchema(agentType: ExpertAgentType): JsonSchemaFormat | null {
+  switch (agentType) {
+    case "classifier":
+      return CLASSIFICATION_SCHEMA;
+    case "connection":
+      return LINK_SUGGESTIONS_SCHEMA;
+    case "note-editor":
+      return NOTE_EDIT_SCHEMA;
+    case "context-builder":
+      return null; // Internal agent, no structured output
+    default:
+      return null;
+  }
+}
+
+// =============================================================================
 // Agent Events (Streaming)
 // =============================================================================
 
@@ -391,10 +523,10 @@ export interface AgentSession {
  * Task routing decision
  */
 export interface RoutingDecision {
-  /** Primary agent to handle the task */
-  primaryAgent: AgentType;
+  /** Primary expert agent to handle the task */
+  primaryAgent: ExpertAgentType;
   /** Context agents to run first (e.g., context-builder) */
-  preflightAgents: AgentType[];
+  preflightAgents: ExpertAgentType[];
   /** Reason for routing decision */
   reason: string;
 }

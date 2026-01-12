@@ -1,18 +1,12 @@
 /**
  * Thinking Parser
  *
- * Parses thinking/reasoning tokens from LLM responses.
- * Supports:
- * - <think>...</think> inline tags (DeepSeek R1, Qwen3)
- * - Configurable start/end tags (LM Studio v0.3.10+)
- * - Streaming-aware parsing (handles partial tags)
+ * Extracts <think>...</think> blocks from LLM responses.
+ * Streaming-aware: buffers only when a partial tag is detected at the end.
  */
 
 import type { ThinkingConfig, ThinkingParseResult } from "./types";
 
-/**
- * Default thinking configuration
- */
 export const DEFAULT_THINKING_CONFIG: ThinkingConfig = {
   startTag: "<think>",
   endTag: "</think>",
@@ -20,7 +14,11 @@ export const DEFAULT_THINKING_CONFIG: ThinkingConfig = {
 };
 
 /**
- * ThinkingParser - Extracts thinking/reasoning content from LLM responses
+ * Streaming parser that extracts thinking blocks from LLM output.
+ *
+ * Design: Only buffers content when we see a potential partial tag at the
+ * very end of the stream. This prevents mangling JSON or other content
+ * that happens to contain `<` characters.
  */
 export class ThinkingParser {
   private config: ThinkingConfig;
@@ -34,64 +32,8 @@ export class ThinkingParser {
     this.config = { ...DEFAULT_THINKING_CONFIG, ...config };
   }
 
-  /** Result of processing buffer while inside a thinking block */
-  private processThinkingBlock(): {
-    thinkingChunk: string;
-    thinkingJustEnded: boolean;
-    shouldBreak: boolean;
-  } {
-    const endIndex = this.buffer.indexOf(this.config.endTag);
-
-    if (endIndex !== -1) {
-      const thinking = this.buffer.slice(0, endIndex);
-      this.thinkingContent += thinking;
-      this.buffer = this.buffer.slice(endIndex + this.config.endTag.length);
-      this.inThinkingBlock = false;
-      return { thinkingChunk: thinking, thinkingJustEnded: true, shouldBreak: false };
-    }
-
-    if (this.mightContainPartialTag(this.buffer, this.config.endTag)) {
-      return { thinkingChunk: "", thinkingJustEnded: false, shouldBreak: true };
-    }
-
-    const thinking = this.buffer;
-    this.thinkingContent += thinking;
-    this.buffer = "";
-    return { thinkingChunk: thinking, thinkingJustEnded: false, shouldBreak: false };
-  }
-
-  /** Result of processing buffer while outside a thinking block */
-  private processContentBlock(): {
-    contentChunk: string;
-    thinkingJustStarted: boolean;
-    shouldBreak: boolean;
-  } {
-    const startIndex = this.buffer.indexOf(this.config.startTag);
-
-    if (startIndex !== -1) {
-      const beforeThinking = this.buffer.slice(0, startIndex);
-      this.mainContent += beforeThinking;
-      this.buffer = this.buffer.slice(startIndex + this.config.startTag.length);
-      this.inThinkingBlock = true;
-      this.thinkingStartTime = Date.now();
-      return { contentChunk: beforeThinking, thinkingJustStarted: true, shouldBreak: false };
-    }
-
-    if (this.mightContainPartialTag(this.buffer, this.config.startTag)) {
-      return { contentChunk: "", thinkingJustStarted: false, shouldBreak: true };
-    }
-
-    const content = this.buffer;
-    this.mainContent += content;
-    this.buffer = "";
-    return { contentChunk: content, thinkingJustStarted: false, shouldBreak: false };
-  }
-
   /**
-   * Process a chunk of streamed content
-   * Call this for each chunk received from the LLM
-   *
-   * @returns Object containing new thinking content, new main content, and state
+   * Process a chunk of streamed content.
    */
   processChunk(chunk: string): {
     thinkingChunk: string;
@@ -108,17 +50,44 @@ export class ThinkingParser {
     let thinkingJustEnded = false;
 
     while (this.buffer.length > 0) {
-      if (this.inThinkingBlock) {
-        const result = this.processThinkingBlock();
-        thinkingChunk += result.thinkingChunk;
-        thinkingJustEnded = thinkingJustEnded || result.thinkingJustEnded;
-        if (result.shouldBreak) break;
-      } else {
-        const result = this.processContentBlock();
-        contentChunk += result.contentChunk;
-        thinkingJustStarted = thinkingJustStarted || result.thinkingJustStarted;
-        if (result.shouldBreak) break;
+      const targetTag = this.inThinkingBlock ? this.config.endTag : this.config.startTag;
+      const tagIndex = this.buffer.indexOf(targetTag);
+
+      if (tagIndex !== -1) {
+        // Full tag found - process content before it
+        const beforeTag = this.buffer.slice(0, tagIndex);
+        this.buffer = this.buffer.slice(tagIndex + targetTag.length);
+
+        if (this.inThinkingBlock) {
+          this.thinkingContent += beforeTag;
+          thinkingChunk += beforeTag;
+          this.inThinkingBlock = false;
+          thinkingJustEnded = true;
+        } else {
+          this.mainContent += beforeTag;
+          contentChunk += beforeTag;
+          this.inThinkingBlock = true;
+          this.thinkingStartTime = Date.now();
+          thinkingJustStarted = true;
+        }
+        continue;
       }
+
+      // No full tag - check for partial tag at end only
+      const holdLength = this.partialTagLength(this.buffer, targetTag);
+      const safeContent = this.buffer.slice(0, this.buffer.length - holdLength);
+
+      if (safeContent.length > 0) {
+        if (this.inThinkingBlock) {
+          this.thinkingContent += safeContent;
+          thinkingChunk += safeContent;
+        } else {
+          this.mainContent += safeContent;
+          contentChunk += safeContent;
+        }
+        this.buffer = this.buffer.slice(safeContent.length);
+      }
+      break;
     }
 
     return {
@@ -131,26 +100,25 @@ export class ThinkingParser {
   }
 
   /**
-   * Check if the buffer might contain a partial tag at the end
+   * Returns how many characters at the end of `text` could be a partial `tag`.
+   * Only matches if the suffix starts with '<' (first char of tag).
    */
-  private mightContainPartialTag(buffer: string, tag: string): boolean {
-    // Check if any suffix of the buffer is a prefix of the tag
-    const maxCheck = Math.min(buffer.length, tag.length - 1);
-    for (let i = 1; i <= maxCheck; i++) {
-      const suffix = buffer.slice(-i);
+  private partialTagLength(text: string, tag: string): number {
+    const maxCheck = Math.min(text.length, tag.length - 1);
+    for (let length = maxCheck; length >= 1; length--) {
+      const suffix = text.slice(-length);
       if (tag.startsWith(suffix)) {
-        return true;
+        return length;
       }
     }
-    return false;
+    return 0;
   }
 
   /**
-   * Finalize parsing (call when stream ends)
-   * Flushes any remaining buffer content
+   * Finalize parsing (call when stream ends).
+   * Flushes any remaining buffer content.
    */
   finalize(): ThinkingParseResult {
-    // Flush remaining buffer as content (even if we were in thinking block)
     if (this.buffer.length > 0) {
       if (this.inThinkingBlock) {
         this.thinkingContent += this.buffer;
@@ -167,38 +135,23 @@ export class ThinkingParser {
     };
   }
 
-  /**
-   * Get current thinking duration (if in thinking block)
-   */
   getThinkingDurationMs(): number {
     if (this.thinkingStartTime === 0) return 0;
     return Date.now() - this.thinkingStartTime;
   }
 
-  /**
-   * Get accumulated thinking content so far
-   */
   getThinkingContent(): string {
     return this.thinkingContent;
   }
 
-  /**
-   * Get accumulated main content so far
-   */
   getMainContent(): string {
     return this.mainContent;
   }
 
-  /**
-   * Check if currently in a thinking block
-   */
   isInThinkingBlock(): boolean {
     return this.inThinkingBlock;
   }
 
-  /**
-   * Reset parser state for new message
-   */
   reset(): void {
     this.buffer = "";
     this.thinkingContent = "";

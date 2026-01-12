@@ -14,6 +14,33 @@ export interface ChatMessage {
 }
 
 /**
+ * JSON Schema for structured output
+ * Used to force LLM to output valid JSON matching a schema
+ */
+export interface JsonSchemaFormat {
+  type: "json_schema";
+  json_schema: {
+    /** Name of the schema (for debugging) */
+    name: string;
+    /** Whether to enforce strict validation */
+    strict?: boolean;
+    /** The JSON schema definition */
+    schema: {
+      type: "object" | "array";
+      properties?: Record<string, unknown>;
+      items?: unknown;
+      required?: string[];
+      additionalProperties?: boolean;
+    };
+  };
+}
+
+/**
+ * Response format options
+ */
+export type ResponseFormat = JsonSchemaFormat | { type: "json_object" } | { type: "text" };
+
+/**
  * Options for completion requests
  */
 export interface CompletionOptions {
@@ -23,6 +50,8 @@ export interface CompletionOptions {
   maxTokens?: number;
   /** Stop generation at these sequences */
   stopSequences?: string[];
+  /** Force structured output format (LM Studio structured output API) */
+  responseFormat?: ResponseFormat;
 }
 
 /**

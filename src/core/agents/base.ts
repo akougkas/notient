@@ -13,9 +13,10 @@ import type {
   AgentOutput,
   AgentType,
   DelegationRequest,
+  ExpertAgentType,
   NoteContext,
 } from "./types";
-import { AGENT_CONFIGS } from "./types";
+import { AGENT_CONFIGS, getAgentSchema } from "./types";
 
 /**
  * Abstract base class for all agents
@@ -70,6 +71,7 @@ export abstract class BaseAgent {
   /**
    * Build LLM completion options based on agent config
    * Adjusts temperature for thinking models (DeepSeek, Falcon H1R, Qwen QwQ)
+   * Adds structured output schema for expert agents
    */
   protected getCompletionOptions(): CompletionOptions {
     let temperature = this.config.temperature;
@@ -94,10 +96,23 @@ export abstract class BaseAgent {
       );
     }
 
-    return {
+    const options: CompletionOptions = {
       temperature,
       maxTokens: this.config.maxTokens,
     };
+
+    // Add structured output schema for expert agents (forces valid JSON)
+    if (this.config.outputKind === "structured" && !this.config.isUI) {
+      const schema = getAgentSchema(this.config.type as ExpertAgentType);
+      if (schema) {
+        options.responseFormat = schema;
+        console.log(
+          `[${this.config.name}] Using structured output schema: ${schema.json_schema.name}`,
+        );
+      }
+    }
+
+    return options;
   }
 
   /**

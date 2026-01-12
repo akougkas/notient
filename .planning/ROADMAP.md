@@ -14,8 +14,8 @@ None (internal Obsidian plugin patterns)
 - Integer phases (0, 1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 0: Foundation Repair** — Fix critical performance blockers (EMERGENCY)
-- [ ] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions (2/3 plans)
+- [ ] **Phase 0: Foundation Repair** — Fix critical performance blockers (EMERGENCY) — **BLOCKED**
+- [x] **Phase 1: Agent Architecture** — Consolidate to 12-agent model, rewire Quick Actions (3/3 plans) — **COMPLETE**
 - [ ] **Phase 2: Insights Stream** — Wire agent results + proactive suggestions
 - [ ] **Phase 3: Agent Command Center** — Connect AgentStreamsView to services
 - [ ] **Phase 4: Chat Enhancement** — Contextual chips, inline agent results
@@ -164,12 +164,19 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 0. Foundation Repair | 1/TBD | **IN PROGRESS** | - |
-| 1. Agent Architecture | 2/3 | Blocked by Phase 0 | - |
-| 2. Insights Stream | 0/TBD | Not started | - |
-| 3. Agent Command Center | 0/TBD | Not started | - |
-| 4. Chat Enhancement | 0/TBD | Not started | - |
-| 5. Search Enhancement | 0/TBD | Not started | - |
-| 6. Reliability Hardening | 0/TBD | Not started | - |
-| 7. Settings Refactor | 0/TBD | Not started | - |
-| 8. Personal Validation | 0/TBD | Not started | - |
+| 0. Foundation Repair | 2/3 | **BLOCKED** (UAT-003) | - |
+| 1. Agent Architecture | 3/3 | **COMPLETE** | 2026-01-11 |
+| 2. Insights Stream | 0/TBD | Blocked by Phase 0 | - |
+| 3. Agent Command Center | 0/TBD | Blocked by Phase 0 | - |
+| 4. Chat Enhancement | 0/TBD | Blocked by Phase 0 | - |
+| 5. Search Enhancement | 0/TBD | Blocked by Phase 0 | - |
+| 6. Reliability Hardening | 0/TBD | Blocked by Phase 0 | - |
+| 7. Settings Refactor | 0/TBD | Blocked by Phase 0 | - |
+| 8. Personal Validation | 0/TBD | Blocked by Phase 0 | - |
+
+**Phase 0 Detail:**
+- 00-01-PLAN: Async loading ✓ COMPLETE
+- 00-01-FIX-PLAN: HNSW batching ✓ EXECUTED (needs SUMMARY)
+- 00-02-PLAN: Validation ❌ BLOCKED by UAT-003
+
+**Blocker:** UAT-003 - UI crash after agent trigger. Decision: SDK migration.

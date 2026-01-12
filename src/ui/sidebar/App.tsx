@@ -62,12 +62,7 @@ import {
   searchQuery,
   searchResults,
 } from "./state";
-import {
-  handleChatAction,
-  handleRichChatSend,
-  prefillChatAndSwitch,
-  triggerAgenticAction,
-} from "./state/appHandlers";
+import { handleChatAction, handleRichChatSend, triggerAgenticAction } from "./state/appHandlers";
 
 export function App() {
   return (
@@ -144,13 +139,6 @@ function AppContent() {
     [taskQueue, noteVitals],
   );
 
-  const onPrefillChatAndSwitch = useCallback(
-    (prompt: string) => {
-      prefillChatAndSwitch({ taskQueue, noteVitals }, prompt);
-    },
-    [taskQueue, noteVitals],
-  );
-
   const onRichChatSend = useCallback(
     async (message: string) => {
       await handleRichChatSend({ chatService, noteVitals, obsidian: kernel.obsidian }, message);
@@ -194,10 +182,10 @@ function AppContent() {
       : undefined;
     return createNoteQuickActions(
       vitals?.title || "this note",
-      { triggerAgent: onTriggerAgenticAction, sendToChat: onPrefillChatAndSwitch },
+      { triggerAgent: onTriggerAgenticAction },
       noteState,
     );
-  }, [noteVitals.value, onTriggerAgenticAction, onPrefillChatAndSwitch]);
+  }, [noteVitals.value, onTriggerAgenticAction]);
 
   // Modal handlers
   const openModelSelector = useCallback(() => {

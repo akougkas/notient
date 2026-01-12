@@ -312,19 +312,22 @@ function handleTaskCompleted(task: TaskData): void {
     return;
   }
 
-  const resultData = buildResultData(task, agent);
-  updateAgentAsCompleted(task.id, resultData);
-  agentStatus.value = {
-    ...agentStatus.value,
-    runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-  };
+  // Defer signal updates to next tick to prevent synchronous cascade/freeze
+  setTimeout(() => {
+    const resultData = buildResultData(task, agent);
+    updateAgentAsCompleted(task.id, resultData);
+    agentStatus.value = {
+      ...agentStatus.value,
+      runningCount: Math.max(0, agentStatus.value.runningCount - 1),
+    };
 
-  if (task.result?.actions?.length) {
-    addPendingActions(task.result.actions, agent.targetNote);
-  }
+    if (task.result?.actions?.length) {
+      addPendingActions(task.result.actions, agent.targetNote);
+    }
 
-  addCompletionInsight(task.taskType || "agent", resultData.insightSummary || "");
-  new Notice(`${task.taskType || "Agent"} completed`);
+    addCompletionInsight(task.taskType || "agent", resultData.insightSummary || "");
+    new Notice(`${task.taskType || "Agent"} completed`);
+  }, 0);
 }
 
 function buildResultData(task: TaskData, agent: { startedAt?: Date }): AgentResultData {

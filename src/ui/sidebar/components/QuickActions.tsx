@@ -43,8 +43,6 @@ export interface NoteState {
 export interface QuickActionCallbacks {
   /** Trigger expert agent (shows in Agent Streams) */
   triggerAgent: (prompt: string, agentType: "note-editor" | "classifier" | "connection") => void;
-  /** Send to conversational chat (for contextual actions that need chat) */
-  sendToChat: (prompt: string) => void;
 }
 
 // =============================================================================
@@ -68,6 +66,7 @@ const PINNED_ACTIONS = [
 /**
  * Available contextual actions pool.
  * getContextualActions() selects 3 based on note state.
+ * All actions are agent-type only (no chat actions).
  */
 interface ContextualActionDef {
   id: string;
@@ -78,10 +77,8 @@ interface ContextualActionDef {
   priority: number;
   /** Condition to check if this action is relevant */
   condition: (state: NoteState) => boolean;
-  /** Action type: agent or chat */
-  type: "agent" | "chat";
-  /** Agent type (if type is "agent") */
-  agentType?: "note-editor" | "classifier" | "connection";
+  /** Agent type to invoke */
+  agentType: "note-editor" | "classifier" | "connection";
   /** Prompt builder */
   buildPrompt: (noteTitle: string) => string;
 }
@@ -94,7 +91,6 @@ const CONTEXTUAL_ACTIONS: ContextualActionDef[] = [
     description: "Find related notes",
     priority: 1,
     condition: (state) => state.linkCount === 0,
-    type: "agent",
     agentType: "connection",
     buildPrompt: (title) => `Find notes semantically related to "${title}" and explain connections`,
   },
@@ -105,51 +101,51 @@ const CONTEXTUAL_ACTIONS: ContextualActionDef[] = [
     description: "Expand short note",
     priority: 2,
     condition: (state) => state.wordCount < 200,
-    type: "agent",
     agentType: "note-editor",
     buildPrompt: (title) => `Expand "${title}" with more detail, context, and examples`,
   },
   {
-    id: "extract-tasks",
-    icon: "check-square",
-    label: "Tasks",
-    description: "Extract action items",
+    id: "suggest-tags",
+    icon: "tags",
+    label: "Tags",
+    description: "Suggest relevant tags",
     priority: 3,
-    condition: (state) => state.hasCheckboxes,
-    type: "chat",
-    buildPrompt: (title) => `Extract any actionable items or tasks mentioned in "${title}"`,
+    condition: (state) => state.linkCount > 0,
+    agentType: "classifier",
+    buildPrompt: (title) =>
+      `Analyze "${title}" and suggest relevant tags based on content and context`,
   },
   {
-    id: "summarize",
-    icon: "file-text",
-    label: "Summary",
-    description: "Generate summary",
-    priority: 10,
-    condition: () => true, // Always available as fallback
-    type: "chat",
-    buildPrompt: (title) => `Create a concise summary of "${title}" that captures the key points`,
-  },
-  {
-    id: "link-ideas",
+    id: "link-suggestions",
     icon: "git-branch",
     label: "Link",
     description: "Suggest links to add",
-    priority: 11,
-    condition: () => true, // Always available as fallback
-    type: "agent",
+    priority: 10,
+    condition: () => true, // Fallback
     agentType: "connection",
     buildPrompt: (title) =>
       `Suggest internal wiki-links to add to "${title}" that connect it to related notes`,
   },
   {
-    id: "brainstorm",
-    icon: "lightbulb",
-    label: "Ideas",
-    description: "Brainstorm related ideas",
+    id: "structure",
+    icon: "list",
+    label: "Structure",
+    description: "Improve note structure",
+    priority: 11,
+    condition: () => true, // Fallback
+    agentType: "note-editor",
+    buildPrompt: (title) =>
+      `Analyze the structure of "${title}" and suggest improvements to headings, sections, and organization`,
+  },
+  {
+    id: "categorize",
+    icon: "folder",
+    label: "Categorize",
+    description: "Suggest folder placement",
     priority: 12,
-    condition: () => true, // Always available as fallback
-    type: "chat",
-    buildPrompt: (title) => `Brainstorm ideas and questions related to "${title}"`,
+    condition: () => true, // Fallback
+    agentType: "classifier",
+    buildPrompt: (title) => `Suggest the best folder location for "${title}" based on its content`,
   },
 ];
 
@@ -189,13 +185,14 @@ function getContextualActions(noteState?: NoteState): ContextualActionDef[] {
 /**
  * Create quick actions for a note.
  * Returns 6 actions: 3 pinned (always visible) + 3 contextual (smart-filtered).
+ * All actions route to expert agents only - no chat path.
  */
 export function createNoteQuickActions(
   noteTitle: string,
   callbacks: QuickActionCallbacks,
   noteState?: NoteState,
 ): QuickAction[] {
-  const { triggerAgent, sendToChat } = callbacks;
+  const { triggerAgent } = callbacks;
 
   // Build pinned actions (always first 3)
   const pinnedActions: QuickAction[] = PINNED_ACTIONS.map((action) => ({
@@ -214,7 +211,7 @@ export function createNoteQuickActions(
     },
   }));
 
-  // Build contextual actions (next 3)
+  // Build contextual actions (next 3) - all agent-type
   const contextual = getContextualActions(noteState);
   const contextualActions: QuickAction[] = contextual.map((action) => ({
     id: action.id,
@@ -223,12 +220,7 @@ export function createNoteQuickActions(
     primary: false,
     description: action.description,
     onClick: () => {
-      const prompt = action.buildPrompt(noteTitle);
-      if (action.type === "agent" && action.agentType) {
-        triggerAgent(prompt, action.agentType);
-      } else {
-        sendToChat(prompt);
-      }
+      triggerAgent(action.buildPrompt(noteTitle), action.agentType);
     },
   }));
 

@@ -4,22 +4,17 @@
  * White House Model:
  * - President = User (decision maker)
  * - Chief of Staff = This class (coordinator, dispatcher, router, aggregator)
- * - Department Heads = Specialized agents
+ * - Department Heads = Specialized expert agents
  *
  * Responsibilities:
- * 1. Route tasks to appropriate agents
+ * 1. Route tasks to appropriate expert agents
  * 2. Build context before agent execution
- * 3. Handle agent-to-agent delegation
- * 4. Aggregate results from multiple agents
- * 5. Manage agent sessions for awareness
+ * 3. Aggregate results from multiple agents
+ * 4. Manage agent sessions for awareness
  *
- * UI vs Expert Agent Distinction:
- * Chat is the UI layer — a conversational interface that delegates to expert agents.
- * It is NOT a 13th agent that gets routed to. When a request is identified as a
- * "UI request" (no explicit command, no strong intent signals), it flows through
- * Chat for conversational handling without heavyweight context-builder preflight.
- * Expert agents (note-editor, classifier, connection, etc.) are the specialists
- * that handle structured, domain-specific work.
+ * NOTE: Chat is NOT routed through ChiefOfStaff. The Chat UI uses ChatService
+ * directly. ChiefOfStaff only routes to expert agents (note-editor, classifier,
+ * connection, context-builder) via explicit commands or strong intent signals.
  */
 
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
@@ -29,7 +24,6 @@ import type { VaultContextBuilder } from "../context/vaultContextBuilder";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import { isInternalOutput, isStructuredOutput } from "./base";
-import { ChatAgent } from "./chatAgent";
 import { ClassifierAgent } from "./classifierAgent";
 import { ConnectionAgent } from "./connectionAgent";
 import { ContextBuilderAgent } from "./contextBuilderAgent";
@@ -39,10 +33,8 @@ import type {
   AgentEvent,
   AgentOutput,
   AgentSession,
-  AgentType,
   AggregatedResult,
-  DelegatedResult,
-  DelegationRequest,
+  ExpertAgentType,
   InternalOutput,
   NoteContext,
   PARAContext,
@@ -70,8 +62,8 @@ export interface ChiefOfStaffTask {
   noteTitle: string;
   /** Chat history for context */
   chatHistory: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-  /** Optional explicit agent target (bypasses routing) */
-  targetAgent?: AgentType;
+  /** Optional explicit expert agent target (bypasses routing) */
+  targetAgent?: ExpertAgentType;
   /** Optional explicit workflow target (for slash commands) */
   targetWorkflow?: WorkflowAgentType;
 }
@@ -80,8 +72,7 @@ export interface ChiefOfStaffTask {
  * Chief of Staff - Central agent coordinator
  */
 export class ChiefOfStaff {
-  // Core Agents (Department Heads)
-  private chatAgent: ChatAgent;
+  // Expert Agents (Department Heads)
   private noteEditorAgent: NoteEditorAgent;
   private classifierAgent: ClassifierAgent;
   private connectionAgent: ConnectionAgent;
@@ -109,8 +100,7 @@ export class ChiefOfStaff {
     this.obsidian = obsidian;
     this.profile = profile;
 
-    // Initialize core agents (Department Heads) with profile for identity system
-    this.chatAgent = new ChatAgent(llm, profile);
+    // Initialize expert agents (Department Heads) with profile for identity system
     this.noteEditorAgent = new NoteEditorAgent(llm, profile);
     this.classifierAgent = new ClassifierAgent(llm, profile);
     this.connectionAgent = new ConnectionAgent(llm, profile);
@@ -120,9 +110,6 @@ export class ChiefOfStaff {
       vaultContextBuilder,
       profile,
     );
-
-    // Wire up delegation handler
-    this.chatAgent.setDelegationHandler(this.handleDelegation.bind(this));
   }
 
   /**
@@ -331,8 +318,7 @@ export class ChiefOfStaff {
   setProfile(profile: UserProfile | undefined): void {
     this.profile = profile;
 
-    // Propagate to core agents for identity system
-    this.chatAgent.setProfile(profile);
+    // Propagate to expert agents for identity system
     this.noteEditorAgent.setProfile(profile);
     this.classifierAgent.setProfile(profile);
     this.connectionAgent.setProfile(profile);
@@ -351,8 +337,7 @@ export class ChiefOfStaff {
   updateLLM(llm: LLMProvider): void {
     this.llm = llm;
 
-    // Recreate core agents with new LLM and preserved profile
-    this.chatAgent = new ChatAgent(llm, this.profile);
+    // Recreate expert agents with new LLM and preserved profile
     this.noteEditorAgent = new NoteEditorAgent(llm, this.profile);
     this.classifierAgent = new ClassifierAgent(llm, this.profile);
     this.connectionAgent = new ConnectionAgent(llm, this.profile);
@@ -367,9 +352,6 @@ export class ChiefOfStaff {
 
     // Clear workflow agents (will be recreated on demand with new LLM)
     this.workflowAgents.clear();
-
-    // Re-wire delegation
-    this.chatAgent.setDelegationHandler(this.handleDelegation.bind(this));
   }
 
   /**
@@ -391,89 +373,16 @@ export class ChiefOfStaff {
   // ===========================================================================
 
   /**
-   * Check if this is a simple UI request that doesn't need expert routing.
-   *
-   * UI requests are handled efficiently by Chat without heavyweight preflight:
-   * - No explicit /command
-   * - No strong intent signals (edit < 0.5, classify < 0.5, link < 0.5)
-   * - Target is "chat" or undefined
-   *
-   * @returns true if this should be handled as a UI request (simple conversational)
-   */
-  private isUIRequest(task: ChiefOfStaffTask): boolean {
-    // Explicit expert target means NOT a UI request
-    if (task.targetAgent && task.targetAgent !== "chat") {
-      return false;
-    }
-
-    // Explicit workflow target means NOT a UI request
-    if (task.targetWorkflow) {
-      return false;
-    }
-
-    const query = task.query.toLowerCase();
-
-    // Slash commands target specific agents, not UI
-    if (query.startsWith("/")) {
-      return false;
-    }
-
-    // Check intent signals
-    const intents = this.detectIntents(query);
-    const hasStrongIntent = intents.edit >= 0.5 || intents.classify >= 0.5 || intents.link >= 0.5;
-
-    return !hasStrongIntent;
-  }
-
-  /**
-   * Check if a UI request is simple enough to skip context-builder preflight.
-   *
-   * Simple queries that can be answered conversationally without vault search:
-   * - Short queries (< 20 words)
-   * - No question marks (not a factual question needing vault lookup)
-   * - No request keywords (not asking for specific information)
-   */
-  private isSimpleUIRequest(task: ChiefOfStaffTask): boolean {
-    const query = task.query;
-    const wordCount = query.split(/\s+/).length;
-
-    // Long queries likely need context
-    if (wordCount >= 20) {
-      return false;
-    }
-
-    // Questions likely need vault search
-    if (query.includes("?")) {
-      return false;
-    }
-
-    // Request keywords suggest needing context
-    const requestKeywords = [
-      "find",
-      "search",
-      "show",
-      "what",
-      "where",
-      "when",
-      "how",
-      "why",
-      "tell",
-    ];
-    const queryLower = query.toLowerCase();
-    const hasRequestKeyword = requestKeywords.some((keyword) => queryLower.includes(keyword));
-
-    return !hasRequestKeyword;
-  }
-
-  /**
-   * Determine which agent should handle this task
+   * Determine which expert agent should handle this task.
+   * Only routes to expert agents. Throws if no expert agent matches.
    */
   private determineRouting(task: ChiefOfStaffTask): RoutingDecision {
     // Explicit target takes precedence
     if (task.targetAgent) {
+      const needsContext = task.targetAgent !== "classifier";
       return {
         primaryAgent: task.targetAgent,
-        preflightAgents: task.targetAgent === "chat" ? ["context-builder"] : [],
+        preflightAgents: needsContext ? ["context-builder"] : [],
         reason: `Explicit target: ${task.targetAgent}`,
       };
     }
@@ -514,25 +423,11 @@ export class ChiefOfStaff {
       }
     }
 
-    // Check if this is a UI request (conversational, no strong intent)
-    if (this.isUIRequest(task)) {
-      // For simple UI requests, skip context-builder for efficiency
-      const skipPreflight = this.isSimpleUIRequest(task);
-
-      return {
-        primaryAgent: "chat",
-        preflightAgents: skipPreflight ? [] : ["context-builder"],
-        reason: skipPreflight
-          ? "UI handling - simple conversational (no preflight)"
-          : "UI handling - conversational with context",
-      };
-    }
-
     // Intent detection from natural language
     const intents = this.detectIntents(query);
 
     // Strong edit signals
-    if (intents.edit > 0.7) {
+    if (intents.edit >= 0.5) {
       return {
         primaryAgent: "note-editor",
         preflightAgents: ["context-builder"],
@@ -541,7 +436,7 @@ export class ChiefOfStaff {
     }
 
     // Strong classification signals
-    if (intents.classify > 0.7) {
+    if (intents.classify >= 0.5) {
       return {
         primaryAgent: "classifier",
         preflightAgents: [],
@@ -550,7 +445,7 @@ export class ChiefOfStaff {
     }
 
     // Strong linking signals
-    if (intents.link > 0.7) {
+    if (intents.link >= 0.5) {
       return {
         primaryAgent: "connection",
         preflightAgents: ["context-builder"],
@@ -558,12 +453,10 @@ export class ChiefOfStaff {
       };
     }
 
-    // Default: chat with context (has some intent but not strong enough for expert)
-    return {
-      primaryAgent: "chat",
-      preflightAgents: ["context-builder"],
-      reason: "Default conversational routing with context",
-    };
+    // No expert agent matches - this should not be routed through ChiefOfStaff
+    throw new Error(
+      `No expert agent matched for query: "${task.query.slice(0, 50)}...". Conversational requests should use ChatService directly, not ChiefOfStaff.`,
+    );
   }
 
   /**
@@ -647,76 +540,6 @@ export class ChiefOfStaff {
     for await (const event of workflowAgent.execute(fullContext, signal)) {
       yield event;
     }
-  }
-
-  // ===========================================================================
-  // Delegation Protocol
-  // ===========================================================================
-
-  /**
-   * Handle delegation requests from agents
-   */
-  private async handleDelegation(request: DelegationRequest): Promise<DelegatedResult> {
-    const startTime = Date.now();
-
-    if (!this.currentSession) {
-      throw new Error("No active session for delegation");
-    }
-
-    console.log(`[ChiefOfStaff] Delegation: chat -> ${request.targetAgent}`);
-
-    // Get the target agent
-    const targetAgent = this.getAgent(request.targetAgent);
-    if (!targetAgent) {
-      throw new Error(`Unknown agent: ${request.targetAgent}`);
-    }
-
-    // Build context for delegated agent
-    const lastContext = this.currentSession.completedAgents.get("context-builder") as
-      | InternalOutput
-      | undefined;
-
-    // Get note context from previous execution or load fresh
-    const noteContext = await this.loadNoteContext(
-      this.currentSession.notePath,
-      this.currentSession.notePath.split("/").pop()?.replace(".md", "") || "Note",
-    );
-
-    if (!noteContext) {
-      throw new Error("Failed to load note context for delegation");
-    }
-
-    const delegatedContext: AgentContext = {
-      currentNote: noteContext,
-      query: request.instruction,
-      chatHistory: [],
-      relatedNotes: lastContext?.relatedNotes,
-      contextSummary: lastContext?.contextSummary,
-      activeAgents: Array.from(this.currentSession.activeAgents),
-      delegationChain: ["chat"],
-      para: this.getPARAContext(),
-    };
-
-    // Execute delegated agent
-    let output: StructuredOutput | null = null;
-
-    for await (const event of targetAgent.execute(delegatedContext)) {
-      if (event.type === "complete" && isStructuredOutput(event.output)) {
-        output = event.output;
-      }
-    }
-
-    if (!output) {
-      throw new Error(`Delegation to ${request.targetAgent} produced no output`);
-    }
-
-    const durationMs = Date.now() - startTime;
-
-    return {
-      agentType: request.targetAgent,
-      output,
-      durationMs,
-    };
   }
 
   // ===========================================================================
@@ -856,14 +679,12 @@ export class ChiefOfStaff {
   }
 
   /**
-   * Get agent instance by type
+   * Get expert agent instance by type
    */
   private getAgent(
-    type: AgentType,
-  ): ChatAgent | NoteEditorAgent | ClassifierAgent | ConnectionAgent | ContextBuilderAgent {
+    type: ExpertAgentType,
+  ): NoteEditorAgent | ClassifierAgent | ConnectionAgent | ContextBuilderAgent {
     switch (type) {
-      case "chat":
-        return this.chatAgent;
       case "note-editor":
         return this.noteEditorAgent;
       case "classifier":
@@ -873,7 +694,7 @@ export class ChiefOfStaff {
       case "context-builder":
         return this.contextBuilderAgent;
       default:
-        throw new Error(`Unknown agent type: ${type}`);
+        throw new Error(`Unknown expert agent type: ${type}`);
     }
   }
 
@@ -887,14 +708,14 @@ export class ChiefOfStaff {
   /**
    * Check if an agent is currently active
    */
-  isAgentActive(type: AgentType): boolean {
+  isAgentActive(type: ExpertAgentType): boolean {
     return this.currentSession?.activeAgents.has(type) ?? false;
   }
 
   /**
    * Get agent configuration
    */
-  getAgentConfig(type: AgentType) {
+  getAgentConfig(type: ExpertAgentType) {
     return AGENT_CONFIGS[type];
   }
 }

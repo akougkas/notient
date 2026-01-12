@@ -53,6 +53,24 @@ function hashStringFNV1a32Hex(input: string): string {
   return (hash >>> 0).toString(16);
 }
 
+/** Check if file exists on disk */
+async function fileExists(filePath: string): Promise<boolean> {
+  return fs.promises
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
+}
+
+/** Check if path is an external/user-provided index */
+function isExternalIndexPath(indexPath: string): boolean {
+  return indexPath.includes("system/index") || indexPath.includes("system\\index");
+}
+
+/** Sanitize model key for use in filenames */
+function sanitizeModelKey(modelKey: string): string {
+  return modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 /** Rich metadata for discovered indices - used by UI surfaces */
 export interface DiscoveredIndex {
   path: string;
@@ -182,9 +200,7 @@ export class IndexManager {
     const activePath = this.kernel.settings.indexing.activeIndexPath;
 
     // Determine if this is a user-provided external index (read-only)
-    this.isUserProvidedIndex = activePath
-      ? activePath.includes("system/index") || activePath.includes("system\\index")
-      : false;
+    this.isUserProvidedIndex = activePath ? isExternalIndexPath(activePath) : false;
 
     // Stage 1: Get model info
     console.log("[IndexManager] Stage 1/4: Getting model info...");
@@ -264,7 +280,7 @@ export class IndexManager {
    * Returns the path to the best match, or null if none found.
    */
   private async discoverBestIndex(): Promise<string | null> {
-    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitizedKey = sanitizeModelKey(this.modelKey);
     const pluginRoot = this.kernel.storagePaths.pluginRoot;
 
     console.log(
@@ -338,12 +354,7 @@ export class IndexManager {
       // This prevents race condition where WASM hasn't finished loading
       await this.vectorStore.waitForReady?.();
 
-      const exists = await fs.promises
-        .access(indexPath)
-        .then(() => true)
-        .catch(() => false);
-
-      if (!exists) {
+      if (!(await fileExists(indexPath))) {
         console.log(`[IndexManager] Index file not found: ${indexPath}`);
         return false;
       }
@@ -375,7 +386,7 @@ export class IndexManager {
       );
 
       // Validate model key and dimension
-      const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const sanitizedKey = sanitizeModelKey(this.modelKey);
       if (data.meta.modelKey !== sanitizedKey) {
         console.log(
           `[IndexManager] Model key mismatch: file=${data.meta.modelKey}, current=${sanitizedKey}`,
@@ -457,16 +468,11 @@ export class IndexManager {
   } | null> {
     const statePath = path.join(
       this.kernel.storagePaths.pluginRoot,
-      `state-${this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`,
+      `state-${sanitizeModelKey(this.modelKey)}.json`,
     );
 
     try {
-      const exists = await fs.promises
-        .access(statePath)
-        .then(() => true)
-        .catch(() => false);
-
-      if (!exists) {
+      if (!(await fileExists(statePath))) {
         console.log("[IndexManager] No v2 state file to migrate");
         return null;
       }
@@ -561,7 +567,7 @@ export class IndexManager {
    * Format: idx_{timestamp}_v{version}_{model}_{dim}d.json
    */
   private generateIndexPath(): string {
-    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitizedKey = sanitizeModelKey(this.modelKey);
     const timestamp = formatIndexTimestamp();
     return path.join(
       this.kernel.storagePaths.pluginRoot,
@@ -835,12 +841,7 @@ export class IndexManager {
     // Scan Vault System Storage
     try {
       const sysPath = storagePaths.systemIndex;
-      const dirExists = await fs.promises
-        .access(sysPath)
-        .then(() => true)
-        .catch(() => false);
-
-      if (dirExists) {
+      if (await fileExists(sysPath)) {
         const vaultFiles = await fs.promises.readdir(sysPath);
         for (const file of vaultFiles) {
           if (file.endsWith(".json")) {
@@ -923,8 +924,7 @@ export class IndexManager {
       return;
     }
 
-    const isUserProvided =
-      indexPath.includes("system/index") || indexPath.includes("system\\index");
+    const isUserProvided = isExternalIndexPath(indexPath);
 
     this.kernel.settings.indexing.activeIndexPath = indexPath;
     this.kernel.settings.indexing.activeIndexMeta = {
@@ -952,8 +952,7 @@ export class IndexManager {
    * Delete a specific index by its file path.
    */
   async deleteIndexByPath(indexPath: string): Promise<boolean> {
-    const isExternal = indexPath.includes("system/index") || indexPath.includes("system\\index");
-    if (isExternal) {
+    if (isExternalIndexPath(indexPath)) {
       console.warn("[IndexManager] Cannot delete user-provided index");
       return false;
     }
@@ -965,12 +964,7 @@ export class IndexManager {
     }
 
     try {
-      const exists = await fs.promises
-        .access(indexPath)
-        .then(() => true)
-        .catch(() => false);
-
-      if (exists) {
+      if (await fileExists(indexPath)) {
         await this.moveToDeleted(indexPath, "deleted");
       }
 
@@ -1070,7 +1064,7 @@ export class IndexManager {
       }
 
       // Generate new filename
-      const sanitizedKey = importedModelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const sanitizedKey = sanitizeModelKey(importedModelKey);
       const timestamp = formatIndexTimestamp();
       const indexPath = path.join(
         this.kernel.storagePaths.pluginRoot,
@@ -1190,7 +1184,7 @@ export class IndexManager {
   /** Find the best legacy index file */
   private async findLegacyIndex(): Promise<string | null> {
     const pluginRoot = this.kernel.storagePaths.pluginRoot;
-    const sanitizedKey = this.modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitizedKey = sanitizeModelKey(this.modelKey);
 
     try {
       const files = await fs.promises.readdir(pluginRoot);
@@ -1343,12 +1337,7 @@ export class IndexManager {
     const deletedDir = path.join(this.kernel.storagePaths.pluginRoot, ".deleted");
 
     try {
-      const exists = await fs.promises
-        .access(deletedDir)
-        .then(() => true)
-        .catch(() => false);
-
-      if (!exists) return;
+      if (!(await fileExists(deletedDir))) return;
 
       const files = await fs.promises.readdir(deletedDir);
       const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;

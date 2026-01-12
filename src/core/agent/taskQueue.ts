@@ -10,6 +10,11 @@
  * multi-agent system. It converts between:
  * - AgentTask ↔ ChiefOfStaffTask
  * - AgentEvent ↔ AgentStreamEvent
+ *
+ * IMPORTANT: TaskQueue is for EXPERT AGENTS ONLY (note-editor, classifier, connection).
+ * Tasks MUST have a valid taskType that maps to an expert agent.
+ * Chat conversations go through ChatService directly, NOT through TaskQueue.
+ * Invalid task types will cause the task to fail - no silent fallback to chat.
  */
 
 import type { ProposedAction } from "../agentic/types";
@@ -358,12 +363,18 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Map taskType to agent type.
-   * Handles both new agent names and legacy task names.
+   * Map taskType to expert agent type.
+   *
+   * IMPORTANT: TaskQueue is for EXPERT AGENTS ONLY. Every task MUST have a valid
+   * taskType that maps to an expert agent. If taskType is missing or invalid,
+   * we throw an error - NO fallback to chat routing.
+   *
+   * Valid expert agents: note-editor, classifier, connection
+   * Legacy names are supported for backwards compatibility.
+   *
+   * @throws Error if taskType is missing or doesn't map to an expert agent
    */
-  private mapTaskTypeToAgent(
-    taskType?: string,
-  ): "chat" | "note-editor" | "classifier" | "connection" | undefined {
+  private mapTaskTypeToAgent(taskType?: string): "note-editor" | "classifier" | "connection" {
     switch (taskType) {
       // New agent names (pass through)
       case "note-editor":
@@ -380,7 +391,9 @@ export class AgentTaskQueue {
       case "link":
         return "connection";
       default:
-        return undefined; // Let ChiefOfStaff route automatically
+        throw new Error(
+          `TaskQueue requires a valid expert agent taskType. Got: "${taskType ?? "undefined"}". Valid types: note-editor, classifier, connection (or legacy: enrich, classify, link). For chat conversations, use ChatService directly.`,
+        );
     }
   }
 
@@ -396,13 +409,24 @@ export class AgentTaskQueue {
   }
 
   /**
-   * Map agent type to result type for structured outputs
+   * Map expert agent type to result type for structured outputs.
+   *
+   * Note: This only handles expert agent types since TaskQueue is for expert agents only.
+   * The "chat" fallback is kept for conversational outputs from expert agents that
+   * include explanatory text alongside their structured data.
    */
   private mapAgentTypeToResultType(agentType: string | undefined): TaskResult["type"] {
-    if (agentType === "note-editor") return "action_plan";
-    if (agentType === "classifier") return "classification";
-    if (agentType === "connection") return "links";
-    return "chat";
+    switch (agentType) {
+      case "note-editor":
+        return "action_plan";
+      case "classifier":
+        return "classification";
+      case "connection":
+        return "links";
+      default:
+        // Expert agents may produce conversational explanations alongside structured output
+        return "chat";
+    }
   }
 
   /**

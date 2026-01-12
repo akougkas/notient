@@ -8,11 +8,87 @@
  * - HTTP requests to /v1/chat/completions
  * - Streaming SSE parsing
  * - Error handling
+ *
+ * Thinking Model Support:
+ * - Models like DeepSeek R1, Falcon H1R, Qwen QwQ use `reasoning_content` field
+ * - Non-streaming: extracts content, falls back to reasoning if empty
+ * - Streaming: wraps reasoning_content in <think> tags for ThinkingParser
  */
 
 import { LLM_PROMPTS } from "../../constants";
 import type { LLMProvider } from "../provider";
 import type { ChatMessage, CompletionOptions, RankedResult, RerankCandidate } from "../types";
+
+/** OpenAI-style message from API response */
+interface OpenAIMessage {
+  content?: string | null;
+  reasoning_content?: string | null;
+}
+
+/**
+ * Extract usable content from an OpenAI-style message.
+ * Handles thinking models that put answers in different fields.
+ *
+ * Priority:
+ * 1. Use `content` if present (standard case)
+ * 2. If empty, try to extract from `reasoning_content`:
+ *    - Look for JSON structures (common for structured output)
+ *    - Strip <think> tags and use remaining prose
+ *    - Last resort: return raw reasoning for debugging
+ */
+function extractContent(message: OpenAIMessage | undefined, providerName: string): string {
+  if (!message) {
+    console.warn(`[${providerName}] No message in response`);
+    return "";
+  }
+
+  let content = message.content || "";
+  const reasoning = message.reasoning_content || "";
+
+  // Standard case: content is present
+  if (content) {
+    // Strip any <think> tags that leaked into content
+    if (content.includes("<think>")) {
+      content = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    }
+    return content;
+  }
+
+  // Fallback: extract from reasoning_content
+  if (!reasoning) {
+    console.warn(`[${providerName}] Empty response from model`);
+    return "";
+  }
+
+  // Try JSON extraction first (structured output often ends up in reasoning)
+  // Match JSON objects {...} or arrays [...] but NOT Obsidian links [[...]]
+  const jsonObjectMatch = reasoning.match(/\{[\s\S]*\}/);
+  const jsonArrayMatch = reasoning.match(/\[(?!\[)[\s\S]*\](?!\])/); // Negative lookahead to skip [[]]
+  const jsonMatch = jsonObjectMatch || jsonArrayMatch;
+
+  if (jsonMatch) {
+    // Validate it's actually parseable JSON before claiming success
+    try {
+      JSON.parse(jsonMatch[0]);
+      console.log(`[${providerName}] Extracted JSON from reasoning_content`);
+      return jsonMatch[0];
+    } catch {
+      // Matched something that looks like JSON but isn't valid
+      console.log(`[${providerName}] Found JSON-like pattern but invalid, using prose`);
+    }
+  }
+
+  // Strip <think> tags and use remaining prose
+  const withoutThinkTags = reasoning.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  if (withoutThinkTags) {
+    console.log(`[${providerName}] Using reasoning_content prose (no JSON found)`);
+    return withoutThinkTags;
+  }
+
+  // Only had thinking tags, no actual output
+  console.warn(`[${providerName}] Model only produced <think> content, no answer`);
+  return reasoning;
+}
 
 /**
  * Base provider for OpenAI-compatible APIs
@@ -147,16 +223,25 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error(`${this.name} not initialized`);
     }
 
+    // Build request body
+    const requestBody: Record<string, unknown> = {
+      model: this.model,
+      messages,
+      temperature: options?.temperature ?? 0.7,
+      max_tokens: options?.maxTokens ?? 1500,
+      stop: options?.stopSequences,
+    };
+
+    // Add structured output format if specified (LM Studio/OpenAI structured output API)
+    if (options?.responseFormat) {
+      requestBody.response_format = options.responseFormat;
+      console.log(`[${this.name}] Using structured output: ${options.responseFormat.type}`);
+    }
+
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        temperature: options?.temperature ?? 0.7,
-        max_tokens: options?.maxTokens ?? 1500,
-        stop: options?.stopSequences,
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(120000), // 2min timeout for completions
     });
 
@@ -167,46 +252,18 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     const data = await response.json();
-    const message = data.choices?.[0]?.message;
+    const message = data.choices?.[0]?.message as OpenAIMessage | undefined;
 
-    // Support both regular content and reasoning_content (for thinking models)
-    let content = message?.content || "";
-    const reasoning = message?.reasoning_content || "";
-
-    // Thinking models (DeepSeek R1, Falcon H1R, Qwen QwQ) put answer in content
-    // and reasoning in reasoning_content. If content is empty, the model failed
-    // to produce output - try to salvage from reasoning.
-    if (!content && reasoning) {
-      // IMPORTANT: Look for JSON in the ENTIRE reasoning first (including inside <think> tags)
-      // Some models put structured output inside thinking blocks
-      const jsonMatch = reasoning.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-      if (jsonMatch) {
-        content = jsonMatch[0];
-        console.log(`[${this.name}] Extracted JSON from reasoning_content`);
-      } else {
-        // No JSON found - strip <think> tags and use remaining prose
-        const strippedReasoning = reasoning.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-        if (strippedReasoning.length > 0) {
-          content = strippedReasoning;
-          console.log(`[${this.name}] Using reasoning_content prose (no JSON found)`);
-        } else {
-          // Only had thinking tags, no actual output
-          console.warn(`[${this.name}] Model only produced <think> content, no answer`);
-          content = reasoning; // Return raw for debugging
-        }
+    // When using structured output, content should be valid JSON directly
+    if (options?.responseFormat?.type === "json_schema") {
+      const content = message?.content || "";
+      if (content) {
+        console.log(`[${this.name}] Structured output received (${content.length} chars)`);
+        return content;
       }
     }
 
-    // Also strip <think> tags from content itself (some models include it there)
-    if (content.includes("<think>")) {
-      content = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-    }
-
-    if (!content) {
-      console.warn(`[${this.name}] Empty response from model`);
-    }
-
-    return content;
+    return extractContent(message, this.name);
   }
 
   async *stream(

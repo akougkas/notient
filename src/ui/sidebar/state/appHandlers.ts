@@ -123,42 +123,6 @@ export function triggerAgenticAction(
   }
 }
 
-interface PrefillChatDeps {
-  taskQueue: AgentTaskQueue | null;
-  noteVitals: Signal<NoteVitals | null>;
-}
-
-/**
- * Send a message to the chat tab and switch to it.
- */
-export function prefillChatAndSwitch(
-  { taskQueue, noteVitals }: PrefillChatDeps,
-  prompt: string,
-): void {
-  // Guard: Don't allow chat while indexing to prevent GPU contention
-  if (indexStatus.value.isIndexing) {
-    new Notice("Please wait for indexing to complete before using chat");
-    return;
-  }
-
-  if (taskQueue && noteVitals.value) {
-    try {
-      taskQueue.enqueue({
-        agent: "chat",
-        notePath: noteVitals.value.path,
-        noteTitle: noteVitals.value.title,
-        chatHistory: [{ role: "user", content: prompt }],
-      });
-      activeView.value = "chat";
-      new Notice("Sent to chat");
-    } catch (err) {
-      new Notice(err instanceof Error ? err.message : "Failed to send to chat");
-    }
-  } else {
-    new Notice("Agent system not available");
-  }
-}
-
 interface HandleRichChatDeps {
   chatService: ChatService | null;
   noteVitals: Signal<NoteVitals | null>;
