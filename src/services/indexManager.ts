@@ -348,6 +348,11 @@ export class IndexManager {
       }
 
       const raw = await fs.promises.readFile(indexPath, "utf-8");
+
+      // Yield to event loop before heavy JSON parsing
+      // This lets UI show "Loading..." instead of freezing
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
       const data = JSON.parse(raw) as {
         meta: {
           version?: number;
