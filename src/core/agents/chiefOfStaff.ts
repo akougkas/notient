@@ -20,8 +20,8 @@
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { UserProfile } from "../../types/profile";
 import type { ProposedAction } from "../agentic/types";
-import { generateId } from "../ids";
 import type { VaultContextBuilder } from "../context/vaultContextBuilder";
+import { generateId } from "../ids";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import { isInternalOutput, isStructuredOutput } from "./base";

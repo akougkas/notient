@@ -2,22 +2,26 @@
  * HNSW Vector Store
  *
  * High-performance vector store using HNSW (Hierarchical Navigable Small World)
- * algorithm via WebAssembly. Provides O(log N) search instead of O(N) brute-force.
+ * algorithm via Web Worker. Provides O(log N) search instead of O(N) brute-force.
  *
  * Design:
- * - HNSW index stores embeddings with integer labels
- * - Separate Map stores document metadata (text, noteId, etc.)
- * - Both serialized together for persistence
+ * - Worker manages HNSW index (integer labels <-> embeddings)
+ * - Main thread stores document metadata (text, noteId, etc.) in Maps
+ * - Bridge handles communication
  *
  * Performance targets:
  * - Search 10k chunks < 50ms (vs brute-force ~500ms)
- * - Memory overhead ~2x embedding size for graph structure
+ * - Main thread non-blocking
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { VectorWorkerBridge } from "../core/vector/workerBridge";
 import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
 import type { ChunkKind, ChunkTier, EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, ParaType, SearchOptions } from "../types/search";
+import { atomicWriteFile } from "../utils/atomicWrite";
 import type { VectorStore, VectorStoreInitOptions } from "./vectorStore";
 
 // ============================================================================
@@ -104,31 +108,22 @@ interface PersistedIndex {
 }
 
 // ============================================================================
-// HNSW Library Types (from hnswlib-wasm)
-// ============================================================================
-
-// Import types from hnswlib-wasm
-import type { HierarchicalNSW, HnswlibModule } from "hnswlib-wasm";
-
-type HNSWIndex = HierarchicalNSW;
-type HNSWLib = HnswlibModule;
-
-// ============================================================================
 // HNSW Vector Store Implementation
 // ============================================================================
 
 /**
- * High-performance vector store using HNSW algorithm.
- * Provides O(log N) search via WebAssembly-based HNSW index.
+ * High-performance vector store using HNSW algorithm via Web Worker.
  */
 export class HNSWVectorStore implements VectorStore {
-  private lib: HNSWLib | null = null;
-  private index: HNSWIndex | null = null;
-  private docs: Map<number, StoredDoc> = new Map();
-  private chunkIdToLabel: Map<string, number> = new Map();
-  private labelToChunkId: Map<number, string> = new Map();
-  private noteIdToLabels: Map<string, Set<number>> = new Map();
-  private embeddings: Map<number, Float32Array> = new Map();
+  private bridge: VectorWorkerBridge;
+  private docs: Map<string, StoredDoc> = new Map(); // chunkId -> Doc
+  private noteIdToChunkIds: Map<string, Set<string>> = new Map();
+  // We don't store embeddings in main thread anymore to save memory,
+  // unless we need them for export.
+  // BUT: exportData() requires them.
+  // So we MUST store them or request them from worker (which is slow/complex).
+  // For now, let's keep them in main thread for export support, but they are duplicated in worker.
+  private embeddings: Map<string, Float32Array> = new Map();
 
   private dimension = 0;
   private modelKey = "";
@@ -139,23 +134,13 @@ export class HNSWVectorStore implements VectorStore {
   private paraDetector: ParaDetector;
   private initialized = false;
 
-  // HNSW library ready state (async WASM loading)
-  private isLibraryReady = false;
-  private libraryReadyResolve!: () => void;
-  private libraryReadyReject!: (error: Error) => void;
-  private libraryReadyPromise: Promise<void>;
-
   // Note states
   private noteStates: Map<string, NoteState> = new Map();
   private lastFullIndexAt: number | null = null;
 
   constructor(private kernel: Kernel) {
     this.paraDetector = new ParaDetector(kernel.settings);
-    // Set up promise that resolves when HNSW lib is ready (or rejects on failure)
-    this.libraryReadyPromise = new Promise<void>((resolve, reject) => {
-      this.libraryReadyResolve = resolve;
-      this.libraryReadyReject = reject;
-    });
+    this.bridge = new VectorWorkerBridge();
   }
 
   // ============ Internal Helpers ============
@@ -163,9 +148,7 @@ export class HNSWVectorStore implements VectorStore {
   /** Clear all document maps */
   private clearMaps(): void {
     this.docs.clear();
-    this.chunkIdToLabel.clear();
-    this.labelToChunkId.clear();
-    this.noteIdToLabels.clear();
+    this.noteIdToChunkIds.clear();
     this.embeddings.clear();
   }
 
@@ -194,32 +177,17 @@ export class HNSWVectorStore implements VectorStore {
     };
   }
 
-  /** Store a doc with its label and embedding in all maps */
-  private storeDoc(label: number, doc: StoredDoc, embedding: Float32Array): void {
-    this.docs.set(label, doc);
-    this.chunkIdToLabel.set(doc.chunkId, label);
-    this.labelToChunkId.set(label, doc.chunkId);
-    this.embeddings.set(label, embedding);
+  /** Store a doc in maps */
+  private storeDoc(doc: StoredDoc, embedding: Float32Array): void {
+    this.docs.set(doc.chunkId, doc);
+    this.embeddings.set(doc.chunkId, embedding);
 
-    let noteLabels = this.noteIdToLabels.get(doc.noteId);
-    if (!noteLabels) {
-      noteLabels = new Set();
-      this.noteIdToLabels.set(doc.noteId, noteLabels);
+    let chunkIds = this.noteIdToChunkIds.get(doc.noteId);
+    if (!chunkIds) {
+      chunkIds = new Set();
+      this.noteIdToChunkIds.set(doc.noteId, chunkIds);
     }
-    noteLabels.add(label);
-  }
-
-  /** Initialize HNSW index with default config */
-  private initHnswIndex(): void {
-    if (!this.lib || this.dimension === 0) return;
-    this.index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
-    this.index.initIndex(
-      HNSW_CONFIG.initialMaxElements,
-      HNSW_CONFIG.M,
-      HNSW_CONFIG.efConstruction,
-      100,
-    );
-    this.index.setEfSearch(HNSW_CONFIG.efSearch);
+    chunkIds.add(doc.chunkId);
   }
 
   // ============ Configuration ============
@@ -290,103 +258,59 @@ export class HNSWVectorStore implements VectorStore {
     if (this.initialized) return;
 
     try {
-      // Dynamic import of WASM module
-      const { loadHnswlib } = await import("hnswlib-wasm");
-      this.lib = await loadHnswlib();
+      await this.bridge.init(HNSW_CONFIG);
       this.initialized = true;
-      this.isLibraryReady = true;
-      // Resolve the ready promise so waitForReady() callers can proceed
-      this.libraryReadyResolve();
-      console.log("[HNSWVectorStore] HNSW library loaded");
+      console.log("[HNSWVectorStore] Worker initialized");
     } catch (error) {
-      console.error("[HNSWVectorStore] Failed to load HNSW library:", error);
-      const initError = error instanceof Error ? error : new Error(String(error));
-      this.libraryReadyReject(initError);
-      throw new Error(`HNSW initialization failed: ${error}`);
+      console.error("[HNSWVectorStore] Failed to initialize worker:", error);
+      throw error;
     }
   }
 
-  /**
-   * Wait for HNSW library to be ready.
-   * Used by IndexManager to ensure lib is loaded before calling loadFromData().
-   */
   async waitForReady(): Promise<void> {
-    if (this.isLibraryReady) return;
-    await this.libraryReadyPromise;
-  }
-
-  private ensureIndex(mode: "init" | "load" = "init"): void {
-    if (!this.lib) {
-      throw new Error("HNSW library not initialized");
-    }
-    if (!this.index && this.dimension > 0) {
-      // Constructor: (spaceName, numDimensions, autoSaveFilename)
-      // Empty string for autoSaveFilename disables auto-save
-      this.index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
-      if (mode === "init") {
-        // initIndex: (maxElements, m, efConstruction, randomSeed)
-        this.index.initIndex(
-          HNSW_CONFIG.initialMaxElements,
-          HNSW_CONFIG.M,
-          HNSW_CONFIG.efConstruction,
-          100, // random seed
-        );
-        this.index.setEfSearch(HNSW_CONFIG.efSearch);
-        console.log(
-          `[HNSWVectorStore] Index created: ${this.dimension}d, M=${HNSW_CONFIG.M}, ef=${HNSW_CONFIG.efSearch}`,
-        );
-      }
+    // Bridge init handles waiting
+    if (!this.initialized) {
+      await this.initialize();
     }
   }
 
   // ============ Data Transfer API ============
 
-  private async syncFs(read: boolean): Promise<void> {
-    if (!this.lib) return;
-    await new Promise<void>((resolve, reject) => {
-      try {
-        this.lib?.EmscriptenFileSystemManager.syncFS(read, () => resolve());
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
   async persistNativeIndex(options: { hnswFilename: string }): Promise<void> {
     if (this.disposed) return;
-    if (!this.lib || !this.index) return;
     if (!options.hnswFilename) return;
 
     try {
-      console.log(`[HNSWVectorStore] Persisting native index: ${options.hnswFilename}`);
-      await this.syncFs(true).catch(() => {});
-      await this.index.writeIndex(options.hnswFilename);
-      await this.syncFs(false);
+      console.log(`[HNSWVectorStore] Persisting native index to ${options.hnswFilename}`);
+      const data = await this.bridge.save();
+      
+      const filePath = path.join(this.kernel.storagePaths.pluginRoot, options.hnswFilename);
+      // Write buffer to disk
+      const tempPath = `${filePath}.tmp`;
+      await fs.promises.writeFile(tempPath, new Uint8Array(data));
+      await fs.promises.rename(tempPath, filePath);
+      
       console.log("[HNSWVectorStore] Native index persisted successfully");
     } catch (error) {
       console.warn("[HNSWVectorStore] Failed to persist native index:", error);
     }
   }
 
-  /** Hydrate a single doc into maps */
-  private hydrateDoc(persisted: PersistedDoc, index: number): void {
-    const label = persisted.label ?? index;
+  private hydrateDoc(persisted: PersistedDoc): void {
     const embedding = new Float32Array(persisted.embedding);
-    this.storeDoc(label, this.extractStoredDoc(persisted), embedding);
+    this.storeDoc(this.extractStoredDoc(persisted), embedding);
   }
 
-  /** Hydrate all docs with batched yields */
   private async hydrateDocsAsync(docs: PersistedIndex["docs"]): Promise<void> {
     const BATCH_SIZE = 1000;
     for (let i = 0; i < docs.length; i++) {
-      this.hydrateDoc(docs[i], i);
+      this.hydrateDoc(docs[i]);
       if (i > 0 && i % BATCH_SIZE === 0) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
   }
 
-  /** Load state from persisted data */
   private loadState(state: PersistedState | undefined): void {
     this.noteStates.clear();
     this.lastFullIndexAt = state?.lastFullIndexAt ?? null;
@@ -397,26 +321,28 @@ export class HNSWVectorStore implements VectorStore {
     }
   }
 
-  /** Try to load native HNSW index from IDBFS. Returns true if successful. */
-  private async tryLoadNativeIndex(hnswFilename: string, maxElements: number): Promise<boolean> {
-    if (!this.lib) return false;
+  private async tryLoadNativeIndex(hnswFilename: string): Promise<boolean> {
+    const filePath = path.join(this.kernel.storagePaths.pluginRoot, hnswFilename);
+    
+    try {
+      await fs.promises.access(filePath);
+    } catch {
+      return false;
+    }
 
-    await this.syncFs(true);
-    const exists = this.lib.EmscriptenFileSystemManager.checkFileExists(hnswFilename);
-    console.log(`[HNSWVectorStore] Native index check: file=${hnswFilename}, exists=${exists}`);
-    if (!exists) return false;
-
-    const index = new this.lib.HierarchicalNSW(HNSW_CONFIG.metric, this.dimension, "");
-    const start = performance.now();
-    await index.readIndex(hnswFilename, maxElements); // throws on failure
-    console.log(`[HNSWVectorStore] Native index read: ${Math.round(performance.now() - start)}ms`);
-
-    index.setEfSearch(HNSW_CONFIG.efSearch);
-    this.index = index;
-    return true;
+    try {
+      const buffer = await fs.promises.readFile(filePath);
+      // Convert to ArrayBuffer
+      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+      
+      this.bridge.load(arrayBuffer);
+      return true;
+    } catch (error) {
+      console.warn("[HNSWVectorStore] Native index load failed:", error);
+      return false;
+    }
   }
 
-  /** Set metadata from persisted data */
   private setMetaFromData(meta: { modelKey: string; dimension: number; createdAt: number }): void {
     this.modelKey = meta.modelKey;
     this.dimension = meta.dimension;
@@ -433,87 +359,57 @@ export class HNSWVectorStore implements VectorStore {
   ): Promise<void> {
     this.setMetaFromData(data.meta);
     this.clearMaps();
-    this.index = null;
 
+    // Re-init bridge with new dimension if needed? 
+    // The worker handles dimension change on load.
+    
+    // Initialize metadata first
+    await this.hydrateDocsAsync(data.docs);
+    this.loadState(data.state);
+    
     const hnswFilename = options?.hnswFilename ?? null;
-    const maxElements = Math.max(HNSW_CONFIG.initialMaxElements, data.docs.length);
 
-    // Fast path: load native HNSW from IDBFS
+    // Fast path: load native HNSW
     if (hnswFilename) {
-      try {
-        const loaded = await this.tryLoadNativeIndex(hnswFilename, maxElements);
-        if (loaded) {
-          await this.hydrateDocsAsync(data.docs);
-          this.loadState(data.state);
-          this.dirty = false;
-          console.log(`[HNSWVectorStore] Fast-path loaded ${this.docs.size} chunks`);
-          return;
-        }
-      } catch (error) {
-        console.warn("[HNSWVectorStore] Native index load failed:", error);
+      const loaded = await this.tryLoadNativeIndex(hnswFilename);
+      if (loaded) {
+        this.dirty = false;
+        console.log(`[HNSWVectorStore] Fast-path loaded ${this.docs.size} chunks`);
+        return;
       }
     }
 
-    // Slow path: rebuild HNSW from embeddings
+    // Slow path: rebuild
     console.log("[HNSWVectorStore] Rebuilding index from embeddings...");
-    this.loadFromData(data);
+    
+    const items = data.docs.map(doc => ({
+      id: doc.chunkId,
+      embedding: new Float32Array(doc.embedding)
+    }));
+    
+    await this.bridge.addItems(items);
 
-    // Persist for next startup
     if (hnswFilename) {
       await this.persistNativeIndex({ hnswFilename });
     }
+    
+    this.dirty = false;
   }
 
-  loadFromData(data: {
-    meta: { modelKey: string; dimension: number; createdAt: number };
-    docs: PersistedDoc[];
-    state?: PersistedState;
-  }): void {
-    this.setMetaFromData(data.meta);
-    this.clearMaps();
-    this.ensureIndex();
-
-    if (!this.index) {
-      console.error("[HNSWVectorStore] Index not available for loading");
-      return;
-    }
-
-    if (data.docs.length === 0) {
-      this.loadState(data.state);
-      this.dirty = false;
-      return;
-    }
-
-    // Prepare vectors
-    const embeddings = data.docs.map((d) => new Float32Array(d.embedding));
-
-    let assignedLabels: number[];
-    try {
-      assignedLabels = this.index.addItems(embeddings, false);
-    } catch (error) {
-      console.error("[HNSWVectorStore] Failed to load index:", error);
-      return;
-    }
-
-    // Store metadata with assigned labels
-    for (let i = 0; i < data.docs.length; i++) {
-      this.storeDoc(assignedLabels[i], this.extractStoredDoc(data.docs[i]), embeddings[i]);
-    }
-
-    this.loadState(data.state);
-    this.dirty = false;
-    console.log(
-      `[HNSWVectorStore] Loaded ${this.docs.size} chunks, ${this.noteStates.size} note states`,
-    );
+  // Legacy loadFromData support for interface compatibility
+  loadFromData(data: any): void {
+    // This shouldn't be called if loadFromDataAsync is used by IndexManager
+    console.warn("[HNSWVectorStore] Sync loadFromData called - using async fallback");
+    this.loadFromDataAsync(data).catch(e => console.error(e));
   }
 
   exportData(): { meta: PersistedIndex["meta"]; docs: PersistedDoc[] } {
     const persistedDocs: PersistedDoc[] = [];
 
-    for (const [label, doc] of this.docs) {
-      const embedding = this.embeddings.get(label);
+    for (const [chunkId, doc] of this.docs) {
+      const embedding = this.embeddings.get(chunkId);
       if (embedding) {
-        persistedDocs.push({ ...doc, embedding: Array.from(embedding), label });
+        persistedDocs.push({ ...doc, embedding: Array.from(embedding) });
       }
     }
 
@@ -543,43 +439,35 @@ export class HNSWVectorStore implements VectorStore {
     if (this.disposed) throw new Error("Store disposed");
     if (chunks.length === 0) return;
 
-    this.ensureIndex();
-    if (!this.index) throw new Error("Index not initialized");
-
     // Remove existing chunks for affected notes (unless in bulk mode)
     if (this.bulkDepth === 0) {
       const noteIds = new Set(chunks.map((c) => c.noteId));
       for (const noteId of noteIds) {
-        this.removeNoteChunks(noteId);
+        // We can't synchronously remove from worker, but we can mark deleted
+        // Or just let the worker handle duplicates? 
+        // HNSW doesn't handle duplicates well usually, better to delete old ones.
+        // But we don't know the IDs of old chunks for these notes unless we look them up.
+        await this.removeNoteChunks(noteId);
       }
     }
 
-    // Grow index if needed
-    const currentMax = this.index.getMaxElements();
-    const needed = this.docs.size + chunks.length;
-    if (needed > currentMax) {
-      const newMax = Math.max(needed * 2, currentMax * 2);
-      this.index.resizeIndex(newMax);
-      console.log(`[HNSWVectorStore] Resized index to ${newMax} elements`);
-    }
-
-    // Filter valid chunks
     const validChunks = chunks.filter((c) => this.validateEmbedding(c.embedding));
     if (validChunks.length === 0) return;
 
-    // Batch add embeddings to HNSW index
-    const embeddings = validChunks.map((c) => new Float32Array(c.embedding));
-    let assignedLabels: number[];
-    try {
-      assignedLabels = this.index.addItems(embeddings, true);
-    } catch (error) {
-      console.error("[HNSWVectorStore] Failed to add batch:", error);
-      return;
-    }
+    // Prepare items for worker
+    const items = validChunks.map(c => ({
+      id: c.chunkId,
+      embedding: new Float32Array(c.embedding)
+    }));
 
-    // Store metadata for each chunk
-    for (let i = 0; i < validChunks.length; i++) {
-      this.storeDoc(assignedLabels[i], this.extractStoredDoc(validChunks[i]), embeddings[i]);
+    await this.bridge.addItems(items);
+
+    // Store metadata
+    for (const chunk of validChunks) {
+      this.storeDoc(
+        this.extractStoredDoc(chunk),
+        new Float32Array(chunk.embedding)
+      );
     }
 
     this.dirty = true;
@@ -587,7 +475,7 @@ export class HNSWVectorStore implements VectorStore {
 
   async deleteByNoteId(noteId: string): Promise<void> {
     if (this.disposed) return;
-    this.removeNoteChunks(noteId);
+    await this.removeNoteChunks(noteId);
     this.dirty = true;
   }
 
@@ -602,7 +490,7 @@ export class HNSWVectorStore implements VectorStore {
     }
 
     for (const noteId of noteIdsToRemove) {
-      this.removeNoteChunks(noteId);
+      await this.removeNoteChunks(noteId);
     }
 
     this.dirty = true;
@@ -611,22 +499,6 @@ export class HNSWVectorStore implements VectorStore {
   // ──────────────────────────────────────────────────────────────────────────
   // Search Helpers
   // ──────────────────────────────────────────────────────────────────────────
-
-  /** Build pre-filter valid labels set */
-  private buildValidLabels(options: SearchOptions): Set<number> {
-    const allowedTiers = options.tier
-      ? new Set(Array.isArray(options.tier) ? options.tier : [options.tier])
-      : null;
-    const allowedNoteIds = options.noteIds?.length ? new Set(options.noteIds) : null;
-
-    const validLabels = new Set<number>();
-    for (const [label, doc] of this.docs) {
-      if (allowedTiers && !allowedTiers.has(doc.tier)) continue;
-      if (allowedNoteIds && !allowedNoteIds.has(doc.noteId)) continue;
-      validLabels.add(label);
-    }
-    return validLabels;
-  }
 
   /** Calculate lexical-boosted score */
   private calculateBoostedScore(baseScore: number, doc: StoredDoc, queryTerms: string[]): number {
@@ -688,34 +560,6 @@ export class HNSWVectorStore implements VectorStore {
     };
   }
 
-  /** Process a single neighbor and return a result if valid, null otherwise */
-  private processNeighbor(
-    label: number,
-    distance: number,
-    queryTerms: string[],
-    options: SearchOptions,
-    perNoteCounts: Map<string, number>,
-  ): ChunkSearchResult | null {
-    if (label < 0) return null;
-
-    const doc = this.docs.get(label);
-    if (!doc) return null;
-
-    const score = this.calculateBoostedScore(1 - distance, doc, queryTerms);
-    if (score < options.minScore) return null;
-
-    const paraType = this.paraDetector.detectType(doc.path);
-    if (!this.passesPostFilters(doc, options, paraType)) return null;
-
-    if (typeof options.maxPerNote === "number" && options.maxPerNote > 0) {
-      const current = perNoteCounts.get(doc.noteId) ?? 0;
-      if (current >= options.maxPerNote) return null;
-      perNoteCounts.set(doc.noteId, current + 1);
-    }
-
-    return this.buildSearchResult(doc, score, paraType, options.includeContent ?? false);
-  }
-
   /** Extract query terms from query text */
   private extractQueryTerms(queryText: string | undefined): string[] {
     if (!queryText) return [];
@@ -726,42 +570,41 @@ export class HNSWVectorStore implements VectorStore {
   }
 
   /**
-   * Search using HNSW algorithm - O(log N) complexity.
+   * Search using HNSW algorithm via worker.
    */
   async search(queryEmbedding: number[], options: SearchOptions): Promise<ChunkSearchResult[]> {
-    if (this.disposed || this.docs.size === 0 || !this.index) return [];
+    if (this.disposed) return [];
 
     const query = new Float32Array(queryEmbedding);
-    const validLabels = this.buildValidLabels(options);
-    const filterFn =
-      validLabels.size < this.docs.size ? (label: number) => validLabels.has(label) : undefined;
-    const searchK = Math.min(options.topK * 3, this.docs.size);
-
-    let neighbors: number[];
-    let distances: number[];
-
-    try {
-      const result = this.index.searchKnn(query, searchK, filterFn);
-      neighbors = result.neighbors;
-      distances = result.distances;
-    } catch (error) {
-      console.warn("[HNSWVectorStore] Search failed:", error);
-      return [];
-    }
-
+    
+    // We request more candidates because we apply post-filtering in main thread
+    const k = options.topK * 4; 
+    
+    const rawResults = await this.bridge.search(query, k);
+    
     const queryTerms = this.extractQueryTerms(options.queryText);
     const results: ChunkSearchResult[] = [];
     const perNoteCounts = new Map<string, number>();
 
-    for (let i = 0; i < neighbors.length && results.length < options.topK; i++) {
-      const result = this.processNeighbor(
-        neighbors[i],
-        distances[i],
-        queryTerms,
-        options,
-        perNoteCounts,
-      );
-      if (result) results.push(result);
+    for (const { id, score: rawScore } of rawResults) {
+      if (results.length >= options.topK) break;
+
+      const doc = this.docs.get(id);
+      if (!doc) continue;
+
+      const score = this.calculateBoostedScore(rawScore, doc, queryTerms);
+      if (score < options.minScore) continue;
+
+      const paraType = this.paraDetector.detectType(doc.path);
+      if (!this.passesPostFilters(doc, options, paraType)) continue;
+
+      if (typeof options.maxPerNote === "number" && options.maxPerNote > 0) {
+        const current = perNoteCounts.get(doc.noteId) ?? 0;
+        if (current >= options.maxPerNote) continue;
+        perNoteCounts.set(doc.noteId, current + 1);
+      }
+
+      results.push(this.buildSearchResult(doc, score, paraType, options.includeContent ?? false));
     }
 
     return results;
@@ -770,12 +613,12 @@ export class HNSWVectorStore implements VectorStore {
   async getChunksByNoteId(noteId: string): Promise<NoteChunk[]> {
     if (this.disposed) return [];
 
-    const labels = this.noteIdToLabels.get(noteId);
-    if (!labels) return [];
+    const chunkIds = this.noteIdToChunkIds.get(noteId);
+    if (!chunkIds) return [];
 
     const chunks: NoteChunk[] = [];
-    for (const label of labels) {
-      const doc = this.docs.get(label);
+    for (const id of chunkIds) {
+      const doc = this.docs.get(id);
       if (doc) chunks.push(this.extractStoredDoc(doc));
     }
 
@@ -787,11 +630,11 @@ export class HNSWVectorStore implements VectorStore {
   }
 
   async countNotes(): Promise<number> {
-    return this.noteIdToLabels.size;
+    return this.noteIdToChunkIds.size;
   }
 
   isReady(): boolean {
-    return !this.disposed && this.dimension > 0 && this.initialized;
+    return !this.disposed && this.initialized;
   }
 
   beginBulkUpdate(): void {
@@ -804,7 +647,8 @@ export class HNSWVectorStore implements VectorStore {
 
   async clearAll(): Promise<void> {
     this.clearMaps();
-    this.initHnswIndex();
+    // Re-init worker to clear
+    await this.bridge.init(HNSW_CONFIG);
     this.dirty = true;
   }
 
@@ -815,45 +659,23 @@ export class HNSWVectorStore implements VectorStore {
   async dispose(): Promise<void> {
     this.disposed = true;
     this.clearMaps();
-    this.index = null;
-    this.lib = null;
+    this.bridge.terminate();
   }
 
   // ============ Private Methods ============
 
-  private removeNoteChunks(noteId: string): void {
-    const labels = this.noteIdToLabels.get(noteId);
-    if (!labels) return;
+  private async removeNoteChunks(noteId: string): Promise<void> {
+    const chunkIds = this.noteIdToChunkIds.get(noteId);
+    if (!chunkIds) return;
 
-    const labelsToDelete: number[] = [];
-    for (const label of labels) {
-      const doc = this.docs.get(label);
-      if (doc) {
-        this.chunkIdToLabel.delete(doc.chunkId);
-        this.labelToChunkId.delete(label);
-      }
-      this.docs.delete(label);
-      this.embeddings.delete(label);
-      labelsToDelete.push(label);
+    const idsToDelete = Array.from(chunkIds);
+    this.bridge.markDeleted(idsToDelete);
+
+    for (const id of idsToDelete) {
+      this.docs.delete(id);
+      this.embeddings.delete(id);
     }
-
-    // Mark as deleted in HNSW (soft delete) - batch delete
-    if (this.index && labelsToDelete.length > 0) {
-      try {
-        this.index.markDeleteItems(labelsToDelete);
-      } catch {
-        // Try individual deletes if batch fails
-        for (const label of labelsToDelete) {
-          try {
-            this.index.markDelete(label);
-          } catch {
-            // Label might not exist in index
-          }
-        }
-      }
-    }
-
-    this.noteIdToLabels.delete(noteId);
+    this.noteIdToChunkIds.delete(noteId);
   }
 
   private validateEmbedding(embedding: number[]): boolean {

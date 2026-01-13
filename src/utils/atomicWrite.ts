@@ -74,7 +74,7 @@ async function renameWithRetry(
  * @param data - Content to write
  * @throws Error if write fails (temp file is cleaned up)
  */
-export async function atomicWriteFile(filePath: string, data: string): Promise<void> {
+export async function atomicWriteFile(filePath: string, data: string | Uint8Array): Promise<void> {
   const dir = path.dirname(filePath);
   const tempPath = path.join(dir, `.${path.basename(filePath)}.tmp.${Date.now()}`);
 
@@ -83,7 +83,11 @@ export async function atomicWriteFile(filePath: string, data: string): Promise<v
     await fs.promises.mkdir(dir, { recursive: true });
 
     // Write to temp file first
-    await fs.promises.writeFile(tempPath, data, "utf-8");
+    if (typeof data === "string") {
+      await fs.promises.writeFile(tempPath, data, "utf-8");
+    } else {
+      await fs.promises.writeFile(tempPath, data);
+    }
 
     // Sync to ensure data is flushed to disk before rename
     // This is important for crash safety, but we gracefully degrade on EPERM

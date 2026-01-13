@@ -81,6 +81,7 @@ export class StoragePaths {
 
   // New structure paths
   readonly data: string;
+  readonly dbFile: string;
   readonly chunks: string;
   readonly chunksMeta: string;
   readonly chunksNotes: string;
@@ -137,6 +138,7 @@ export class StoragePaths {
 
     // New structure
     this.data = p("DATA");
+    this.dbFile = p("DB_FILE");
     this.chunks = p("CHUNKS");
     this.chunksMeta = p("CHUNKS_META");
     this.chunksNotes = p("CHUNKS_NOTES");
@@ -310,6 +312,7 @@ export class StoragePaths {
       pluginRoot: this.pluginRoot,
       systemIndex: this.systemIndex,
       data: this.data,
+      dbFile: this.dbFile,
       chunks: this.chunks,
       chunksMeta: this.chunksMeta,
       chunksNotes: this.chunksNotes,

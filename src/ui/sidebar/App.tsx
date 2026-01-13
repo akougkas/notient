@@ -17,8 +17,8 @@ import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
 import type {
-  VitalsHint,
   InsightGenerator as InsightGeneratorType,
+  VitalsHint,
 } from "../../services/insightGenerator";
 import { InsightGenerator } from "../../services/insightGenerator";
 import type { NoteVitals } from "../../services/noteVitalsCalculator";
@@ -57,8 +57,8 @@ import {
   isChatStreaming,
   isChatThinking,
   isServicesReady,
-  pendingActions,
   pendingActionSources,
+  pendingActions,
   providerStatus,
   recentActivity,
   searchQuery,

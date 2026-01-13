@@ -268,6 +268,14 @@ async function copyToVault(): Promise<void> {
     }
   }
 
+  // Copy sql-wasm.wasm
+  const wasmSrc = join(PROJECT_ROOT, "node_modules", "sql.js", "dist", "sql-wasm.wasm");
+  if (existsSync(wasmSrc)) {
+    await cp(wasmSrc, join(VAULT_PLUGIN, "sql-wasm.wasm"));
+  } else {
+    logWarn("sql-wasm.wasm not found in node_modules");
+  }
+
   logSuccess(`${timestamp()} Copied to vault`);
 }
 

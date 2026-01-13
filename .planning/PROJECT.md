@@ -10,22 +10,37 @@ Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transfo
 
 **Reliability**: Actions complete or fail gracefully. No crashes. Clear errors. This is the non-negotiable foundation that enables trust.
 
-## Current Phase: Universe (Foundation Refactor)
+## Current Phase: Universe (Foundation Refactor + Obsidian Integration)
 
 > **All feature work paused until Phase Universe completes.**
 > See `PHASE-UNIVERSE.md` for full specification.
 
-Phase Universe replaces the previous 8-phase roadmap with a focused foundational refactor:
+### The Core Insight: "The Note is the Unit"
+
+Intelligence must surface IN the note (frontmatter, decorations), not just the sidebar. The sidebar is for commands and history. The note is the canvas.
+
+### Two-Layer Architecture
+
+| Layer | Purpose | Deliverables |
+|-------|---------|--------------|
+| **Infrastructure** | Heavy lifting (hidden) | D1-D5: SQLite, Workers, Events |
+| **Integration** | Note-native display (visible) | D6-D9: Frontmatter, MetadataCache, Decorations, Menus |
+
+### Phase Universe Progress
 
 | Deliverable | Description | Status |
 |-------------|-------------|--------|
-| D1: SQLite Data Layer | sql.js WASM, replace JSON files | NOT STARTED |
-| D2: HNSW Worker | Vector ops in Web Worker, never main thread | NOT STARTED |
+| D1: SQLite Data Layer | sql.js WASM, replace JSON files | ✅ COMPLETE |
+| D2: HNSW Worker | Vector ops in Web Worker | 🔄 IN PROGRESS |
 | D3: Event Wiring | Fix action:proposed, applier, capability cards | NOT STARTED |
-| D4: Orchestration | Simplify ChiefOfStaff + TaskManager boundaries | NOT STARTED |
+| D4: Orchestration | Simplify ChiefOfStaff + TaskManager | NOT STARTED |
 | D5: Cleanup | Absorb remaining Phase 0 issues | NOT STARTED |
+| D6: Frontmatter Bridge | Store AI insights in note properties | NOT STARTED |
+| D7: MetadataCache Vitals | Use Obsidian's cache, stop duplicating | NOT STARTED |
+| D8: Editor Decorations | Inline AI insights via CodeMirror 6 | NOT STARTED |
+| D9: Context Menus | Right-click AI actions | NOT STARTED |
 
-**Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle.
+**Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle, `notient-health` in frontmatter.
 
 ## Requirements
 
@@ -45,6 +60,8 @@ Phase Universe replaces the previous 8-phase roadmap with a focused foundational
 - ✓ Action history with undo
 - ✓ Per-note intelligence records
 - ✓ Centralized ID system (`src/core/ids.ts`)
+- ✓ SQLite data layer with Kysely (`src/core/db/`)
+- ✓ Canonical Obsidian API reference (`docs/obsidian/`)
 
 ### Paused (Post-Universe)
 
@@ -98,7 +115,7 @@ Phase Universe replaces the previous 8-phase roadmap with a focused foundational
 
 - **No new dependencies**: Work with existing stack only (Preact, signals, HNSW, Biome)
 - **Local-only**: All LLM operations via Ollama (embeddings) and LM Studio (reasoning)
-- **Obsidian boundary**: Notient is intelligence sidecar, doesn't duplicate native features
+- **Obsidian-native**: Use metadataCache, processFrontMatter, Editor Extensions before custom
 - **Test vault**: `/mnt/c/Users/akougk/Projects/vaultex`
 
 ## Key Decisions
@@ -107,20 +124,25 @@ Phase Universe replaces the previous 8-phase roadmap with a focused foundational
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| **SQLite for metadata** | JSON doesn't scale. Typed queries. Instant startup. | Phase Universe |
-| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | Phase Universe |
-| **sql.js WASM + explicit flush** | Portable, safe sync via Obsidian adapter | Phase Universe |
-| **ChiefOfStaff = single event source** | Clear data flow. Agents never emit to UI. | Phase Universe |
-| **TaskManager with named queues** | Support interactive + background + future cron | Phase Universe |
+| **"Note is the Unit"** | Intelligence surfaces IN the note, not just sidebar | ✓ Phase Universe |
+| **Two-layer architecture** | Infrastructure (hidden) + Integration (visible) | ✓ Phase Universe |
+| **SQLite for metadata** | JSON doesn't scale. Typed queries. Instant startup. | ✓ D1 Complete |
+| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | 🔄 D2 In Progress |
+| **sql.js WASM + Obsidian adapter** | Portable, safe sync via `adapter.write()` | ✓ D1 Complete |
+| **Frontmatter intelligence** | `notient-health`, `notient-summary` IN the note | — D6 Pending |
+| **Use metadataCache** | Don't recalculate what Obsidian already knows | — D7 Pending |
+| **Editor Decorations** | CodeMirror 6 for inline AI insights | — D8 Pending |
+| **Context menus** | Right-click "Find related", "Enhance this" | — D9 Pending |
+| **ChiefOfStaff = single event source** | Clear data flow. Agents never emit to UI. | — D3/D4 Pending |
 | **Centralized ID system** | `src/core/ids.ts` — consistent format, no chaos | ✓ Implemented |
 | Chat is UI, not agent | Avoids 13th agent, Chat delegates to experts | — Pending |
 | 3 pinned + 3 contextual Quick Actions | Enhance/Classify/Connect always visible, rest dynamic | — Pending |
-| All suggestions shown | Aggressive ambient intelligence, user dismisses | — Pending |
-| Agent results inline in Chat | User stays in Chat, doesn't switch tabs | — Pending |
-| Confidence badges + justification | Both visual and textual feedback on search | — Pending |
-| Settings extracted to panels | SettingsTab is 1384 lines, needs modularization | — Pending |
-| Pulse animation only during indexing | Purposeful, not decorative | — Pending |
-| No keyboard shortcuts | Conflicts across layers, stay visual-first | — Pending |
+
+## Reference Documentation
+
+- **Obsidian API**: `docs/obsidian/` — Canonical reference for CSS, Editor, Plugin, UI
+- **Phase Plan**: `.planning/PHASE-UNIVERSE.md` — Full specification
+- **State Tracking**: `.planning/STATE.md` — Current progress
 
 ---
-*Last updated: 2026-01-12 — Phase Universe begins*
+*Last updated: 2026-01-12 — Post-Integration Audit*

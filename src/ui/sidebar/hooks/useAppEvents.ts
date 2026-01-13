@@ -24,8 +24,8 @@ import {
   initContext,
   initState,
   isServicesReady,
-  pendingActions,
   pendingActionSources,
+  pendingActions,
   providerStatus,
   recentActivity,
 } from "../state";

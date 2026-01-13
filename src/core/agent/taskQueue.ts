@@ -636,7 +636,9 @@ export class AgentTaskQueue {
     if (!response) return "No reasoning provided.";
 
     // Try to find explicit reasoning section
-    const reasoningMatch = response.match(/(?:reasoning|rationale|explanation):\s*(.+?)(?:\n\n|$)/is);
+    const reasoningMatch = response.match(
+      /(?:reasoning|rationale|explanation):\s*(.+?)(?:\n\n|$)/is,
+    );
     if (reasoningMatch) {
       return reasoningMatch[1].trim().slice(0, 500);
     }

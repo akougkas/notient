@@ -47,3 +47,5 @@ repomix-output.xml
 .gemini/orchestration/*/queue/*.task
 .gemini/orchestration/*/responses/*.response
 .gemini/settings.local.json
+
+testbench/

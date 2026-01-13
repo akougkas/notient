@@ -17,7 +17,17 @@
  * - mig_ = Migration (data migration operations)
  */
 
-export type IdPrefix = "tsk" | "ins" | "act" | "sug" | "rec" | "stm" | "msg" | "wfl" | "ses" | "mig";
+export type IdPrefix =
+  | "tsk"
+  | "ins"
+  | "act"
+  | "sug"
+  | "rec"
+  | "stm"
+  | "msg"
+  | "wfl"
+  | "ses"
+  | "mig";
 
 /**
  * Generate a standardized ID with prefix.

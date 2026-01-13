@@ -15,6 +15,7 @@ const OP = `${DATA}/_operational`;
 
 export const STORAGE_PATHS = {
   DATA,
+  DB_FILE: `${DATA}/notient.db`,
 
   // Chunks (model-agnostic)
   CHUNKS: `${DATA}/chunks`,

@@ -5,7 +5,7 @@
 **Phase**: Universe — Foundation Refactor + Obsidian Integration
 **Status**: ACTIVE
 **Plan**: `PHASE-UNIVERSE.md`
-**Updated**: 2026-01-12 (Post-Audit)
+**Updated**: 2026-01-12 (Post-Audit, D2 Started)
 
 ## Phase Universe Progress
 
@@ -14,7 +14,7 @@
 | Deliverable | Status | Est. |
 |-------------|--------|------|
 | D1: SQLite Data Layer | ✅ COMPLETE | 8h |
-| D2: HNSW Worker Isolation | NOT STARTED | 8h |
+| D2: HNSW Worker Isolation | 🔄 IN PROGRESS | 8h |
 | D3: Event Wiring Completion | NOT STARTED | 6h |
 | D4: Orchestration Simplification | NOT STARTED | 6h |
 | D5: Absorb Phase 0 Issues | NOT STARTED | 4h |
@@ -29,6 +29,14 @@
 | D9: Context Menu Integration | NOT STARTED | 3h |
 
 **Total**: 50 hours (~3 weeks)
+
+## D2 Progress Detail
+
+**Files created:**
+- `src/workers/vector.worker.ts` — Worker entry point ✅
+- `src/core/vector/workerBridge.ts` — Main thread proxy ✅
+
+**Status:** TypeScript compiles, build passes. Needs integration testing.
 
 ## The Core Insight
 
@@ -61,9 +69,9 @@
 ## Next Action
 
 ```bash
-# D2: HNSW Worker Isolation
-# Create src/workers/vector.worker.ts
-# Create src/core/vector/workerBridge.ts
+# Continue D2: Integration testing
+# Wire VectorWorkerBridge into HNSWVectorStore
+# Verify main thread has no hnswlib-wasm import
 ```
 
 ## Previous Work (Archived)
@@ -74,4 +82,4 @@
 - Obsidian docs committed → `docs/obsidian/`
 
 ---
-*Last updated: 2026-01-12 — Post-Integration Audit*
+*Last updated: 2026-01-12 — D2 Worker files created*
