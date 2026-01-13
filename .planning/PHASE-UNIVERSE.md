@@ -1,9 +1,23 @@
 # Phase Universe: Foundation Refactor
 
-**Status**: ACTIVE
+**Status**: ACTIVE (75% Complete)
 **Created**: 2026-01-12
-**Updated**: 2026-01-12 (Obsidian Integration Audit)
+**Updated**: 2026-01-13 (Interview Decisions + D2/D6/D7/D9 Complete)
 **Supersedes**: Phase 0-8 Roadmap (archived)
+
+## Progress Summary
+
+| Deliverable | Status | Owner | Notes |
+|-------------|--------|-------|-------|
+| D1: SQLite Data Layer | ✅ COMPLETE | Gemini | Schema + migrations ready |
+| D2: HNSW Worker | ✅ COMPLETE | Gemini | vector.worker.ts operational |
+| D3: Event Wiring | 🔄 IN PROGRESS | — | Reranker + action:proposed |
+| D4: Orchestration | 🔄 IN PROGRESS | — | ChiefOfStaff consolidation |
+| D5: Cleanup + embed.worker | 📋 READY | — | Parallel embeddings |
+| D6: Frontmatter Bridge | ✅ COMPLETE | Archie | syncToFrontmatter() + command |
+| D7: Vitals MetadataCache | ✅ COMPLETE | Faye | resolvedLinks direct usage |
+| D8: Editor Decorations | ⏸️ DEFERRED | — | After infrastructure complete |
+| D9: Context Menus | ✅ COMPLETE | Sage | editor-menu + file-menu |
 
 ---
 
@@ -28,7 +42,8 @@ Phase Universe is a foundational refactor that replaces the entire previous road
 2. **Obsidian-Native First** — Use `metadataCache`, `processFrontMatter`, Editor Extensions before building custom.
 3. **Data layer supports, doesn't replace** — SQLite/Workers for heavy lifting, but Obsidian APIs for user-facing data.
 4. **Main thread is sacred** — <16ms operations only. Everything heavy in Workers.
-5. **Clear orchestration boundaries** — ChiefOfStaff reasons, TaskQueues execute, Agents are tools.
+5. **ChiefOfStaff is the FULL orchestrator** — Routes, executes, AND persists. Single owner of agent lifecycle.
+6. **User-controlled intelligence spectrum** — From minimal (passive health display) to proactive (suggestions, completions). User decides.
 
 ---
 
@@ -127,15 +142,15 @@ User opens note
         ┌──────────────────────┼──────────────────────────────────┐
         ↓                      ↓                                  ↓
 ┌───────────────┐    ┌─────────────────┐    ┌─────────────────────┐
-│ vector.worker │    │  (future)       │    │  (future)           │
-│               │    │  db.worker      │    │  embed.worker       │
-│ HNSW index    │    │  SQLite queries │    │  Ollama batching    │
-│ search()      │    │                 │    │                     │
-│ addItems()    │    │                 │    │                     │
+│ vector.worker │    │  embed.worker   │    │  (future)           │
+│   ✅ DONE     │    │   📋 THIS PHASE │    │  db.worker          │
+│ HNSW index    │    │  4 concurrent   │    │  SQLite queries     │
+│ search()      │    │  HTTP calls to  │    │  (if needed)        │
+│ addItems()    │    │  Ollama embed   │    │                     │
 └───────────────┘    └─────────────────┘    └─────────────────────┘
 ```
 
-**Phase Universe scope**: `vector.worker` only. DB stays on main thread (sql.js is fast enough).
+**Phase Universe scope**: `vector.worker` ✅ + `embed.worker` 📋. DB stays on main thread (sql.js is fast enough).
 
 ---
 
@@ -160,80 +175,95 @@ User opens note
 
 ---
 
-### D2: HNSW Worker Isolation (Priority: CRITICAL)
+### D2: HNSW Worker Isolation (Priority: CRITICAL) ✅ COMPLETE
 
-**Files to create:**
+**Status**: COMPLETE (2026-01-13)
+
+**Files created:**
 - `src/workers/vector.worker.ts` — Worker entry point
 - `src/core/vector/workerBridge.ts` — Main thread proxy
 
-**Worker API:**
+**Commit**: `71f557e feat(universe): D2 HNSW Worker isolation complete`
 
-```typescript
-// Messages TO worker
-type VectorCommand =
-  | { type: 'init'; config: HNSWConfig }
-  | { type: 'search'; embedding: Float32Array; k: number; requestId: string }
-  | { type: 'addItems'; items: Array<{ id: string; embedding: Float32Array }> }
-  | { type: 'markDeleted'; ids: string[] }
-  | { type: 'save' }
-  | { type: 'load'; data: ArrayBuffer };
-
-// Messages FROM worker
-type VectorResult =
-  | { type: 'ready' }
-  | { type: 'searchResult'; requestId: string; results: Array<{ id: string; score: number }> }
-  | { type: 'addComplete'; count: number }
-  | { type: 'saveComplete'; data: ArrayBuffer }
-  | { type: 'error'; message: string };
-```
-
-**Key constraints:**
-- Main thread NEVER imports `hnswlib-wasm`
-- All embeddings transferred via Transferable (zero-copy)
-- Worker persists index to IndexedDB (not main thread file I/O)
-
-**Estimated effort**: 8 hours
+**Key achievements:**
+- Main thread has NO `hnswlib-wasm` import
+- HNSWVectorStore delegates search to Worker, queries SQLite for metadata
+- Binary hnsw.bin persistence only (metadata via SQLite)
 
 ---
 
-### D3: Event Wiring Completion (Priority: HIGH)
+### D3: Event Wiring Completion (Priority: HIGH) 🔄 IN PROGRESS
 
 Absorbs Phase 0 Issues 3, 6, 7, 8:
 
 | Issue | Fix |
 |-------|-----|
-| Reranker JSON parsing | Strip `<think>` tags, non-greedy regex, validation |
+| Reranker output parsing | Parse `SCORE: X` format (model outputs lines, not JSON) |
 | action:proposed event | Emit from ChiefOfStaff (not TaskQueue) after agent returns |
 | Action applier wiring | Wire `action:apply-requested` → ActionApplier in main.ts |
 | Capability cards | Wire HealthMonitor → AgentStreamsView props |
 
+**Interview Decision (2026-01-13):** Reranker uses qwen-based models that output `SCORE: 0/3/7/10` lines.
+No JSON parsing needed. Simple regex extraction:
+
+```typescript
+const match = output.match(/SCORE:\s*(\d+)/);
+const score = match ? parseInt(match[1]) : 0;
+```
+
 **Key change**: ChiefOfStaff is the ONLY emitter of user-facing events. TaskQueue is internal.
 
-**Estimated effort**: 6 hours
+**Estimated effort**: 4 hours (reduced - simpler parsing)
 
 ---
 
-### D4: Orchestration Simplification (Priority: MEDIUM)
+### D4: Orchestration Simplification (Priority: MEDIUM) 🔄 IN PROGRESS
+
+**Interview Decision (2026-01-13):** ChiefOfStaff becomes **FULL ORCHESTRATOR**:
+- Routes requests to appropriate agents
+- Executes agent tasks (absorbs actionOrchestrator)
+- Persists results to SQLite
+- Uses **functional composition** (pure functions, one file)
 
 **Remove:**
 - `src/core/intelligence/actionOrchestrator.ts` — Merge into ChiefOfStaff
-- `src/core/intelligence/actionPipeline.ts` — Inline into agents or ChiefOfStaff
+- `src/core/intelligence/actionPipeline.ts` — Inline into ChiefOfStaff
 - `src/core/agentic/workflowRunner.ts` — Merge into TaskQueue
+
+**Refactor Sage's D9 code:** `actionOrchestrator.dispatch()` → `chiefOfStaff.execute()`
 
 **Estimated effort**: 6 hours
 
 ---
 
-### D5: Absorb Remaining Phase 0 Issues (Priority: MEDIUM)
+### D5: Cleanup + embed.worker (Priority: MEDIUM) 📋 READY
+
+**Interview Decision (2026-01-13):**
+- Create `embed.worker` for parallel HTTP calls to Ollama (4 concurrent)
+- Dead code scope: **ChatAgent only** (minimal)
+- Hardware: Mid-range GPU (8-12GB) → 4 concurrent is safe
 
 | Issue | Action |
 |-------|--------|
-| Sequential embeddings | Parallelize in indexer (8 concurrent) |
-| Action ID mismatch | Already fixed via ID system |
-| Dead ChatAgent | Delete file |
+| Sequential embeddings | Create `embed.worker` with 4 concurrent HTTP calls |
+| Dead ChatAgent | Delete file (minimal scope) |
 | FS.syncfs race | Solved by Worker isolation |
 
-**Estimated effort**: 4 hours
+**embed.worker API:**
+
+```typescript
+// Messages TO worker
+type EmbedCommand =
+  | { type: 'embed'; texts: string[]; requestId: string }
+  | { type: 'configure'; ollamaUrl: string; model: string };
+
+// Messages FROM worker
+type EmbedResult =
+  | { type: 'embedResult'; requestId: string; embeddings: Float32Array[] }
+  | { type: 'error'; requestId: string; message: string };
+```
+
+**Estimated effort**: 6 hours
 
 ---
 
@@ -241,207 +271,177 @@ Absorbs Phase 0 Issues 3, 6, 7, 8:
 
 ---
 
-### D6: Frontmatter Intelligence Bridge (Priority: HIGH)
+### D6: Frontmatter Intelligence Bridge (Priority: HIGH) ✅ COMPLETE
 
-**Goal**: Store AI-derived intelligence IN the note's frontmatter, making it portable and visible.
+**Status**: COMPLETE (2026-01-13)
+**Owner**: Archie
+**Commit**: `8472aec feat(d6): frontmatter intelligence bridge - write-on-demand sync`
 
-**Files to modify:**
-- `src/core/intelligence/noteIntelligence.ts` — Add frontmatter sync
-- `src/adapters/obsidianFacade.ts` — Already has `processFrontMatter()`
+**Files modified:**
+- `src/core/intelligence/noteIntelligence.ts` — Added `syncToFrontmatter()` method
+- `src/main.ts` — Added `sync-intelligence-to-frontmatter` command
+
+**Interview Decision (2026-01-13):** Write-on-demand only. User triggers via command.
+No automatic frontmatter writes (avoids Obsidian Sync conflicts).
 
 **Frontmatter Schema:**
 
 ```yaml
 ---
-notient-health: 78
-notient-summary: "One-line AI summary of the note's content"
+notient-health: "78/100"
+notient-summary: "One-line AI summary"
 notient-entities:
-  - type: person
-    name: "John Smith"
-  - type: concept
-    name: "Machine Learning"
+  - "John Smith"
+  - "Machine Learning"
 notient-updated: 2026-01-12T10:30:00Z
 ---
-```
-
-**Implementation:**
-
-```typescript
-// After agent generates intelligence, sync to frontmatter
-async syncToFrontmatter(notePath: string, intelligence: IntelligenceRecord): Promise<void> {
-  await this.obsidian.processFrontMatter(notePath, (fm) => {
-    fm['notient-health'] = intelligence.health?.overall ?? null;
-    fm['notient-summary'] = intelligence.summary ?? null;
-    fm['notient-entities'] = intelligence.entities ?? [];
-    fm['notient-updated'] = new Date().toISOString();
-  });
-}
 ```
 
 **Benefits:**
 - Intelligence is PORTABLE (survives note moves, Obsidian sync)
 - Visible in Obsidian search (`notient-health:>50`)
 - Compatible with Dataview queries
-- User can see/edit AI conclusions
-
-**Estimated effort**: 4 hours
 
 ---
 
-### D7: Vitals from MetadataCache (Priority: HIGH)
+### D7: Vitals from MetadataCache (Priority: HIGH) ✅ COMPLETE
 
-**Goal**: Stop recalculating what Obsidian already knows. Use `metadataCache` as source of truth.
+**Status**: COMPLETE (2026-01-13)
+**Owner**: Faye
+**Commit**: `2aee5ab refactor(d7): optimize vitals using metadataCache.resolvedLinks`
 
-**Current problem** (from audit):
-```typescript
-// SimpleVaultVitals.ts - REDUNDANT
-for (const file of files) {
-  const metadata = this.kernel.obsidian.getMetadataByPath(file.path);
-  const links = metadata?.links ?? [];  // Re-iterating what metadataCache has
-  totalLinks += links.length;
-}
-```
+**Files modified:**
+- `src/core/vitals/simpleVitals.ts` — Refactored to use `metadataCache.resolvedLinks` directly
 
-**Correction:**
-```typescript
-// Use Obsidian's pre-computed graph directly
-const resolvedLinks = this.app.metadataCache.resolvedLinks;
+**Key changes:**
+- Replaced O(n) custom `resolveLink()` with direct `resolvedLinks` lookup
+- Comment: "O(N) instead of O(N^2)"
+- Deleted the custom link resolution method
 
-// Backlinks for a note (O(1) lookup, not O(n) iteration)
-getBacklinks(path: string): string[] {
-  const backlinks: string[] = [];
-  for (const [source, targets] of Object.entries(resolvedLinks)) {
-    if (targets[path]) backlinks.push(source);
-  }
-  return backlinks;
-}
-```
-
-**Files to modify:**
-- `src/core/vitals/simpleVitals.ts` — Use metadataCache directly
-- `src/services/noteVitalsCalculator.ts` — Already uses it, optimize iterations
-
-**Estimated effort**: 3 hours
+**Interview Decision (2026-01-13):** Chose to refactor simpleVitals.ts rather than delete it.
+Safer approach - same result (use metadataCache) without breaking changes.
 
 ---
 
-### D8: Editor Decorations (Priority: MEDIUM)
+### D8: Editor Decorations (Priority: MEDIUM) ⏸️ DEFERRED
 
-**Goal**: Show AI insights INSIDE the editor, not just the sidebar.
+**Status**: DEFERRED (Infrastructure first, per interview 2026-01-13)
+
+**Interview Decisions:**
+- **Trigger**: Ghost text on **explicit request** (hotkey like Tab), NOT automatic
+- **UI Framework**: **Strict separation** — CM6 for editor, Preact for sidebar
+- **First decoration type**: AI suggestion ghost text (Copilot-style)
+- **Data source**: Signal cache → Decoration (reactive)
 
 **Reference**: `docs/obsidian/OBSIDIAN-EDITOR.md`
 
-**Implementation approach:**
+**Implementation approach (when ready):**
 
 ```typescript
-// Create a CodeMirror 6 StateField for Notient decorations
+// CodeMirror 6 StateField (NO Preact in editor layer)
 import { StateField, Decoration, DecorationSet } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 const notientDecorations = StateField.define<DecorationSet>({
   create() { return Decoration.none; },
   update(decorations, transaction) {
-    // Update based on intelligence changes
+    // Update based on intelligence signal changes
   },
   provide: f => EditorView.decorations.from(f)
 });
 ```
 
-**Decoration types:**
-1. **Stale indicator** — Underline sections that haven't been updated in 30+ days
-2. **Entity highlight** — Subtle background on detected entities (people, concepts)
-3. **Health badge** — Small icon in gutter showing note health score
-
-**Files to create:**
+**Files to create (future):**
 - `src/ui/editor/notientDecorations.ts` — StateField + decorations
+- `src/ui/editor/ghostText.ts` — AI completion widget
 - `src/ui/editor/index.ts` — Registration with Obsidian
+
+**Estimated effort**: 8 hours (post-infrastructure)
+
+---
+
+### D9: Context Menu Integration (Priority: MEDIUM) ✅ COMPLETE
+
+**Status**: COMPLETE (2026-01-13)
+**Owner**: Sage
+**Commit**: `4baceba feat(d9): context menu integration - editor and file menu AI actions`
+
+**Files modified:**
+- `src/main.ts` — Added editor-menu and file-menu registrations
+- `src/types/events.ts` — Added action:find-related, action:enhance, action:analyze event types
+- `src/ui/sidebar/components/Omnibar.tsx` — Wired search query signal
+
+**Menu items:**
+- **Editor menu** (on selection): "Find related notes", "Enhance this section"
+- **File menu** (right-click file): "Analyze note"
+
+**Interview Decision (2026-01-13):** All actions go through TaskQueue (async).
+Keep current Agent Streams design for showing results.
+
+---
+
+### D10: SQLite Full Migration (Priority: CRITICAL) 📋 NEW
+
+**Status**: READY (Interview decision 2026-01-13)
+
+**Goal**: Replace ALL JSON stores with SQLite. No backward compatibility needed (early dev).
+
+**Interview Decisions:**
+- **Hard cutover**: Delete JSON files, no migration logic
+- **Schema redesign**: Review ConversationStore needs, update D1 schema to match
+- **No data preservation**: Test data only, clean slate
+
+**Stores to migrate:**
+
+| JSON Store | SQLite Table | Notes |
+|------------|--------------|-------|
+| `ConversationStore` | `messages` | Redesign schema for ConversationStore needs |
+| `ActionHistory` | `actions` | Use existing schema |
+| `IntelligenceDb` | `intelligence` | Use existing schema |
+
+**Files to modify:**
+- `src/core/db/schema.ts` — Update messages table if needed
+- `src/core/chat/conversationStore.ts` — Replace JSON with SQLite
+- `src/core/agentic/actionHistory.ts` — Replace JSON with SQLite
+- `src/core/intelligence/intelligenceDb.ts` — Replace JSON with SQLite
+
+**DELETE after migration:**
+- All `node:fs` imports from migrated files
+- JSON file creation/reading logic
 
 **Estimated effort**: 8 hours
 
 ---
 
-### D9: Context Menu Integration (Priority: MEDIUM)
-
-**Goal**: AI actions available via right-click, not just sidebar buttons.
-
-**Reference**: `docs/obsidian/OBSIDIAN-UI.md` (Context menus section)
-
-**Implementation:**
-
-```typescript
-// In main.ts onload()
-this.registerEvent(
-  this.app.workspace.on("editor-menu", (menu, editor, view) => {
-    const selection = editor.getSelection();
-
-    if (selection) {
-      menu.addItem((item) => {
-        item
-          .setTitle("Notient: Find related notes")
-          .setIcon("search")
-          .onClick(() => this.kernel.eventBus.emit("action:find-related", { text: selection }));
-      });
-
-      menu.addItem((item) => {
-        item
-          .setTitle("Notient: Enhance this section")
-          .setIcon("sparkles")
-          .onClick(() => this.kernel.eventBus.emit("action:enhance", { text: selection }));
-      });
-    }
-  })
-);
-
-this.registerEvent(
-  this.app.workspace.on("file-menu", (menu, file) => {
-    menu.addItem((item) => {
-      item
-        .setTitle("Notient: Analyze note")
-        .setIcon("brain")
-        .onClick(() => this.kernel.eventBus.emit("action:analyze", { path: file.path }));
-    });
-  })
-);
-```
-
-**Files to modify:**
-- `src/main.ts` — Add context menu registration
-
-**Estimated effort**: 3 hours
-
----
-
-## Execution Order
+## Execution Order (Updated 2026-01-13)
 
 ```
-Week 1: Infrastructure
-├── D1: SQLite Data Layer (8h) ✅ COMPLETE
-├── D2: HNSW Worker (8h)
-│   ├── Day 1-2: Worker implementation
-│   └── Day 3: Bridge + integration
+COMPLETED:
+├── D1: SQLite Data Layer ✅
+├── D2: HNSW Worker ✅
+├── D6: Frontmatter Bridge ✅
+├── D7: Vitals MetadataCache ✅
+└── D9: Context Menus ✅
+
+NEXT SESSION (Parallel):
 │
-Week 2: Infrastructure + Integration Start
-├── D3: Event Wiring (6h)
-│   └── Day 1-2: All event fixes
-├── D6: Frontmatter Bridge (4h)
-│   └── Day 2: Sync intelligence to frontmatter
-├── D7: Vitals from MetadataCache (3h)
-│   └── Day 3: Refactor vitals to use Obsidian cache
+├── ARCHIE: Data Layer Completion
+│   ├── D10: SQLite Migration (conversations, actions, intelligence)
+│   ├── D5: embed.worker (4 concurrent HTTP calls)
+│   └── D3: Fix reranker SCORE: X parsing
 │
-Week 3: Orchestration + Integration
-├── D4: Orchestration (6h)
-│   └── Day 1-2: Consolidation
-├── D5: Cleanup (4h)
-│   └── Day 3: Remaining issues
-├── D9: Context Menus (3h)
-│   └── Day 3: Right-click integration
-│
-Week 4: Editor Integration
-└── D8: Editor Decorations (8h)
-    └── Day 1-4: CodeMirror 6 StateField + decorations
+└── SAGE: ChiefOfStaff Consolidation
+    ├── D4: Merge actionOrchestrator → ChiefOfStaff
+    ├── D4: Functional composition (pure functions)
+    ├── D5: Delete dead ChatAgent
+    └── Refactor D9 code: actionOrchestrator.dispatch() → chiefOfStaff.execute()
+
+DEFERRED (Post-Infrastructure):
+└── D8: Editor Decorations
+    └── Ghost text on explicit request (Tab key)
 ```
 
-**Total estimated**: 50 hours (~3 weeks at 4h/day)
+**Remaining effort**: ~20 hours (~1 week at 4h/day)
 
 ---
 
@@ -457,23 +457,23 @@ Week 4: Editor Integration
 
 - [ ] Quick Actions produce results (actions appear in pending)
 - [ ] Apply button applies actions (note modified, undo available)
-- [ ] Search returns reranked results (no JSON parse failures)
+- [ ] Search returns reranked results (SCORE: X parsing works)
 - [ ] Chat works (streaming, thinking blocks, context)
 
 ### Architecture
 
-- [ ] Main thread has NO `hnswlib-wasm` import
-- [ ] All metadata queries go through SQLite
-- [ ] ChiefOfStaff is single source of UI events
-- [ ] No JSON files for core data (only settings)
+- [x] Main thread has NO `hnswlib-wasm` import ✅ (D2)
+- [ ] All data queries go through SQLite (D10 pending)
+- [ ] ChiefOfStaff is FULL orchestrator (D4 pending)
+- [ ] No JSON files for core data (only settings) (D10 pending)
+- [ ] embed.worker handles parallel embeddings (D5 pending)
 
-### Integration (NEW)
+### Integration
 
-- [ ] `notient-health` appears in frontmatter after analysis
-- [ ] `notient-summary` syncs when intelligence regenerates
-- [ ] Right-click on selection shows "Notient: Find related"
-- [ ] Right-click on file shows "Notient: Analyze note"
-- [ ] Vitals use `metadataCache.resolvedLinks` (no redundant iteration)
+- [x] `notient-health` appears in frontmatter after sync command ✅ (D6)
+- [x] Right-click on selection shows "Notient: Find related" ✅ (D9)
+- [x] Right-click on file shows "Notient: Analyze note" ✅ (D9)
+- [x] Vitals use `metadataCache.resolvedLinks` ✅ (D7)
 
 ### Stability
 
@@ -488,8 +488,47 @@ Week 4: Editor Integration
 1. **FTS5 for full-text search?** — Defer to post-Universe. Vector search is primary.
 2. **Multiple embedding models?** — Schema supports it. Implementation deferred.
 3. **Cron/scheduled tasks?** — TaskManager supports future queues. Not in Phase Universe scope.
-4. **Editor Decorations performance?** — May need throttling on large notes. Test with 10K+ line notes.
-5. **Frontmatter bloat?** — Keep `notient-*` fields minimal. Summary max 200 chars.
+4. ~~**Editor Decorations performance?**~~ — ANSWERED: Ghost text on explicit request only. Strict CM6/Preact separation.
+5. ~~**Frontmatter bloat?**~~ — ANSWERED: Write-on-demand. User controls when to sync.
+
+---
+
+## Interview Decisions Log (2026-01-13)
+
+### Infrastructure (Round 1)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Reranker parsing | Parse `SCORE: X` format | Model outputs lines, not JSON |
+| Orchestrator | Refactor to ChiefOfStaff | Full orchestrator (route + execute + persist) |
+| Parallelism | 4 concurrent embeddings | Mid-range GPU (8-12GB) |
+| SQLite migration | Do NOW | Big priority, clean foundation |
+
+### Architecture (Round 2)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| ChiefOfStaff structure | Functional composition | Pure functions, one file |
+| Migration strategy | Hard replace JSON | No backward compat needed (early dev) |
+| Dead code scope | ChatAgent only | Minimal scope |
+| Future workers | Create embed.worker NOW | Parallelize embeddings |
+
+### UX/Vision (Round 3)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| D8 priority | Infrastructure first | Solid foundation before more UI |
+| Agent Streams | Keep current design | It works |
+| First decoration | AI ghost text | Copilot-style completion |
+| UI framework | Strict separation | CM6 for editor, Preact for sidebar |
+
+### Follow-up (Rounds 4-5)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Reranker model | qwen-based, benchmark 3, hardcode best | Simpler than user setting |
+| embed.worker scope | Parallelize HTTP calls only | Worker makes 4 concurrent fetch() |
+| Data preservation | Nothing to preserve | Test data only |
+| Schema for messages | Redesign based on ConversationStore | Better fit |
+| Ghost text trigger | On explicit request (Tab) | Not automatic |
+| ChiefOfStaff role | Full orchestrator | Routes, executes, AND persists |
+| Vision end state | User-controlled spectrum | Minimal → proactive slider |
 
 ---
 
@@ -497,12 +536,12 @@ Week 4: Editor Integration
 
 These areas were identified as "replicated rather than integrated":
 
-| Area | Current | Correction | Deliverable |
-|------|---------|------------|-------------|
-| Intelligence storage | Custom JSON in `.notient/` | Frontmatter + SQLite | D6 |
-| Vitals calculation | Re-iterate all files | Use `metadataCache` | D7 |
-| UI display | Sidebar-only | Editor decorations | D8 |
-| User actions | Sidebar buttons | Context menus | D9 |
+| Area | Current | Correction | Deliverable | Status |
+|------|---------|------------|-------------|--------|
+| Intelligence storage | Custom JSON | Frontmatter + SQLite | D6, D10 | D6 ✅ |
+| Vitals calculation | Re-iterate all files | Use `metadataCache` | D7 | ✅ |
+| UI display | Sidebar-only | Editor decorations | D8 | ⏸️ |
+| User actions | Sidebar buttons | Context menus | D9 | ✅ |
 
 ---
 
