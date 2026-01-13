@@ -496,7 +496,7 @@ Variable
   - Tabs
   - Text input
   - Toggle
-- **Editor**
+- **Editor** (BE CREATIVE HERE)
   - Bases
   - Block
   - Blockquote
@@ -513,8 +513,8 @@ Variable
   - Properties
   - Table
   - Tag
-- **Foundations**
-  - Borders
+- **Foundations** (DO NOT TOUCH)
+  - Borders 
   - Colors
   - Cursor
   - Icons
@@ -522,20 +522,20 @@ Variable
   - Radiuses
   - Spacing
   - Typography
-- **Plugins**
+- **Plugins** (BE CREATIVE HERE)
   - Canvas
   - File explorer
   - Graph
   - Search
   - Sync
-- **Publish**
-- **Window**
+- **Publish** (DO NOT TOUCH)
+- **Window** (DO NOT TOUCH)
   - Divider
   - Ribbon
   - Scrollbar
-  - Sidebar
+  - Sidebar (EXCEPTION - ONLY IF APPLICABLE)
   - Status bar
-  - Vault profile
+  - Vault profile (EXCEPTION - ONLY IF RELEVANT)
   - Window frame
   - Workspace
 - About styling
