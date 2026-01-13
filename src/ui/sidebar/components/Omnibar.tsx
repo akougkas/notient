@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ProgressiveSearchOrchestrator } from "../../../core/search/progressiveSearch";
 import type { SearchResult } from "../../../types/search";
 import { useKernel } from "../context/KernelContext";
+import { searchQuery } from "../state";
 import { DeepSearchIndicator } from "./search/DeepSearchIndicator";
 import {
   SearchDropdown,
@@ -240,6 +241,23 @@ export function Omnibar({
     },
     [executeProgressiveSearch],
   );
+
+  // Sync with global search query signal
+  useEffect(() => {
+    // biome-ignore lint/correctness/useExhaustiveDependencies: manual subscription
+    return searchQuery.subscribe((newValue) => {
+      // Only update if different to avoid cursor jumps / loops
+      // and only if we aren't currently typing (checked via focus?)
+      // Actually, for "find related", we want to overwrite.
+      if (newValue !== query) {
+        setQuery(newValue);
+        // If the query came from outside (e.g. context menu), trigger search immediately
+        if (newValue && !isFocused) {
+          triggerDebouncedSearch(newValue);
+        }
+      }
+    });
+  }, [triggerDebouncedSearch, query, isFocused]);
 
   // Execute deep search using ProgressiveSearchOrchestrator
   const executeDeepSearch = useCallback(async () => {

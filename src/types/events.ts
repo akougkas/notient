@@ -44,6 +44,9 @@ export type EventType =
   | "action:undone"
   | "action:apply-requested"
   | "action:undo-requested"
+  | "action:find-related"
+  | "action:enhance"
+  | "action:analyze"
   // Insight events (primary agent output flow)
   | "insight:created"
   // Identity system events
@@ -91,6 +94,9 @@ export interface EventPayloads {
   "action:undone": ActionUndoneEvent;
   "action:apply-requested": ActionApplyRequestedEvent;
   "action:undo-requested": ActionUndoRequestedEvent;
+  "action:find-related": ActionFindRelatedEvent;
+  "action:enhance": ActionEnhanceEvent;
+  "action:analyze": ActionAnalyzeEvent;
   // Insight events (primary agent output flow)
   "insight:created": InsightCreatedEvent;
   // Identity system events
@@ -253,6 +259,18 @@ export interface ActionApplyRequestedEvent {
 export interface ActionUndoRequestedEvent {
   /** ID of the action record to undo */
   actionId: string;
+}
+
+export interface ActionFindRelatedEvent {
+  text: string;
+}
+
+export interface ActionEnhanceEvent {
+  text: string;
+}
+
+export interface ActionAnalyzeEvent {
+  path: string;
 }
 
 // =============================================================================
