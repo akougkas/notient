@@ -786,6 +786,31 @@ export default class NotientPlugin extends Plugin {
       },
     });
 
+    // Sync Intelligence to Frontmatter (D6)
+    this.addCommand({
+      id: "sync-intelligence-to-frontmatter",
+      name: "Sync Intelligence to Frontmatter",
+      callback: async () => {
+        if (!this.noteIntelligence) {
+          this.kernel.obsidian.notice("Intelligence service not ready");
+          return;
+        }
+
+        const activeFile = this.kernel.obsidian.getActiveFile();
+        if (!activeFile) {
+          this.kernel.obsidian.notice("No active file");
+          return;
+        }
+
+        const result = await this.noteIntelligence.syncToFrontmatter(activeFile.path);
+        if (result.success) {
+          this.kernel.obsidian.notice("Intelligence synced to frontmatter");
+        } else {
+          this.kernel.obsidian.notice(`Sync failed: ${result.error}`);
+        }
+      },
+    });
+
     // Run setup wizard
     this.addCommand({
       id: "run-setup",
