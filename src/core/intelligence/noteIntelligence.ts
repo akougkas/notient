@@ -234,6 +234,36 @@ export class NoteIntelligenceService {
     }
   }
 
+  async syncToFrontmatter(
+    notePath: string,
+    existingRecord?: IntelligenceRecord,
+  ): Promise<{ success: boolean; error?: string }> {
+    const record = existingRecord || this.getRecord(notePath);
+    if (!record) {
+      return { success: false, error: "No intelligence available for this note" };
+    }
+
+    // Prepare fields
+    const entityNames = record.entities
+      .map((e) => e.name)
+      .slice(0, 10); // Truncate to max 10
+
+    const healthScore = record.health ? `${record.health.score}/100` : "unknown";
+
+    const result = await this.kernel.obsidian.processFrontMatter(notePath, (fm) => {
+      if (record.health) {
+        fm["notient-health"] = healthScore;
+      }
+      if (record.summaryShort) {
+        fm["notient-summary"] = record.summaryShort;
+      }
+      fm["notient-entities"] = entityNames;
+      fm["notient-updated"] = new Date(record.generatedAt).toISOString();
+    });
+
+    return result;
+  }
+
   private hasRecordChanged(
     previous: IntelligenceRecord | null,
     current: IntelligenceRecord,
