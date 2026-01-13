@@ -86,25 +86,27 @@ export class SimpleVaultVitals {
     let totalLinks = 0;
 
     const allTags = new Set<string>();
+    const resolvedLinks = this.kernel.obsidian.metadataCache.resolvedLinks;
 
     for (const file of files) {
-      const metadata = this.kernel.obsidian.getMetadataByPath(file.path);
+      // Use resolved links for connectivity metrics
+      const fileLinks = resolvedLinks[file.path] || {};
+      const linkCount = Object.keys(fileLinks).length;
 
-      // Count links
-      const links = metadata?.links ?? [];
-      totalLinks += links.length;
+      totalLinks += linkCount;
 
       // Orphan detection (no outgoing links)
-      if (links.length === 0) {
+      if (linkCount === 0) {
         orphanCount++;
       }
 
       // Hub detection (5+ links)
-      if (links.length >= 5) {
+      if (linkCount >= 5) {
         hubCount++;
       }
 
-      // Tags
+      // Tags still need metadata cache
+      const metadata = this.kernel.obsidian.getMetadataByPath(file.path);
       const tags = metadata?.tags ?? [];
       for (const tag of tags) {
         allTags.add(tag);
@@ -132,6 +134,7 @@ export class SimpleVaultVitals {
   private async computeConnectivity(files: { path: string }[]): Promise<ConnectivityMetrics> {
     const incomingLinks: Map<string, number> = new Map();
     const outgoingLinks: Map<string, number> = new Map();
+    const resolvedLinks = this.kernel.obsidian.metadataCache.resolvedLinks;
 
     // Initialize counts
     for (const file of files) {
@@ -139,17 +142,17 @@ export class SimpleVaultVitals {
       outgoingLinks.set(file.path, 0);
     }
 
-    // Count links
-    for (const file of files) {
-      const metadata = this.kernel.obsidian.getMetadataByPath(file.path);
-      const links = metadata?.links ?? [];
+    // Count links using resolvedLinks (O(N) instead of O(N^2))
+    for (const [sourcePath, targets] of Object.entries(resolvedLinks)) {
+      // Update outgoing for source
+      if (outgoingLinks.has(sourcePath)) {
+        outgoingLinks.set(sourcePath, Object.keys(targets).length);
+      }
 
-      outgoingLinks.set(file.path, links.length);
-
-      for (const link of links) {
-        const linkedPath = this.resolveLink(link, files);
-        if (linkedPath) {
-          incomingLinks.set(linkedPath, (incomingLinks.get(linkedPath) ?? 0) + 1);
+      // Update incoming for targets
+      for (const targetPath of Object.keys(targets)) {
+        if (incomingLinks.has(targetPath)) {
+          incomingLinks.set(targetPath, (incomingLinks.get(targetPath) ?? 0) + 1);
         }
       }
     }
@@ -193,24 +196,6 @@ export class SimpleVaultVitals {
       noOutgoingLinks: noOutgoing,
       topConnectedNotes,
     };
-  }
-
-  /**
-   * Resolve a link to a file path
-   */
-  private resolveLink(link: string, files: { path: string }[]): string | null {
-    const normalized = link.replace(/\.md$/, "").toLowerCase();
-
-    for (const file of files) {
-      const filePath = file.path.toLowerCase();
-      const fileBase = filePath.replace(/\.md$/, "");
-
-      if (fileBase === normalized || fileBase.endsWith(`/${normalized}`)) {
-        return file.path;
-      }
-    }
-
-    return null;
   }
 
   /**
