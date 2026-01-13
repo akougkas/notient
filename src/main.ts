@@ -15,9 +15,11 @@ import { Notice, Plugin } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
 import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
+import type { Insight } from "./core/agentic/types";
 import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
+import { generateId } from "./core/ids";
 import { UserEvolutionService } from "./core/evolution";
 import { ImporterService, MigrationService } from "./core/importer";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
@@ -41,6 +43,7 @@ import { ProfilePreviewModal } from "./ui/modals/ProfilePreviewModal";
 import { SetupWizardModal } from "./ui/modals/SetupWizard";
 import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
 import { NotientSidebarView } from "./ui/sidebar";
+import { activeView, searchQuery } from "./ui/sidebar/state";
 import { DatabaseService } from "./core/db/database";
 
 export default class NotientPlugin extends Plugin {
@@ -130,6 +133,45 @@ export default class NotientPlugin extends Plugin {
 
       // Register commands
       this.registerCommands();
+
+      // Register context menus (D9)
+      this.registerEvent(
+        this.app.workspace.on("editor-menu", (menu, editor, _view) => {
+          const selection = editor.getSelection();
+
+          if (selection) {
+            menu.addItem((item) => {
+              item
+                .setTitle("Notient: Find related notes")
+                .setIcon("search")
+                .onClick(() =>
+                  this.kernel.eventBus.emit("action:find-related", { text: selection }),
+                );
+            });
+
+            menu.addItem((item) => {
+              item
+                .setTitle("Notient: Enhance this section")
+                .setIcon("sparkles")
+                .onClick(() => this.kernel.eventBus.emit("action:enhance", { text: selection }));
+            });
+          }
+        }),
+      );
+
+      this.registerEvent(
+        this.app.workspace.on("file-menu", (menu, file) => {
+          // Check if file is a TFile and is markdown
+          if (!file || !(file as any).path) return;
+          
+          menu.addItem((item) => {
+            item
+              .setTitle("Notient: Analyze note")
+              .setIcon("brain")
+              .onClick(() => this.kernel.eventBus.emit("action:analyze", { path: file.path }));
+          });
+        }),
+      );
 
       // Add settings tab
       this.settingTab = new NotientSettingTab(
@@ -602,6 +644,9 @@ export default class NotientPlugin extends Plugin {
 
       // Register action event handlers (PART 2.3)
       this.registerActionEventHandlers(eventBus);
+      
+      // Register context action handlers (D9)
+      this.registerContextActionHandlers(eventBus);
 
       // =========================================================================
       // PHASE 4: READY or DEGRADED
@@ -1291,5 +1336,91 @@ export default class NotientPlugin extends Plugin {
     });
 
     console.log("[Notient] Action event handlers registered");
+  }
+
+  /**
+   * Register handlers for context menu actions (D9)
+   */
+  private registerContextActionHandlers(eventBus: typeof this.kernel.eventBus): void {
+    // action:find-related
+    eventBus.on("action:find-related", ({ text }) => {
+      this.activateSidebar();
+      // Set global signals to trigger UI
+      searchQuery.value = text;
+    });
+
+    // action:enhance
+    eventBus.on("action:enhance", async ({ text }) => {
+      if (!this.actionOrchestrator) {
+        this.kernel.obsidian.notice("Cannot enhance - services not ready");
+        return;
+      }
+
+      const file = this.app.workspace.getActiveFile();
+      if (!file) {
+        this.kernel.obsidian.notice("No active file");
+        return;
+      }
+
+      this.kernel.obsidian.notice("Enhancing selection...");
+
+      try {
+        const content = await this.app.vault.read(file);
+        const context = {
+          notePath: file.path,
+          noteTitle: file.basename,
+          noteContent: content,
+          config: { selection: text },
+        };
+
+        const { pipeline } = await this.actionOrchestrator.dispatch(
+          "enhance",
+          context,
+          { scope: "selection" }
+        );
+
+        let analysis = "";
+        const actions = [];
+        
+        // Execute pipeline (yields events)
+        for await (const event of pipeline.execute()) {
+          if (event.type === "analysis") analysis = event.analysis;
+          if (event.type === "actions") actions.push(...event.actions);
+        }
+
+        const insight: Insight = {
+          id: generateId("ins"),
+          agentType: "enhance",
+          summary: analysis,
+          actions: actions,
+          suggestions: [],
+          reasoning: "User requested enhancement",
+          timestamp: Date.now(),
+          noteContext: {
+             path: context.notePath,
+             title: context.noteTitle,
+          }
+        };
+        
+        this.kernel.eventBus.emit("insight:created", { insight, source: "user-action" });
+        this.kernel.obsidian.notice("Enhancement suggestions ready (see sidebar)");
+
+      } catch (error) {
+        console.error("[Notient] Enhance failed:", error);
+        this.kernel.obsidian.notice("Enhancement failed");
+      }
+    });
+
+    // action:analyze
+    eventBus.on("action:analyze", async ({ path }) => {
+      if (!this.noteIntelligence) {
+        this.kernel.obsidian.notice("Intelligence service not ready");
+        return;
+      }
+      
+      this.kernel.obsidian.notice("Analyzing note...");
+      await this.noteIntelligence.regenerate(path);
+      this.kernel.obsidian.notice("Analysis complete");
+    });
   }
 }
