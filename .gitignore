@@ -49,3 +49,6 @@ repomix-output.xml
 .gemini/settings.local.json
 
 testbench/
+vector.worker.js
+main.js
+styles.css
