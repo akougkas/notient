@@ -56,13 +56,20 @@ export interface EmbeddingTable {
 export interface ActionTable {
   id: string;
   task_id: string | null;
+  workflow_id: string | null;
   type: string;
   risk: string;
   note_path: string | null;
+  title: string;
+  reason: string;
+  reasoning: string;
   created_at: number;
   applied_at: number | null;
   undone_at: number | null;
-  payload: string; // JSON
+  status: string;
+  payload: string; // JSON - action payload
+  undo_payload: string; // JSON - undo data
+  changed_paths: string; // JSON array
 }
 
 export interface MessageTable {
@@ -72,13 +79,18 @@ export interface MessageTable {
   content: string;
   thinking: string | null;
   created_at: number;
+  attachments: string | null; // JSON array
+  status: string | null; // 'success' | 'failed' | 'cancelled'
+  reasoning_summary: string | null;
+  action_ref: string | null;
 }
 
 export interface IntelligenceTable {
   note_path: string;
-  health: string | null; // JSON
-  entities: string | null; // JSON
-  suggestions: string | null; // JSON
+  topic: string; // Topic bucket for grouping
+  content_hash: string;
+  model_key: string;
+  data: string; // Full IntelligenceRecord as JSON
   updated_at: number;
 }
 

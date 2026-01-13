@@ -1,61 +1,29 @@
 /**
- * Action History Service (Phase 5)
+ * Action History Service (SQLite-backed)
  *
- * Persists applied actions with time-bucketed storage:
- * - Hot file: Recent 200 actions (data/actions/hot/current.json)
- * - Archives: Monthly files (data/actions/archive/{YYYY-MM}.json)
+ * Persists applied actions using SQLite actions table.
+ * Supports undo operations via stored undo payloads.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
+import type { Kysely } from "kysely";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
-import type { StoragePaths } from "../../services/storagePaths";
-import { atomicWriteFile } from "../../utils/atomicWrite";
+import type { Database } from "../db/schema";
 import type { EventBus } from "../events/eventBus";
 import { deriveRecordId } from "../ids";
 import type {
-  ActionsArchiveFile,
   AppliedActionRecord,
   AppliedActionStatus,
   DiffUndoPayload,
-  HotActionsFile,
   ProposedAction,
   RenameBackUndo,
   RestoreContentUndo,
   UndoPayload,
 } from "./types";
 
-/** Schema version for migration support */
-const ACTIONS_VERSION = 2;
-
-/** Maximum records in hot file before archiving */
-const MAX_HOT_ACTIONS = 200;
-
-/** Number of oldest records to archive when limit exceeded */
-const ARCHIVE_THRESHOLD = 150;
-
-/** Debounce delay for flushing to disk */
+/** Debounce delay for flushing to disk (for dirty tracking) */
 const FLUSH_DEBOUNCE_MS = 500;
 
-/** Get year-month string from timestamp (YYYY-MM format) */
-function getYearMonth(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Group records by month */
-function groupByMonth(records: AppliedActionRecord[]): Map<string, AppliedActionRecord[]> {
-  const byMonth = new Map<string, AppliedActionRecord[]>();
-  for (const record of records) {
-    const yearMonth = getYearMonth(record.timestamp);
-    const existing = byMonth.get(yearMonth) ?? [];
-    existing.push(record);
-    byMonth.set(yearMonth, existing);
-  }
-  return byMonth;
-}
-
-/** Retention config (kept for backward compatibility, unused with time-bucketed storage) */
+/** Retention config (kept for backward compatibility) */
 export interface ActionRetentionConfig {
   maxEntries: number;
   maxAgeDays: number;
@@ -72,7 +40,7 @@ export interface UndoResult {
 }
 
 /**
- * Manages action history with time-bucketed storage and diff-based undo
+ * Manages action history with SQLite storage and diff-based undo
  */
 export class ActionHistory {
   private records: AppliedActionRecord[] = [];
@@ -81,37 +49,28 @@ export class ActionHistory {
   private loaded = false;
 
   constructor(
-    private storagePaths: StoragePaths,
+    private db: Kysely<Database>,
     private obsidian: ObsidianFacade,
     private eventBus: EventBus,
-    // Retention config kept for backward compatibility but not used for time-bucketed storage
     _retention?: ActionRetentionConfig,
   ) {}
 
   /**
-   * Load hot actions from disk (with migration if needed)
+   * Load actions from SQLite
    */
   async load(): Promise<void> {
     if (this.loaded) return;
 
-    // Run migration if legacy file exists
-    await this.migrateIfNeeded();
-
-    const hotPath = this.storagePaths.actionsCurrent;
-
     try {
-      const exists = await this.fileExists(hotPath);
-      if (!exists) {
-        this.loaded = true;
-        return;
-      }
+      const rows = await this.db
+        .selectFrom("actions")
+        .selectAll()
+        .orderBy("created_at", "asc")
+        .execute();
 
-      const content = await fs.promises.readFile(hotPath, "utf-8");
-      const data: HotActionsFile = JSON.parse(content);
-
-      this.records = data.records || [];
+      this.records = rows.map((row) => this.rowToRecord(row));
       this.loaded = true;
-      console.log(`[ActionHistory] Loaded ${this.records.length} hot actions`);
+      console.log(`[ActionHistory] Loaded ${this.records.length} actions`);
     } catch (error) {
       console.error("[ActionHistory] Failed to load:", error);
       this.loaded = true;
@@ -143,12 +102,6 @@ export class ActionHistory {
 
     this.records.push(record);
     this.dirty = true;
-
-    // Check if we need to archive old records
-    if (this.records.length > MAX_HOT_ACTIONS) {
-      void this.archiveOldRecords();
-    }
-
     this.scheduleFlush();
     this.eventBus.emit("action:applied", { record });
     console.log(`[ActionHistory] Added record: ${record.action.title}`);
@@ -157,58 +110,7 @@ export class ActionHistory {
   }
 
   /**
-   * Archive oldest records to monthly files when hot file exceeds limit
-   */
-  private async archiveOldRecords(): Promise<void> {
-    if (this.records.length <= MAX_HOT_ACTIONS) return;
-
-    const toArchive = this.records.slice(0, ARCHIVE_THRESHOLD);
-    this.records = this.records.slice(ARCHIVE_THRESHOLD);
-
-    for (const [yearMonth, records] of groupByMonth(toArchive)) {
-      await this.appendToArchive(yearMonth, records);
-    }
-
-    this.dirty = true;
-    console.log(`[ActionHistory] Archived ${toArchive.length} records`);
-  }
-
-  /**
-   * Append records to monthly archive file
-   */
-  private async appendToArchive(
-    yearMonth: string,
-    newRecords: AppliedActionRecord[],
-  ): Promise<void> {
-    const archivePath = this.storagePaths.getActionArchivePath(yearMonth);
-
-    let existing: AppliedActionRecord[] = [];
-
-    try {
-      const content = await fs.promises.readFile(archivePath, "utf-8");
-      const data: ActionsArchiveFile = JSON.parse(content);
-      existing = data.records;
-    } catch {
-      // File doesn't exist yet
-    }
-
-    const allRecords = [...existing, ...newRecords];
-
-    const archive: ActionsArchiveFile = {
-      version: ACTIONS_VERSION,
-      yearMonth,
-      records: allRecords,
-      recordCount: allRecords.length,
-      archivedAt: Date.now(),
-    };
-
-    // Ensure directory exists
-    await fs.promises.mkdir(this.storagePaths.actionsArchive, { recursive: true });
-    await atomicWriteFile(archivePath, JSON.stringify(archive, null, 2));
-  }
-
-  /**
-   * Flush hot actions to disk (debounced)
+   * Flush records to SQLite
    */
   async flush(): Promise<void> {
     if (!this.dirty) return;
@@ -218,19 +120,13 @@ export class ActionHistory {
       this.flushTimeout = null;
     }
 
-    // Ensure directory exists
-    await fs.promises.mkdir(this.storagePaths.actionsHot, { recursive: true });
+    // Sync all records to SQLite
+    for (const record of this.records) {
+      await this.upsertRecord(record);
+    }
 
-    const data: HotActionsFile = {
-      version: ACTIONS_VERSION,
-      records: this.records,
-      oldestTimestamp: this.records[0]?.timestamp ?? Date.now(),
-      newestTimestamp: this.records[this.records.length - 1]?.timestamp ?? Date.now(),
-    };
-
-    await atomicWriteFile(this.storagePaths.actionsCurrent, JSON.stringify(data, null, 2));
     this.dirty = false;
-    console.log(`[ActionHistory] Flushed ${this.records.length} hot actions`);
+    console.log(`[ActionHistory] Flushed ${this.records.length} actions`);
   }
 
   /**
@@ -249,21 +145,21 @@ export class ActionHistory {
   }
 
   /**
-   * Get a record by ID (hot records only)
+   * Get a record by ID
    */
   getRecord(recordId: string): AppliedActionRecord | undefined {
     return this.records.find((r) => r.id === recordId);
   }
 
   /**
-   * Get all hot records
+   * Get all records
    */
   getAllRecords(): AppliedActionRecord[] {
     return [...this.records];
   }
 
   /**
-   * Get records for a specific note (hot records only)
+   * Get records for a specific note
    */
   getRecordsForNote(notePath: string): AppliedActionRecord[] {
     return this.records.filter(
@@ -272,7 +168,7 @@ export class ActionHistory {
   }
 
   /**
-   * Get records for a specific workflow (hot records only)
+   * Get records for a specific workflow
    */
   getRecordsForWorkflow(workflowId: string): AppliedActionRecord[] {
     return this.records.filter((r) => r.workflowId === workflowId);
@@ -283,39 +179,6 @@ export class ActionHistory {
    */
   getRecentRecords(limit = 20): AppliedActionRecord[] {
     return this.records.slice(-limit).reverse();
-  }
-
-  /**
-   * Get archived actions for a specific month
-   */
-  async getArchivedActions(yearMonth: string): Promise<AppliedActionRecord[]> {
-    const archivePath = this.storagePaths.getActionArchivePath(yearMonth);
-
-    try {
-      const content = await fs.promises.readFile(archivePath, "utf-8");
-      const data: ActionsArchiveFile = JSON.parse(content);
-      return data.records;
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * List available archive months (most recent first)
-   */
-  async listArchiveMonths(): Promise<string[]> {
-    const archiveDir = this.storagePaths.actionsArchive;
-
-    try {
-      const files = await fs.promises.readdir(archiveDir);
-      return files
-        .filter((f) => f.endsWith(".json"))
-        .map((f) => f.replace(".json", ""))
-        .sort()
-        .reverse();
-    } catch {
-      return [];
-    }
   }
 
   /**
@@ -333,14 +196,11 @@ export class ActionHistory {
       const undoResult = await this.applyUndo(record.undo);
 
       if (undoResult.success) {
-        // Update status and remove from hot records
         record.status = "undone";
-        this.records.splice(recordIndex, 1);
         this.scheduleFlush();
         this.eventBus.emit("action:undone", { recordId });
         console.log(`[ActionHistory] Undone action: ${record.action.title}`);
       } else if (undoResult.partial && record.undo.type === "restore_content") {
-        // Partial success: update the record to only contain files that still need undoing
         const remainingFiles = record.undo.files.filter((f) =>
           undoResult.failedPaths?.includes(f.path),
         );
@@ -353,7 +213,7 @@ export class ActionHistory {
           record.changedPaths = remainingFiles.map((f) => f.path);
           this.scheduleFlush();
         } else {
-          this.records.splice(recordIndex, 1);
+          record.status = "undone";
           this.scheduleFlush();
           this.eventBus.emit("action:undone", { recordId });
         }
@@ -384,7 +244,7 @@ export class ActionHistory {
   }
 
   /**
-   * Restore file content(s) to previous state (legacy method)
+   * Restore file content(s) to previous state
    */
   private async undoRestoreContent(payload: RestoreContentUndo): Promise<UndoResult> {
     const errors: string[] = [];
@@ -392,7 +252,6 @@ export class ActionHistory {
     const failedPaths: string[] = [];
 
     for (const file of payload.files) {
-      // Empty before content means file was created - trash it
       if (file.before === "") {
         const result = await this.obsidian.trashFile(file.path);
         if (!result.success) {
@@ -471,7 +330,6 @@ export class ActionHistory {
           continue;
         }
 
-        // Apply the reverse diff
         const restored = applyReverseDiff(current, patch.diff);
 
         const result = await this.obsidian.modifyFile(patch.path, restored);
@@ -513,8 +371,6 @@ export class ActionHistory {
     switch (record.undo.type) {
       case "restore_content":
         return record.undo.files.every((f) => {
-          // Empty before = created file, must exist to delete
-          // Non-empty before = modified file, must exist to restore
           return this.obsidian.getFileByPath(f.path) !== null;
         });
       case "rename_back":
@@ -538,20 +394,19 @@ export class ActionHistory {
   }
 
   /**
-   * Clear all hot records
+   * Clear all records
    */
   clear(): void {
     this.records = [];
     this.scheduleFlush();
+    void this.db.deleteFrom("actions").execute();
   }
 
   /**
-   * Prune old records (no-op with time-bucketed storage - we archive instead)
-   * Kept for backward compatibility
+   * Prune old records (kept for backward compatibility)
    */
   prune(): void {
-    // With time-bucketed storage, old records are archived rather than pruned
-    // This method is kept for backward compatibility
+    // No-op - SQLite handles storage efficiently
   }
 
   /**
@@ -572,83 +427,89 @@ export class ActionHistory {
     await this.flush();
   }
 
-  // ============ Migration ============
-
-  /**
-   * Migrate from legacy single-file format if needed
-   */
-  private async migrateIfNeeded(): Promise<void> {
-    const legacyPath = this.storagePaths.legacyActions;
-
-    try {
-      const exists = await this.fileExists(legacyPath);
-      if (!exists) return;
-
-      // Check if already migrated
-      const hotPath = this.storagePaths.actionsCurrent;
-      const hotExists = await this.fileExists(hotPath);
-      if (hotExists) return;
-
-      console.log("[ActionHistory] Migrating legacy actions...");
-
-      // Read legacy file
-      const content = await fs.promises.readFile(legacyPath, "utf-8");
-      const legacy = JSON.parse(content);
-
-      // Ensure directories exist
-      await fs.promises.mkdir(this.storagePaths.actionsHot, { recursive: true });
-      await fs.promises.mkdir(this.storagePaths.actionsArchive, { recursive: true });
-
-      // Convert records (add reasoning and status fields)
-      const records: AppliedActionRecord[] = (legacy.records ?? []).map(
-        (r: Partial<AppliedActionRecord>) => ({
-          ...r,
-          reasoning: r.reasoning ?? "Legacy action - no reasoning recorded",
-          status: r.status ?? "applied",
-        }),
-      );
-
-      // Split into hot (last 200) and archives (older ones)
-      const hot = records.slice(-MAX_HOT_ACTIONS);
-      const toArchive = records.slice(0, -MAX_HOT_ACTIONS);
-
-      // Save hot records
-      this.records = hot;
-      this.dirty = true;
-      await this.flush();
-
-      // Archive old records by month
-      if (toArchive.length > 0) {
-        for (const [yearMonth, recs] of groupByMonth(toArchive)) {
-          await this.appendToArchive(yearMonth, recs);
-        }
-      }
-
-      // Move legacy file to _deleted
-      await fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true });
-      const deletedPath = path.join(
-        this.storagePaths.tempDeleted,
-        `actions-legacy-${Date.now()}.json`,
-      );
-      await fs.promises.rename(legacyPath, deletedPath);
-
-      console.log(
-        `[ActionHistory] Migration complete: ${hot.length} hot, ${toArchive.length} archived`,
-      );
-    } catch (error) {
-      console.error("[ActionHistory] Migration failed:", error);
-    }
-  }
-
   // ============ Private Helpers ============
 
-  private async fileExists(filePath: string): Promise<boolean> {
-    try {
-      await fs.promises.access(filePath, fs.constants.F_OK);
-      return true;
-    } catch {
-      return false;
-    }
+  /**
+   * Convert a database row to AppliedActionRecord
+   */
+  private rowToRecord(row: {
+    id: string;
+    task_id: string | null;
+    workflow_id: string | null;
+    type: string;
+    risk: string;
+    note_path: string | null;
+    title: string;
+    reason: string;
+    reasoning: string;
+    created_at: number;
+    applied_at: number | null;
+    undone_at: number | null;
+    status: string;
+    payload: string;
+    undo_payload: string;
+    changed_paths: string;
+  }): AppliedActionRecord {
+    const payload = JSON.parse(row.payload);
+    const action: ProposedAction = {
+      id: row.id,
+      type: row.type as ProposedAction["type"],
+      risk: row.risk as ProposedAction["risk"],
+      title: row.title,
+      reason: row.reason,
+      target: row.note_path ?? "",
+      requiresWriteLock: true,
+      payload,
+    } as ProposedAction;
+
+    return {
+      id: row.id,
+      timestamp: row.created_at,
+      workflowId: row.workflow_id ?? undefined,
+      taskId: row.task_id ?? undefined,
+      action,
+      reasoning: row.reasoning,
+      undo: JSON.parse(row.undo_payload),
+      changedPaths: JSON.parse(row.changed_paths),
+      status: row.status as AppliedActionStatus,
+    };
+  }
+
+  /**
+   * Upsert a record to SQLite
+   */
+  private async upsertRecord(record: AppliedActionRecord): Promise<void> {
+    const row = {
+      id: record.id,
+      task_id: record.taskId ?? null,
+      workflow_id: record.workflowId ?? null,
+      type: record.action.type,
+      risk: record.action.risk,
+      note_path: record.action.target ?? null,
+      title: record.action.title,
+      reason: record.action.reason,
+      reasoning: record.reasoning,
+      created_at: record.timestamp,
+      applied_at: record.status === "applied" ? record.timestamp : null,
+      undone_at: record.status === "undone" ? Date.now() : null,
+      status: record.status,
+      payload: JSON.stringify("payload" in record.action ? record.action.payload : {}),
+      undo_payload: JSON.stringify(record.undo),
+      changed_paths: JSON.stringify(record.changedPaths),
+    };
+
+    await this.db
+      .insertInto("actions")
+      .values(row)
+      .onConflict((oc) =>
+        oc.column("id").doUpdateSet({
+          status: row.status,
+          undone_at: row.undone_at,
+          undo_payload: row.undo_payload,
+          changed_paths: row.changed_paths,
+        }),
+      )
+      .execute();
   }
 }
 
@@ -658,7 +519,6 @@ export class ActionHistory {
 
 /**
  * Create a unified diff for undo purposes.
- * The diff is created from newContent to oldContent (reversed) so applying it restores original.
  */
 export function createUnifiedDiff(
   newContent: string,
@@ -669,14 +529,12 @@ export function createUnifiedDiff(
   const newLines = newContent.split("\n");
   const output: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
 
-  // Find changed regions using simple LCS-style comparison
   const changes = findChanges(newLines, oldLines);
 
   if (changes.length === 0) {
     return output.join("\n");
   }
 
-  // Group changes into hunks with context
   for (const change of changes) {
     const contextStart = Math.max(0, change.newStart - 3);
     const contextEnd = Math.min(newLines.length, change.newEnd + 3);
@@ -692,22 +550,18 @@ export function createUnifiedDiff(
 
     output.push(`@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@`);
 
-    // Context before
     for (let i = contextStart; i < change.newStart; i++) {
       output.push(` ${newLines[i]}`);
     }
 
-    // Deletions (lines in new that need to be removed)
     for (let i = change.newStart; i < change.newEnd; i++) {
       output.push(`+${newLines[i]}`);
     }
 
-    // Additions (lines from old that need to be restored)
     for (let i = change.oldStart; i < change.oldEnd; i++) {
       output.push(`-${oldLines[i]}`);
     }
 
-    // Context after
     for (let i = change.newEnd; i < contextEnd; i++) {
       output.push(` ${newLines[i]}`);
     }
@@ -723,13 +577,6 @@ interface Change {
   newEnd: number;
 }
 
-interface MatchResult {
-  found: boolean;
-  oldOffset: number;
-  newOffset: number;
-}
-
-/** Check if two lines at given indices match */
 function linesMatch(
   oldLines: string[],
   newLines: string[],
@@ -741,7 +588,6 @@ function linesMatch(
   );
 }
 
-/** Skip matching lines and return updated indices */
 function skipMatchingLines(
   oldLines: string[],
   newLines: string[],
@@ -757,24 +603,12 @@ function skipMatchingLines(
   return { oldIdx, newIdx };
 }
 
-/** Search for a match within lookahead window */
-function searchForMatch(
-  oldLines: string[],
-  newLines: string[],
-  oldIdx: number,
-  newIdx: number,
-  maxLookahead: number,
-): MatchResult {
-  for (let ahead = 1; ahead <= maxLookahead; ahead++) {
-    const result = checkOffsetsAtDistance(oldLines, newLines, oldIdx, newIdx, ahead);
-    if (result.found) {
-      return result;
-    }
-  }
-  return { found: false, oldOffset: 0, newOffset: 0 };
+interface MatchResult {
+  found: boolean;
+  oldOffset: number;
+  newOffset: number;
 }
 
-/** Check all offset combinations at a given distance */
 function checkOffsetsAtDistance(
   oldLines: string[],
   newLines: string[],
@@ -791,7 +625,22 @@ function checkOffsetsAtDistance(
   return { found: false, oldOffset: 0, newOffset: 0 };
 }
 
-/** Find regions where old and new content differ */
+function searchForMatch(
+  oldLines: string[],
+  newLines: string[],
+  oldIdx: number,
+  newIdx: number,
+  maxLookahead: number,
+): MatchResult {
+  for (let ahead = 1; ahead <= maxLookahead; ahead++) {
+    const result = checkOffsetsAtDistance(oldLines, newLines, oldIdx, newIdx, ahead);
+    if (result.found) {
+      return result;
+    }
+  }
+  return { found: false, oldOffset: 0, newOffset: 0 };
+}
+
 function findChanges(newLines: string[], oldLines: string[]): Change[] {
   const changes: Change[] = [];
   let oldIdx = 0;
@@ -829,7 +678,6 @@ function findChanges(newLines: string[], oldLines: string[]): Change[] {
   return changes;
 }
 
-/** Parsed hunk from unified diff */
 interface DiffHunk {
   oldStart: number;
   oldCount: number;
@@ -838,18 +686,10 @@ interface DiffHunk {
   lines: string[];
 }
 
-/** Result of processing hunk lines for reverse application */
-interface HunkApplication {
-  deleteCount: number;
-  insertLines: string[];
-}
-
-/** Check if a line is a diff content line (starts with +, -, or space) */
 function isDiffContentLine(line: string): boolean {
   return line.startsWith("+") || line.startsWith("-") || line.startsWith(" ");
 }
 
-/** Parse a hunk header line into a DiffHunk structure */
 function parseHunkHeader(line: string): DiffHunk | null {
   const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
   if (!match) {
@@ -864,7 +704,6 @@ function parseHunkHeader(line: string): DiffHunk | null {
   };
 }
 
-/** Parse all hunks from diff lines */
 function parseHunks(diffLines: string[]): DiffHunk[] {
   const hunks: DiffHunk[] = [];
   let currentHunk: DiffHunk | null = null;
@@ -890,7 +729,6 @@ function parseHunks(diffLines: string[]): DiffHunk[] {
   return hunks;
 }
 
-/** Process a single diff line for reverse application */
 function processReverseDiffLine(line: string): { delete: boolean; insert: string | null } {
   const content = line.slice(1);
 
@@ -906,7 +744,11 @@ function processReverseDiffLine(line: string): { delete: boolean; insert: string
   return { delete: false, insert: null };
 }
 
-/** Calculate delete count and insert lines for a hunk in reverse application */
+interface HunkApplication {
+  deleteCount: number;
+  insertLines: string[];
+}
+
 function calculateHunkApplication(hunkLines: string[]): HunkApplication {
   let deleteCount = 0;
   const insertLines: string[] = [];
@@ -924,7 +766,6 @@ function calculateHunkApplication(hunkLines: string[]): HunkApplication {
   return { deleteCount, insertLines };
 }
 
-/** Apply a single hunk to result lines (mutates resultLines) */
 function applyHunkToLines(resultLines: string[], hunk: DiffHunk): void {
   const startIdx = hunk.newStart - 1;
   const { deleteCount, insertLines } = calculateHunkApplication(hunk.lines);
@@ -933,12 +774,6 @@ function applyHunkToLines(resultLines: string[], hunk: DiffHunk): void {
 
 /**
  * Apply a reverse diff to restore original content.
- * The diff was created with new→old, so + lines are additions (to remove)
- * and - lines are deletions (to add back).
- *
- * @param currentContent - Current file content
- * @param diff - Unified diff string
- * @returns Restored content
  */
 export function applyReverseDiff(currentContent: string, diff: string): string {
   const diffLines = diff.split("\n");

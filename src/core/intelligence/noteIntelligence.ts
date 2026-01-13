@@ -9,6 +9,7 @@
  * plugin data folder and emits events for UI surfaces.
  */
 
+import type { DatabaseService } from "../db/database";
 import type { EventBus } from "../events/eventBus";
 import { generateNoteId } from "../indexer/simpleChunker";
 import type { Kernel } from "../kernel";
@@ -48,8 +49,14 @@ export class NoteIntelligenceService {
   async initialize(): Promise<void> {
     if (this.disposed) return;
 
-    // No longer model-keyed - intelligence is vault-centric (Phase 3)
-    this.db = new IntelligenceDb(this.kernel.storagePaths);
+    // Get database service for SQLite-backed storage
+    const dbService = this.kernel.getService<DatabaseService>("database");
+    if (!dbService) {
+      console.warn("[NoteIntelligenceService] Database service not available");
+      return;
+    }
+
+    this.db = new IntelligenceDb(dbService.db);
     await this.db.load();
 
     // After indexing completes, refresh stale intelligence records.

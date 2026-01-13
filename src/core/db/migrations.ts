@@ -60,13 +60,20 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE TABLE IF NOT EXISTS actions (
   id TEXT PRIMARY KEY,
   task_id TEXT,
+  workflow_id TEXT,
   type TEXT NOT NULL,
   risk TEXT NOT NULL,
   note_path TEXT,
+  title TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  reasoning TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   applied_at INTEGER,
   undone_at INTEGER,
-  payload TEXT NOT NULL
+  status TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  undo_payload TEXT NOT NULL,
+  changed_paths TEXT NOT NULL
 );
 
 -- Messages
@@ -76,18 +83,24 @@ CREATE TABLE IF NOT EXISTS messages (
   role TEXT NOT NULL,
   content TEXT NOT NULL,
   thinking TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  attachments TEXT,
+  status TEXT,
+  reasoning_summary TEXT,
+  action_ref TEXT
 );
 
 -- Intelligence
 CREATE TABLE IF NOT EXISTS intelligence (
   note_path TEXT PRIMARY KEY,
-  health TEXT,
-  entities TEXT,
-  suggestions TEXT,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (note_path) REFERENCES notes(path)
+  topic TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  model_key TEXT NOT NULL,
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_intelligence_topic ON intelligence(topic);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_notes_mtime ON notes(mtime);
