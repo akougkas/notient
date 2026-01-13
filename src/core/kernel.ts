@@ -10,6 +10,7 @@
 
 import type { App, Plugin } from "obsidian";
 import { ObsidianFacade } from "../adapters/obsidianFacade";
+import type { DatabaseService } from "./db/database";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { IndexManager } from "../services/indexManager";
 import type { OllamaService } from "../services/ollama";
@@ -57,6 +58,7 @@ interface ServiceState {
  * Used by getService() for type-safe service retrieval.
  */
 export interface ServiceRegistry {
+  database: DatabaseService;
   healthMonitor: HealthMonitor;
   ollama: OllamaService;
   vectorStore: VectorStore;
@@ -112,6 +114,7 @@ export class Kernel {
   };
 
   // Service references (set during initialization)
+  private database: DatabaseService | null = null;
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
   private vectorStore: VectorStore | null = null;
@@ -314,6 +317,9 @@ export class Kernel {
    */
   registerService<K extends ServiceName>(name: K, service: ServiceRegistry[K]): void {
     switch (name) {
+      case "database":
+        this.database = service as DatabaseService;
+        break;
       case "healthMonitor":
         this.healthMonitor = service as HealthMonitor;
         break;
@@ -398,6 +404,9 @@ export class Kernel {
   getService<K extends ServiceName | string>(name: K): unknown {
     let result: unknown = null;
     switch (name) {
+      case "database":
+        result = this.database;
+        break;
       case "healthMonitor":
         result = this.healthMonitor;
         break;
@@ -484,6 +493,7 @@ export class Kernel {
 
     // Dispose services in reverse order
     const disposables = [
+      this.database, // Add database here
       // Phase 2 services first
       this.workflowRunner,
       this.actionApplier,

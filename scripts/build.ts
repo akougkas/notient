@@ -27,10 +27,10 @@ const VAULT_PLUGIN = "/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/not
 const PROJECT_ROOT = process.cwd();
 
 // Files to deploy to vault
-const DEPLOY_FILES = ["main.js", "manifest.json", "styles.css"];
+const DEPLOY_FILES = ["main.js", "vector.worker.js", "manifest.json", "styles.css"];
 
 // Core plugin files (never deleted)
-const CORE_FILES = new Set(["main.js", "manifest.json", "styles.css", "data.json"]);
+const CORE_FILES = new Set(["main.js", "vector.worker.js", "manifest.json", "styles.css", "data.json"]);
 
 // New structure directories (Phase 1/2)
 const NEW_STRUCTURE = {
@@ -190,6 +190,18 @@ const cssBuildOptions: esbuild.BuildOptions = {
   minify: !isDev && !isClean && !isReset && !isHardReset,
 };
 
+const workerBuildOptions: esbuild.BuildOptions = {
+  entryPoints: ["src/workers/vector.worker.ts"],
+  bundle: true,
+  outfile: "vector.worker.js",
+  format: "esm",
+  target: "es2022",
+  platform: "browser",
+  logLevel: "info",
+  minify: !isDev,
+  sourcemap: isDev ? "inline" : false,
+};
+
 // ============ Build Functions ============
 
 async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
@@ -202,6 +214,7 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
     const [jsResult] = await Promise.all([
       esbuild.build(getBuildOptions(dev)),
       esbuild.build(cssBuildOptions),
+      esbuild.build(workerBuildOptions),
     ]);
 
     const duration = Date.now() - start;
@@ -216,12 +229,13 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
 }
 
 async function watchBuild(): Promise<void> {
-  const [jsCtx, cssCtx] = await Promise.all([
+  const [jsCtx, cssCtx, workerCtx] = await Promise.all([
     esbuild.context(getBuildOptions(true)),
     esbuild.context(cssBuildOptions),
+    esbuild.context(workerBuildOptions),
   ]);
 
-  await Promise.all([jsCtx.watch(), cssCtx.watch()]);
+  await Promise.all([jsCtx.watch(), cssCtx.watch(), workerCtx.watch()]);
 
   logSection("Watch Mode");
   logInfo("Watching src/ for changes...");
@@ -247,6 +261,7 @@ async function watchBuild(): Promise<void> {
     watcher.close();
     jsCtx.dispose();
     cssCtx.dispose();
+    workerCtx.dispose();
     console.log();
     logInfo("Watch mode stopped");
     process.exit(0);

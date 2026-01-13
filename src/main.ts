@@ -41,6 +41,7 @@ import { ProfilePreviewModal } from "./ui/modals/ProfilePreviewModal";
 import { SetupWizardModal } from "./ui/modals/SetupWizard";
 import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
 import { NotientSidebarView } from "./ui/sidebar";
+import { DatabaseService } from "./core/db/database";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;
@@ -51,6 +52,9 @@ export default class NotientPlugin extends Plugin {
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
   private llmProvider: LMStudioSDKProvider | null = null;
+
+  // Database
+  private databaseService: DatabaseService | null = null;
 
   // Indexing and search
   private vectorStore: HNSWVectorStore | null = null;
@@ -90,6 +94,9 @@ export default class NotientPlugin extends Plugin {
 
   // Indexing control
   private indexingAbortController: AbortController | null = null;
+
+  // Pending action from wizard
+  private _pendingIndexAction: "none" | "use_existing" | "sync" | "rebuild" = "none";
 
   async onload(): Promise<void> {
     console.log("[Notient] Loading plugin...");
@@ -249,6 +256,12 @@ export default class NotientPlugin extends Plugin {
       await this.vectorStore.dispose();
       this.vectorStore = null;
     }
+    
+    // Dispose Database
+    if (this.databaseService) {
+      this.databaseService.close();
+      this.databaseService = null;
+    }
 
     // LLM providers
     this.ollamaService?.dispose();
@@ -350,7 +363,18 @@ export default class NotientPlugin extends Plugin {
       // PHASE 2: LOADING_INDEX
       // =========================================================================
       this.initStateMachine.transition("LOADING_INDEX", {
-        progress: { stage: "index", percent: 50, message: "Loading vector store..." },
+        progress: { stage: "index", percent: 50, message: "Loading database..." },
+      });
+      
+      // Initialize Database (SQLite)
+      this.databaseService = new DatabaseService(this.app, this.kernel.storagePaths);
+      await this.databaseService.init();
+      this.kernel.registerService("database", this.databaseService);
+
+      this.initStateMachine.updateProgress({
+        stage: "index",
+        percent: 55,
+        message: "Loading vector store...",
       });
 
       // Create and initialize vector store (loads HNSW WASM)
@@ -973,9 +997,6 @@ export default class NotientPlugin extends Plugin {
       await this.reinitializeServices();
     }
   }
-
-  // Track the index action requested by the wizard
-  private _pendingIndexAction: "none" | "use_existing" | "sync" | "rebuild" = "none";
 
   private async reinitializeServices(): Promise<void> {
     try {

@@ -48,8 +48,13 @@ export class VectorWorkerBridge {
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
 
-  constructor() {
-    this.worker = new Worker(new URL("../../workers/vector.worker.ts", import.meta.url), {
+  constructor(workerPath: string) {
+    const workerUrl =
+      workerPath.startsWith("http") || workerPath.startsWith("file")
+        ? workerPath
+        : `file://${workerPath}`;
+
+    this.worker = new Worker(workerUrl, {
       type: "module",
     });
 
