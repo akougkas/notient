@@ -433,11 +433,6 @@ export class HNSWVectorStore implements VectorStore {
     this.dirty = true;
   }
 
-  async deleteByNoteId(noteId: string): Promise<void> {
-    console.warn("[HNSWVectorStore] deleteByNoteId is not supported with SQLite. Use deleteByPath.");
-  }
-  
-  // New method for SQLite compatibility
   async deleteByPath(notePath: string): Promise<void> {
     if (this.disposed) return;
     

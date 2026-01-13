@@ -569,13 +569,14 @@ export default class NotientPlugin extends Plugin {
         );
       }
 
-      // ConversationStore
-      this.conversationStore = new ConversationStore(this.kernel.storagePaths, {
+      // ConversationStore (SQLite-backed)
+      if (!this.databaseService) throw new Error("DatabaseService not initialized");
+      this.conversationStore = new ConversationStore(this.databaseService.db, {
         maxMessagesPerNote: this.settings.chatRetention.maxMessagesPerNote,
         maxAgeDays: this.settings.chatRetention.maxAgeDays,
       });
-      await this.conversationStore.load();
-      this.conversationStore.prune();
+      await this.conversationStore.initialize();
+      void this.conversationStore.prune();
       this.kernel.registerService("conversationStore", this.conversationStore);
 
       // Always wire conversation store (taskQueue always exists now)
@@ -592,8 +593,10 @@ export default class NotientPlugin extends Plugin {
       this.trustLevelManager = new TrustLevelManager(this.settings.agent.trustPolicy);
       this.kernel.registerService("trustLevelManager", this.trustLevelManager);
 
+      // ActionHistory (SQLite-backed)
+      if (!this.databaseService) throw new Error("DatabaseService not initialized");
       this.actionHistory = new ActionHistory(
-        this.kernel.storagePaths,
+        this.databaseService.db,
         this.kernel.obsidian,
         this.kernel.eventBus,
         {

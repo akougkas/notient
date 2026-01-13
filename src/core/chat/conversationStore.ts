@@ -1,26 +1,18 @@
 /**
- * Conversation Store
+ * Conversation Store (SQLite-backed)
  *
- * Per-note conversation storage with lazy loading.
- * Files stored at: data/conversations/notes/{noteId}.json
+ * Per-note conversation storage using SQLite messages table.
  *
  * Key features:
- * - Lazy loading: only loads conversation when accessed
+ * - Lazy loading: loads conversation when accessed
  * - Status tracking: success/failed/cancelled for audit trail
- * - Reasoning summary: stores <think> summary, not full content
- * - Migration: auto-migrates legacy conversations.json
- * - Rollups: on-demand folder summaries for PARA
+ * - In-memory caching with SQLite persistence
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import type { StoragePaths } from "../../services/storagePaths";
-import { atomicWriteFile } from "../../utils/atomicWrite";
+import type { Kysely } from "kysely";
+import type { Database } from "../db/schema";
 import { generateNoteId } from "../indexer/simpleChunker";
-import type { ConversationFile, ExtendedChatMessage, StoredChatMessage } from "./types";
-
-/** Schema version for per-note files */
-const CONVERSATION_VERSION = 2;
+import type { ExtendedChatMessage, StoredChatMessage } from "./types";
 
 /** Default retention settings */
 const DEFAULT_MAX_MESSAGES_PER_NOTE = 50;
@@ -43,7 +35,7 @@ interface ConversationMeta {
 }
 
 /**
- * Manages per-note conversation persistence
+ * Manages per-note conversation persistence using SQLite
  */
 export class ConversationStore {
   /** Loaded conversations keyed by noteId */
@@ -54,11 +46,9 @@ export class ConversationStore {
   private dirty: Set<string> = new Set();
   /** Debounced flush timer */
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Whether migration has been checked */
-  private migrationChecked = false;
 
   constructor(
-    private storagePaths: StoragePaths,
+    private db: Kysely<Database>,
     private retention: ChatRetentionConfig = {
       maxMessagesPerNote: DEFAULT_MAX_MESSAGES_PER_NOTE,
       maxAgeDays: DEFAULT_MAX_AGE_DAYS,
@@ -70,20 +60,12 @@ export class ConversationStore {
   // ============================================================================
 
   /**
-   * Initialize store and run migration if needed
-   * @alias load() - backward compatible
+   * Initialize store (no-op, SQLite is already initialized)
    */
   async initialize(): Promise<void> {
-    await this.migrateIfNeeded();
+    // SQLite is already initialized via DatabaseService
   }
 
-  /**
-   * Backward-compatible load method
-   * @deprecated Use initialize() instead
-   */
-  async load(): Promise<void> {
-    await this.initialize();
-  }
 
   /**
    * Load conversation for a specific note (lazy)
@@ -95,24 +77,35 @@ export class ConversationStore {
       return cached;
     }
 
-    const filePath = this.storagePaths.getConversationPath(noteId);
+    // Load from SQLite
+    const rows = await this.db
+      .selectFrom("messages")
+      .selectAll()
+      .where("note_path", "=", noteId)
+      .orderBy("created_at", "asc")
+      .execute();
 
-    try {
-      const content = await fs.promises.readFile(filePath, "utf-8");
-      const data: ConversationFile = JSON.parse(content);
+    const messages: StoredChatMessage[] = rows.map((row) => ({
+      id: row.id,
+      role: row.role as "system" | "user" | "assistant",
+      content: row.content,
+      timestamp: new Date(row.created_at).toISOString(),
+      attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
+      status: row.status as StoredChatMessage["status"],
+      reasoningSummary: row.reasoning_summary ?? undefined,
+      actionRef: row.action_ref ?? undefined,
+    }));
 
-      this.loaded.set(noteId, data.messages);
+    this.loaded.set(noteId, messages);
+    if (messages.length > 0) {
       this.meta.set(noteId, {
-        notePath: data.notePath,
-        createdAt: new Date(data.createdAt),
-        lastAccessedAt: new Date(data.lastAccessedAt),
+        notePath: noteId, // We use noteId as path reference
+        createdAt: new Date(rows[0].created_at),
+        lastAccessedAt: new Date(),
       });
-
-      return data.messages;
-    } catch {
-      // No conversation yet - return empty
-      return [];
     }
+
+    return messages;
   }
 
   /**
@@ -128,8 +121,6 @@ export class ConversationStore {
     const existingMeta = this.meta.get(noteId);
     if (existingMeta) {
       existingMeta.lastAccessedAt = new Date();
-      this.dirty.add(noteId);
-      this.scheduleFlush();
     }
 
     // Convert StoredChatMessage to ExtendedChatMessage
@@ -198,24 +189,15 @@ export class ConversationStore {
 
   /**
    * Handle note rename - update stored path
-   *
-   * @param oldPath - Old note path
-   * @param newPath - New note path
    */
   handleRename(oldPath: string, newPath: string): void {
-    // For rename, we need to handle two cases:
-    // 1. The noteId is derived from oldPath - we need to migrate to newPath-based noteId
-    // 2. The conversation is in memory - update the notePath in meta
-
     const oldNoteId = generateNoteId(oldPath);
     const newNoteId = generateNoteId(newPath);
 
-    // Check if we have a conversation for the old path
     const messages = this.loaded.get(oldNoteId);
     const meta = this.meta.get(oldNoteId);
 
     if (messages && meta) {
-      // If noteId changed, we need to move the data
       if (oldNoteId !== newNoteId) {
         // Move to new noteId
         this.loaded.delete(oldNoteId);
@@ -227,28 +209,17 @@ export class ConversationStore {
         this.dirty.delete(oldNoteId);
         this.dirty.add(newNoteId);
 
-        // Schedule file migration (old file will be deleted after save)
-        this.scheduleFlush();
-
-        // Also delete the old file asynchronously
-        const oldFilePath = this.storagePaths.getConversationPath(oldNoteId);
-        fs.promises.unlink(oldFilePath).catch(() => {
-          // File might not exist - that's OK
-        });
+        // Update in SQLite - delete old and reinsert
+        void this.updateNotePathInDb(oldNoteId, newNoteId);
       } else {
-        // Same noteId (case-only change), just update path
         meta.notePath = newPath;
         meta.lastAccessedAt = new Date();
-        this.dirty.add(oldNoteId);
-        this.scheduleFlush();
       }
     }
   }
 
   /**
-   * Delete conversation for a note (takes notePath for backward compatibility)
-   *
-   * @param notePath - Note path
+   * Delete conversation for a note
    */
   deleteConversation(notePath: string): void {
     const noteId = generateNoteId(notePath);
@@ -256,39 +227,16 @@ export class ConversationStore {
     this.meta.delete(noteId);
     this.dirty.delete(noteId);
 
-    const filePath = this.storagePaths.getConversationPath(noteId);
-
-    // Move to _deleted for audit trail (async, fire-and-forget)
-    fs.promises
-      .mkdir(this.storagePaths.tempDeleted, { recursive: true })
-      .then(() => {
-        const deletedPath = path.join(
-          this.storagePaths.tempDeleted,
-          `conversation-${noteId}-${Date.now()}.json`,
-        );
-        return fs.promises.rename(filePath, deletedPath);
-      })
-      .catch(() => {
-        // File might not exist - that's OK
-      });
+    // Delete from SQLite
+    void this.db.deleteFrom("messages").where("note_path", "=", noteId).execute();
   }
 
   /**
    * Check if a conversation exists for a note (in cache)
-   *
-   * @param notePath - Note path
    */
   hasConversation(notePath: string): boolean {
     const noteId = generateNoteId(notePath);
     return this.loaded.has(noteId);
-  }
-
-  /**
-   * Get all note paths with loaded conversations
-   * @deprecated Use getLoadedNoteIds() for noteIds or iterate meta for paths
-   */
-  getConversationPaths(): string[] {
-    return Array.from(this.meta.values()).map((m) => m.notePath);
   }
 
   /**
@@ -299,7 +247,7 @@ export class ConversationStore {
   }
 
   /**
-   * Flush all dirty conversations to disk
+   * Flush all dirty conversations to SQLite
    */
   async flush(): Promise<void> {
     if (this.dirty.size === 0) return;
@@ -326,51 +274,27 @@ export class ConversationStore {
    * Prune old conversations based on retention policy
    */
   async prune(): Promise<void> {
-    const notesDir = this.storagePaths.conversationsNotes;
     const now = Date.now();
     const maxAge = this.retention.maxAgeDays * 24 * 60 * 60 * 1000;
-    let pruned = 0;
+    const cutoff = now - maxAge;
 
-    let files: string[] = [];
-    try {
-      files = await fs.promises.readdir(notesDir);
-    } catch {
-      return; // Directory doesn't exist
+    // Delete old messages from SQLite
+    const result = await this.db
+      .deleteFrom("messages")
+      .where("created_at", "<", cutoff)
+      .executeTakeFirst();
+
+    if (result.numDeletedRows && result.numDeletedRows > 0n) {
+      console.log(`[ConversationStore] Pruned ${result.numDeletedRows} old messages`);
     }
 
-    for (const file of files) {
-      if (!file.endsWith(".json")) continue;
-
-      const noteId = file.replace(".json", "");
-      const filePath = path.join(notesDir, file);
-
-      try {
-        const content = await fs.promises.readFile(filePath, "utf-8");
-        const data: ConversationFile = JSON.parse(content);
-
-        const age = now - new Date(data.lastAccessedAt).getTime();
-        if (age > maxAge) {
-          // Remove from cache
-          this.loaded.delete(noteId);
-          this.meta.delete(noteId);
-          this.dirty.delete(noteId);
-
-          // Move to _deleted
-          const deletedPath = path.join(
-            this.storagePaths.tempDeleted,
-            `conversation-pruned-${noteId}-${Date.now()}.json`,
-          );
-          await fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true });
-          await fs.promises.rename(filePath, deletedPath);
-          pruned++;
-        }
-      } catch {
-        // Skip unreadable files
+    // Clear from cache if expired
+    for (const [noteId, meta] of this.meta) {
+      if (now - meta.lastAccessedAt.getTime() > maxAge) {
+        this.loaded.delete(noteId);
+        this.meta.delete(noteId);
+        this.dirty.delete(noteId);
       }
-    }
-
-    if (pruned > 0) {
-      console.log(`[ConversationStore] Pruned ${pruned} old conversations`);
     }
   }
 
@@ -432,128 +356,49 @@ export class ConversationStore {
   }
 
   /**
-   * Save a specific conversation to disk
+   * Save a specific conversation to SQLite
    */
   private async saveConversation(noteId: string): Promise<void> {
     const messages = this.loaded.get(noteId);
-    const conversationMeta = this.meta.get(noteId);
-    if (!messages || !conversationMeta) return;
+    if (!messages) return;
 
-    const filePath = this.storagePaths.getConversationPath(noteId);
-    const data: ConversationFile = {
-      version: CONVERSATION_VERSION,
-      noteId,
-      notePath: conversationMeta.notePath,
-      messages,
-      createdAt: conversationMeta.createdAt.toISOString(),
-      lastAccessedAt: conversationMeta.lastAccessedAt.toISOString(),
-    };
+    // Delete existing messages for this note
+    await this.db.deleteFrom("messages").where("note_path", "=", noteId).execute();
 
-    // Ensure directory exists
-    await fs.promises.mkdir(this.storagePaths.conversationsNotes, { recursive: true });
-    await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
+    // Insert all messages
+    if (messages.length > 0) {
+      const rows = messages.map((msg) => ({
+        id: msg.id,
+        note_path: noteId,
+        role: msg.role,
+        content: msg.content,
+        thinking: null,
+        created_at: new Date(msg.timestamp).getTime(),
+        attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+        status: msg.status ?? null,
+        reasoning_summary: msg.reasoningSummary ?? null,
+        action_ref: msg.actionRef ?? null,
+      }));
+
+      // Insert in batches
+      const chunkSize = 100;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        await this.db
+          .insertInto("messages")
+          .values(rows.slice(i, i + chunkSize))
+          .execute();
+      }
+    }
   }
 
   /**
-   * Migrate legacy conversations.json to per-note files
+   * Update note_path in SQLite when a note is renamed
    */
-  private async migrateIfNeeded(): Promise<void> {
-    if (this.migrationChecked) return;
-    this.migrationChecked = true;
-
-    const legacyPath = this.storagePaths.legacyConversations;
-
-    try {
-      // Check if legacy file exists
-      await fs.promises.access(legacyPath);
-    } catch {
-      // No legacy file - nothing to migrate
-      return;
-    }
-
-    // Check if already migrated (new directory has files)
-    try {
-      const newDir = this.storagePaths.conversationsNotes;
-      await fs.promises.access(newDir);
-      const files = await fs.promises.readdir(newDir);
-      if (files.length > 0) {
-        // Already migrated - don't overwrite
-        return;
-      }
-    } catch {
-      // Directory doesn't exist yet - proceed with migration
-    }
-
-    console.log("[ConversationStore] Migrating legacy conversations...");
-
-    try {
-      // Read legacy file
-      const content = await fs.promises.readFile(legacyPath, "utf-8");
-      const legacy = JSON.parse(content) as {
-        version?: number;
-        conversations?: Record<
-          string,
-          {
-            notePath: string;
-            messages: Array<{
-              id: string;
-              role: "system" | "user" | "assistant";
-              content: string;
-              timestamp: string;
-              attachments?: StoredChatMessage["attachments"];
-            }>;
-            createdAt: string;
-            lastAccessedAt: string;
-          }
-        >;
-      };
-
-      // Ensure new directory
-      await fs.promises.mkdir(this.storagePaths.conversationsNotes, { recursive: true });
-
-      // Migrate each conversation
-      let migratedCount = 0;
-      for (const [notePath, conversation] of Object.entries(legacy.conversations ?? {})) {
-        const noteId = generateNoteId(notePath);
-
-        // Convert messages to new format
-        const messages: StoredChatMessage[] = (conversation.messages ?? []).map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          timestamp: message.timestamp,
-          attachments: message.attachments,
-          status: message.content ? ("success" as const) : ("failed" as const),
-        }));
-
-        // Create per-note file
-        const data: ConversationFile = {
-          version: CONVERSATION_VERSION,
-          noteId,
-          notePath,
-          messages,
-          createdAt: conversation.createdAt,
-          lastAccessedAt: conversation.lastAccessedAt,
-        };
-
-        const filePath = this.storagePaths.getConversationPath(noteId);
-        await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
-        migratedCount++;
-      }
-
-      // Move legacy file to _deleted for audit trail
-      const deletedPath = path.join(
-        this.storagePaths.tempDeleted,
-        `conversations-legacy-${Date.now()}.json`,
-      );
-      await fs.promises.mkdir(this.storagePaths.tempDeleted, { recursive: true });
-      await fs.promises.rename(legacyPath, deletedPath);
-
-      console.log(
-        `[ConversationStore] Migration complete: ${migratedCount} conversations migrated`,
-      );
-    } catch (error) {
-      console.error("[ConversationStore] Migration failed:", error);
-    }
+  private async updateNotePathInDb(oldNoteId: string, newNoteId: string): Promise<void> {
+    await this.db
+      .updateTable("messages")
+      .set({ note_path: newNoteId })
+      .where("note_path", "=", oldNoteId)
+      .execute();
   }
 }

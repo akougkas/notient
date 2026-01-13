@@ -37,11 +37,6 @@ export type ExpertAgentType =
   | "context-builder"; // Build context for other agents (internal)
 
 /**
- * @deprecated Use "connection" instead. Maintained for backwards compatibility.
- */
-export type LinkFinderType = "connection";
-
-/**
  * All agent types in the system (union of UI and Expert agents).
  *
  * Maintains backwards compatibility while establishing the conceptual

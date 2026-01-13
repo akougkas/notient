@@ -16,7 +16,7 @@ export interface IndexStats {
   completionPercent: number;
 }
 
-/** Legacy discovery interface */
+/** @deprecated Legacy type for JSON index discovery - SQLite backend doesn't use this */
 export interface DiscoveredIndex {
   path: string;
   modelKey: string;
@@ -286,15 +286,8 @@ export class IndexManager {
     this.scheduleSave();
   }
 
-  async removeNote(notePath: string, noteId: string): Promise<void> {
-    // Use deleteByPath as deleteByNoteId is deprecated
-    // biome-ignore lint/suspicious/noExplicitAny: Check for new method
-    if ((this.vectorStore as any).deleteByPath) {
-      // biome-ignore lint/suspicious/noExplicitAny: Call new method
-      await (this.vectorStore as any).deleteByPath(notePath);
-    } else {
-      await this.vectorStore.deleteByNoteId(noteId);
-    }
+  async removeNote(notePath: string, _noteId: string): Promise<void> {
+    await this.vectorStore.deleteByPath(notePath);
     this.removeNoteState(notePath);
   }
 
@@ -405,19 +398,20 @@ export class IndexManager {
     await this.removeNote(notePath, noteId);
   }
 
-  async switchToIndex(indexPath: string): Promise<void> {
-    console.warn("Switching index is not supported in SQLite mode");
+  // ============ Legacy Stubs (SQLite has no discoverable indices) ============
+
+  /** @deprecated No JSON indices to discover with SQLite backend */
+  static async discoverIndices(_storagePaths: unknown): Promise<never[]> {
+    return [];
   }
 
-  // ============ Discovery (Legacy/Compat) ============
-  
-  // biome-ignore lint/suspicious/noExplicitAny: Legacy compat
-  static async discoverIndices(storagePaths: any): Promise<any[]> {
-    return []; // No JSON indices to discover
-  }
-  
-  // biome-ignore lint/suspicious/noExplicitAny: Legacy compat
-  async discoverIndices(): Promise<any[]> {
+  /** @deprecated No JSON indices to discover with SQLite backend */
+  async discoverIndices(): Promise<never[]> {
     return [];
+  }
+
+  /** @deprecated Index switching not supported with SQLite backend */
+  async switchToIndex(_indexPath: string): Promise<void> {
+    console.warn("[IndexManager] Index switching not supported with SQLite backend");
   }
 }

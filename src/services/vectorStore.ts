@@ -33,9 +33,9 @@ export interface VectorStore {
   upsertChunks(chunks: EmbeddedChunk[]): Promise<void>;
 
   /**
-   * Delete chunks by note ID
+   * Delete chunks by note path
    */
-  deleteByNoteId(noteId: string): Promise<void>;
+  deleteByPath(notePath: string): Promise<void>;
 
   /**
    * Delete chunks by path prefix (for folder operations)
