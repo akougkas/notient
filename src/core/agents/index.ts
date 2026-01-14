@@ -1,18 +1,16 @@
 /**
  * Multi-Agent System Exports
  *
- * White House Model Architecture:
- * - President = User (decision maker)
- * - Chief of Staff = Notient core (coordinator, dispatcher, router, aggregator)
- * - Department Heads = Specialized agents (core + workflow)
+ * 4-Agent Swarm Architecture:
+ * - User = President (decision maker)
+ * - Orchestrator = Brain (reasoning, planning, delegation)
+ * - NoteEditor = Obsidian I/O specialist
+ * - ContextBuilder = Vault awareness specialist
+ * - Worker = Unified workflow executor
  *
  * Two-Tier Identity System:
  * - Tier 1: Core Notient Identity (Research Chief of Staff + user profile)
  * - Tier 2: Agent Specialization (role + mission + output format)
- *
- * Agent Types:
- * - Core Agents: chat, note-editor, classifier, connection, context-builder
- * - Workflow Agents: enhance, atomic, synthesis, task, brand, connection, antagonist, clipping
  */
 
 // Types
@@ -32,11 +30,8 @@ export {
 } from "./agentIdentity";
 export type { AgentSpecialization, AgentOutputFormat, AgentDelegationSpec } from "./agentIdentity";
 
-// Core agents (Department Heads)
-export { ChatAgent } from "./chatAgent";
+// Specialized agents (4-Agent Swarm)
 export { NoteEditorAgent } from "./noteEditorAgent";
-export { ClassifierAgent } from "./classifierAgent";
-export { ConnectionAgent } from "./connectionAgent";
 export { ContextBuilderAgent } from "./contextBuilderAgent";
 
 // Workflow agents (Intelligence 2.0) - Legacy, kept for backwards compatibility

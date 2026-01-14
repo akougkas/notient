@@ -27,8 +27,6 @@ import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
 import { SkillRegistry } from "../skills/registry";
 import { isInternalOutput, isStructuredOutput } from "./base";
-import { ClassifierAgent } from "./classifierAgent";
-import { ConnectionAgent } from "./connectionAgent";
 import { ContextBuilderAgent } from "./contextBuilderAgent";
 import { NoteEditorAgent } from "./noteEditorAgent";
 import type {
@@ -80,13 +78,8 @@ export class ChiefOfStaff {
   // Specialized Agents (4-Agent Swarm)
   private noteEditorAgent: NoteEditorAgent;
   private contextBuilderAgent: ContextBuilderAgent;
-  // Worker agent will be added in Phase 2
 
-  // Legacy agents (to be absorbed by Worker in Phase 2)
-  private classifierAgent: ClassifierAgent;
-  private connectionAgent: ConnectionAgent;
-
-  // Worker Agents (Phase 2 Swarm) - created on demand per workflow type
+  // Worker Agents (Swarm) - created on demand per workflow type
   private workerAgents: Map<WorkflowAgentType, WorkerAgent> = new Map();
 
   // Services
@@ -110,10 +103,8 @@ export class ChiefOfStaff {
     this.profile = profile;
     this.skillRegistry = new SkillRegistry();
 
-    // Initialize expert agents (Department Heads) with profile for identity system
+    // Initialize specialized agents (4-Agent Swarm)
     this.noteEditorAgent = new NoteEditorAgent(llm, profile, this.skillRegistry);
-    this.classifierAgent = new ClassifierAgent(llm, profile);
-    this.connectionAgent = new ConnectionAgent(llm, profile);
     this.contextBuilderAgent = new ContextBuilderAgent(
       llm,
       searchPipeline,
@@ -345,29 +336,19 @@ export class ChiefOfStaff {
   ): AsyncIterable<AgentEvent> {
     const taskLower = task.toLowerCase();
 
-    // Check for classify/organize keywords
-    if (
-      taskLower.includes("classify") ||
-      taskLower.includes("organize") ||
-      taskLower.includes("para") ||
-      taskLower.includes("/classify")
-    ) {
-      yield* this.classifierAgent.execute(context, signal);
-      return;
-    }
-
-    // Check for connection keywords
+    // Route connection tasks to Worker
     if (
       taskLower.includes("connect") ||
       taskLower.includes("link") ||
       taskLower.includes("/connect") ||
       taskLower.includes("/link")
     ) {
-      yield* this.connectionAgent.execute(context, signal);
+      const worker = this.getWorkerAgent("connection");
+      yield* worker.execute(context, signal);
       return;
     }
 
-    // Check for workflow commands
+    // Check for workflow commands (includes classify via /enhance)
     const workflowType = this.extractWorkflowType(task);
     if (workflowType) {
       const workflowAgent = this.getWorkerAgent(workflowType);
@@ -590,10 +571,8 @@ export class ChiefOfStaff {
   setProfile(profile: UserProfile | undefined): void {
     this.profile = profile;
 
-    // Propagate to expert agents for identity system
+    // Propagate to specialized agents for identity system
     this.noteEditorAgent.setProfile(profile);
-    this.classifierAgent.setProfile(profile);
-    this.connectionAgent.setProfile(profile);
     this.contextBuilderAgent.setProfile(profile);
 
     // Propagate to any existing worker agents
@@ -609,10 +588,8 @@ export class ChiefOfStaff {
   updateLLM(llm: LLMProvider): void {
     this.llm = llm;
 
-    // Recreate expert agents with new LLM and preserved profile
+    // Recreate specialized agents with new LLM and preserved profile
     this.noteEditorAgent = new NoteEditorAgent(llm, this.profile, this.skillRegistry);
-    this.classifierAgent = new ClassifierAgent(llm, this.profile);
-    this.connectionAgent = new ConnectionAgent(llm, this.profile);
 
     // Context builder keeps its search pipeline reference
     this.contextBuilderAgent = new ContextBuilderAgent(
@@ -980,29 +957,19 @@ export class ChiefOfStaff {
   }
 
   /**
-   * Get expert agent instance by type
+   * Get specialized agent instance by type
    */
   private getAgent(
     type: ExpertAgentType,
-  ): NoteEditorAgent | ClassifierAgent | ConnectionAgent | ContextBuilderAgent {
-    let result: NoteEditorAgent | ClassifierAgent | ConnectionAgent | ContextBuilderAgent;
+  ): NoteEditorAgent | ContextBuilderAgent {
     switch (type) {
       case "note-editor":
-        result = this.noteEditorAgent;
-        break;
-      case "classifier":
-        result = this.classifierAgent;
-        break;
-      case "connection":
-        result = this.connectionAgent;
-        break;
+        return this.noteEditorAgent;
       case "context-builder":
-        result = this.contextBuilderAgent;
-        break;
+        return this.contextBuilderAgent;
       default:
-        throw new Error(`Unknown expert agent type: ${type}`);
+        throw new Error(`Unknown agent type: ${type}. Use getWorkerAgent() for workflows.`);
     }
-    return result;
   }
 
   /**
