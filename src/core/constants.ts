@@ -17,11 +17,6 @@ export const STORAGE_PATHS = {
   DATA,
   DB_FILE: `${DATA}/notient.db`,
 
-  // Chunks (model-agnostic)
-  CHUNKS: `${DATA}/chunks`,
-  CHUNKS_META: `${DATA}/chunks/meta.json`,
-  CHUNKS_NOTES: `${DATA}/chunks/notes`,
-
   // Embeddings (model-scoped)
   EMBEDDINGS: `${DATA}/embeddings`,
   EMBEDDINGS_ACTIVE: `${DATA}/embeddings/active`,
