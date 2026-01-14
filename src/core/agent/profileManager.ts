@@ -44,7 +44,7 @@ export class ProfileManager {
    * Get the profile file path from storage paths
    */
   private get profilePath(): string {
-    return this.kernel.storagePaths.profile;
+    return this.kernel.storagePaths.profileFile;
   }
 
   /**
