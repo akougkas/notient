@@ -39,7 +39,7 @@ export { ClassifierAgent } from "./classifierAgent";
 export { ConnectionAgent } from "./connectionAgent";
 export { ContextBuilderAgent } from "./contextBuilderAgent";
 
-// Workflow agents (Intelligence 2.0)
+// Workflow agents (Intelligence 2.0) - Legacy, kept for backwards compatibility
 export {
   WorkflowAgent,
   createWorkflowAgent,
@@ -49,6 +49,10 @@ export {
   WORKFLOW_CONFIGS,
 } from "./workflowAgents";
 export type { WorkflowAgentType, WorkflowAgentConfig } from "./workflowAgents";
+
+// Worker Agent (Phase 2 Swarm) - Unified workflow executor
+export { WorkerAgent, createWorkerAgent, isValidWorkflowType } from "./workerAgent";
+export type { WorkflowType } from "./workerAgent";
 
 // Chief of Staff (main entry point)
 export { ChiefOfStaff } from "./chiefOfStaff";

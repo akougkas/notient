@@ -46,11 +46,11 @@ import type {
 } from "./types";
 import { AGENT_CONFIGS } from "./types";
 import {
-  WorkflowAgent,
   type WorkflowAgentType,
   getWorkflowByCommand,
   isWorkflowCommand,
 } from "./workflowAgents";
+import { WorkerAgent } from "./workerAgent";
 
 /**
  * Task input for the Chief of Staff
@@ -80,8 +80,8 @@ export class ChiefOfStaff {
   private connectionAgent: ConnectionAgent;
   private contextBuilderAgent: ContextBuilderAgent;
 
-  // Workflow Agents (Intelligence 2.0) - created on demand
-  private workflowAgents: Map<WorkflowAgentType, WorkflowAgent> = new Map();
+  // Worker Agents (Phase 2 Swarm) - created on demand per workflow type
+  private workerAgents: Map<WorkflowAgentType, WorkerAgent> = new Map();
 
   // Services
   private llm: LLMProvider;
@@ -117,13 +117,14 @@ export class ChiefOfStaff {
   }
 
   /**
-   * Get or create a workflow agent
+   * Get or create a worker agent for a specific workflow type.
+   * Worker agents are cached per workflow type for reuse.
    */
-  private getWorkflowAgent(workflowType: WorkflowAgentType): WorkflowAgent {
-    let agent = this.workflowAgents.get(workflowType);
+  private getWorkerAgent(workflowType: WorkflowAgentType): WorkerAgent {
+    let agent = this.workerAgents.get(workflowType);
     if (!agent) {
-      agent = new WorkflowAgent(this.llm, workflowType, this.profile);
-      this.workflowAgents.set(workflowType, agent);
+      agent = new WorkerAgent(this.llm, workflowType, this.profile);
+      this.workerAgents.set(workflowType, agent);
     }
     return agent;
   }
@@ -340,8 +341,8 @@ export class ChiefOfStaff {
     this.connectionAgent.setProfile(profile);
     this.contextBuilderAgent.setProfile(profile);
 
-    // Propagate to any existing workflow agents
-    for (const agent of this.workflowAgents.values()) {
+    // Propagate to any existing worker agents
+    for (const agent of this.workerAgents.values()) {
       agent.setProfile(profile);
     }
   }
@@ -366,8 +367,8 @@ export class ChiefOfStaff {
       this.profile,
     );
 
-    // Clear workflow agents (will be recreated on demand with new LLM)
-    this.workflowAgents.clear();
+    // Clear worker agents (will be recreated on demand with new LLM)
+    this.workerAgents.clear();
   }
 
   /**
@@ -568,11 +569,11 @@ export class ChiefOfStaff {
     // Build full context for workflow
     const fullContext = this.buildFullContext(task, noteContext, contextOutput);
 
-    // Get or create workflow agent
-    const workflowAgent = this.getWorkflowAgent(workflowType);
+    // Get or create worker agent for this workflow type
+    const workerAgent = this.getWorkerAgent(workflowType);
 
-    // Execute workflow
-    for await (const event of workflowAgent.execute(fullContext, signal)) {
+    // Execute workflow via worker agent
+    for await (const event of workerAgent.execute(fullContext, signal)) {
       yield event;
     }
   }

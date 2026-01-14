@@ -27,14 +27,15 @@ export type UIAgentType = "chat";
 /**
  * Expert Agent Types - Specialized domain experts that produce structured output.
  *
- * These are the 12 routable expert agents that handle specific tasks.
+ * These are the routable expert agents that handle specific tasks.
  * ChiefOfStaff routes work to these agents based on intent detection.
  */
 export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
   | "classifier" // PARA classification, tagging
   | "connection" // Find semantic connections between notes
-  | "context-builder"; // Build context for other agents (internal)
+  | "context-builder" // Build context for other agents (internal)
+  | "worker"; // Unified workflow executor (Phase 2 Swarm)
 
 /**
  * All agent types in the system (union of UI and Expert agents).
@@ -151,6 +152,18 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     canDelegate: false,
     delegationTargets: [],
     contextPriority: 10, // Highest priority - runs first
+  },
+  worker: {
+    type: "worker",
+    name: "Worker Agent",
+    isUI: false, // Expert agent - executes workflows
+    temperature: 0.3, // Default, overridden per workflow
+    maxTokens: 2000,
+    contextBudget: 8000,
+    outputKind: "structured",
+    canDelegate: false,
+    delegationTargets: [],
+    contextPriority: 2,
   },
 };
 
