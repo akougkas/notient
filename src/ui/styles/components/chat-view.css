@@ -982,6 +982,100 @@
 }
 
 /* ============================================================================
+   DELEGATION BANNER
+   ============================================================================ */
+
+.nv2-delegation-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--nv2-space-sm);
+  padding: var(--nv2-space-sm) var(--nv2-space-md);
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--interactive-accent);
+  animation: delegation-slide-in 0.2s ease;
+}
+
+@keyframes delegation-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nv2-delegation-icon {
+  color: var(--interactive-accent);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.nv2-delegation-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv2-delegation-label {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.nv2-delegation-progress {
+  height: 3px;
+  background: var(--background-modifier-border);
+  border-radius: 2px;
+  margin-top: var(--nv2-space-xs);
+  overflow: hidden;
+}
+
+.nv2-delegation-progress-bar {
+  height: 100%;
+  background: var(--interactive-accent);
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}
+
+/* ============================================================================
+   WORKFLOW SUGGESTION CHIPS
+   ============================================================================ */
+
+.nv2-workflow-suggestions {
+  display: flex;
+  gap: var(--nv2-space-xs);
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.nv2-workflow-chip {
+  padding: 4px 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nv2-radius-full);
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nv2-workflow-chip:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+  transform: translateY(-1px);
+}
+
+.nv2-workflow-chip:active {
+  transform: translateY(0);
+}
+
+/* ============================================================================
    SHARED ANIMATIONS
    ============================================================================ */
 
