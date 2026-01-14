@@ -12,7 +12,7 @@ import type { Signal } from "@preact/signals";
 import { Notice, setIcon } from "obsidian";
 import type { JSX } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { AgentTaskQueue } from "../../core/agent";
+import { type AgentTaskQueue, type NotientAgent } from "../../core/agent";
 import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";
@@ -108,6 +108,13 @@ function AppContent() {
           link: ["link", "connect", "related", "similar", "connections", "find notes"],
         },
       });
+
+      // Phase 5: Wire Orchestrator for hybrid mode (chat + agent delegation)
+      const orchestrator = kernel.getService<NotientAgent>("agent");
+      if (orchestrator) {
+        service.setOrchestrator(orchestrator);
+      }
+
       setChatService(service);
       return service;
     }
