@@ -17,14 +17,11 @@ import type { ChatMessage } from "../llm/types";
 /**
  * 4-Agent Swarm Architecture Types
  *
- * Target Architecture (4 agents):
+ * Architecture (4 agents):
  * 1. Orchestrator - The brain (reasoning model, makes plans, delegates)
  * 2. NoteEditor - Obsidian I/O specialist (edit, create, move, verify)
  * 3. ContextBuilder - Vault awareness specialist (search, relationships, trends)
  * 4. Worker - Workflow executor (classify, enhance, atomize, etc.)
- *
- * Legacy agents (chat, classifier, connection) are maintained for backward
- * compatibility and will be absorbed by Worker in Phase 2.
  */
 
 /**
@@ -34,23 +31,19 @@ import type { ChatMessage } from "../llm/types";
  * - orchestrator: Brain, makes plans, delegates
  * - note-editor: Obsidian I/O specialist
  * - context-builder: Vault awareness specialist
- * - worker: Workflow executor (Phase 2)
+ * - worker: Workflow executor
  *
- * Legacy (maintained for backward compatibility):
+ * Legacy:
  * - chat: UI layer (uses ChatService directly)
- * - classifier: Will be absorbed by Worker
- * - connection: Will be absorbed by Worker
  */
 export type AgentType =
   // Core 4-Agent Swarm
   | "orchestrator" // Brain - makes plans, delegates
   | "note-editor" // Obsidian I/O specialist
   | "context-builder" // Vault awareness specialist
-  | "worker" // Workflow executor (Phase 2)
-  // Legacy agents (backward compatibility, to be absorbed in Phase 2)
-  | "chat" // UI layer - uses ChatService directly
-  | "classifier" // PARA classification -> Worker
-  | "connection"; // Find connections -> Worker
+  | "worker" // Workflow executor
+  // Legacy (UI layer)
+  | "chat"; // UI layer - uses ChatService directly
 
 /**
  * UI Agent Types - Interface layer that delegates to expert agents.
@@ -65,10 +58,8 @@ export type UIAgentType = "chat";
  */
 export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
-  | "classifier" // PARA classification, tagging -> absorbed by Worker (Phase 2)
-  | "connection" // Find semantic connections -> absorbed by Worker (Phase 2)
   | "context-builder" // Build context for other agents (internal)
-  | "worker"; // Unified workflow executor (Phase 2 Swarm)
+  | "worker"; // Unified workflow executor (Swarm)
 
 /**
  * Agent output types - determines parsing strategy
@@ -116,7 +107,6 @@ export interface AgentConfig {
 /**
  * Default configurations for each agent type
  * 4-Agent Swarm: orchestrator, note-editor, context-builder, worker
- * + Legacy agents for backward compatibility
  */
 export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   // ===========================================================================
@@ -161,7 +151,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   worker: {
     type: "worker",
     name: "Worker",
-    isUI: false, // Workflow executor (Phase 2)
+    isUI: false, // Workflow executor
     temperature: 0.3,
     maxTokens: 1500,
     contextBudget: 8000,
@@ -171,7 +161,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     contextPriority: 3,
   },
   // ===========================================================================
-  // Legacy agents (backward compatibility, to be absorbed in Phase 2)
+  // Legacy (UI layer)
   // ===========================================================================
   chat: {
     type: "chat",
@@ -182,32 +172,8 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     contextBudget: 12000,
     outputKind: "conversational",
     canDelegate: true,
-    delegationTargets: ["note-editor", "classifier", "connection"],
+    delegationTargets: ["note-editor", "worker"],
     contextPriority: 1,
-  },
-  classifier: {
-    type: "classifier",
-    name: "Classifier",
-    isUI: false, // Will be absorbed by Worker
-    temperature: 0.2,
-    maxTokens: 800,
-    contextBudget: 6000,
-    outputKind: "structured",
-    canDelegate: false,
-    delegationTargets: [],
-    contextPriority: 3,
-  },
-  connection: {
-    type: "connection",
-    name: "Connection Agent",
-    isUI: false, // Will be absorbed by Worker
-    temperature: 0.3,
-    maxTokens: 1200,
-    contextBudget: 10000,
-    outputKind: "structured",
-    canDelegate: false,
-    delegationTargets: [],
-    contextPriority: 2,
   },
 };
 
@@ -551,14 +517,12 @@ export const NOTE_EDIT_SCHEMA: JsonSchemaFormat = {
  */
 export function getAgentSchema(agentType: ExpertAgentType): JsonSchemaFormat | null {
   switch (agentType) {
-    case "classifier":
-      return CLASSIFICATION_SCHEMA;
-    case "connection":
-      return LINK_SUGGESTIONS_SCHEMA;
     case "note-editor":
       return NOTE_EDIT_SCHEMA;
     case "context-builder":
       return null; // Internal agent, no structured output
+    case "worker":
+      return null; // Worker uses workflow-specific schemas
     default:
       return null;
   }

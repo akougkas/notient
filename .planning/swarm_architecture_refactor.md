@@ -4,28 +4,28 @@ overview: "Simplify Notient's agent architecture from 13+ scattered agents to a 
 todos:
   - id: phase1-orchestrator
     content: Refactor ChiefOfStaff → Orchestrator (reasoning brain only)
-    status: pending
+    status: complete
   - id: phase2-worker
     content: Create WorkerAgent (unified workflow executor)
-    status: pending
+    status: complete
   - id: phase3-noteeditor
     content: Enhance NoteEditor with self-verification loop
-    status: pending
+    status: complete
   - id: phase3-contextbuilder
     content: Enhance ContextBuilder with behavior/trend tracking
-    status: pending
+    status: complete
   - id: phase4-chatservice
     content: Add Orchestrator trigger to ChatService
-    status: pending
+    status: complete
   - id: phase5-delete
     content: Delete absorbed agents (Classifier, Connection, Workflow)
-    status: pending
+    status: complete
   - id: phase5-types
     content: Update types.ts with new AgentType definitions
-    status: pending
+    status: complete
   - id: phase5-docs
     content: Update planning docs (CLAUDE.md, PROJECT.md, PHASE-UNIVERSE.md)
-    status: pending
+    status: complete
 ---
 
 # Swarm Architecture Refactor

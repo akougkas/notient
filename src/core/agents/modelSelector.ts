@@ -49,7 +49,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: true,
     temperatureRange: { min: 0.1, max: 0.7 },
     speedTier: "fast",
-    strengths: ["classifier", "connection"],
+    strengths: ["worker"],
   },
 
   // Qwen series
@@ -58,14 +58,14 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: false,
     temperatureRange: { min: 0.0, max: 1.0 },
     speedTier: "medium",
-    strengths: ["chat", "note-editor", "connection"],
+    strengths: ["chat", "note-editor", "worker"],
   },
   "qwen2.5-3b-instruct": {
     contextWindow: 32768,
     isThinkingModel: false,
     temperatureRange: { min: 0.0, max: 1.0 },
     speedTier: "fast",
-    strengths: ["classifier", "context-builder"],
+    strengths: ["worker", "context-builder"],
   },
 
   // Llama series
@@ -83,7 +83,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: false,
     temperatureRange: { min: 0.0, max: 1.0 },
     speedTier: "fast",
-    strengths: ["chat", "classifier"],
+    strengths: ["chat", "worker"],
   },
 
   // DeepSeek series (thinking models)
@@ -92,7 +92,7 @@ export const MODEL_PROFILES: Record<string, Partial<ModelProfile>> = {
     isThinkingModel: true,
     temperatureRange: { min: 0.0, max: 0.6 },
     speedTier: "slow",
-    strengths: ["note-editor", "connection"],
+    strengths: ["note-editor", "worker"],
   },
 };
 

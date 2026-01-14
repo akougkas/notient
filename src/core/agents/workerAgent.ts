@@ -19,18 +19,175 @@
  */
 
 import type { UserProfile } from "../../types/profile";
+import {
+  ANTAGONIST_PROMPT,
+  ATOMIC_SPLIT_PROMPT,
+  type AgentPrompt,
+  BRAND_CHECK_PROMPT,
+  CLIPPING_PROMPT,
+  CONNECTION_PROMPT,
+  ENHANCE_PROMPT,
+  SYNTHESIS_PROMPT,
+  TASK_EXTRACTION_PROMPT,
+  buildAntagonistPrompt,
+  buildAtomicSplitPrompt,
+  buildBrandCheckPrompt,
+  buildClippingPrompt,
+  buildConnectionPrompt,
+  buildEnhancePrompt,
+  buildSynthesisPrompt,
+  buildTaskExtractionPrompt,
+} from "../intelligence/prompts";
 import type { LLMProvider } from "../llm/provider";
 import { BaseAgent } from "./base";
 import type { AgentContext, AgentEvent, AgentType, StructuredOutput } from "./types";
-import {
-  WORKFLOW_CONFIGS,
-  type WorkflowAgentConfig,
-  type WorkflowAgentType,
-} from "./workflowAgents";
+
+// =============================================================================
+// Workflow Configuration (moved from workflowAgents.ts)
+// =============================================================================
+
+/**
+ * Workflow agent types (Intelligence 2.0)
+ */
+export type WorkflowAgentType =
+  | "enhance"
+  | "atomic"
+  | "synthesis"
+  | "task"
+  | "brand"
+  | "connection"
+  | "antagonist"
+  | "clipping";
+
+/**
+ * Configuration for workflow agents
+ */
+export interface WorkflowAgentConfig {
+  type: WorkflowAgentType;
+  name: string;
+  slashCommand: string;
+  description: string;
+  temperature: number;
+  maxTokens: number;
+  getPrompt: (profile?: UserProfile) => string;
+  staticPrompt: AgentPrompt;
+}
+
+/**
+ * Workflow agent configurations
+ */
+export const WORKFLOW_CONFIGS: Record<WorkflowAgentType, WorkflowAgentConfig> = {
+  enhance: {
+    type: "enhance",
+    name: "Enhance Agent",
+    slashCommand: "/enhance",
+    description: "Transform captures into well-structured vault notes",
+    temperature: 0.3,
+    maxTokens: 2000,
+    getPrompt: buildEnhancePrompt,
+    staticPrompt: ENHANCE_PROMPT,
+  },
+  atomic: {
+    type: "atomic",
+    name: "Atomic Split Agent",
+    slashCommand: "/atomize",
+    description: "Break complex notes into atomic concepts (100-300 words each)",
+    temperature: 0.2,
+    maxTokens: 2000,
+    getPrompt: buildAtomicSplitPrompt,
+    staticPrompt: ATOMIC_SPLIT_PROMPT,
+  },
+  synthesis: {
+    type: "synthesis",
+    name: "Synthesis Agent",
+    slashCommand: "/synthesize",
+    description: "Create synthesis notes from related concept clusters",
+    temperature: 0.3,
+    maxTokens: 3000,
+    getPrompt: buildSynthesisPrompt,
+    staticPrompt: SYNTHESIS_PROMPT,
+  },
+  task: {
+    type: "task",
+    name: "Task Extraction Agent",
+    slashCommand: "/tasks",
+    description: "Extract actionable items, decisions, and deadlines",
+    temperature: 0.2,
+    maxTokens: 2000,
+    getPrompt: buildTaskExtractionPrompt,
+    staticPrompt: TASK_EXTRACTION_PROMPT,
+  },
+  brand: {
+    type: "brand",
+    name: "Brand Check Agent",
+    slashCommand: "/brand",
+    description: "Evaluate content against brand voice and standards",
+    temperature: 0.3,
+    maxTokens: 2000,
+    getPrompt: buildBrandCheckPrompt,
+    staticPrompt: BRAND_CHECK_PROMPT,
+  },
+  connection: {
+    type: "connection",
+    name: "Connection Agent",
+    slashCommand: "/connect",
+    description: "Build semantic connections with 6 relationship types",
+    temperature: 0.3,
+    maxTokens: 2000,
+    getPrompt: buildConnectionPrompt,
+    staticPrompt: CONNECTION_PROMPT,
+  },
+  antagonist: {
+    type: "antagonist",
+    name: "Antagonist Agent",
+    slashCommand: "/challenge",
+    description: "Provide counterpoints and devil's advocate perspective",
+    temperature: 0.4,
+    maxTokens: 2000,
+    getPrompt: buildAntagonistPrompt,
+    staticPrompt: ANTAGONIST_PROMPT,
+  },
+  clipping: {
+    type: "clipping",
+    name: "Clipping Agent",
+    slashCommand: "/clipping",
+    description: "Process web clippings into structured vault notes",
+    temperature: 0.3,
+    maxTokens: 2000,
+    getPrompt: buildClippingPrompt,
+    staticPrompt: CLIPPING_PROMPT,
+  },
+};
+
+/**
+ * Get all available workflow configurations
+ */
+export function getAllWorkflowConfigs(): WorkflowAgentConfig[] {
+  return Object.values(WORKFLOW_CONFIGS);
+}
+
+/**
+ * Get workflow config by slash command
+ */
+export function getWorkflowByCommand(command: string): WorkflowAgentConfig | undefined {
+  const normalized = command.startsWith("/") ? command : `/${command}`;
+  return Object.values(WORKFLOW_CONFIGS).find((config) => config.slashCommand === normalized);
+}
+
+/**
+ * Check if a command is a workflow command
+ */
+export function isWorkflowCommand(command: string): boolean {
+  return getWorkflowByCommand(command) !== undefined;
+}
+
+// =============================================================================
+// Worker Agent
+// =============================================================================
 
 /**
  * Workflow types the Worker can execute.
- * Maps directly to existing WorkflowAgentType.
+ * Maps directly to WorkflowAgentType.
  */
 export type WorkflowType = WorkflowAgentType;
 
