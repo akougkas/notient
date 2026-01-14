@@ -1,8 +1,10 @@
-import { batch, useComputed } from "@preact/signals";
+import { batch } from "@preact/signals";
 import { Notice } from "obsidian";
 import { useEffect } from "preact/hooks";
-import type { AgentEvent, AgentOutput, AgentType } from "../../../core/agents/types";
-import { useKernel } from "../../../main";
+import type { VitalsHint } from "../../../services/insightGenerator";
+import type { EventType } from "../../../types/events";
+import type { ActiveAgent, PendingAction, RecentActivity } from "../components/AgentStreamsView";
+import { useKernel } from "../context/KernelContext";
 import {
   activeAgents,
   activeView,
@@ -11,19 +13,19 @@ import {
   pendingActionSources,
   pendingActions,
   recentActivity,
-} from "../signals";
-import type { ActiveAgent, AgentResultData, VitalsHint } from "../types";
+} from "../state";
 
 interface UseAppEventsOptions {
-  chatService: any;
-  createChatService: () => Promise<void>;
+  chatService: unknown;
+  createChatService: () => unknown;
 }
 
 export function useAppEvents({ chatService, createChatService }: UseAppEventsOptions): void {
   const kernel = useKernel();
 
-  // Helper for registering event listeners
-  function useEventBus<T>(event: string, handler: (data: T) => void) {
+  // Helper for registering event listeners with typed events
+  // biome-ignore lint/suspicious/noExplicitAny: Event handler needs to accept any payload shape
+  function useEventBus(event: EventType, handler: (data: any) => void) {
     useEffect(() => {
       const unsub = kernel.eventBus.on(event, handler);
       return () => unsub();
@@ -54,10 +56,10 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   const handleTaskRunning = (task: any) => {
     batch(() => {
       // Add or update active agent
-      const existing = activeAgents.value.find((a) => a.id === task.id);
+      const existing = activeAgents.value.find((a: ActiveAgent) => a.id === task.id);
       if (existing) {
         // Update progress
-        activeAgents.value = activeAgents.value.map((a) =>
+        activeAgents.value = activeAgents.value.map((a: ActiveAgent) =>
           a.id === task.id ? { ...a, status: "running", progress: task.progress, activeSkill: task.activeSkill } : a,
         );
       } else {
@@ -85,7 +87,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   const handleTaskCompleted = (task: any) => {
     batch(() => {
       // Move from active to completed state (keep in list until dismissed)
-      activeAgents.value = activeAgents.value.map((a) =>
+      activeAgents.value = activeAgents.value.map((a: ActiveAgent) =>
         a.id === task.id
           ? {
               ...a,
@@ -115,11 +117,10 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         ...recentActivity.value.slice(0, 19), // Keep last 20
       ];
 
-      // Update stats
+      // Update stats (only decrement running count, completed tasks tracked in recent activity)
       agentStatus.value = {
         ...agentStatus.value,
         runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-        completedCount: agentStatus.value.completedCount + 1,
       };
     });
   };
@@ -127,7 +128,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   const handleTaskFailed = (task: any) => {
     batch(() => {
       // Remove from active agents
-      activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
+      activeAgents.value = activeAgents.value.filter((a: ActiveAgent) => a.id !== task.id);
 
       // Add to recent activity as failure
       recentActivity.value = [
@@ -144,20 +145,19 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         ...recentActivity.value.slice(0, 19),
       ];
 
-      // Update stats
+      // Update stats (only decrement running count, failures tracked in recent activity)
       agentStatus.value = {
         ...agentStatus.value,
         runningCount: Math.max(0, agentStatus.value.runningCount - 1),
-        failedCount: agentStatus.value.failedCount + 1,
       };
-      
+
       new Notice(`Agent failed: ${task.error || "Unknown error"}`);
     });
   };
 
   const handleTaskCancelled = (task: any) => {
     batch(() => {
-      activeAgents.value = activeAgents.value.filter((a) => a.id !== task.id);
+      activeAgents.value = activeAgents.value.filter((a: ActiveAgent) => a.id !== task.id);
       agentStatus.value = {
         ...agentStatus.value,
         runningCount: Math.max(0, agentStatus.value.runningCount - 1),
@@ -205,7 +205,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     
     batch(() => {
       // Remove from pending
-      pendingActions.value = pendingActions.value.filter(a => a.id !== actionId);
+      pendingActions.value = pendingActions.value.filter((a: PendingAction) => a.id !== actionId);
       
       // Update pending count
       agentStatus.value = {
@@ -236,7 +236,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     
     batch(() => {
       // Mark recent activity as undone
-      recentActivity.value = recentActivity.value.map(a => 
+      recentActivity.value = recentActivity.value.map((a: RecentActivity) =>
         a.id === actionId ? { ...a, status: "undone", canUndo: false } : a
       );
     });
