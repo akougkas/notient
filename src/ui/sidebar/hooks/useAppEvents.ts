@@ -17,6 +17,8 @@ import {
   activeView,
   agentInsights,
   agentStatus,
+  initContext,
+  initState,
   pendingActionSources,
   pendingActions,
   recentActivity,
@@ -48,6 +50,12 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   useEventBus("services:initialized", () => {
     // Refresh chat service when kernel re-initializes
     createChatService();
+  });
+
+  // Init state machine events - update UI signals
+  useEventBus("init:state-changed", (data) => {
+    initState.value = data.currentState;
+    initContext.value = data.context;
   });
 
   // ──────────────────────────────────────────────────────────────────────────
