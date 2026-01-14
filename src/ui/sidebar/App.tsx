@@ -12,7 +12,7 @@ import type { Signal } from "@preact/signals";
 import { Notice, setIcon } from "obsidian";
 import type { JSX } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { type AgentTaskQueue, type NotientAgent } from "../../core/agent";
+import type { AgentTaskQueue, NotientAgent } from "../../core/agent";
 import type { ActionApplier, WorkflowRunner } from "../../core/agentic";
 import { ChatService } from "../../core/chat";
 import type { Kernel } from "../../core/kernel";

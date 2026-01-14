@@ -163,7 +163,10 @@ function processAgentEvent(event: AgentEvent, state: ChatStreamState): ChatStrea
     case "progress":
       chatActivities.value = [
         ...chatActivities.value,
-        createActivityItem(`${event.agentType}: ${Math.round(event.progress * 100)}%`, "delegation"),
+        createActivityItem(
+          `${event.agentType}: ${Math.round(event.progress * 100)}%`,
+          "delegation",
+        ),
       ];
       return state;
 
@@ -212,39 +215,30 @@ function formatStructuredOutput(agentType: string, data: Record<string, unknown>
   if (data.paraCategory) {
     const conf = data.confidence as number;
     const tags = (data.suggestedTags as string[]) || [];
-    return (
-      `**Classification Result**\n\n` +
-      `- **Category:** ${data.paraCategory}\n` +
-      `- **Confidence:** ${Math.round(conf * 100)}%\n` +
-      `- **Suggested tags:** ${tags.join(", ") || "none"}\n` +
-      (data.suggestedFolder ? `- **Suggested folder:** ${data.suggestedFolder}\n` : "") +
-      `\n**Reasoning:** ${data.reasoning}`
-    );
+    return `**Classification Result**\n\n- **Category:** ${data.paraCategory}\n- **Confidence:** ${Math.round(conf * 100)}%\n- **Suggested tags:** ${tags.join(", ") || "none"}\n${data.suggestedFolder ? `- **Suggested folder:** ${data.suggestedFolder}\n` : ""}\n**Reasoning:** ${data.reasoning}`;
   }
 
   // Link suggestions output
   if (data.links && Array.isArray(data.links)) {
-    const links = data.links as Array<{ targetTitle: string; reason: string; relevanceScore: number }>;
+    const links = data.links as Array<{
+      targetTitle: string;
+      reason: string;
+      relevanceScore: number;
+    }>;
     if (links.length === 0) return "No related notes found.";
-    return (
-      `**Related Notes Found**\n\n` +
-      links
-        .map(
-          (l, i) =>
-            `${i + 1}. **[[${l.targetTitle}]]** (${Math.round(l.relevanceScore * 100)}%)\n   ${l.reason}`,
-        )
-        .join("\n\n")
-    );
+    return `**Related Notes Found**\n\n${links
+      .map(
+        (l, i) =>
+          `${i + 1}. **[[${l.targetTitle}]]** (${Math.round(l.relevanceScore * 100)}%)\n   ${l.reason}`,
+      )
+      .join("\n\n")}`;
   }
 
   // Note edit actions
   if (data.actions && Array.isArray(data.actions)) {
     const actions = data.actions as Array<{ title: string; reason: string }>;
     if (actions.length === 0) return "No changes suggested.";
-    return (
-      `**Suggested Changes**\n\n` +
-      actions.map((a, i) => `${i + 1}. **${a.title}**\n   ${a.reason}`).join("\n\n")
-    );
+    return `**Suggested Changes**\n\n${actions.map((a, i) => `${i + 1}. **${a.title}**\n   ${a.reason}`).join("\n\n")}`;
   }
 
   // Fallback: JSON

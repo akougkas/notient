@@ -203,7 +203,9 @@ export class ContextBuilderAgent extends BaseAgent {
     const limitedEdits = recentEdits.slice(0, 50);
 
     // Determine edit frequency
-    const recentEditCount = limitedEdits.filter((e) => e.timestamp > now - 24 * 60 * 60 * 1000).length;
+    const recentEditCount = limitedEdits.filter(
+      (e) => e.timestamp > now - 24 * 60 * 60 * 1000,
+    ).length;
     let editFrequency: UserBehavior["editFrequency"] = "low";
     if (recentEditCount > 10) {
       editFrequency = "high";

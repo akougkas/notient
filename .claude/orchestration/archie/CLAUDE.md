@@ -71,12 +71,34 @@ git commit -m "feat(agents): add self-verification to NoteEditor"
 git rev-parse --short HEAD
 ```
 
+### Parallel Work Isolation (CRITICAL)
+
+**You are working in parallel with other agents.** Each agent works on different files simultaneously.
+
+**Staging and committing:**
+- Only `git add` files YOU created or modified
+- Use `git add <specific-file>` instead of `git add .`
+- Never stage files you didn't touch
+
+**Linting/typecheck errors:**
+- Errors in files you didn't modify = another agent is working on them
+- **IGNORE lint errors in other agents' files** — they will fix their own
+- Only fix errors in YOUR files (your scope from TASK.md)
+
+**Your scope (Archie):**
+- `src/core/agents/` — your domain
+- `src/core/` services you're assigned
+- If you see errors in `src/ui/` — that's Faye, ignore it
+- If you see errors in files Sage is reviewing — ignore it
+
 ### What NOT To Do
 
 - Push to origin (orchestrator handles remote)
 - Merge other branches (orchestrator handles merges)
 - Rebase or amend commits
 - Work on branches not assigned to you
+- Stage or commit files you didn't modify
+- Fix lint errors in other agents' files
 
 ## Workflow
 

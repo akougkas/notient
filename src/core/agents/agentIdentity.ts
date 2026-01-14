@@ -160,7 +160,7 @@ You execute the HOW. The Orchestrator decides WHAT.`,
     ],
     outputFormat: {
       type: "structured-json",
-      instructions: `Output varies by workflow. Follow the specific workflow prompt format.`,
+      instructions: "Output varies by workflow. Follow the specific workflow prompt format.",
     },
   },
 
