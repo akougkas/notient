@@ -125,13 +125,11 @@ export interface EmbeddedChunk extends NoteChunk {
 /**
  * Stored chunk content without embedding (model-agnostic).
  * Derived from NoteChunk, excluding runtime fields (mtimeMs, contentHash).
- * Stored at: data/chunks/notes/{noteId}.json
  */
 export type StoredChunk = Omit<NoteChunk, "mtimeMs" | "contentHash">;
 
 /**
  * Per-note chunk file structure.
- * Stored at: data/chunks/notes/{noteId}.json
  */
 export interface NoteChunkFile {
   noteId: string;
@@ -144,7 +142,6 @@ export interface NoteChunkFile {
 
 /**
  * Chunks meta file structure.
- * Stored at: data/chunks/meta.json
  */
 export interface ChunksMeta {
   version: number;

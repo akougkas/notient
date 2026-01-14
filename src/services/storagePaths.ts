@@ -82,9 +82,6 @@ export class StoragePaths {
   // New structure paths
   readonly data: string;
   readonly dbFile: string;
-  readonly chunks: string;
-  readonly chunksMeta: string;
-  readonly chunksNotes: string;
   readonly embeddings: string;
   readonly embeddingsActive: string;
   readonly embeddingsRebuilding: string;
@@ -130,9 +127,6 @@ export class StoragePaths {
     // New structure
     this.data = p("DATA");
     this.dbFile = p("DB_FILE");
-    this.chunks = p("CHUNKS");
-    this.chunksMeta = p("CHUNKS_META");
-    this.chunksNotes = p("CHUNKS_NOTES");
     this.embeddings = p("EMBEDDINGS");
     this.embeddingsActive = p("EMBEDDINGS_ACTIVE");
     this.embeddingsRebuilding = p("EMBEDDINGS_REBUILDING");
@@ -166,8 +160,6 @@ export class StoragePaths {
   async ensureDirectories(): Promise<void> {
     const dirs = [
       this.data,
-      this.chunks,
-      this.chunksNotes,
       this.embeddings,
       this.embeddingsActive,
       this.embeddingsRebuilding,
@@ -199,11 +191,6 @@ export class StoragePaths {
   // ─────────────────────────────────────────────────────────────────────────────
   // Dynamic Path Builders
   // ─────────────────────────────────────────────────────────────────────────────
-
-  /** Get path for a specific note's chunk file */
-  getChunkPath(noteId: string): string {
-    return path.join(this.chunksNotes, `${noteId}.json`);
-  }
 
   /** Get path for embedding index (current model) */
   getEmbeddingIndexPath(modelKey: string, dimension: number): string {
@@ -268,9 +255,6 @@ export class StoragePaths {
       systemIndex: this.systemIndex,
       data: this.data,
       dbFile: this.dbFile,
-      chunks: this.chunks,
-      chunksMeta: this.chunksMeta,
-      chunksNotes: this.chunksNotes,
       embeddings: this.embeddings,
       embeddingsActive: this.embeddingsActive,
       embeddingsRebuilding: this.embeddingsRebuilding,
