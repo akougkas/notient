@@ -109,6 +109,7 @@ export class ChiefOfStaff {
       llm,
       searchPipeline,
       vaultContextBuilder,
+      obsidian,
       profile,
     );
   }
@@ -596,6 +597,7 @@ export class ChiefOfStaff {
       llm,
       null, // Will be updated separately via updateSearch
       null,
+      this.obsidian,
       this.profile,
     );
 
