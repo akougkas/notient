@@ -439,15 +439,15 @@ export class NoteEditorAgent extends BaseAgent {
       return true;
     }
 
-    // Handle LLM variations: { field: string, newValue: any } or { property: string, value: any }
-    const altKey = p.field || p.property;
-    const altValue = p.newValue !== undefined ? p.newValue : p.value;
+    // Handle LLM variations - check all common key field names
+    const altKey = p.field || p.property || p.name || p.attribute || p.setting || p.frontmatterKey;
+    const altValue = p.newValue ?? p.frontmatterValue ?? p.value;
 
     if (typeof altKey === "string" && altKey.length > 0 && altValue !== undefined) {
       // Normalize to standard format
       p.key = altKey as string;
       p.value = altValue;
-      console.debug(
+      console.warn(
         `[Note Editor] Normalized frontmatter_set payload from alternate format. key: ${p.key}`,
       );
       return true;
