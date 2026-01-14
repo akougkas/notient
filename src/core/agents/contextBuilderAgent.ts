@@ -168,16 +168,31 @@ export class ContextBuilderAgent extends BaseAgent {
     const now = Date.now();
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    // Collect recent edits sorted by modification time
+    const recentEdits = this.collectRecentEdits(files, oneWeekAgo);
+    const { tagCounts, folderCounts } = this.countTagsAndFolders(files);
+    const editFrequency = this.determineEditFrequency(recentEdits, now);
+    const activeTopics = this.computeActiveTopics(tagCounts, folderCounts);
+    const preferredNoteTypes = this.inferNoteTypes(files);
+
+    return {
+      recentEdits,
+      activeTopics,
+      editFrequency,
+      preferredNoteTypes,
+    };
+  }
+
+  /**
+   * Collect recent edits from files, limited to last 50
+   */
+  private collectRecentEdits(
+    files: { path: string; stat: { ctime: number; mtime: number } }[],
+    oneWeekAgo: number,
+  ): UserBehavior["recentEdits"] {
     const recentEdits: UserBehavior["recentEdits"] = [];
-    const tagCounts = new Map<string, number>();
-    const folderCounts = new Map<string, number>();
 
     for (const file of files) {
       const stat = file.stat;
-      const metadata = this.obsidian.getFileMetadata(file);
-
-      // Track recent edits (last 50)
       if (stat.mtime > oneWeekAgo) {
         recentEdits.push({
           path: file.path,
@@ -185,56 +200,75 @@ export class ContextBuilderAgent extends BaseAgent {
           type: stat.ctime === stat.mtime ? "create" : "modify",
         });
       }
+    }
 
-      // Count tags
+    recentEdits.sort((a, b) => b.timestamp - a.timestamp);
+    return recentEdits.slice(0, 50);
+  }
+
+  /**
+   * Count tags and folders across files
+   */
+  private countTagsAndFolders(
+    files: { path: string; stat: { size: number } }[],
+  ): {
+    tagCounts: Map<string, number>;
+    folderCounts: Map<string, number>;
+  } {
+    const tagCounts = new Map<string, number>();
+    const folderCounts = new Map<string, number>();
+
+    for (const file of files) {
+      const metadata = this.obsidian?.getFileMetadata(file as any) || { tags: [] };
+
       for (const tag of metadata.tags) {
         tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
       }
 
-      // Count top-level folder activity
       const folder = file.path.split("/")[0];
-      if (folder && folder !== file.name) {
+      if (folder && folder !== file.path) {
         folderCounts.set(folder, (folderCounts.get(folder) || 0) + 1);
       }
     }
 
-    // Sort recent edits by timestamp descending, limit to 50
-    recentEdits.sort((a, b) => b.timestamp - a.timestamp);
-    const limitedEdits = recentEdits.slice(0, 50);
+    return { tagCounts, folderCounts };
+  }
 
-    // Determine edit frequency
-    const recentEditCount = limitedEdits.filter(
-      (e) => e.timestamp > now - 24 * 60 * 60 * 1000,
-    ).length;
-    let editFrequency: UserBehavior["editFrequency"] = "low";
-    if (recentEditCount > 10) {
-      editFrequency = "high";
-    } else if (recentEditCount > 3) {
-      editFrequency = "medium";
-    }
+  /**
+   * Determine edit frequency based on recent edits in the last 24 hours
+   */
+  private determineEditFrequency(
+    recentEdits: UserBehavior["recentEdits"],
+    now: number,
+  ): UserBehavior["editFrequency"] {
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const recentEditCount = recentEdits.filter((e) => e.timestamp > oneDayAgo).length;
 
-    // Get top 10 active topics (tags + folders combined)
+    if (recentEditCount > 10) return "high";
+    if (recentEditCount > 3) return "medium";
+    return "low";
+  }
+
+  /**
+   * Compute top 10 active topics from tags and folders
+   */
+  private computeActiveTopics(
+    tagCounts: Map<string, number>,
+    folderCounts: Map<string, number>,
+  ): string[] {
     const allTopics = new Map<string, number>();
+
     for (const [tag, count] of tagCounts) {
       allTopics.set(`#${tag}`, count);
     }
     for (const [folder, count] of folderCounts) {
       allTopics.set(folder, count);
     }
-    const activeTopics = [...allTopics.entries()]
+
+    return [...allTopics.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([topic]) => topic);
-
-    // Determine preferred note types (simplified heuristic)
-    const preferredNoteTypes = this.inferNoteTypes(files);
-
-    return {
-      recentEdits: limitedEdits,
-      activeTopics,
-      editFrequency,
-      preferredNoteTypes,
-    };
   }
 
   /**
