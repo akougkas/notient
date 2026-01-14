@@ -140,9 +140,11 @@ export default class NotientPlugin extends Plugin {
           const selection = editor.getSelection();
 
           if (selection) {
+            menu.addSeparator();
+            
             menu.addItem((item) => {
               item
-                .setTitle("Notient: Find related notes")
+                .setTitle("Find related notes")
                 .setIcon("search")
                 .onClick(() =>
                   this.kernel.eventBus.emit("action:find-related", { text: selection }),
@@ -151,7 +153,7 @@ export default class NotientPlugin extends Plugin {
 
             menu.addItem((item) => {
               item
-                .setTitle("Notient: Enhance this section")
+                .setTitle("Enhance selection")
                 .setIcon("sparkles")
                 .onClick(() => this.kernel.eventBus.emit("action:enhance", { text: selection }));
             });
@@ -164,9 +166,11 @@ export default class NotientPlugin extends Plugin {
           // Check if file is a TFile and is markdown
           if (!file || !(file as any).path) return;
           
+          menu.addSeparator();
+
           menu.addItem((item) => {
             item
-              .setTitle("Notient: Analyze note")
+              .setTitle("Analyze note")
               .setIcon("brain")
               .onClick(() => this.kernel.eventBus.emit("action:analyze", { path: file.path }));
           });
