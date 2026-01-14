@@ -664,7 +664,7 @@ export class HNSWVectorStore implements VectorStore {
     this.bulkDepth = Math.max(0, this.bulkDepth - 1);
   }
   async clearAll(): Promise<void> {
-    await this.bridge.init(HNSW_CONFIG);
+    await this.bridge?.init(HNSW_CONFIG);
     await this.db.db.deleteFrom("chunks").execute();
     await this.db.db.deleteFrom("notes").execute();
     await this.db.db.deleteFrom("embeddings").execute();
