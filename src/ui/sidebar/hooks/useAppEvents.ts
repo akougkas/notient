@@ -1,8 +1,15 @@
 import { batch } from "@preact/signals";
 import { Notice } from "obsidian";
 import { useEffect } from "preact/hooks";
+import type { AgentTask } from "../../../core/agent/types";
 import type { VitalsHint } from "../../../services/insightGenerator";
-import type { EventType } from "../../../types/events";
+import type {
+  ActionAppliedEvent,
+  ActionUndoneEvent,
+  AgentTaskUpdateEvent,
+  EventType,
+  InsightCreatedEvent,
+} from "../../../types/events";
 import type { ActiveAgent, PendingAction, RecentActivity } from "../components/AgentStreamsView";
 import { useKernel } from "../context/KernelContext";
 import {
@@ -24,12 +31,14 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   const kernel = useKernel();
 
   // Helper for registering event listeners with typed events
-  // biome-ignore lint/suspicious/noExplicitAny: Event handler needs to accept any payload shape
-  function useEventBus(event: EventType, handler: (data: any) => void) {
+  function useEventBus<T extends EventType>(
+    event: T,
+    handler: (data: import("../../../types/events").EventPayloads[T]) => void,
+  ) {
     useEffect(() => {
       const unsub = kernel.eventBus.on(event, handler);
       return () => unsub();
-    }, [event, handler, kernel.eventBus]);
+    }, [event, handler]);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -53,27 +62,24 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   // ──────────────────────────────────────────────────────────────────────────
 
   // Handlers for specific task states
-  const handleTaskRunning = (task: any) => {
+  const handleTaskRunning = (task: AgentTask) => {
     batch(() => {
       // Add or update active agent
       const existing = activeAgents.value.find((a: ActiveAgent) => a.id === task.id);
       if (existing) {
         // Update progress
         activeAgents.value = activeAgents.value.map((a: ActiveAgent) =>
-          a.id === task.id
-            ? { ...a, status: "running", progress: task.progress, activeSkill: task.activeSkill }
-            : a,
+          a.id === task.id ? { ...a, status: "running", progress: task.progress } : a,
         );
       } else {
         // Add new agent
         const newAgent: ActiveAgent = {
           id: task.id,
-          type: task.agentType,
-          targetNote: task.targetNote || "Unknown Note",
+          type: task.agent,
+          targetNote: task.noteTitle || "Unknown Note",
           status: "running",
           progress: task.progress || 0,
           startedAt: new Date(),
-          activeSkill: task.activeSkill, // From task object
         };
         activeAgents.value = [...activeAgents.value, newAgent];
 
@@ -86,7 +92,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     });
   };
 
-  const handleTaskCompleted = (task: any) => {
+  const handleTaskCompleted = (task: AgentTask) => {
     batch(() => {
       // Move from active to completed state (keep in list until dismissed)
       activeAgents.value = activeAgents.value.map((a: ActiveAgent) =>
@@ -100,7 +106,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
                 ? {
                     content: "Task completed", // Placeholder if not structured
                     structured: task.result,
-                    insightSummary: task.result?.contextSummary || "Task completed successfully",
+                    insightSummary: "Task completed successfully",
                   }
                 : undefined,
             }
@@ -112,8 +118,8 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         {
           id: task.id,
           status: "success",
-          actionType: task.agentType,
-          targetNote: task.targetNote || "Unknown",
+          actionType: task.agent,
+          targetNote: task.noteTitle || "Unknown",
           summary: "Task completed successfully",
           completedAt: new Date(),
           canUndo: false,
@@ -129,7 +135,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     });
   };
 
-  const handleTaskFailed = (task: any) => {
+  const handleTaskFailed = (task: AgentTask) => {
     batch(() => {
       // Remove from active agents
       activeAgents.value = activeAgents.value.filter((a: ActiveAgent) => a.id !== task.id);
@@ -139,8 +145,8 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         {
           id: task.id,
           status: "failed",
-          actionType: task.agentType,
-          targetNote: task.targetNote || "Unknown",
+          actionType: task.agent,
+          targetNote: task.noteTitle || "Unknown",
           summary: task.error || "Task failed",
           completedAt: new Date(),
           canUndo: false,
@@ -159,7 +165,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     });
   };
 
-  const handleTaskCancelled = (task: any) => {
+  const handleTaskCancelled = (task: AgentTask) => {
     batch(() => {
       activeAgents.value = activeAgents.value.filter((a: ActiveAgent) => a.id !== task.id);
       agentStatus.value = {
@@ -169,13 +175,13 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     });
   };
 
-  const handleTaskQueued = (task: any) => {
+  const handleTaskQueued = (task: AgentTask) => {
     // Optional: show queued items in UI if we want
     // For now, we only show running items to reduce noise
   };
 
   // Agent task updates - dispatch to handlers
-  useEventBus("agent:task-update", (data: any) => {
+  useEventBus("agent:task-update", (data) => {
     const task = data.task;
     if (!task || task.taskType === "chat") {
       return;
@@ -204,8 +210,9 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   // 4. ACTION EVENTS (Apply / Undo)
   // ──────────────────────────────────────────────────────────────────────────
 
-  useEventBus("action:applied", (data: any) => {
-    const { actionId, result } = data;
+  useEventBus("action:applied", (data) => {
+    const { record } = data;
+    const actionId = record.id;
 
     batch(() => {
       // Remove from pending
@@ -235,13 +242,13 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     new Notice("Action applied successfully");
   });
 
-  useEventBus("action:undone", (data: any) => {
-    const { actionId } = data;
+  useEventBus("action:undone", (data) => {
+    const { recordId } = data;
 
     batch(() => {
       // Mark recent activity as undone
       recentActivity.value = recentActivity.value.map((a: RecentActivity) =>
-        a.id === actionId ? { ...a, status: "undone", canUndo: false } : a,
+        a.id === recordId ? { ...a, status: "undone", canUndo: false } : a,
       );
     });
 
@@ -255,7 +262,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   // Insight events - primary agent output flow (per ID-ARCHITECTURE-SPEC.md)
   // Agent returns → ChiefOfStaff/TaskQueue wraps in Insight container → emit insight:created
   // → UI extracts actions from Insight for pending review
-  useEventBus("insight:created", (data: any) => {
+  useEventBus("insight:created", (data) => {
     queueMicrotask(() => {
       const { insight } = data;
 

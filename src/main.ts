@@ -164,7 +164,7 @@ export default class NotientPlugin extends Plugin {
       this.registerEvent(
         this.app.workspace.on("file-menu", (menu, file) => {
           // Check if file is a TFile and is markdown
-          if (!file || !(file as any).path) return;
+          if (!file || !file.path) return;
 
           menu.addSeparator();
 
