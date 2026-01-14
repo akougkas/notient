@@ -1,8 +1,8 @@
+import type { DatabaseService } from "../core/db/database";
 import type { Kernel } from "../core/kernel";
 import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 import type { VectorStore } from "./vectorStore";
-import type { DatabaseService } from "../core/db/database";
 
 /** Exported index state for UI */
 export interface IndexStats {
@@ -80,7 +80,7 @@ export class IndexManager {
 
     // Try loading native HNSW index
     const nativeFilename = "hnsw.bin";
-    
+
     await this.vectorStore.loadFromDataAsync?.(
       {
         meta: {
@@ -89,9 +89,9 @@ export class IndexManager {
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
-        docs: [], 
+        docs: [],
       },
-      { hnswFilename: nativeFilename }
+      { hnswFilename: nativeFilename },
     );
 
     // Check if store is populated
@@ -99,7 +99,9 @@ export class IndexManager {
     if (chunkCount === 0) {
       const dbCount = await this.countEmbeddingsInDb();
       if (dbCount > 0) {
-        console.log(`[IndexManager] Native index empty, but DB has ${dbCount} embeddings. Rehydrating...`);
+        console.log(
+          `[IndexManager] Native index empty, but DB has ${dbCount} embeddings. Rehydrating...`,
+        );
         await this.rehydrateFromDb();
       }
     }
@@ -122,7 +124,7 @@ export class IndexManager {
   private async rehydrateFromDb(): Promise<void> {
     const BATCH_SIZE = 2000;
     let offset = 0;
-    
+
     while (true) {
       const rows = await this.db.db
         .selectFrom("embeddings")
@@ -131,27 +133,34 @@ export class IndexManager {
         .limit(BATCH_SIZE)
         .offset(offset)
         .execute();
-        
+
       if (rows.length === 0) break;
-      
+
       // biome-ignore lint/suspicious/noExplicitAny: wrapper format
-      const docs = rows.map(row => ({
+      const docs = rows.map((row) => ({
         chunkId: row.chunk_id,
         embedding: Array.from(row.vector),
-        noteId: "", path: "", text: "", 
-        tier: "block", kind: "paragraph", headingPath: [],
-        mtimeMs: 0, contentHash: "", tags: [], frontmatter: {}
+        noteId: "",
+        path: "",
+        text: "",
+        tier: "block",
+        kind: "paragraph",
+        headingPath: [],
+        mtimeMs: 0,
+        contentHash: "",
+        tags: [],
+        frontmatter: {},
       }));
-      
+
       await this.vectorStore.loadFromDataAsync?.({
         meta: { modelKey: this.modelKey, dimension: this.dimension, createdAt: 0, updatedAt: 0 },
-        docs: docs as any
+        docs: docs as any,
       });
-      
+
       offset += rows.length;
       console.log(`[IndexManager] Rehydrated ${offset} vectors...`);
     }
-    
+
     await this.vectorStore.persistNativeIndex?.({ hnswFilename: "hnsw.bin" });
   }
 

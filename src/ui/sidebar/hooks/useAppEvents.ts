@@ -60,7 +60,9 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
       if (existing) {
         // Update progress
         activeAgents.value = activeAgents.value.map((a: ActiveAgent) =>
-          a.id === task.id ? { ...a, status: "running", progress: task.progress, activeSkill: task.activeSkill } : a,
+          a.id === task.id
+            ? { ...a, status: "running", progress: task.progress, activeSkill: task.activeSkill }
+            : a,
         );
       } else {
         // Add new agent
@@ -74,7 +76,7 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           activeSkill: task.activeSkill, // From task object
         };
         activeAgents.value = [...activeAgents.value, newAgent];
-        
+
         // Update stats
         agentStatus.value = {
           ...agentStatus.value,
@@ -94,11 +96,13 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
               status: "completed",
               progress: 100,
               completedAt: new Date(),
-              resultData: task.result ? {
-                content: "Task completed", // Placeholder if not structured
-                structured: task.result,
-                insightSummary: task.result?.contextSummary || "Task completed successfully"
-              } : undefined
+              resultData: task.result
+                ? {
+                    content: "Task completed", // Placeholder if not structured
+                    structured: task.result,
+                    insightSummary: task.result?.contextSummary || "Task completed successfully",
+                  }
+                : undefined,
             }
           : a,
       );
@@ -202,15 +206,15 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
 
   useEventBus("action:applied", (data: any) => {
     const { actionId, result } = data;
-    
+
     batch(() => {
       // Remove from pending
       pendingActions.value = pendingActions.value.filter((a: PendingAction) => a.id !== actionId);
-      
+
       // Update pending count
       agentStatus.value = {
         ...agentStatus.value,
-        pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1)
+        pendingReviewCount: Math.max(0, agentStatus.value.pendingReviewCount - 1),
       };
 
       // Add to recent activity
@@ -224,23 +228,23 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
           completedAt: new Date(),
           canUndo: true,
         },
-        ...recentActivity.value.slice(0, 19)
+        ...recentActivity.value.slice(0, 19),
       ];
     });
-    
+
     new Notice("Action applied successfully");
   });
 
   useEventBus("action:undone", (data: any) => {
     const { actionId } = data;
-    
+
     batch(() => {
       // Mark recent activity as undone
       recentActivity.value = recentActivity.value.map((a: RecentActivity) =>
-        a.id === actionId ? { ...a, status: "undone", canUndo: false } : a
+        a.id === actionId ? { ...a, status: "undone", canUndo: false } : a,
       );
     });
-    
+
     new Notice("Action undone");
   });
 

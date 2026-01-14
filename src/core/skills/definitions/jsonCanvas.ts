@@ -26,11 +26,11 @@ const CANVAS_SCHEMA = {
               label: { type: "string", description: "For group nodes: Label text" },
               color: { type: "string", description: "Preset '1'-'6' or hex code" },
               background: { type: "string", description: "For group nodes: Background image path" },
-              backgroundStyle: { type: "string", enum: ["cover", "ratio", "repeat"] }
+              backgroundStyle: { type: "string", enum: ["cover", "ratio", "repeat"] },
             },
             required: ["id", "type", "x", "y", "width", "height"],
-            additionalProperties: false
-          }
+            additionalProperties: false,
+          },
         },
         edges: {
           type: "array",
@@ -45,17 +45,17 @@ const CANVAS_SCHEMA = {
               toSide: { type: "string", enum: ["top", "right", "bottom", "left"] },
               toEnd: { type: "string", enum: ["none", "arrow"] },
               color: { type: "string" },
-              label: { type: "string" }
+              label: { type: "string" },
             },
             required: ["id", "fromNode", "toNode"],
-            additionalProperties: false
-          }
-        }
+            additionalProperties: false,
+          },
+        },
       },
       required: ["nodes", "edges"],
-      additionalProperties: false
-    }
-  }
+      additionalProperties: false,
+    },
+  },
 } as const;
 
 export const jsonCanvasSkill: Skill = {
@@ -85,15 +85,51 @@ Rules:
       user: "Create a canvas with a main idea and two details",
       assistant: JSON.stringify({
         nodes: [
-          { id: "n1a2b3c4d5e6f7a8", type: "text", x: 0, y: 0, width: 400, height: 200, text: "# Main Idea" },
-          { id: "n2b3c4d5e6f7a8b9", type: "text", x: 500, y: -100, width: 300, height: 150, text: "Detail 1" },
-          { id: "n3c4d5e6f7a8b9c0", type: "text", x: 500, y: 100, width: 300, height: 150, text: "Detail 2" }
+          {
+            id: "n1a2b3c4d5e6f7a8",
+            type: "text",
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 200,
+            text: "# Main Idea",
+          },
+          {
+            id: "n2b3c4d5e6f7a8b9",
+            type: "text",
+            x: 500,
+            y: -100,
+            width: 300,
+            height: 150,
+            text: "Detail 1",
+          },
+          {
+            id: "n3c4d5e6f7a8b9c0",
+            type: "text",
+            x: 500,
+            y: 100,
+            width: 300,
+            height: 150,
+            text: "Detail 2",
+          },
         ],
         edges: [
-          { id: "e1d2e3f4a5b6c7d8", fromNode: "n1a2b3c4d5e6f7a8", fromSide: "right", toNode: "n2b3c4d5e6f7a8b9", toSide: "left" },
-          { id: "e2e3f4a5b6c7d8e9", fromNode: "n1a2b3c4d5e6f7a8", fromSide: "right", toNode: "n3c4d5e6f7a8b9c0", toSide: "left" }
-        ]
-      })
-    }
-  ]
+          {
+            id: "e1d2e3f4a5b6c7d8",
+            fromNode: "n1a2b3c4d5e6f7a8",
+            fromSide: "right",
+            toNode: "n2b3c4d5e6f7a8b9",
+            toSide: "left",
+          },
+          {
+            id: "e2e3f4a5b6c7d8e9",
+            fromNode: "n1a2b3c4d5e6f7a8",
+            fromSide: "right",
+            toNode: "n3c4d5e6f7a8b9c0",
+            toSide: "left",
+          },
+        ],
+      }),
+    },
+  ],
 };

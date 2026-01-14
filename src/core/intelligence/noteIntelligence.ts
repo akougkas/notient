@@ -251,9 +251,7 @@ export class NoteIntelligenceService {
     }
 
     // Prepare fields
-    const entityNames = record.entities
-      .map((e) => e.name)
-      .slice(0, 10); // Truncate to max 10
+    const entityNames = record.entities.map((e) => e.name).slice(0, 10); // Truncate to max 10
 
     const healthScore = record.health ? `${record.health.score}/100` : "unknown";
 

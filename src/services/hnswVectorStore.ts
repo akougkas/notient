@@ -1,13 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { VectorWorkerBridge } from "../core/vector/workerBridge";
+import type { DatabaseService } from "../core/db/database";
 import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
+import { VectorWorkerBridge } from "../core/vector/workerBridge";
 import type { ChunkKind, ChunkTier, EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, ParaType, SearchOptions } from "../types/search";
 import { atomicWriteFile } from "../utils/atomicWrite";
 import type { VectorStore, VectorStoreInitOptions } from "./vectorStore";
-import type { DatabaseService } from "../core/db/database";
 
 // ============================================================================
 // HNSW Configuration
@@ -81,7 +81,7 @@ interface PersistedIndex {
 export class HNSWVectorStore implements VectorStore {
   private bridge: VectorWorkerBridge;
   private db: DatabaseService;
-  
+
   private dimension = 0;
   private modelKey = "";
   private createdAt = Date.now();
@@ -99,7 +99,7 @@ export class HNSWVectorStore implements VectorStore {
     this.paraDetector = new ParaDetector(kernel.settings);
     const workerPath = path.join(this.kernel.storagePaths.pluginRoot, "vector.worker.js");
     this.bridge = new VectorWorkerBridge(workerPath);
-    
+
     const db = kernel.getService<DatabaseService>("database");
     if (!db) throw new Error("DatabaseService not available");
     this.db = db;
@@ -176,7 +176,7 @@ export class HNSWVectorStore implements VectorStore {
       await this.bridge.init(HNSW_CONFIG);
       this.initialized = true;
       console.log("[HNSWVectorStore] Worker initialized");
-      
+
       // Load note states from SQLite to hydrate cache
       await this.hydrateNoteStates();
     } catch (error) {
@@ -184,7 +184,7 @@ export class HNSWVectorStore implements VectorStore {
       throw error;
     }
   }
-  
+
   private async hydrateNoteStates(): Promise<void> {
     try {
       // Fetch indexed notes from DB
@@ -192,25 +192,25 @@ export class HNSWVectorStore implements VectorStore {
         .selectFrom("notes")
         .select(["path", "mtime", "hash", "word_count"])
         .execute();
-        
+
       // Only notes with chunks are "indexed".
       const indexedNotes = await this.db.db
         .selectFrom("chunks")
         .select("note_path")
         .distinct()
         .execute();
-        
-      const indexedPaths = new Set(indexedNotes.map(n => n.note_path));
-      
+
+      const indexedPaths = new Set(indexedNotes.map((n) => n.note_path));
+
       for (const note of notes) {
         if (indexedPaths.has(note.path)) {
-           this.noteStates.set(note.path, {
-             path: note.path,
-             mtimeMs: note.mtime,
-             contentHash: note.hash,
-             chunkCount: 0, // Placeholder
-             embeddedAt: note.mtime
-           });
+          this.noteStates.set(note.path, {
+            path: note.path,
+            mtimeMs: note.mtime,
+            contentHash: note.hash,
+            chunkCount: 0, // Placeholder
+            embeddedAt: note.mtime,
+          });
         }
       }
       console.log(`[HNSWVectorStore] Hydrated ${this.noteStates.size} note states from DB`);
@@ -234,12 +234,12 @@ export class HNSWVectorStore implements VectorStore {
     try {
       console.log(`[HNSWVectorStore] Persisting native index to ${options.hnswFilename}`);
       const data = await this.bridge.save();
-      
+
       const filePath = path.join(this.kernel.storagePaths.pluginRoot, options.hnswFilename);
       const tempPath = `${filePath}.tmp`;
       await fs.promises.writeFile(tempPath, new Uint8Array(data));
       await fs.promises.rename(tempPath, filePath);
-      
+
       console.log("[HNSWVectorStore] Native index persisted successfully");
     } catch (error) {
       console.warn("[HNSWVectorStore] Failed to persist native index:", error);
@@ -251,7 +251,10 @@ export class HNSWVectorStore implements VectorStore {
     try {
       await fs.promises.access(filePath);
       const buffer = await fs.promises.readFile(filePath);
-      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+      const arrayBuffer = buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength,
+      );
       this.bridge.load(arrayBuffer);
       return true;
     } catch (error) {
@@ -275,7 +278,7 @@ export class HNSWVectorStore implements VectorStore {
     options?: { hnswFilename?: string },
   ): Promise<void> {
     this.setMetaFromData(data.meta);
-    
+
     // Legacy state load (if provided)
     if (data.state) {
       this.lastFullIndexAt = data.state.lastFullIndexAt ?? null;
@@ -285,7 +288,7 @@ export class HNSWVectorStore implements VectorStore {
         }
       }
     }
-    
+
     const hnswFilename = options?.hnswFilename ?? null;
 
     // Fast path: load native HNSW
@@ -300,21 +303,21 @@ export class HNSWVectorStore implements VectorStore {
 
     // Slow path: rebuild HNSW from provided docs (Migration case)
     if (data.docs && data.docs.length > 0) {
-        console.log("[HNSWVectorStore] Rebuilding index from JSON docs...");
-        const items = data.docs.map(doc => ({
-          id: doc.chunkId,
-          embedding: new Float32Array(doc.embedding)
-        }));
-        await this.bridge.addItems(items);
+      console.log("[HNSWVectorStore] Rebuilding index from JSON docs...");
+      const items = data.docs.map((doc) => ({
+        id: doc.chunkId,
+        embedding: new Float32Array(doc.embedding),
+      }));
+      await this.bridge.addItems(items);
     }
-    
+
     this.dirty = false;
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: Legacy interface compatibility
   loadFromData(data: any): void {
     console.warn("[HNSWVectorStore] Sync loadFromData called - using async fallback");
-    this.loadFromDataAsync(data).catch(e => console.error(e));
+    this.loadFromDataAsync(data).catch((e) => console.error(e));
   }
 
   exportData(): { meta: PersistedIndex["meta"]; docs: PersistedDoc[] } {
@@ -349,9 +352,9 @@ export class HNSWVectorStore implements VectorStore {
     if (validChunks.length === 0) return;
 
     // 1. Prepare items for worker
-    const items = validChunks.map(c => ({
+    const items = validChunks.map((c) => ({
       id: c.chunkId,
-      embedding: new Float32Array(c.embedding)
+      embedding: new Float32Array(c.embedding),
     }));
 
     // 2. Write to SQLite
@@ -360,7 +363,8 @@ export class HNSWVectorStore implements VectorStore {
         // Insert/Update chunks
         for (const chunk of validChunks) {
           // Ensure note exists
-          await trx.insertInto("notes")
+          await trx
+            .insertInto("notes")
             .values({
               path: chunk.path,
               hash: chunk.contentHash,
@@ -368,17 +372,20 @@ export class HNSWVectorStore implements VectorStore {
               title: chunk.title,
               health_score: 0,
               para_type: this.paraDetector.detectType(chunk.path),
-              word_count: 0 // TODO: calculate
+              word_count: 0, // TODO: calculate
             })
-            .onConflict((oc) => oc.column("path").doUpdateSet({
-              hash: chunk.contentHash,
-              mtime: chunk.mtimeMs,
-              title: chunk.title
-            }))
+            .onConflict((oc) =>
+              oc.column("path").doUpdateSet({
+                hash: chunk.contentHash,
+                mtime: chunk.mtimeMs,
+                title: chunk.title,
+              }),
+            )
             .execute();
 
           // Insert chunk
-          await trx.insertInto("chunks")
+          await trx
+            .insertInto("chunks")
             .values({
               id: chunk.chunkId,
               note_path: chunk.path,
@@ -388,26 +395,31 @@ export class HNSWVectorStore implements VectorStore {
               heading_path: chunk.headingPath ? JSON.stringify(chunk.headingPath) : null,
               text: chunk.text,
               start_line: chunk.startLine || null,
-              end_line: chunk.endLine || null
+              end_line: chunk.endLine || null,
             })
-            .onConflict((oc) => oc.column("id").doUpdateSet({
-              text: chunk.text,
-              tier: chunk.tier,
-              kind: chunk.kind
-            }))
+            .onConflict((oc) =>
+              oc.column("id").doUpdateSet({
+                text: chunk.text,
+                tier: chunk.tier,
+                kind: chunk.kind,
+              }),
+            )
             .execute();
 
           // Insert embedding
-          await trx.insertInto("embeddings")
+          await trx
+            .insertInto("embeddings")
             .values({
               chunk_id: chunk.chunkId,
               model_key: this.modelKey,
               dimension: this.dimension,
-              vector: new Uint8Array(new Float32Array(chunk.embedding).buffer)
+              vector: new Uint8Array(new Float32Array(chunk.embedding).buffer),
             })
-            .onConflict((oc) => oc.column("chunk_id").doUpdateSet({
-              vector: new Uint8Array(new Float32Array(chunk.embedding).buffer)
-            }))
+            .onConflict((oc) =>
+              oc.column("chunk_id").doUpdateSet({
+                vector: new Uint8Array(new Float32Array(chunk.embedding).buffer),
+              }),
+            )
             .execute();
         }
       });
@@ -426,7 +438,7 @@ export class HNSWVectorStore implements VectorStore {
         mtimeMs: chunk.mtimeMs,
         contentHash: chunk.contentHash,
         chunkCount: 0, // Need to track
-        embeddedAt: Date.now()
+        embeddedAt: Date.now(),
       });
     }
 
@@ -435,26 +447,26 @@ export class HNSWVectorStore implements VectorStore {
 
   async deleteByPath(notePath: string): Promise<void> {
     if (this.disposed) return;
-    
+
     // 1. Get chunk IDs from DB
     const chunks = await this.db.db
       .selectFrom("chunks")
       .select("id")
       .where("note_path", "=", notePath)
       .execute();
-      
-    const ids = chunks.map(c => c.id);
+
+    const ids = chunks.map((c) => c.id);
     if (ids.length === 0) return;
-    
+
     // 2. Delete from Worker
     this.bridge.markDeleted(ids);
-    
+
     // 3. Delete from DB
     await this.db.db.deleteFrom("chunks").where("note_path", "=", notePath).execute();
     // embeddings deleted via foreign key cascade? Not guaranteed in SQLite unless enabled.
     // Explicitly delete embeddings.
     await this.db.db.deleteFrom("embeddings").where("chunk_id", "in", ids).execute();
-    
+
     this.dirty = true;
   }
 
@@ -467,7 +479,7 @@ export class HNSWVectorStore implements VectorStore {
       .select("path")
       .where("path", "like", `${prefix}%`)
       .execute();
-      
+
     for (const note of notes) {
       await this.deleteByPath(note.path);
     }
@@ -513,46 +525,57 @@ export class HNSWVectorStore implements VectorStore {
     if (this.disposed) return [];
 
     const query = new Float32Array(queryEmbedding);
-    const k = options.topK * 4; 
-    
+    const k = options.topK * 4;
+
     // 1. Get candidates from Worker
     const rawResults = await this.bridge.search(query, k);
     if (rawResults.length === 0) return [];
-    
-    const ids = rawResults.map(r => r.id);
-    const scores = new Map(rawResults.map(r => [r.id, r.score]));
-    
+
+    const ids = rawResults.map((r) => r.id);
+    const scores = new Map(rawResults.map((r) => [r.id, r.score]));
+
     // 2. Fetch metadata from SQLite
     const rows = await this.db.db
       .selectFrom("chunks")
       .innerJoin("notes", "chunks.note_path", "notes.path")
       .select([
-        "chunks.id", "chunks.note_path", "chunks.tier", "chunks.kind", 
-        "chunks.heading_path", "chunks.text", "chunks.start_line", "chunks.end_line",
+        "chunks.id",
+        "chunks.note_path",
+        "chunks.tier",
+        "chunks.kind",
+        "chunks.heading_path",
+        "chunks.text",
+        "chunks.start_line",
+        "chunks.end_line",
         "chunks.parent_chunk_id",
-        "notes.title", "notes.path"
+        "notes.title",
+        "notes.path",
       ])
       .where("chunks.id", "in", ids)
       .execute();
-      
+
     // 3. Post-process
-    const queryTerms = options.queryText?.toLowerCase().split(/\s+/).filter(t => t.length >= 2) || [];
+    const queryTerms =
+      options.queryText
+        ?.toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length >= 2) || [];
     const results: ChunkSearchResult[] = [];
     const perNoteCounts = new Map<string, number>();
 
     for (const row of rows) {
       const score = scores.get(row.id) || 0;
       const paraType = this.paraDetector.detectType(row.path);
-      
+
       // Filter: Tier
       if (options.tier) {
         const tiers = Array.isArray(options.tier) ? options.tier : [options.tier];
         if (!tiers.includes(row.tier)) continue;
       }
-      
+
       results.push(this.buildSearchResult(row, score, paraType, options.includeContent ?? false));
     }
-    
+
     // Sort by score
     return results.sort((a, b) => b.score - a.score).slice(0, options.topK);
   }
@@ -560,18 +583,18 @@ export class HNSWVectorStore implements VectorStore {
   async getChunksByNoteId(noteId: string): Promise<NoteChunk[]> {
     return this.getChunksByPath(noteId);
   }
-  
+
   async getChunksByPath(path: string): Promise<NoteChunk[]> {
     if (this.disposed) return [];
-    
+
     const rows = await this.db.db
       .selectFrom("chunks")
       .where("note_path", "=", path)
       .selectAll()
       .execute();
-      
+
     // biome-ignore lint/suspicious/noExplicitAny: casting types
-    return rows.map(row => ({
+    return rows.map((row) => ({
       chunkId: row.id,
       noteId: row.note_path,
       path: row.note_path,
@@ -589,7 +612,7 @@ export class HNSWVectorStore implements VectorStore {
       tokenEstimate: 0,
       chunkIndex: 0,
       parentChunkId: row.parent_chunk_id,
-      blockRef: null
+      blockRef: null,
     }));
   }
 
@@ -614,8 +637,12 @@ export class HNSWVectorStore implements VectorStore {
   }
 
   // Bulk stubs
-  beginBulkUpdate(): void { this.bulkDepth++; }
-  async endBulkUpdate(): Promise<void> { this.bulkDepth = Math.max(0, this.bulkDepth - 1); }
+  beginBulkUpdate(): void {
+    this.bulkDepth++;
+  }
+  async endBulkUpdate(): Promise<void> {
+    this.bulkDepth = Math.max(0, this.bulkDepth - 1);
+  }
   async clearAll(): Promise<void> {
     await this.bridge.init(HNSW_CONFIG);
     await this.db.db.deleteFrom("chunks").execute();
@@ -624,8 +651,8 @@ export class HNSWVectorStore implements VectorStore {
     this.noteStates.clear();
     this.dirty = true;
   }
-  async flush(): Promise<void> { }
-  
+  async flush(): Promise<void> {}
+
   async dispose(): Promise<void> {
     this.disposed = true;
     this.noteStates.clear();

@@ -13,29 +13,29 @@ const BASES_SCHEMA = {
           properties: {
             and: { type: "array", items: { type: "string" } },
             or: { type: "array", items: { type: "string" } },
-            not: { type: "array", items: { type: "string" } }
+            not: { type: "array", items: { type: "string" } },
           },
-          additionalProperties: false
+          additionalProperties: false,
         },
         formulas: {
           type: "object",
           additionalProperties: { type: "string" },
-          description: "Map of formula names to expressions"
+          description: "Map of formula names to expressions",
         },
         properties: {
           type: "object",
           additionalProperties: {
             type: "object",
             properties: {
-              displayName: { type: "string" }
+              displayName: { type: "string" },
             },
             required: ["displayName"],
-            additionalProperties: false
-          }
+            additionalProperties: false,
+          },
         },
         summaries: {
           type: "object",
-          additionalProperties: { type: "string" }
+          additionalProperties: { type: "string" },
         },
         views: {
           type: "array",
@@ -49,35 +49,35 @@ const BASES_SCHEMA = {
                 type: "object",
                 properties: {
                   property: { type: "string" },
-                  direction: { type: "string", enum: ["ASC", "DESC"] }
+                  direction: { type: "string", enum: ["ASC", "DESC"] },
                 },
                 required: ["property", "direction"],
-                additionalProperties: false
+                additionalProperties: false,
               },
               filters: {
                 type: "object",
                 properties: {
                   and: { type: "array", items: { type: "string" } },
                   or: { type: "array", items: { type: "string" } },
-                  not: { type: "array", items: { type: "string" } }
+                  not: { type: "array", items: { type: "string" } },
                 },
-                additionalProperties: false
+                additionalProperties: false,
               },
               order: { type: "array", items: { type: "string" } },
               summaries: {
                 type: "object",
-                additionalProperties: { type: "string" }
-              }
+                additionalProperties: { type: "string" },
+              },
             },
             required: ["type", "name"],
-            additionalProperties: false
-          }
-        }
+            additionalProperties: false,
+          },
+        },
       },
       required: ["views"],
-      additionalProperties: false
-    }
-  }
+      additionalProperties: false,
+    },
+  },
 } as const;
 
 export const obsidianBasesSkill: Skill = {
@@ -110,15 +110,17 @@ Operators: ==, !=, >, <, >=, <=, &&, ||, !
       user: "Create a table of active projects",
       assistant: JSON.stringify({
         filters: {
-          and: ['file.hasTag("project")', 'status == "active"']
+          and: ['file.hasTag("project")', 'status == "active"'],
         },
-        views: [{
-          type: "table",
-          name: "Active Projects",
-          order: ["file.name", "status", "priority", "due_date"],
-          groupBy: { property: "priority", direction: "DESC" }
-        }]
-      })
-    }
-  ]
+        views: [
+          {
+            type: "table",
+            name: "Active Projects",
+            order: ["file.name", "status", "priority", "due_date"],
+            groupBy: { property: "priority", direction: "DESC" },
+          },
+        ],
+      }),
+    },
+  ],
 };

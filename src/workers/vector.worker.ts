@@ -1,5 +1,5 @@
-import type { HnswlibModule, HierarchicalNSW } from "hnswlib-wasm";
-import type { VectorCommand, VectorResult, HNSWConfig } from "../core/vector/workerBridge";
+import type { HierarchicalNSW, HnswlibModule } from "hnswlib-wasm";
+import type { HNSWConfig, VectorCommand, VectorResult } from "../core/vector/workerBridge";
 
 let lib: HnswlibModule | null = null;
 let index: HierarchicalNSW | null = null;
@@ -79,7 +79,7 @@ function ensureIndex(dimension: number) {
     globalConfig.initialMaxElements,
     globalConfig.M,
     globalConfig.efConstruction,
-    100 // random seed
+    100, // random seed
   );
   index.setEfSearch(globalConfig.efSearch);
 }
@@ -92,7 +92,7 @@ function handleSearch(embedding: Float32Array, k: number, requestId: string) {
 
   try {
     const result = index.searchKnn(embedding, k, (label) => !deletedLabels.has(label));
-    
+
     const mappedResults: { id: string; score: number }[] = [];
     for (let i = 0; i < result.neighbors.length; i++) {
       const label = result.neighbors[i];
@@ -139,7 +139,7 @@ function handleAddItems(items: Array<{ id: string; embedding: Float32Array }>) {
     }
     // If it was deleted, un-delete it
     deletedLabels.delete(label);
-    
+
     labels.push(label);
     embeddings.push(item.embedding);
   }
@@ -174,52 +174,54 @@ async function handleSave() {
 
   const filename = "temp_index.bin";
   index.writeIndex(filename);
-  
+
   // @ts-ignore
   const fs = lib.FS;
   const indexData = fs.readFile(filename, { encoding: "binary" }) as Uint8Array;
-  
+
   const mapping = {
     nextLabel,
     currentDimension,
     idToLabel: Array.from(idToLabel.entries()),
-    deletedLabels: Array.from(deletedLabels)
+    deletedLabels: Array.from(deletedLabels),
   };
   const mappingJson = JSON.stringify(mapping);
   const mappingBytes = new TextEncoder().encode(mappingJson);
-  
+
   const totalLength = 4 + mappingBytes.length + indexData.length;
   const buffer = new ArrayBuffer(totalLength);
   const view = new DataView(buffer);
   const uint8 = new Uint8Array(buffer);
-  
+
   view.setUint32(0, mappingBytes.length, true);
   uint8.set(mappingBytes, 4);
   uint8.set(indexData, 4 + mappingBytes.length);
-  
-  try { fs.unlink(filename); } catch {}
-  
+
+  try {
+    fs.unlink(filename);
+  } catch {}
+
   postResult({ type: "saveComplete", data: buffer });
 }
 
 async function handleLoad(data: ArrayBuffer) {
   if (!lib || !globalConfig) return;
-  
+
   const view = new DataView(data);
   const uint8 = new Uint8Array(data);
-  
+
   const mappingLen = view.getUint32(0, true);
   const mappingBytes = uint8.subarray(4, 4 + mappingLen);
   const mappingJson = new TextDecoder().decode(mappingBytes);
   const mapping = JSON.parse(mappingJson);
-  
+
   nextLabel = mapping.nextLabel;
   currentDimension = mapping.currentDimension;
-  
+
   idToLabel.clear();
   labelToId.clear();
   deletedLabels.clear();
-  
+
   for (const [id, label] of mapping.idToLabel) {
     idToLabel.set(id, label);
     labelToId.set(label, id);
@@ -227,27 +229,29 @@ async function handleLoad(data: ArrayBuffer) {
   for (const label of mapping.deletedLabels) {
     deletedLabels.add(label);
   }
-  
+
   const indexData = uint8.subarray(4 + mappingLen);
   const filename = "temp_load.bin";
   // @ts-ignore
   const fs = lib.FS;
   fs.writeFile(filename, indexData);
-  
+
   ensureIndex(currentDimension);
   if (index) {
     // Note: readIndex arguments might vary by version, checking usage in HNSWVectorStore
     // It used: index.readIndex(hnswFilename, maxElements)
     const maxElements = Math.max(
-      globalConfig.initialMaxElements, 
-      idToLabel.size + 1000 // Ensure room
+      globalConfig.initialMaxElements,
+      idToLabel.size + 1000, // Ensure room
     );
-    // Re-init with correct max elements before reading? 
+    // Re-init with correct max elements before reading?
     // Usually readIndex replaces the content, but the instance must be init'ed.
     // Let's use maxElements from mapping if we had it, or estimate.
-    
+
     index.readIndex(filename, maxElements);
   }
-  
-  try { fs.unlink(filename); } catch {}
+
+  try {
+    fs.unlink(filename);
+  } catch {}
 }

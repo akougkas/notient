@@ -112,10 +112,7 @@ export class VectorWorkerBridge {
     await this.readyPromise;
   }
 
-  async search(
-    embedding: Float32Array,
-    k: number,
-  ): Promise<Array<{ id: string; score: number }>> {
+  async search(embedding: Float32Array, k: number): Promise<Array<{ id: string; score: number }>> {
     const requestId = Math.random().toString(36).substring(7);
     return new Promise((resolve, reject) => {
       this.pendingSearches.set(requestId, { resolve, reject });

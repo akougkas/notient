@@ -66,7 +66,6 @@ export class ConversationStore {
     // SQLite is already initialized via DatabaseService
   }
 
-
   /**
    * Load conversation for a specific note (lazy)
    */

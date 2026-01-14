@@ -1,5 +1,5 @@
-import { type App, FileSystemAdapter } from "obsidian";
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from "kysely";
+import { type App, FileSystemAdapter } from "obsidian";
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 import type { StoragePaths } from "../../services/storagePaths";
 import { migrateJsonToSqlite } from "./json-migration";

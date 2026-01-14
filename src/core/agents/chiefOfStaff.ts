@@ -49,12 +49,8 @@ import type {
   VaultGraphContext,
 } from "./types";
 import { AGENT_CONFIGS } from "./types";
-import {
-  type WorkflowAgentType,
-  getWorkflowByCommand,
-  isWorkflowCommand,
-} from "./workflowAgents";
 import { WorkerAgent } from "./workerAgent";
+import { type WorkflowAgentType, getWorkflowByCommand, isWorkflowCommand } from "./workflowAgents";
 
 /**
  * Task input for the Orchestrator
@@ -154,7 +150,7 @@ export class ChiefOfStaff {
     console.log(`[Orchestrator] Handling request from ${request.source}`);
 
     // Load note context if not provided
-    let noteContext = request.noteContext;
+    const noteContext = request.noteContext;
     if (!noteContext && request.intent) {
       // Try to get note context from the request or current active note
       // For now, we require noteContext to be provided

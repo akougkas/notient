@@ -99,9 +99,7 @@ export class ObsidianFacade {
    * Get all supported files (md, canvas, base) in the vault
    */
   getSupportedFiles(): TFile[] {
-    return this.app.vault
-      .getFiles()
-      .filter((f) => SUPPORTED_EXTENSIONS.has(f.extension));
+    return this.app.vault.getFiles().filter((f) => SUPPORTED_EXTENSIONS.has(f.extension));
   }
 
   /**

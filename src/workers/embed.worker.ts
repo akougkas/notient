@@ -77,7 +77,9 @@ async function embedSingle(text: string): Promise<number[]> {
 /**
  * Process texts in parallel with concurrency limit
  */
-async function embedBatch(texts: string[]): Promise<{ embeddings: Float32Array[]; dimension: number }> {
+async function embedBatch(
+  texts: string[],
+): Promise<{ embeddings: Float32Array[]; dimension: number }> {
   if (texts.length === 0) {
     return { embeddings: [], dimension: 0 };
   }

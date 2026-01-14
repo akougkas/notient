@@ -19,8 +19,9 @@ import type { Insight } from "./core/agentic/types";
 import { ConversationStore } from "./core/chat";
 import { VIEW_TYPE_DASHBOARD, VIEW_TYPE_SIDEBAR } from "./core/constants";
 import { VaultContextBuilder } from "./core/context/vaultContextBuilder";
-import { generateId } from "./core/ids";
+import { DatabaseService } from "./core/db/database";
 import { UserEvolutionService } from "./core/evolution";
+import { generateId } from "./core/ids";
 import { ImporterService, MigrationService } from "./core/importer";
 import { SimpleIndexer } from "./core/indexer/simpleIndexer";
 import { ActionOrchestrator } from "./core/intelligence/actionOrchestrator";
@@ -44,7 +45,6 @@ import { SetupWizardModal } from "./ui/modals/SetupWizard";
 import { NotientSettingTab, loadSettings, saveSettings } from "./ui/settings";
 import { NotientSidebarView } from "./ui/sidebar";
 import { activeView, searchQuery } from "./ui/sidebar/state";
-import { DatabaseService } from "./core/db/database";
 
 export default class NotientPlugin extends Plugin {
   private kernel!: Kernel;
@@ -141,7 +141,7 @@ export default class NotientPlugin extends Plugin {
 
           if (selection) {
             menu.addSeparator();
-            
+
             menu.addItem((item) => {
               item
                 .setTitle("Find related notes")
@@ -165,7 +165,7 @@ export default class NotientPlugin extends Plugin {
         this.app.workspace.on("file-menu", (menu, file) => {
           // Check if file is a TFile and is markdown
           if (!file || !(file as any).path) return;
-          
+
           menu.addSeparator();
 
           menu.addItem((item) => {
@@ -302,7 +302,7 @@ export default class NotientPlugin extends Plugin {
       await this.vectorStore.dispose();
       this.vectorStore = null;
     }
-    
+
     // Dispose Database
     if (this.databaseService) {
       this.databaseService.close();
@@ -411,7 +411,7 @@ export default class NotientPlugin extends Plugin {
       this.initStateMachine.transition("LOADING_INDEX", {
         progress: { stage: "index", percent: 50, message: "Loading database..." },
       });
-      
+
       // Initialize Database (SQLite)
       this.databaseService = new DatabaseService(this.app, this.kernel.storagePaths);
       await this.databaseService.init();
@@ -651,7 +651,7 @@ export default class NotientPlugin extends Plugin {
 
       // Register action event handlers (PART 2.3)
       this.registerActionEventHandlers(eventBus);
-      
+
       // Register context action handlers (D9)
       this.registerContextActionHandlers(eventBus);
 
@@ -1405,15 +1405,13 @@ export default class NotientPlugin extends Plugin {
           config: { selection: text },
         };
 
-        const { pipeline } = await this.actionOrchestrator.dispatch(
-          "enhance",
-          context,
-          { scope: "selection" }
-        );
+        const { pipeline } = await this.actionOrchestrator.dispatch("enhance", context, {
+          scope: "selection",
+        });
 
         let analysis = "";
         const actions = [];
-        
+
         // Execute pipeline (yields events)
         for await (const event of pipeline.execute()) {
           if (event.type === "analysis") analysis = event.analysis;
@@ -1429,14 +1427,13 @@ export default class NotientPlugin extends Plugin {
           reasoning: "User requested enhancement",
           timestamp: Date.now(),
           noteContext: {
-             path: context.notePath,
-             title: context.noteTitle,
-          }
+            path: context.notePath,
+            title: context.noteTitle,
+          },
         };
-        
+
         this.kernel.eventBus.emit("insight:created", { insight, source: "user-action" });
         this.kernel.obsidian.notice("Enhancement suggestions ready (see sidebar)");
-
       } catch (error) {
         console.error("[Notient] Enhance failed:", error);
         this.kernel.obsidian.notice("Enhancement failed");
@@ -1449,7 +1446,7 @@ export default class NotientPlugin extends Plugin {
         this.kernel.obsidian.notice("Intelligence service not ready");
         return;
       }
-      
+
       this.kernel.obsidian.notice("Analyzing note...");
       await this.noteIntelligence.regenerate(path);
       this.kernel.obsidian.notice("Analysis complete");

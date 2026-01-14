@@ -10,7 +10,6 @@
 
 import type { App, Plugin } from "obsidian";
 import { ObsidianFacade } from "../adapters/obsidianFacade";
-import type { DatabaseService } from "./db/database";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { IndexManager } from "../services/indexManager";
 import type { OllamaService } from "../services/ollama";
@@ -27,6 +26,7 @@ import type { TrustLevelManager } from "./agentic/trustLevelManager";
 import type { WorkflowRunner } from "./agentic/workflowRunner";
 import type { ConversationStore } from "./chat/conversationStore";
 import type { VaultContextBuilder } from "./context/vaultContextBuilder";
+import type { DatabaseService } from "./db/database";
 import { EventBus, setGlobalEventBus } from "./events/eventBus";
 import type { SimpleIndexer } from "./indexer/simpleIndexer";
 import type { ActionOrchestrator } from "./intelligence/actionOrchestrator";

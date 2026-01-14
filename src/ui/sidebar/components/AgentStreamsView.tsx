@@ -208,7 +208,10 @@ export function AgentStreamsView({
  * Capability Cards - Shows status of the 3 core capabilities
  * Per PRD: Three capability cards: Semantic Search, Context Builder, Chat Assistant
  */
-const CAPABILITY_CONFIG: Record<CapabilityType, { icon: string; label: string; description: string }> = {
+const CAPABILITY_CONFIG: Record<
+  CapabilityType,
+  { icon: string; label: string; description: string }
+> = {
   search: { icon: "search", label: "Search", description: "Semantic search" },
   context: { icon: "package", label: "Context", description: "Context bundler" },
   chat: { icon: "message-square", label: "Chat", description: "Chat assistant" },
@@ -387,7 +390,9 @@ function ActiveAgentCard({
           {agent.activeSkill && (
             <span class="nv2-agent-skill-badge" title={`Using Skill: ${agent.activeSkill}`}>
               <Icon name="zap" className="nv2-skill-icon" />
-              {agent.activeSkill.length > 20 ? `${agent.activeSkill.slice(0, 18)}...` : agent.activeSkill}
+              {agent.activeSkill.length > 20
+                ? `${agent.activeSkill.slice(0, 18)}...`
+                : agent.activeSkill}
             </span>
           )}
           {timeDisplay && <span class={timeDisplay.className}>{timeDisplay.text}</span>}

@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import type { FileSystemAdapter } from "obsidian";
 import type { Kysely } from "kysely";
+import type { FileSystemAdapter } from "obsidian";
 import type { StoragePaths } from "../../services/storagePaths";
 import { generateId } from "../ids";
 import type { Database } from "./schema";

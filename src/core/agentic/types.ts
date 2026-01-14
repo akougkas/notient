@@ -60,7 +60,7 @@ export type ProposedActionType =
   // Intelligence 2.0 (NEW)
   | "create_note"
   | "create_canvas" // NEW: Dedicated type for Canvas creation
-  | "create_base"   // NEW: Dedicated type for Base creation
+  | "create_base" // NEW: Dedicated type for Base creation
   | "batch_create_notes"
   | "restructure_note"
   | "create_task_note"

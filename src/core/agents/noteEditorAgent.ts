@@ -157,7 +157,12 @@ export class NoteEditorAgent extends BaseAgent {
 
     // Emit started event with active skill
     yield { type: "started", agentType: "note-editor", activeSkill: activeSkill?.name };
-    yield { type: "progress", agentType: "note-editor", progress: 10, activeSkill: activeSkill?.name };
+    yield {
+      type: "progress",
+      agentType: "note-editor",
+      progress: 10,
+      activeSkill: activeSkill?.name,
+    };
 
     // 2. Build Messages
     const messages = [
@@ -170,10 +175,17 @@ export class NoteEditorAgent extends BaseAgent {
       },
     ];
 
-    this.log(`Generating ${creationMode ? "content" : "edit proposals"} for ${context.currentNote.path}`);
+    this.log(
+      `Generating ${creationMode ? "content" : "edit proposals"} for ${context.currentNote.path}`,
+    );
 
     try {
-      yield { type: "progress", agentType: "note-editor", progress: 30, activeSkill: activeSkill?.name };
+      yield {
+        type: "progress",
+        agentType: "note-editor",
+        progress: 30,
+        activeSkill: activeSkill?.name,
+      };
 
       // 3. Configure Options (Schema Injection)
       const options = this.getCompletionOptions();
@@ -185,7 +197,12 @@ export class NoteEditorAgent extends BaseAgent {
       // 4. Call LLM
       const rawOutput = await this.llm.complete(messages, options);
 
-      yield { type: "progress", agentType: "note-editor", progress: 70, activeSkill: activeSkill?.name };
+      yield {
+        type: "progress",
+        agentType: "note-editor",
+        progress: 70,
+        activeSkill: activeSkill?.name,
+      };
 
       // 5. Parse Output
       let output: StructuredOutput;
@@ -193,17 +210,17 @@ export class NoteEditorAgent extends BaseAgent {
       if (creationMode && activeSkill) {
         // SPECIAL MODE: Wrap raw content in a creation action
         const content = this.sanitizeLLMOutput(rawOutput);
-        
+
         // Validate JSON integrity check
         try {
-            JSON.parse(content);
+          JSON.parse(content);
         } catch (e) {
-            throw new Error(`Generated invalid JSON for ${activeSkill.name}`);
+          throw new Error(`Generated invalid JSON for ${activeSkill.name}`);
         }
 
         const actionType = activeSkill.id === "json-canvas" ? "create_canvas" : "create_base";
         const extension = activeSkill.id === "json-canvas" ? "canvas" : "base";
-        
+
         // Determine filename from query or default
         // Simple heuristic: look for "named X" or use "Untitled"
         // In a real system, we might ask LLM for the filename too, but for now we use target from context or generate one
@@ -212,9 +229,9 @@ export class NoteEditorAgent extends BaseAgent {
         // But usually creation happens in a new file.
         // Let's assume the Orchestrator passed a target path if known, or we default.
         // For now, we will assume the Orchestrator/Chat provided a target path in the context or we use a timestamp.
-        const targetPath = context.currentNote.path.endsWith(".md") 
-            ? context.currentNote.path.replace(".md", `.${extension}`) 
-            : `${context.currentNote.path}.${extension}`;
+        const targetPath = context.currentNote.path.endsWith(".md")
+          ? context.currentNote.path.replace(".md", `.${extension}`)
+          : `${context.currentNote.path}.${extension}`;
 
         const action: ProposedAction = {
           id: generateId("act"),
@@ -226,17 +243,16 @@ export class NoteEditorAgent extends BaseAgent {
           requiresWriteLock: true,
           payload: {
             path: targetPath,
-            content: content
-          }
+            content: content,
+          },
         } as any; // Cast to satisfy specific payload types
 
         output = {
           kind: "structured",
           agentType: "note-editor",
           schema: "NoteEditOutput",
-          data: { actions: [action] }
+          data: { actions: [action] },
         };
-
       } else {
         // STANDARD MODE: Parse ProposedAction[]
         output = this.parseOutput(rawOutput, context);
@@ -245,7 +261,12 @@ export class NoteEditorAgent extends BaseAgent {
       const editOutput = output.data as NoteEditOutput;
       this.log(`Generated ${editOutput.actions.length} actions`);
 
-      yield { type: "progress", agentType: "note-editor", progress: 100, activeSkill: activeSkill?.name };
+      yield {
+        type: "progress",
+        agentType: "note-editor",
+        progress: 100,
+        activeSkill: activeSkill?.name,
+      };
       yield { type: "complete", agentType: "note-editor", output };
     } catch (error) {
       yield { type: "error", agentType: "note-editor", error: error as Error };
@@ -269,8 +290,10 @@ export class NoteEditorAgent extends BaseAgent {
       // Validate action type
       const actionType = action.type as ProposedActionType;
       // Allow new creation types if they pass through here (though usually handled in creationMode block)
-      if (!SUPPORTED_ACTION_TYPES.includes(actionType) && 
-          !["create_canvas", "create_base"].includes(actionType)) {
+      if (
+        !SUPPORTED_ACTION_TYPES.includes(actionType) &&
+        !["create_canvas", "create_base"].includes(actionType)
+      ) {
         this.warn(`Unknown or unsupported action type: ${action.type}`);
         continue;
       }
@@ -335,11 +358,11 @@ export class NoteEditorAgent extends BaseAgent {
 
       case "move_note":
         return typeof p.to === "string" && p.to.length > 0;
-      
+
       case "create_note":
       case "create_canvas":
       case "create_base":
-          return typeof p.path === "string" && typeof p.content === "string";
+        return typeof p.path === "string" && typeof p.content === "string";
 
       default:
         return false;

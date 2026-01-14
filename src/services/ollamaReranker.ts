@@ -44,9 +44,7 @@ export class OllamaReranker {
       host: settings.ollama.host,
     });
 
-    console.log(
-      `[OllamaReranker] Initialized with model=${settings.ollama.rerankModel}`,
-    );
+    console.log(`[OllamaReranker] Initialized with model=${settings.ollama.rerankModel}`);
   }
 
   /**
@@ -107,11 +105,7 @@ export class OllamaReranker {
   /**
    * Score a single candidate against the query
    */
-  private async scoreCandidate(
-    query: string,
-    text: string,
-    model: string,
-  ): Promise<number> {
+  private async scoreCandidate(query: string, text: string, model: string): Promise<number> {
     if (!this.client) throw new Error("Client not initialized");
 
     // Format prompt for Qwen reranker

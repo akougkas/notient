@@ -3,7 +3,8 @@ import type { Skill } from "../types";
 export const obsidianMarkdownSkill: Skill = {
   id: "obsidian-markdown",
   name: "Obsidian Flavored Markdown",
-  description: "Write content using Obsidian-specific Markdown syntax (wikilinks, callouts, embeds)",
+  description:
+    "Write content using Obsidian-specific Markdown syntax (wikilinks, callouts, embeds)",
   systemPrompt: `
 # Obsidian Flavored Markdown Skill
 You are an expert at writing Obsidian Flavored Markdown.
@@ -37,7 +38,7 @@ This project connects to [[Strategic Goals]].
 
 ## Next Steps
 - [ ] Review [[Requirements Doc]]
-- [ ] Update team`
-    }
-  ]
+- [ ] Update team`,
+    },
+  ],
 };
