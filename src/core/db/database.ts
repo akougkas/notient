@@ -32,7 +32,8 @@ export class DatabaseService {
     const SQL = await initSqlJs({ wasmBinary: wasmBuffer });
 
     let buffer: ArrayBuffer | null = null;
-    const dbPath = this.paths.dbFile;
+    // Adapter methods need vault-relative paths
+    const dbPath = this.paths.toVaultPath(this.paths.dbFile);
 
     // Use Obsidian adapter for file operations
     if (await this.adapter.exists(dbPath)) {
@@ -74,7 +75,9 @@ export class DatabaseService {
     // Create a proper ArrayBuffer copy (sql.js returns Uint8Array with ArrayBufferLike)
     const buffer = new ArrayBuffer(data.byteLength);
     new Uint8Array(buffer).set(data);
-    await this.adapter.writeBinary(this.paths.dbFile, buffer);
+    // Adapter methods need vault-relative paths
+    const dbPath = this.paths.toVaultPath(this.paths.dbFile);
+    await this.adapter.writeBinary(dbPath, buffer);
   }
 
   /**
