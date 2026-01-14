@@ -15,35 +15,59 @@ import type { ChatMessage } from "../llm/types";
 // =============================================================================
 
 /**
- * UI Agent Types - Interface layer that delegates to expert agents.
+ * 4-Agent Swarm Architecture Types
  *
- * Chat is a UI layer, not a routable expert. It handles conversation
- * and recognizes when to route to experts, but is not itself an "expert"
- * that other agents route to. This is why we have 12 expert agents,
- * not 13 — Chat is the UI, not a peer agent.
+ * Target Architecture (4 agents):
+ * 1. Orchestrator - The brain (reasoning model, makes plans, delegates)
+ * 2. NoteEditor - Obsidian I/O specialist (edit, create, move, verify)
+ * 3. ContextBuilder - Vault awareness specialist (search, relationships, trends)
+ * 4. Worker - Workflow executor (classify, enhance, atomize, etc.)
+ *
+ * Legacy agents (chat, classifier, connection) are maintained for backward
+ * compatibility and will be absorbed by Worker in Phase 2.
+ */
+
+/**
+ * All Agent Types in the system
+ *
+ * Core 4-Agent Swarm:
+ * - orchestrator: Brain, makes plans, delegates
+ * - note-editor: Obsidian I/O specialist
+ * - context-builder: Vault awareness specialist
+ * - worker: Workflow executor (Phase 2)
+ *
+ * Legacy (maintained for backward compatibility):
+ * - chat: UI layer (uses ChatService directly)
+ * - classifier: Will be absorbed by Worker
+ * - connection: Will be absorbed by Worker
+ */
+export type AgentType =
+  // Core 4-Agent Swarm
+  | "orchestrator" // Brain - makes plans, delegates
+  | "note-editor" // Obsidian I/O specialist
+  | "context-builder" // Vault awareness specialist
+  | "worker" // Workflow executor (Phase 2)
+  // Legacy agents (backward compatibility, to be absorbed in Phase 2)
+  | "chat" // UI layer - uses ChatService directly
+  | "classifier" // PARA classification -> Worker
+  | "connection"; // Find connections -> Worker
+
+/**
+ * UI Agent Types - Interface layer that delegates to expert agents.
+ * Chat is a UI layer, not a routable expert.
+ * @deprecated Use AgentType directly. Chat UI uses ChatService.
  */
 export type UIAgentType = "chat";
 
 /**
  * Expert Agent Types - Specialized domain experts that produce structured output.
- *
- * These are the 12 routable expert agents that handle specific tasks.
- * ChiefOfStaff routes work to these agents based on intent detection.
+ * @deprecated Use AgentType directly. The 4-agent swarm replaces expert agents.
  */
 export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
-  | "classifier" // PARA classification, tagging
-  | "connection" // Find semantic connections between notes
+  | "classifier" // PARA classification, tagging -> absorbed by Worker (Phase 2)
+  | "connection" // Find semantic connections -> absorbed by Worker (Phase 2)
   | "context-builder"; // Build context for other agents (internal)
-
-/**
- * All agent types in the system (union of UI and Expert agents).
- *
- * Maintains backwards compatibility while establishing the conceptual
- * distinction between UI agents (conversational interface) and Expert
- * agents (domain specialists).
- */
-export type AgentType = UIAgentType | ExpertAgentType;
 
 /**
  * Agent output types - determines parsing strategy
@@ -90,24 +114,29 @@ export interface AgentConfig {
 
 /**
  * Default configurations for each agent type
+ * 4-Agent Swarm: orchestrator, note-editor, context-builder, worker
+ * + Legacy agents for backward compatibility
  */
 export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
-  chat: {
-    type: "chat",
-    name: "Chat Agent",
-    isUI: true, // UI layer - conversational interface, not a routable expert
-    temperature: 0.7,
-    maxTokens: 2000,
-    contextBudget: 12000,
-    outputKind: "conversational",
+  // ===========================================================================
+  // Core 4-Agent Swarm
+  // ===========================================================================
+  orchestrator: {
+    type: "orchestrator",
+    name: "Orchestrator",
+    isUI: false, // Brain - makes plans, delegates to other agents
+    temperature: 0.3, // Low for deterministic planning
+    maxTokens: 1500,
+    contextBudget: 8000,
+    outputKind: "structured", // Outputs action plans
     canDelegate: true,
-    delegationTargets: ["note-editor", "classifier", "connection"],
-    contextPriority: 1,
+    delegationTargets: ["note-editor", "context-builder", "worker"],
+    contextPriority: 10, // Highest - orchestrates everything
   },
   "note-editor": {
     type: "note-editor",
     name: "Note Editor",
-    isUI: false, // Expert agent - structured output, routable
+    isUI: false, // Obsidian I/O specialist
     temperature: 0.3,
     maxTokens: 1500,
     contextBudget: 8000,
@@ -116,10 +145,49 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     delegationTargets: [],
     contextPriority: 2,
   },
+  "context-builder": {
+    type: "context-builder",
+    name: "Context Builder",
+    isUI: false, // Vault awareness specialist
+    temperature: 0.1,
+    maxTokens: 500,
+    contextBudget: 4000,
+    outputKind: "internal",
+    canDelegate: false,
+    delegationTargets: [],
+    contextPriority: 5, // High priority - provides context for others
+  },
+  worker: {
+    type: "worker",
+    name: "Worker",
+    isUI: false, // Workflow executor (Phase 2)
+    temperature: 0.3,
+    maxTokens: 1500,
+    contextBudget: 8000,
+    outputKind: "structured",
+    canDelegate: false,
+    delegationTargets: [],
+    contextPriority: 3,
+  },
+  // ===========================================================================
+  // Legacy agents (backward compatibility, to be absorbed in Phase 2)
+  // ===========================================================================
+  chat: {
+    type: "chat",
+    name: "Chat Agent",
+    isUI: true, // UI layer - conversational interface
+    temperature: 0.7,
+    maxTokens: 2000,
+    contextBudget: 12000,
+    outputKind: "conversational",
+    canDelegate: true,
+    delegationTargets: ["note-editor", "classifier", "connection"],
+    contextPriority: 1,
+  },
   classifier: {
     type: "classifier",
     name: "Classifier",
-    isUI: false, // Expert agent - structured output, routable
+    isUI: false, // Will be absorbed by Worker
     temperature: 0.2,
     maxTokens: 800,
     contextBudget: 6000,
@@ -131,7 +199,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   connection: {
     type: "connection",
     name: "Connection Agent",
-    isUI: false, // Expert agent - structured output, routable
+    isUI: false, // Will be absorbed by Worker
     temperature: 0.3,
     maxTokens: 1200,
     contextBudget: 10000,
@@ -139,18 +207,6 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     canDelegate: false,
     delegationTargets: [],
     contextPriority: 2,
-  },
-  "context-builder": {
-    type: "context-builder",
-    name: "Context Builder",
-    isUI: false, // Expert agent - internal, runs as preflight
-    temperature: 0.1,
-    maxTokens: 500,
-    contextBudget: 4000,
-    outputKind: "internal",
-    canDelegate: false,
-    delegationTargets: [],
-    contextPriority: 10, // Highest priority - runs first
   },
 };
 
@@ -511,11 +567,51 @@ export interface AgentSession {
 }
 
 // =============================================================================
-// Chief of Staff Types
+// Orchestrator Types (4-Agent Swarm)
+// =============================================================================
+
+/**
+ * Request source for the Orchestrator (one of three triggers)
+ */
+export type OrchestratorSource = "ui" | "chat" | "editor";
+
+/**
+ * Request to the Orchestrator from any of the three triggers
+ */
+export interface OrchestratorRequest {
+  /** Which trigger initiated this request */
+  source: OrchestratorSource;
+  /** User's intent (natural language or structured) */
+  intent: string;
+  /** Current note context */
+  noteContext?: NoteContext;
+  /** Selected text if any */
+  selection?: string;
+  /** Chat history for context (from ChatService) */
+  chatHistory?: ChatMessage[];
+}
+
+/**
+ * The Orchestrator's action plan after reasoning
+ */
+export interface OrchestratorPlan {
+  /** What action to take */
+  action: "delegate" | "respond" | "clarify";
+  /** Target agent for delegation */
+  targetAgent?: "note-editor" | "context-builder" | "worker";
+  /** Task description for the target agent */
+  task?: string;
+  /** The reasoning behind this plan */
+  reasoning: string;
+}
+
+// =============================================================================
+// Legacy Chief of Staff Types (for backward compatibility)
 // =============================================================================
 
 /**
  * Task routing decision
+ * @deprecated Use OrchestratorPlan instead
  */
 export interface RoutingDecision {
   /** Primary expert agent to handle the task */
@@ -527,7 +623,7 @@ export interface RoutingDecision {
 }
 
 /**
- * Aggregated result from Chief of Staff
+ * Aggregated result from Orchestrator
  */
 export interface AggregatedResult {
   /** Primary output (what user sees) */

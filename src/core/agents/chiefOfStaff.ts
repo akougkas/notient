@@ -1,20 +1,21 @@
 /**
- * Chief of Staff - Central Agent Coordinator
+ * Chief of Staff - The Orchestrator (Brain)
  *
- * White House Model:
- * - President = User (decision maker)
- * - Chief of Staff = This class (coordinator, dispatcher, router, aggregator)
- * - Department Heads = Specialized expert agents
+ * 4-Agent Swarm Architecture:
+ * - User = President (decision maker)
+ * - Orchestrator = This class (reasoning brain, makes plans, delegates)
+ * - NoteEditor = Obsidian I/O specialist
+ * - ContextBuilder = Vault awareness specialist
+ * - Worker = Workflow executor (Phase 2)
  *
  * Responsibilities:
- * 1. Route tasks to appropriate expert agents
- * 2. Build context before agent execution
- * 3. Aggregate results from multiple agents
- * 4. Manage agent sessions for awareness
+ * 1. Receive requests from three triggers (UI, Chat, Editor)
+ * 2. Reason about WHAT to do (action planning)
+ * 3. Delegate to specialized agents
+ * 4. Aggregate results and return to caller
  *
- * NOTE: Chat is NOT routed through ChiefOfStaff. The Chat UI uses ChatService
- * directly. ChiefOfStaff only routes to expert agents (note-editor, classifier,
- * connection, context-builder) via explicit commands or strong intent signals.
+ * The Orchestrator does NOT execute workflows directly - it delegates HOW
+ * to specialized agents (NoteEditor, ContextBuilder, Worker).
  */
 
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
@@ -35,10 +36,13 @@ import type {
   AgentEvent,
   AgentOutput,
   AgentSession,
+  AgentType,
   AggregatedResult,
   ExpertAgentType,
   InternalOutput,
   NoteContext,
+  OrchestratorPlan,
+  OrchestratorRequest,
   PARAContext,
   RoutingDecision,
   StructuredOutput,
@@ -53,7 +57,8 @@ import {
 } from "./workflowAgents";
 
 /**
- * Task input for the Chief of Staff
+ * Task input for the Orchestrator
+ * @deprecated Use OrchestratorRequest for new code
  */
 export interface ChiefOfStaffTask {
   /** User's query/message */
@@ -71,16 +76,19 @@ export interface ChiefOfStaffTask {
 }
 
 /**
- * Chief of Staff - Central agent coordinator
+ * The Orchestrator - Central reasoning brain of the 4-Agent Swarm
+ *
+ * Key principle: Orchestrator reasons about WHAT to do. Other agents decide HOW.
  */
 export class ChiefOfStaff {
-  // Expert Agents (Department Heads)
+  // Specialized Agents (4-Agent Swarm)
   private noteEditorAgent: NoteEditorAgent;
+  private contextBuilderAgent: ContextBuilderAgent;
+  // Worker agent will be added in Phase 2
+
+  // Legacy agents (to be absorbed by Worker in Phase 2)
   private classifierAgent: ClassifierAgent;
   private connectionAgent: ConnectionAgent;
-  private contextBuilderAgent: ContextBuilderAgent;
-
-  // Workflow Agents (Intelligence 2.0) - created on demand
   private workflowAgents: Map<WorkflowAgentType, WorkflowAgent> = new Map();
 
   // Services
@@ -129,11 +137,260 @@ export class ChiefOfStaff {
   }
 
   // ===========================================================================
-  // Public API
+  // Orchestrator Public API (4-Agent Swarm)
+  // ===========================================================================
+
+  /**
+   * Handle a request from any of the three triggers (UI, Chat, Editor)
+   * This is the primary entry point for the 4-Agent Swarm architecture.
+   */
+  async *handleRequest(
+    request: OrchestratorRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    console.log(`[Orchestrator] Handling request from ${request.source}`);
+
+    // Load note context if not provided
+    let noteContext = request.noteContext;
+    if (!noteContext && request.intent) {
+      // Try to get note context from the request or current active note
+      // For now, we require noteContext to be provided
+    }
+
+    // Create session
+    const notePath = noteContext?.path || "unknown";
+    this.currentSession = this.createSession(notePath);
+
+    // Plan the action
+    const plan = await this.planAction(request);
+    console.log(`[Orchestrator] Plan: ${plan.action} → ${plan.targetAgent || "self"}`);
+
+    // Execute based on plan
+    if (plan.action === "delegate" && plan.targetAgent) {
+      yield* this.delegate(plan.targetAgent, plan.task || request.intent, noteContext, signal);
+    } else if (plan.action === "respond") {
+      // Direct response (no delegation needed)
+      yield {
+        type: "complete",
+        agentType: "orchestrator" as AgentType,
+        output: {
+          kind: "conversational",
+          content: plan.reasoning,
+          citations: [],
+        },
+      };
+    } else if (plan.action === "clarify") {
+      // Need more information from user
+      yield {
+        type: "complete",
+        agentType: "orchestrator" as AgentType,
+        output: {
+          kind: "conversational",
+          content: plan.reasoning,
+          citations: [],
+        },
+      };
+    }
+  }
+
+  /**
+   * Plan what action to take based on the request.
+   * Uses LLM reasoning to determine the best course of action.
+   */
+  async planAction(request: OrchestratorRequest): Promise<OrchestratorPlan> {
+    // Fast-path: Check for explicit commands first (no LLM needed)
+    const intent = request.intent.toLowerCase();
+
+    // Slash commands → direct routing
+    if (intent.startsWith("/")) {
+      const command = intent.split(" ")[0].slice(1);
+
+      // Edit commands → NoteEditor
+      if (["enhance", "edit", "improve"].includes(command)) {
+        return {
+          action: "delegate",
+          targetAgent: "note-editor",
+          task: request.intent,
+          reasoning: `Slash command /${command} routes to NoteEditor`,
+        };
+      }
+
+      // Classification commands → Worker (Phase 2, for now uses legacy routing)
+      if (["classify", "organize", "para"].includes(command)) {
+        return {
+          action: "delegate",
+          targetAgent: "worker", // Will use legacy classifier in Phase 2
+          task: request.intent,
+          reasoning: `Slash command /${command} routes to Worker (classifier workflow)`,
+        };
+      }
+
+      // Connection commands → Worker (Phase 2, for now uses legacy routing)
+      if (["connect", "link", "links"].includes(command)) {
+        return {
+          action: "delegate",
+          targetAgent: "worker", // Will use legacy connection in Phase 2
+          task: request.intent,
+          reasoning: `Slash command /${command} routes to Worker (connection workflow)`,
+        };
+      }
+    }
+
+    // Intent detection for natural language
+    const intents = this.detectIntents(intent);
+
+    if (intents.edit >= 0.5) {
+      return {
+        action: "delegate",
+        targetAgent: "note-editor",
+        task: request.intent,
+        reasoning: "Detected edit intent from natural language",
+      };
+    }
+
+    if (intents.classify >= 0.5 || intents.link >= 0.5) {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: "Detected workflow intent (classify/connect)",
+      };
+    }
+
+    // If we can't determine intent, ask for clarification
+    // In Phase 2, this will use LLM reasoning for more nuanced planning
+    return {
+      action: "clarify",
+      reasoning:
+        "I'm not sure what you'd like me to do. Could you be more specific? " +
+        "Try commands like /enhance, /classify, or /connect.",
+    };
+  }
+
+  /**
+   * Delegate a task to a specialized agent.
+   * Returns a stream of events from the delegated agent.
+   */
+  async *delegate(
+    targetAgent: "note-editor" | "context-builder" | "worker",
+    task: string,
+    noteContext?: NoteContext,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    console.log(`[Orchestrator] Delegating to ${targetAgent}: ${task.slice(0, 50)}...`);
+
+    // Build context for the agent
+    const agentContext: AgentContext = {
+      currentNote: noteContext || {
+        title: "Unknown",
+        path: "unknown",
+        content: "",
+      },
+      query: task,
+      chatHistory: [],
+      activeAgents: [targetAgent],
+      delegationChain: ["orchestrator" as AgentType, targetAgent],
+    };
+
+    // For now, always run context-builder first to get context
+    // (unless we're already calling context-builder)
+    if (targetAgent !== "context-builder" && noteContext) {
+      const contextOutput = await this.runContextBuilder(agentContext, signal);
+      if (contextOutput) {
+        agentContext.relatedNotes = contextOutput.relatedNotes;
+        agentContext.contextSummary = contextOutput.contextSummary;
+        agentContext.search = contextOutput.searchResults;
+      }
+    }
+
+    // Dispatch to the target agent
+    switch (targetAgent) {
+      case "note-editor":
+        yield* this.noteEditorAgent.execute(agentContext, signal);
+        break;
+      case "context-builder":
+        yield* this.contextBuilderAgent.execute(agentContext, signal);
+        break;
+      case "worker":
+        // Phase 2: Will route to WorkerAgent
+        // For now, fall back to legacy routing based on task content
+        yield* this.delegateToLegacyAgent(task, agentContext, signal);
+        break;
+    }
+  }
+
+  /**
+   * Helper to run context builder and get output
+   */
+  private async runContextBuilder(
+    context: AgentContext,
+    signal?: AbortSignal,
+  ): Promise<InternalOutput | null> {
+    let output: InternalOutput | null = null;
+    for await (const event of this.contextBuilderAgent.execute(context, signal)) {
+      if (event.type === "complete" && isInternalOutput(event.output)) {
+        output = event.output;
+      }
+    }
+    return output;
+  }
+
+  /**
+   * Temporary: Route to legacy agents based on task content
+   * This will be replaced by WorkerAgent in Phase 2
+   */
+  private async *delegateToLegacyAgent(
+    task: string,
+    context: AgentContext,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    const taskLower = task.toLowerCase();
+
+    // Check for classify/organize keywords
+    if (
+      taskLower.includes("classify") ||
+      taskLower.includes("organize") ||
+      taskLower.includes("para") ||
+      taskLower.includes("/classify")
+    ) {
+      yield* this.classifierAgent.execute(context, signal);
+      return;
+    }
+
+    // Check for connection keywords
+    if (
+      taskLower.includes("connect") ||
+      taskLower.includes("link") ||
+      taskLower.includes("/connect") ||
+      taskLower.includes("/link")
+    ) {
+      yield* this.connectionAgent.execute(context, signal);
+      return;
+    }
+
+    // Check for workflow commands
+    const workflowType = this.extractWorkflowType(task);
+    if (workflowType) {
+      const workflowAgent = this.getWorkflowAgent(workflowType);
+      yield* workflowAgent.execute(context, signal);
+      return;
+    }
+
+    // Default: error - no matching agent
+    yield {
+      type: "error",
+      agentType: "orchestrator" as AgentType,
+      error: new Error(`No agent found to handle task: ${task.slice(0, 50)}...`),
+    };
+  }
+
+  // ===========================================================================
+  // Legacy Public API (for backward compatibility)
   // ===========================================================================
 
   /**
    * Execute a task with streaming events
+   * @deprecated Use handleRequest() for new code
    */
   async *execute(task: ChiefOfStaffTask, signal?: AbortSignal): AsyncIterable<AgentEvent> {
     console.log("[ChiefOfStaff] Execute START");
