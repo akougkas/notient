@@ -2,141 +2,91 @@
 
 ## Current Position
 
-**Phase**: Universe — Foundation Refactor + Obsidian Integration
-**Status**: ACTIVE
+**Phase**: Universe — Foundation Refactor + Swarm Architecture
+**Status**: ACTIVE (Swarm Phase 1-2 Ready)
 **Plan**: `PHASE-UNIVERSE.md`
 **Architecture**: `SWARM-ARCHITECTURE.md`
-**Updated**: 2026-01-14 (Swarm Architecture Decision)
+**Updated**: 2026-01-14
 
-## Phase Universe Progress
+## Session Summary (2026-01-14)
 
-### Infrastructure Layer (D1-D5)
+### Completed This Session
+- ✅ Reviewed agent work from previous session
+- ✅ Analyzed swarm architecture alignment
+- ✅ Reset agent branches to beta-spec
+- ✅ Deleted global agent configs (`~/.claude/agents/{orchestrator,archie,sage,faye}.md`)
+- ✅ Deleted old orchestration archive (`.planning/_archive/orchestration/`)
+- ✅ Fixed `dispatch.py` to sync TASK.md to worktrees (symlink)
+- ✅ Updated orchestrator CLAUDE.md with new workflow
+- ✅ Verified D10, D5, D3, D9 already complete
+- ✅ Created Swarm Phase 1-2 TASK.md files
+- ✅ Captured Phase 1 (post-Universe) decisions: InsightStream, Quick Actions, Chat
 
-| Deliverable | Status | Est. |
-|-------------|--------|------|
-| D1: SQLite Data Layer | ✅ COMPLETE | 8h |
-| D2: HNSW Worker Isolation | ✅ COMPLETE | 8h |
-| D3: Event Wiring Completion | 🔄 IN PROGRESS | 4h |
-| D4: Swarm Architecture | 🔄 REDESIGNED | 12h |
-| D5: Cleanup + embed.worker | 📋 READY | 6h |
-| D10: SQLite Full Migration | 📋 READY | 8h |
-| D11: Skills Architecture | ✅ COMPLETE | 6h |
+### Ready to Execute
+- 📋 **Sage**: Swarm Phase 1 — Orchestrator Refactor (TASK.md ready)
+- 📋 **Archie**: Swarm Phase 2 — WorkerAgent Creation (TASK.md ready)
 
-### Integration Layer (D6-D9)
-
-| Deliverable | Status | Est. |
-|-------------|--------|------|
-| D6: Frontmatter Intelligence Bridge | ✅ COMPLETE | 4h |
-| D7: Vitals from MetadataCache | ✅ COMPLETE | 3h |
-| D8: Editor Decorations | ⏸️ DEFERRED | 8h |
-| D9: Context Menu Integration | ✅ COMPLETE | 3h |
-
-**Total**: ~58 hours (~3.5 weeks at 4h/day)
-
-## D4: Swarm Architecture (Current Focus)
-
-**Status**: REDESIGNED (2026-01-14)
-
-The 4-agent swarm replaces the previous "ChiefOfStaff consolidation" plan:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        ORCHESTRATOR (Brain)                              │
-│  • Receives ALL requests (UI, Chat, Editor Decorations)                 │
-│  • Makes action plans using reasoning model                             │
-│  • Delegates to specialized agents                                       │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-        ┌───────────────────────────┼───────────────────────────────────┐
-        ▼                           ▼                                   ▼
-┌───────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
-│    NoteEditor     │     │   ContextBuilder    │     │       Worker        │
-│ • Edit/Create     │     │ • Search vault      │     │ • Execute workflows │
-│ • Canvas/Bases    │     │ • Find related      │     │ • Classify, Enhance │
-│ • Self-verify     │     │ • User behavior     │     │ • Atomize, Connect  │
-│ Uses: Skills      │     │ Uses: Search        │     │ Uses: Prompts       │
-└───────────────────┘     └─────────────────────┘     └─────────────────────┘
-```
-
-### Implementation Phases
+## Swarm Architecture Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 1 | Refactor ChiefOfStaff → Orchestrator (brain only) | NOT STARTED |
-| Phase 2 | Create WorkerAgent (unified workflow executor) | NOT STARTED |
-| Phase 3 | Enhance NoteEditor (self-verification) | NOT STARTED |
-| Phase 4 | Enhance ContextBuilder (behavior/trend tracking) | NOT STARTED |
-| Phase 5 | ChatService integration (hybrid mode) | NOT STARTED |
+| Phase 1 | ChiefOfStaff → pure Orchestrator | 📋 TASK.md ready |
+| Phase 2 | Create WorkerAgent | 📋 TASK.md ready |
+| Phase 3 | Enhance NoteEditor (self-verification) | Not started |
+| Phase 4 | Enhance ContextBuilder (behavior tracking) | Not started |
+| Phase 5 | ChatService integration (hybrid mode) | Not started |
 
-### Files to Modify
+## Phase Universe Progress
 
-| Action | File |
-|--------|------|
-| REFACTOR | `src/core/agents/chiefOfStaff.ts` → Orchestrator |
-| CREATE | `src/core/agents/workerAgent.ts` |
-| ENHANCE | `src/core/agents/noteEditorAgent.ts` |
-| ENHANCE | `src/core/agents/contextBuilderAgent.ts` |
-| MODIFY | `src/core/chat/chatService.ts` |
-| DELETE | `src/core/agents/classifierAgent.ts` |
-| DELETE | `src/core/agents/connectionAgent.ts` |
-| DELETE | `src/core/agents/workflowAgents.ts` |
+| Deliverable | Status |
+|-------------|--------|
+| D1: SQLite Data Layer | ✅ Complete |
+| D2: HNSW Worker | ✅ Complete |
+| D3: Reranker Fix | ✅ Complete |
+| D4: Swarm Architecture | 🔄 Phase 1-2 ready |
+| D5: embed.worker | ✅ Complete |
+| D6: Frontmatter Bridge | ✅ Complete |
+| D7: Vitals MetadataCache | ✅ Complete |
+| D8: Editor Decorations | ⏸️ Deferred (Tab trigger confirmed) |
+| D9: Context Menus | ✅ Complete |
+| D10: SQLite Migration | ✅ Complete |
+| D11: Skills Integration | ✅ Complete |
 
-## The Core Insights
-
-> **"The Note is the Unit"** (2026-01-12)
->
-> Intelligence must surface IN the note (frontmatter, decorations), not just the sidebar.
-> The sidebar is for commands and history. The note is the canvas.
-
-> **"4-Agent Swarm"** (2026-01-14)
->
-> The current 13+ agent system has accidental complexity. Each "agent" does the same thing:
-> build prompt → call LLM → parse output. The complexity isn't in the PROBLEM, it's in the 
-> IMPLEMENTATION. 4 specialized agents with clear responsibilities is simpler and scalable.
-
-## Validation Criteria
-
-### Performance
-- [ ] Startup <1s to UI shell
-- [ ] Note context load <500ms
-
-### Core Functionality
-- [ ] Quick Actions work end-to-end
-- [ ] Apply button applies actions
-- [ ] Search reranking works
-
-### Architecture (Updated)
-- [x] No main-thread HNSW ✅
-- [ ] All data in SQLite (heavy) + Frontmatter (light)
-- [ ] 4-Agent Swarm operational
-  - [ ] Orchestrator receives all requests
-  - [ ] NoteEditor with self-verification
-  - [ ] ContextBuilder with behavior tracking
-  - [ ] Worker executes all workflows
-- [ ] ChatService can trigger Orchestrator
-- [ ] CPU <5% at idle
-
-### Integration
-- [x] `notient-health` in frontmatter ✅
-- [x] Right-click context menus work ✅
-- [x] Vitals use metadataCache ✅
-
-## Next Action
+## Next Session Actions
 
 ```bash
-# D4 Phase 1: Refactor Orchestrator
-# Start with src/core/agents/chiefOfStaff.ts
-# Remove direct agent instantiation
-# Add action planning with LLM reasoning
-# Delegate via clean interface
+# 1. Dispatch Sage for Phase 1
+uv run .claude/agents/dispatch.py sage "Execute Swarm Phase 1 per TASK.md - refactor ChiefOfStaff to pure Orchestrator"
+
+# 2. Wait for completion
+uv run .claude/agents/watcher.py --agents sage --wait-for 1 --verbose
+
+# 3. Review response
+uv run .claude/agents/dispatch.py --responses sage
+
+# 4. Dispatch Archie for Phase 2
+uv run .claude/agents/dispatch.py archie "Execute Swarm Phase 2 per TASK.md - create WorkerAgent"
 ```
 
-## Previous Work (Archived)
+## Key Decisions (This Session)
 
-- Old 8-phase roadmap → `.planning/_archive/pre-universe/ROADMAP.md`
-- Phase 0 tracking → `.planning/_archive/pre-universe/STATE.md`
-- ID System implemented → `docs/ID-SYSTEM.md`
-- Obsidian docs committed → `docs/obsidian/`
+| Decision | Choice |
+|----------|--------|
+| D8 Ghost Text Trigger | Tab key (explicit) |
+| Post-Universe Scope | ALL: InsightStream, Quick Actions, Chat |
+| Agent configs | Local only (`.claude/orchestration/`) |
+| TASK.md sync | Symlink to worktrees via dispatch.py |
+
+## File Locations
+
+| What | Where |
+|------|-------|
+| Swarm Spec | `.planning/SWARM-ARCHITECTURE.md` |
+| Phase Universe | `.planning/PHASE-UNIVERSE.md` |
+| Orchestrator docs | `.claude/orchestration/orchestrator/CLAUDE.md` |
+| Sage Phase 1 task | `.claude/orchestration/sage/TASK.md` |
+| Archie Phase 2 task | `.claude/orchestration/archie/TASK.md` |
+| Dispatch script | `.claude/agents/dispatch.py` |
 
 ---
-*Last updated: 2026-01-14 — Swarm Architecture Decision*
+*Last updated: 2026-01-14 — Swarm Phase 1-2 tasks ready*

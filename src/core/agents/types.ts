@@ -209,18 +209,6 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     delegationTargets: [],
     contextPriority: 2,
   },
-  worker: {
-    type: "worker",
-    name: "Worker Agent",
-    isUI: false, // Expert agent - executes workflows
-    temperature: 0.3, // Default, overridden per workflow
-    maxTokens: 2000,
-    contextBudget: 8000,
-    outputKind: "structured",
-    canDelegate: false,
-    delegationTargets: [],
-    contextPriority: 2,
-  },
 };
 
 // =============================================================================

@@ -374,7 +374,7 @@ export class ChiefOfStaff {
     // Check for workflow commands
     const workflowType = this.extractWorkflowType(task);
     if (workflowType) {
-      const workflowAgent = this.getWorkflowAgent(workflowType);
+      const workflowAgent = this.getWorkerAgent(workflowType);
       yield* workflowAgent.execute(context, signal);
       return;
     }
