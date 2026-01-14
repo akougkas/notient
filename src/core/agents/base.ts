@@ -240,6 +240,7 @@ ${truncatedContent}
   protected parseJSON<T>(jsonStr: string): T | null {
     try {
       let cleaned = jsonStr.trim();
+      const originalLength = jsonStr.length;
 
       // Strip thinking model tags (DeepSeek, Falcon H1R, Qwen QwQ)
       // These models wrap reasoning in <think>...</think>
@@ -264,6 +265,10 @@ ${truncatedContent}
           `[${this.config.name}] No JSON found in output. Preview:`,
           cleaned.slice(0, 200),
         );
+        console.debug(
+          `[${this.config.name}] Full cleaned input (${cleaned.length} chars):`,
+          cleaned,
+        );
         return null;
       }
 
@@ -272,13 +277,28 @@ ${truncatedContent}
       try {
         const result = JSON.parse(extracted) as T;
         return result;
-      } catch {
+      } catch (parseError) {
         // If greedy match failed, try to find balanced braces
         const balanced = this.extractBalancedJson(cleaned);
         if (balanced) {
-          const result = JSON.parse(balanced) as T;
-          return result;
+          try {
+            const result = JSON.parse(balanced) as T;
+            return result;
+          } catch (balancedError) {
+            console.debug(
+              `[${this.config.name}] Balanced JSON parse failed. Extracted (${balanced.length} chars):`,
+              balanced.slice(0, 500),
+            );
+            throw new Error("JSON extraction failed - balanced parse error");
+          }
         }
+        console.debug(
+          `[${this.config.name}] JSON extraction failed. Original length: ${originalLength}, cleaned: ${cleaned.length}`,
+        );
+        console.debug(
+          `[${this.config.name}] Extracted segment (${extracted.length} chars):`,
+          extracted.slice(0, 500),
+        );
         throw new Error("JSON extraction failed");
       }
     } catch (error) {
