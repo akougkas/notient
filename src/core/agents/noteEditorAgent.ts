@@ -453,7 +453,7 @@ export class NoteEditorAgent extends BaseAgent {
       return true;
     }
 
-    console.debug(
+    console.warn(
       "[Note Editor] Invalid payload for frontmatter_set. Expected { key: string, value: any }. Got:",
       JSON.stringify(p, null, 2),
     );
