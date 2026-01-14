@@ -244,7 +244,6 @@ export function Omnibar({
 
   // Sync with global search query signal
   useEffect(() => {
-    // biome-ignore lint/correctness/useExhaustiveDependencies: manual subscription
     return searchQuery.subscribe((newValue) => {
       // Only update if different to avoid cursor jumps / loops
       // and only if we aren't currently typing (checked via focus?)
