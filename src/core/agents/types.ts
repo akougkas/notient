@@ -67,7 +67,8 @@ export type ExpertAgentType =
   | "note-editor" // Edit note content/frontmatter
   | "classifier" // PARA classification, tagging -> absorbed by Worker (Phase 2)
   | "connection" // Find semantic connections -> absorbed by Worker (Phase 2)
-  | "context-builder"; // Build context for other agents (internal)
+  | "context-builder" // Build context for other agents (internal)
+  | "worker"; // Unified workflow executor (Phase 2 Swarm)
 
 /**
  * Agent output types - determines parsing strategy
@@ -203,6 +204,18 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     temperature: 0.3,
     maxTokens: 1200,
     contextBudget: 10000,
+    outputKind: "structured",
+    canDelegate: false,
+    delegationTargets: [],
+    contextPriority: 2,
+  },
+  worker: {
+    type: "worker",
+    name: "Worker Agent",
+    isUI: false, // Expert agent - executes workflows
+    temperature: 0.3, // Default, overridden per workflow
+    maxTokens: 2000,
+    contextBudget: 8000,
     outputKind: "structured",
     canDelegate: false,
     delegationTargets: [],
