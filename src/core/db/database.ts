@@ -2,7 +2,6 @@ import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from "
 import { type App, FileSystemAdapter } from "obsidian";
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 import type { StoragePaths } from "../../services/storagePaths";
-import { migrateJsonToSqlite } from "./json-migration";
 import { SqlJsDriver } from "./kysely-sqljs";
 import { migrateToLatest } from "./migrations";
 import type { Database } from "./schema";
@@ -56,9 +55,6 @@ export class DatabaseService {
 
     // Run migrations
     await migrateToLatest(this._db);
-
-    // Import legacy JSON data if needed
-    await migrateJsonToSqlite(this._db, this.adapter, this.paths);
   }
 
   /**

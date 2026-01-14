@@ -16,20 +16,6 @@ export interface IndexStats {
   completionPercent: number;
 }
 
-/** @deprecated Legacy type for JSON index discovery - SQLite backend doesn't use this */
-export interface DiscoveredIndex {
-  path: string;
-  modelKey: string;
-  dimension: number;
-  docCount: number;
-  source: "plugin" | "vault";
-  createdAt: Date | null;
-  updatedAt: Date | null;
-  vaultHash: string | null;
-  isLegacy: boolean;
-  displayName: string;
-}
-
 /**
  * Index Manager - coordinates vector store and database.
  */
@@ -407,20 +393,27 @@ export class IndexManager {
     await this.removeNote(notePath, noteId);
   }
 
-  // ============ Legacy Stubs (SQLite has no discoverable indices) ============
+  // ============ Compatibility Stubs ============
+  // These methods exist for UI compatibility but return empty results
+  // since SQLite backend has no JSON indices to discover or switch between.
 
-  /** @deprecated No JSON indices to discover with SQLite backend */
   static async discoverIndices(_storagePaths: unknown): Promise<never[]> {
     return [];
   }
 
-  /** @deprecated No JSON indices to discover with SQLite backend */
   async discoverIndices(): Promise<never[]> {
     return [];
   }
 
-  /** @deprecated Index switching not supported with SQLite backend */
   async switchToIndex(_indexPath: string): Promise<void> {
-    console.warn("[IndexManager] Index switching not supported with SQLite backend");
+    // No-op: SQLite backend has single unified index
+  }
+
+  async trimIndex(): Promise<{ removed: number }> {
+    return { removed: 0 };
+  }
+
+  async deleteIndexByPath(_path: string): Promise<boolean> {
+    return false;
   }
 }

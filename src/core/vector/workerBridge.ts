@@ -34,7 +34,7 @@ export type VectorResult =
 // ============================================================================
 
 export class VectorWorkerBridge {
-  private worker: Worker;
+  private worker!: Worker;
   private pendingSearches = new Map<
     string,
     { resolve: (results: { id: string; score: number }[]) => void; reject: (err: Error) => void }
@@ -45,14 +45,28 @@ export class VectorWorkerBridge {
     resolve: (data: ArrayBuffer) => void;
     reject: (err: Error) => void;
   } | null = null;
-  private readyPromise: Promise<void>;
+  private readyPromise!: Promise<void>;
   private resolveReady!: () => void;
 
-  constructor(workerPath: string) {
-    const workerUrl =
-      workerPath.startsWith("http") || workerPath.startsWith("file")
-        ? workerPath
-        : `file://${workerPath}`;
+  /**
+   * Create a VectorWorkerBridge.
+   * @param workerCodeOrUrl - Either a Blob URL (blob:...) or the worker code as a string
+   */
+  constructor(workerCodeOrUrl: string) {
+    // Determine if this is a URL or raw code
+    const isUrl =
+      workerCodeOrUrl.startsWith("blob:") ||
+      workerCodeOrUrl.startsWith("http") ||
+      workerCodeOrUrl.startsWith("file");
+
+    let workerUrl: string;
+    if (isUrl) {
+      workerUrl = workerCodeOrUrl;
+    } else {
+      // Create Blob URL from worker code
+      const blob = new Blob([workerCodeOrUrl], { type: "application/javascript" });
+      workerUrl = URL.createObjectURL(blob);
+    }
 
     this.worker = new Worker(workerUrl, {
       type: "module",

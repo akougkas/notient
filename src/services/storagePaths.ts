@@ -111,15 +111,6 @@ export class StoragePaths {
   readonly tempDeleted: string;
   readonly logs: string;
 
-  // Legacy paths
-  readonly legacyIndexState: string;
-  readonly legacyConversations: string;
-  readonly legacyActions: string;
-  readonly legacyProfile: string;
-  readonly legacyCache: string;
-  readonly legacyLocks: string;
-  readonly legacyLogs: string;
-
   constructor(app: App) {
     const adapter = app.vault.adapter;
 
@@ -167,31 +158,12 @@ export class StoragePaths {
     this.tempInvalid = p("TEMP_INVALID");
     this.tempDeleted = p("TEMP_DELETED");
     this.logs = p("LOGS");
-
-    // Legacy paths
-    this.legacyIndexState = p("LEGACY_INDEX_STATE");
-    this.legacyConversations = p("LEGACY_CONVERSATIONS");
-    this.legacyActions = p("LEGACY_ACTIONS");
-    this.legacyProfile = p("LEGACY_PROFILE");
-    this.legacyCache = p("LEGACY_CACHE");
-    this.legacyLocks = p("LEGACY_LOCKS");
-    this.legacyLogs = p("LEGACY_LOGS");
   }
 
   /**
-   * Ensure all required directories exist (legacy structure)
+   * Ensure all required directories exist
    */
   async ensureDirectories(): Promise<void> {
-    const dirs = [this.legacyCache, this.legacyLocks, this.legacyLogs];
-    for (const dir of dirs) {
-      await fs.promises.mkdir(dir, { recursive: true });
-    }
-  }
-
-  /**
-   * Ensure all new directory structure exists
-   */
-  async ensureNewDirectories(): Promise<void> {
     const dirs = [
       this.data,
       this.chunks,
@@ -222,23 +194,6 @@ export class StoragePaths {
     for (const dir of dirs) {
       await fs.promises.mkdir(dir, { recursive: true });
     }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Migration Detection
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  hasLegacyData(): boolean {
-    return (
-      fs.existsSync(this.legacyConversations) ||
-      fs.existsSync(this.legacyActions) ||
-      fs.existsSync(this.legacyProfile) ||
-      fs.existsSync(this.legacyIndexState)
-    );
-  }
-
-  hasNewStructure(): boolean {
-    return fs.existsSync(this.data);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -341,13 +296,6 @@ export class StoragePaths {
       tempInvalid: this.tempInvalid,
       tempDeleted: this.tempDeleted,
       logs: this.logs,
-      legacyIndexState: this.legacyIndexState,
-      legacyConversations: this.legacyConversations,
-      legacyActions: this.legacyActions,
-      legacyProfile: this.legacyProfile,
-      legacyCache: this.legacyCache,
-      legacyLocks: this.legacyLocks,
-      legacyLogs: this.legacyLogs,
     };
   }
 }

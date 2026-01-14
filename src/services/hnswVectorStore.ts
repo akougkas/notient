@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { App } from "obsidian";
 import type { DatabaseService } from "../core/db/database";
 import type { Kernel } from "../core/kernel";
 import { ParaDetector } from "../core/para/detector";
@@ -79,8 +80,9 @@ interface PersistedIndex {
  * Metadata is stored in SQLite (via DatabaseService).
  */
 export class HNSWVectorStore implements VectorStore {
-  private bridge: VectorWorkerBridge;
+  private bridge: VectorWorkerBridge | null = null;
   private db: DatabaseService;
+  private app: App;
 
   private dimension = 0;
   private modelKey = "";
@@ -95,14 +97,23 @@ export class HNSWVectorStore implements VectorStore {
   private noteStates: Map<string, NoteState> = new Map();
   private lastFullIndexAt: number | null = null;
 
-  constructor(private kernel: Kernel) {
+  constructor(private kernel: Kernel, app: App) {
+    this.app = app;
     this.paraDetector = new ParaDetector(kernel.settings);
-    const workerPath = path.join(this.kernel.storagePaths.pluginRoot, "vector.worker.js");
-    this.bridge = new VectorWorkerBridge(workerPath);
+    // Note: bridge is created in initialize() to allow async loading of worker code
 
     const db = kernel.getService<DatabaseService>("database");
     if (!db) throw new Error("DatabaseService not available");
     this.db = db;
+  }
+
+  // ============ Bridge Access ============
+
+  private getBridge(): VectorWorkerBridge {
+    if (!this.bridge) {
+      throw new Error("[HNSWVectorStore] Bridge not initialized. Call initialize() first.");
+    }
+    return this.bridge;
   }
 
   // ============ Configuration ============
@@ -173,6 +184,12 @@ export class HNSWVectorStore implements VectorStore {
     if (this.initialized) return;
 
     try {
+      // Load worker code via Obsidian adapter (file:// URLs are blocked in Electron)
+      // Read from .obsidian/plugins/notient/vector.worker.js (vault-relative path)
+      const workerPath = ".obsidian/plugins/notient/vector.worker.js";
+      const workerCode = await this.app.vault.adapter.read(workerPath);
+      this.bridge = new VectorWorkerBridge(workerCode);
+
       await this.bridge.init(HNSW_CONFIG);
       this.initialized = true;
       console.log("[HNSWVectorStore] Worker initialized");
@@ -233,7 +250,7 @@ export class HNSWVectorStore implements VectorStore {
 
     try {
       console.log(`[HNSWVectorStore] Persisting native index to ${options.hnswFilename}`);
-      const data = await this.bridge.save();
+      const data = await this.getBridge().save();
 
       const filePath = path.join(this.kernel.storagePaths.pluginRoot, options.hnswFilename);
       const tempPath = `${filePath}.tmp`;
@@ -255,7 +272,7 @@ export class HNSWVectorStore implements VectorStore {
         buffer.byteOffset,
         buffer.byteOffset + buffer.byteLength,
       );
-      this.bridge.load(arrayBuffer);
+      this.getBridge().load(arrayBuffer);
       return true;
     } catch (error) {
       console.warn("[HNSWVectorStore] Native index load failed:", error);
@@ -308,7 +325,7 @@ export class HNSWVectorStore implements VectorStore {
         id: doc.chunkId,
         embedding: new Float32Array(doc.embedding),
       }));
-      await this.bridge.addItems(items);
+      await this.getBridge().addItems(items);
     }
 
     this.dirty = false;
@@ -429,7 +446,7 @@ export class HNSWVectorStore implements VectorStore {
     }
 
     // 3. Update Worker
-    await this.bridge.addItems(items);
+    await this.getBridge().addItems(items);
 
     // 4. Update cache
     for (const chunk of validChunks) {
@@ -459,7 +476,7 @@ export class HNSWVectorStore implements VectorStore {
     if (ids.length === 0) return;
 
     // 2. Delete from Worker
-    this.bridge.markDeleted(ids);
+    this.getBridge().markDeleted(ids);
 
     // 3. Delete from DB
     await this.db.db.deleteFrom("chunks").where("note_path", "=", notePath).execute();
@@ -528,7 +545,7 @@ export class HNSWVectorStore implements VectorStore {
     const k = options.topK * 4;
 
     // 1. Get candidates from Worker
-    const rawResults = await this.bridge.search(query, k);
+    const rawResults = await this.getBridge().search(query, k);
     if (rawResults.length === 0) return [];
 
     const ids = rawResults.map((r) => r.id);
@@ -656,7 +673,7 @@ export class HNSWVectorStore implements VectorStore {
   async dispose(): Promise<void> {
     this.disposed = true;
     this.noteStates.clear();
-    this.bridge.terminate();
+    this.bridge?.terminate();
   }
 
   private validateEmbedding(embedding: number[]): boolean {

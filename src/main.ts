@@ -424,7 +424,7 @@ export default class NotientPlugin extends Plugin {
       });
 
       // Create and initialize vector store (loads HNSW WASM)
-      this.vectorStore = new HNSWVectorStore(this.kernel);
+      this.vectorStore = new HNSWVectorStore(this.kernel, this.app);
       await this.vectorStore.initialize();
       this.kernel.registerService("vectorStore", this.vectorStore);
 

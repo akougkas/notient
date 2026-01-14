@@ -58,15 +58,6 @@ export const STORAGE_PATHS = {
   TEMP_INVALID: `${OP}/temp/_invalid`,
   TEMP_DELETED: `${OP}/temp/_deleted`,
   LOGS: `${OP}/logs`,
-
-  // Legacy paths (for migration detection)
-  LEGACY_INDEX_STATE: "index-state.json",
-  LEGACY_CONVERSATIONS: "conversations.json",
-  LEGACY_ACTIONS: "actions.json",
-  LEGACY_PROFILE: "profile.json",
-  LEGACY_CACHE: "cache",
-  LEGACY_LOCKS: "locks",
-  LEGACY_LOGS: "logs",
 } as const;
 
 /** Lock file names */
