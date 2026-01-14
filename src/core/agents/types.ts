@@ -259,6 +259,52 @@ export interface SearchContext {
     score: number;
   }>;
   query: string;
+  /** User behavior patterns (Phase 4 Swarm) */
+  userBehavior?: UserBehavior;
+  /** Vault-level trends (Phase 4 Swarm) */
+  vaultTrends?: VaultTrends;
+}
+
+// =============================================================================
+// Behavior & Trends (Phase 4 Swarm)
+// =============================================================================
+
+/**
+ * User behavior patterns tracked by ContextBuilder
+ * Enables personalized suggestions and understanding of user workflow
+ */
+export interface UserBehavior {
+  /** Recent file edits (last 50 modifications) */
+  recentEdits: Array<{
+    path: string;
+    timestamp: number;
+    type: "create" | "modify";
+  }>;
+  /** Tags/folders user works in frequently (top 10) */
+  activeTopics: string[];
+  /** Edit frequency based on recent activity */
+  editFrequency: "high" | "medium" | "low";
+  /** Preferred note types based on content patterns */
+  preferredNoteTypes: string[];
+}
+
+/**
+ * Vault-level trends computed by ContextBuilder
+ * Provides insights into vault health and evolution
+ */
+export interface VaultTrends {
+  /** Notes created per week (rolling average) */
+  growthRate: number;
+  /** Topic clusters derived from tags/folders */
+  topicClusters: Array<{
+    topic: string;
+    noteCount: number;
+    recentActivity: boolean;
+  }>;
+  /** Ratio of notes with no links (orphans / total) */
+  orphanRatio: number;
+  /** Average outgoing links per note */
+  avgConnectivity: number;
 }
 
 /**
