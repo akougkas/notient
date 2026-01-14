@@ -48,7 +48,7 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════════════════════
 
 POLL_INTERVAL = 1.0
-DEFAULT_MODEL = "haiku"
+DEFAULT_MODEL = "claude-opus-4-5-20251101"
 VALID_AGENTS = ("archie", "sage", "faye")
 
 # Agent colors and icons

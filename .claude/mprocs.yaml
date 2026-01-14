@@ -38,7 +38,7 @@ procs:
       - claude
       - --dangerously-skip-permissions
       - --model
-      - haiku
+      - claude-opus-4-5-20251101
       - "Read @.claude/orchestration/orchestrator/CLAUDE.md and confirm ready."
     autostart: true
     stop: "SIGTERM"

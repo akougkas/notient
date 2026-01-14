@@ -33,8 +33,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VALID_AGENTS = ("archie", "sage", "faye")
-VALID_MODELS = ("haiku", "sonnet", "opus")
-DEFAULT_MODEL = "haiku"
+VALID_MODELS = (
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-5-20251101",
+)
+DEFAULT_MODEL = "claude-opus-4-5-20251101"
 
 
 def get_paths(agent: str) -> tuple[Path, Path]:
