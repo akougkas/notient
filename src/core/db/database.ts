@@ -25,11 +25,11 @@ export class DatabaseService {
   async init(): Promise<void> {
     if (this._db) return;
 
-    // Initialize sql.js
-    // We point to the wasm file in the plugin root
-    const SQL = await initSqlJs({
-      locateFile: (_file) => `${this.paths.pluginRoot}/sql-wasm.wasm`,
-    });
+    // Initialize sql.js with WASM loaded via Obsidian adapter
+    // (Obsidian blocks file:// URL fetches, so we read the binary directly)
+    const wasmPath = `${this.paths.pluginRoot}/sql-wasm.wasm`;
+    const wasmBuffer = await this.adapter.readBinary(wasmPath);
+    const SQL = await initSqlJs({ wasmBinary: wasmBuffer });
 
     let buffer: ArrayBuffer | null = null;
     const dbPath = this.paths.dbFile;
