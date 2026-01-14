@@ -213,14 +213,11 @@ src/core/agents/
 ├── index.ts              # Module exports
 ├── types.ts              # Type definitions
 ├── base.ts               # BaseAgent abstract class
-├── agentIdentity.ts      # Two-tier identity system for core agents
-├── chatAgent.ts          # Senior Advisor & Liaison
-├── noteEditorAgent.ts    # Content Architect
-├── classifierAgent.ts    # Knowledge Taxonomist
-├── linkFinderAgent.ts    # Connection Specialist
-├── contextBuilderAgent.ts # Intelligence Analyst
-├── workflowAgents.ts     # Workflow agents (Intelligence 2.0)
-├── chiefOfStaff.ts       # Central coordinator
+├── agentIdentity.ts      # Two-tier identity system
+├── chiefOfStaff.ts       # Orchestrator (brain, routing, delegation)
+├── noteEditorAgent.ts    # NoteEditor (Obsidian I/O specialist)
+├── contextBuilderAgent.ts # ContextBuilder (vault awareness)
+├── workerAgent.ts        # Worker (unified workflow executor)
 ├── modelSelector.ts      # Resource-aware parameters
 └── README.md             # This file
 ```

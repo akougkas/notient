@@ -47,8 +47,12 @@ import type {
   VaultGraphContext,
 } from "./types";
 import { AGENT_CONFIGS } from "./types";
-import { WorkerAgent } from "./workerAgent";
-import { type WorkflowAgentType, getWorkflowByCommand, isWorkflowCommand } from "./workflowAgents";
+import {
+  WorkerAgent,
+  type WorkflowAgentType,
+  getWorkflowByCommand,
+  isWorkflowCommand,
+} from "./workerAgent";
 
 /**
  * Task input for the Orchestrator
@@ -630,7 +634,7 @@ export class ChiefOfStaff {
   private determineRouting(task: ChiefOfStaffTask): RoutingDecision {
     // Explicit target takes precedence
     if (task.targetAgent) {
-      const needsContext = task.targetAgent !== "classifier";
+      const needsContext = task.targetAgent !== "worker";
       const result: RoutingDecision = {
         primaryAgent: task.targetAgent,
         preflightAgents: needsContext ? ["context-builder"] : [],
@@ -661,7 +665,7 @@ export class ChiefOfStaff {
         case "organize":
         case "para": {
           const result: RoutingDecision = {
-            primaryAgent: "classifier",
+            primaryAgent: "worker",
             preflightAgents: [],
             reason: "Slash command: classify",
           };
@@ -672,7 +676,7 @@ export class ChiefOfStaff {
         case "link":
         case "links": {
           const result: RoutingDecision = {
-            primaryAgent: "connection",
+            primaryAgent: "worker",
             preflightAgents: ["context-builder"],
             reason: "Slash command: find connections",
           };
@@ -697,7 +701,7 @@ export class ChiefOfStaff {
     // Strong classification signals
     if (intents.classify >= 0.5) {
       const result: RoutingDecision = {
-        primaryAgent: "classifier",
+        primaryAgent: "worker",
         preflightAgents: [],
         reason: "Detected classification intent",
       };
@@ -707,7 +711,7 @@ export class ChiefOfStaff {
     // Strong linking signals
     if (intents.link >= 0.5) {
       const result: RoutingDecision = {
-        primaryAgent: "connection",
+        primaryAgent: "worker",
         preflightAgents: ["context-builder"],
         reason: "Detected connection intent",
       };

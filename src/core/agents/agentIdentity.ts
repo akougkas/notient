@@ -80,13 +80,12 @@ export interface AgentDelegationSpec {
  * Agent specializations for each agent type
  *
  * 4-Agent Swarm Architecture:
- * - Orchestrator: Brain, makes plans, delegates (NEW)
+ * - Orchestrator: Brain, makes plans, delegates
  * - NoteEditor: Obsidian I/O specialist
  * - ContextBuilder: Vault awareness specialist
- * - Worker: Workflow executor (NEW)
+ * - Worker: Workflow executor
  *
- * Legacy agents (chat, classifier, connection) are maintained for backward
- * compatibility and will be absorbed by Worker in Phase 2.
+ * Legacy: Chat agent is UI layer (uses ChatService directly)
  */
 export const AGENT_SPECIALIZATIONS: Record<AgentType, AgentSpecialization> = {
   // ===========================================================================
@@ -204,7 +203,7 @@ linking), you recognize the intent and signal it.`,
 - Acknowledgment when information is not in the vault`,
     },
     delegation: {
-      targets: ["note-editor", "classifier", "connection"],
+      targets: ["note-editor", "worker"],
       protocol: `Recognize when users need expert work and signal the INTENT (not the agent).
 
 WHEN TO SIGNAL DELEGATION (explicit user requests):
@@ -269,95 +268,6 @@ Rules:
 - Maximum 10 actions per response
 - Target must match the current note path
 - If no edits needed, return { "actions": [] }`,
-    },
-  },
-
-  classifier: {
-    role: "Knowledge Taxonomist",
-    mission: `You are the vault's Knowledge Taxonomist, expert in PARA methodology and note categorization.
-Your role is to:
-- Analyze note content and purpose
-- Determine optimal PARA classification
-- Suggest meaningful, domain-appropriate tags
-- Recommend folder placement when beneficial`,
-    expertise: [
-      "PARA methodology mastery",
-      "Content intent analysis",
-      "Taxonomic classification",
-      "Tag strategy",
-      "Workflow alignment",
-    ],
-    outputFormat: {
-      type: "structured-json",
-      instructions: `Output ONLY valid JSON. No explanation or markdown code fences.
-
-Your response must follow this exact format:`,
-      schema: `{
-  "paraCategory": "project" | "area" | "resource" | "archive" | "inbox",
-  "confidence": 0.0-1.0,
-  "reasoning": "Clear explanation of why this category fits",
-  "suggestedTags": ["tag1", "tag2"],
-  "suggestedFolder": "optional/folder/path"
-}
-
-PARA Classification Criteria:
-- **Project**: Active effort with clear outcome AND deadline
-- **Area**: Ongoing responsibility without end date
-- **Resource**: Reference material for future use
-- **Archive**: Inactive or completed content
-- **Inbox**: Uncategorized, needs processing
-
-Tag Guidelines:
-- Use lowercase, hyphenated tags
-- 3-7 tags is ideal
-- Include domain-specific tags
-- Include status tags if applicable (active, draft, review)`,
-    },
-  },
-
-  connection: {
-    role: "Knowledge Connector",
-    mission: `You are the vault's Knowledge Connector, expert in semantic relationships and knowledge graphs.
-Your role is to:
-- Identify non-obvious but valuable semantic connections
-- Explain WHY each connection matters to the user's work
-- Prioritize quality over quantity
-- Consider multiple relationship types across domains`,
-    expertise: [
-      "Semantic similarity detection",
-      "Conceptual mapping",
-      "Knowledge graph analysis",
-      "Cross-domain connection synthesis",
-      "Bidirectional link strategy",
-    ],
-    outputFormat: {
-      type: "structured-json",
-      instructions: `Output ONLY valid JSON. No explanation or markdown code fences.
-
-Your response must follow this exact format:`,
-      schema: `{
-  "links": [
-    {
-      "targetPath": "path/to/note.md",
-      "targetTitle": "Note Title",
-      "relevanceScore": 0.0-1.0,
-      "connectionType": "conceptual" | "methodological" | "problem-solution" | "hierarchical",
-      "reason": "Brief explanation of why this connection is valuable"
-    }
-  ]
-}
-
-Connection Types:
-- **conceptual**: Shared ideas, themes, or frameworks
-- **methodological**: Similar approaches, techniques, or processes
-- **problem-solution**: One note has problem, another has solutions
-- **hierarchical**: Parent-child, category-instance, or general-specific
-
-Quality Criteria:
-- Prioritize non-obvious but valuable connections
-- Score 0.7+ indicates strong connection
-- Maximum 10 links, ordered by relevance
-- Avoid suggesting links that already exist`,
     },
   },
 

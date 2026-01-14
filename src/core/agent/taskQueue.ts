@@ -400,25 +400,25 @@ export class AgentTaskQueue {
    * taskType that maps to an expert agent. If taskType is missing or invalid,
    * we throw an error - NO fallback to chat routing.
    *
-   * Valid expert agents: note-editor, classifier, connection
+   * Valid expert agents: note-editor, worker
    * Legacy names are supported for backwards compatibility.
    *
    * @throws Error if taskType is missing or doesn't map to an expert agent
    */
-  private mapTaskTypeToAgent(taskType?: string): "note-editor" | "classifier" | "connection" {
+  private mapTaskTypeToAgent(taskType?: string): "note-editor" | "worker" {
     switch (taskType) {
       case "note-editor":
       case "enrich":
         return "note-editor";
+      case "worker":
       case "classifier":
       case "classify":
-        return "classifier";
       case "connection":
       case "link":
-        return "connection";
+        return "worker";
       default:
         throw new Error(
-          `TaskQueue requires a valid expert agent taskType. Got: "${taskType ?? "undefined"}". Valid types: note-editor, classifier, connection (or legacy: enrich, classify, link). For chat conversations, use ChatService directly.`,
+          `TaskQueue requires a valid expert agent taskType. Got: "${taskType ?? "undefined"}". Valid types: note-editor, worker (or legacy: enrich, classify, link). For chat conversations, use ChatService directly.`,
         );
     }
   }
@@ -446,10 +446,9 @@ export class AgentTaskQueue {
     switch (agentType) {
       case "note-editor":
         return "action_plan";
-      case "classifier":
-        return "classification";
-      case "connection":
-        return "links";
+      case "worker":
+        // Worker handles multiple workflow types, return appropriate type
+        return "action_plan";
       default:
         // Expert agents may produce conversational explanations alongside structured output
         return "chat";

@@ -34,20 +34,18 @@ export type { AgentSpecialization, AgentOutputFormat, AgentDelegationSpec } from
 export { NoteEditorAgent } from "./noteEditorAgent";
 export { ContextBuilderAgent } from "./contextBuilderAgent";
 
-// Workflow agents (Intelligence 2.0) - Legacy, kept for backwards compatibility
+// Worker Agent (Phase 2 Swarm) - Unified workflow executor
+// Includes all workflow configurations (consolidated from workflowAgents.ts)
 export {
-  WorkflowAgent,
-  createWorkflowAgent,
+  WorkerAgent,
+  createWorkerAgent,
+  isValidWorkflowType,
   getAllWorkflowConfigs,
   getWorkflowByCommand,
   isWorkflowCommand,
   WORKFLOW_CONFIGS,
-} from "./workflowAgents";
-export type { WorkflowAgentType, WorkflowAgentConfig } from "./workflowAgents";
-
-// Worker Agent (Phase 2 Swarm) - Unified workflow executor
-export { WorkerAgent, createWorkerAgent, isValidWorkflowType } from "./workerAgent";
-export type { WorkflowType } from "./workerAgent";
+} from "./workerAgent";
+export type { WorkflowType, WorkflowAgentType, WorkflowAgentConfig } from "./workerAgent";
 
 // Chief of Staff (main entry point)
 export { ChiefOfStaff } from "./chiefOfStaff";
