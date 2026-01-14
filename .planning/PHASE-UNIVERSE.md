@@ -2,7 +2,7 @@
 
 **Status**: ACTIVE (75% Complete)
 **Created**: 2026-01-12
-**Updated**: 2026-01-13 (Interview Decisions + D2/D6/D7/D9 Complete)
+**Updated**: 2026-01-14 (Swarm Architecture Decision)
 **Supersedes**: Phase 0-8 Roadmap (archived)
 
 ## Progress Summary
@@ -12,8 +12,8 @@
 | D1: SQLite Data Layer | ✅ COMPLETE | Gemini | Schema + migrations ready |
 | D2: HNSW Worker | ✅ COMPLETE | Gemini | vector.worker.ts operational |
 | D3: Event Wiring | 🔄 IN PROGRESS | — | Reranker + action:proposed |
-| D4: Orchestration | 🔄 IN PROGRESS | — | ChiefOfStaff consolidation |
-| D5: Cleanup + embed.worker | 📋 READY | — | Parallel embeddings |
+| D4: Swarm Architecture | 🔄 REDESIGNED | — | 4-agent swarm (see SWARM-ARCHITECTURE.md) |
+| D5: Cleanup + embed.worker | 📋 READY | — | Parallel embeddings + delete absorbed agents |
 | D6: Frontmatter Bridge | ✅ COMPLETE | Archie | syncToFrontmatter() + command |
 | D7: Vitals MetadataCache | ✅ COMPLETE | Faye | resolvedLinks direct usage |
 | D8: Editor Decorations | ⏸️ DEFERRED | — | After infrastructure complete |
@@ -43,7 +43,7 @@ Phase Universe is a foundational refactor that replaces the entire previous road
 2. **Obsidian-Native First** — Use `metadataCache`, `processFrontMatter`, Editor Extensions before building custom.
 3. **Data layer supports, doesn't replace** — SQLite/Workers for heavy lifting, but Obsidian APIs for user-facing data.
 4. **Main thread is sacred** — <16ms operations only. Everything heavy in Workers.
-5. **ChiefOfStaff is the FULL orchestrator** — Routes, executes, AND persists. Single owner of agent lifecycle.
+5. **4-Agent Swarm Architecture** — Orchestrator (brain), NoteEditor (Obsidian I/O), ContextBuilder (vault awareness), Worker (workflow executor). Clear separation of concerns. See `SWARM-ARCHITECTURE.md`.
 6. **User-controlled intelligence spectrum** — From minimal (passive health display) to proactive (suggestions, completions). User decides.
 
 ---
@@ -218,36 +218,85 @@ const score = match ? parseInt(match[1]) : 0;
 
 ---
 
-### D4: Orchestration Simplification (Priority: MEDIUM) 🔄 IN PROGRESS
+### D4: Swarm Architecture (Priority: HIGH) 🔄 REDESIGNED
 
-**Interview Decision (2026-01-13):** ChiefOfStaff becomes **FULL ORCHESTRATOR**:
-- Routes requests to appropriate agents
-- Executes agent tasks (absorbs actionOrchestrator)
-- Persists results to SQLite
-- Uses **functional composition** (pure functions, one file)
+**Status**: REDESIGNED (2026-01-14 Architecture Decision)
 
-**Remove:**
-- `src/core/intelligence/actionOrchestrator.ts` — Merge into ChiefOfStaff
-- `src/core/intelligence/actionPipeline.ts` — Inline into ChiefOfStaff
-- `src/core/agentic/workflowRunner.ts` — Merge into TaskQueue
+**Previous plan**: Merge actionOrchestrator → ChiefOfStaff (functional composition)
 
-**Refactor Sage's D9 code:** `actionOrchestrator.dispatch()` → `chiefOfStaff.execute()`
+**New plan**: 4-Agent Swarm with clear separation of concerns. See `SWARM-ARCHITECTURE.md` for full specification.
 
-**Estimated effort**: 6 hours
+**The Core Insight (2026-01-14):**
+> The current 13+ agent system has accidental complexity. Each "agent" (Classifier, Connection, 
+> Workflow) does the same thing: build prompt → call LLM → parse output. The complexity isn't 
+> in the PROBLEM, it's in the IMPLEMENTATION.
+>
+> **The Correction:** 4 specialized agents, each with ONE job. Orchestrator reasons about WHAT 
+> to do. Other agents focus on HOW to do it well.
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR (Brain)                              │
+│  • Receives ALL requests (UI, Chat, Editor Decorations)                 │
+│  • Makes action plans using reasoning model                             │
+│  • Delegates to specialized agents                                       │
+└───────────────────────────────────┬─────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────────────┐
+        ▼                           ▼                                   ▼
+┌───────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
+│    NoteEditor     │     │   ContextBuilder    │     │       Worker        │
+│ • Edit/Create     │     │ • Search vault      │     │ • Execute workflows │
+│ • Canvas/Bases    │     │ • Find related      │     │ • Classify, Enhance │
+│ • Self-verify     │     │ • User behavior     │     │ • Atomize, Connect  │
+│ Uses: Skills      │     │ Uses: Search        │     │ Uses: Prompts       │
+└───────────────────┘     └─────────────────────┘     └─────────────────────┘
+```
+
+**Three Triggers → Orchestrator:**
+1. **UI** — Quick Actions, Agent Streams
+2. **ChatService** — Hybrid mode (conversation OR agent delegation)
+3. **Editor Decorations** — Live conversation during note editing (D8)
+
+**Files to modify:**
+- `src/core/agents/chiefOfStaff.ts` → Refactor to pure Orchestrator
+- `src/core/agents/workerAgent.ts` → CREATE (unified workflow executor)
+- `src/core/agents/noteEditorAgent.ts` → Enhance with self-verification
+- `src/core/agents/contextBuilderAgent.ts` → Add behavior/trend tracking
+- `src/core/chat/chatService.ts` → Add Orchestrator trigger (hybrid)
+
+**Files to DELETE (in D5):**
+- `src/core/agents/classifierAgent.ts` → "classify" workflow in Worker
+- `src/core/agents/connectionAgent.ts` → "connect" workflow in Worker
+- `src/core/agents/workflowAgents.ts` → Absorbed into Worker
+
+**Implementation Phases:**
+1. Phase 1: Refactor Orchestrator (brain only)
+2. Phase 2: Create Worker Agent (unified workflows)
+3. Phase 3: Enhance NoteEditor (self-verification)
+4. Phase 4: Enhance ContextBuilder (behavior tracking)
+5. Phase 5: ChatService integration (hybrid mode)
+
+**Estimated effort**: 12 hours (increased due to scope expansion)
 
 ---
 
 ### D5: Cleanup + embed.worker (Priority: MEDIUM) 📋 READY
 
-**Interview Decision (2026-01-13):**
+**Interview Decision (2026-01-13 + 2026-01-14):**
 - Create `embed.worker` for parallel HTTP calls to Ollama (4 concurrent)
-- Dead code scope: **ChatAgent only** (minimal)
+- Dead code scope: **EXPANDED** (Swarm Architecture cleanup)
 - Hardware: Mid-range GPU (8-12GB) → 4 concurrent is safe
 
 | Issue | Action |
 |-------|--------|
 | Sequential embeddings | Create `embed.worker` with 4 concurrent HTTP calls |
-| Dead ChatAgent | Delete file (minimal scope) |
+| Dead ChatAgent | Delete file |
+| Absorbed ClassifierAgent | Delete file (now "classify" workflow in Worker) |
+| Absorbed ConnectionAgent | Delete file (now "connect" workflow in Worker) |
+| Absorbed WorkflowAgents | Delete file (unified into Worker) |
 | FS.syncfs race | Solved by Worker isolation |
 
 **embed.worker API:**
@@ -414,7 +463,7 @@ Keep current Agent Streams design for showing results.
 
 ---
 
-## Execution Order (Updated 2026-01-13)
+## Execution Order (Updated 2026-01-14)
 
 ```
 COMPLETED:
@@ -422,27 +471,30 @@ COMPLETED:
 ├── D2: HNSW Worker ✅
 ├── D6: Frontmatter Bridge ✅
 ├── D7: Vitals MetadataCache ✅
-└── D9: Context Menus ✅
+├── D9: Context Menus ✅
+└── D11: Skills Integration ✅
 
-NEXT SESSION (Parallel):
+NEXT SESSION — D4: Swarm Architecture (NEW PRIORITY):
 │
-├── ARCHIE: Data Layer Completion
-│   ├── D10: SQLite Migration (conversations, actions, intelligence)
-│   ├── D5: embed.worker (4 concurrent HTTP calls)
-│   └── D3: Fix reranker SCORE: X parsing
+├── Phase 1: Refactor ChiefOfStaff → Orchestrator (brain only)
+├── Phase 2: Create WorkerAgent (unified workflow executor)
+├── Phase 3: Enhance NoteEditor (self-verification)
+├── Phase 4: Enhance ContextBuilder (behavior/trend tracking)
+└── Phase 5: ChatService integration (hybrid mode)
+
+PARALLEL WITH D4:
 │
-└── SAGE: ChiefOfStaff Consolidation
-    ├── D4: Merge actionOrchestrator → ChiefOfStaff
-    ├── D4: Functional composition (pure functions)
-    ├── D5: Delete dead ChatAgent
-    └── Refactor D9 code: actionOrchestrator.dispatch() → chiefOfStaff.execute()
+├── D10: SQLite Migration (conversations, actions, intelligence)
+├── D3: Event Wiring (depends on D4 Phase 1)
+└── D5: embed.worker + delete absorbed agents (after D4 Phase 5)
 
 DEFERRED (Post-Infrastructure):
 └── D8: Editor Decorations
     └── Ghost text on explicit request (Tab key)
+    └── 3rd trigger for Orchestrator
 ```
 
-**Remaining effort**: ~20 hours (~1 week at 4h/day)
+**Remaining effort**: ~28 hours (+8 for Swarm Architecture)
 
 ---
 
@@ -465,9 +517,15 @@ DEFERRED (Post-Infrastructure):
 
 - [x] Main thread has NO `hnswlib-wasm` import ✅ (D2)
 - [ ] All data queries go through SQLite (D10 pending)
-- [ ] ChiefOfStaff is FULL orchestrator (D4 pending)
+- [ ] 4-Agent Swarm operational (D4 pending)
+  - [ ] Orchestrator receives all requests
+  - [ ] NoteEditor with self-verification
+  - [ ] ContextBuilder with behavior tracking
+  - [ ] Worker executes all workflows
+- [ ] ChatService can trigger Orchestrator (D4 Phase 5)
 - [ ] No JSON files for core data (only settings) (D10 pending)
 - [ ] embed.worker handles parallel embeddings (D5 pending)
+- [ ] Absorbed agents deleted (D5 pending)
 
 ### Integration
 
@@ -530,6 +588,17 @@ DEFERRED (Post-Infrastructure):
 | Ghost text trigger | On explicit request (Tab) | Not automatic |
 | ChiefOfStaff role | Full orchestrator | Routes, executes, AND persists |
 | Vision end state | User-controlled spectrum | Minimal → proactive slider |
+
+### Swarm Architecture (2026-01-14)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Agent count | 4 agents (Orchestrator, NoteEditor, ContextBuilder, Worker) | Clear separation of concerns |
+| Worker scope | Unified workflow executor | Absorbs 8 workflow agents + Classifier + Connection |
+| ChatService | Hybrid (conversation OR trigger Orchestrator) | Maintains direct chat, enables agent delegation |
+| Model config | Configurable per agent type | Orchestrator can use reasoning model, others use faster model |
+| Complexity concern | Proceed incrementally | Phase 1: Orchestrator. Phase 2: Worker. Phase 3+: Delete old agents |
+| Workflows preserved | Yes, as reusable prompts | No functionality loss, just different executor |
+| Three triggers | UI, ChatService, Editor Decorations | All flow through Orchestrator |
 
 ---
 

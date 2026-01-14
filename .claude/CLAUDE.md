@@ -6,10 +6,14 @@
 
 **Notient = Note + Sentient** — Transform Obsidian notes from passive files into living entities with health, context, and agency. Local-only. Privacy-first. Human-in-the-steering-wheel.
 
-**Mental Model: White House**
+**Mental Model: 4-Agent Swarm** (Updated 2026-01-14)
 - User = President (decision maker, commands agents)
-- ChiefOfStaff = Orchestrator (routes tasks, manages delegation)
-- Agents = Department Heads (specialized expertise)
+- Orchestrator = Brain (reasoning model, makes plans, delegates)
+- NoteEditor = Obsidian I/O specialist (edit, create, verify)
+- ContextBuilder = Vault awareness specialist (search, relationships)
+- Worker = Workflow executor (classify, enhance, atomize, etc.)
+
+See `.planning/SWARM-ARCHITECTURE.md` for full specification.
 
 ---
 
@@ -126,16 +130,22 @@ src/core/
 ├── llm/                   # LLM abstraction layer
 │   ├── provider.ts        # LLMProvider interface
 │   └── providers/         # LMStudio, Ollama implementations
-├── agents/                # Multi-agent system (White House Model)
-│   ├── chiefOfStaff.ts    # Central orchestrator
+├── agents/                # 4-Agent Swarm Architecture
+│   ├── chiefOfStaff.ts    # → Refactoring to Orchestrator (brain)
 │   ├── base.ts            # BaseAgent abstract class
 │   ├── agentIdentity.ts   # Tier 2 specializations
-│   ├── *Agent.ts          # Individual agent implementations
-│   └── workflowAgents.ts  # Intelligence 2.0 wrappers
-├── agent/                 # Legacy (Tier 1 identity here)
+│   ├── noteEditorAgent.ts # Obsidian I/O specialist
+│   ├── contextBuilderAgent.ts # Vault awareness specialist
+│   ├── workerAgent.ts     # Unified workflow executor (NEW)
+│   ├── classifierAgent.ts # → TO DELETE (absorbed by Worker)
+│   ├── connectionAgent.ts # → TO DELETE (absorbed by Worker)
+│   └── workflowAgents.ts  # → TO DELETE (absorbed by Worker)
+├── agent/                 # Tier 1 identity
 │   └── identity.ts        # Core Notient persona
-├── intelligence/          # Workflow prompts
+├── intelligence/          # Workflow prompts (used by Worker)
 │   └── prompts/           # Individual prompt builders
+├── skills/                # Dynamic capabilities (used by NoteEditor)
+│   └── registry.ts        # SkillRegistry for Canvas, Bases, Markdown
 ├── agentic/               # Trust levels, action applier
 ├── search/                # Vector search + LLM reranking
 └── context/               # Vault context builder
@@ -148,10 +158,21 @@ src/core/
 - Dependency injection via `kernel.get<T>(ServiceName)`
 - Startup orchestration with health checks
 
-**Skills Architecture (Brain & Hands)**
-- **Brain:** `SkillRegistry` injects specialized schemas (Canvas, Bases) into agents.
+**4-Agent Swarm Architecture** (2026-01-14)
+- **Orchestrator:** Reasoning brain. Receives all requests, makes plans, delegates.
+- **NoteEditor:** Obsidian I/O specialist. Uses Skills (Canvas, Bases, Markdown).
+- **ContextBuilder:** Vault awareness. Uses Search Pipeline, Embeddings.
+- **Worker:** Unified workflow executor. Uses Prompts + Context + Search.
+
+**Three Triggers → Orchestrator:**
+1. UI (Quick Actions, Agent Streams)
+2. ChatService (hybrid mode)
+3. Editor Decorations (D8, future)
+
+**Skills Architecture (NoteEditor only)**
+- **Brain:** `SkillRegistry` injects specialized schemas (Canvas, Bases) into NoteEditor.
 - **Hands:** `ObsidianFacade` handles atomic writes for all file types.
-- **Dynamic:** Agents "equip" skills only when needed, keeping context light.
+- **Dynamic:** NoteEditor "equips" skills only when needed, keeping context light.
 
 **Two-Tier Identity**
 - Tier 1: `src/core/agent/identity.ts` — Core persona, shared by ALL agents
@@ -172,46 +193,40 @@ src/core/
 
 ## Extending the System
 
-### Adding a New Core Agent
+### Adding a New Workflow (Preferred)
 
-1. **Create agent file** in `src/core/agents/`:
+With the 4-Agent Swarm, most new capabilities should be **workflows** in the Worker agent:
+
+1. **Create prompt builder** in `src/core/intelligence/prompts/`:
    ```typescript
-   // newAgent.ts
-   export class NewAgent extends BaseAgent {
-     constructor(llm: LLMProvider, profile?: UserProfile) {
-       super(llm, "new-agent");  // Must match AgentType
-       this.profile = profile;
-     }
-     
-     protected buildSystemPrompt(context: AgentContext): string {
-       return buildAgentSystemPrompt("new-agent", this.profile, ...);
-     }
-     
-     protected parseOutput(raw: string, context: AgentContext): AgentOutput { ... }
-     
-     async *execute(context: AgentContext, signal?: AbortSignal): AsyncIterable<AgentEvent> { ... }
+   // newworkflow.ts
+   export const NEWWORKFLOW_PROMPT: AgentPrompt = {
+     system: "You are a specialized workflow agent...",
+     userTemplate: "Process this note: {{noteTitle}}\n\n{{noteContent}}"
+   };
+   
+   export function buildNewWorkflowPrompt(profile?: UserProfile): string {
+     const base = buildBaseIdentity(profile);
+     return `${base}\n\n${NEWWORKFLOW_PROMPT.system}`;
    }
    ```
 
-2. **Add type** to `src/core/agents/types.ts`:
-   ```typescript
-   export type AgentType = "chat" | "note-editor" | ... | "new-agent";
-   ```
+2. **Register in Worker** — Worker agent loads prompts dynamically.
 
-3. **Add specialization** to `src/core/agents/agentIdentity.ts`:
-   ```typescript
-   "new-agent": {
-     role: "Role Title",
-     mission: "What this agent does...",
-     expertise: ["area1", "area2"],
-     outputFormat: { type: "structured-json", instructions: "..." }
-   }
-   ```
+### Adding a New Core Agent (Rare)
 
-4. **Wire into ChiefOfStaff** in `chiefOfStaff.ts`:
-   - Add to constructor
-   - Add routing logic in `determineRouting()`
-   - Add to `getAgent()` switch
+Only add a new agent if the capability requires:
+- Self-verification/correction loop
+- Complex multi-step reasoning
+- Distinct LLM model requirements
+
+The 4-agent swarm should cover most needs:
+- **Orchestrator** — Reasoning, planning
+- **NoteEditor** — Obsidian I/O (with Skills)
+- **ContextBuilder** — Vault awareness
+- **Worker** — Workflow execution (with Prompts)
+
+If truly needed, follow the same pattern as existing agents.
 
 ### Adding a New Workflow Command
 
@@ -274,9 +289,10 @@ src/core/
 - Views are UI only
 - Delegate to services via Kernel
 
-❌ **Don't bypass ChiefOfStaff**
-- All agent execution goes through `ChiefOfStaff.execute()`
+❌ **Don't bypass Orchestrator**
+- All agent execution goes through Orchestrator
 - Don't instantiate agents directly in UI code
+- ChatService can trigger Orchestrator for agent tasks (hybrid mode)
 
 ❌ **Don't create parallel type systems**
 - Reuse existing types from `types.ts`
@@ -329,7 +345,8 @@ src/core/
 |------|---------|
 | `src/main.ts` | Plugin entry point |
 | `src/core/kernel.ts` | Service registry |
-| `src/core/agents/chiefOfStaff.ts` | Agent orchestrator |
+| `src/core/agents/chiefOfStaff.ts` | Orchestrator (brain) — being refactored |
+| `src/core/agents/workerAgent.ts` | Worker (workflow executor) — NEW |
 | `src/core/agents/agentIdentity.ts` | Tier 2 agent prompts |
 | `src/core/agent/identity.ts` | Tier 1 core identity |
 | `src/core/llm/provider.ts` | LLM interface |

@@ -4,7 +4,7 @@
 
 Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transforms notes from passive files into living entities with pulse, intelligence, and agency — all powered by local LLMs. No cloud, no data leaving your machine, ever.
 
-**Core identity**: Research Chief of Staff — the orchestrator that routes user intent to specialized expert agents, with the vault as ambient intelligence.
+**Core identity**: Research Chief of Staff — a 4-agent swarm (Orchestrator, NoteEditor, ContextBuilder, Worker) that routes user intent to specialized agents, with the vault as ambient intelligence.
 
 ## Core Value
 
@@ -31,14 +31,15 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 | Deliverable | Description | Status |
 |-------------|-------------|--------|
 | D1: SQLite Data Layer | sql.js WASM, replace JSON files | ✅ COMPLETE |
-| D2: HNSW Worker | Vector ops in Web Worker | 🔄 IN PROGRESS |
-| D3: Event Wiring | Fix action:proposed, applier, capability cards | NOT STARTED |
-| D4: Orchestration | Simplify ChiefOfStaff + TaskManager | NOT STARTED |
-| D5: Cleanup | Absorb remaining Phase 0 issues | NOT STARTED |
-| D6: Frontmatter Bridge | Store AI insights in note properties | NOT STARTED |
-| D7: MetadataCache Vitals | Use Obsidian's cache, stop duplicating | NOT STARTED |
-| D8: Editor Decorations | Inline AI insights via CodeMirror 6 | NOT STARTED |
-| D9: Context Menus | Right-click AI actions | NOT STARTED |
+| D2: HNSW Worker | Vector ops in Web Worker | ✅ COMPLETE |
+| D3: Event Wiring | Fix action:proposed, applier, capability cards | 🔄 IN PROGRESS |
+| D4: Swarm Architecture | 4-agent swarm (replaces ChiefOfStaff consolidation) | 🔄 REDESIGNED |
+| D5: Cleanup | Delete absorbed agents + embed.worker | 📋 READY |
+| D6: Frontmatter Bridge | Store AI insights in note properties | ✅ COMPLETE |
+| D7: MetadataCache Vitals | Use Obsidian's cache, stop duplicating | ✅ COMPLETE |
+| D8: Editor Decorations | Inline AI insights via CodeMirror 6 | ⏸️ DEFERRED |
+| D9: Context Menus | Right-click AI actions | ✅ COMPLETE |
+| D11: Skills Integration | Dynamic capability injection | ✅ COMPLETE |
 
 **Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle, `notient-health` in frontmatter.
 
@@ -63,13 +64,27 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 - ✓ Centralized ID system (`src/core/ids.ts`)
 - ✓ SQLite data layer with Kysely (`src/core/db/`)
 - ✓ Canonical Obsidian API reference (`docs/obsidian/`)
+- ✓ HNSW Worker isolation (no main-thread hnswlib)
+- ✓ Frontmatter intelligence bridge (write-on-demand)
+- ✓ Vitals from MetadataCache (O(N) performance)
+- ✓ Context menu integration (editor + file menus)
+
+### In Progress (Phase Universe)
+
+<!-- Active work items. -->
+
+**Architecture — Swarm Refactor (D4)**
+- [ ] 4-agent swarm: Orchestrator, NoteEditor, ContextBuilder, Worker
+- [ ] Orchestrator as pure reasoning brain
+- [ ] Worker as unified workflow executor
+- [ ] ChatService hybrid mode (conversation OR agent delegation)
 
 ### Paused (Post-Universe)
 
 <!-- Will be re-evaluated after Phase Universe completes. -->
 
 **Architecture**
-- [ ] 12-agent system: 9 user-facing + 3 infrastructure
+- [ ] ~~12-agent system~~ → Replaced by 4-agent swarm
 - [ ] Quick Actions model: 3 pinned + 3 contextual
 
 **Insights Stream**
@@ -106,7 +121,7 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 
 **Brownfield project**: Substantial existing codebase with ~15K lines of TypeScript. Architecture is clean (kernel, services, events, agents). CODE RED fixes complete (HNSW, Error Boundaries, App.tsx refactor).
 
-**The White House Model**: User is President (decision maker), ChiefOfStaff is orchestrator, Agents are department heads with specialized expertise. Agents are capabilities, not personas.
+**The White House Model (Evolved)**: User is President (decision maker), Orchestrator is the brain (reasoning, planning), specialized agents (NoteEditor, ContextBuilder, Worker) are executors with distinct responsibilities. See `SWARM-ARCHITECTURE.md`.
 
 **Ambient intelligence**: Notient works in the background. InsightStream surfaces suggestions without demanding user attention. The vault talks back.
 
@@ -134,16 +149,19 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 | **Use metadataCache** | Don't recalculate what Obsidian already knows | — D7 Pending |
 | **Editor Decorations** | CodeMirror 6 for inline AI insights | — D8 Pending |
 | **Context menus** | Right-click "Find related", "Enhance this" | — D9 Pending |
-| **ChiefOfStaff = single event source** | Clear data flow. Agents never emit to UI. | — D3/D4 Pending |
+| **Orchestrator = single event source** | Clear data flow. Agents never emit to UI. | — D3/D4 Pending |
 | **Centralized ID system** | `src/core/ids.ts` — consistent format, no chaos | ✓ Implemented |
-| Chat is UI, not agent | Avoids 13th agent, Chat delegates to experts | — Pending |
+| Chat is UI, not agent | ChatService handles conversation, can trigger Orchestrator | — D4 Phase 5 |
+| **4-Agent Swarm** | Orchestrator + NoteEditor + ContextBuilder + Worker | — D4 Pending |
+| **Worker absorbs workflows** | Classifier, Connection, 8 WorkflowAgents → Worker | — D4 Phase 2 |
 | 3 pinned + 3 contextual Quick Actions | Enhance/Classify/Connect always visible, rest dynamic | — Pending |
 
 ## Reference Documentation
 
 - **Obsidian API**: `docs/obsidian/` — Canonical reference for CSS, Editor, Plugin, UI
 - **Phase Plan**: `.planning/PHASE-UNIVERSE.md` — Full specification
+- **Swarm Architecture**: `.planning/SWARM-ARCHITECTURE.md` — 4-agent architecture spec
 - **State Tracking**: `.planning/STATE.md` — Current progress
 
 ---
-*Last updated: 2026-01-12 — Post-Integration Audit*
+*Last updated: 2026-01-14 — Swarm Architecture Decision*
