@@ -6,34 +6,55 @@ You coordinate Archie (backend), Sage (review), and Faye (frontend) via task que
 
 ---
 
-## 🚀 NEXT SESSION: Swarm Phase 1-2
+## 🚀 THIS SESSION: Swarm Phase 3-5 (Parallel)
 
 **Read `.planning/STATE.md` for full context.**
 
-### Immediate Actions
+### Session Goal
+
+Complete Swarm Architecture with all 3 agents in parallel:
+- **Archie**: Phase 3 — NoteEditor self-verification
+- **Sage**: Phase 4 — ContextBuilder behavior tracking
+- **Faye**: Phase 5 — ChatService hybrid mode
+
+### Worktree Status (Fresh from beta-spec)
+
+| Agent | Branch | Ready |
+|-------|--------|-------|
+| Archie | `archie/swarm-phase-3` | ✅ |
+| Sage | `sage/swarm-phase-4` | ✅ |
+| Faye | `faye/swarm-phase-5` | ✅ |
+
+### Dispatch All 3 (Parallel)
 
 ```bash
-# 1. Dispatch Sage for Swarm Phase 1 (Orchestrator Refactor)
-uv run .claude/agents/dispatch.py sage "Execute Swarm Phase 1 per TASK.md - refactor ChiefOfStaff to pure Orchestrator"
+# Dispatch all agents simultaneously
+uv run .claude/agents/dispatch.py archie "Execute Swarm Phase 3 per TASK.md - NoteEditor self-verification"
+uv run .claude/agents/dispatch.py sage "Execute Swarm Phase 4 per TASK.md - ContextBuilder behavior tracking"
+uv run .claude/agents/dispatch.py faye "Execute Swarm Phase 5 per TASK.md - ChatService hybrid mode"
 
-# 2. Start watcher
-uv run .claude/agents/watcher.py --agents sage --wait-for 1 --verbose
-
-# 3. After Sage completes, dispatch Archie for Phase 2
-uv run .claude/agents/dispatch.py archie "Execute Swarm Phase 2 per TASK.md - create WorkerAgent"
+# Watch for all 3 to complete
+uv run .claude/agents/watcher.py --wait-for 3 --verbose
 ```
 
-### Current Task Files
-- **Sage**: `.claude/orchestration/sage/TASK.md` — Phase 1: ChiefOfStaff → Orchestrator
-- **Archie**: `.claude/orchestration/archie/TASK.md` — Phase 2: Create WorkerAgent
+### After Completion
 
-### Swarm Architecture Target
+```bash
+# Merge each branch to beta-spec
+git merge archie/swarm-phase-3 --no-ff -m "Merge archie: Phase 3 NoteEditor self-verification"
+git merge sage/swarm-phase-4 --no-ff -m "Merge sage: Phase 4 ContextBuilder behavior tracking"
+git merge faye/swarm-phase-5 --no-ff -m "Merge faye: Phase 5 ChatService hybrid mode"
+
+# Verify build
+bun run dev
+
+# Iterate on any issues until passes
 ```
-Orchestrator (brain) → delegates to:
-  ├── Worker (workflow execution)
-  ├── NoteEditor (Obsidian I/O)
-  └── ContextBuilder (vault awareness)
-```
+
+### Previous Session Completed
+
+- ✅ Phase 1: Orchestrator refactor (`470a1bf`)
+- ✅ Phase 2: WorkerAgent created (`c2c111a`)
 
 ---
 
