@@ -4,14 +4,50 @@ You coordinate Archie (backend), Sage (review), and Faye (frontend) via task que
 
 **You dispatch tasks yourself using Bash.** The user talks to you, you delegate to agents.
 
+---
+
+## 🚀 NEXT SESSION: Swarm Phase 1-2
+
+**Read `.planning/STATE.md` for full context.**
+
+### Immediate Actions
+
+```bash
+# 1. Dispatch Sage for Swarm Phase 1 (Orchestrator Refactor)
+uv run .claude/agents/dispatch.py sage "Execute Swarm Phase 1 per TASK.md - refactor ChiefOfStaff to pure Orchestrator"
+
+# 2. Start watcher
+uv run .claude/agents/watcher.py --agents sage --wait-for 1 --verbose
+
+# 3. After Sage completes, dispatch Archie for Phase 2
+uv run .claude/agents/dispatch.py archie "Execute Swarm Phase 2 per TASK.md - create WorkerAgent"
+```
+
+### Current Task Files
+- **Sage**: `.claude/orchestration/sage/TASK.md` — Phase 1: ChiefOfStaff → Orchestrator
+- **Archie**: `.claude/orchestration/archie/TASK.md` — Phase 2: Create WorkerAgent
+
+### Swarm Architecture Target
+```
+Orchestrator (brain) → delegates to:
+  ├── Worker (workflow execution)
+  ├── NoteEditor (Obsidian I/O)
+  └── ContextBuilder (vault awareness)
+```
+
+---
+
 ## Core Workflow
 
 1. User describes what they want
 2. **You dispatch** via Bash: `uv run .claude/agents/dispatch.py <agent> "prompt"`
 3. Agent queue processor runs task automatically
 4. **You check responses** via Bash: `uv run .claude/agents/dispatch.py --responses <agent>`
-5. **You clear processed**: `rm .claude/orchestration/<agent>/responses/<task_id>.response`
-6. Report results to user or dispatch next task
+5. **You merge agent's branch**: `git merge <agent-branch> --no-ff -m "Merge <agent> work"`
+6. **You clear processed**: `rm .claude/orchestration/<agent>/responses/<task_id>.response`
+7. Report results to user or dispatch next task
+
+**IMPORTANT:** Never copy files from worktrees. Always merge branches properly.
 
 ## Dispatching Tasks (You Run These)
 
@@ -68,8 +104,41 @@ Written to `.claude/orchestration/<agent>/responses/<task_id>.response`:
   "model": "haiku",
   "returncode": 0,
   "elapsed_seconds": 5.25,
-  "timestamp": "2026-01-12T19:00:05Z"
+  "timestamp": "2026-01-12T19:00:05Z",
+  "stats": {
+    "tokens": { "input": 5000, "output": 2000, "cache_read": 150000 },
+    "context": {
+      "used": 157000,
+      "remaining": 13000,
+      "percent_used": 92.4,
+      "limit": 170000
+    }
+  }
 }
+```
+
+## Context Window Management
+
+Each agent has ~170K token context window. Monitor `stats.context.percent_used` in responses:
+
+| percent_used | Action |
+|--------------|--------|
+| < 80% | Continue dispatching to same agent |
+| 80-100% | Warn: agent nearing capacity, plan smaller tasks |
+| > 100% | **RESTART REQUIRED**: Agent context exhausted |
+
+**When `context.percent_used > 100`:**
+1. Note the agent's current work state from REPORT.md
+2. Kill the agent's queue processor (user restarts manually)
+3. Dispatch continuation task to fresh agent instance
+4. Include context: "Continuing from previous session. Last completed: [summary]"
+
+**Restart command (user runs):**
+```bash
+# Kill existing processor (Ctrl+C in agent terminal)
+# Then restart with fresh context:
+cd ~/projects/_worktrees/notient-{agent}
+uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py {agent}
 ```
 
 ## Pipeline Example
@@ -83,17 +152,21 @@ uv run .claude/agents/dispatch.py archie "Implement UserService with CRUD operat
 # 2. Wait for response (or continue other work)
 uv run .claude/agents/dispatch.py --check archie
 
-# 3. Review response
+# 3. Review response and REPORT.md
 uv run .claude/agents/dispatch.py --responses archie
+cat ~/projects/_worktrees/notient-archie/.claude/orchestration/archie/REPORT.md
 
-# 4. Clear processed response
+# 4. Merge archie's branch (agent committed their work)
+git merge archie/backend --no-ff -m "Merge archie: UserService implementation"
+
+# 5. Clear processed response
 rm .claude/orchestration/archie/responses/task-*.response
 
-# 5. Dispatch review task
-uv run .claude/agents/dispatch.py sage "Review archie's UserService implementation" --context "Check error handling and types"
+# 6. Dispatch review task to Sage
+uv run .claude/agents/dispatch.py sage "Review UserService implementation" --context "Check error handling"
 
-# 6. Review and merge
-uv run .claude/agents/dispatch.py --responses sage
+# 7. Merge sage's review fixes
+git merge sage/simplify --no-ff -m "Merge sage: UserService review fixes"
 ```
 
 ## Background Watcher (Async Wait)
@@ -195,6 +268,20 @@ rm .claude/orchestration/<agent>/responses/*.response
 ├── logs/               # Hook logs
 └── orchestrator/       # This config (CLAUDE.md)
 ```
+
+## Response vs REPORT.md
+
+Two artifacts from agent work — different purposes:
+
+| Artifact | Purpose | Location |
+|----------|---------|----------|
+| `*.response` JSON | **Orchestration signals**: status, timing, tokens, context usage | `.claude/orchestration/{agent}/responses/` |
+| `REPORT.md` | **Technical codebase notes**: what changed, why, blockers | Worktree `.claude/orchestration/{agent}/REPORT.md` |
+
+**Orchestrator workflow:**
+1. Check `*.response` JSON for status and context usage
+2. Read `REPORT.md` for technical details about codebase changes
+3. Link REPORT.md from worktree to main if needed for review
 
 ## TASK.md Files
 

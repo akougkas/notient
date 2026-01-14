@@ -238,6 +238,24 @@ class ExecutionStats:
     cache_read_tokens: int = 0
     num_turns: int = 0
 
+    # Context window management (170K target per agent)
+    CONTEXT_LIMIT: int = 170_000
+
+    @property
+    def context_used(self) -> int:
+        """Estimate total context used (cache_read represents accumulated context)."""
+        return self.cache_read_tokens + self.input_tokens + self.output_tokens
+
+    @property
+    def context_remaining(self) -> int:
+        """Estimate remaining context window capacity."""
+        return max(0, self.CONTEXT_LIMIT - self.context_used)
+
+    @property
+    def context_percent_used(self) -> float:
+        """Percentage of context window used."""
+        return round((self.context_used / self.CONTEXT_LIMIT) * 100, 1)
+
 
 @dataclass
 class Response:
@@ -276,6 +294,12 @@ class Response:
                     "input": self.stats.input_tokens,
                     "output": self.stats.output_tokens,
                     "cache_read": self.stats.cache_read_tokens,
+                },
+                "context": {
+                    "used": self.stats.context_used,
+                    "remaining": self.stats.context_remaining,
+                    "percent_used": self.stats.context_percent_used,
+                    "limit": self.stats.CONTEXT_LIMIT,
                 },
             }
         return result

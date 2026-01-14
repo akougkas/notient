@@ -57,17 +57,16 @@ def get_worktree_path(agent: str) -> Path:
     return WORKTREE_BASE / f"notient-{agent}"
 
 
-def sync_task_to_worktree(agent: str) -> bool:
-    """Sync TASK.md from main workspace to agent's worktree.
+def sync_file_to_worktree(agent: str, filename: str) -> bool:
+    """Sync a file from main workspace to agent's worktree.
 
-    This ensures agents can read their task file when running in their worktree.
     Uses symlink if possible, falls back to copy.
     """
     repo = Path(__file__).parent.parent.parent
-    source = repo / f".claude/orchestration/{agent}/TASK.md"
+    source = repo / f".claude/orchestration/{agent}/{filename}"
     worktree = get_worktree_path(agent)
     target_dir = worktree / f".claude/orchestration/{agent}"
-    target = target_dir / "TASK.md"
+    target = target_dir / filename
 
     if not source.exists():
         return False
@@ -86,24 +85,36 @@ def sync_task_to_worktree(agent: str) -> bool:
     # Try symlink first (more efficient), fall back to copy
     try:
         target.symlink_to(source)
-        print(f"  Synced: TASK.md -> {agent} worktree (symlink)")
+        return True
     except OSError:
         # Symlink failed (e.g., cross-device), fall back to copy
         import shutil
         shutil.copy2(source, target)
-        print(f"  Synced: TASK.md -> {agent} worktree (copy)")
+        return True
 
-    return True
+
+def sync_agent_files(agent: str) -> None:
+    """Sync CLAUDE.md and TASK.md to agent's worktree."""
+    synced = []
+    if sync_file_to_worktree(agent, "CLAUDE.md"):
+        synced.append("CLAUDE.md")
+    if sync_file_to_worktree(agent, "TASK.md"):
+        synced.append("TASK.md")
+    if synced:
+        print(f"  Synced: {', '.join(synced)} -> {agent} worktree")
 
 
 def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: str = "") -> str:
     queue_dir, _ = get_paths(agent)
     queue_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prepend instruction to read agent's CLAUDE.md first
+    full_prompt = f"First read .claude/orchestration/{agent}/CLAUDE.md for your identity and instructions, then: {prompt}"
+
     task_id = f"task-{uuid.uuid4().hex[:8]}"
     task = {
         "id": task_id,
-        "prompt": prompt,
+        "prompt": full_prompt,
         "model": model,
         "context": context,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -116,8 +127,8 @@ def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: 
     print(f"  Model: {model}")
     print(f"  Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
 
-    # Sync TASK.md to worktree so agent can read it
-    sync_task_to_worktree(agent)
+    # Sync CLAUDE.md and TASK.md to worktree
+    sync_agent_files(agent)
 
     return task_id
 
