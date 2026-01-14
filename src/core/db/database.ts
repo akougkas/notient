@@ -27,7 +27,8 @@ export class DatabaseService {
 
     // Initialize sql.js with WASM loaded via Obsidian adapter
     // (Obsidian blocks file:// URL fetches, so we read the binary directly)
-    const wasmPath = `${this.paths.pluginRoot}/sql-wasm.wasm`;
+    // Note: adapter.readBinary() needs a path RELATIVE to vault root
+    const wasmPath = ".obsidian/plugins/notient/sql-wasm.wasm";
     const wasmBuffer = await this.adapter.readBinary(wasmPath);
     const SQL = await initSqlJs({ wasmBinary: wasmBuffer });
 
