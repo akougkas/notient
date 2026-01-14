@@ -97,7 +97,10 @@ export class HNSWVectorStore implements VectorStore {
   private noteStates: Map<string, NoteState> = new Map();
   private lastFullIndexAt: number | null = null;
 
-  constructor(private kernel: Kernel, app: App) {
+  constructor(
+    private kernel: Kernel,
+    app: App,
+  ) {
     this.app = app;
     this.paraDetector = new ParaDetector(kernel.settings);
     // Note: bridge is created in initialize() to allow async loading of worker code
