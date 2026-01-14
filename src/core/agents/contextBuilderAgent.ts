@@ -14,6 +14,7 @@
  * - Caches expensive computations with TTL
  */
 
+import type { TFile } from "obsidian";
 import type { ObsidianFacade } from "../../adapters/obsidianFacade";
 import type { UserProfile } from "../../types/profile";
 import type { VaultContextBuilder } from "../context/vaultContextBuilder";
@@ -209,9 +210,7 @@ export class ContextBuilderAgent extends BaseAgent {
   /**
    * Count tags and folders across files
    */
-  private countTagsAndFolders(
-    files: { path: string; stat: { size: number } }[],
-  ): {
+  private countTagsAndFolders(files: { path: string; stat: { size: number } }[]): {
     tagCounts: Map<string, number>;
     folderCounts: Map<string, number>;
   } {
@@ -219,7 +218,7 @@ export class ContextBuilderAgent extends BaseAgent {
     const folderCounts = new Map<string, number>();
 
     for (const file of files) {
-      const metadata = this.obsidian?.getFileMetadata(file as any) || { tags: [] };
+      const metadata = this.obsidian?.getFileMetadata(file as TFile) || { tags: [] };
 
       for (const tag of metadata.tags) {
         tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
