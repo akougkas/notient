@@ -116,10 +116,9 @@ export async function migrateToLatest(db: Kysely<Database>) {
   // In the future, we can add version tracking and incremental migrations.
 
   // sql.js prepare() expects single statements, so split and execute individually
-  const statements = INITIAL_SCHEMA
-    .split(';')
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith('--'));
+  const statements = INITIAL_SCHEMA.split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !s.startsWith("--"));
 
   for (const statement of statements) {
     await sql.raw(statement).execute(db);
