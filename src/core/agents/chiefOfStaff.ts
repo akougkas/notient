@@ -959,9 +959,7 @@ export class ChiefOfStaff {
   /**
    * Get specialized agent instance by type
    */
-  private getAgent(
-    type: ExpertAgentType,
-  ): NoteEditorAgent | ContextBuilderAgent {
+  private getAgent(type: ExpertAgentType): NoteEditorAgent | ContextBuilderAgent {
     switch (type) {
       case "note-editor":
         return this.noteEditorAgent;

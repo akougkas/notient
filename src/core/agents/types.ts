@@ -356,6 +356,10 @@ export interface DelegatedResult {
  */
 export interface NoteEditOutput {
   actions: ProposedAction[];
+  /** True if self-verification passed (Phase 3 Swarm) */
+  verified?: boolean;
+  /** Number of correction attempts made during verification */
+  verificationAttempts?: number;
 }
 
 /**
