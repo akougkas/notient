@@ -116,7 +116,10 @@ export class OllamaService {
       });
       console.log("[OllamaService] Embed worker initialized (4 concurrent)");
     } catch (error) {
-      console.warn("[OllamaService] Failed to init embed worker, falling back to sequential:", error);
+      console.warn(
+        "[OllamaService] Failed to init embed worker, falling back to sequential:",
+        error,
+      );
       this.bridge = null;
     }
   }
