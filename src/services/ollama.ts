@@ -7,11 +7,16 @@
  *
  * SDK Migration: Now uses ollama.embed() instead of raw fetch.
  * This provides better async handling and error messages.
+ *
+ * Worker Mode: Uses EmbedWorkerBridge for batch embeddings with
+ * 4 concurrent HTTP calls for ~4x speedup during indexing.
  */
 
+import type { App } from "obsidian";
 import { Ollama } from "ollama";
 import { MODEL_DEFAULTS } from "../core/constants";
 import type { Kernel } from "../core/kernel";
+import { EmbedWorkerBridge } from "../core/vector/embedBridge";
 
 export interface EmbeddingResult {
   embedding: number[];
@@ -48,8 +53,16 @@ export class OllamaService {
   private disposed = false;
   /** Cached model capabilities - discovered at initialization */
   private capabilities: ModelCapabilities | null = null;
+  /** Worker bridge for parallel batch embeddings */
+  private bridge: EmbedWorkerBridge | null = null;
+  private app: App;
 
-  constructor(private kernel: Kernel) {}
+  constructor(
+    private kernel: Kernel,
+    app: App,
+  ) {
+    this.app = app;
+  }
 
   /**
    * Initialize the service and discover model capabilities
@@ -79,6 +92,32 @@ export class OllamaService {
       console.log(`[OllamaService] Model key will be: ${this.getModelKey()}`);
     } else {
       console.warn("[OllamaService] No embedding model configured!");
+    }
+
+    // Initialize embed worker for parallel batch embeddings
+    await this.initWorker();
+  }
+
+  /**
+   * Initialize the embed worker bridge for parallel batch embeddings.
+   * Uses Obsidian adapter to read worker code (file:// URLs blocked in Electron).
+   */
+  private async initWorker(): Promise<void> {
+    try {
+      const workerPath = ".obsidian/plugins/notient/embed.worker.js";
+      const workerCode = await this.app.vault.adapter.read(workerPath);
+      this.bridge = new EmbedWorkerBridge(workerCode);
+
+      const settings = this.kernel.settings;
+      await this.bridge.init({
+        host: settings.ollama.host,
+        model: settings.ollama.embeddingModel,
+        keepAliveMs: settings.advanced.keepAliveMs,
+      });
+      console.log("[OllamaService] Embed worker initialized (4 concurrent)");
+    } catch (error) {
+      console.warn("[OllamaService] Failed to init embed worker, falling back to sequential:", error);
+      this.bridge = null;
     }
   }
 
@@ -315,8 +354,9 @@ export class OllamaService {
   }
 
   /**
-   * Generate embeddings for multiple texts in a single Ollama `/api/embed` call.
-   * Uses discovered model capabilities to truncate appropriately.
+   * Generate embeddings for multiple texts.
+   * Uses worker bridge for parallel embedding (4x speedup) when available,
+   * falls back to SDK batch call otherwise.
    */
   async embedBatch(texts: string[]): Promise<BatchEmbeddingResult> {
     if (this.disposed) {
@@ -353,6 +393,15 @@ export class OllamaService {
       return text;
     });
 
+    // Use worker bridge for parallel embedding (4 concurrent HTTP calls)
+    if (this.bridge) {
+      const result = await this.bridge.embed(truncatedTexts);
+      // Convert Float32Array[] to number[][]
+      const embeddings = result.embeddings.map((e) => Array.from(e));
+      return { embeddings, model };
+    }
+
+    // Fallback: use SDK batch call (sequential)
     const embeddings = await this.embedRequest(truncatedTexts, model, {
       timeoutMs: 30000,
       contextTokens,
@@ -490,5 +539,9 @@ export class OllamaService {
   dispose(): void {
     this.disposed = true;
     this.client = null;
+    if (this.bridge) {
+      this.bridge.terminate();
+      this.bridge = null;
+    }
   }
 }

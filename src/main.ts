@@ -374,7 +374,7 @@ export default class NotientPlugin extends Plugin {
 
       // Initialize Ollama (required for embeddings - Scenario P1-P11)
       try {
-        this.ollamaService = new OllamaService(this.kernel);
+        this.ollamaService = new OllamaService(this.kernel, this.app);
         await this.ollamaService.initialize();
         this.kernel.registerService("ollama", this.ollamaService);
       } catch (ollamaError) {
