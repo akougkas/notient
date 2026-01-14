@@ -122,25 +122,31 @@ export class IndexManager {
 
       if (rows.length === 0) break;
 
-      // biome-ignore lint/suspicious/noExplicitAny: wrapper format
       const docs = rows.map((row) => ({
         chunkId: row.chunk_id,
         embedding: Array.from(row.vector),
         noteId: "",
         path: "",
+        title: "",
         text: "",
-        tier: "block",
-        kind: "paragraph",
+        tier: "block" as const,
+        kind: "paragraph" as const,
         headingPath: [],
+        parentChunkId: null,
+        blockRef: null,
+        startLine: 0,
+        endLine: 0,
         mtimeMs: 0,
         contentHash: "",
         tags: [],
         frontmatter: {},
+        tokenEstimate: 0,
+        chunkIndex: 0,
       }));
 
       await this.vectorStore.loadFromDataAsync?.({
         meta: { modelKey: this.modelKey, dimension: this.dimension, createdAt: 0, updatedAt: 0 },
-        docs: docs as any,
+        docs,
       });
 
       offset += rows.length;

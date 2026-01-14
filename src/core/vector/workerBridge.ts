@@ -132,7 +132,7 @@ export class VectorWorkerBridge {
       this.pendingSearches.set(requestId, { resolve, reject });
       this.worker.postMessage(
         { type: "search", embedding, k, requestId },
-        [embedding.buffer] as any, // Zero-copy transfer if aligned
+        [embedding.buffer] as Transferable[], // Zero-copy transfer if aligned
       );
     });
   }

@@ -71,6 +71,21 @@ interface PersistedIndex {
   docs: PersistedDoc[];
 }
 
+/** Database row shape for chunk queries */
+interface ChunkDbRow {
+  id: string;
+  note_path: string;
+  tier: ChunkTier;
+  kind: string; // DB returns string, cast to ChunkKind when building result
+  heading_path: string | null;
+  text: string;
+  start_line: number | null;
+  end_line: number | null;
+  parent_chunk_id: string | null;
+  title?: string | null;
+  path?: string;
+}
+
 // ============================================================================
 // HNSW Vector Store Implementation
 // ============================================================================
@@ -512,9 +527,8 @@ export class HNSWVectorStore implements VectorStore {
   // ──────────────────────────────────────────────────────────────────────────
 
   /** Build search result from row */
-  // biome-ignore lint/suspicious/noExplicitAny: DB row
   private buildSearchResult(
-    row: any,
+    row: ChunkDbRow,
     score: number,
     paraType: ParaType,
     includeContent: boolean,
@@ -526,7 +540,7 @@ export class HNSWVectorStore implements VectorStore {
       title: row.title || "",
       headingPath: row.heading_path ? JSON.parse(row.heading_path) : [],
       tier: row.tier,
-      kind: row.kind,
+      kind: row.kind as ChunkKind,
       parentChunkId: row.parent_chunk_id,
       blockRef: null,
       startLine: row.start_line,
@@ -613,15 +627,14 @@ export class HNSWVectorStore implements VectorStore {
       .selectAll()
       .execute();
 
-    // biome-ignore lint/suspicious/noExplicitAny: casting types
     return rows.map((row) => ({
       chunkId: row.id,
       noteId: row.note_path,
       path: row.note_path,
       title: "", // Missing title in chunks table query, default to empty
       text: row.text,
-      tier: row.tier as any,
-      kind: row.kind as any,
+      tier: row.tier as ChunkTier,
+      kind: row.kind as ChunkKind,
       headingPath: row.heading_path ? JSON.parse(row.heading_path) : [],
       startLine: row.start_line || 0,
       endLine: row.end_line || 0,

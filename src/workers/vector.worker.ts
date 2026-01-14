@@ -57,8 +57,9 @@ self.onmessage = async (e: MessageEvent<VectorCommand>) => {
         await handleLoad(cmd.data);
         break;
     }
-  } catch (err: any) {
-    postResult({ type: "error", message: err.message || String(err) });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    postResult({ type: "error", message });
   }
 };
 
