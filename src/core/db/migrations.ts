@@ -112,13 +112,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_note ON messages(note_path);
 `;
 
 export async function migrateToLatest(db: Kysely<Database>) {
-  // For now, we just run the initial schema.
-  // In the future, we can add version tracking and incremental migrations.
-
   // sql.js prepare() expects single statements, so split and execute individually
-  const statements = INITIAL_SCHEMA.split(";")
+  // First remove SQL comments, then split by semicolon
+  const withoutComments = INITIAL_SCHEMA.replace(/--.*$/gm, "");
+  const statements = withoutComments
+    .split(";")
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    .filter((s) => s.length > 0);
 
   for (const statement of statements) {
     await sql.raw(statement).execute(db);
