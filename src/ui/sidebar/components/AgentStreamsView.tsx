@@ -9,15 +9,20 @@
  */
 
 import type { Signal } from "@preact/signals";
-import type { AgentType } from "../../../core/agents/types";
 import { formatTimeAgo, truncate } from "../utils/formatters";
 import { Icon } from "./Icon";
 
 /**
- * Capability status for the 3 core agents
+ * UI-only capability types for display purposes.
+ * These are NOT AgentType values - they're categories for the capability cards.
+ */
+export type CapabilityType = "search" | "context" | "chat";
+
+/**
+ * Capability status for the 3 core capability cards
  */
 export interface CapabilityStatus {
-  agent: AgentType;
+  agent: CapabilityType;
   health: "healthy" | "degraded" | "offline";
   isActive: boolean;
   lastActivity?: Date;
@@ -200,10 +205,10 @@ export function AgentStreamsView({
 }
 
 /**
- * Capability Cards - Shows status of the 3 core agents
+ * Capability Cards - Shows status of the 3 core capabilities
  * Per PRD: Three capability cards: Semantic Search, Context Builder, Chat Assistant
  */
-const CAPABILITY_CONFIG: Record<AgentType, { icon: string; label: string; description: string }> = {
+const CAPABILITY_CONFIG: Record<CapabilityType, { icon: string; label: string; description: string }> = {
   search: { icon: "search", label: "Search", description: "Semantic search" },
   context: { icon: "package", label: "Context", description: "Context bundler" },
   chat: { icon: "message-square", label: "Chat", description: "Chat assistant" },
@@ -216,9 +221,9 @@ interface CapabilityCardsProps {
 function CapabilityCards({ capabilities }: CapabilityCardsProps) {
   // Default capabilities if not provided
   const defaultCaps: CapabilityStatus[] = [
-    { agent: "search", health: "healthy", isActive: false },
-    { agent: "context", health: "healthy", isActive: false },
-    { agent: "chat", health: "healthy", isActive: false },
+    { agent: "search" as CapabilityType, health: "healthy", isActive: false },
+    { agent: "context" as CapabilityType, health: "healthy", isActive: false },
+    { agent: "chat" as CapabilityType, health: "healthy", isActive: false },
   ];
 
   const caps = capabilities?.value ?? defaultCaps;
