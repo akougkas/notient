@@ -261,8 +261,22 @@ export class WorkerAgent extends BaseAgent {
    * Returns generic structured output with workflow-specific schema.
    */
   protected parseOutput(rawOutput: string, _context: AgentContext): StructuredOutput {
+    // Warn if LLM response is suspiciously short
+    if (rawOutput.length < 100) {
+      this.warn(
+        `LLM returned very short response (${rawOutput.length} chars): "${rawOutput.slice(0, 50)}..."`,
+      );
+    }
+
     const sanitized = this.sanitizeLLMOutput(rawOutput);
     const parsed = this.parseJSON<Record<string, unknown>>(sanitized);
+
+    // Warn if JSON parsing failed
+    if (!parsed) {
+      this.warn(
+        `Failed to parse JSON from LLM response. Returning empty data. Response preview: "${sanitized.slice(0, 200)}"`,
+      );
+    }
 
     return {
       kind: "structured",

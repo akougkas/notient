@@ -242,6 +242,13 @@ ${truncatedContent}
       let cleaned = jsonStr.trim();
       const originalLength = jsonStr.length;
 
+      // Log if input is suspiciously short (likely a problem)
+      if (originalLength < 50) {
+        console.warn(
+          `[${this.config.name}] parseJSON received very short input (${originalLength} chars): "${jsonStr}"`,
+        );
+      }
+
       // Strip thinking model tags (DeepSeek, Falcon H1R, Qwen QwQ)
       // These models wrap reasoning in <think>...</think>
       cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
@@ -262,13 +269,12 @@ ${truncatedContent}
       const jsonMatch = cleaned.match(/[\[{][\s\S]*[\]}]/);
       if (!jsonMatch) {
         console.warn(
-          `[${this.config.name}] No JSON found in output. Preview:`,
+          `[${this.config.name}] No JSON found in output (${cleaned.length} chars after cleaning). Preview:`,
           cleaned.slice(0, 200),
         );
-        console.debug(
-          `[${this.config.name}] Full cleaned input (${cleaned.length} chars):`,
-          cleaned,
-        );
+        if (cleaned.length < 500) {
+          console.warn(`[${this.config.name}] Full cleaned output:`, cleaned);
+        }
         return null;
       }
 
@@ -285,19 +291,19 @@ ${truncatedContent}
             const result = JSON.parse(balanced) as T;
             return result;
           } catch (balancedError) {
-            console.debug(
+            console.warn(
               `[${this.config.name}] Balanced JSON parse failed. Extracted (${balanced.length} chars):`,
               balanced.slice(0, 500),
             );
             throw new Error("JSON extraction failed - balanced parse error");
           }
         }
-        console.debug(
-          `[${this.config.name}] JSON extraction failed. Original length: ${originalLength}, cleaned: ${cleaned.length}`,
+        console.warn(
+          `[${this.config.name}] JSON extraction failed. Original: ${originalLength} chars, cleaned: ${cleaned.length} chars, extracted: ${extracted.length} chars`,
         );
-        console.debug(
-          `[${this.config.name}] Extracted segment (${extracted.length} chars):`,
-          extracted.slice(0, 500),
+        console.warn(
+          `[${this.config.name}] Extracted segment preview (first 300 chars):`,
+          extracted.slice(0, 300),
         );
         throw new Error("JSON extraction failed");
       }
