@@ -100,7 +100,7 @@ export interface ChatSessionState {
 // Enhanced Chat System Types (ChatService)
 // ============================================================================
 
-import type { AgentType } from "../agents/types";
+import type { AgentEvent, AgentType } from "../agents/types";
 
 /**
  * Events emitted during chat streaming from ChatService
@@ -114,7 +114,11 @@ export type ChatStreamEvent =
   | { type: "delegation-started"; agent: AgentType }
   | { type: "delegation-complete"; agent: AgentType; durationMs: number }
   | { type: "complete"; content: string; thinking: string | null; statistics: ChatStatistics }
-  | { type: "error"; error: Error };
+  | { type: "error"; error: Error }
+  // Orchestrator delegation events (Phase 5 hybrid mode)
+  | { type: "delegation:start"; delegation: DelegationDetection }
+  | { type: "delegation:event"; event: AgentEvent }
+  | { type: "delegation:complete" };
 
 /**
  * Activity phases for the activity trail
@@ -162,6 +166,8 @@ export interface DelegationDetection {
   instruction?: string;
   /** Confidence level (0-1) */
   confidence: number;
+  /** Detected workflow type (for Worker agent) */
+  workflow?: string;
 }
 
 /**

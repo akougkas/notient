@@ -1,21 +1,25 @@
 /**
- * Chat Service
+ * Chat Service - Hybrid Mode (Phase 5)
  *
- * Lightweight chat orchestrator that bypasses ChiefOfStaff for pure conversation.
- * Provides direct LLM access with streaming, thinking token support, and optional
- * delegation to specialist agents when needed.
+ * Hybrid chat orchestrator that handles both pure conversation AND agent delegation.
  *
  * Key features:
- * - Direct LLM calls for fast chat (no routing overhead)
+ * - Direct LLM calls for fast chat (pure conversation)
+ * - Delegation to Orchestrator for agent tasks (/classify, /enhance, etc.)
  * - Thinking token extraction (<think> tags, reasoning_content)
  * - Activity trail events for UI breadcrumbs
  * - Statistics collection (tokens/sec, response time, etc.)
- * - Delegation detection for specialist agent handoff
  * - Reasoning summary extraction for storage
+ *
+ * Hybrid Mode Flow:
+ * 1. Detect if message requires agent delegation
+ * 2a. If delegation: route to Orchestrator, stream agent events
+ * 2b. If conversation: use direct LLM for fast response
  */
 
 import type { UserProfile } from "../../types/profile";
 import { buildBaseIdentity } from "../agent/identity";
+import type { ChiefOfStaff } from "../agents/chiefOfStaff";
 import type { AgentType } from "../agents/types";
 import { CHAT_LIMITS } from "../constants";
 import type { LLMProvider } from "../llm/provider";
@@ -39,11 +43,15 @@ interface ThinkingState {
 }
 
 /**
- * ChatService - Lightweight chat orchestrator
+ * ChatService - Hybrid Mode Orchestrator (Phase 5)
+ *
+ * Can either handle pure conversation directly OR delegate to the
+ * Orchestrator (ChiefOfStaff) for agent tasks.
  */
 export class ChatService {
   private config: ChatServiceConfig;
   private profile?: UserProfile;
+  private orchestrator: ChiefOfStaff | null = null;
 
   constructor(
     private llm: LLMProvider,
@@ -52,6 +60,14 @@ export class ChatService {
   ) {
     this.profile = profile;
     this.config = { ...DEFAULT_CHAT_CONFIG, ...config };
+  }
+
+  /**
+   * Inject Orchestrator for agent delegation (Phase 5 hybrid mode)
+   * Called from main.ts after both services are initialized.
+   */
+  setOrchestrator(orchestrator: ChiefOfStaff): void {
+    this.orchestrator = orchestrator;
   }
 
   /**
@@ -145,7 +161,11 @@ export class ChatService {
   }
 
   /**
-   * Chat with streaming response
+   * Chat with streaming response - Hybrid Mode (Phase 5)
+   *
+   * Routes messages to either:
+   * - Orchestrator for agent tasks (commands, workflows)
+   * - Direct LLM for pure conversation
    *
    * @param message - User's message
    * @param noteContext - Current note context
@@ -158,19 +178,90 @@ export class ChatService {
     history: ChatMessage[] = [],
     signal?: AbortSignal,
   ): AsyncIterable<ChatStreamEvent> {
-    const startTime = Date.now();
-
     yield { type: "started" };
 
-    // Check for delegation first
+    // Phase 5 Hybrid Mode: Check for delegation first
     const delegation = this.detectDelegation(message);
-    if (delegation.shouldDelegate && delegation.confidence > 0.7) {
-      yield {
-        type: "activity",
-        message: `Detected ${delegation.targetAgent} intent - will delegate...`,
-        phase: "delegation",
-      };
+
+    if (delegation.shouldDelegate && delegation.confidence > 0.7 && this.orchestrator) {
+      // Delegate to Orchestrator for agent tasks
+      yield* this.handleDelegatedRequest(message, noteContext, history, delegation, signal);
+      return;
     }
+
+    // Pure conversation - use direct LLM for fast response
+    yield* this.handleDirectConversation(message, noteContext, history, signal);
+  }
+
+  /**
+   * Handle delegated request via Orchestrator (Phase 5)
+   * Routes to the 4-Agent Swarm for agent tasks.
+   */
+  private async *handleDelegatedRequest(
+    message: string,
+    noteContext: ChatNoteContext | null,
+    history: ChatMessage[],
+    delegation: DelegationDetection,
+    signal?: AbortSignal,
+  ): AsyncIterable<ChatStreamEvent> {
+    if (!this.orchestrator) {
+      // Fallback to direct conversation if no orchestrator
+      yield* this.handleDirectConversation(message, noteContext, history, signal);
+      return;
+    }
+
+    // Emit delegation start event for UI
+    yield { type: "delegation:start", delegation };
+    yield {
+      type: "activity",
+      message: `Delegating to ${delegation.targetAgent || "agent"}...`,
+      phase: "delegation",
+    };
+
+    // Build Orchestrator request
+    const request = {
+      source: "chat" as const,
+      intent: message,
+      noteContext: noteContext
+        ? {
+            title: noteContext.title,
+            path: noteContext.path,
+            content: noteContext.content,
+            frontmatter: noteContext.frontmatter,
+            wordCount: noteContext.wordCount,
+          }
+        : undefined,
+      chatHistory: history,
+    };
+
+    try {
+      // Stream Orchestrator events back to chat
+      for await (const event of this.orchestrator.handleRequest(request, signal)) {
+        yield { type: "delegation:event", event };
+      }
+
+      yield { type: "delegation:complete" };
+      yield { type: "activity", message: "Complete", phase: "complete" };
+    } catch (error) {
+      if ((error as Error).name === "AbortError") {
+        yield { type: "error", error: new DOMException("Delegation aborted", "AbortError") };
+        return;
+      }
+      yield { type: "error", error: error as Error };
+    }
+  }
+
+  /**
+   * Handle direct conversation with LLM (existing chat logic)
+   * Used for pure conversation that doesn't require agent delegation.
+   */
+  private async *handleDirectConversation(
+    message: string,
+    noteContext: ChatNoteContext | null,
+    history: ChatMessage[],
+    signal?: AbortSignal,
+  ): AsyncIterable<ChatStreamEvent> {
+    const startTime = Date.now();
 
     // Build context
     yield { type: "activity", message: "Building context...", phase: "context" };
@@ -229,73 +320,161 @@ export class ChatService {
   }
 
   /**
-   * Detect if message should be delegated to a specialist agent
+   * Detect if message should be delegated to the Orchestrator (Phase 5)
+   *
+   * Detection happens via:
+   * 1. Explicit slash commands (/classify, /enhance, /connect, etc.)
+   * 2. Natural language intent matching ("classify this note", "find related", etc.)
+   * 3. Action requests ("move this to", "create a note about", etc.)
+   *
+   * The Orchestrator then routes to the appropriate agent in the 4-Agent Swarm.
    */
   detectDelegation(message: string): DelegationDetection {
-    const lowerMessage = message.toLowerCase();
+    const lowerMessage = message.toLowerCase().trim();
+
+    // === Pattern 1: Explicit slash commands (highest confidence) ===
+    const commandMatch = lowerMessage.match(
+      /^\/(classify|enhance|connect|atomize|synthesize|challenge|extract-tasks|edit|improve|link|para|organize)/i,
+    );
+    if (commandMatch) {
+      const command = commandMatch[1].toLowerCase();
+
+      // Map commands to target agents in 4-Agent Swarm
+      if (["edit", "improve", "enhance"].includes(command)) {
+        return {
+          shouldDelegate: true,
+          targetAgent: "note-editor" as AgentType,
+          instruction: message,
+          confidence: 1.0,
+        };
+      }
+
+      // Workflow commands → Worker agent
+      return {
+        shouldDelegate: true,
+        targetAgent: "worker" as AgentType,
+        workflow: command,
+        instruction: message,
+        confidence: 1.0,
+      };
+    }
+
+    // === Pattern 2: Natural language intent detection ===
+    const intents: Array<{
+      pattern: RegExp;
+      targetAgent: AgentType;
+      workflow?: string;
+      confidence: number;
+    }> = [
+      // Edit intents → NoteEditor
+      {
+        pattern: /\b(edit|change|update|modify|fix|rewrite|restructure)\s*(this|the)?\s*note\b/i,
+        targetAgent: "note-editor",
+        confidence: 0.85,
+      },
+      {
+        pattern: /\b(add|append|insert)\s*(a|to|section|paragraph)/i,
+        targetAgent: "note-editor",
+        confidence: 0.8,
+      },
+      {
+        pattern: /\b(improve|enhance)\s*(this|the)?\s*(note|content|writing)/i,
+        targetAgent: "note-editor",
+        confidence: 0.85,
+      },
+
+      // Classification intents → Worker (classify workflow)
+      {
+        pattern: /\b(classify|categorize|organize)\s*(this|the)?\s*note\b/i,
+        targetAgent: "worker",
+        workflow: "classify",
+        confidence: 0.9,
+      },
+      {
+        pattern: /\bpara\b|\bwhat folder\b|\bwhere.*belong/i,
+        targetAgent: "worker",
+        workflow: "classify",
+        confidence: 0.85,
+      },
+
+      // Connection intents → Worker (connect workflow)
+      {
+        pattern: /\b(find|show|suggest)\s*(related|similar|connected)\s*notes?\b/i,
+        targetAgent: "worker",
+        workflow: "connect",
+        confidence: 0.85,
+      },
+      {
+        pattern: /\bconnections?\b|\bbacklinks?\b|\blink.*to\b/i,
+        targetAgent: "worker",
+        workflow: "connect",
+        confidence: 0.8,
+      },
+
+      // Search intents → ContextBuilder
+      {
+        pattern: /\b(search|find|look for)\s*(in|across|through)?\s*(the)?\s*vault\b/i,
+        targetAgent: "context-builder",
+        confidence: 0.75,
+      },
+
+      // Atomize intents → Worker (atomize workflow)
+      {
+        pattern: /\b(break|split|atomize|decompose)\s*(down|into|this)\b/i,
+        targetAgent: "worker",
+        workflow: "atomize",
+        confidence: 0.85,
+      },
+    ];
+
+    for (const intent of intents) {
+      if (intent.pattern.test(lowerMessage)) {
+        return {
+          shouldDelegate: true,
+          targetAgent: intent.targetAgent,
+          workflow: intent.workflow,
+          instruction: message,
+          confidence: intent.confidence,
+        };
+      }
+    }
+
+    // === Pattern 3: Keyword-based fallback (legacy support) ===
     const keywords = this.config.delegationKeywords;
 
-    // Check edit keywords
     const editScore = this.calculateKeywordScore(lowerMessage, keywords.edit);
     if (editScore > 0.5) {
       return {
         shouldDelegate: true,
         targetAgent: "note-editor" as AgentType,
         instruction: message,
-        confidence: editScore,
+        confidence: editScore * 0.8, // Lower confidence for keyword-only
       };
     }
 
-    // Check classify keywords
     const classifyScore = this.calculateKeywordScore(lowerMessage, keywords.classify);
     if (classifyScore > 0.5) {
       return {
         shouldDelegate: true,
-        targetAgent: "classifier" as AgentType,
+        targetAgent: "worker" as AgentType,
+        workflow: "classify",
         instruction: message,
-        confidence: classifyScore,
+        confidence: classifyScore * 0.8,
       };
     }
 
-    // Check link keywords
     const linkScore = this.calculateKeywordScore(lowerMessage, keywords.link);
     if (linkScore > 0.5) {
       return {
         shouldDelegate: true,
-        targetAgent: "link-finder" as AgentType,
+        targetAgent: "worker" as AgentType,
+        workflow: "connect",
         instruction: message,
-        confidence: linkScore,
+        confidence: linkScore * 0.8,
       };
     }
 
-    // Check for explicit slash commands
-    if (lowerMessage.startsWith("/edit") || lowerMessage.startsWith("/improve")) {
-      return {
-        shouldDelegate: true,
-        targetAgent: "note-editor" as AgentType,
-        instruction: message,
-        confidence: 1.0,
-      };
-    }
-
-    if (lowerMessage.startsWith("/classify") || lowerMessage.startsWith("/para")) {
-      return {
-        shouldDelegate: true,
-        targetAgent: "classifier" as AgentType,
-        instruction: message,
-        confidence: 1.0,
-      };
-    }
-
-    if (lowerMessage.startsWith("/link") || lowerMessage.startsWith("/connect")) {
-      return {
-        shouldDelegate: true,
-        targetAgent: "link-finder" as AgentType,
-        instruction: message,
-        confidence: 1.0,
-      };
-    }
-
+    // No delegation needed - pure conversation
     return {
       shouldDelegate: false,
       confidence: 0,
