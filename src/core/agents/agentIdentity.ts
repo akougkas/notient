@@ -79,11 +79,95 @@ export interface AgentDelegationSpec {
 /**
  * Agent specializations for each agent type
  *
- * IMPORTANT: Chat is a UI agent, not an expert agent. It handles conversation
- * and recognizes when to route to expert agents. All other agents are experts
- * that produce structured output and are routable via ChiefOfStaff.
+ * 4-Agent Swarm Architecture:
+ * - Orchestrator: Brain, makes plans, delegates (NEW)
+ * - NoteEditor: Obsidian I/O specialist
+ * - ContextBuilder: Vault awareness specialist
+ * - Worker: Workflow executor (NEW)
+ *
+ * Legacy agents (chat, classifier, connection) are maintained for backward
+ * compatibility and will be absorbed by Worker in Phase 2.
  */
 export const AGENT_SPECIALIZATIONS: Record<AgentType, AgentSpecialization> = {
+  // ===========================================================================
+  // Core 4-Agent Swarm
+  // ===========================================================================
+
+  /**
+   * Orchestrator - The Brain of the 4-Agent Swarm
+   *
+   * The Orchestrator reasons about WHAT needs to be done and delegates
+   * HOW to specialized agents. It never executes workflows directly.
+   */
+  orchestrator: {
+    role: "Strategic Brain",
+    mission: `You are the Orchestrator, the reasoning brain of Notient's 4-Agent Swarm.
+Your role is to:
+- Receive requests from three triggers (UI, Chat, Editor)
+- Reason about WHAT needs to be done
+- Delegate execution to specialized agents
+- Aggregate results and return to the user
+
+You do NOT execute workflows directly. You plan and delegate.`,
+    expertise: [
+      "Action planning",
+      "Intent recognition",
+      "Task decomposition",
+      "Agent coordination",
+      "Request routing",
+    ],
+    outputFormat: {
+      type: "structured-json",
+      instructions: `Output a structured action plan.
+
+Your response must follow this format:`,
+      schema: `{
+  "action": "delegate" | "respond" | "clarify",
+  "targetAgent": "note-editor" | "context-builder" | "worker",
+  "task": "Task description for the target agent",
+  "reasoning": "Why this plan makes sense"
+}
+
+Planning Rules:
+- "delegate": Route to a specialized agent (requires targetAgent and task)
+- "respond": Direct response (no agent needed)
+- "clarify": Ask user for more information`,
+    },
+  },
+
+  /**
+   * Worker Agent - Unified Workflow Executor (Phase 2)
+   *
+   * The Worker executes all workflows using prompts from intelligence/prompts/.
+   * It absorbs ClassifierAgent, ConnectionAgent, and WorkflowAgents.
+   */
+  worker: {
+    role: "Workflow Executor",
+    mission: `You are the Worker, the unified workflow executor for Notient.
+Your role is to:
+- Execute workflow prompts (classify, enhance, connect, atomize, etc.)
+- Use ContextBuilder for vault awareness when needed
+- Produce structured output for the requested workflow
+
+You execute the HOW. The Orchestrator decides WHAT.`,
+    expertise: [
+      "PARA classification",
+      "Note enhancement",
+      "Connection discovery",
+      "Content atomization",
+      "Task extraction",
+      "Synthesis generation",
+    ],
+    outputFormat: {
+      type: "structured-json",
+      instructions: `Output varies by workflow. Follow the specific workflow prompt format.`,
+    },
+  },
+
+  // ===========================================================================
+  // Legacy Agents (backward compatibility, to be absorbed in Phase 2)
+  // ===========================================================================
+
   /**
    * Chat Agent - UI Layer (not routable expert)
    *
