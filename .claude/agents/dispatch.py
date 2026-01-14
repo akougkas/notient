@@ -40,12 +40,60 @@ VALID_MODELS = (
 )
 DEFAULT_MODEL = "claude-opus-4-5-20251101"
 
+# Worktree paths (agents run in separate git worktrees)
+WORKTREE_BASE = Path.home() / "projects/_worktrees"
+
 
 def get_paths(agent: str) -> tuple[Path, Path]:
+    """Get queue and response paths in main workspace."""
     repo = Path(__file__).parent.parent.parent
     queue = repo / f".claude/orchestration/{agent}/queue"
     responses = repo / f".claude/orchestration/{agent}/responses"
     return queue, responses
+
+
+def get_worktree_path(agent: str) -> Path:
+    """Get the worktree path for an agent."""
+    return WORKTREE_BASE / f"notient-{agent}"
+
+
+def sync_task_to_worktree(agent: str) -> bool:
+    """Sync TASK.md from main workspace to agent's worktree.
+
+    This ensures agents can read their task file when running in their worktree.
+    Uses symlink if possible, falls back to copy.
+    """
+    repo = Path(__file__).parent.parent.parent
+    source = repo / f".claude/orchestration/{agent}/TASK.md"
+    worktree = get_worktree_path(agent)
+    target_dir = worktree / f".claude/orchestration/{agent}"
+    target = target_dir / "TASK.md"
+
+    if not source.exists():
+        return False
+
+    if not worktree.exists():
+        print(f"  Warning: Worktree not found: {worktree}")
+        return False
+
+    # Ensure target directory exists
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing target (file or symlink)
+    if target.exists() or target.is_symlink():
+        target.unlink()
+
+    # Try symlink first (more efficient), fall back to copy
+    try:
+        target.symlink_to(source)
+        print(f"  Synced: TASK.md -> {agent} worktree (symlink)")
+    except OSError:
+        # Symlink failed (e.g., cross-device), fall back to copy
+        import shutil
+        shutil.copy2(source, target)
+        print(f"  Synced: TASK.md -> {agent} worktree (copy)")
+
+    return True
 
 
 def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: str = "") -> str:
@@ -67,6 +115,10 @@ def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: 
     print(f"Dispatched: {task_id} -> {agent}")
     print(f"  Model: {model}")
     print(f"  Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
+
+    # Sync TASK.md to worktree so agent can read it
+    sync_task_to_worktree(agent)
+
     return task_id
 
 

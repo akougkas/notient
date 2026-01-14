@@ -181,17 +181,33 @@ rm .claude/orchestration/<agent>/responses/*.response
 ```
 .claude/orchestration/
 ├── archie/
+│   ├── TASK.md         # Current task assignment (auto-synced to worktree)
 │   ├── queue/          # Pending tasks (picked up by processor)
 │   └── responses/      # Completed responses (review and clear)
 ├── sage/
+│   ├── TASK.md
 │   ├── queue/
 │   └── responses/
 ├── faye/
+│   ├── TASK.md
 │   ├── queue/
 │   └── responses/
 ├── logs/               # Hook logs
-└── orchestrator/       # This config
+└── orchestrator/       # This config (CLAUDE.md)
 ```
+
+## TASK.md Files
+
+Each agent has a `TASK.md` file with detailed instructions:
+- Written by orchestrator before dispatching
+- Auto-synced to worktree by `dispatch.py` (symlink or copy)
+- Agents read from their worktree's copy
+- Format: YAML-like with `## do`, `## context`, `## verify`, `## git` sections
+
+**Workflow:**
+1. Write TASK.md in `.claude/orchestration/<agent>/TASK.md`
+2. Run `dispatch.py` — it syncs TASK.md to worktree automatically
+3. Agent reads TASK.md from their worktree and executes
 
 ## Model Selection
 

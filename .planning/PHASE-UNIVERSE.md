@@ -376,12 +376,14 @@ Safer approach - same result (use metadataCache) without breaking changes.
 ### D8: Editor Decorations (Priority: MEDIUM) ⏸️ DEFERRED
 
 **Status**: DEFERRED (Infrastructure first, per interview 2026-01-13)
+**Updated**: 2026-01-14 (Tab trigger confirmed)
 
 **Interview Decisions:**
-- **Trigger**: Ghost text on **explicit request** (hotkey like Tab), NOT automatic
+- **Trigger**: Ghost text on **Tab key press** (explicit, Copilot-style)
 - **UI Framework**: **Strict separation** — CM6 for editor, Preact for sidebar
 - **First decoration type**: AI suggestion ghost text (Copilot-style)
 - **Data source**: Signal cache → Decoration (reactive)
+- **Flow**: Tab → Orchestrator → Worker (completion workflow) → Ghost text widget
 
 **Reference**: `docs/obsidian/OBSIDIAN-EDITOR.md`
 
@@ -599,6 +601,43 @@ DEFERRED (Post-Infrastructure):
 | Complexity concern | Proceed incrementally | Phase 1: Orchestrator. Phase 2: Worker. Phase 3+: Delete old agents |
 | Workflows preserved | Yes, as reusable prompts | No functionality loss, just different executor |
 | Three triggers | UI, ChatService, Editor Decorations | All flow through Orchestrator |
+
+### Post-Universe Planning (2026-01-14)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| D8 Ghost Text Trigger | **Tab key** | Explicit request, Copilot-style UX |
+| Phase 1 Scope | **ALL**: InsightStream + Quick Actions + Chat | Full feature set after foundation |
+
+---
+
+## Phase 1: Feature Polish (Post-Universe)
+
+> **Prerequisite**: Phase Universe COMPLETE (D1-D11 done, Swarm operational)
+
+### P1.1: InsightStream
+Wire agent results to InsightStream in Note Vitals:
+- Agent completes → insight appears in stream
+- Proactive suggestions from ContextBuilder
+- "Vault is talking back" experience
+
+### P1.2: Quick Actions Model
+Finalize 3 pinned + 3 contextual:
+- **Pinned**: Enhance, Classify, Connect (always visible)
+- **Contextual**: Based on note type, tags, recent activity
+- Actions trigger Orchestrator → Worker
+
+### P1.3: Chat Improvements
+- Contextual suggestion chips (based on active note)
+- Chat can trigger Orchestrator for agent tasks
+- Agent results stream inline in chat
+- Thinking blocks with expand/collapse
+
+### P1.4: Search Enhancement
+- Confidence badges on results
+- AI justification for rankings
+- "Why this result?" expandable
+
+**Estimated effort**: ~40 hours total
 
 ---
 
