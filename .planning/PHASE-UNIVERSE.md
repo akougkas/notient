@@ -11,9 +11,9 @@
 |-------------|--------|-------|-------|
 | D1: SQLite Data Layer | ✅ COMPLETE | Gemini | Schema + migrations ready |
 | D2: HNSW Worker | ✅ COMPLETE | Gemini | vector.worker.ts operational |
-| D3: Event Wiring | 🔄 IN PROGRESS | — | Reranker + action:proposed |
-| D4: Swarm Architecture | 🔄 REDESIGNED | — | 4-agent swarm (see SWARM-ARCHITECTURE.md) |
-| D5: Cleanup + embed.worker | 📋 READY | — | Parallel embeddings + delete absorbed agents |
+| D3: Event Wiring | ✅ COMPLETE | — | Reranker + action:proposed |
+| D4: Swarm Architecture | 🔄 IN PROGRESS | — | Phase 1-2 done, Phase 3-5 dispatching |
+| D5: Cleanup + embed.worker | ⏳ AFTER D4 | — | Parallel embeddings + delete absorbed agents |
 | D6: Frontmatter Bridge | ✅ COMPLETE | Archie | syncToFrontmatter() + command |
 | D7: Vitals MetadataCache | ✅ COMPLETE | Faye | resolvedLinks direct usage |
 | D8: Editor Decorations | ⏸️ DEFERRED | — | After infrastructure complete |
@@ -273,13 +273,13 @@ const score = match ? parseInt(match[1]) : 0;
 - `src/core/agents/workflowAgents.ts` → Absorbed into Worker
 
 **Implementation Phases:**
-1. Phase 1: Refactor Orchestrator (brain only)
-2. Phase 2: Create Worker Agent (unified workflows)
-3. Phase 3: Enhance NoteEditor (self-verification)
-4. Phase 4: Enhance ContextBuilder (behavior tracking)
-5. Phase 5: ChatService integration (hybrid mode)
+1. ✅ Phase 1: Refactor Orchestrator (brain only) — `470a1bf`
+2. ✅ Phase 2: Create Worker Agent (unified workflows) — `c2c111a`
+3. 🔄 Phase 3: Enhance NoteEditor (self-verification) — Archie dispatching
+4. 🔄 Phase 4: Enhance ContextBuilder (behavior tracking) — Sage dispatching
+5. 🔄 Phase 5: ChatService integration (hybrid mode) — Faye dispatching
 
-**Estimated effort**: 12 hours (increased due to scope expansion)
+**Status**: Phase 1-2 complete, Phase 3-5 running in parallel
 
 ---
 

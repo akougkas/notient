@@ -68,54 +68,59 @@ bun run format           # Format code
 ### Branch Hierarchy
 
 ```
-main                         ← Tagged releases only (production-ready)
-  └── beta-spec              ← Active development (CEO workspace)
-        └── sage/simplify    ← Quality gate (review + simplify before promoting)
-              ├── archie/backend  ← Heavy backend work
-              └── faye/frontend   ← Heavy frontend work
+main                              ← Tagged releases only (production-ready)
+  └── beta-spec                   ← Active development (Orchestrator workspace)
+        ├── archie/swarm-phase-N  ← Backend phase work
+        ├── sage/swarm-phase-N    ← Review/simplify phase work
+        └── faye/swarm-phase-N    ← Frontend phase work
 ```
 
 ### Worktree Layout
 
-| Path | Branch | Owner |
-|------|--------|-------|
-| `~/projects/notient/` | `beta-spec` | CEO (main workspace) |
-| `~/projects/_worktrees/notient-sage/` | `sage/simplify` | Sage |
-| `~/projects/_worktrees/notient-archie/` | `archie/backend` | Archie |
-| `~/projects/_worktrees/notient-faye/` | `faye/frontend` | Faye |
+| Path | Branch Pattern | Owner |
+|------|----------------|-------|
+| `~/projects/notient/` | `beta-spec` | Orchestrator (main workspace) |
+| `~/projects/_worktrees/notient-archie/` | `archie/{task}` | Archie |
+| `~/projects/_worktrees/notient-sage/` | `sage/{task}` | Sage |
+| `~/projects/_worktrees/notient-faye/` | `faye/{task}` | Faye |
 
-### Workflow
+### Phase-Based Workflow
 
-1. **Archie/Faye** do heavy work in their worktrees
-2. **Sage** merges their work, reviews, simplifies
-3. **CEO** merges `sage/simplify` → `beta-spec` when clean
-4. **Milestone complete?** `beta-spec` → `main` + tag
+**Branch Naming:** `{agent}/swarm-phase-{N}` or `{agent}/{task-description}`
+
+**Lifecycle:**
+1. **Orchestrator** prepares worktree via `git-prepare.sh`
+2. **Agent** works on assigned branch, commits incrementally
+3. **Agent** completes, writes REPORT.md with commit hash
+4. **Orchestrator** merges to `beta-spec` via `git merge --no-ff`
+5. **Old branch** kept as safety net until validation passes
 
 ### Quick Commands
 
 ```bash
-# Launch agent in worktree
-cd ~/projects/_worktrees/notient-archie && claude
+# Prepare agent worktree for new task
+.claude/agents/git-prepare.sh archie archie/swarm-phase-3
 
-# Merge agent work through Sage
-cd ~/projects/_worktrees/notient-sage
-git merge archie/backend  # or faye/frontend
+# Prepare all agents
+.claude/agents/git-prepare-all.sh
 
-# Promote to beta-spec
-cd ~/projects/notient
-git merge sage/simplify
+# Dispatch task to agent
+uv run .claude/agents/dispatch.py archie "Execute Phase 3 per TASK.md"
 
-# Reset rogue agent
-cd ~/projects/_worktrees/notient-archie
-git reset --hard sage/simplify
+# Merge agent work to beta-spec
+git merge archie/swarm-phase-3 --no-ff -m "Merge archie: Phase 3 NoteEditor"
+
+# Check agent responses
+uv run .claude/agents/dispatch.py --responses archie
 ```
 
 ### Rules
 
 - **Never push agent branches** — All work is local
-- **Sage is the gatekeeper** — Only reviewed code reaches beta-spec
-- **Worktrees are disposable** — Reset freely if agent goes rogue
+- **Orchestrator owns merges** — Agents only commit, never merge
+- **Worktrees are disposable** — Reset freely via `git-prepare.sh`
 - **Main stays clean** — Only tagged releases
+- **Phase branches persist** — Delete only after validation
 
 ---
 
@@ -131,15 +136,15 @@ src/core/
 │   ├── provider.ts        # LLMProvider interface
 │   └── providers/         # LMStudio, Ollama implementations
 ├── agents/                # 4-Agent Swarm Architecture
-│   ├── chiefOfStaff.ts    # → Refactoring to Orchestrator (brain)
+│   ├── chiefOfStaff.ts    # Orchestrator (brain) - Phase 1 complete
 │   ├── base.ts            # BaseAgent abstract class
 │   ├── agentIdentity.ts   # Tier 2 specializations
-│   ├── noteEditorAgent.ts # Obsidian I/O specialist
-│   ├── contextBuilderAgent.ts # Vault awareness specialist
-│   ├── workerAgent.ts     # Unified workflow executor (NEW)
-│   ├── classifierAgent.ts # → TO DELETE (absorbed by Worker)
-│   ├── connectionAgent.ts # → TO DELETE (absorbed by Worker)
-│   └── workflowAgents.ts  # → TO DELETE (absorbed by Worker)
+│   ├── noteEditorAgent.ts # Obsidian I/O specialist - Phase 3 in progress
+│   ├── contextBuilderAgent.ts # Vault awareness - Phase 4 in progress
+│   ├── workerAgent.ts     # Unified workflow executor - Phase 2 complete
+│   ├── classifierAgent.ts # → DELETE after D4 (absorbed by Worker)
+│   ├── connectionAgent.ts # → DELETE after D4 (absorbed by Worker)
+│   └── workflowAgents.ts  # → DELETE after D4 (absorbed by Worker)
 ├── agent/                 # Tier 1 identity
 │   └── identity.ts        # Core Notient persona
 ├── intelligence/          # Workflow prompts (used by Worker)
@@ -345,8 +350,8 @@ If truly needed, follow the same pattern as existing agents.
 |------|---------|
 | `src/main.ts` | Plugin entry point |
 | `src/core/kernel.ts` | Service registry |
-| `src/core/agents/chiefOfStaff.ts` | Orchestrator (brain) — being refactored |
-| `src/core/agents/workerAgent.ts` | Worker (workflow executor) — NEW |
+| `src/core/agents/chiefOfStaff.ts` | Orchestrator (brain) — Phase 1 complete |
+| `src/core/agents/workerAgent.ts` | Worker (workflow executor) — Phase 2 complete |
 | `src/core/agents/agentIdentity.ts` | Tier 2 agent prompts |
 | `src/core/agent/identity.ts` | Tier 1 core identity |
 | `src/core/llm/provider.ts` | LLM interface |

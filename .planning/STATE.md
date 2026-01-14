@@ -3,34 +3,45 @@
 ## Current Position
 
 **Phase**: Universe — Foundation Refactor + Swarm Architecture
-**Status**: ACTIVE (Swarm Phase 1-2 Complete, Testing)
+**Status**: ACTIVE — Swarm Phase 3-5 Ready to Dispatch
 **Plan**: `PHASE-UNIVERSE.md`
 **Architecture**: `SWARM-ARCHITECTURE.md`
-**Updated**: 2026-01-14
+**Updated**: 2026-01-14 (Session 2)
 
-## Session Summary (2026-01-14)
+## Current Session (2026-01-14 - Session 2)
 
-### Completed This Session
+### Session Goal
+Complete Swarm Architecture Phases 3-5 in parallel:
+- **Archie**: Phase 3 — NoteEditor self-verification
+- **Sage**: Phase 4 — ContextBuilder behavior tracking
+- **Faye**: Phase 5 — ChatService hybrid mode
 
-**Swarm Architecture:**
+### Infrastructure Updates This Session
+- ✅ Created `git-prepare.sh` and `git-prepare-all.sh` scripts
+- ✅ Updated agent CLAUDE.md files with standardized git workflow
+- ✅ Reset all worktrees to `beta-spec` with new phase branches:
+  - `archie/swarm-phase-3`
+  - `sage/swarm-phase-4`
+  - `faye/swarm-phase-5`
+- ✅ Updated TASK.md files with correct branch references
+
+### Previous Session Completed (2026-01-14 - Session 1)
+
+**Swarm Architecture Phase 1-2:**
 - ✅ **Phase 1**: Sage refactored ChiefOfStaff → pure Orchestrator (`470a1bf`)
 - ✅ **Phase 2**: Archie created WorkerAgent unified workflow executor (`c2c111a`)
 - ✅ Resolved merge conflicts (duplicate worker configs) (`3836f68`)
 - ✅ **UI Fixes**: Faye fixed 16 TypeScript errors in sidebar (`f5ea01b`)
-- ✅ Lint auto-fixes applied (`522374b`)
-- ✅ Build passing, deployed to test vault
+- ✅ SQLite migration complexity removed (`19e0ff1`)
+- ✅ sql-wasm.wasm loading fixed (`e5c97b2`)
 
-**Key Changes:**
-- `chiefOfStaff.ts`: New `handleRequest()` → `planAction()` → `delegate()` flow
-- `workerAgent.ts` (NEW): Unified workflow executor for all workflows
-- `types.ts`: Added orchestrator, worker to AgentType + AGENT_CONFIGS
-- `agentIdentity.ts`: Orchestrator and Worker specializations
-- UI: Fixed `useAppEvents.ts`, `AgentStreamsView.tsx`, `App.tsx`
+### Agent Dispatch Status
 
-### Ready to Test
-- 🧪 Reload Obsidian and verify sidebar loads
-- 🧪 Test Quick Actions trigger Orchestrator → Worker flow
-- 🧪 Verify Agent Streams displays correctly
+| Agent | Branch | Phase | Task | Status |
+|-------|--------|-------|------|--------|
+| Archie | `archie/swarm-phase-3` | 3 | NoteEditor self-verification | 📋 Ready |
+| Sage | `sage/swarm-phase-4` | 4 | ContextBuilder behavior tracking | 📋 Ready |
+| Faye | `faye/swarm-phase-5` | 5 | ChatService hybrid mode | 📋 Ready |
 
 ## Swarm Architecture Progress
 
@@ -38,10 +49,10 @@
 |-------|-------------|--------|--------|
 | Phase 1 | ChiefOfStaff → pure Orchestrator | ✅ Complete | `470a1bf` |
 | Phase 2 | Create WorkerAgent | ✅ Complete | `c2c111a` |
-| Phase 3 | Enhance NoteEditor (self-verification) | 📋 Not started | — |
-| Phase 4 | Enhance ContextBuilder (behavior tracking) | 📋 Not started | — |
-| Phase 5 | ChatService integration (hybrid mode) | 📋 Not started | — |
-| Cleanup | Delete absorbed agents | 📋 Not started | — |
+| Phase 3 | Enhance NoteEditor (self-verification) | 📋 Dispatching | — |
+| Phase 4 | Enhance ContextBuilder (behavior tracking) | 📋 Dispatching | — |
+| Phase 5 | ChatService integration (hybrid mode) | 📋 Dispatching | — |
+| Cleanup | Delete absorbed agents | ⏳ After Phase 5 | — |
 
 ## Phase Universe Progress
 
@@ -50,8 +61,8 @@
 | D1: SQLite Data Layer | ✅ Complete |
 | D2: HNSW Worker | ✅ Complete |
 | D3: Reranker Fix | ✅ Complete |
-| D4: Swarm Architecture | 🔄 Phase 1-2 complete, testing |
-| D5: embed.worker | ✅ Complete |
+| D4: Swarm Architecture | 🔄 Phase 1-2 complete, Phase 3-5 dispatching |
+| D5: embed.worker + Cleanup | ⏳ After D4 |
 | D6: Frontmatter Bridge | ✅ Complete |
 | D7: Vitals MetadataCache | ✅ Complete |
 | D8: Editor Decorations | ⏸️ Deferred |
@@ -59,44 +70,45 @@
 | D10: SQLite Migration | ✅ Complete |
 | D11: Skills Integration | ✅ Complete |
 
-## Git History (Recent)
+## Git State
 
+**beta-spec HEAD**: `aa3e1ab` (orchestration updates)
+
+**Recent commits:**
 ```
-522374b style: auto-fix lint issues (formatting, imports, const)
-743865d Merge faye: fix UI TypeScript errors in sidebar components
-f5ea01b fix(ui): resolve TypeScript errors in sidebar components
-3836f68 fix(swarm): resolve merge conflicts from Phase 1/2
-48eab27 Merge archie: Swarm Phase 2 - WorkerAgent unified workflow executor
-c2c111a feat(swarm): Phase 2 - WorkerAgent unified workflow executor
-5bbc214 Merge sage: Swarm Phase 1 - ChiefOfStaff → Orchestrator
-470a1bf refactor(swarm): Phase 1 - ChiefOfStaff becomes pure Orchestrator
+aa3e1ab chore: updates to the agentic git worktree branching and commit strategy
+29de0c3 Merge sage: remove migration complexity - SQLite only (cherry-picked)
+3f5667e fix(db): use relative path for sql-wasm.wasm (adapter expects vault-relative)
+e218b29 Merge sage: fix sql-wasm.wasm loading via Obsidian adapter
 ```
+
+**Worktree Status:**
+| Worktree | Branch | HEAD | Status |
+|----------|--------|------|--------|
+| notient | `beta-spec` | `aa3e1ab` | Orchestrator workspace |
+| notient-archie | `archie/swarm-phase-3` | `29de0c3` | Ready for dispatch |
+| notient-sage | `sage/swarm-phase-4` | `29de0c3` | Ready for dispatch |
+| notient-faye | `faye/swarm-phase-5` | `29de0c3` | Ready for dispatch |
 
 ## Next Actions
 
-1. **Test in Obsidian**: Reload and verify plugin loads correctly
-2. **Verify Swarm Flow**: Quick Action → Orchestrator → Worker
-3. **Phase 3-4**: Enhance NoteEditor/ContextBuilder (if needed)
-4. **Cleanup**: Delete absorbed agents (classifierAgent, connectionAgent, workflowAgents)
-
-## Key Decisions (This Session)
-
-| Decision | Choice |
-|----------|--------|
-| Worker location | Sage's first definition kept (better expertise list) |
-| UI types | Created `CapabilityType` for search/context/chat display |
-| Merge strategy | Manual conflict resolution, kept both Phase 1 & 2 additions |
+1. **Dispatch all 3 agents in parallel** (Phase 3, 4, 5)
+2. **Wait for completion** via watcher
+3. **Merge branches sequentially** to beta-spec
+4. **Run `bun run dev`** and iterate on any issues
+5. **D5 Cleanup**: Delete absorbed agents after validation
 
 ## File Locations
 
 | What | Where |
 |------|-------|
-| Swarm Spec | `.planning/SWARM-ARCHITECTURE.md` |
+| Swarm Spec | `docs/notient-specs/SWARM-ARCHITECTURE.md` |
 | Phase Universe | `.planning/PHASE-UNIVERSE.md` |
 | Orchestrator (refactored) | `src/core/agents/chiefOfStaff.ts` |
 | WorkerAgent (new) | `src/core/agents/workerAgent.ts` |
 | Agent types | `src/core/agents/types.ts` |
-| Agent identities | `src/core/agents/agentIdentity.ts` |
+| Git prepare script | `.claude/agents/git-prepare.sh` |
+| Orchestration | `.claude/orchestration/` |
 
 ---
-*Last updated: 2026-01-14 — Swarm Phase 1-2 complete, deployed to test vault*
+*Last updated: 2026-01-14 Session 2 — Ready to dispatch Phase 3-5*

@@ -32,13 +32,14 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 |-------------|-------------|--------|
 | D1: SQLite Data Layer | sql.js WASM, replace JSON files | ✅ COMPLETE |
 | D2: HNSW Worker | Vector ops in Web Worker | ✅ COMPLETE |
-| D3: Event Wiring | Fix action:proposed, applier, capability cards | 🔄 IN PROGRESS |
-| D4: Swarm Architecture | 4-agent swarm (replaces ChiefOfStaff consolidation) | 🔄 REDESIGNED |
-| D5: Cleanup | Delete absorbed agents + embed.worker | 📋 READY |
+| D3: Event Wiring | Fix action:proposed, applier, capability cards | ✅ COMPLETE |
+| D4: Swarm Architecture | 4-agent swarm (Phase 1-2 done, 3-5 in progress) | 🔄 IN PROGRESS |
+| D5: Cleanup | Delete absorbed agents + embed.worker | ⏳ After D4 |
 | D6: Frontmatter Bridge | Store AI insights in note properties | ✅ COMPLETE |
 | D7: MetadataCache Vitals | Use Obsidian's cache, stop duplicating | ✅ COMPLETE |
 | D8: Editor Decorations | Inline AI insights via CodeMirror 6 | ⏸️ DEFERRED |
 | D9: Context Menus | Right-click AI actions | ✅ COMPLETE |
+| D10: SQLite Migration | Replace all JSON stores | ✅ COMPLETE |
 | D11: Skills Integration | Dynamic capability injection | ✅ COMPLETE |
 
 **Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle, `notient-health` in frontmatter.
@@ -74,10 +75,12 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 <!-- Active work items. -->
 
 **Architecture — Swarm Refactor (D4)**
-- [ ] 4-agent swarm: Orchestrator, NoteEditor, ContextBuilder, Worker
-- [ ] Orchestrator as pure reasoning brain
-- [ ] Worker as unified workflow executor
-- [ ] ChatService hybrid mode (conversation OR agent delegation)
+- [x] Phase 1: Orchestrator as pure reasoning brain (`470a1bf`)
+- [x] Phase 2: Worker as unified workflow executor (`c2c111a`)
+- [ ] Phase 3: NoteEditor self-verification (Archie — dispatching)
+- [ ] Phase 4: ContextBuilder behavior tracking (Sage — dispatching)
+- [ ] Phase 5: ChatService hybrid mode (Faye — dispatching)
+- [ ] Cleanup: Delete absorbed agents (after Phase 5)
 
 ### Paused (Post-Universe)
 
@@ -143,17 +146,18 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 | **"Note is the Unit"** | Intelligence surfaces IN the note, not just sidebar | ✓ Phase Universe |
 | **Two-layer architecture** | Infrastructure (hidden) + Integration (visible) | ✓ Phase Universe |
 | **SQLite for metadata** | JSON doesn't scale. Typed queries. Instant startup. | ✓ D1 Complete |
-| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | 🔄 D2 In Progress |
+| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | ✓ D2 Complete |
 | **sql.js WASM + Obsidian adapter** | Portable, safe sync via `adapter.write()` | ✓ D1 Complete |
-| **Frontmatter intelligence** | `notient-health`, `notient-summary` IN the note | — D6 Pending |
-| **Use metadataCache** | Don't recalculate what Obsidian already knows | — D7 Pending |
-| **Editor Decorations** | CodeMirror 6 for inline AI insights | — D8 Pending |
-| **Context menus** | Right-click "Find related", "Enhance this" | — D9 Pending |
-| **Orchestrator = single event source** | Clear data flow. Agents never emit to UI. | — D3/D4 Pending |
+| **Frontmatter intelligence** | `notient-health`, `notient-summary` IN the note | ✓ D6 Complete |
+| **Use metadataCache** | Don't recalculate what Obsidian already knows | ✓ D7 Complete |
+| **Editor Decorations** | CodeMirror 6 for inline AI insights | ⏸️ D8 Deferred |
+| **Context menus** | Right-click "Find related", "Enhance this" | ✓ D9 Complete |
+| **Orchestrator = single event source** | Clear data flow. Agents never emit to UI. | 🔄 D4 In Progress |
 | **Centralized ID system** | `src/core/ids.ts` — consistent format, no chaos | ✓ Implemented |
-| Chat is UI, not agent | ChatService handles conversation, can trigger Orchestrator | — D4 Phase 5 |
-| **4-Agent Swarm** | Orchestrator + NoteEditor + ContextBuilder + Worker | — D4 Pending |
-| **Worker absorbs workflows** | Classifier, Connection, 8 WorkflowAgents → Worker | — D4 Phase 2 |
+| Chat is UI, not agent | ChatService handles conversation, can trigger Orchestrator | 🔄 D4 Phase 5 |
+| **4-Agent Swarm** | Orchestrator + NoteEditor + ContextBuilder + Worker | 🔄 D4 Phases 3-5 |
+| **Worker absorbs workflows** | Classifier, Connection, 8 WorkflowAgents → Worker | ✓ D4 Phase 2 |
+| **Phase-based agent branches** | `{agent}/swarm-phase-{N}` naming convention | ✓ Implemented |
 | 3 pinned + 3 contextual Quick Actions | Enhance/Classify/Connect always visible, rest dynamic | — Pending |
 
 ## Reference Documentation
@@ -164,4 +168,4 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 - **State Tracking**: `.planning/STATE.md` — Current progress
 
 ---
-*Last updated: 2026-01-14 — Swarm Architecture Decision*
+*Last updated: 2026-01-14 Session 2 — Swarm Phase 3-5 dispatching*
