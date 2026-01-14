@@ -68,6 +68,13 @@ export const isChatThinking = signal(false);
 export const chatActivities = signal<ActivityItem[]>([]);
 /** Task IDs from chat slash commands - maps taskId -> chatMessageId for result mirroring */
 export const chatSlashCommandTasks = signal<Map<string, string>>(new Map());
+/** Current delegation state for UI display */
+export const chatDelegation = signal<{
+  active: boolean;
+  agent?: string;
+  workflow?: string;
+  progress?: number;
+} | null>(null);
 
 // -----------------------------------------------------------------------------
 // Search State

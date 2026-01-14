@@ -13,9 +13,10 @@
  */
 
 import type { Signal } from "@preact/signals";
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Icon } from "../Icon";
 import { type ActivityItem, ActivityTrail, createActivityItem } from "./ActivityTrail";
+import { DelegationBanner } from "./DelegationBanner";
 import {
   type MessageAction,
   MessageBubble,
@@ -28,6 +29,13 @@ export interface ChatContext {
   noteTitle: string | null;
 }
 
+export interface DelegationState {
+  active: boolean;
+  agent?: string;
+  workflow?: string;
+  progress?: number;
+}
+
 interface RichChatViewProps {
   context: Signal<ChatContext>;
   messages: Signal<RichChatMessage[]>;
@@ -36,12 +44,20 @@ interface RichChatViewProps {
   streamingThinking: Signal<string>;
   isThinking: Signal<boolean>;
   activities: Signal<ActivityItem[]>;
+  delegation: Signal<DelegationState | null>;
   onSendMessage: (message: string) => void;
   onClearContext: () => void;
   onOpenNote: (path: string) => void;
   onAction?: (action: MessageAction) => void;
   showStats?: boolean;
 }
+
+/** Workflow definitions for suggestion chips */
+const WORKFLOW_SUGGESTIONS = [
+  { command: "/classify", label: "Classify", match: ["classif", "para", "categoriz", "tag"] },
+  { command: "/enrich", label: "Enhance", match: ["enhanc", "improv", "expand", "enrich"] },
+  { command: "/link", label: "Find Related", match: ["connect", "related", "similar", "link"] },
+];
 
 export function RichChatView({
   context,
@@ -51,6 +67,7 @@ export function RichChatView({
   streamingThinking,
   isThinking,
   activities,
+  delegation,
   onSendMessage,
   onClearContext,
   onOpenNote,
@@ -59,6 +76,7 @@ export function RichChatView({
 }: RichChatViewProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [inputValue, setInputValue] = useState("");
 
   // Auto-scroll to bottom when new messages arrive
   // biome-ignore lint/correctness/useExhaustiveDependencies: signals auto-subscribe, scroll triggers on content change
@@ -66,12 +84,25 @@ export function RichChatView({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.value.length, streamingContent.value, streamingThinking.value]);
 
+  // Detect workflow suggestions as user types
+  const suggestedWorkflows = useMemo(() => {
+    const lower = inputValue.toLowerCase().trim();
+    if (!lower || lower.length < 2) return [];
+
+    return WORKFLOW_SUGGESTIONS.filter(
+      (w) =>
+        w.match.some((m) => lower.includes(m)) ||
+        lower.startsWith(w.command.slice(0, Math.max(1, lower.length + 1))),
+    ).slice(0, 3); // Max 3 suggestions
+  }, [inputValue]);
+
   const handleSend = () => {
     const input = inputRef.current;
     if (!input || !input.value.trim() || isStreaming.value) return;
 
     onSendMessage(input.value.trim());
     input.value = "";
+    setInputValue("");
     input.style.height = "auto";
   };
 
@@ -85,14 +116,24 @@ export function RichChatView({
   const handleInput = () => {
     const input = inputRef.current;
     if (input) {
+      setInputValue(input.value);
       input.style.height = "auto";
       input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    }
+  };
+
+  const handleWorkflowChipClick = (command: string) => {
+    if (inputRef.current) {
+      inputRef.current.value = `${command} `;
+      setInputValue(`${command} `);
+      inputRef.current.focus();
     }
   };
 
   const hasContext = !!context.value.noteTitle;
   const hasMessages = messages.value.length > 0;
   const hasActivities = activities.value.length > 0;
+  const hasDelegation = delegation.value?.active;
 
   return (
     <section class="nv2-chat-view nv2-chat-view--rich" aria-label="Chat with Notient">
@@ -132,6 +173,15 @@ export function RichChatView({
         <ActivityTrail activities={activities.value} isStreaming={isStreaming.value} />
       )}
 
+      {/* Section 2b: Delegation Banner (visible during delegation) */}
+      {hasDelegation && delegation.value && (
+        <DelegationBanner
+          agent={delegation.value.agent || "agent"}
+          workflow={delegation.value.workflow}
+          progress={delegation.value.progress}
+        />
+      )}
+
       {/* Section 3: Message Stream */}
       {/* biome-ignore lint/a11y/useSemanticElements: role="log" is valid ARIA for live regions */}
       <main class="nv2-chat-messages" role="log" aria-live="polite">
@@ -160,7 +210,23 @@ export function RichChatView({
         )}
       </main>
 
-      {/* Section 4: Input */}
+      {/* Section 4: Workflow Suggestions */}
+      {suggestedWorkflows.length > 0 && !isStreaming.value && (
+        <div class="nv2-workflow-suggestions">
+          {suggestedWorkflows.map((w) => (
+            <button
+              key={w.command}
+              type="button"
+              class="nv2-workflow-chip"
+              onClick={() => handleWorkflowChipClick(w.command)}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Section 5: Input */}
       <footer class="nv2-chat-input-area">
         <textarea
           ref={inputRef}

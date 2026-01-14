@@ -48,6 +48,7 @@ import {
   agentStatus,
   chatActivities,
   chatContext,
+  chatDelegation,
   chatMessages,
   chatStreamingContent,
   chatStreamingThinking,
@@ -456,6 +457,7 @@ function ChatContent({ onRichChatSend, kernel, actionApplier }: ChatContentProps
       streamingThinking={chatStreamingThinking}
       isThinking={isChatThinking}
       activities={chatActivities}
+      delegation={chatDelegation}
       onSendMessage={onRichChatSend}
       onClearContext={() => {
         queueMicrotask(() => {

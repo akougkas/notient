@@ -22,6 +22,7 @@ import {
   activeView,
   chatActivities,
   chatContext,
+  chatDelegation,
   chatMessages,
   chatSlashCommandTasks,
   chatStreamingContent,
@@ -161,6 +162,9 @@ function processAgentEvent(event: AgentEvent, state: ChatStreamState): ChatStrea
       return state;
 
     case "progress":
+      chatDelegation.value = chatDelegation.value
+        ? { ...chatDelegation.value, progress: Math.round(event.progress * 100) }
+        : null;
       chatActivities.value = [
         ...chatActivities.value,
         createActivityItem(
@@ -288,6 +292,12 @@ function processChatEvent(event: ChatStreamEvent, state: ChatStreamState): ChatS
     case "delegation:start":
       state.isDelegating = true;
       state.delegatedAgentContent = "";
+      chatDelegation.value = {
+        active: true,
+        agent: event.delegation.targetAgent,
+        workflow: event.delegation.workflow,
+        progress: undefined,
+      };
       chatActivities.value = [
         ...chatActivities.value,
         createActivityItem(
@@ -302,6 +312,7 @@ function processChatEvent(event: ChatStreamEvent, state: ChatStreamState): ChatS
 
     case "delegation:complete":
       state.isDelegating = false;
+      chatDelegation.value = null;
       // Copy delegated content to fullContent for final message
       if (state.delegatedAgentContent) {
         state.fullContent = state.delegatedAgentContent;
@@ -315,6 +326,7 @@ function resetChatStreamState(): void {
   chatStreamingContent.value = "";
   chatStreamingThinking.value = "";
   isChatThinking.value = false;
+  chatDelegation.value = null;
   chatActivities.value = [...chatActivities.value, createActivityItem("Complete", "complete")];
 }
 
