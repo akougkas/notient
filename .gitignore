@@ -50,5 +50,6 @@ repomix-output.xml
 
 testbench/
 vector.worker.js
+embed.worker.js
 main.js
 styles.css
