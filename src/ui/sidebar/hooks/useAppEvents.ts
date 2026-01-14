@@ -17,10 +17,13 @@ import {
   activeView,
   agentInsights,
   agentStatus,
+  indexStatus,
   initContext,
   initState,
+  isServicesReady,
   pendingActionSources,
   pendingActions,
+  providerStatus,
   recentActivity,
 } from "../state";
 
@@ -47,15 +50,48 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   // 1. SYSTEM LIFECYCLE EVENTS
   // ──────────────────────────────────────────────────────────────────────────
 
-  useEventBus("services:initialized", () => {
+  useEventBus("services:initialized", async () => {
     // Refresh chat service when kernel re-initializes
     createChatService();
+
+    // Populate provider status from kernel service health
+    const health = kernel.serviceHealth;
+    const ollamaService = kernel.getService("ollama");
+    const ollamaModel = ollamaService?.getCapabilities()?.model || null;
+    const lmstudioModel = kernel.settings.lmstudio?.reasoningModel || null;
+
+    providerStatus.value = {
+      ollama: {
+        connected: health.ollama.status === "healthy",
+        model: ollamaModel,
+      },
+      lmstudio: {
+        connected: health.lmstudio.status === "healthy",
+        model: lmstudioModel,
+      },
+    };
+
+    // Populate index status
+    const indexManager = kernel.getService("indexManager");
+    if (indexManager) {
+      const stats = await indexManager.getStats();
+      indexStatus.value = {
+        noteCount: stats.noteCount,
+        lastSyncedAt: stats.lastFullIndexAt ? new Date(stats.lastFullIndexAt) : null,
+        isIndexing: false,
+      };
+    }
   });
 
   // Init state machine events - update UI signals
   useEventBus("init:state-changed", (data) => {
     initState.value = data.currentState;
     initContext.value = data.context;
+
+    // Enable content views when services are ready
+    if (data.currentState === "READY") {
+      isServicesReady.value = true;
+    }
   });
 
   // ──────────────────────────────────────────────────────────────────────────
