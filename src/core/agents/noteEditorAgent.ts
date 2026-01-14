@@ -400,33 +400,134 @@ export class NoteEditorAgent extends BaseAgent {
    * Validate payload structure for action type
    */
   private validatePayload(type: ProposedActionType, payload: unknown): boolean {
-    if (!payload || typeof payload !== "object") return false;
+    if (!payload || typeof payload !== "object") {
+      console.debug(`[Note Editor] Invalid payload for ${type}: not an object`, payload);
+      return false;
+    }
     const p = payload as Record<string, unknown>;
 
     switch (type) {
       case "frontmatter_set":
-        return typeof p.key === "string" && p.key.length > 0;
-
+        return this.validateFrontmatterSetPayload(p);
       case "frontmatter_add_tags":
-        return Array.isArray(p.tags) && p.tags.every((t) => typeof t === "string");
-
+        return this.validateFrontmatterAddTagsPayload(p);
       case "append_section":
-        return typeof p.content === "string";
-
+        return this.validateAppendSectionPayload(p);
       case "append_related_links":
-        return Array.isArray(p.links) && p.links.every((l) => typeof l === "string");
-
+        return this.validateAppendRelatedLinksPayload(p);
       case "move_note":
-        return typeof p.to === "string" && p.to.length > 0;
-
+        return this.validateMoveNotePayload(p);
       case "create_note":
       case "create_canvas":
       case "create_base":
-        return typeof p.path === "string" && typeof p.content === "string";
-
+        return this.validateCreateFilePayload(p, type);
       default:
+        console.debug(`[Note Editor] Unknown action type: ${type}`);
         return false;
     }
+  }
+
+  /**
+   * Validate frontmatter_set payload
+   */
+  private validateFrontmatterSetPayload(p: Record<string, unknown>): boolean {
+    // Check standard format: { key: string, value: any }
+    const hasKey = typeof p.key === "string" && p.key.length > 0;
+    const hasValue = "value" in p;
+
+    if (hasKey && hasValue) {
+      return true;
+    }
+
+    // Handle LLM variations: { field: string, newValue: any } or { property: string, value: any }
+    const altKey = p.field || p.property;
+    const altValue = p.newValue !== undefined ? p.newValue : p.value;
+
+    if (typeof altKey === "string" && altKey.length > 0 && altValue !== undefined) {
+      // Normalize to standard format
+      p.key = altKey as string;
+      p.value = altValue;
+      console.debug(
+        `[Note Editor] Normalized frontmatter_set payload from alternate format. key: ${p.key}`,
+      );
+      return true;
+    }
+
+    console.debug(
+      "[Note Editor] Invalid payload for frontmatter_set. Expected { key: string, value: any }. Got:",
+      JSON.stringify(p, null, 2),
+    );
+    return false;
+  }
+
+  /**
+   * Validate frontmatter_add_tags payload
+   */
+  private validateFrontmatterAddTagsPayload(p: Record<string, unknown>): boolean {
+    const valid = Array.isArray(p.tags) && p.tags.every((t) => typeof t === "string");
+    if (!valid) {
+      console.debug(
+        "[Note Editor] Invalid payload for frontmatter_add_tags. Expected { tags: string[] }. Got:",
+        JSON.stringify(p, null, 2),
+      );
+    }
+    return valid;
+  }
+
+  /**
+   * Validate append_section payload
+   */
+  private validateAppendSectionPayload(p: Record<string, unknown>): boolean {
+    const valid = typeof p.content === "string";
+    if (!valid) {
+      console.debug(
+        "[Note Editor] Invalid payload for append_section. Expected { content: string }. Got:",
+        JSON.stringify(p, null, 2),
+      );
+    }
+    return valid;
+  }
+
+  /**
+   * Validate append_related_links payload
+   */
+  private validateAppendRelatedLinksPayload(p: Record<string, unknown>): boolean {
+    const valid = Array.isArray(p.links) && p.links.every((l) => typeof l === "string");
+    if (!valid) {
+      console.debug(
+        "[Note Editor] Invalid payload for append_related_links. Expected { links: string[] }. Got:",
+        JSON.stringify(p, null, 2),
+      );
+    }
+    return valid;
+  }
+
+  /**
+   * Validate move_note payload
+   */
+  private validateMoveNotePayload(p: Record<string, unknown>): boolean {
+    const valid = typeof p.to === "string" && p.to.length > 0;
+    if (!valid) {
+      console.debug(
+        "[Note Editor] Invalid payload for move_note. Expected { to: string }. Got:",
+        JSON.stringify(p, null, 2),
+      );
+    }
+    return valid;
+  }
+
+  /**
+   * Validate create_note/create_canvas/create_base payload
+   */
+  private validateCreateFilePayload(p: Record<string, unknown>, type: string): boolean {
+    const valid = typeof p.path === "string" && typeof p.content === "string";
+    if (!valid) {
+      console.debug(
+        `[Note Editor] Invalid payload for ${type}. Expected { path: string, content: string }. Got:`,
+        JSON.stringify(p, null, 2),
+      );
+    }
+    return valid;
   }
 
   // ===========================================================================
