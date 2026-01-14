@@ -148,6 +148,11 @@ src/core/
 - Dependency injection via `kernel.get<T>(ServiceName)`
 - Startup orchestration with health checks
 
+**Skills Architecture (Brain & Hands)**
+- **Brain:** `SkillRegistry` injects specialized schemas (Canvas, Bases) into agents.
+- **Hands:** `ObsidianFacade` handles atomic writes for all file types.
+- **Dynamic:** Agents "equip" skills only when needed, keeping context light.
+
 **Two-Tier Identity**
 - Tier 1: `src/core/agent/identity.ts` — Core persona, shared by ALL agents
 - Tier 2: `src/core/agents/agentIdentity.ts` — Agent-specific mission/expertise

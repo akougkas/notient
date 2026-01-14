@@ -18,6 +18,7 @@
 | D7: Vitals MetadataCache | ✅ COMPLETE | Faye | resolvedLinks direct usage |
 | D8: Editor Decorations | ⏸️ DEFERRED | — | After infrastructure complete |
 | D9: Context Menus | ✅ COMPLETE | Sage | editor-menu + file-menu |
+| D11: Skills Integration | ✅ COMPLETE | Gemini | Skills Registry + UI Badges |
 
 ---
 

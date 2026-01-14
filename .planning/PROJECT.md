@@ -50,6 +50,7 @@ Intelligence must surface IN the note (frontmatter, decorations), not just the s
 
 - ✓ Kernel-based service architecture with DI
 - ✓ Multi-agent system (ChiefOfStaff orchestrating agents)
+- ✓ Skills Architecture (Dynamic capability injection)
 - ✓ LLM abstraction (LM Studio reasoning, Ollama embeddings)
 - ✓ HNSW vector search with O(log N) performance
 - ✓ Progressive search (INSTANT → EVOLVING → DEEP)
