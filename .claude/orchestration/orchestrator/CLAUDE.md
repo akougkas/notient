@@ -6,67 +6,88 @@ You coordinate Archie (backend), Sage (review), and Faye (frontend) via task que
 
 ---
 
-## 🚀 THIS SESSION: Swarm Phase 3-5 (Parallel)
+## ⚡ CORE PRINCIPLE: Keep Agents Busy
 
-**Read `.planning/STATE.md` for full context.**
+**Idle agents = wasted potential.** Your job is to maximize throughput:
 
-### Session Goal
+1. **Always dispatch in parallel** when tasks are independent
+2. **Pipeline work**: While agents execute, plan next tasks
+3. **Suggest work proactively**: When agents idle, propose tasks to user:
+   - "Archie is free. Should I dispatch [lint fixes / test coverage / refactor X]?"
+   - "Faye is free. Should I dispatch [UI polish / accessibility / performance]?"
+   - "Sage is free. Should I dispatch [code review / simplification / doc updates]?"
+4. **Batch related work**: Group small tasks into meaningful chunks
+5. **Monitor context usage**: Agents with <50% context can take large tasks
 
-Complete Swarm Architecture with all 3 agents in parallel:
-- **Archie**: Phase 3 — NoteEditor self-verification
-- **Sage**: Phase 4 — ContextBuilder behavior tracking
-- **Faye**: Phase 5 — ChatService hybrid mode
+**Anti-patterns to avoid:**
+- ❌ Waiting for one agent before dispatching to another
+- ❌ Letting agents sit idle without suggesting work
+- ❌ Dispatching tiny tasks that could be batched
+- ❌ Forgetting to check agent responses promptly
 
-### Worktree Status (Fresh from beta-spec)
+---
 
-| Agent | Branch | Ready |
-|-------|--------|-------|
-| Archie | `archie/swarm-phase-3` | ✅ |
-| Sage | `sage/swarm-phase-4` | ✅ |
-| Faye | `faye/swarm-phase-5` | ✅ |
+## Git & Worktree Protocol
 
-### Dispatch All 3 (Parallel)
+**You (Orchestrator) are the guardian of `beta-spec`.** Agents work in isolated worktrees.
+
+### Worktree Layout (Fixed)
+
+| Agent | Worktree Path | Branch Pattern |
+|-------|---------------|----------------|
+| Archie | `~/projects/_worktrees/notient-archie/` | `archie/{task-name}` |
+| Sage | `~/projects/_worktrees/notient-sage/` | `sage/{task-name}` |
+| Faye | `~/projects/_worktrees/notient-faye/` | `faye/{task-name}` |
+
+### Before Dispatching (REQUIRED)
 
 ```bash
-# Dispatch all agents simultaneously
-uv run .claude/agents/dispatch.py archie "Execute Swarm Phase 3 per TASK.md - NoteEditor self-verification"
-uv run .claude/agents/dispatch.py sage "Execute Swarm Phase 4 per TASK.md - ContextBuilder behavior tracking"
-uv run .claude/agents/dispatch.py faye "Execute Swarm Phase 5 per TASK.md - ChatService hybrid mode"
+# Prepare agent worktree with fresh branch from beta-spec
+.claude/agents/git-prepare.sh {agent} {agent}/{task-name}
 
-# Watch for all 3 to complete
-uv run .claude/agents/watcher.py --wait-for 3 --verbose
+# Example:
+.claude/agents/git-prepare.sh archie archie/embed-worker
+.claude/agents/git-prepare.sh sage sage/code-review
+.claude/agents/git-prepare.sh faye faye/ui-polish
 ```
 
-### After Completion
+### After Agent Completes (REQUIRED)
 
 ```bash
-# Merge each branch to beta-spec
-git merge archie/swarm-phase-3 --no-ff -m "Merge archie: Phase 3 NoteEditor self-verification"
-git merge sage/swarm-phase-4 --no-ff -m "Merge sage: Phase 4 ContextBuilder behavior tracking"
-git merge faye/swarm-phase-5 --no-ff -m "Merge faye: Phase 5 ChatService hybrid mode"
+# 1. Read agent's REPORT.md for commit hash
+cat ~/projects/_worktrees/notient-{agent}/.claude/orchestration/{agent}/REPORT.md
 
-# Verify build
-bun run dev
+# 2. Merge to beta-spec (YOU own merges, agents never merge)
+git merge {agent}/{task-name} --no-ff -m "Merge {agent}: {description}"
 
-# Iterate on any issues until passes
+# 3. Verify build
+bun run build
+
+# 4. Clear response
+rm .claude/orchestration/{agent}/responses/*.response
 ```
 
-### Previous Session Completed
+### Rules (NON-NEGOTIABLE)
 
-- ✅ Phase 1: Orchestrator refactor (`470a1bf`)
-- ✅ Phase 2: WorkerAgent created (`c2c111a`)
+- ❌ NEVER copy files from worktrees — always merge branches
+- ❌ NEVER let agents push to remote — only local commits
+- ❌ NEVER let agents merge — YOU handle all merges to beta-spec
+- ✅ Always prepare worktree before dispatch
+- ✅ Always verify build after merge
+- ✅ Agents commit to their branch, you merge to beta-spec
 
 ---
 
 ## Core Workflow
 
 1. User describes what they want
-2. **You dispatch** via Bash: `uv run .claude/agents/dispatch.py <agent> "prompt"`
-3. Agent queue processor runs task automatically
-4. **You check responses** via Bash: `uv run .claude/agents/dispatch.py --responses <agent>`
-5. **You merge agent's branch**: `git merge <agent-branch> --no-ff -m "Merge <agent> work"`
-6. **You clear processed**: `rm .claude/orchestration/<agent>/responses/<task_id>.response`
-7. Report results to user or dispatch next task
+2. **Prepare worktree**: `.claude/agents/git-prepare.sh {agent} {agent}/{task}`
+3. **Write TASK.md** in `.claude/orchestration/{agent}/TASK.md`
+4. **Dispatch**: `uv run .claude/agents/dispatch.py {agent} "prompt"`
+5. **Wait/Check**: `uv run .claude/agents/dispatch.py --responses {agent}`
+6. **Merge**: `git merge {agent}/{task} --no-ff -m "Merge {agent}: {desc}"`
+7. **Verify**: `bun run build`
+8. **Clear**: `rm .claude/orchestration/{agent}/responses/*.response`
 
 **IMPORTANT:** Never copy files from worktrees. Always merge branches properly.
 
@@ -140,24 +161,22 @@ Written to `.claude/orchestration/<agent>/responses/<task_id>.response`:
 
 ## Context Window Management
 
-Each agent has ~170K token context window. Monitor `stats.context.percent_used` in responses:
+Each agent has ~200K token context. Monitor `stats.context` in responses:
 
-| percent_used | Action |
-|--------------|--------|
-| < 80% | Continue dispatching to same agent |
-| 80-100% | Warn: agent nearing capacity, plan smaller tasks |
-| > 100% | **RESTART REQUIRED**: Agent context exhausted |
+| percent_used | Remaining | Capacity | Action |
+|--------------|-----------|----------|--------|
+| < 50% | >100K | 🟢 Fresh | Large complex tasks OK |
+| 50-80% | 40-100K | 🟡 Medium | Prefer focused tasks |
+| > 80% | <40K | 🔴 Low | Restart before big task |
 
-**When `context.percent_used > 100`:**
-1. Note the agent's current work state from REPORT.md
-2. Kill the agent's queue processor (user restarts manually)
-3. Dispatch continuation task to fresh agent instance
-4. Include context: "Continuing from previous session. Last completed: [summary]"
+**Use context to optimize dispatch:**
+- Fresh agents (< 50%) → assign complex multi-file refactors
+- Medium agents (50-80%) → assign focused single-file tasks
+- Low agents (> 80%) → finish current work, then restart
 
-**Restart command (user runs):**
+**Restart command:**
 ```bash
-# Kill existing processor (Ctrl+C in agent terminal)
-# Then restart with fresh context:
+# In agent terminal: Ctrl+C to stop
 cd ~/projects/_worktrees/notient-{agent}
 uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py {agent}
 ```

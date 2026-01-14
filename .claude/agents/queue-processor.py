@@ -238,13 +238,16 @@ class ExecutionStats:
     cache_read_tokens: int = 0
     num_turns: int = 0
 
-    # Context window management (170K target per agent)
-    CONTEXT_LIMIT: int = 170_000
+    # Context window management (200K limit for Claude, estimate ~170K usable)
+    CONTEXT_LIMIT: int = 200_000
 
     @property
     def context_used(self) -> int:
-        """Estimate total context used (cache_read represents accumulated context)."""
-        return self.cache_read_tokens + self.input_tokens + self.output_tokens
+        """
+        Estimate context used based on input + output tokens.
+        Note: cache_read is a subset of input_tokens (not additive).
+        """
+        return self.input_tokens + self.output_tokens
 
     @property
     def context_remaining(self) -> int:
@@ -254,6 +257,8 @@ class ExecutionStats:
     @property
     def context_percent_used(self) -> float:
         """Percentage of context window used."""
+        if self.CONTEXT_LIMIT == 0:
+            return 0.0
         return round((self.context_used / self.CONTEXT_LIMIT) * 100, 1)
 
 
@@ -549,24 +554,29 @@ class EventDisplay:
             print(f"{C.RED}{box_line(self.width)}{C.RESET}")
             print(f"{C.RED}{box_text(status_line, self.width)}{C.RESET}")
         else:
-            # Stats line
+            # Stats line with context info
             tool_count = len(self.stats.tool_calls)
             files_count = len(set(self.stats.files_read + self.stats.files_written + self.stats.files_edited))
-            
+            ctx_pct = self.stats.context_percent_used
+            ctx_remaining_k = self.stats.context_remaining // 1000
+
             status_line = f"✅ Complete │ {elapsed:.1f}s │ ${total_cost:.4f} │ {tool_count} tools │ {files_count} files"
             print(f"{self.color}{box_line(self.width)}{C.RESET}")
             print(f"{self.color}{box_text(status_line, self.width)}{C.RESET}")
+
+            # Context window line
+            ctx_color = C.GREEN if ctx_pct < 50 else (C.YELLOW if ctx_pct < 80 else C.RED)
+            ctx_line = f"📊 Context: {ctx_pct}% used │ ~{ctx_remaining_k}K tokens remaining"
+            print(f"{self.color}{box_text(f'{ctx_color}{ctx_line}{C.RESET}', self.width)}{C.RESET}")
         
-        # File summary if any files were modified
-        modified = set(self.stats.files_written + self.stats.files_edited)
+        # File summary - show ALL modified files (no truncation)
+        modified = list(set(self.stats.files_written + self.stats.files_edited))
         if modified:
             print(f"{self.color}{box_line(self.width, Box.LT, Box.RT)}{C.RESET}")
-            for f in list(modified)[:5]:
+            for f in modified:
                 short = self._short_path(f)
                 action = "✏️" if f in self.stats.files_edited else "📝"
                 print(f"{self.color}{box_text(f'{action} {short}', self.width)}{C.RESET}")
-            if len(modified) > 5:
-                print(f"{self.color}{box_text(f'  +{len(modified) - 5} more files...', self.width)}{C.RESET}")
         
         print(f"{self.color}{box_line(self.width, Box.BL, Box.BR)}{C.RESET}")
         print()
