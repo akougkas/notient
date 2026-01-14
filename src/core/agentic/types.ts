@@ -59,6 +59,8 @@ export type ProposedActionType =
   | "move_note"
   // Intelligence 2.0 (NEW)
   | "create_note"
+  | "create_canvas" // NEW: Dedicated type for Canvas creation
+  | "create_base"   // NEW: Dedicated type for Base creation
   | "batch_create_notes"
   | "restructure_note"
   | "create_task_note"
@@ -187,6 +189,32 @@ export interface CreateNoteAction extends ProposedActionBase {
     content: string;
     /** Frontmatter to include */
     frontmatter?: Record<string, unknown>;
+  };
+}
+
+/**
+ * Create a new Canvas file
+ */
+export interface CreateCanvasAction extends ProposedActionBase {
+  type: "create_canvas";
+  payload: {
+    /** Path where canvas should be created (must end in .canvas) */
+    path: string;
+    /** Canvas content (JSON string) */
+    content: string;
+  };
+}
+
+/**
+ * Create a new Base file
+ */
+export interface CreateBaseAction extends ProposedActionBase {
+  type: "create_base";
+  payload: {
+    /** Path where base should be created (must end in .base) */
+    path: string;
+    /** Base content (YAML string) */
+    content: string;
   };
 }
 
@@ -349,6 +377,8 @@ export type ProposedAction =
   | TrashNoteAction
   // Intelligence 2.0 (NEW)
   | CreateNoteAction
+  | CreateCanvasAction
+  | CreateBaseAction
   | BatchCreateNotesAction
   | RestructureNoteAction
   | CreateTaskNoteAction
@@ -557,6 +587,8 @@ export const ACTION_RISK_MAP: Record<ProposedActionType, RiskLevel> = {
   trash_note: "high",
   // Intelligence 2.0 (NEW)
   create_note: "low",
+  create_canvas: "low",
+  create_base: "low",
   batch_create_notes: "medium",
   restructure_note: "medium",
   create_task_note: "low",
@@ -578,11 +610,16 @@ export const SUPPORTED_ACTION_TYPES: ProposedActionType[] = [
   "append_section",
   "append_related_links",
   "move_note",
+  "create_note",
+  "create_canvas",
+  "create_base",
 ];
 
 /** Intelligence 2.0 action types */
 export const INTELLIGENCE_2_ACTION_TYPES: ProposedActionType[] = [
   "create_note",
+  "create_canvas",
+  "create_base",
   "batch_create_notes",
   "restructure_note",
   "create_task_note",

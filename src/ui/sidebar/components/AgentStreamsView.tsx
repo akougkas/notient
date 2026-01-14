@@ -9,7 +9,7 @@
  */
 
 import type { Signal } from "@preact/signals";
-import type { AgentType } from "../../../core/agent/types";
+import type { AgentType } from "../../../core/agents/types";
 import { formatTimeAgo, truncate } from "../utils/formatters";
 import { Icon } from "./Icon";
 
@@ -26,6 +26,7 @@ export interface CapabilityStatus {
 export interface ActiveAgent {
   id: string;
   type: string;
+  activeSkill?: string; // NEW: Track the specific skill being used (e.g. "JSON Canvas Creator")
   targetNote: string;
   status: "running" | "paused" | "queued" | "completed";
   progress?: number;
@@ -378,6 +379,12 @@ function ActiveAgentCard({
       <div class="nv2-agent-body">
         <div class="nv2-agent-header">
           <span class="nv2-agent-type">{formatAgentType(agent.type)}</span>
+          {agent.activeSkill && (
+            <span class="nv2-agent-skill-badge" title={`Using Skill: ${agent.activeSkill}`}>
+              <Icon name="zap" className="nv2-skill-icon" />
+              {agent.activeSkill.length > 20 ? `${agent.activeSkill.slice(0, 18)}...` : agent.activeSkill}
+            </span>
+          )}
           {timeDisplay && <span class={timeDisplay.className}>{timeDisplay.text}</span>}
         </div>
 

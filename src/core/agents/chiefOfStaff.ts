@@ -24,6 +24,7 @@ import type { VaultContextBuilder } from "../context/vaultContextBuilder";
 import { generateId } from "../ids";
 import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/pipeline";
+import { SkillRegistry } from "../skills/registry";
 import { isInternalOutput, isStructuredOutput } from "./base";
 import { ClassifierAgent } from "./classifierAgent";
 import { ConnectionAgent } from "./connectionAgent";
@@ -86,6 +87,7 @@ export class ChiefOfStaff {
   private llm: LLMProvider;
   private obsidian: ObsidianFacade;
   private profile?: UserProfile;
+  private skillRegistry: SkillRegistry;
 
   // Session management
   private currentSession: AgentSession | null = null;
@@ -100,9 +102,10 @@ export class ChiefOfStaff {
     this.llm = llm;
     this.obsidian = obsidian;
     this.profile = profile;
+    this.skillRegistry = new SkillRegistry();
 
     // Initialize expert agents (Department Heads) with profile for identity system
-    this.noteEditorAgent = new NoteEditorAgent(llm, profile);
+    this.noteEditorAgent = new NoteEditorAgent(llm, profile, this.skillRegistry);
     this.classifierAgent = new ClassifierAgent(llm, profile);
     this.connectionAgent = new ConnectionAgent(llm, profile);
     this.contextBuilderAgent = new ContextBuilderAgent(
@@ -351,7 +354,7 @@ export class ChiefOfStaff {
     this.llm = llm;
 
     // Recreate expert agents with new LLM and preserved profile
-    this.noteEditorAgent = new NoteEditorAgent(llm, this.profile);
+    this.noteEditorAgent = new NoteEditorAgent(llm, this.profile, this.skillRegistry);
     this.classifierAgent = new ClassifierAgent(llm, this.profile);
     this.connectionAgent = new ConnectionAgent(llm, this.profile);
 
@@ -498,6 +501,13 @@ export class ChiefOfStaff {
       "add",
       "append",
       "update",
+      // Canvas/Base creation intents are edit intents
+      "create",
+      "make",
+      "canvas",
+      "diagram",
+      "base",
+      "view",
     ];
     const classifyKeywords = [
       "classify",

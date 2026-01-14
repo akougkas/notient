@@ -465,8 +465,8 @@ export function getAgentSchema(agentType: ExpertAgentType): JsonSchemaFormat | n
  * Events emitted during agent execution
  */
 export type AgentEvent =
-  | { type: "started"; agentType: AgentType }
-  | { type: "progress"; agentType: AgentType; progress: number }
+  | { type: "started"; agentType: AgentType; activeSkill?: string }
+  | { type: "progress"; agentType: AgentType; progress: number; activeSkill?: string }
   | { type: "chunk"; agentType: AgentType; content: string }
   | { type: "delegation-started"; from: AgentType; to: AgentType }
   | { type: "delegation-complete"; from: AgentType; to: AgentType; result: DelegatedResult }

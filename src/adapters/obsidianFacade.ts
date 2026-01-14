@@ -18,6 +18,8 @@ import {
   normalizePath,
 } from "obsidian";
 
+const SUPPORTED_EXTENSIONS = new Set(["md", "canvas", "base"]);
+
 export interface NoteInfo {
   path: string;
   name: string;
@@ -91,6 +93,15 @@ export class ObsidianFacade {
    */
   getMarkdownFiles(): TFile[] {
     return this.app.vault.getMarkdownFiles();
+  }
+
+  /**
+   * Get all supported files (md, canvas, base) in the vault
+   */
+  getSupportedFiles(): TFile[] {
+    return this.app.vault
+      .getFiles()
+      .filter((f) => SUPPORTED_EXTENSIONS.has(f.extension));
   }
 
   /**
@@ -430,7 +441,7 @@ export class ObsidianFacade {
    */
   onFileCreate(callback: (file: TFile) => void): EventRef {
     return this.app.vault.on("create", (file) => {
-      if (file instanceof TFile && file.extension === "md") {
+      if (file instanceof TFile && SUPPORTED_EXTENSIONS.has(file.extension)) {
         callback(file);
       }
     });
@@ -441,7 +452,7 @@ export class ObsidianFacade {
    */
   onFileModify(callback: (file: TFile) => void): EventRef {
     return this.app.vault.on("modify", (file) => {
-      if (file instanceof TFile && file.extension === "md") {
+      if (file instanceof TFile && SUPPORTED_EXTENSIONS.has(file.extension)) {
         callback(file);
       }
     });
@@ -452,7 +463,7 @@ export class ObsidianFacade {
    */
   onFileRename(callback: (file: TFile, oldPath: string) => void): EventRef {
     return this.app.vault.on("rename", (file, oldPath) => {
-      if (file instanceof TFile && file.extension === "md") {
+      if (file instanceof TFile && SUPPORTED_EXTENSIONS.has(file.extension)) {
         callback(file, oldPath);
       }
     });
@@ -463,7 +474,7 @@ export class ObsidianFacade {
    */
   onFileDelete(callback: (file: TFile) => void): EventRef {
     return this.app.vault.on("delete", (file) => {
-      if (file instanceof TFile && file.extension === "md") {
+      if (file instanceof TFile && SUPPORTED_EXTENSIONS.has(file.extension)) {
         callback(file);
       }
     });
