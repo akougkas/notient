@@ -327,6 +327,8 @@ export interface StructuredOutput {
   data: unknown;
   /** Schema name for validation */
   schema: string;
+  /** Error message if output parsing failed */
+  error?: string;
 }
 
 /**
