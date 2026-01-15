@@ -32,7 +32,31 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-VALID_AGENTS = ("archie", "sage", "faye")
+# Valid roles (predefined)
+VALID_ROLES = ("researcher", "coder", "reviewer", "tester")
+# Keep old agents for backward compatibility
+VALID_AGENTS = VALID_ROLES + ("archie", "sage", "faye")
+
+# Valid CLI platforms
+VALID_CLIS = ("claude", "gemini", "cursor-agent", "opencode")
+
+# Default models per CLI
+DEFAULT_MODELS = {
+    "claude": "claude-opus-4-5-20251101",
+    "gemini": "gemini-3.0-pro",
+    "cursor-agent": "gpt-5.2-codex-high",
+    "opencode": "glm-4.7",
+}
+
+# CLI trust levels
+CLI_TRUST = {
+    "claude": "high",
+    "gemini": "high",
+    "cursor-agent": "medium",
+    "opencode": "low",
+}
+
+# Legacy model list for backward compatibility
 VALID_MODELS = (
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
@@ -104,19 +128,35 @@ def sync_agent_files(agent: str) -> None:
         print(f"  Synced: {', '.join(synced)} -> {agent} worktree")
 
 
-def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: str = "") -> str:
+def dispatch_task(agent: str, prompt: str, model: str = None, context: str = "", cli: str = None) -> str:
     queue_dir, _ = get_paths(agent)
     queue_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prepend instruction to read agent's CLAUDE.md first
-    full_prompt = f"First read .claude/orchestration/{agent}/CLAUDE.md for your identity and instructions, then: {prompt}"
+    # Determine CLI platform (default to claude for old agents)
+    if cli is None:
+        cli = "claude"  # Default CLI
+
+    # Use default model for CLI if not specified
+    if model is None:
+        model = DEFAULT_MODELS.get(cli, DEFAULT_MODEL)
+
+    # Determine identity file based on agent type
+    if agent in VALID_ROLES:
+        identity_file = f".claude/orchestration/{agent}/ROLE.md"
+    else:
+        identity_file = f".claude/orchestration/{agent}/CLAUDE.md"
+
+    # Prepend instruction to read identity file first
+    full_prompt = f"First read {identity_file} for your role context and instructions, then: {prompt}"
 
     task_id = f"task-{uuid.uuid4().hex[:8]}"
     task = {
         "id": task_id,
         "prompt": full_prompt,
         "model": model,
+        "cli": cli,
         "context": context,
+        "trust_level": CLI_TRUST.get(cli, "high"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -124,10 +164,12 @@ def dispatch_task(agent: str, prompt: str, model: str = DEFAULT_MODEL, context: 
     task_file.write_text(json.dumps(task, indent=2))
 
     print(f"Dispatched: {task_id} -> {agent}")
+    print(f"  CLI: {cli}")
     print(f"  Model: {model}")
+    print(f"  Trust: {CLI_TRUST.get(cli, 'high')}")
     print(f"  Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
 
-    # Sync CLAUDE.md and TASK.md to worktree
+    # Sync identity files to worktree (for backward compatibility)
     sync_agent_files(agent)
 
     return task_id
@@ -172,10 +214,30 @@ def list_responses(agent: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dispatch tasks to agent queues")
-    parser.add_argument("agent", nargs="?", help=f"Agent: {', '.join(VALID_AGENTS)}")
+    parser = argparse.ArgumentParser(
+        description="Dispatch tasks to role-based agent queues",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Dispatch to researcher role using Gemini
+    uv run dispatch.py researcher "Analyze the search pipeline" --cli gemini
+
+    # Dispatch to coder role using Claude Opus
+    uv run dispatch.py coder "Implement retry logic" --cli claude --model claude-opus-4-5-20251101
+
+    # Check queue status
+    uv run dispatch.py --check researcher
+
+    # List responses
+    uv run dispatch.py --responses coder
+        """
+    )
+    parser.add_argument("agent", nargs="?", help=f"Agent/Role: {', '.join(VALID_AGENTS)}")
     parser.add_argument("prompt", nargs="?", help="Task prompt")
-    parser.add_argument("--model", "-m", default=DEFAULT_MODEL, choices=VALID_MODELS)
+    parser.add_argument("--cli", choices=VALID_CLIS, default=None,
+                        help=f"CLI platform: {', '.join(VALID_CLIS)} (default: claude)")
+    parser.add_argument("--model", "-m", default=None,
+                        help="Model to use (default: CLI-specific default)")
     parser.add_argument("--context", "-c", default="", help="Additional context")
     parser.add_argument("--check", action="store_true", help="Check queue status")
     parser.add_argument("--responses", "-r", action="store_true", help="List responses")
@@ -188,8 +250,9 @@ def main():
 
     agent = args.agent.lower()
     if agent not in VALID_AGENTS:
-        print(f"Unknown agent: {agent}")
-        print(f"  Valid: {', '.join(VALID_AGENTS)}")
+        print(f"Unknown agent/role: {agent}")
+        print(f"  Roles: {', '.join(VALID_ROLES)}")
+        print(f"  Legacy agents: archie, sage, faye")
         sys.exit(1)
 
     if args.check:
@@ -197,7 +260,7 @@ def main():
     elif args.responses:
         list_responses(agent)
     elif args.prompt:
-        dispatch_task(agent, args.prompt, args.model, args.context)
+        dispatch_task(agent, args.prompt, args.model, args.context, args.cli)
     else:
         check_queue(agent)
 

@@ -43,12 +43,52 @@ procs:
     autostart: true
     stop: "SIGTERM"
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ROLE-BASED AGENT POOLS (each can use any CLI platform: claude/gemini/cursor/opencode)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  researcher:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "researcher"
+    shell: "uv run .claude/agents/queue-processor.py researcher"
+    autostart: true
+    stop: "SIGTERM"
+
+  coder:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "coder"
+    shell: "uv run .claude/agents/queue-processor.py coder"
+    autostart: true
+    stop: "SIGTERM"
+
+  reviewer:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "reviewer"
+    shell: "uv run .claude/agents/queue-processor.py reviewer"
+    autostart: true
+    stop: "SIGTERM"
+
+  tester:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "tester"
+    shell: "uv run .claude/agents/queue-processor.py tester"
+    autostart: true
+    stop: "SIGTERM"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LEGACY AGENTS (backward compatibility - can be removed after migration)
+  # ═══════════════════════════════════════════════════════════════════════════
+
   archie:
     cwd: /home/akougkas/projects/notient
     env:
       NOTIENT_AGENT: "archie"
     shell: "uv run .claude/agents/queue-processor.py archie"
-    autostart: true
+    autostart: false
     stop: "SIGTERM"
 
   sage:
@@ -56,7 +96,7 @@ procs:
     env:
       NOTIENT_AGENT: "sage"
     shell: "uv run .claude/agents/queue-processor.py sage"
-    autostart: true
+    autostart: false
     stop: "SIGTERM"
 
   faye:
@@ -64,5 +104,5 @@ procs:
     env:
       NOTIENT_AGENT: "faye"
     shell: "uv run .claude/agents/queue-processor.py faye"
-    autostart: true
+    autostart: false
     stop: "SIGTERM"

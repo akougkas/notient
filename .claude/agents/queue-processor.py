@@ -49,14 +49,78 @@ from typing import Optional
 
 POLL_INTERVAL = 1.0
 DEFAULT_MODEL = "claude-opus-4-5-20251101"
-VALID_AGENTS = ("archie", "sage", "faye")
 
-# Agent colors and icons
-AGENT_THEME = {
+# Valid roles (predefined)
+VALID_ROLES = ("researcher", "coder", "reviewer", "tester")
+# Keep old agents for backward compatibility
+VALID_AGENTS = VALID_ROLES + ("archie", "sage", "faye")
+
+# CLI configurations for multi-platform support
+CLI_CONFIGS = {
+    "claude": {
+        "cmd": "claude",
+        "json_flag": ["--output-format", "stream-json"],
+        "headless_flag": "--dangerously-skip-permissions",
+        "prompt_flag": "--print",
+        "model_flag": "--model",
+        "extra_flags": ["--verbose"],
+        "trust": "high",
+        "speed": "fast",
+    },
+    "gemini": {
+        "cmd": "gemini",
+        "json_flag": ["--output-format", "stream-json"],
+        "headless_flag": "--yolo",
+        "prompt_flag": "-p",
+        "model_flag": "--model",
+        "extra_flags": [],
+        "trust": "high",
+        "speed": "fast",
+    },
+    "cursor-agent": {
+        "cmd": "cursor-agent",
+        "json_flag": ["--output-format", "stream-json"],
+        "headless_flag": "--approve-mcps",
+        "prompt_flag": "--print",
+        "model_flag": "--model",
+        "extra_flags": [],
+        "trust": "medium",
+        "speed": "slow",
+    },
+    "opencode": {
+        "cmd": "opencode",
+        "json_flag": ["--format", "json"],
+        "headless_flag": None,
+        "prompt_flag": "run",
+        "model_flag": "--model",
+        "extra_flags": [],
+        "trust": "low",
+        "speed": "medium",
+    },
+}
+
+# Default models per CLI
+DEFAULT_MODELS = {
+    "claude": "claude-opus-4-5-20251101",
+    "gemini": "gemini-3.0-pro",
+    "cursor-agent": "gpt-5.2-codex-high",
+    "opencode": "glm-4.7",
+}
+
+# Role themes for display
+ROLE_THEME = {
+    "researcher": {"icon": "🔬", "color": "blue", "name": "RESEARCHER"},
+    "coder": {"icon": "💻", "color": "cyan", "name": "CODER"},
+    "reviewer": {"icon": "📋", "color": "green", "name": "REVIEWER"},
+    "tester": {"icon": "🧪", "color": "yellow", "name": "TESTER"},
+    # Backward compatibility with old agents
     "archie": {"icon": "🔧", "color": "cyan", "name": "ARCHIE"},
     "sage": {"icon": "📚", "color": "green", "name": "SAGE"},
     "faye": {"icon": "🎨", "color": "magenta", "name": "FAYE"},
 }
+
+# Alias for backward compatibility
+AGENT_THEME = ROLE_THEME
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANSI Colors and Formatting
@@ -194,6 +258,7 @@ class Task:
     id: str
     prompt: str
     model: str = DEFAULT_MODEL
+    cli: str = "claude"  # CLI platform: claude, gemini, cursor-agent, opencode
     context: str = ""
     priority: int = 0
     created_at: str = ""
@@ -205,6 +270,7 @@ class Task:
             id=data.get("id", path.stem),
             prompt=data.get("prompt", ""),
             model=data.get("model", DEFAULT_MODEL),
+            cli=data.get("cli", "claude"),
             context=data.get("context", ""),
             priority=data.get("priority", 0),
             created_at=data.get("created_at", ""),
@@ -697,9 +763,35 @@ class QueueProcessor:
         tasks = list(self.queue_dir.glob("*.task"))
         return sorted(tasks, key=lambda p: p.stat().st_mtime)
 
+    def _build_command(self, task: Task, prompt: str) -> list[str]:
+        """Build CLI command based on platform."""
+        cli_config = CLI_CONFIGS.get(task.cli, CLI_CONFIGS["claude"])
+        cmd = [cli_config["cmd"]]
+
+        # Platform-specific argument ordering
+        if task.cli == "opencode":
+            # opencode run "<prompt>" --format json --model <model>
+            cmd.append(cli_config["prompt_flag"])  # "run"
+            cmd.append(prompt)
+            cmd.extend(cli_config["json_flag"])
+            if cli_config["model_flag"] and task.model:
+                cmd.extend([cli_config["model_flag"], task.model])
+        else:
+            # claude/gemini/cursor: --print "<prompt>" --model <model> --output-format stream-json
+            cmd.append(cli_config["prompt_flag"])
+            cmd.append(prompt)
+            if cli_config["model_flag"] and task.model:
+                cmd.extend([cli_config["model_flag"], task.model])
+            if cli_config["headless_flag"]:
+                cmd.append(cli_config["headless_flag"])
+            cmd.extend(cli_config["json_flag"])
+            cmd.extend(cli_config["extra_flags"])
+
+        return cmd
+
     def execute(self, task: Task) -> Response:
         self.current_task = task.id
-        
+
         # Create display handler
         display = EventDisplay(self.agent, task)
         self.current_display = display
@@ -709,16 +801,12 @@ class QueueProcessor:
         if task.context:
             prompt = f"{task.context}\n\n---\n\n{prompt}"
 
-        # Use stream-json for rich output
-        cmd = [
-            "claude",
-            "--print",
-            "--model", task.model,
-            "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
-            "--verbose",
-            prompt,
-        ]
+        # Build command dynamically based on CLI platform
+        cmd = self._build_command(task, prompt)
+
+        # Log which CLI we're using
+        cli_name = task.cli.upper()
+        self.log(f"Using CLI: {cli_name} ({CLI_CONFIGS.get(task.cli, {}).get('cmd', 'unknown')})")
 
         start = time.time()
         result_text = ""

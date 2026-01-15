@@ -36,18 +36,27 @@ AGENT="${1:-}"
 BRANCH="${2:-}"
 BASE="${3:-beta-spec}"
 
+# Valid agents/roles
+VALID_ROLES="researcher coder reviewer tester"
+VALID_LEGACY="archie sage faye"
+VALID_ALL="$VALID_ROLES $VALID_LEGACY"
+
 # Validation
 if [[ -z "$AGENT" ]] || [[ -z "$BRANCH" ]]; then
     echo -e "${RED}Usage: $0 <agent> <branch> [base]${NC}"
     echo ""
     echo "Arguments:"
-    echo "  agent   Agent name: archie, sage, or faye"
-    echo "  branch  Target branch name (e.g., archie/swarm-phase-3)"
+    echo "  agent   Role or agent name"
+    echo "  branch  Target branch name (e.g., coder/feature-x)"
     echo "  base    Base branch to create from (default: beta-spec)"
     echo ""
+    echo "Roles (multi-CLI):  $VALID_ROLES"
+    echo "Legacy (Claude):    $VALID_LEGACY"
+    echo ""
     echo "Examples:"
+    echo "  $0 researcher researcher/pipeline-analysis"
+    echo "  $0 coder coder/retry-logic"
     echo "  $0 archie archie/swarm-phase-3"
-    echo "  $0 sage sage/swarm-phase-4 beta-spec"
     exit 1
 fi
 
@@ -55,7 +64,8 @@ fi
 WORKTREE_PATH="$WORKTREE_BASE/notient-$AGENT"
 if [[ ! -d "$WORKTREE_PATH" ]]; then
     echo -e "${RED}Error: Worktree not found: $WORKTREE_PATH${NC}"
-    echo "Valid agents: archie, sage, faye"
+    echo "Valid roles: $VALID_ROLES"
+    echo "Valid legacy agents: $VALID_LEGACY"
     exit 1
 fi
 
