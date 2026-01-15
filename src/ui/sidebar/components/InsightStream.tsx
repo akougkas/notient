@@ -63,29 +63,32 @@ export function InsightStream({ insights, onOpenFile }: InsightStreamProps) {
   const [agenticInsights, setAgenticInsights] = useState<AgenticInsight[]>([]);
 
   // Subscribe to insight:created events
-  useEventBus("insight:created", useCallback((data: { insight: Insight; source: string }) => {
-    const { insight } = data;
+  useEventBus(
+    "insight:created",
+    useCallback((data: { insight: Insight; source: string }) => {
+      const { insight } = data;
 
-    // Convert Insight to display format
-    const agenticInsight: AgenticInsight = {
-      id: insight.id,
-      text: insight.summary,
-      priority: insight.actions.length > 0 ? "high" : "medium",
-      agentType: insight.agentType,
-      actionCount: insight.actions.length,
-      suggestionCount: insight.suggestions.length,
-      timestamp: insight.timestamp,
-    };
+      // Convert Insight to display format
+      const agenticInsight: AgenticInsight = {
+        id: insight.id,
+        text: insight.summary,
+        priority: insight.actions.length > 0 ? "high" : "medium",
+        agentType: insight.agentType,
+        actionCount: insight.actions.length,
+        suggestionCount: insight.suggestions.length,
+        timestamp: insight.timestamp,
+      };
 
-    setAgenticInsights((prev) => {
-      // Avoid duplicates
-      if (prev.some((i) => i.id === agenticInsight.id)) {
-        return prev;
-      }
-      // Keep most recent at top, limit total
-      return [agenticInsight, ...prev].slice(0, MAX_AGENTIC_INSIGHTS);
-    });
-  }, []));
+      setAgenticInsights((prev) => {
+        // Avoid duplicates
+        if (prev.some((i) => i.id === agenticInsight.id)) {
+          return prev;
+        }
+        // Keep most recent at top, limit total
+        return [agenticInsight, ...prev].slice(0, MAX_AGENTIC_INSIGHTS);
+      });
+    }, []),
+  );
 
   // Merge heuristic hints with agentic insights for display
   const allInsights = useMemo((): DisplayInsight[] => {
@@ -93,9 +96,17 @@ export function InsightStream({ insights, onOpenFile }: InsightStreamProps) {
     const agenticHints: DisplayInsight[] = agenticInsights.map((ai) => ({
       text: ai.text,
       priority: ai.priority,
-      action: ai.actionCount > 0 ? `Review ${ai.actionCount} action${ai.actionCount > 1 ? "s" : ""}` : undefined,
+      action:
+        ai.actionCount > 0
+          ? `Review ${ai.actionCount} action${ai.actionCount > 1 ? "s" : ""}`
+          : undefined,
       actionIcon: "bot",
-      actionCallback: ai.actionCount > 0 ? () => { activeView.value = "agents"; } : undefined,
+      actionCallback:
+        ai.actionCount > 0
+          ? () => {
+              activeView.value = "agents";
+            }
+          : undefined,
       isAgentic: true,
     }));
 
@@ -126,7 +137,11 @@ export function InsightStream({ insights, onOpenFile }: InsightStreamProps) {
       <h3 class="nv2-section-label">
         AI Insights
         {highPriorityCount > 0 && <span class="nv2-insight-badge">{highPriorityCount}</span>}
-        {agenticCount > 0 && <span class="nv2-insight-badge nv2-insight-badge--agentic" title="From agents">{agenticCount}</span>}
+        {agenticCount > 0 && (
+          <span class="nv2-insight-badge nv2-insight-badge--agentic" title="From agents">
+            {agenticCount}
+          </span>
+        )}
       </h3>
       {/* biome-ignore lint/a11y/useSemanticElements: role="feed" is correct ARIA pattern for dynamic content streams */}
       <div class="nv2-insight-stream" role="feed" aria-busy="false">
@@ -186,7 +201,9 @@ function InsightItem({ insight, onOpenFile, isFirst }: InsightItemProps) {
     config.className,
     isFirst ? "nv2-insight--featured" : "",
     isAgentic ? "nv2-insight--agentic" : "",
-  ].filter(Boolean).join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <article
