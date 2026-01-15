@@ -699,13 +699,7 @@ export default class NotientPlugin extends Plugin {
         // Check index state and auto-resume if incomplete
         const stats = await this.indexManager.getStats();
 
-        // Dev mode: skip auto-indexing for faster testing
-        if (this.settings.advanced.devSkipAutoIndex) {
-          console.log(
-            `[Notient] Dev mode: skipping auto-index (${stats.noteCount}/${stats.vaultNoteCount} notes)`,
-          );
-          this.kernel.obsidian.notice("Dev mode: indexing skipped for faster testing");
-        } else if (stats.state === "none") {
+        if (stats.state === "none") {
           console.log("[Notient] No index found, starting initial indexing");
           setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
         } else if (stats.state === "incomplete") {
