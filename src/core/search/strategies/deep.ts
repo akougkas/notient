@@ -494,7 +494,7 @@ Example: ["term1", "term2", "term3"]`;
   private truncateForRerank(text: string): string {
     const MAX_CHARS = 2000;
     if (text.length <= MAX_CHARS) return text;
-    return text.slice(0, MAX_CHARS) + "...";
+    return `${text.slice(0, MAX_CHARS)}...`;
   }
 
   /**
