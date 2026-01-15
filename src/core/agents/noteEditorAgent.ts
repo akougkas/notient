@@ -453,6 +453,21 @@ export class NoteEditorAgent extends BaseAgent {
       return true;
     }
 
+    // Handle shorthand format: { someKey: someValue }
+    // If payload has exactly one key (not "key" or "value"), treat it as shorthand
+    const keys = Object.keys(p);
+    if (keys.length === 1 && keys[0] !== "key" && keys[0] !== "value") {
+      const shorthandKey = keys[0];
+      const shorthandValue = p[shorthandKey];
+      // Normalize to standard format
+      p.key = shorthandKey;
+      p.value = shorthandValue;
+      console.log(
+        `[Note Editor] Normalized shorthand payload: {${shorthandKey}} -> {key: ${shorthandKey}, value: ${JSON.stringify(shorthandValue)}}`,
+      );
+      return true;
+    }
+
     console.warn(
       "[Note Editor] Invalid payload for frontmatter_set. Expected { key: string, value: any }. Got:",
       JSON.stringify(p, null, 2),

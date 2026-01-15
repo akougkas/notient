@@ -235,7 +235,8 @@ ${truncatedContent}
 
   /**
    * Parse JSON from LLM output with robust error handling
-   * Handles thinking model output with <think> tags
+   * Handles thinking model output with <think> tags and reasoning blocks
+   * Uses multiple extraction strategies for resilience
    */
   protected parseJSON<T>(jsonStr: string): T | null {
     try {
@@ -253,60 +254,65 @@ ${truncatedContent}
       // These models wrap reasoning in <think>...</think>
       cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
-      // Strip markdown code fences
-      if (cleaned.startsWith("```json")) {
-        cleaned = cleaned.slice(7);
-      } else if (cleaned.startsWith("```")) {
-        cleaned = cleaned.slice(3);
-      }
-      if (cleaned.endsWith("```")) {
-        cleaned = cleaned.slice(0, -3);
-      }
-      cleaned = cleaned.trim();
-
-      // Extract JSON object/array - use non-greedy match from first { or [
-      // to find the balanced closing bracket
-      const jsonMatch = cleaned.match(/[\[{][\s\S]*[\]}]/);
-      if (!jsonMatch) {
-        console.warn(
-          `[${this.config.name}] No JSON found in output (${cleaned.length} chars after cleaning). Preview:`,
-          cleaned.slice(0, 200),
-        );
-        if (cleaned.length < 500) {
-          console.warn(`[${this.config.name}] Full cleaned output:`, cleaned);
-        }
-        return null;
-      }
-
-      // Try parsing the extracted JSON
-      const extracted = jsonMatch[0];
+      // Strategy 1: Try parsing raw cleaned input
       try {
-        const result = JSON.parse(extracted) as T;
-        return result;
-      } catch (parseError) {
-        // If greedy match failed, try to find balanced braces
-        const balanced = this.extractBalancedJson(cleaned);
-        if (balanced) {
-          try {
-            const result = JSON.parse(balanced) as T;
-            return result;
-          } catch (balancedError) {
-            console.warn(
-              `[${this.config.name}] Balanced JSON parse failed. Extracted (${balanced.length} chars):`,
-              balanced.slice(0, 500),
-            );
-            throw new Error("JSON extraction failed - balanced parse error");
-          }
-        }
-        console.warn(
-          `[${this.config.name}] JSON extraction failed. Original: ${originalLength} chars, cleaned: ${cleaned.length} chars, extracted: ${extracted.length} chars`,
-        );
-        console.warn(
-          `[${this.config.name}] Extracted segment preview (first 300 chars):`,
-          extracted.slice(0, 300),
-        );
-        throw new Error("JSON extraction failed");
+        return JSON.parse(cleaned) as T;
+      } catch {
+        // Continue to next strategy
       }
+
+      // Strategy 2: Strip markdown code fences with language tag
+      let fenceStripped = cleaned;
+      if (fenceStripped.startsWith("```json")) {
+        fenceStripped = fenceStripped.slice(7);
+      } else if (fenceStripped.startsWith("```")) {
+        fenceStripped = fenceStripped.slice(3);
+      }
+      if (fenceStripped.endsWith("```")) {
+        fenceStripped = fenceStripped.slice(0, -3);
+      }
+      fenceStripped = fenceStripped.trim();
+
+      try {
+        return JSON.parse(fenceStripped) as T;
+      } catch {
+        // Continue to next strategy
+      }
+
+      // Strategy 3: Extract JSON object/array using regex
+      const jsonMatch = fenceStripped.match(/[\[{][\s\S]*[\]}]/);
+      if (jsonMatch) {
+        const extracted = jsonMatch[0];
+        try {
+          return JSON.parse(extracted) as T;
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 4: Balanced bracket extraction
+      const balanced = this.extractBalancedJson(fenceStripped);
+      if (balanced) {
+        try {
+          return JSON.parse(balanced) as T;
+        } catch (balancedError) {
+          console.warn(
+            `[${this.config.name}] All JSON extraction strategies failed. Balanced extraction (${balanced.length} chars):`,
+            balanced.slice(0, 500),
+          );
+        }
+      }
+
+      // All strategies failed
+      console.warn(
+        `[${this.config.name}] No valid JSON found. Original: ${originalLength} chars, after cleaning: ${fenceStripped.length} chars`,
+      );
+      if (fenceStripped.length < 500) {
+        console.warn(`[${this.config.name}] Full cleaned output:`, fenceStripped);
+      } else {
+        console.warn(`[${this.config.name}] Cleaned output preview:`, fenceStripped.slice(0, 200));
+      }
+      return null;
     } catch (error) {
       console.warn(`[${this.config.name}] JSON parse error:`, error);
       return null;
