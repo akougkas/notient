@@ -354,9 +354,10 @@ export class HNSWVectorStore implements VectorStore {
         embedding: new Float32Array(doc.embedding),
       }));
       await this.getBridge().addItems(items);
+      // Mark dirty so index gets persisted after rebuild
+      this.dirty = true;
     }
-
-    this.dirty = false;
+    // Note: dirty flag NOT cleared here - only cleared on successful native load
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: Legacy interface compatibility
@@ -665,6 +666,11 @@ export class HNSWVectorStore implements VectorStore {
       .select(this.db.db.fn.count("id").as("count"))
       .executeTakeFirst();
     return Number(res?.count || 0);
+  }
+
+  async countHnswEntries(): Promise<number> {
+    if (!this.bridge) return 0;
+    return this.getBridge().getCurrentCount();
   }
 
   async countNotes(): Promise<number> {

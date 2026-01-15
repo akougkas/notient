@@ -53,9 +53,14 @@ export interface VectorStore {
   getChunksByNoteId(noteId: string): Promise<NoteChunk[]>;
 
   /**
-   * Count total chunks
+   * Count total chunks (in SQLite)
    */
   countChunks(): Promise<number>;
+
+  /**
+   * Count entries in the HNSW index (in-memory/worker)
+   */
+  countHnswEntries?(): Promise<number>;
 
   /**
    * Count notes (distinct noteIds)

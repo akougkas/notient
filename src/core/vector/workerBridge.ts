@@ -19,7 +19,8 @@ export type VectorCommand =
   | { type: "addItems"; items: Array<{ id: string; embedding: Float32Array }> }
   | { type: "markDeleted"; ids: string[] }
   | { type: "save" }
-  | { type: "load"; data: ArrayBuffer };
+  | { type: "load"; data: ArrayBuffer }
+  | { type: "getCount"; requestId: string };
 
 // Messages FROM worker
 export type VectorResult =
@@ -27,6 +28,7 @@ export type VectorResult =
   | { type: "searchResult"; requestId: string; results: Array<{ id: string; score: number }> }
   | { type: "addComplete"; count: number }
   | { type: "saveComplete"; data: ArrayBuffer }
+  | { type: "countResult"; requestId: string; count: number }
   | { type: "error"; message: string };
 
 // ============================================================================
@@ -38,6 +40,10 @@ export class VectorWorkerBridge {
   private pendingSearches = new Map<
     string,
     { resolve: (results: { id: string; score: number }[]) => void; reject: (err: Error) => void }
+  >();
+  private pendingCounts = new Map<
+    string,
+    { resolve: (count: number) => void; reject: (err: Error) => void }
   >();
   private pendingAdds: Array<{ resolve: (count: number) => void; reject: (err: Error) => void }> =
     [];
@@ -108,6 +114,12 @@ export class VectorWorkerBridge {
     }
     this.pendingSearches.clear();
 
+    // Reject all pending counts
+    for (const [, pending] of this.pendingCounts) {
+      pending.reject(error);
+    }
+    this.pendingCounts.clear();
+
     // Reject all pending adds
     for (const pending of this.pendingAdds) {
       pending.reject(error);
@@ -146,6 +158,15 @@ export class VectorWorkerBridge {
         if (this.pendingSave) {
           this.pendingSave.resolve(message.data);
           this.pendingSave = null;
+        }
+        break;
+      }
+
+      case "countResult": {
+        const pending = this.pendingCounts.get(message.requestId);
+        if (pending) {
+          pending.resolve(message.count);
+          this.pendingCounts.delete(message.requestId);
         }
         break;
       }
@@ -211,6 +232,14 @@ export class VectorWorkerBridge {
 
   load(data: ArrayBuffer): void {
     this.worker.postMessage({ type: "load", data }, [data]);
+  }
+
+  async getCurrentCount(): Promise<number> {
+    const requestId = Math.random().toString(36).substring(7);
+    return new Promise((resolve, reject) => {
+      this.pendingCounts.set(requestId, { resolve, reject });
+      this.worker.postMessage({ type: "getCount", requestId });
+    });
   }
 
   terminate(): void {
