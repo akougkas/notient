@@ -1,31 +1,33 @@
 # /// script
 # package = "notient-queue-processor"
-# version = "2.0.0"
+# version = "3.0.0"
 # authors = ["Anthony Kougkas | https://akougkas.io"]
-# description = "Queue processor for Notient multi-agent orchestration with rich display"
+# description = "Queue processor for Notient role-based agent orchestration"
 # repository = "https://github.com/akougkas/notient"
 # license = "MIT"
 # dependencies = []
 # requires-python = ">=3.10"
 # ///
 """
-Notient Agent Queue Processor v2
+Notient Role Queue Processor v3
 
-Enhanced queue processor with rich terminal display:
+Enhanced queue processor for role-based agents with rich terminal display:
+- Coder roles: implementer, simplifier, validator, tester, architect, advisor
+- Researcher roles: docs-fetcher, codebase-navigator, world-knowledge
+- Multi-CLI support: claude, gemini, cursor-agent, opencode
 - Stream-JSON parsing for real-time event display
-- ANSI colors and ASCII decorations
 - Tool usage tracking with file diffs
-- Progress timer and cost tracking
-- Agent control via signals (SIGINT to interrupt)
+- Context window management
 
 Usage:
-    uv run queue-processor.py <agent_name>
+    uv run queue-processor.py <role>
 
-    agent_name: archie, sage, or faye
+    role: implementer, simplifier, validator, tester, architect, advisor,
+          docs-fetcher, codebase-navigator, world-knowledge
 
 Workflow:
-    1. Orchestrator writes JSON .task file to agent's queue/
-    2. This processor picks up task, runs Claude with stream-json
+    1. Orchestrator dispatches task via dispatch.py
+    2. This processor picks up task, runs appropriate CLI
     3. Parses events and displays rich formatted output
     4. Writes JSON .response file to responses/
     5. Orchestrator reads response when ready
@@ -48,79 +50,67 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════════════════════
 
 POLL_INTERVAL = 1.0
-DEFAULT_MODEL = "claude-opus-4-5-20251101"
 
-# Valid roles (predefined)
-VALID_ROLES = ("researcher", "coder", "reviewer", "tester")
-# Keep old agents for backward compatibility
-VALID_AGENTS = VALID_ROLES + ("archie", "sage", "faye")
+# Coder roles (shared CODER.md core identity)
+CODER_ROLES = (
+    "implementer",
+    "simplifier",
+    "validator",
+    "tester",
+    "architect",
+    "advisor",
+)
 
-# CLI configurations for multi-platform support
-CLI_CONFIGS = {
-    "claude": {
-        "cmd": "claude",
-        "json_flag": ["--output-format", "stream-json"],
-        "headless_flag": "--dangerously-skip-permissions",
-        "prompt_flag": "--print",
-        "model_flag": "--model",
-        "extra_flags": ["--verbose"],
-        "trust": "high",
-        "speed": "fast",
-    },
-    "gemini": {
-        "cmd": "gemini",
-        "json_flag": ["--output-format", "stream-json"],
-        "headless_flag": "--yolo",
-        "prompt_flag": "-p",
-        "model_flag": "--model",
-        "extra_flags": [],
-        "trust": "high",
-        "speed": "fast",
-    },
-    "cursor-agent": {
-        "cmd": "cursor-agent",
-        "json_flag": ["--output-format", "stream-json"],
-        "headless_flag": "--approve-mcps",
-        "prompt_flag": "--print",
-        "model_flag": "--model",
-        "extra_flags": [],
-        "trust": "medium",
-        "speed": "slow",
-    },
-    "opencode": {
-        "cmd": "opencode",
-        "json_flag": ["--format", "json"],
-        "headless_flag": None,
-        "prompt_flag": "run",
-        "model_flag": "--model",
-        "extra_flags": [],
-        "trust": "low",
-        "speed": "medium",
-    },
-}
+# Researcher roles (shared RESEARCHER.md core identity)
+RESEARCHER_ROLES = (
+    "docs-fetcher",
+    "codebase-navigator",
+    "world-knowledge",
+)
 
-# Default models per CLI
-DEFAULT_MODELS = {
-    "claude": "claude-opus-4-5-20251101",
-    "gemini": "gemini-3.0-pro",
-    "cursor-agent": "gpt-5.2-codex-high",
-    "opencode": "glm-4.7",
-}
+# All valid roles
+VALID_ROLES = CODER_ROLES + RESEARCHER_ROLES
+
+# Load CLI configuration from central config file
+def load_config() -> dict:
+    """Load CLI configuration from config.json."""
+    config_path = Path(__file__).parent.parent / "orchestration/config.json"
+    if config_path.exists():
+        return json.loads(config_path.read_text())
+    # Fallback defaults if config missing
+    return {
+        "models": {
+            "claude": "claude-opus-4-5-20251101",
+            "gemini": "gemini-3.0-pro",
+            "cursor-agent": "gpt-5.2-codex-high",
+            "opencode": "glm-4.7",
+        },
+        "cli": {
+            "claude": {"cmd": "claude", "flags": ["--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]},
+            "gemini": {"cmd": "gemini", "flags": ["--output-format", "stream-json"]},
+            "cursor-agent": {"cmd": "cursor-agent", "flags": ["--print", "--output-format", "stream-json"]},
+            "opencode": {"cmd": "opencode", "subcommand": "run", "flags": ["--format", "json"]},
+        }
+    }
+
+CONFIG = load_config()
+DEFAULT_MODELS = CONFIG["models"]
+CLI_CONFIGS = CONFIG["cli"]
 
 # Role themes for display
 ROLE_THEME = {
-    "researcher": {"icon": "🔬", "color": "blue", "name": "RESEARCHER"},
-    "coder": {"icon": "💻", "color": "cyan", "name": "CODER"},
-    "reviewer": {"icon": "📋", "color": "green", "name": "REVIEWER"},
-    "tester": {"icon": "🧪", "color": "yellow", "name": "TESTER"},
-    # Backward compatibility with old agents
-    "archie": {"icon": "🔧", "color": "cyan", "name": "ARCHIE"},
-    "sage": {"icon": "📚", "color": "green", "name": "SAGE"},
-    "faye": {"icon": "🎨", "color": "magenta", "name": "FAYE"},
+    # Coders
+    "implementer": {"icon": "🔨", "color": "cyan", "name": "IMPLEMENTER", "category": "coder"},
+    "simplifier": {"icon": "✨", "color": "green", "name": "SIMPLIFIER", "category": "coder"},
+    "validator": {"icon": "🔍", "color": "yellow", "name": "VALIDATOR", "category": "coder"},
+    "tester": {"icon": "🧪", "color": "magenta", "name": "TESTER", "category": "coder"},
+    "architect": {"icon": "📐", "color": "blue", "name": "ARCHITECT", "category": "coder"},
+    "advisor": {"icon": "💡", "color": "white", "name": "ADVISOR", "category": "coder"},
+    # Researchers
+    "docs-fetcher": {"icon": "📚", "color": "blue", "name": "DOCS-FETCHER", "category": "researcher"},
+    "codebase-navigator": {"icon": "🗺️", "color": "cyan", "name": "CODEBASE-NAVIGATOR", "category": "researcher"},
+    "world-knowledge": {"icon": "🌐", "color": "magenta", "name": "WORLD-KNOWLEDGE", "category": "researcher"},
 }
-
-# Alias for backward compatibility
-AGENT_THEME = ROLE_THEME
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANSI Colors and Formatting
@@ -128,14 +118,12 @@ AGENT_THEME = ROLE_THEME
 
 class C:
     """ANSI color codes for terminal styling."""
-    # Reset
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
     ITALIC = "\033[3m"
     UNDERLINE = "\033[4m"
-    
-    # Colors
+
     BLACK = "\033[30m"
     RED = "\033[31m"
     GREEN = "\033[32m"
@@ -145,8 +133,7 @@ class C:
     CYAN = "\033[36m"
     WHITE = "\033[37m"
     GRAY = "\033[90m"
-    
-    # Bright colors
+
     BRIGHT_RED = "\033[91m"
     BRIGHT_GREEN = "\033[92m"
     BRIGHT_YELLOW = "\033[93m"
@@ -154,8 +141,7 @@ class C:
     BRIGHT_MAGENTA = "\033[95m"
     BRIGHT_CYAN = "\033[96m"
     BRIGHT_WHITE = "\033[97m"
-    
-    # Background
+
     BG_BLACK = "\033[40m"
     BG_RED = "\033[41m"
     BG_GREEN = "\033[42m"
@@ -166,9 +152,9 @@ class C:
     BG_WHITE = "\033[47m"
 
 
-def get_agent_color(agent: str) -> str:
-    """Get the ANSI color code for an agent."""
-    theme = AGENT_THEME.get(agent, {"color": "white"})
+def get_role_color(role: str) -> str:
+    """Get the ANSI color code for a role."""
+    theme = ROLE_THEME.get(role, {"color": "white"})
     return getattr(C, theme["color"].upper(), C.WHITE)
 
 
@@ -178,7 +164,6 @@ def get_agent_color(agent: str) -> str:
 
 class Box:
     """ASCII box drawing characters."""
-    # Single line
     H = "─"
     V = "│"
     TL = "╭"
@@ -190,8 +175,7 @@ class Box:
     TT = "┬"
     BT = "┴"
     X = "┼"
-    
-    # Double line
+
     DH = "═"
     DV = "║"
     DTL = "╔"
@@ -207,17 +191,17 @@ def box_line(width: int, left: str = Box.TL, right: str = Box.TR, fill: str = Bo
 
 def box_text(text: str, width: int, left: str = Box.V, right: str = Box.V, align: str = "left") -> str:
     """Create a box text line with padding."""
-    inner_width = width - 4  # Account for borders and padding
+    inner_width = width - 4
     if len(text) > inner_width:
         text = text[:inner_width - 3] + "..."
-    
+
     if align == "center":
         text = text.center(inner_width)
     elif align == "right":
         text = text.rjust(inner_width)
     else:
         text = text.ljust(inner_width)
-    
+
     return f"{left} {text} {right}"
 
 
@@ -242,6 +226,7 @@ TOOL_ICONS = {
     "Skill": ("⚡", C.CYAN),
 }
 
+
 def get_tool_display(tool_name: str) -> tuple[str, str]:
     """Get icon and color for a tool."""
     if tool_name.startswith("mcp__"):
@@ -257,8 +242,10 @@ def get_tool_display(tool_name: str) -> tuple[str, str]:
 class Task:
     id: str
     prompt: str
-    model: str = DEFAULT_MODEL
-    cli: str = "claude"  # CLI platform: claude, gemini, cursor-agent, opencode
+    model: str = ""
+    cli: str = "claude"
+    role: str = ""
+    category: str = ""
     context: str = ""
     priority: int = 0
     created_at: str = ""
@@ -269,8 +256,10 @@ class Task:
         return cls(
             id=data.get("id", path.stem),
             prompt=data.get("prompt", ""),
-            model=data.get("model", DEFAULT_MODEL),
+            model=data.get("model", DEFAULT_MODELS.get(data.get("cli", "claude"), "")),
             cli=data.get("cli", "claude"),
+            role=data.get("role", ""),
+            category=data.get("category", ""),
             context=data.get("context", ""),
             priority=data.get("priority", 0),
             created_at=data.get("created_at", ""),
@@ -304,25 +293,18 @@ class ExecutionStats:
     cache_read_tokens: int = 0
     num_turns: int = 0
 
-    # Context window management (200K limit for Claude, estimate ~170K usable)
     CONTEXT_LIMIT: int = 200_000
 
     @property
     def context_used(self) -> int:
-        """
-        Estimate context used based on input + output tokens.
-        Note: cache_read is a subset of input_tokens (not additive).
-        """
         return self.input_tokens + self.output_tokens
 
     @property
     def context_remaining(self) -> int:
-        """Estimate remaining context window capacity."""
         return max(0, self.CONTEXT_LIMIT - self.context_used)
 
     @property
     def context_percent_used(self) -> float:
-        """Percentage of context window used."""
         if self.CONTEXT_LIMIT == 0:
             return 0.0
         return round((self.context_used / self.CONTEXT_LIMIT) * 100, 1)
@@ -331,11 +313,12 @@ class ExecutionStats:
 @dataclass
 class Response:
     task_id: str
-    agent: str
-    status: str  # complete, failed, interrupted
+    role: str
+    status: str
     output: str = ""
     error: Optional[str] = None
-    model: str = DEFAULT_MODEL
+    model: str = ""
+    cli: str = "claude"
     returncode: int = 0
     elapsed_seconds: float = 0.0
     stats: Optional[ExecutionStats] = None
@@ -344,11 +327,12 @@ class Response:
     def to_dict(self) -> dict:
         result = {
             "task_id": self.task_id,
-            "agent": self.agent,
+            "role": self.role,
             "status": self.status,
             "output": self.output,
             "error": self.error,
             "model": self.model,
+            "cli": self.cli,
             "returncode": self.returncode,
             "elapsed_seconds": self.elapsed_seconds,
             "timestamp": self.timestamp,
@@ -381,13 +365,13 @@ class Response:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class EventDisplay:
-    """Handles formatting and display of Claude streaming events."""
-    
-    def __init__(self, agent: str, task: Task):
-        self.agent = agent
+    """Handles formatting and display of CLI streaming events."""
+
+    def __init__(self, role: str, task: Task):
+        self.role = role
         self.task = task
-        self.theme = AGENT_THEME.get(agent, {"icon": "🤖", "color": "white", "name": agent.upper()})
-        self.color = get_agent_color(agent)
+        self.theme = ROLE_THEME.get(role, {"icon": "🤖", "color": "white", "name": role.upper()})
+        self.color = get_role_color(role)
         self.stats = ExecutionStats()
         self.pending_tools: dict[str, ToolCall] = {}
         self.current_text = ""
@@ -395,35 +379,46 @@ class EventDisplay:
         self.width = min(os.get_terminal_size().columns, 100)
         self._timer_thread: Optional[threading.Thread] = None
         self._timer_running = False
-        
+
     def start(self):
-        """Display task header."""
+        """Display task header with clear WORKING ON banner."""
         icon = self.theme["icon"]
         name = self.theme["name"]
-        model = self.task.model.upper()
-        
-        # Task header box
+        model = self.task.model if self.task.model else "DEFAULT"
+        cli = self.task.cli.upper()
+        category = self.theme.get("category", "agent").upper()
+
+        # Extract actual task (after "Then execute this task:")
+        prompt = self.task.prompt
+        if "Then execute this task:" in prompt:
+            prompt = prompt.split("Then execute this task:")[-1].strip()
+
+        # Truncate prompt for display
+        prompt_line1 = prompt[:self.width - 8].replace("\n", " ")
+        prompt_line2 = ""
+        if len(prompt) > self.width - 8:
+            prompt_line2 = prompt[self.width - 8:self.width * 2 - 16].replace("\n", " ")
+            if len(prompt) > self.width * 2 - 16:
+                prompt_line2 += "..."
+
         print()
-        print(f"{self.color}{box_line(self.width)}{C.RESET}")
-        
-        header = f"{icon} {name} │ {self.task.id} │ {model}"
-        print(f"{self.color}{box_text(header, self.width)}{C.RESET}")
-        
-        print(f"{self.color}{box_line(self.width, Box.LT, Box.RT)}{C.RESET}")
-        
-        # Task prompt (truncated)
-        prompt_preview = self.task.prompt[:self.width - 10].replace("\n", " ")
-        if len(self.task.prompt) > self.width - 10:
-            prompt_preview += "..."
-        print(f"{self.color}{box_text(f'📝 {prompt_preview}', self.width)}{C.RESET}")
-        
-        print(f"{self.color}{box_line(self.width, Box.BL, Box.BR)}{C.RESET}")
+        print(f"{C.BRIGHT_WHITE}{C.BG_BLUE} ▶ WORKING {C.RESET} {self.color}{icon} {name}{C.RESET}")
         print()
-        
+        print(f"{self.color}{Box.DTL}{Box.DH * (self.width - 2)}{Box.DTR}{C.RESET}")
+        print(f"{self.color}{Box.DV} {C.BRIGHT_WHITE}CLI:{C.RESET} {cli:<15} {self.color}{C.BRIGHT_WHITE}MODEL:{C.RESET} {model:<30} {self.color}{Box.DV}{C.RESET}")
+        print(f"{self.color}{Box.DV}{Box.H * (self.width - 2)}{Box.DV}{C.RESET}")
+        print(f"{self.color}{Box.DV} {C.BRIGHT_WHITE}TASK:{C.RESET} {self.task.id:<56} {self.color}{Box.DV}{C.RESET}")
+        print(f"{self.color}{Box.DV}{Box.H * (self.width - 2)}{Box.DV}{C.RESET}")
+        print(f"{self.color}{Box.DV} 📝 {prompt_line1:<{self.width - 6}}{Box.DV}{C.RESET}")
+        if prompt_line2:
+            print(f"{self.color}{Box.DV}    {prompt_line2:<{self.width - 6}}{Box.DV}{C.RESET}")
+        print(f"{self.color}{Box.DBL}{Box.DH * (self.width - 2)}{Box.DBR}{C.RESET}")
+        print()
+
     def stop(self):
         """Stop any running display updates."""
         self._timer_running = False
-        
+
     def elapsed_str(self) -> str:
         """Format elapsed time."""
         elapsed = time.time() - self.start_time
@@ -431,69 +426,62 @@ class EventDisplay:
         if mins > 0:
             return f"{mins}m {secs}s"
         return f"{secs}s"
-    
+
     def handle_event(self, event: dict) -> Optional[str]:
-        """
-        Handle a streaming event and return any final result text.
-        Returns the final output text when type=result.
-        """
+        """Handle a streaming event and return any final result text."""
         event_type = event.get("type")
         subtype = event.get("subtype")
-        
+
         if event_type == "system":
             if subtype == "init":
                 model = event.get("model", "unknown")
                 print(f"  {C.DIM}⚙️  Initialized: {model}{C.RESET}")
             elif subtype == "hook_response":
-                pass  # Skip hook responses
-            else:
-                # Other system events
                 pass
-                
+            else:
+                pass
+
         elif event_type == "assistant":
             self._handle_assistant_event(event)
-            
+
         elif event_type == "user":
             self._handle_tool_result(event)
-            
+
         elif event_type == "result":
             return self._handle_result(event)
-            
+
         return None
-    
+
     def _handle_assistant_event(self, event: dict):
         """Handle assistant message events (text and tool_use)."""
         message = event.get("message", {})
         content = message.get("content", [])
-        
+
         for item in content:
             item_type = item.get("type")
-            
+
             if item_type == "text":
                 text = item.get("text", "")
                 if text and text != self.current_text:
-                    # Show new text (streaming)
                     new_text = text[len(self.current_text):]
                     if new_text.strip():
-                        # Format thinking/response text
                         lines = new_text.split("\n")
                         for line in lines:
                             if line.strip():
                                 print(f"  {C.WHITE}💭 {line.strip()}{C.RESET}")
                     self.current_text = text
-                    
+
             elif item_type == "tool_use":
                 self._handle_tool_use(item)
-    
+
     def _handle_tool_use(self, item: dict):
         """Handle a tool_use event."""
         tool_name = item.get("name", "unknown")
         tool_id = item.get("id", "")
         input_data = item.get("input", {})
-        
+
         icon, color = get_tool_display(tool_name)
-        
-        # Create tool call record
+
         tool_call = ToolCall(
             name=tool_name,
             tool_id=tool_id,
@@ -502,8 +490,7 @@ class EventDisplay:
         )
         self.pending_tools[tool_id] = tool_call
         self.stats.tool_calls.append(tool_call)
-        
-        # Display based on tool type
+
         if tool_name == "Bash":
             cmd = input_data.get("command", "")[:60]
             desc = input_data.get("description", "")
@@ -511,17 +498,17 @@ class EventDisplay:
             print(f"  {color}{icon} Bash:{C.RESET} {C.YELLOW}{cmd}{C.RESET}")
             if desc:
                 print(f"     {C.DIM}└─ {desc}{C.RESET}")
-                
+
         elif tool_name == "Read":
             file_path = input_data.get("file_path", input_data.get("target_file", ""))
             self.stats.files_read.append(file_path)
             short_path = self._short_path(file_path)
             print(f"  {color}{icon} Read:{C.RESET} {C.BLUE}{short_path}{C.RESET}")
-            
+
         elif tool_name in ("Edit", "Write"):
             file_path = input_data.get("file_path", input_data.get("target_file", ""))
             short_path = self._short_path(file_path)
-            
+
             if tool_name == "Edit":
                 self.stats.files_edited.append(file_path)
                 old_str = input_data.get("old_string", "")
@@ -535,48 +522,44 @@ class EventDisplay:
                 content = input_data.get("contents", "")
                 line_count = content.count("\n") + 1 if content else 0
                 print(f"  {color}{icon} Write:{C.RESET} {C.GREEN}{short_path}{C.RESET} ({line_count} lines)")
-                
+
         elif tool_name == "Glob":
             pattern = input_data.get("pattern", input_data.get("glob_pattern", ""))
             print(f"  {color}{icon} Glob:{C.RESET} {C.CYAN}{pattern}{C.RESET}")
-            
+
         elif tool_name == "Grep":
             pattern = input_data.get("pattern", "")
             path = input_data.get("path", "")
             print(f"  {color}{icon} Grep:{C.RESET} {C.CYAN}'{pattern}'{C.RESET} in {path or 'workspace'}")
-            
+
         elif tool_name.startswith("mcp__"):
-            # MCP tool call
             mcp_name = tool_name.split("__")[-1] if "__" in tool_name else tool_name
             print(f"  {color}{icon} MCP:{C.RESET} {C.MAGENTA}{mcp_name}{C.RESET}")
-            
+
         else:
             print(f"  {color}{icon} {tool_name}{C.RESET}")
-    
+
     def _handle_tool_result(self, event: dict):
         """Handle a tool result event."""
         message = event.get("message", {})
         content = message.get("content", [])
         tool_result = event.get("tool_use_result", {})
-        
+
         for item in content:
             if item.get("type") == "tool_result":
                 tool_id = item.get("tool_use_id", "")
                 is_error = item.get("is_error", False)
                 result_content = item.get("content", "")
-                
-                # Update pending tool
+
                 if tool_id in self.pending_tools:
                     tool = self.pending_tools[tool_id]
                     tool.end_time = time.time()
                     tool.is_error = is_error
                     tool.result = result_content[:500] if result_content else None
-                    
-                    # Show result summary
+
                     if is_error:
                         print(f"     {C.RED}└─ ✗ Error{C.RESET}")
                     else:
-                        # Summarize result
                         if tool.name == "Glob" and result_content:
                             files = result_content.strip().split("\n")
                             print(f"     {C.DIM}└─ Found {len(files)} file(s){C.RESET}")
@@ -594,7 +577,7 @@ class EventDisplay:
                                 print(f"     {C.DIM}└─ {preview}{'...' if len(stdout) > 50 else ''}{C.RESET}")
                             elif stderr:
                                 print(f"     {C.YELLOW}└─ {stderr[:50]}...{C.RESET}")
-    
+
     def _handle_result(self, event: dict) -> str:
         """Handle the final result event."""
         is_error = event.get("is_error", False)
@@ -603,24 +586,21 @@ class EventDisplay:
         total_cost = event.get("total_cost_usd", 0)
         usage = event.get("usage", {})
         num_turns = event.get("num_turns", 0)
-        
-        # Update stats
+
         self.stats.total_cost_usd = total_cost
         self.stats.input_tokens = usage.get("input_tokens", 0)
         self.stats.output_tokens = usage.get("output_tokens", 0)
         self.stats.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
         self.stats.num_turns = num_turns
-        
-        # Summary box
+
         print()
         elapsed = duration_ms / 1000
-        
+
         if is_error:
             status_line = f"❌ Failed │ {elapsed:.1f}s │ ${total_cost:.4f}"
             print(f"{C.RED}{box_line(self.width)}{C.RESET}")
             print(f"{C.RED}{box_text(status_line, self.width)}{C.RESET}")
         else:
-            # Stats line with context info
             tool_count = len(self.stats.tool_calls)
             files_count = len(set(self.stats.files_read + self.stats.files_written + self.stats.files_edited))
             ctx_pct = self.stats.context_percent_used
@@ -630,12 +610,10 @@ class EventDisplay:
             print(f"{self.color}{box_line(self.width)}{C.RESET}")
             print(f"{self.color}{box_text(status_line, self.width)}{C.RESET}")
 
-            # Context window line
             ctx_color = C.GREEN if ctx_pct < 50 else (C.YELLOW if ctx_pct < 80 else C.RED)
             ctx_line = f"📊 Context: {ctx_pct}% used │ ~{ctx_remaining_k}K tokens remaining"
             print(f"{self.color}{box_text(f'{ctx_color}{ctx_line}{C.RESET}', self.width)}{C.RESET}")
-        
-        # File summary - show ALL modified files (no truncation)
+
         modified = list(set(self.stats.files_written + self.stats.files_edited))
         if modified:
             print(f"{self.color}{box_line(self.width, Box.LT, Box.RT)}{C.RESET}")
@@ -643,35 +621,34 @@ class EventDisplay:
                 short = self._short_path(f)
                 action = "✏️" if f in self.stats.files_edited else "📝"
                 print(f"{self.color}{box_text(f'{action} {short}', self.width)}{C.RESET}")
-        
+
         print(f"{self.color}{box_line(self.width, Box.BL, Box.BR)}{C.RESET}")
         print()
-        
+
         return result_text
-    
+
     def _short_path(self, path: str) -> str:
         """Shorten a file path for display."""
         if not path:
             return ""
-        # Remove common prefixes
         for prefix in ["/home/akougkas/projects/notient/", "src/", "./"]:
             if path.startswith(prefix):
                 path = path[len(prefix):]
         return path
-    
+
     def _compute_diff_summary(self, old: str, new: str) -> str:
         """Compute a simple diff summary."""
         if not old and not new:
             return ""
-        
+
         old_lines = old.count("\n") + 1 if old else 0
         new_lines = new.count("\n") + 1 if new else 0
-        
+
         if old_lines == 0:
             return f"+{new_lines} lines"
         elif new_lines == 0:
             return f"-{old_lines} lines"
-        
+
         diff = new_lines - old_lines
         if diff > 0:
             return f"+{diff} lines ({old_lines} → {new_lines})"
@@ -686,18 +663,17 @@ class EventDisplay:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class QueueProcessor:
-    def __init__(self, agent: str):
-        self.agent = agent
+    def __init__(self, role: str):
+        self.role = role
         self.running = True
         self.current_task: Optional[str] = None
         self.current_process: Optional[subprocess.Popen] = None
         self.current_display: Optional[EventDisplay] = None
 
-        # Paths
         repo = Path(__file__).parent.parent.parent
-        self.queue_dir = repo / f".claude/orchestration/{agent}/queue"
-        self.response_dir = repo / f".claude/orchestration/{agent}/responses"
-        self.worktree = Path.home() / f"projects/_worktrees/notient-{agent}"
+        self.queue_dir = repo / f".claude/orchestration/{role}/queue"
+        self.response_dir = repo / f".claude/orchestration/{role}/responses"
+        self.worktree = Path.home() / f"projects/_worktrees/notient-{role}"
 
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._shutdown)
@@ -725,33 +701,32 @@ class QueueProcessor:
             color = C.YELLOW
         elif level == "SUCCESS":
             color = C.GREEN
-        print(f"{C.DIM}[{ts}]{C.RESET} {color}[{self.agent.upper()}]{C.RESET} {msg}", flush=True)
+        print(f"{C.DIM}[{ts}]{C.RESET} {color}[{self.role.upper()}]{C.RESET} {msg}", flush=True)
 
     def status(self, state: str, detail: str = ""):
-        suffix = f" - {detail}" if detail else ""
-        theme = AGENT_THEME.get(self.agent, {"icon": "🤖"})
+        theme = ROLE_THEME.get(self.role, {"icon": "🤖"})
         icon = theme["icon"]
-        color = get_agent_color(self.agent)
-        
+        color = get_role_color(self.role)
+
         if state == "idle":
-            print(f"\n{color}{icon} {self.agent.upper()}: {C.DIM}Waiting for tasks...{C.RESET}", flush=True)
+            print()
+            print(f"{C.DIM}{C.BG_BLACK} ⏸ IDLE {C.RESET} {color}{icon} {self.role.upper()}{C.RESET} {C.DIM}— Waiting for tasks...{C.RESET}", flush=True)
+            print()
         elif state == "busy":
-            pass  # Task header handles this
-        else:
-            print(f"STATUS:{self.agent}:{state}{suffix}", flush=True)
+            pass
 
     def setup(self) -> bool:
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self.response_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.worktree.exists():
-            self.log(f"Worktree missing: {self.worktree}", "ERROR")
-            return False
+            self.log(f"Worktree missing: {self.worktree}", "WARN")
+            self.log("Will run in main repo (no isolation)", "WARN")
 
+        # Check default CLI availability
         result = subprocess.run(["claude", "--version"], capture_output=True)
         if result.returncode != 0:
-            self.log("Claude CLI not found", "ERROR")
-            return False
+            self.log("Claude CLI not found (other CLIs may still work)", "WARN")
 
         self.log(f"Queue: {self.queue_dir}")
         self.log(f"Worktree: {self.worktree}")
@@ -764,36 +739,30 @@ class QueueProcessor:
         return sorted(tasks, key=lambda p: p.stat().st_mtime)
 
     def _build_command(self, task: Task, prompt: str) -> list[str]:
-        """Build CLI command based on platform."""
+        """Build CLI command: <cmd> [subcommand] [--model X] [flags...] "prompt"."""
         cli_config = CLI_CONFIGS.get(task.cli, CLI_CONFIGS["claude"])
         cmd = [cli_config["cmd"]]
 
-        # Platform-specific argument ordering
-        if task.cli == "opencode":
-            # opencode run "<prompt>" --format json --model <model>
-            cmd.append(cli_config["prompt_flag"])  # "run"
-            cmd.append(prompt)
-            cmd.extend(cli_config["json_flag"])
-            if cli_config["model_flag"] and task.model:
-                cmd.extend([cli_config["model_flag"], task.model])
-        else:
-            # claude/gemini/cursor: --print "<prompt>" --model <model> --output-format stream-json
-            cmd.append(cli_config["prompt_flag"])
-            cmd.append(prompt)
-            if cli_config["model_flag"] and task.model:
-                cmd.extend([cli_config["model_flag"], task.model])
-            if cli_config["headless_flag"]:
-                cmd.append(cli_config["headless_flag"])
-            cmd.extend(cli_config["json_flag"])
-            cmd.extend(cli_config["extra_flags"])
+        # Add subcommand if specified (e.g., "run" for opencode)
+        if cli_config.get("subcommand"):
+            cmd.append(cli_config["subcommand"])
+
+        # Add model flag
+        if task.model:
+            cmd.extend(["--model", task.model])
+
+        # Add all configured flags
+        cmd.extend(cli_config.get("flags", []))
+
+        # Prompt is always positional (last argument)
+        cmd.append(prompt)
 
         return cmd
 
     def execute(self, task: Task) -> Response:
         self.current_task = task.id
 
-        # Create display handler
-        display = EventDisplay(self.agent, task)
+        display = EventDisplay(self.role, task)
         self.current_display = display
         display.start()
 
@@ -801,12 +770,13 @@ class QueueProcessor:
         if task.context:
             prompt = f"{task.context}\n\n---\n\n{prompt}"
 
-        # Build command dynamically based on CLI platform
         cmd = self._build_command(task, prompt)
 
-        # Log which CLI we're using
         cli_name = task.cli.upper()
         self.log(f"Using CLI: {cli_name} ({CLI_CONFIGS.get(task.cli, {}).get('cmd', 'unknown')})")
+
+        # Determine working directory
+        cwd = self.worktree if self.worktree.exists() else Path(__file__).parent.parent.parent
 
         start = time.time()
         result_text = ""
@@ -816,13 +786,12 @@ class QueueProcessor:
         try:
             self.current_process = subprocess.Popen(
                 cmd,
-                cwd=self.worktree,
+                cwd=cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
 
-            # Process streaming events
             for line in iter(self.current_process.stdout.readline, ""):
                 if not line.strip():
                     continue
@@ -832,7 +801,6 @@ class QueueProcessor:
                     if result is not None:
                         result_text = result
                 except json.JSONDecodeError:
-                    # Not JSON, just print it
                     print(f"  {C.DIM}> {line.strip()}{C.RESET}")
 
             self.current_process.wait()
@@ -848,7 +816,7 @@ class QueueProcessor:
 
         elapsed = time.time() - start
         status = "complete" if returncode == 0 else "failed"
-        
+
         if returncode != 0 and not error_text:
             status = "interrupted"
 
@@ -857,11 +825,12 @@ class QueueProcessor:
 
         return Response(
             task_id=task.id,
-            agent=self.agent,
+            role=self.role,
             status=status,
             output=result_text,
             error=error_text,
             model=task.model,
+            cli=task.cli,
             returncode=returncode,
             elapsed_seconds=round(elapsed, 2),
             stats=display.stats,
@@ -874,12 +843,21 @@ class QueueProcessor:
         task_path.unlink(missing_ok=True)
 
     def run(self) -> int:
-        # Startup banner
-        theme = AGENT_THEME.get(self.agent, {"icon": "🤖", "name": self.agent.upper()})
+        theme = ROLE_THEME.get(self.role, {"icon": "🤖", "name": self.role.upper()})
+        category = theme.get("category", "unknown")
+        color = get_role_color(self.role)
+
+        # Get configured defaults
+        default_cli = "claude"  # Default fallback
+        default_model = DEFAULT_MODELS.get(default_cli, "unknown")
+
         print()
-        print(f"{get_agent_color(self.agent)}{Box.DH * 60}{C.RESET}")
-        print(f"{get_agent_color(self.agent)}  {theme['icon']} {theme['name']} Queue Processor v2.0{C.RESET}")
-        print(f"{get_agent_color(self.agent)}{Box.DH * 60}{C.RESET}")
+        print(f"{color}{Box.DTL}{Box.DH * 68}{Box.DTR}{C.RESET}")
+        print(f"{color}{Box.DV}  {theme['icon']} {theme['name']:<20} {'│':^3} {category.upper():<12} {'│':^3} READY    {Box.DV}{C.RESET}")
+        print(f"{color}{Box.DV}{Box.DH * 68}{Box.DV}{C.RESET}")
+        print(f"{color}{Box.DV}  📍 Queue: .claude/orchestration/{self.role}/queue/{' ' * (35 - len(self.role))}{Box.DV}{C.RESET}")
+        print(f"{color}{Box.DV}  🔧 Available CLIs: claude, gemini, cursor-agent, opencode{' ' * 8}{Box.DV}{C.RESET}")
+        print(f"{color}{Box.DBL}{Box.DH * 68}{Box.DBR}{C.RESET}")
         print()
 
         if not self.setup():
@@ -919,17 +897,19 @@ class QueueProcessor:
 
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: uv run queue-processor.py <agent>")
-        print(f"  agent: {', '.join(VALID_AGENTS)}")
+        print(f"Usage: uv run queue-processor.py <role>")
+        print(f"\nCoders: {', '.join(CODER_ROLES)}")
+        print(f"Researchers: {', '.join(RESEARCHER_ROLES)}")
         sys.exit(1)
 
-    agent = sys.argv[1].lower()
-    if agent not in VALID_AGENTS:
-        print(f"{C.RED}Unknown agent: {agent}{C.RESET}")
-        print(f"  Valid: {', '.join(VALID_AGENTS)}")
+    role = sys.argv[1].lower()
+    if role not in VALID_ROLES:
+        print(f"{C.RED}Unknown role: {role}{C.RESET}")
+        print(f"\nCoders: {', '.join(CODER_ROLES)}")
+        print(f"Researchers: {', '.join(RESEARCHER_ROLES)}")
         sys.exit(1)
 
-    sys.exit(QueueProcessor(agent).run())
+    sys.exit(QueueProcessor(role).run())
 
 
 if __name__ == "__main__":
