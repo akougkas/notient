@@ -2,101 +2,73 @@
 
 ## Current Position
 
-**Phase**: Universe — Foundation Refactor + Swarm Architecture
-**Status**: D4 + D5 COMPLETE + Critical Bug Fixes
-**Plan**: `PHASE-UNIVERSE.md`
-**Architecture**: `SWARM-ARCHITECTURE.md`
-**Updated**: 2026-01-14 (Session 4)
+**Phase**: Universe — Pipeline Wiring Fixes
+**Status**: Wave 1-3 complete, awaiting Reviewer 3+4 feedback
+**Updated**: 2026-01-15 (Session 6)
 
-## Current Session (2026-01-14 - Session 4)
+## Session 6 Completed
 
-### Session Goal
-Fix lint warnings, SQLite migration bugs, and embedding pipeline issues.
+### Wave 1: Backend Critical Fixes
+- ✅ Vector save mutex (prevent "Save already in progress")
+- ✅ Reranker wiring (Ollama SCORE format, not JSON)
+- ✅ JSON extraction hardening (4-strategy parsing)
+- ✅ Template token stripping ({{date}} etc.)
+- ✅ Payload normalization (accept shorthand frontmatter)
 
-### Completed This Session
+### Wave 2: Routing Fixes
+- ✅ Quick Actions workflow routing (classifier→enhance, connection→connection)
+- ✅ Chat slash commands (/atomize, /synthesize, /challenge, /extract-tasks)
+- ✅ WorkerAgent agentType label (was "note-editor", now "worker")
+- ✅ Parse failure surfacing (error field in output)
+- ✅ Progressive search event wiring
 
-**Lint Cleanup (22 warnings → 0):**
-- ✅ Archie: Backend `any` types eliminated
-- ✅ Sage: computeBehavior complexity 18→12
-- ✅ Faye: Frontend event handler types
-
-**SQLite Migration Fixes:**
-- ✅ Split DDL into individual statements for sql.js (`e7ca9eb`)
-- ✅ Strip SQL comments before splitting (`e7ca9eb`)
-- ✅ Use vault-relative paths for Obsidian adapter (`6f83b30`)
-
-**Dead Code Removal:**
-- ✅ Deleted ChunkStore JSON storage (-251 lines)
-- ✅ Removed CHUNKS_META, CHUNKS_NOTES paths
-- ✅ SQLite-only architecture confirmed
-
-**UI Fix:**
-- ✅ Added init:state-changed event subscription (`90cabd3`)
-- Sidebar now receives state updates from InitStateMachine
+### Wave 3: LLM + Cleanup
+- ✅ LM Studio reasoning fallback (extract JSON from reasoning when content empty)
+- ✅ Dead code removal (-425 lines executeWithVerification)
+- ✅ **CRITICAL: Disabled auto-processing in NoteIntelligenceService** (was making 3,580 LLM calls on startup)
+- ✅ planAction complexity refactor (extracted handleSlashCommand)
 
 ### Build Status
-```
-bun run dev ✅ PASSING
-bun run lint ✅ 0 errors, 0 warnings
-```
-
-### PENDING: Test indexing after reload
-The init state subscription was just added. User needs to:
-1. Reload Obsidian
-2. Verify sidebar shows READY state (not spinning)
-3. Trigger manual indexing
-4. Confirm embedding pipeline works with SQLite
-
-## Phase Universe Progress
-
-| Deliverable | Status |
-|-------------|--------|
-| D1: SQLite Data Layer | ✅ Complete |
-| D2: HNSW Worker | ✅ Complete |
-| D3: Reranker Fix | ✅ Complete |
-| D4: Swarm Architecture | ✅ Complete |
-| D5: embed.worker + Cleanup | ✅ Complete |
-| D6: Frontmatter Bridge | ✅ Complete |
-| D7: Vitals MetadataCache | ✅ Complete |
-| D8: Editor Decorations | ⏸️ Deferred |
-| D9: Context Menus | ✅ Complete |
-| D10: SQLite Migration | ✅ Complete |
-| D11: Skills Integration | ✅ Complete |
+- Typecheck: ✅ pass
+- Lint: ✅ pass (no warnings)
+- Dev build: ✅ copied to vault
 
 ## Git State
 
-**beta-spec HEAD**: `90cabd3`
+**beta-spec HEAD**: `6f8f0ae` (Merge sage: refactor planAction)
 
-**Recent commits:**
+**Key commits this session:**
 ```
-90cabd3 fix(ui): subscribe to init:state-changed events to update sidebar state
-6f83b30 fix(db): use vault-relative paths for Obsidian adapter methods
-e7ca9eb fix(db): strip SQL comments before splitting DDL statements
-fdf3e74 Merge sage: remove dead JSON chunk storage - SQLite only
-9c5dd26 Merge archie: fix SQLite migration - split DDL statements
-ef9dcec fix(lint): use TFile type instead of any in contextBuilderAgent
-53aa4b5 Merge faye: type safety for frontend event handlers
-fc7a236 Merge archie: eliminate any types in backend services
-239e251 Merge sage: reduce computeBehavior complexity (18→12)
+6f8f0ae Merge sage: refactor planAction to reduce complexity
+38bb933 fix(intelligence): disable auto-processing to prevent runaway LLM calls
+2a2bc07 style: use optional chain in lmstudio-sdk
+125c2ae Merge sage: remove 425 lines of unused verification code
+4f4cb90 Merge archie: fix LM Studio structured output reasoning fallback
+21869c2 Merge faye: wire progressive search event subscribers
+13958ba Merge sage: fix WorkerAgent agentType label and surface parse failures
+b3c72fe Merge archie: Wave 2 routing fixes
+ee54ea4 Merge archie: Wave 1 backend fixes
 ```
 
-## Next Actions
+## Pending Reviews
 
-1. **Verify sidebar loads** after reload
-2. **Test indexing** - trigger full reindex
-3. **Confirm SQLite storage** - check notient.db is created/written
-4. **Test search** - verify embeddings work end-to-end
+**Reviewer 3**: Lifecycle + Concurrency + Type Boundaries (`.planning/REVIEWER_PROMPT_3.md`)
+**Reviewer 4**: Holistic Wiring Audit (`.planning/REVIEWER_PROMPT_4.md`)
 
-## File Locations
+## Next Session
 
-| What | Where |
-|------|-------|
-| Database service | `src/core/db/database.ts` |
-| Migrations | `src/core/db/migrations.ts` |
-| Vector store | `src/services/hnswVectorStore.ts` |
-| Index manager | `src/services/indexManager.ts` |
-| UI state | `src/ui/sidebar/state.ts` |
-| Event subscriptions | `src/ui/sidebar/hooks/useAppEvents.ts` |
+1. Read Reviewer 3 and Reviewer 4 feedback
+2. Triage findings by severity
+3. Dispatch agents for fixes (more agents may be available)
+4. Test in Obsidian - verify LLM storm is fixed
+5. Continue pipeline optimization
+
+## Agent Status
+
+All agents idle. Worktrees exist at:
+- `~/projects/_worktrees/notient-archie/`
+- `~/projects/_worktrees/notient-sage/`
+- `~/projects/_worktrees/notient-faye/`
 
 ---
-*Last updated: 2026-01-14 Session 4 — Awaiting user verification of fixes*
+*Session 6 complete — awaiting reviewer feedback*
