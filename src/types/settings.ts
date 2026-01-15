@@ -49,8 +49,6 @@ export interface NotientSettings {
   advanced: {
     debugLogging: boolean;
     keepAliveMs: number;
-    /** Skip auto-resume indexing on startup (dev mode for faster testing) */
-    devSkipAutoIndex: boolean;
   };
 
   /** Setup wizard completion flag */
@@ -201,7 +199,6 @@ export const DEFAULT_SETTINGS: NotientSettings = {
   advanced: {
     debugLogging: false,
     keepAliveMs: 300000, // 5 minutes
-    devSkipAutoIndex: false, // Set true to skip auto-resume indexing for faster dev testing
   },
   setupComplete: false,
   agent: {
