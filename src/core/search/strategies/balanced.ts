@@ -13,8 +13,8 @@
  * Falls back to Quick search if embeddings unavailable.
  */
 
-import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import type { OllamaReranker } from "../../../services/ollamaReranker";
+import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import { SEARCH_LIMITS } from "../../constants";
 import { NativeSearch } from "./native";
 import type {
