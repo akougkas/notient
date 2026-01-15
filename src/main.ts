@@ -1326,75 +1326,81 @@ export default class NotientPlugin extends Plugin {
    */
   private registerActionEventHandlers(eventBus: typeof this.kernel.eventBus): void {
     // Handle action apply requests from UI
-    this.eventUnsubscribes.push(eventBus.on("action:apply-requested", async ({ actionId, action }) => {
-      console.log("[Notient] Action apply requested:", actionId);
+    this.eventUnsubscribes.push(
+      eventBus.on("action:apply-requested", async ({ actionId, action }) => {
+        console.log("[Notient] Action apply requested:", actionId);
 
-      if (!this.actionApplier) {
-        console.error("[Notient] ActionApplier not available");
-        this.kernel.obsidian.notice("Cannot apply action - services not ready");
-        return;
-      }
+        if (!this.actionApplier) {
+          console.error("[Notient] ActionApplier not available");
+          this.kernel.obsidian.notice("Cannot apply action - services not ready");
+          return;
+        }
 
-      // If action not provided in event, try workflow runner's review queue
-      let actionToApply = action;
-      if (!actionToApply && this.workflowRunner) {
-        // Check current and queued workflows for the action
-        const currentWorkflow = this.workflowRunner.getCurrentWorkflow();
-        const queuedWorkflows = this.workflowRunner.getQueuedWorkflows();
-        const workflows = currentWorkflow ? [currentWorkflow, ...queuedWorkflows] : queuedWorkflows;
+        // If action not provided in event, try workflow runner's review queue
+        let actionToApply = action;
+        if (!actionToApply && this.workflowRunner) {
+          // Check current and queued workflows for the action
+          const currentWorkflow = this.workflowRunner.getCurrentWorkflow();
+          const queuedWorkflows = this.workflowRunner.getQueuedWorkflows();
+          const workflows = currentWorkflow
+            ? [currentWorkflow, ...queuedWorkflows]
+            : queuedWorkflows;
 
-        for (const wf of workflows) {
-          const found = wf.reviewQueue.find((a: { id: string }) => a.id === actionId);
-          if (found) {
-            actionToApply = found;
-            break;
+          for (const wf of workflows) {
+            const found = wf.reviewQueue.find((a: { id: string }) => a.id === actionId);
+            if (found) {
+              actionToApply = found;
+              break;
+            }
           }
         }
-      }
 
-      if (!actionToApply) {
-        console.warn("[Notient] Could not find action:", actionId);
-        this.kernel.obsidian.notice("Action not found. It may have expired.");
-        return;
-      }
-
-      try {
-        const result = await this.actionApplier.apply(actionToApply);
-        if (result.success) {
-          this.kernel.obsidian.notice(`Applied: ${actionToApply.title}`);
-          // Remove from workflow review queue if applicable
-          this.workflowRunner?.dismissReviewItem(actionId);
-        } else {
-          this.kernel.obsidian.notice(`Failed: ${result.error}`);
+        if (!actionToApply) {
+          console.warn("[Notient] Could not find action:", actionId);
+          this.kernel.obsidian.notice("Action not found. It may have expired.");
+          return;
         }
-      } catch (error) {
-        console.error("[Notient] Action apply failed:", error);
-        this.kernel.obsidian.notice("Action failed. Check console for details.");
-      }
-    }));
+
+        try {
+          const result = await this.actionApplier.apply(actionToApply);
+          if (result.success) {
+            this.kernel.obsidian.notice(`Applied: ${actionToApply.title}`);
+            // Remove from workflow review queue if applicable
+            this.workflowRunner?.dismissReviewItem(actionId);
+          } else {
+            this.kernel.obsidian.notice(`Failed: ${result.error}`);
+          }
+        } catch (error) {
+          console.error("[Notient] Action apply failed:", error);
+          this.kernel.obsidian.notice("Action failed. Check console for details.");
+        }
+      }),
+    );
 
     // Handle action undo requests from UI
-    this.eventUnsubscribes.push(eventBus.on("action:undo-requested", async ({ actionId }) => {
-      console.log("[Notient] Action undo requested:", actionId);
+    this.eventUnsubscribes.push(
+      eventBus.on("action:undo-requested", async ({ actionId }) => {
+        console.log("[Notient] Action undo requested:", actionId);
 
-      if (!this.actionHistory) {
-        console.error("[Notient] ActionHistory not available");
-        this.kernel.obsidian.notice("Cannot undo - services not ready");
-        return;
-      }
-
-      try {
-        const success = await this.actionHistory.undo(actionId);
-        if (success) {
-          this.kernel.obsidian.notice("Action undone successfully");
-        } else {
-          this.kernel.obsidian.notice("Could not undo action. It may have already been undone.");
+        if (!this.actionHistory) {
+          console.error("[Notient] ActionHistory not available");
+          this.kernel.obsidian.notice("Cannot undo - services not ready");
+          return;
         }
-      } catch (error) {
-        console.error("[Notient] Action undo failed:", error);
-        this.kernel.obsidian.notice("Undo failed. Check console for details.");
-      }
-    }));
+
+        try {
+          const success = await this.actionHistory.undo(actionId);
+          if (success) {
+            this.kernel.obsidian.notice("Action undone successfully");
+          } else {
+            this.kernel.obsidian.notice("Could not undo action. It may have already been undone.");
+          }
+        } catch (error) {
+          console.error("[Notient] Action undo failed:", error);
+          this.kernel.obsidian.notice("Undo failed. Check console for details.");
+        }
+      }),
+    );
 
     console.log("[Notient] Action event handlers registered");
   }
@@ -1404,81 +1410,87 @@ export default class NotientPlugin extends Plugin {
    */
   private registerContextActionHandlers(eventBus: typeof this.kernel.eventBus): void {
     // action:find-related
-    this.eventUnsubscribes.push(eventBus.on("action:find-related", ({ text }) => {
-      this.activateSidebar();
-      // Set global signals to trigger UI
-      searchQuery.value = text;
-    }));
+    this.eventUnsubscribes.push(
+      eventBus.on("action:find-related", ({ text }) => {
+        this.activateSidebar();
+        // Set global signals to trigger UI
+        searchQuery.value = text;
+      }),
+    );
 
     // action:enhance
-    this.eventUnsubscribes.push(eventBus.on("action:enhance", async ({ text }) => {
-      if (!this.actionOrchestrator) {
-        this.kernel.obsidian.notice("Cannot enhance - services not ready");
-        return;
-      }
-
-      const file = this.app.workspace.getActiveFile();
-      if (!file) {
-        this.kernel.obsidian.notice("No active file");
-        return;
-      }
-
-      this.kernel.obsidian.notice("Enhancing selection...");
-
-      try {
-        const content = await this.app.vault.read(file);
-        const context = {
-          notePath: file.path,
-          noteTitle: file.basename,
-          noteContent: content,
-          config: { selection: text },
-        };
-
-        const { pipeline } = await this.actionOrchestrator.dispatch("enhance", context, {
-          scope: "selection",
-        });
-
-        let analysis = "";
-        const actions = [];
-
-        // Execute pipeline (yields events)
-        for await (const event of pipeline.execute()) {
-          if (event.type === "analysis") analysis = event.analysis;
-          if (event.type === "actions") actions.push(...event.actions);
+    this.eventUnsubscribes.push(
+      eventBus.on("action:enhance", async ({ text }) => {
+        if (!this.actionOrchestrator) {
+          this.kernel.obsidian.notice("Cannot enhance - services not ready");
+          return;
         }
 
-        const insight: Insight = {
-          id: generateId("ins"),
-          agentType: "enhance",
-          summary: analysis,
-          actions: actions,
-          suggestions: [],
-          reasoning: "User requested enhancement",
-          timestamp: Date.now(),
-          noteContext: {
-            path: context.notePath,
-            title: context.noteTitle,
-          },
-        };
+        const file = this.app.workspace.getActiveFile();
+        if (!file) {
+          this.kernel.obsidian.notice("No active file");
+          return;
+        }
 
-        this.kernel.eventBus.emit("insight:created", { insight, source: "user-action" });
-        this.kernel.obsidian.notice("Enhancement suggestions ready (see sidebar)");
-      } catch (error) {
-        console.error("[Notient] Enhance failed:", error);
-        this.kernel.obsidian.notice("Enhancement failed");
-      }
-    }));
+        this.kernel.obsidian.notice("Enhancing selection...");
+
+        try {
+          const content = await this.app.vault.read(file);
+          const context = {
+            notePath: file.path,
+            noteTitle: file.basename,
+            noteContent: content,
+            config: { selection: text },
+          };
+
+          const { pipeline } = await this.actionOrchestrator.dispatch("enhance", context, {
+            scope: "selection",
+          });
+
+          let analysis = "";
+          const actions = [];
+
+          // Execute pipeline (yields events)
+          for await (const event of pipeline.execute()) {
+            if (event.type === "analysis") analysis = event.analysis;
+            if (event.type === "actions") actions.push(...event.actions);
+          }
+
+          const insight: Insight = {
+            id: generateId("ins"),
+            agentType: "enhance",
+            summary: analysis,
+            actions: actions,
+            suggestions: [],
+            reasoning: "User requested enhancement",
+            timestamp: Date.now(),
+            noteContext: {
+              path: context.notePath,
+              title: context.noteTitle,
+            },
+          };
+
+          this.kernel.eventBus.emit("insight:created", { insight, source: "user-action" });
+          this.kernel.obsidian.notice("Enhancement suggestions ready (see sidebar)");
+        } catch (error) {
+          console.error("[Notient] Enhance failed:", error);
+          this.kernel.obsidian.notice("Enhancement failed");
+        }
+      }),
+    );
 
     // action:analyze
-    this.eventUnsubscribes.push(eventBus.on("action:analyze", async ({ path }) => {
-      if (!this.noteIntelligence) {
-        this.kernel.obsidian.notice("Intelligence service not ready");
-        return;
-      }
+    this.eventUnsubscribes.push(
+      eventBus.on("action:analyze", async ({ path }) => {
+        if (!this.noteIntelligence) {
+          this.kernel.obsidian.notice("Intelligence service not ready");
+          return;
+        }
 
-      this.kernel.obsidian.notice("Analyzing note...");
-      await this.noteIntelligence.regenerate(path);
-      this.kernel.obsidian.notice("Analysis complete");
-    }));
+        this.kernel.obsidian.notice("Analyzing note...");
+        await this.noteIntelligence.regenerate(path);
+        this.kernel.obsidian.notice("Analysis complete");
+      }),
+    );
   }
 }
