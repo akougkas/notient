@@ -14,9 +14,10 @@
  * Falls back to Balanced if LLM unavailable for expansion.
  */
 
+import type { OllamaReranker, RerankCandidate } from "../../../services/ollamaReranker";
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
 import type { LLMProvider } from "../../llm/provider";
-import type { ChatMessage, RankedResult, RerankCandidate } from "../../llm/types";
+import type { ChatMessage } from "../../llm/types";
 import { BalancedSearchStrategy } from "./balanced";
 import { NativeSearch } from "./native";
 import type {
@@ -442,17 +443,16 @@ Example: ["term1", "term2", "term3"]`;
   private async finalRerank(
     query: string,
     results: SearchResult[],
-    reranker: LLMProvider,
+    reranker: OllamaReranker,
     expandedTerms: string[],
   ): Promise<SearchResult[]> {
     const RERANK_LIMIT = 15;
 
+    // Build candidates in OllamaReranker format: {id, text, score?}
     const candidates: RerankCandidate[] = results.slice(0, RERANK_LIMIT).map((r) => ({
-      noteId: r.noteId,
-      path: r.path,
-      title: r.title,
-      text: r.chunks[0]?.text ?? "",
-      originalScore: r.bestScore,
+      id: r.noteId,
+      text: this.truncateForRerank(r.chunks[0]?.text ?? r.title),
+      score: r.bestScore,
     }));
 
     // Enhance query with expanded terms for reranking
@@ -462,27 +462,36 @@ Example: ["term1", "term2", "term3"]`;
     const ranked = await reranker.rerank(enhancedQuery, candidates);
     if (!ranked.length) return results;
 
-    // Apply rankings
-    const scoreMap = new Map<string, { score: number; reasoning: string }>();
+    // Apply rankings - OllamaReranker returns {id, score, reasoning?}
+    const scoreMap = new Map<string, { score: number; reasoning?: string }>();
     for (const r of ranked) {
-      scoreMap.set(r.noteId, { score: r.score, reasoning: r.reasoning });
+      scoreMap.set(r.id, { score: r.score, reasoning: r.reasoning });
     }
 
     for (const result of results) {
       const newScore = scoreMap.get(result.noteId);
       if (newScore) {
         result.bestScore = newScore.score;
-        result.reasoning = newScore.reasoning;
+        result.reasoning = newScore.reasoning ?? "Ollama reranked";
         // Update chunk scores too
         for (const chunk of result.chunks) {
           chunk.score = newScore.score;
-          chunk.reasoning = newScore.reasoning;
+          chunk.reasoning = newScore.reasoning ?? "Ollama reranked";
         }
       }
     }
 
     results.sort((a, b) => b.bestScore - a.bestScore);
     return results;
+  }
+
+  /**
+   * Truncate text for reranking (avoid overly long inputs)
+   */
+  private truncateForRerank(text: string): string {
+    const MAX_CHARS = 2000;
+    if (text.length <= MAX_CHARS) return text;
+    return text.slice(0, MAX_CHARS) + "...";
   }
 
   /**
@@ -496,11 +505,11 @@ Example: ["term1", "term2", "term3"]`;
   }
 
   /**
-   * Get LLM provider for reranking
+   * Get Ollama reranker for reranking
    */
-  private getReranker(): LLMProvider | null {
-    const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
-    return provider?.isReady ? provider : null;
+  private getReranker(): OllamaReranker | null {
+    const reranker = this.context.kernel.getService<OllamaReranker>("ollamaReranker");
+    return reranker?.isReady() ? reranker : null;
   }
 
   /**
