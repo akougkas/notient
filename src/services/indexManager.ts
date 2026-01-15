@@ -75,7 +75,6 @@ export class IndexManager {
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
-        docs: [],
       },
       { hnswFilename: nativeFilename },
     );
@@ -122,32 +121,13 @@ export class IndexManager {
 
       if (rows.length === 0) break;
 
-      const docs = rows.map((row) => ({
-        chunkId: row.chunk_id,
-        embedding: Array.from(row.vector),
-        noteId: "",
-        path: "",
-        title: "",
-        text: "",
-        tier: "block" as const,
-        kind: "paragraph" as const,
-        headingPath: [],
-        parentChunkId: null,
-        blockRef: null,
-        startLine: 0,
-        endLine: 0,
-        mtimeMs: 0,
-        contentHash: "",
-        tags: [],
-        frontmatter: {},
-        tokenEstimate: 0,
-        chunkIndex: 0,
+      // Pass only what HNSW needs: id + embedding
+      const items = rows.map((row) => ({
+        id: row.chunk_id,
+        embedding: new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
       }));
 
-      await this.vectorStore.loadFromDataAsync?.({
-        meta: { modelKey: this.modelKey, dimension: this.dimension, createdAt: 0, updatedAt: 0 },
-        docs,
-      });
+      await this.vectorStore.addItemsDirectly?.(items);
 
       offset += rows.length;
       console.log(`[IndexManager] Rehydrated ${offset} vectors...`);

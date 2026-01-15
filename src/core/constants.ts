@@ -17,11 +17,8 @@ export const STORAGE_PATHS = {
   DATA,
   DB_FILE: `${DATA}/notient.db`,
 
-  // Embeddings (model-scoped)
+  // Embeddings (HNSW binary stored here)
   EMBEDDINGS: `${DATA}/embeddings`,
-  EMBEDDINGS_ACTIVE: `${DATA}/embeddings/active`,
-  EMBEDDINGS_REBUILDING: `${DATA}/embeddings/_rebuilding`,
-  EMBEDDINGS_ARCHIVED: `${DATA}/embeddings/_archived`,
 
   // Intelligence (tag-keyed)
   INTELLIGENCE: `${DATA}/intelligence`,

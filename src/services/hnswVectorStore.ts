@@ -35,10 +35,6 @@ const INDEX_VERSION = 3;
 // Types
 // ============================================================================
 
-/** Persisted doc format with embedding (Legacy compatibility) */
-// biome-ignore lint/suspicious/noExplicitAny: Legacy format
-type PersistedDoc = any;
-
 /** Note state for tracking indexed notes */
 interface NoteState {
   path: string;
@@ -54,7 +50,7 @@ interface PersistedState {
   notes: Record<string, NoteState>;
 }
 
-/** Persisted index format */
+/** Persisted index format (metadata only, vectors in SQLite) */
 interface PersistedIndex {
   meta: {
     version: number;
@@ -68,7 +64,6 @@ interface PersistedIndex {
     tiers: { note: boolean; section: boolean; block: boolean };
     state: PersistedState;
   };
-  docs: PersistedDoc[];
 }
 
 /** Database row shape for chunk queries */
@@ -317,7 +312,6 @@ export class HNSWVectorStore implements VectorStore {
   async loadFromDataAsync(
     data: {
       meta: { modelKey: string; dimension: number; createdAt: number };
-      docs: PersistedDoc[];
       state?: PersistedState;
     },
     options?: { hnswFilename?: string },
@@ -336,44 +330,28 @@ export class HNSWVectorStore implements VectorStore {
 
     const hnswFilename = options?.hnswFilename ?? null;
 
-    // Fast path: load native HNSW
+    // Load native HNSW index
     if (hnswFilename) {
       const loaded = await this.tryLoadNativeIndex(hnswFilename);
       if (loaded) {
         this.dirty = false;
         console.log(`[HNSWVectorStore] Loaded native index ${hnswFilename}`);
-        return;
       }
     }
-
-    // Slow path: rebuild HNSW from provided docs (Migration case)
-    if (data.docs && data.docs.length > 0) {
-      console.log("[HNSWVectorStore] Rebuilding index from JSON docs...");
-      const items = data.docs.map((doc) => ({
-        id: doc.chunkId,
-        embedding: new Float32Array(doc.embedding),
-      }));
-      await this.getBridge().addItems(items);
-      // Mark dirty so index gets persisted after rebuild
-      this.dirty = true;
-    }
-    // Note: dirty flag NOT cleared here - only cleared on successful native load
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: Legacy interface compatibility
-  loadFromData(data: any): void {
+  loadFromData(data: { meta: { modelKey: string; dimension: number; createdAt: number } }): void {
     console.warn("[HNSWVectorStore] Sync loadFromData called - using async fallback");
     this.loadFromDataAsync(data).catch((e) => console.error(e));
   }
 
-  exportData(): { meta: PersistedIndex["meta"]; docs: PersistedDoc[] } {
-    // We no longer export docs to JSON.
+  exportData(): { meta: PersistedIndex["meta"]; docs: never[] } {
     return {
       meta: {
         version: INDEX_VERSION,
         modelKey: this.modelKey,
         dimension: this.dimension,
-        docCount: this.noteStates.size, // Approx
+        docCount: this.noteStates.size,
         createdAt: this.createdAt,
         updatedAt: Date.now(),
         hnswConfig: HNSW_CONFIG,
@@ -384,8 +362,20 @@ export class HNSWVectorStore implements VectorStore {
           notes: Object.fromEntries(this.noteStates),
         },
       },
-      docs: [], // Empty docs - metadata is in SQLite
+      docs: [],
     };
+  }
+
+  /**
+   * Add items directly to HNSW index (for rehydration from SQLite).
+   * This bypasses SQLite writes since data already exists there.
+   */
+  async addItemsDirectly(items: Array<{ id: string; embedding: Float32Array }>): Promise<void> {
+    if (this.disposed) return;
+    if (items.length === 0) return;
+
+    await this.getBridge().addItems(items);
+    this.dirty = true;
   }
 
   // ============ Vector Operations ============
