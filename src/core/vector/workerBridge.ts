@@ -19,7 +19,7 @@ export type VectorCommand =
   | { type: "addItems"; items: Array<{ id: string; embedding: Float32Array }> }
   | { type: "markDeleted"; ids: string[] }
   | { type: "save" }
-  | { type: "load"; data: ArrayBuffer }
+  | { type: "load"; data: { mapping?: string } }
   | { type: "getCount"; requestId: string };
 
 // Messages FROM worker
@@ -27,7 +27,8 @@ export type VectorResult =
   | { type: "ready" }
   | { type: "searchResult"; requestId: string; results: Array<{ id: string; score: number }> }
   | { type: "addComplete"; count: number }
-  | { type: "saveComplete"; data: ArrayBuffer }
+  | { type: "saveComplete"; mapping: string }
+  | { type: "loadComplete"; count: number; needsRehydration?: boolean }
   | { type: "countResult"; requestId: string; count: number }
   | { type: "error"; message: string };
 
@@ -48,7 +49,11 @@ export class VectorWorkerBridge {
   private pendingAdds: Array<{ resolve: (count: number) => void; reject: (err: Error) => void }> =
     [];
   private pendingSave: {
-    resolve: (data: ArrayBuffer) => void;
+    resolve: (mapping: string) => void;
+    reject: (err: Error) => void;
+  } | null = null;
+  private pendingLoad: {
+    resolve: (result: { count: number; needsRehydration?: boolean }) => void;
     reject: (err: Error) => void;
   } | null = null;
   private readyPromise!: Promise<void>;
@@ -131,6 +136,12 @@ export class VectorWorkerBridge {
       this.pendingSave.reject(error);
       this.pendingSave = null;
     }
+
+    // Reject pending load if exists
+    if (this.pendingLoad) {
+      this.pendingLoad.reject(error);
+      this.pendingLoad = null;
+    }
   }
 
   private handleMessage(message: VectorResult) {
@@ -156,8 +167,19 @@ export class VectorWorkerBridge {
 
       case "saveComplete": {
         if (this.pendingSave) {
-          this.pendingSave.resolve(message.data);
+          this.pendingSave.resolve(message.mapping);
           this.pendingSave = null;
+        }
+        break;
+      }
+
+      case "loadComplete": {
+        if (this.pendingLoad) {
+          this.pendingLoad.resolve({
+            count: message.count,
+            needsRehydration: message.needsRehydration,
+          });
+          this.pendingLoad = null;
         }
         break;
       }
@@ -219,7 +241,7 @@ export class VectorWorkerBridge {
     this.worker.postMessage({ type: "markDeleted", ids });
   }
 
-  async save(): Promise<ArrayBuffer> {
+  async save(): Promise<string> {
     return new Promise((resolve, reject) => {
       if (this.pendingSave) {
         reject(new Error("Save already in progress"));
@@ -230,8 +252,15 @@ export class VectorWorkerBridge {
     });
   }
 
-  load(data: ArrayBuffer): void {
-    this.worker.postMessage({ type: "load", data }, [data]);
+  async load(mapping?: string): Promise<{ count: number; needsRehydration?: boolean }> {
+    return new Promise((resolve, reject) => {
+      if (this.pendingLoad) {
+        reject(new Error("Load already in progress"));
+        return;
+      }
+      this.pendingLoad = { resolve, reject };
+      this.worker.postMessage({ type: "load", data: { mapping } });
+    });
   }
 
   async getCurrentCount(): Promise<number> {

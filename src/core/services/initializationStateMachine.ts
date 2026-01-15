@@ -34,7 +34,7 @@ const VALID_TRANSITIONS: Record<InitializationState, InitializationState[]> = {
 /** Timeout configuration per state (ms) */
 const STATE_TIMEOUTS: Partial<Record<InitializationState, number>> = {
   CHECKING_PROVIDERS: 30_000, // 30s to check providers
-  LOADING_INDEX: 60_000, // 60s to load index
+  LOADING_INDEX: 180_000, // 180s to load index (large vaults can have 50k+ vectors)
   WARMING_SERVICES: 30_000, // 30s to warm services
 };
 

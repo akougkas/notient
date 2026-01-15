@@ -12,22 +12,22 @@ const deletedLabels = new Set<number>();
 let globalConfig: HNSWConfig | null = null;
 let currentDimension = 0;
 
-// Initialize WASM
+// HNSW index filename (stored in IDBFS)
+const HNSW_FILENAME = "notient_hnsw.bin";
+
+// Initialize WASM with IDBFS support
 const initPromise = (async () => {
   try {
-    const { loadHnswlib } = await import("hnswlib-wasm");
-    lib = await loadHnswlib();
+    const { loadHnswlib, waitForFileSystemInitalized } = await import("hnswlib-wasm");
+    lib = await loadHnswlib("IDBFS");
+    await waitForFileSystemInitalized();
   } catch (err) {
     postResult({ type: "error", message: `Failed to load hnswlib: ${err}` });
   }
 })();
 
 function postResult(result: VectorResult) {
-  if (result.type === "saveComplete" && result.data instanceof ArrayBuffer) {
-    self.postMessage(result, [result.data]);
-  } else {
-    self.postMessage(result);
-  }
+  self.postMessage(result);
 }
 
 self.onmessage = async (e: MessageEvent<VectorCommand>) => {
@@ -181,86 +181,68 @@ async function handleSave() {
     throw new Error("No index to save");
   }
 
-  const filename = "temp_index.bin";
-  index.writeIndex(filename);
+  // Write index to Emscripten virtual filesystem
+  await index.writeIndex(HNSW_FILENAME);
 
-  // @ts-ignore
-  const fs = lib.FS;
-  const indexData = fs.readFile(filename, { encoding: "binary" }) as Uint8Array;
+  // Sync to IndexedDB (IDBFS)
+  await new Promise<void>((resolve) => {
+    lib?.EmscriptenFileSystemManager.syncFS(false, () => {
+      resolve();
+    });
+  });
 
+  // Build mapping JSON to return (caller stores this alongside the fact that IDBFS has the index)
   const mapping = {
     nextLabel,
     currentDimension,
     idToLabel: Array.from(idToLabel.entries()),
     deletedLabels: Array.from(deletedLabels),
   };
-  const mappingJson = JSON.stringify(mapping);
-  const mappingBytes = new TextEncoder().encode(mappingJson);
 
-  const totalLength = 4 + mappingBytes.length + indexData.length;
-  const buffer = new ArrayBuffer(totalLength);
-  const view = new DataView(buffer);
-  const uint8 = new Uint8Array(buffer);
-
-  view.setUint32(0, mappingBytes.length, true);
-  uint8.set(mappingBytes, 4);
-  uint8.set(indexData, 4 + mappingBytes.length);
-
-  try {
-    fs.unlink(filename);
-  } catch {}
-
-  postResult({ type: "saveComplete", data: buffer });
+  postResult({ type: "saveComplete", mapping: JSON.stringify(mapping) });
 }
 
-async function handleLoad(data: ArrayBuffer) {
+async function handleLoad(data: { mapping?: string }) {
   if (!lib || !globalConfig) return;
 
-  const view = new DataView(data);
-  const uint8 = new Uint8Array(data);
+  // Sync from IndexedDB to get persisted index (if it exists)
+  await new Promise<void>((resolve) => {
+    lib?.EmscriptenFileSystemManager.syncFS(true, () => {
+      resolve();
+    });
+  });
 
-  const mappingLen = view.getUint32(0, true);
-  const mappingBytes = uint8.subarray(4, 4 + mappingLen);
-  const mappingJson = new TextDecoder().decode(mappingBytes);
-  const mapping = JSON.parse(mappingJson);
+  // Load mapping if provided
+  if (data.mapping) {
+    const mapping = JSON.parse(data.mapping);
+    nextLabel = mapping.nextLabel ?? 0;
+    currentDimension = mapping.currentDimension ?? 0;
 
-  nextLabel = mapping.nextLabel;
-  currentDimension = mapping.currentDimension;
+    idToLabel.clear();
+    labelToId.clear();
+    deletedLabels.clear();
 
-  idToLabel.clear();
-  labelToId.clear();
-  deletedLabels.clear();
-
-  for (const [id, label] of mapping.idToLabel) {
-    idToLabel.set(id, label);
-    labelToId.set(label, id);
-  }
-  for (const label of mapping.deletedLabels) {
-    deletedLabels.add(label);
-  }
-
-  const indexData = uint8.subarray(4 + mappingLen);
-  const filename = "temp_load.bin";
-  // @ts-ignore
-  const fs = lib.FS;
-  fs.writeFile(filename, indexData);
-
-  ensureIndex(currentDimension);
-  if (index) {
-    // Note: readIndex arguments might vary by version, checking usage in HNSWVectorStore
-    // It used: index.readIndex(hnswFilename, maxElements)
-    const maxElements = Math.max(
-      globalConfig.initialMaxElements,
-      idToLabel.size + 1000, // Ensure room
-    );
-    // Re-init with correct max elements before reading?
-    // Usually readIndex replaces the content, but the instance must be init'ed.
-    // Let's use maxElements from mapping if we had it, or estimate.
-
-    index.readIndex(filename, maxElements);
+    for (const [id, label] of mapping.idToLabel ?? []) {
+      idToLabel.set(id, label);
+      labelToId.set(label, id);
+    }
+    for (const label of mapping.deletedLabels ?? []) {
+      deletedLabels.add(label);
+    }
   }
 
-  try {
-    fs.unlink(filename);
-  } catch {}
+  // Check if HNSW index exists in IDBFS
+  const indexExists = lib.EmscriptenFileSystemManager.checkFileExists(HNSW_FILENAME);
+
+  if (indexExists && currentDimension > 0) {
+    ensureIndex(currentDimension);
+    if (index) {
+      const maxElements = Math.max(globalConfig.initialMaxElements, idToLabel.size + 1000);
+      await index.readIndex(HNSW_FILENAME, maxElements);
+    }
+    postResult({ type: "loadComplete", count: index?.getCurrentCount() ?? 0 });
+  } else {
+    // No persisted index, signal that rehydration is needed
+    postResult({ type: "loadComplete", count: 0, needsRehydration: true });
+  }
 }

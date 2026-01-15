@@ -270,15 +270,18 @@ export class HNSWVectorStore implements VectorStore {
 
     this.saveInProgress = true;
     try {
-      console.log(`[HNSWVectorStore] Persisting native index to ${options.hnswFilename}`);
-      const data = await this.getBridge().save();
+      console.log("[HNSWVectorStore] Persisting native index to IDBFS");
+      // Worker saves HNSW binary to IDBFS (IndexedDB), returns mapping JSON
+      const mapping = await this.getBridge().save();
 
-      const filePath = path.join(this.kernel.storagePaths.pluginRoot, options.hnswFilename);
-      const tempPath = `${filePath}.tmp`;
-      await fs.promises.writeFile(tempPath, new Uint8Array(data));
-      await fs.promises.rename(tempPath, filePath);
+      // Persist mapping to filesystem (small JSON file)
+      const mappingPath = path.join(
+        this.kernel.storagePaths.pluginRoot,
+        options.hnswFilename.replace(".bin", ".mapping.json"),
+      );
+      await atomicWriteFile(mappingPath, mapping);
 
-      console.log("[HNSWVectorStore] Native index persisted successfully");
+      console.log("[HNSWVectorStore] Native index persisted to IDBFS, mapping saved");
     } catch (error) {
       console.warn("[HNSWVectorStore] Failed to persist native index:", error);
     } finally {
@@ -286,20 +289,33 @@ export class HNSWVectorStore implements VectorStore {
     }
   }
 
-  private async tryLoadNativeIndex(hnswFilename: string): Promise<boolean> {
-    const filePath = path.join(this.kernel.storagePaths.pluginRoot, hnswFilename);
+  private async tryLoadNativeIndex(hnswFilename: string): Promise<{
+    loaded: boolean;
+    needsRehydration?: boolean;
+  }> {
+    const mappingPath = path.join(
+      this.kernel.storagePaths.pluginRoot,
+      hnswFilename.replace(".bin", ".mapping.json"),
+    );
     try {
-      await fs.promises.access(filePath);
-      const buffer = await fs.promises.readFile(filePath);
-      const arrayBuffer = buffer.buffer.slice(
-        buffer.byteOffset,
-        buffer.byteOffset + buffer.byteLength,
+      // Try to read mapping file
+      let mapping: string | undefined;
+      try {
+        await fs.promises.access(mappingPath);
+        mapping = await fs.promises.readFile(mappingPath, "utf-8");
+      } catch {
+        // No mapping file, will need rehydration
+      }
+
+      // Load from IDBFS (worker syncs from IndexedDB)
+      const result = await this.getBridge().load(mapping);
+      console.log(
+        `[HNSWVectorStore] Load result: count=${result.count}, needsRehydration=${result.needsRehydration}`,
       );
-      this.getBridge().load(arrayBuffer);
-      return true;
+      return { loaded: result.count > 0, needsRehydration: result.needsRehydration };
     } catch (error) {
       console.warn("[HNSWVectorStore] Native index load failed:", error);
-      return false;
+      return { loaded: false, needsRehydration: true };
     }
   }
 
@@ -315,29 +331,31 @@ export class HNSWVectorStore implements VectorStore {
       state?: PersistedState;
     },
     options?: { hnswFilename?: string },
-  ): Promise<void> {
+  ): Promise<{ needsRehydration?: boolean }> {
     this.setMetaFromData(data.meta);
 
     // Legacy state load (if provided)
     if (data.state) {
       this.lastFullIndexAt = data.state.lastFullIndexAt ?? null;
       if (data.state.notes) {
-        for (const [path, noteState] of Object.entries(data.state.notes)) {
-          this.noteStates.set(path, noteState);
+        for (const [notePath, noteState] of Object.entries(data.state.notes)) {
+          this.noteStates.set(notePath, noteState);
         }
       }
     }
 
     const hnswFilename = options?.hnswFilename ?? null;
 
-    // Load native HNSW index
+    // Load native HNSW index from IDBFS
     if (hnswFilename) {
-      const loaded = await this.tryLoadNativeIndex(hnswFilename);
-      if (loaded) {
+      const result = await this.tryLoadNativeIndex(hnswFilename);
+      if (result.loaded) {
         this.dirty = false;
-        console.log(`[HNSWVectorStore] Loaded native index ${hnswFilename}`);
+        console.log("[HNSWVectorStore] Loaded native index from IDBFS");
       }
+      return { needsRehydration: result.needsRehydration };
     }
+    return { needsRehydration: true };
   }
 
   loadFromData(data: { meta: { modelKey: string; dimension: number; createdAt: number } }): void {

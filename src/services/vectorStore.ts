@@ -181,6 +181,9 @@ export interface VectorStore {
   /**
    * Async variant of loadFromData() for implementations that need async I/O
    * (e.g., loading a native/WASM index from filesystem).
+   *
+   * @returns Object with optional needsRehydration flag. If true, caller should
+   *          rehydrate the HNSW index from SQLite embeddings.
    */
   loadFromDataAsync?(
     data: {
@@ -210,7 +213,7 @@ export interface VectorStore {
        */
       hnswFilename?: string;
     },
-  ): Promise<void>;
+  ): Promise<{ needsRehydration?: boolean } | undefined>;
 
   /**
    * Add items directly to the index (bypasses SQLite, for rehydration).
