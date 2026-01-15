@@ -124,7 +124,11 @@ export class IndexManager {
       // Pass only what HNSW needs: id + embedding
       const items = rows.map((row) => ({
         id: row.chunk_id,
-        embedding: new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
+        embedding: new Float32Array(
+          row.vector.buffer,
+          row.vector.byteOffset,
+          row.vector.byteLength / 4,
+        ),
       }));
 
       await this.vectorStore.addItemsDirectly?.(items);
