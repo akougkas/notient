@@ -699,8 +699,10 @@ export default class NotientPlugin extends Plugin {
         // Check index state and auto-resume if incomplete
         const stats = await this.indexManager.getStats();
 
-        if (stats.state === "none") {
-          console.log("[Notient] No index found, starting initial indexing");
+        if (stats.state === "none" || stats.state === "stale") {
+          console.log(
+            `[Notient] Index ${stats.state === "stale" ? "stale (orphaned chunks)" : "missing"}, starting rebuild`,
+          );
           setTimeout(() => this.startBackgroundIndexing("rebuild"), 2000);
         } else if (stats.state === "incomplete") {
           // Auto-resume: silently continue indexing remaining notes
