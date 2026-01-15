@@ -11,7 +11,7 @@
  * - SearchPipeline: Cached semantic search
  */
 
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFile } from "obsidian";
 import { AgentTaskQueue, NotientAgent } from "./core/agent";
 import { ProfileManager } from "./core/agent/profileManager";
 import { ActionApplier, ActionHistory, TrustLevelManager, WorkflowRunner } from "./core/agentic";
@@ -97,6 +97,10 @@ export default class NotientPlugin extends Plugin {
 
   // Indexing control
   private indexingAbortController: AbortController | null = null;
+  private isIndexing = false;
+
+  // Event handler cleanup
+  private eventUnsubscribes: Array<() => void> = [];
 
   // Pending action from wizard
   private _pendingIndexAction: "none" | "use_existing" | "sync" | "rebuild" = "none";
@@ -234,6 +238,9 @@ export default class NotientPlugin extends Plugin {
     console.log("[Notient] Unloading plugin...");
 
     try {
+      // M1: Abort any in-flight indexing before disposing services
+      this.indexingAbortController?.abort();
+
       await this.disposeServices();
 
       // Dispose state machine
@@ -254,6 +261,21 @@ export default class NotientPlugin extends Plugin {
    * Used by both onunload() and reinitializeServices().
    */
   private async disposeServices(): Promise<void> {
+    // Unsubscribe event handlers to prevent duplicates on reinit
+    for (const unsub of this.eventUnsubscribes) {
+      unsub();
+    }
+    this.eventUnsubscribes = [];
+
+    // M2: Cancel all pending agent tasks
+    if (this.agentTaskQueue) {
+      for (const task of this.agentTaskQueue.getAll()) {
+        if (task.status === "running" || task.status === "queued") {
+          this.agentTaskQueue.cancel(task.id);
+        }
+      }
+    }
+
     // Agentic services first (depend on other services)
     this.workflowRunner?.dispose();
     this.workflowRunner = null;
@@ -586,12 +608,14 @@ export default class NotientPlugin extends Plugin {
       // Always wire conversation store (taskQueue always exists now)
       this.agentTaskQueue.setConversationStore(this.conversationStore);
 
-      // File rename handler
-      this.kernel.obsidian.onFileRename((file, oldPath) => {
-        if (this.conversationStore) {
-          this.conversationStore.handleRename(oldPath, file.path);
-        }
-      });
+      // M3: File rename handler - use this.registerEvent for auto-cleanup on unload
+      this.registerEvent(
+        this.app.vault.on("rename", (file, oldPath) => {
+          if (this.conversationStore && file instanceof TFile) {
+            this.conversationStore.handleRename(oldPath, file.path);
+          }
+        }),
+      );
 
       // Agentic services
       this.trustLevelManager = new TrustLevelManager(this.settings.agent.trustPolicy);
@@ -1233,6 +1257,12 @@ export default class NotientPlugin extends Plugin {
       return;
     }
 
+    // H2: Prevent overlapping indexing runs
+    if (this.isIndexing) {
+      console.log("[Notient] Indexing already in progress, skipping");
+      return;
+    }
+
     if (!this.kernel.capabilities.indexing) {
       console.log(
         "[Notient] Cannot start indexing - missing capabilities:",
@@ -1244,6 +1274,8 @@ export default class NotientPlugin extends Plugin {
       }
       return;
     }
+
+    this.isIndexing = true;
 
     // Create AbortController for this indexing session
     this.indexingAbortController = new AbortController();
@@ -1283,6 +1315,7 @@ export default class NotientPlugin extends Plugin {
         this.kernel.obsidian.notice("Indexing failed. Check console for details.");
       }
     } finally {
+      this.isIndexing = false;
       this.indexingAbortController = null;
     }
   }
@@ -1293,7 +1326,7 @@ export default class NotientPlugin extends Plugin {
    */
   private registerActionEventHandlers(eventBus: typeof this.kernel.eventBus): void {
     // Handle action apply requests from UI
-    eventBus.on("action:apply-requested", async ({ actionId, action }) => {
+    this.eventUnsubscribes.push(eventBus.on("action:apply-requested", async ({ actionId, action }) => {
       console.log("[Notient] Action apply requested:", actionId);
 
       if (!this.actionApplier) {
@@ -1338,10 +1371,10 @@ export default class NotientPlugin extends Plugin {
         console.error("[Notient] Action apply failed:", error);
         this.kernel.obsidian.notice("Action failed. Check console for details.");
       }
-    });
+    }));
 
     // Handle action undo requests from UI
-    eventBus.on("action:undo-requested", async ({ actionId }) => {
+    this.eventUnsubscribes.push(eventBus.on("action:undo-requested", async ({ actionId }) => {
       console.log("[Notient] Action undo requested:", actionId);
 
       if (!this.actionHistory) {
@@ -1361,7 +1394,7 @@ export default class NotientPlugin extends Plugin {
         console.error("[Notient] Action undo failed:", error);
         this.kernel.obsidian.notice("Undo failed. Check console for details.");
       }
-    });
+    }));
 
     console.log("[Notient] Action event handlers registered");
   }
@@ -1371,14 +1404,14 @@ export default class NotientPlugin extends Plugin {
    */
   private registerContextActionHandlers(eventBus: typeof this.kernel.eventBus): void {
     // action:find-related
-    eventBus.on("action:find-related", ({ text }) => {
+    this.eventUnsubscribes.push(eventBus.on("action:find-related", ({ text }) => {
       this.activateSidebar();
       // Set global signals to trigger UI
       searchQuery.value = text;
-    });
+    }));
 
     // action:enhance
-    eventBus.on("action:enhance", async ({ text }) => {
+    this.eventUnsubscribes.push(eventBus.on("action:enhance", async ({ text }) => {
       if (!this.actionOrchestrator) {
         this.kernel.obsidian.notice("Cannot enhance - services not ready");
         return;
@@ -1434,10 +1467,10 @@ export default class NotientPlugin extends Plugin {
         console.error("[Notient] Enhance failed:", error);
         this.kernel.obsidian.notice("Enhancement failed");
       }
-    });
+    }));
 
     // action:analyze
-    eventBus.on("action:analyze", async ({ path }) => {
+    this.eventUnsubscribes.push(eventBus.on("action:analyze", async ({ path }) => {
       if (!this.noteIntelligence) {
         this.kernel.obsidian.notice("Intelligence service not ready");
         return;
@@ -1446,6 +1479,6 @@ export default class NotientPlugin extends Plugin {
       this.kernel.obsidian.notice("Analyzing note...");
       await this.noteIntelligence.regenerate(path);
       this.kernel.obsidian.notice("Analysis complete");
-    });
+    }));
   }
 }
