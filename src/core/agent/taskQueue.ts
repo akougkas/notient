@@ -20,6 +20,7 @@
 import type { Insight, ProposedAction } from "../agentic/types";
 import type { ChiefOfStaff, ChiefOfStaffTask } from "../agents/chiefOfStaff";
 import type { AgentEvent, ConversationalOutput, StructuredOutput } from "../agents/types";
+import type { WorkflowAgentType } from "../agents/workerAgent";
 import type { ConversationStore } from "../chat/conversationStore";
 import type { ExtendedChatMessage } from "../chat/types";
 import type { EventBus } from "../events/eventBus";
@@ -382,6 +383,9 @@ export class AgentTaskQueue {
 
     const targetAgent = this.mapTaskTypeToAgent(task.taskType);
 
+    // Map taskType to targetWorkflow for Quick Actions
+    const targetWorkflow = this.mapTaskTypeToWorkflow(task.taskType);
+
     const result = {
       query,
       notePath: task.notePath,
@@ -389,8 +393,34 @@ export class AgentTaskQueue {
       chatHistory: task.chatHistory,
       // Map legacy taskType to targetAgent if appropriate
       targetAgent,
+      // Map taskType to explicit workflow (fixes Quick Actions defaulting to "enhance")
+      targetWorkflow,
     };
     return result;
+  }
+
+  /**
+   * Map taskType to workflow type for Quick Actions.
+   * Ensures Quick Actions route to the correct workflow instead of defaulting to "enhance".
+   *
+   * Mapping:
+   * - "classifier" → "enhance" (enhance workflow handles PARA classification)
+   * - "connection" → "connection" (connection workflow)
+   * - "enrich" → "enhance" (explicit enhance)
+   */
+  private mapTaskTypeToWorkflow(taskType?: string): WorkflowAgentType | undefined {
+    switch (taskType) {
+      case "classifier":
+      case "classify":
+        return "enhance"; // enhance workflow includes PARA classification
+      case "connection":
+      case "link":
+        return "connection";
+      case "enrich":
+        return "enhance";
+      default:
+        return undefined;
+    }
   }
 
   /**
