@@ -436,4 +436,10 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
       searchResults.value = data.results;
     }
   });
+
+  // M5: Search error handler - clear stale results on failure
+  useEventBus("search:error", (data) => {
+    console.error("[Search] Error:", data.error);
+    searchResults.value = [];
+  });
 }
