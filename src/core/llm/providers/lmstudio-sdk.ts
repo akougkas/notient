@@ -208,8 +208,18 @@ export class LMStudioSDKProvider implements LLMProvider {
     isStructuredOutput: boolean,
   ): string {
     if (isStructuredOutput) {
-      console.log(`[${this.name}] Structured output received (${content.length} chars)`);
-      return content;
+      if (content && content.trim()) {
+        console.log(`[${this.name}] Structured output received (${content.length} chars)`);
+        return content;
+      }
+      // Fallback: try extracting from reasoning
+      if (reasoning) {
+        console.warn(`[${this.name}] Structured output empty, extracting from reasoning`);
+        const extracted = this.extractFromReasoning(reasoning);
+        if (extracted) return extracted;
+      }
+      console.warn(`[${this.name}] Structured output empty and no reasoning fallback`);
+      return content; // Return empty, let caller handle
     }
 
     if (content) {
