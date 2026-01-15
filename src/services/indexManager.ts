@@ -80,13 +80,13 @@ export class IndexManager {
       { hnswFilename: nativeFilename },
     );
 
-    // Check if store is populated
-    const chunkCount = await this.vectorStore.countChunks();
-    if (chunkCount === 0) {
+    // Check if HNSW index is populated (native load may have failed)
+    const hnswCount = (await this.vectorStore.countHnswEntries?.()) ?? 0;
+    if (hnswCount === 0) {
       const dbCount = await this.countEmbeddingsInDb();
       if (dbCount > 0) {
         console.log(
-          `[IndexManager] Native index empty, but DB has ${dbCount} embeddings. Rehydrating...`,
+          `[IndexManager] HNSW index empty (0 entries), but DB has ${dbCount} embeddings. Rehydrating...`,
         );
         await this.rehydrateFromDb();
       }

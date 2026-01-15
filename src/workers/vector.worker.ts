@@ -56,6 +56,9 @@ self.onmessage = async (e: MessageEvent<VectorCommand>) => {
       case "load":
         await handleLoad(cmd.data);
         break;
+      case "getCount":
+        handleGetCount(cmd.requestId);
+        break;
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -166,6 +169,11 @@ function handleMarkDeleted(ids: string[]) {
       }
     }
   }
+}
+
+function handleGetCount(requestId: string) {
+  const count = index ? index.getCurrentCount() : 0;
+  postResult({ type: "countResult", requestId, count });
 }
 
 async function handleSave() {
