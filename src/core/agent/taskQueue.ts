@@ -187,6 +187,15 @@ export class AgentTaskQueue {
   }
 
   /**
+   * Cancel all running and queued tasks
+   */
+  cancelAll(): void {
+    for (const task of this.tasks.filter((t) => t.status === "running" || t.status === "queued")) {
+      this.cancel(task.id);
+    }
+  }
+
+  /**
    * Get all tasks
    */
   getAll(): AgentTask[] {
