@@ -289,18 +289,25 @@ export class WorkerAgent extends BaseAgent {
     const sanitized = this.sanitizeLLMOutput(stripped);
     const parsed = this.parseJSON<Record<string, unknown>>(sanitized);
 
-    // Warn if JSON parsing failed
+    // Return with error indicator if JSON parsing failed
     if (!parsed) {
       this.warn(
         `Failed to parse JSON from LLM response. Returning empty data. Response preview: "${sanitized.slice(0, 200)}"`,
       );
+      return {
+        kind: "structured",
+        agentType: "worker",
+        schema: this.workflowType,
+        data: {},
+        error: "JSON parse failed",
+      };
     }
 
     return {
       kind: "structured",
-      agentType: "note-editor", // Generic type for workflow outputs
+      agentType: "worker",
       schema: this.workflowType,
-      data: parsed || {},
+      data: parsed,
     };
   }
 
