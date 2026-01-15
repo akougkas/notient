@@ -6,13 +6,6 @@ Issues discovered during development. Track and fix as needed.
 
 ## Active Issues
 
-### ProfileManager EISDIR Error
-**Status**: Minor, non-blocking
-**Error**: `Failed to load profile: Error: EISDIR: illegal operation on a directory, read`
-**Cause**: Profile directory exists but `profile.json` file doesn't
-**Impact**: Profile features won't work until first profile creation
-**Fix**: Add defensive check in ProfileManager.load() to create file if missing
-
 ### obsidian-file-color Plugin Error
 **Status**: External plugin, not our bug
 **Error**: `Cannot convert undefined or null to object at Object.entries`
@@ -21,6 +14,25 @@ Issues discovered during development. Track and fix as needed.
 ---
 
 ## Resolved This Session (2026-01-14)
+
+### ✅ NoteEditor JSON Parse Failure
+**Fixed**: `9dd0921` (Archie) - Enhanced parseJSON with debug logging
+**Cause**: LLM structured output not being extracted as valid JSON
+**Solution**: Added debug logging to show input length, cleaned content, and extraction attempts
+
+### ✅ frontmatter_set Payload Validation
+**Fixed**: `9dd0921` (Archie) - Improved validation to handle LLM variations
+**Cause**: LLM produces payloads with different field names (field/property, newValue)
+**Solution**: Refactored into smaller methods, added field name normalization
+
+### ✅ ProfileManager EISDIR Error
+**Fixed**: `aefdfa4` (Sage) - Use profileFile path instead of profile directory
+**Cause**: Code used `storagePaths.profile` (directory) instead of `storagePaths.profileFile` (JSON)
+**Solution**: One-line fix in profileManager.ts:47
+
+### ✅ Sidebar Shows "Notient is ready to use" Forever
+**Fixed**: `dd03eb8` - Wire isServicesReady signal from init events
+**Cause**: `isServicesReady.value` was never set to `true`, blocking content views
 
 ### ✅ SQLite Migration "no such table"
 **Fixed**: `e7ca9eb` - Split DDL + strip comments before execution
@@ -40,4 +52,4 @@ Issues discovered during development. Track and fix as needed.
 
 ---
 
-*Last updated: 2026-01-14 Session 4*
+*Last updated: 2026-01-14 Session 5*

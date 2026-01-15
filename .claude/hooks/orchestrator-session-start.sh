@@ -1,6 +1,6 @@
 #!/bin/bash
-# Orchestrator SessionStart Hook (Queue-Based v2)
-# Checks for pending agent responses and injects them as context.
+# Orchestrator SessionStart Hook (Role-Based v3)
+# Checks for pending role responses and injects them as context.
 #
 # Detection: Uses NOTIENT_ORCHESTRATOR env var set by mprocs.yaml
 # If not set, script exits silently (vanilla Claude mode).
@@ -27,31 +27,37 @@ LOG_DIR="$ORCH_DIR/logs"
 
 mkdir -p "$LOG_DIR"
 
+# Role definitions
+CODER_ROLES="implementer simplifier validator tester architect advisor"
+RESEARCHER_ROLES="docs-fetcher codebase-navigator world-knowledge"
+ALL_ROLES="$CODER_ROLES $RESEARCHER_ROLES"
+
 # Collect pending responses
 RESPONSES=()
 RESPONSE_SUMMARY=""
 
-for agent in archie sage faye; do
-  response_dir="$ORCH_DIR/$agent/responses"
+for role in $ALL_ROLES; do
+  response_dir="$ORCH_DIR/$role/responses"
 
   if [[ -d "$response_dir" ]]; then
     shopt -s nullglob
     for resp in "$response_dir"/*.response; do
       [[ -f "$resp" ]] || continue
 
-      task_id=$(basename "$resp" .response)
+      task_id=$(jq -r '.task_id // "unknown"' "$resp")
       status=$(jq -r '.status // "unknown"' "$resp")
       output=$(jq -r '.output // ""' "$resp" | head -c 500)
       elapsed=$(jq -r '.elapsed_seconds // 0' "$resp")
+      cli=$(jq -r '.cli // "claude"' "$resp")
       error=$(jq -r '.error // null' "$resp")
 
-      RESPONSES+=("$agent:$task_id")
+      RESPONSES+=("$role:$task_id")
 
       if [[ "$status" == "complete" ]]; then
-        RESPONSE_SUMMARY+="### ✓ $agent/$task_id (${elapsed}s)\n"
+        RESPONSE_SUMMARY+="### ✓ $role/$task_id (${elapsed}s via $cli)\n"
         RESPONSE_SUMMARY+="\`\`\`\n${output}\n\`\`\`\n\n"
       else
-        RESPONSE_SUMMARY+="### ✗ $agent/$task_id (FAILED)\n"
+        RESPONSE_SUMMARY+="### ✗ $role/$task_id (FAILED via $cli)\n"
         if [[ "$error" != "null" ]]; then
           RESPONSE_SUMMARY+="Error: $error\n\n"
         fi
@@ -64,21 +70,25 @@ done
 CONTEXT=""
 
 if [[ ${#RESPONSES[@]} -gt 0 ]]; then
-  CONTEXT="## 📬 Pending Agent Responses\n\n"
+  CONTEXT="## 📬 Pending Role Responses\n\n"
   CONTEXT+="The following tasks completed:\n\n"
   CONTEXT+="$RESPONSE_SUMMARY"
   CONTEXT+="**Actions:**\n"
   CONTEXT+="- Review outputs above\n"
-  CONTEXT+="- Clear processed: \`rm .claude/orchestration/<agent>/responses/<task_id>.response\`\n"
-  CONTEXT+="- Dispatch new: \`uv run .claude/agents/dispatch.py <agent> \"prompt\"\`\n"
+  CONTEXT+="- Clear processed: \`rm .claude/orchestration/<role>/responses/<task_id>.response\`\n"
+  CONTEXT+="- Dispatch new: \`uv run .claude/agents/dispatch.py <role> \"prompt\" --cli <platform>\`\n"
 else
   # Fresh start
   CONTEXT="## Orchestrator Ready\n\n"
-  CONTEXT+="No pending responses. All agents idle.\n\n"
+  CONTEXT+="No pending responses. All roles idle.\n\n"
+  CONTEXT+="**Available Roles:**\n"
+  CONTEXT+="- CODERS: implementer, simplifier, validator, tester, architect, advisor\n"
+  CONTEXT+="- RESEARCHERS: docs-fetcher, codebase-navigator, world-knowledge\n\n"
   CONTEXT+="**Dispatch tasks:**\n"
   CONTEXT+="\`\`\`bash\n"
-  CONTEXT+="uv run .claude/agents/dispatch.py archie \"Your task here\"\n"
-  CONTEXT+="uv run .claude/agents/dispatch.py --check archie\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py implementer \"Your task here\" --cli claude\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py docs-fetcher \"Get docs for X\" --cli gemini\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py --status\n"
   CONTEXT+="\`\`\`\n"
 fi
 

@@ -2,73 +2,61 @@
 
 ## Current Position
 
-**Phase**: Universe — Pipeline Wiring Fixes
-**Status**: Wave 1-3 complete, awaiting Reviewer 3+4 feedback
-**Updated**: 2026-01-15 (Session 6)
+**Phase**: Universe → Helios Transition
+**Status**: Universe 90% complete, Helios planned
+**Updated**: 2026-01-15 (Session 7)
 
-## Session 6 Completed
+## Session 7 Summary
 
-### Wave 1: Backend Critical Fixes
-- ✅ Vector save mutex (prevent "Save already in progress")
-- ✅ Reranker wiring (Ollama SCORE format, not JSON)
-- ✅ JSON extraction hardening (4-strategy parsing)
-- ✅ Template token stripping ({{date}} etc.)
-- ✅ Payload normalization (accept shorthand frontmatter)
+### Reviewer 3+4 Findings Received
+- **14 issues** identified (6 HIGH, 6 MEDIUM, 2 LOW)
+- Categorized into lifecycle, data flow, and error handling themes
+- Phase Helios plan created
 
-### Wave 2: Routing Fixes
-- ✅ Quick Actions workflow routing (classifier→enhance, connection→connection)
-- ✅ Chat slash commands (/atomize, /synthesize, /challenge, /extract-tasks)
-- ✅ WorkerAgent agentType label (was "note-editor", now "worker")
-- ✅ Parse failure surfacing (error field in output)
-- ✅ Progressive search event wiring
+### Research Wave (Partial)
+- Dispatched 4 agents: docs-fetcher, codebase-navigator, world-knowledge, advisor
+- 2/4 completed successfully (codebase-navigator, advisor)
+- Key insight from advisor: Fix H1-H2 first (foundational), then H5, then remaining
 
-### Wave 3: LLM + Cleanup
-- ✅ LM Studio reasoning fallback (extract JSON from reasoning when content empty)
-- ✅ Dead code removal (-425 lines executeWithVerification)
-- ✅ **CRITICAL: Disabled auto-processing in NoteIntelligenceService** (was making 3,580 LLM calls on startup)
-- ✅ planAction complexity refactor (extracted handleSlashCommand)
+### Key Findings Categorized
 
-### Build Status
-- Typecheck: ✅ pass
-- Lint: ✅ pass (no warnings)
-- Dev build: ✅ copied to vault
+**Lifecycle Issues (main.ts):**
+- H1: EventBus handlers duplicate on reinit
+- H2: Background indexing can overlap
+- M1-M3: Cleanup gaps on unload
+
+**Data Flow Issues (useAppEvents, workerBridge):**
+- H3: Pending actions ID mismatch (action.id vs record.id)
+- H4: Chat slash results never populate placeholder
+- H5: Indexing status signal never updates
+- H6: Worker errors never reject pending promises
+
+**Error Surface Issues:**
+- M4-M6: Partial failures silent, search events dead, reranker not registered
 
 ## Git State
 
-**beta-spec HEAD**: `6f8f0ae` (Merge sage: refactor planAction)
+**beta-spec HEAD**: `94695ac` (multi-CLI agent architecture)
 
-**Key commits this session:**
-```
-6f8f0ae Merge sage: refactor planAction to reduce complexity
-38bb933 fix(intelligence): disable auto-processing to prevent runaway LLM calls
-2a2bc07 style: use optional chain in lmstudio-sdk
-125c2ae Merge sage: remove 425 lines of unused verification code
-4f4cb90 Merge archie: fix LM Studio structured output reasoning fallback
-21869c2 Merge faye: wire progressive search event subscribers
-13958ba Merge sage: fix WorkerAgent agentType label and surface parse failures
-b3c72fe Merge archie: Wave 2 routing fixes
-ee54ea4 Merge archie: Wave 1 backend fixes
-```
+## Phase Universe Remaining
 
-## Pending Reviews
+| Item | Status |
+|------|--------|
+| D5: embed.worker | Not started |
+| D5: Delete absorbed agents | Not started |
+| D8: Editor Decorations | Deferred to post-Helios |
 
-**Reviewer 3**: Lifecycle + Concurrency + Type Boundaries (`.planning/REVIEWER_PROMPT_3.md`)
-**Reviewer 4**: Holistic Wiring Audit (`.planning/REVIEWER_PROMPT_4.md`)
+## Next Session: Phase Helios
 
-## Next Session
+See `PHASE-HELIOS.md` for full plan.
 
-1. Read Reviewer 3 and Reviewer 4 feedback
-2. Triage findings by severity
-3. Dispatch agents for fixes (more agents may be available)
-4. Test in Obsidian - verify LLM storm is fixed
-5. Continue pipeline optimization
+**Wave 1**: Lifecycle Safety (H1, H2, M1-M3)
+**Wave 2**: Data Flow Fixes (H3-H6)
+**Wave 3**: Error Surfaces (M4-M6)
 
 ## Agent Status
 
-All agents idle. Worktrees exist at:
-- `~/projects/_worktrees/notient-archie/`
-- `~/projects/_worktrees/notient-sage/`
-- `~/projects/_worktrees/notient-faye/`
+All agents idle. Orchestration system updated by CEO.
 
 ---
-*Session 6 complete — awaiting reviewer feedback*
+*Session 7 complete — Phase Helios ready for execution*

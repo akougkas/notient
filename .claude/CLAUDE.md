@@ -44,35 +44,43 @@ bun run format           # Format code
 
 ## Git Infrastructure
 
-### Worktree Layout
+### Worktree Layout (Role-Based)
 
-| Path | Branch | Owner |
-|------|--------|-------|
+| Path | Branch | Role |
+|------|--------|------|
 | `~/projects/notient/` | `beta-spec` | Orchestrator |
-| `~/projects/_worktrees/notient-archie/` | `archie/{task}` | Archie (backend) |
-| `~/projects/_worktrees/notient-sage/` | `sage/{task}` | Sage (review) |
-| `~/projects/_worktrees/notient-faye/` | `faye/{task}` | Faye (frontend) |
+| `~/projects/_worktrees/notient-implementer/` | `implementer/{task}` | Coder: Feature builder |
+| `~/projects/_worktrees/notient-simplifier/` | `simplifier/{task}` | Coder: Code clarifier |
+| `~/projects/_worktrees/notient-validator/` | `validator/{task}` | Coder: Quality gate |
+| `~/projects/_worktrees/notient-tester/` | `tester/{task}` | Coder: Test specialist |
+| `~/projects/_worktrees/notient-docs-fetcher/` | `docs-fetcher/{task}` | Researcher: Documentation |
+| `~/projects/_worktrees/notient-codebase-navigator/` | `codebase-navigator/{task}` | Researcher: Codebase expert |
+| `~/projects/_worktrees/notient-world-knowledge/` | `world-knowledge/{task}` | Researcher: External intel |
 
 ### Quick Commands
 
 ```bash
-# Prepare agent worktree
-.claude/agents/git-prepare.sh archie archie/swarm-phase-3
+# Prepare role worktree
+.claude/agents/git-prepare.sh implementer implementer/retry-logic
 
-# Dispatch task
-uv run .claude/agents/dispatch.py archie "Execute Phase 3 per TASK.md"
+# Dispatch task with CLI choice
+uv run .claude/agents/dispatch.py implementer "Add retry logic" --cli claude
+uv run .claude/agents/dispatch.py docs-fetcher "Get Preact docs" --cli gemini
 
-# Check responses
-uv run .claude/agents/dispatch.py --responses archie
+# Check all roles status
+uv run .claude/agents/dispatch.py --status
 
-# Merge agent work
-git merge archie/swarm-phase-3 --no-ff -m "Merge archie: Phase 3"
+# Check responses for a role
+uv run .claude/agents/dispatch.py --responses implementer
+
+# Merge role work
+git merge implementer/retry-logic --no-ff -m "Merge implementer: retry logic"
 ```
 
 ### Rules
 
-- Never push agent branches (all work is local)
-- Orchestrator owns merges (agents only commit)
+- Never push role branches (all work is local)
+- Orchestrator owns merges (roles only commit)
 - Worktrees are disposable (reset via `git-prepare.sh`)
 - Main stays clean (only tagged releases)
 
@@ -312,29 +320,48 @@ src/
 
 ---
 
-## .claude Infrastructure
+## .claude Infrastructure (Role-Based v3)
 
 ```
 .claude/
 ├── CLAUDE.md                    # This file (project context)
 ├── agents/
-│   ├── dispatch.py              # Task dispatcher
-│   ├── queue-processor.py       # Agent runner
+│   ├── dispatch.py              # Role-based task dispatcher
+│   ├── queue-processor.py       # Role queue processor
 │   ├── watcher.py               # Response watcher
 │   ├── git-prepare.sh           # Worktree setup
-│   └── git-prepare-all.sh       # Prepare all agents
+│   └── git-prepare-all.sh       # Prepare all roles
 ├── orchestration/
-│   ├── archie/                  # Backend agent
-│   │   ├── CLAUDE.md            # Agent identity
-│   │   ├── TASK.md              # Current task
-│   │   ├── queue/               # Pending tasks
-│   │   └── responses/           # Completed tasks
-│   ├── sage/                    # Review agent
-│   ├── faye/                    # Frontend agent
-│   └── orchestrator/
-│       └── CLAUDE.md            # Orchestrator identity
+│   ├── orchestrator/
+│   │   └── CLAUDE.md            # Chief Engineer identity
+│   ├── core/                    # Shared identities
+│   │   ├── CODER.md             # Shared coder traits
+│   │   └── RESEARCHER.md        # Shared researcher traits
+│   ├── implementer/             # Coder: Feature builder
+│   │   ├── ROLE.md
+│   │   ├── queue/
+│   │   └── responses/
+│   ├── simplifier/              # Coder: Code clarifier
+│   ├── validator/               # Coder: Quality gate
+│   ├── tester/                  # Coder: Test specialist
+│   ├── architect/               # Coder: System designer
+│   ├── advisor/                 # Coder: Technical consultant
+│   ├── docs-fetcher/            # Researcher: Documentation expert
+│   ├── codebase-navigator/      # Researcher: Codebase expert
+│   ├── world-knowledge/         # Researcher: External intel
+│   └── state/
+│       └── agents.json          # Runtime state tracking
 └── hooks/                       # Session hooks
 ```
+
+### CLI Platforms
+
+| CLI | Trust | Best For |
+|-----|-------|----------|
+| **claude** | 🟢 HIGH | Complex reasoning, architecture |
+| **gemini** | 🟢 HIGH | Research, fast iteration |
+| **cursor-agent** | 🟡 MEDIUM | Bulk code generation |
+| **opencode** | 🔴 LOW | Local/offline, sensitive tasks |
 
 ---
 

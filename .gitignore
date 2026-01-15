@@ -53,3 +53,9 @@ vector.worker.js
 embed.worker.js
 main.js
 styles.css
+
+.claude/agents/__pycache__/
+.gemini/agents/__pycache__/
+
+mprocs.log
+

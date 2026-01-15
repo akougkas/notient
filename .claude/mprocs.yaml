@@ -1,29 +1,30 @@
-# Notient Multi-Agent Orchestration (Queue-Based v2)
+# Notient Multi-Agent Orchestration v3 (Role-Based)
 # Usage: mprocs -c .claude/mprocs.yaml
 #
-# Processes:
-#   repos        - File browser with git status (yazi)
-#   orchestrator - Interactive session, coordinates agents
-#   archie       - Queue processor (backend engineer)
-#   sage         - Queue processor (code quality)
-#   faye         - Queue processor (frontend engineer)
+# Architecture:
+#   User (CEO) → Orchestrator (Chief Engineer) → Role-Based Agents
 #
-# New Workflow (Queue-Based):
-#   1. Orchestrator writes .task file to agent's queue/
-#   2. Agent queue processor picks up task, runs Claude CLI
-#   3. Agent writes .response file to responses/
-#   4. Orchestrator checks responses/ for results
+# Roles:
+#   CODERS: implementer, simplifier, validator, tester, architect, advisor
+#   RESEARCHERS: docs-fetcher, codebase-navigator, world-knowledge
 #
-# Advantages:
-#   - Deterministic: One task at a time, clear input/output
-#   - Lightweight: No persistent Claude sessions for agents
-#   - Recoverable: Queue persists, restart without losing tasks
-#   - Streamable: See Claude output in real-time per agent pane
+# Each role can be dispatched to any CLI: claude, gemini, cursor-agent, opencode
+#
+# Workflow:
+#   1. Orchestrator proposes dispatch options to CEO
+#   2. CEO approves, orchestrator runs: dispatch.py <role> "task" --cli <platform>
+#   3. Role queue processor picks up task, runs CLI
+#   4. Orchestrator checks: dispatch.py --responses <role>
+#   5. Orchestrator reports results to CEO
 
 server: 127.0.0.1:4050
 log_dir: <CONFIG_DIR>/logs
 
 procs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FILE BROWSER & ORCHESTRATOR
+  # ═══════════════════════════════════════════════════════════════════════════
+
   repos:
     cwd: /home/akougkas/projects/notient
     shell: "YAZI_CONFIG_HOME=/home/akougkas/projects/notient/.claude/yazi-config /home/akougkas/projects/notient/.claude/bin/yazi"
@@ -44,30 +45,33 @@ procs:
     stop: "SIGTERM"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # ROLE-BASED AGENT POOLS (each can use any CLI platform: claude/gemini/cursor/opencode)
+  # CODER ROLES (Multi-CLI capable)
   # ═══════════════════════════════════════════════════════════════════════════
 
-  researcher:
+  implementer:
     cwd: /home/akougkas/projects/notient
     env:
-      NOTIENT_ROLE: "researcher"
-    shell: "uv run .claude/agents/queue-processor.py researcher"
+      NOTIENT_ROLE: "implementer"
+      NOTIENT_CATEGORY: "coder"
+    shell: "uv run .claude/agents/queue-processor.py implementer"
     autostart: true
     stop: "SIGTERM"
 
-  coder:
+  simplifier:
     cwd: /home/akougkas/projects/notient
     env:
-      NOTIENT_ROLE: "coder"
-    shell: "uv run .claude/agents/queue-processor.py coder"
+      NOTIENT_ROLE: "simplifier"
+      NOTIENT_CATEGORY: "coder"
+    shell: "uv run .claude/agents/queue-processor.py simplifier"
     autostart: true
     stop: "SIGTERM"
 
-  reviewer:
+  validator:
     cwd: /home/akougkas/projects/notient
     env:
-      NOTIENT_ROLE: "reviewer"
-    shell: "uv run .claude/agents/queue-processor.py reviewer"
+      NOTIENT_ROLE: "validator"
+      NOTIENT_CATEGORY: "coder"
+    shell: "uv run .claude/agents/queue-processor.py validator"
     autostart: true
     stop: "SIGTERM"
 
@@ -75,34 +79,56 @@ procs:
     cwd: /home/akougkas/projects/notient
     env:
       NOTIENT_ROLE: "tester"
+      NOTIENT_CATEGORY: "coder"
     shell: "uv run .claude/agents/queue-processor.py tester"
+    autostart: false
+    stop: "SIGTERM"
+
+  architect:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "architect"
+      NOTIENT_CATEGORY: "coder"
+    shell: "uv run .claude/agents/queue-processor.py architect"
+    autostart: false
+    stop: "SIGTERM"
+
+  advisor:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "advisor"
+      NOTIENT_CATEGORY: "coder"
+    shell: "uv run .claude/agents/queue-processor.py advisor"
+    autostart: false
+    stop: "SIGTERM"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # RESEARCHER ROLES (Multi-CLI capable)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  docs-fetcher:
+    cwd: /home/akougkas/projects/notient
+    env:
+      NOTIENT_ROLE: "docs-fetcher"
+      NOTIENT_CATEGORY: "researcher"
+    shell: "uv run .claude/agents/queue-processor.py docs-fetcher"
     autostart: true
     stop: "SIGTERM"
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # LEGACY AGENTS (backward compatibility - can be removed after migration)
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  archie:
+  codebase-navigator:
     cwd: /home/akougkas/projects/notient
     env:
-      NOTIENT_AGENT: "archie"
-    shell: "uv run .claude/agents/queue-processor.py archie"
+      NOTIENT_ROLE: "codebase-navigator"
+      NOTIENT_CATEGORY: "researcher"
+    shell: "uv run .claude/agents/queue-processor.py codebase-navigator"
     autostart: false
     stop: "SIGTERM"
 
-  sage:
+  world-knowledge:
     cwd: /home/akougkas/projects/notient
     env:
-      NOTIENT_AGENT: "sage"
-    shell: "uv run .claude/agents/queue-processor.py sage"
-    autostart: false
-    stop: "SIGTERM"
-
-  faye:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_AGENT: "faye"
-    shell: "uv run .claude/agents/queue-processor.py faye"
+      NOTIENT_ROLE: "world-knowledge"
+      NOTIENT_CATEGORY: "researcher"
+    shell: "uv run .claude/agents/queue-processor.py world-knowledge"
     autostart: false
     stop: "SIGTERM"
