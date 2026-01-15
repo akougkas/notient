@@ -183,9 +183,12 @@ Example: ["term1", "term2", "term3"]`;
       return [];
     }
 
-    // Parse JSON array from response
+    // Strip <think> blocks before extraction (reasoning model output: DeepSeek, Falcon H1R, Qwen QwQ)
+    const cleaned = response.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+    // Parse JSON array from cleaned response
     try {
-      const match = response.match(/\[[\s\S]*\]/);
+      const match = cleaned.match(/\[[\s\S]*\]/);
       if (match) {
         const terms = JSON.parse(match[0]) as string[];
         // Filter and deduplicate
@@ -197,7 +200,7 @@ Example: ["term1", "term2", "term3"]`;
       }
     } catch {
       // Try line-by-line parsing as fallback
-      const lines = response.split("\n").filter((l) => l.trim());
+      const lines = cleaned.split("\n").filter((l) => l.trim());
       return lines
         .map((l) => l.replace(/^[-*\d.)\s]+/, "").trim())
         .filter((l) => l.length > 2 && l.length < 50)
