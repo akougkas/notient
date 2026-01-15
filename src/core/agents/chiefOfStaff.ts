@@ -229,6 +229,46 @@ export class ChiefOfStaff {
           reasoning: `Slash command /${command} routes to Worker (connection workflow)`,
         };
       }
+
+      // Atomize command → Worker (atomic workflow)
+      if (command === "atomize") {
+        return {
+          action: "delegate",
+          targetAgent: "worker",
+          task: request.intent,
+          reasoning: "Slash command /atomize routes to Worker (atomic workflow)",
+        };
+      }
+
+      // Synthesize command → Worker (synthesis workflow)
+      if (command === "synthesize") {
+        return {
+          action: "delegate",
+          targetAgent: "worker",
+          task: request.intent,
+          reasoning: "Slash command /synthesize routes to Worker (synthesis workflow)",
+        };
+      }
+
+      // Challenge command → Worker (antagonist workflow)
+      if (command === "challenge") {
+        return {
+          action: "delegate",
+          targetAgent: "worker",
+          task: request.intent,
+          reasoning: "Slash command /challenge routes to Worker (antagonist workflow)",
+        };
+      }
+
+      // Task extraction commands → Worker (task workflow)
+      if (["extract-tasks", "tasks"].includes(command)) {
+        return {
+          action: "delegate",
+          targetAgent: "worker",
+          task: request.intent,
+          reasoning: `Slash command /${command} routes to Worker (task workflow)`,
+        };
+      }
     }
 
     // Intent detection for natural language
@@ -512,8 +552,8 @@ export class ChiefOfStaff {
 
     // Route to appropriate agent - worker uses getWorkerAgent(), others use getAgent()
     if (routing.primaryAgent === "worker") {
-      // Determine workflow type from task query, defaulting to "enhance" for classification/general tasks
-      const workflowType = this.extractWorkflowType(task.query) || "enhance";
+      // Use explicit targetWorkflow if provided (fixes Quick Actions), otherwise extract from query
+      const workflowType = task.targetWorkflow || this.extractWorkflowType(task.query) || "enhance";
       const workerAgent = this.getWorkerAgent(workflowType);
       for await (const event of workerAgent.execute(fullContext, signal)) {
         yield event;

@@ -167,11 +167,27 @@ export function getAllWorkflowConfigs(): WorkflowAgentConfig[] {
 }
 
 /**
- * Get workflow config by slash command
+ * Get workflow config by slash command.
+ * Supports command aliases (e.g., /extract-tasks → /tasks)
  */
 export function getWorkflowByCommand(command: string): WorkflowAgentConfig | undefined {
   const normalized = command.startsWith("/") ? command : `/${command}`;
-  return Object.values(WORKFLOW_CONFIGS).find((config) => config.slashCommand === normalized);
+
+  // Direct match
+  const directMatch = Object.values(WORKFLOW_CONFIGS).find(
+    (config) => config.slashCommand === normalized,
+  );
+  if (directMatch) {
+    return directMatch;
+  }
+
+  // Handle aliases
+  // /extract-tasks → /tasks (task extraction workflow)
+  if (normalized === "/extract-tasks") {
+    return WORKFLOW_CONFIGS.task;
+  }
+
+  return undefined;
 }
 
 /**
