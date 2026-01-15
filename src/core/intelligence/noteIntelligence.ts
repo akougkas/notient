@@ -59,17 +59,10 @@ export class NoteIntelligenceService {
     this.db = new IntelligenceDb(dbService.db);
     await this.db.load();
 
-    // After indexing completes, refresh stale intelligence records.
-    // Store unsubscriber for cleanup on dispose
-    const unsubIndex = this.eventBus.on("index:complete", () => {
-      void this.enqueueStaleFromIndex();
-    });
-    this.eventUnsubscribers.push(unsubIndex);
-
-    // Also kick a best-effort refresh shortly after startup (non-blocking).
-    setTimeout(() => {
-      void this.enqueueStaleFromIndex();
-    }, 2000);
+    // NOTE: Auto-processing disabled to prevent runaway LLM calls on startup.
+    // Intelligence is generated on-demand via regenerate() or explicit user action.
+    // Each note requires 4 LLM calls (summary, entities, links, triage).
+    // With 895 notes, auto-processing would make 3,580 LLM calls on startup.
   }
 
   dispose(): void {
