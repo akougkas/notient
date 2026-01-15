@@ -80,9 +80,45 @@ export class VectorWorkerBridge {
       this.handleMessage(event.data);
     };
 
-    this.worker.onerror = (error) => {
-      console.error("[VectorWorkerBridge] Worker error:", error);
+    this.worker.onerror = (event) => {
+      console.error(
+        "[VectorWorkerBridge] Worker error:",
+        event.message,
+        event.filename,
+        event.lineno,
+      );
+      this.rejectAllPending(new Error(`Worker error: ${event.message}`));
+      event.preventDefault();
     };
+
+    this.worker.onmessageerror = () => {
+      console.error("[VectorWorkerBridge] Message deserialization failed");
+      this.rejectAllPending(new Error("Worker message deserialization failed"));
+    };
+  }
+
+  /**
+   * Reject all pending operations with an error.
+   * Used when worker errors or terminates.
+   */
+  private rejectAllPending(error: Error): void {
+    // Reject all pending searches
+    for (const [, pending] of this.pendingSearches) {
+      pending.reject(error);
+    }
+    this.pendingSearches.clear();
+
+    // Reject all pending adds
+    for (const pending of this.pendingAdds) {
+      pending.reject(error);
+    }
+    this.pendingAdds = [];
+
+    // Reject pending save if exists
+    if (this.pendingSave) {
+      this.pendingSave.reject(error);
+      this.pendingSave = null;
+    }
   }
 
   private handleMessage(message: VectorResult) {
@@ -114,10 +150,22 @@ export class VectorWorkerBridge {
         break;
       }
 
-      case "error":
+      case "error": {
         console.error("[VectorWorkerBridge] Error from worker:", message.message);
-        // Clean up pending operations if needed, or let them timeout
+        // Check if error has requestId (specific operation failed)
+        const errorWithId = message as { requestId?: string; message: string };
+        if (errorWithId.requestId) {
+          const pending = this.pendingSearches.get(errorWithId.requestId);
+          if (pending) {
+            pending.reject(new Error(message.message));
+            this.pendingSearches.delete(errorWithId.requestId);
+          }
+        } else {
+          // No requestId - worker may be broken, reject all pending
+          this.rejectAllPending(new Error(`Worker error: ${message.message}`));
+        }
         break;
+      }
     }
   }
 
@@ -166,6 +214,8 @@ export class VectorWorkerBridge {
   }
 
   terminate(): void {
+    // Reject all pending operations before terminating
+    this.rejectAllPending(new Error("Worker terminated"));
     this.worker.terminate();
   }
 }
