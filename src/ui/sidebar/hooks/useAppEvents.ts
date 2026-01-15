@@ -25,6 +25,8 @@ import {
   pendingActions,
   providerStatus,
   recentActivity,
+  searchQuery,
+  searchResults,
 } from "../state";
 
 interface UseAppEventsOptions {
@@ -348,5 +350,25 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
         }
       });
     });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // 6. PROGRESSIVE SEARCH EVENTS
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // Instant results from native Obsidian search (fast, first pass)
+  useEventBus("search:progressive-instant", (data) => {
+    // Only update if this matches the current query (avoid stale results)
+    if (data.query === searchQuery.value) {
+      searchResults.value = data.results;
+    }
+  });
+
+  // Evolved results after semantic reranking (higher quality, replaces instant)
+  useEventBus("search:progressive-evolving", (data) => {
+    // Only update if this matches the current query (avoid stale results)
+    if (data.query === searchQuery.value) {
+      searchResults.value = data.results;
+    }
   });
 }
