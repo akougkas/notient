@@ -17,6 +17,8 @@ import {
   activeView,
   agentInsights,
   agentStatus,
+  chatMessages,
+  chatSlashCommandTasks,
   indexStatus,
   initContext,
   initState,
@@ -94,6 +96,37 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
     if (data.currentState === "READY") {
       isServicesReady.value = true;
     }
+  });
+
+  // H5: Indexing status signal wiring
+  useEventBus("index:progress", (data) => {
+    batch(() => {
+      indexStatus.value = {
+        ...indexStatus.value,
+        isIndexing: true,
+        noteCount: data.progress.completed,
+      };
+    });
+  });
+
+  useEventBus("index:complete", (data) => {
+    batch(() => {
+      indexStatus.value = {
+        ...indexStatus.value,
+        isIndexing: false,
+        noteCount: data.totalIndexed,
+        lastSyncedAt: new Date(),
+      };
+    });
+  });
+
+  useEventBus("index:error", () => {
+    batch(() => {
+      indexStatus.value = {
+        ...indexStatus.value,
+        isIndexing: false,
+      };
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -229,7 +262,35 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
   // Agent task updates - dispatch to handlers
   useEventBus("agent:task-update", (data) => {
     const task = data.task;
-    if (!task || task.taskType === "chat") {
+    if (!task) {
+      return;
+    }
+
+    // H4: Handle chat slash command result mirroring
+    if (task.status === "completed" || task.status === "failed") {
+      const messageId = chatSlashCommandTasks.value.get(task.id);
+      if (messageId) {
+        batch(() => {
+          // Update placeholder message with result
+          const resultContent =
+            task.status === "failed"
+              ? `Task failed: ${task.error || "Unknown error"}`
+              : typeof task.result?.data === "string"
+                ? task.result.data
+                : `Task ${task.status}`;
+          chatMessages.value = chatMessages.value.map((message) =>
+            message.id === messageId ? { ...message, content: resultContent } : message,
+          );
+          // Clean up mapping
+          const newMap = new Map(chatSlashCommandTasks.value);
+          newMap.delete(task.id);
+          chatSlashCommandTasks.value = newMap;
+        });
+      }
+    }
+
+    // Skip further processing for chat tasks (handled by ChatService)
+    if (task.taskType === "chat") {
       return;
     }
 
@@ -258,11 +319,15 @@ export function useAppEvents({ chatService, createChatService }: UseAppEventsOpt
 
   useEventBus("action:applied", (data) => {
     const { record } = data;
-    const actionId = record.id;
+    const actionId = record.action.id; // Use action.id, not record.id - pending uses action.id
 
     batch(() => {
       // Remove from pending
       pendingActions.value = pendingActions.value.filter((a: PendingAction) => a.id !== actionId);
+      // Clean up pendingActionSources
+      const updatedSources = new Map(pendingActionSources.value);
+      updatedSources.delete(actionId);
+      pendingActionSources.value = updatedSources;
 
       // Update pending count
       agentStatus.value = {
