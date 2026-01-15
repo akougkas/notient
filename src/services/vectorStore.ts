@@ -5,7 +5,7 @@
  * Allows for alternative implementations in the future.
  */
 
-import type { ChunkKind, ChunkTier, EmbeddedChunk, NoteChunk } from "../types/indexer";
+import type { EmbeddedChunk, NoteChunk } from "../types/indexer";
 import type { ChunkSearchResult, SearchOptions } from "../types/search";
 
 /**
@@ -153,8 +153,8 @@ export interface VectorStore {
   // ============ Data Transfer API (for IndexManager file I/O) ============
 
   /**
-   * Load data from parsed index file.
-   * Called by IndexManager after reading and parsing JSON.
+   * Load metadata from index file.
+   * Called by IndexManager to set model config.
    */
   loadFromData?(data: {
     meta: {
@@ -163,28 +163,6 @@ export interface VectorStore {
       createdAt: number;
       updatedAt: number;
     };
-    docs: Array<{
-      chunkId: string;
-      noteId: string;
-      path: string;
-      title: string;
-      headingPath: string[];
-      tier: ChunkTier;
-      kind: ChunkKind;
-      parentChunkId: string | null;
-      blockRef: string | null;
-      startLine: number | null;
-      endLine: number | null;
-      tokenEstimate: number;
-      importance?: number;
-      chunkIndex: number;
-      text: string;
-      embedding: number[];
-      mtimeMs: number;
-      contentHash: string;
-      tags: string[];
-      frontmatter: Record<string, unknown>;
-    }>;
     state?: {
       lastFullIndexAt: number | null;
       notes: Record<
@@ -202,9 +180,7 @@ export interface VectorStore {
 
   /**
    * Async variant of loadFromData() for implementations that need async I/O
-   * (e.g., loading a native/WASM index from a virtual filesystem).
-   *
-   * Called by IndexManager after reading and parsing JSON.
+   * (e.g., loading a native/WASM index from filesystem).
    */
   loadFromDataAsync?(
     data: {
@@ -214,30 +190,6 @@ export interface VectorStore {
         createdAt: number;
         updatedAt: number;
       };
-      docs: Array<{
-        chunkId: string;
-        noteId: string;
-        path: string;
-        title: string;
-        headingPath: string[];
-        tier: ChunkTier;
-        kind: ChunkKind;
-        parentChunkId: string | null;
-        blockRef: string | null;
-        startLine: number | null;
-        endLine: number | null;
-        tokenEstimate: number;
-        importance?: number;
-        chunkIndex: number;
-        text: string;
-        embedding: number[];
-        /** Optional label for native index compatibility (v3+) */
-        label?: number;
-        mtimeMs: number;
-        contentHash: string;
-        tags: string[];
-        frontmatter: Record<string, unknown>;
-      }>;
       state?: {
         lastFullIndexAt: number | null;
         notes: Record<
@@ -254,12 +206,16 @@ export interface VectorStore {
     },
     options?: {
       /**
-       * Optional native index filename for WASM-backed stores (e.g. hnswlib-wasm).
-       * This should be unique per vault/index snapshot to avoid collisions.
+       * Native index filename (e.g. 'hnsw.bin').
        */
       hnswFilename?: string;
     },
   ): Promise<void>;
+
+  /**
+   * Add items directly to the index (bypasses SQLite, for rehydration).
+   */
+  addItemsDirectly?(items: Array<{ id: string; embedding: Float32Array }>): Promise<void>;
 
   /**
    * Optional: persist any native/WASM index data (separate from JSON) to the
@@ -268,8 +224,8 @@ export interface VectorStore {
   persistNativeIndex?(options: { hnswFilename: string }): Promise<void>;
 
   /**
-   * Export current data for persistence.
-   * Called by IndexManager when saving to disk.
+   * Export metadata for persistence.
+   * Note: Embeddings are stored in SQLite, not exported here.
    */
   exportData?(): {
     meta: {
@@ -295,30 +251,7 @@ export interface VectorStore {
         >;
       };
     };
-    docs: Array<{
-      chunkId: string;
-      noteId: string;
-      path: string;
-      title: string;
-      headingPath: string[];
-      tier: ChunkTier;
-      kind: ChunkKind;
-      parentChunkId: string | null;
-      blockRef: string | null;
-      startLine: number | null;
-      endLine: number | null;
-      tokenEstimate: number;
-      importance?: number;
-      chunkIndex: number;
-      text: string;
-      embedding: number[];
-      /** Optional label for native index compatibility (v3+) */
-      label?: number;
-      mtimeMs: number;
-      contentHash: string;
-      tags: string[];
-      frontmatter: Record<string, unknown>;
-    }>;
+    docs: never[];
   };
 
   /**

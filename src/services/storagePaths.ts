@@ -65,11 +65,6 @@ export type StoragePathsConfig = CorePaths & {
   [K in StoragePathKey as ReturnType<typeof toCamelCase>]: string;
 };
 
-/** Sanitize model key for safe filenames */
-function sanitizeModelKey(modelKey: string): string {
-  return modelKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
 /**
  * Resolves and manages all storage paths for the plugin
  */
@@ -83,9 +78,6 @@ export class StoragePaths {
   readonly data: string;
   readonly dbFile: string;
   readonly embeddings: string;
-  readonly embeddingsActive: string;
-  readonly embeddingsRebuilding: string;
-  readonly embeddingsArchived: string;
   readonly intelligence: string;
   readonly intelligenceMeta: string;
   readonly intelligenceTopics: string;
@@ -128,9 +120,6 @@ export class StoragePaths {
     this.data = p("DATA");
     this.dbFile = p("DB_FILE");
     this.embeddings = p("EMBEDDINGS");
-    this.embeddingsActive = p("EMBEDDINGS_ACTIVE");
-    this.embeddingsRebuilding = p("EMBEDDINGS_REBUILDING");
-    this.embeddingsArchived = p("EMBEDDINGS_ARCHIVED");
     this.intelligence = p("INTELLIGENCE");
     this.intelligenceMeta = p("INTELLIGENCE_META");
     this.intelligenceTopics = p("INTELLIGENCE_TOPICS");
@@ -161,9 +150,6 @@ export class StoragePaths {
     const dirs = [
       this.data,
       this.embeddings,
-      this.embeddingsActive,
-      this.embeddingsRebuilding,
-      this.embeddingsArchived,
       this.intelligence,
       this.intelligenceTopics,
       this.conversations,
@@ -191,24 +177,6 @@ export class StoragePaths {
   // ─────────────────────────────────────────────────────────────────────────────
   // Dynamic Path Builders
   // ─────────────────────────────────────────────────────────────────────────────
-
-  /** Get path for embedding index (current model) */
-  getEmbeddingIndexPath(modelKey: string, dimension: number): string {
-    return path.join(this.embeddingsActive, `${sanitizeModelKey(modelKey)}-${dimension}d.json`);
-  }
-
-  /** Get path for rebuilding embedding index */
-  getRebuildingEmbeddingPath(modelKey: string, dimension: number): string {
-    return path.join(this.embeddingsRebuilding, `${sanitizeModelKey(modelKey)}-${dimension}d.json`);
-  }
-
-  /** Get path for archived embedding index */
-  getArchivedEmbeddingPath(modelKey: string, dimension: number, timestamp: string): string {
-    return path.join(
-      this.embeddingsArchived,
-      `${sanitizeModelKey(modelKey)}-${dimension}d-${timestamp}.json`,
-    );
-  }
 
   /** Get path for an intelligence topic file */
   getIntelligenceTopicPath(tag: string): string {
@@ -256,9 +224,6 @@ export class StoragePaths {
       data: this.data,
       dbFile: this.dbFile,
       embeddings: this.embeddings,
-      embeddingsActive: this.embeddingsActive,
-      embeddingsRebuilding: this.embeddingsRebuilding,
-      embeddingsArchived: this.embeddingsArchived,
       intelligence: this.intelligence,
       intelligenceMeta: this.intelligenceMeta,
       intelligenceTopics: this.intelligenceTopics,

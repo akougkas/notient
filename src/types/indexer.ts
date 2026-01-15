@@ -151,24 +151,3 @@ export interface ChunksMeta {
   lastUpdated: number;
 }
 
-/**
- * Embedding index structure (model-specific).
- * Stored at: data/embeddings/active/{model}-{dim}d.json
- */
-export interface EmbeddingIndex {
-  meta: {
-    version: number;
-    modelKey: string;
-    dimension: number;
-    chunkCount: number;
-    createdAt: number;
-    updatedAt: number;
-  };
-  /** Map of chunkId -> embedding vector */
-  embeddings: Record<string, number[]>;
-  state: {
-    lastFullIndexAt: number | null;
-    /** Map of notePath -> note state */
-    notes: Record<string, { noteId: string; embeddedAt: number }>;
-  };
-}
