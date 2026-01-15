@@ -198,77 +198,8 @@ export class ChiefOfStaff {
 
     // Slash commands → direct routing
     if (intent.startsWith("/")) {
-      const command = intent.split(" ")[0].slice(1);
-
-      // Edit commands → NoteEditor
-      if (["enhance", "edit", "improve"].includes(command)) {
-        return {
-          action: "delegate",
-          targetAgent: "note-editor",
-          task: request.intent,
-          reasoning: `Slash command /${command} routes to NoteEditor`,
-        };
-      }
-
-      // Classification commands → Worker (Phase 2, for now uses legacy routing)
-      if (["classify", "organize", "para"].includes(command)) {
-        return {
-          action: "delegate",
-          targetAgent: "worker", // Will use legacy classifier in Phase 2
-          task: request.intent,
-          reasoning: `Slash command /${command} routes to Worker (classifier workflow)`,
-        };
-      }
-
-      // Connection commands → Worker (Phase 2, for now uses legacy routing)
-      if (["connect", "link", "links"].includes(command)) {
-        return {
-          action: "delegate",
-          targetAgent: "worker", // Will use legacy connection in Phase 2
-          task: request.intent,
-          reasoning: `Slash command /${command} routes to Worker (connection workflow)`,
-        };
-      }
-
-      // Atomize command → Worker (atomic workflow)
-      if (command === "atomize") {
-        return {
-          action: "delegate",
-          targetAgent: "worker",
-          task: request.intent,
-          reasoning: "Slash command /atomize routes to Worker (atomic workflow)",
-        };
-      }
-
-      // Synthesize command → Worker (synthesis workflow)
-      if (command === "synthesize") {
-        return {
-          action: "delegate",
-          targetAgent: "worker",
-          task: request.intent,
-          reasoning: "Slash command /synthesize routes to Worker (synthesis workflow)",
-        };
-      }
-
-      // Challenge command → Worker (antagonist workflow)
-      if (command === "challenge") {
-        return {
-          action: "delegate",
-          targetAgent: "worker",
-          task: request.intent,
-          reasoning: "Slash command /challenge routes to Worker (antagonist workflow)",
-        };
-      }
-
-      // Task extraction commands → Worker (task workflow)
-      if (["extract-tasks", "tasks"].includes(command)) {
-        return {
-          action: "delegate",
-          targetAgent: "worker",
-          task: request.intent,
-          reasoning: `Slash command /${command} routes to Worker (task workflow)`,
-        };
-      }
+      const slashPlan = this.handleSlashCommand(intent, request);
+      if (slashPlan) return slashPlan;
     }
 
     // Intent detection for natural language
@@ -300,6 +231,90 @@ export class ChiefOfStaff {
         "I'm not sure what you'd like me to do. Could you be more specific? " +
         "Try commands like /enhance, /classify, or /connect.",
     };
+  }
+
+  /**
+   * Handle slash command routing.
+   * Returns a plan if the command is recognized, null otherwise.
+   */
+  private handleSlashCommand(
+    intent: string,
+    request: OrchestratorRequest,
+  ): OrchestratorPlan | null {
+    const command = intent.split(" ")[0].slice(1);
+
+    // Edit commands → NoteEditor
+    if (["enhance", "edit", "improve"].includes(command)) {
+      return {
+        action: "delegate",
+        targetAgent: "note-editor",
+        task: request.intent,
+        reasoning: `Slash command /${command} routes to NoteEditor`,
+      };
+    }
+
+    // Classification commands → Worker
+    if (["classify", "organize", "para"].includes(command)) {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: `Slash command /${command} routes to Worker (classifier workflow)`,
+      };
+    }
+
+    // Connection commands → Worker
+    if (["connect", "link", "links"].includes(command)) {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: `Slash command /${command} routes to Worker (connection workflow)`,
+      };
+    }
+
+    // Atomize command → Worker (atomic workflow)
+    if (command === "atomize") {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: "Slash command /atomize routes to Worker (atomic workflow)",
+      };
+    }
+
+    // Synthesize command → Worker (synthesis workflow)
+    if (command === "synthesize") {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: "Slash command /synthesize routes to Worker (synthesis workflow)",
+      };
+    }
+
+    // Challenge command → Worker (antagonist workflow)
+    if (command === "challenge") {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: "Slash command /challenge routes to Worker (antagonist workflow)",
+      };
+    }
+
+    // Task extraction commands → Worker (task workflow)
+    if (["extract-tasks", "tasks"].includes(command)) {
+      return {
+        action: "delegate",
+        targetAgent: "worker",
+        task: request.intent,
+        reasoning: `Slash command /${command} routes to Worker (task workflow)`,
+      };
+    }
+
+    // Unrecognized slash command
+    return null;
   }
 
   /**
