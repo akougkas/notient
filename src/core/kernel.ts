@@ -13,6 +13,7 @@ import { ObsidianFacade } from "../adapters/obsidianFacade";
 import type { HealthMonitor } from "../services/healthMonitor";
 import type { IndexManager } from "../services/indexManager";
 import type { OllamaService } from "../services/ollama";
+import type { OllamaReranker } from "../services/ollamaReranker";
 import { StoragePaths } from "../services/storagePaths";
 import { VaultLock } from "../services/vaultLock";
 import type { VectorStore } from "../services/vectorStore";
@@ -61,6 +62,7 @@ export interface ServiceRegistry {
   database: DatabaseService;
   healthMonitor: HealthMonitor;
   ollama: OllamaService;
+  ollamaReranker: OllamaReranker;
   vectorStore: VectorStore;
   indexManager: IndexManager;
   indexer: SimpleIndexer;
