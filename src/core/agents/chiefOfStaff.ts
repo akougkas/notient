@@ -510,12 +510,26 @@ export class ChiefOfStaff {
     this.currentSession?.activeAgents.add(routing.primaryAgent);
     const fullContext = this.buildFullContext(task, noteContext, contextOutput);
 
-    const agent = this.getAgent(routing.primaryAgent);
-    for await (const event of agent.execute(fullContext, signal)) {
-      yield event;
-      if (event.type === "complete") {
-        console.log(`[ChiefOfStaff] Agent completed: ${routing.primaryAgent}`);
-        this.currentSession?.completedAgents.set(routing.primaryAgent, event.output);
+    // Route to appropriate agent - worker uses getWorkerAgent(), others use getAgent()
+    if (routing.primaryAgent === "worker") {
+      // Determine workflow type from task query, defaulting to "enhance" for classification/general tasks
+      const workflowType = this.extractWorkflowType(task.query) || "enhance";
+      const workerAgent = this.getWorkerAgent(workflowType);
+      for await (const event of workerAgent.execute(fullContext, signal)) {
+        yield event;
+        if (event.type === "complete") {
+          console.log(`[ChiefOfStaff] Worker agent completed: ${workflowType}`);
+          this.currentSession?.completedAgents.set(routing.primaryAgent, event.output);
+        }
+      }
+    } else {
+      const agent = this.getAgent(routing.primaryAgent);
+      for await (const event of agent.execute(fullContext, signal)) {
+        yield event;
+        if (event.type === "complete") {
+          console.log(`[ChiefOfStaff] Agent completed: ${routing.primaryAgent}`);
+          this.currentSession?.completedAgents.set(routing.primaryAgent, event.output);
+        }
       }
     }
   }
