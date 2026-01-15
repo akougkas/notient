@@ -257,6 +257,22 @@ export class WorkerAgent extends BaseAgent {
   }
 
   /**
+   * Strip template tokens from LLM output
+   * Template tokens like {{today}}, {{date}}, {{title}} break JSON parsing
+   */
+  private stripTemplateTokens(text: string): string {
+    // Match {{anything}} pattern
+    const templatePattern = /\{\{[^}]+\}\}/g;
+    const matches = text.match(templatePattern);
+
+    if (matches && matches.length > 0) {
+      this.warn(`[WorkerAgent] Stripped ${matches.length} template tokens from response`);
+    }
+
+    return text.replace(templatePattern, "");
+  }
+
+  /**
    * Parse structured output from LLM response.
    * Returns generic structured output with workflow-specific schema.
    */
@@ -268,7 +284,9 @@ export class WorkerAgent extends BaseAgent {
       );
     }
 
-    const sanitized = this.sanitizeLLMOutput(rawOutput);
+    // Strip template tokens before sanitization
+    const stripped = this.stripTemplateTokens(rawOutput);
+    const sanitized = this.sanitizeLLMOutput(stripped);
     const parsed = this.parseJSON<Record<string, unknown>>(sanitized);
 
     // Warn if JSON parsing failed

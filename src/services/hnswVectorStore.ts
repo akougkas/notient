@@ -107,6 +107,7 @@ export class HNSWVectorStore implements VectorStore {
   private bulkDepth = 0;
   private paraDetector: ParaDetector;
   private initialized = false;
+  private saveInProgress = false;
 
   // Note states - Cached in memory for speed, populated from DB on init.
   private noteStates: Map<string, NoteState> = new Map();
@@ -266,6 +267,13 @@ export class HNSWVectorStore implements VectorStore {
     if (this.disposed) return;
     if (!options.hnswFilename) return;
 
+    // Skip if save already in progress (mutex guard)
+    if (this.saveInProgress) {
+      console.log("[HNSWVectorStore] Save already in progress, skipping duplicate save request");
+      return;
+    }
+
+    this.saveInProgress = true;
     try {
       console.log(`[HNSWVectorStore] Persisting native index to ${options.hnswFilename}`);
       const data = await this.getBridge().save();
@@ -278,6 +286,8 @@ export class HNSWVectorStore implements VectorStore {
       console.log("[HNSWVectorStore] Native index persisted successfully");
     } catch (error) {
       console.warn("[HNSWVectorStore] Failed to persist native index:", error);
+    } finally {
+      this.saveInProgress = false;
     }
   }
 

@@ -14,9 +14,8 @@
  */
 
 import type { ChunkSearchResult, SearchResult } from "../../../types/search";
+import type { OllamaReranker } from "../../../services/ollamaReranker";
 import { SEARCH_LIMITS } from "../../constants";
-import type { LLMProvider } from "../../llm/provider";
-import type { RankedResult, RerankCandidate } from "../../llm/types";
 import { NativeSearch } from "./native";
 import type {
   SearchProgress,
@@ -227,47 +226,49 @@ export class BalancedSearchStrategy implements SearchStrategy {
   }
 
   /**
-   * Get LLM provider for reranking
+   * Get Ollama reranker for reranking
    */
-  private getReranker(): LLMProvider | null {
-    const provider = this.context.kernel.getService<LLMProvider>("llmProvider");
-    return provider?.isReady ? provider : null;
+  private getReranker(): OllamaReranker | null {
+    const reranker = this.context.kernel.getService<OllamaReranker>("ollamaReranker");
+    if (!reranker?.isReady()) {
+      return null;
+    }
+    console.log("[Balanced] Using Ollama reranker");
+    return reranker;
   }
 
   /**
-   * Rerank chunks using LLM
+   * Rerank chunks using Ollama reranker
    */
   private async rerankChunks(
     query: string,
     chunks: ChunkSearchResult[],
-    reranker: LLMProvider,
+    reranker: OllamaReranker,
   ): Promise<ChunkSearchResult[]> {
     const RERANK_LIMIT = 25;
 
     try {
-      const candidates: RerankCandidate[] = chunks.slice(0, RERANK_LIMIT).map((c) => ({
-        noteId: c.chunkId, // Encode chunkId as noteId for reranker
-        path: c.path,
-        title: c.headingPath.length ? `${c.title} — ${c.headingPath.join(" > ")}` : c.title,
+      const candidates = chunks.slice(0, RERANK_LIMIT).map((c) => ({
+        id: c.chunkId,
         text: this.truncateForRerank(c.text),
-        originalScore: c.score,
+        score: c.score,
       }));
 
       const ranked = await reranker.rerank(query, candidates);
       if (!ranked.length) return chunks;
 
       // Build score map
-      const scores = new Map<string, { score: number; reasoning: string }>();
+      const scores = new Map<string, number>();
       for (const r of ranked) {
-        scores.set(r.noteId, { score: r.score, reasoning: r.reasoning });
+        scores.set(r.id, r.score);
       }
 
       // Apply scores to chunks
       const rerankedChunks: ChunkSearchResult[] = [];
       for (const c of chunks) {
-        const rr = scores.get(c.chunkId);
-        if (rr) {
-          rerankedChunks.push({ ...c, score: rr.score, reasoning: rr.reasoning });
+        const rerankScore = scores.get(c.chunkId);
+        if (rerankScore !== undefined) {
+          rerankedChunks.push({ ...c, score: rerankScore, reasoning: "Ollama reranked" });
         } else {
           // Chunks outside rerank window keep vector scores with penalty
           const penalizedScore = c.score * 0.85;
