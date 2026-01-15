@@ -223,10 +223,13 @@ ${truncatedContent}
    * Removes control characters and normalizes line endings
    */
   protected sanitizeLLMOutput(rawOutput: string): string {
+    // Strip <think> blocks FIRST (reasoning model output: DeepSeek, Falcon H1R, Qwen QwQ)
+    let result = rawOutput.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
     // Remove control characters that break JSON.parse (keep \n, \r, \t)
     // biome-ignore lint/suspicious/noControlCharactersInRegex: Intentional control char removal from LLM output
     const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
-    const result = rawOutput
+    result = result
       .replace(controlCharRegex, "")
       .replace(/\r\n/g, "\n") // Normalize line endings
       .replace(/\r/g, "\n");
