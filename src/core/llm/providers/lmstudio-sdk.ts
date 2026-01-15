@@ -208,7 +208,7 @@ export class LMStudioSDKProvider implements LLMProvider {
     isStructuredOutput: boolean,
   ): string {
     if (isStructuredOutput) {
-      if (content && content.trim()) {
+      if (content?.trim()) {
         console.log(`[${this.name}] Structured output received (${content.length} chars)`);
         return content;
       }
