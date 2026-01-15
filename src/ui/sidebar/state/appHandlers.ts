@@ -397,12 +397,26 @@ export async function handleRichChatSend(
     for await (const event of chatService.chat(message, noteContext, history)) {
       processChatEvent(event as ChatStreamEvent, state);
     }
+
+    // Handle empty response when model outputs only <think> tags
+    let content = state.fullContent;
+    if (!content.trim() && state.fullThinking.trim()) {
+      console.warn(
+        "[Chat] Model produced reasoning only, no response content. Thinking length:",
+        state.fullThinking.length,
+      );
+      content =
+        "⚠️ The model produced reasoning but no response. This can happen with some models " +
+        "(like falcon-h1r) that output everything in thinking tags. Try rephrasing your question " +
+        "or consider using a different model.";
+    }
+
     chatMessages.value = [
       ...chatMessages.value,
       {
         id: generateId("msg"),
         role: "assistant",
-        content: state.fullContent,
+        content,
         timestamp: new Date(),
         thinking: state.fullThinking || null,
         thinkingDurationMs: state.statistics?.thinkingTimeMs,
