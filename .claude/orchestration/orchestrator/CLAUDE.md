@@ -376,3 +376,60 @@ uv run .claude/agents/watcher.py --researchers
 3. **ALWAYS prepare worktree** before dispatching
 4. **ALWAYS verify build** after merging
 5. **YOU own all merges** — roles never merge to beta-spec
+
+---
+
+## Session Learnings (Updated 2026-01-15)
+
+### Effective Patterns Discovered
+
+**1. Parallel File-Based Dispatch**
+Split work by file to avoid merge conflicts:
+```
+implementer → main.ts changes
+simplifier → useAppEvents.ts changes
+```
+Both run in parallel, merge sequentially.
+
+**2. Worktree Symlinks**
+The dispatch.py expects `notient-{role}` worktrees. Create symlinks to map:
+```bash
+ln -sf ~/projects/_worktrees/notient-coder ~/projects/_worktrees/notient-implementer
+ln -sf ~/projects/_worktrees/notient-tester ~/projects/_worktrees/notient-simplifier
+ln -sf ~/projects/_worktrees/notient-reviewer ~/projects/_worktrees/notient-validator
+```
+
+**3. Individual Watchers with Auto-Exit**
+Instead of one long-running watcher, launch per-role watchers that exit on completion:
+```bash
+uv run .claude/agents/watcher.py --roles implementer --wait-for 1 &
+uv run .claude/agents/watcher.py --roles simplifier --wait-for 1 &
+```
+Each exits when their agent completes — no manual polling needed.
+
+**4. Tester for Lint/Build Fixes**
+When build fails, dispatch tester with persistent instruction:
+```
+"CRITICAL: Do NOT stop until 'bun run dev' passes successfully."
+```
+
+**5. Validator on Different CLI**
+Use cursor-agent or gemini for validation (code review only) to:
+- Get different perspective
+- Reduce Claude API costs
+- Parallelize with Claude implementers
+
+### Anti-Patterns to Avoid
+
+1. **Long sleep/poll cycles** — Use `--wait-for 1` watchers instead
+2. **Dispatching to roles without worktrees** — Researchers OK, coders need worktrees
+3. **Gemini for Context7 lookups** — Had policy errors, use Claude for docs-fetcher
+4. **Single watcher for all agents** — Hard to track, use individual watchers
+
+### CLI Reliability Notes (2026-01-15)
+
+| CLI | Reliability | Notes |
+|-----|-------------|-------|
+| claude | HIGH | Best for complex implementation |
+| gemini | MEDIUM | Context7 tool had policy errors |
+| cursor-agent | MEDIUM | Shell tool blocked, good for code review |

@@ -1,7 +1,8 @@
 # Phase Helios: Backend Pipeline Cohesion
 
-**Status**: READY FOR EXECUTION
+**Status**: READY FOR EXECUTION (Research Complete)
 **Created**: 2026-01-15 (Session 7)
+**Updated**: 2026-01-15 (Session 8 - Research Wave)
 **Goal**: Bug-free backend pipeline, close Phase Universe
 **Scope**: Backend/agentic fixes only (UI deferred to Project Gaia)
 
@@ -54,6 +55,8 @@
 ### H1: EventBus Handler Deduplication
 
 **Problem**: `registerActionEventHandlers()` and `registerContextActionHandlers()` called on every reinit without cleanup.
+
+**Pattern Source**: `noteIntelligence.ts:42,68-77` — uses `eventUnsubscribers[]` array pattern.
 
 **Fix**:
 ```typescript
@@ -192,54 +195,108 @@ useEventBus("agent:task-update", (data) => {
 
 **Problem**: `indexStatus.isIndexing` never set true during indexing.
 
+**Pattern Source**: Preact signals docs — use `batch()` to group multiple signal writes into single update.
+
 **Fix**:
 ```typescript
+import { batch } from "@preact/signals";
+
 // useAppEvents.ts - Add handlers
 useEventBus("index:progress", (data) => {
-  indexStatus.value = {
-    ...indexStatus.value,
-    isIndexing: true,
-    noteCount: data.progress.completed,
-  };
+  batch(() => {
+    indexStatus.value = {
+      ...indexStatus.value,
+      isIndexing: true,
+      noteCount: data.progress.completed,
+    };
+  });
 });
 
 useEventBus("index:complete", () => {
-  indexStatus.value = { ...indexStatus.value, isIndexing: false };
+  batch(() => {
+    indexStatus.value = { ...indexStatus.value, isIndexing: false };
+  });
 });
 
 useEventBus("index:error", () => {
-  indexStatus.value = { ...indexStatus.value, isIndexing: false };
+  batch(() => {
+    indexStatus.value = { ...indexStatus.value, isIndexing: false };
+  });
 });
 ```
 
-### H6: Worker Error Rejection
+### H6: Worker Error Rejection (EXPANDED)
 
-**Problem**: Worker errors logged but pending promises never rejected.
+**Problem**: Worker errors logged but pending promises never rejected. Three gaps identified.
 
-**Fix**:
+**Pattern Source**: `embedBridge.ts:54-89,120-127` — correctly rejects pending on error AND terminate. Follow this pattern.
+
+**Research Intel** (Web Worker best practices):
+- Three error surfaces: `onerror` (uncaught), `onmessageerror` (DataCloneError), `postMessage({ type: "error" })`
+- Must reject pending promises at ALL three points + `terminate()`
+- `worker.terminate()` gives no cleanup opportunity — reject BEFORE calling it
+
+**Fix** (3 rejection points + terminate):
 ```typescript
-// workerBridge.ts - Track pending operations
-private pendingOps = new Map<string, { resolve: Function, reject: Function }>();
+// workerBridge.ts - Helper method
+private rejectAllPending(error: Error): void {
+  for (const [id, { reject }] of this.pendingSearches) {
+    reject(error);
+  }
+  this.pendingSearches.clear();
 
-// In error handler
+  for (const { reject } of this.pendingAdds) {
+    reject(error);
+  }
+  this.pendingAdds.length = 0;
+
+  if (this.pendingSave) {
+    this.pendingSave.reject(error);
+    this.pendingSave = null;
+  }
+}
+
+// 1. Global worker error handler (uncaught exceptions)
+this.worker.onerror = (event: ErrorEvent) => {
+  console.error("[VectorWorkerBridge] Worker error:", {
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+  });
+  this.rejectAllPending(new Error(`Worker error: ${event.message}`));
+  event.preventDefault();
+};
+
+// 2. Message deserialization error (rare but critical)
+this.worker.onmessageerror = (event: MessageEvent) => {
+  console.error("[VectorWorkerBridge] Message deserialization failed");
+  this.rejectAllPending(new Error("Worker message deserialization failed"));
+};
+
+// 3. In handleMessage - route error messages to specific pending
 case "error":
   console.error("[VectorWorkerBridge] Error:", message.message);
-  // Reject all pending operations
-  for (const [id, { reject }] of this.pendingOps) {
-    reject(new Error(`Worker error: ${message.message}`));
+  if (message.requestId) {
+    // Reject specific operation if we have requestId
+    const pending = this.pendingSearches.get(message.requestId);
+    if (pending) {
+      pending.reject(new Error(message.message));
+      this.pendingSearches.delete(message.requestId);
+    }
+  } else {
+    // No requestId = reject all (worker may be broken)
+    this.rejectAllPending(new Error(`Worker error: ${message.message}`));
   }
-  this.pendingOps.clear();
   break;
 
-// In terminate()
+// 4. In terminate() - reject before killing
 terminate(): void {
-  for (const [id, { reject }] of this.pendingOps) {
-    reject(new Error("Worker terminated"));
-  }
-  this.pendingOps.clear();
+  this.rejectAllPending(new Error("Worker terminated"));
   this.worker.terminate();
 }
 ```
+
+**Note**: Current `workerBridge.ts:83-85` only logs errors. `embedBridge.ts` does it correctly — use as reference.
 
 ---
 
@@ -353,6 +410,34 @@ uv run .claude/agents/dispatch.py simplifier "Phase Helios Wave 3: Fix M4 (parti
 - [ ] Indexing blocks agent triggers
 - [ ] Worker errors surface to caller
 - [ ] Reranker is available for balanced search
+
+---
+
+## Research Sources (Session 8)
+
+### Internal Patterns (codebase-navigator)
+- `eventBus.ts:24-41`: Core `on()` returns unsubscribe
+- `noteIntelligence.ts:42,68-77`: Array-tracked unsubscribers pattern
+- `embedBridge.ts:54-89,120-127`: Correct worker error + terminate rejection
+- `workerBridge.ts:83-121`: **BROKEN** — only logs, doesn't reject
+- `KernelContext.tsx:105-117`: `useEventBus` hook with ref pattern
+
+### Preact Signals (docs-fetcher)
+- `batch()`: Groups multiple signal writes into single update
+- `effect()`: Returns dispose function — always store and call
+- `useSignalEffect()`: Auto-disposes on component unmount — prefer in components
+- **Rule**: Never use `effect()` inside components — use `useSignalEffect()`
+
+### Web Worker Patterns (world-knowledge)
+- Three error surfaces: `onerror`, `onmessageerror`, `postMessage({ type: "error" })`
+- **Critical**: Reject pending promises BEFORE `worker.terminate()`
+- `onmessageerror`: Catches DataCloneError (rare but important)
+- Consider graceful shutdown: message → timeout → terminate
+
+### External References
+- [MDN Worker error event](https://developer.mozilla.org/en-US/docs/Web/API/Worker/error_event)
+- [MDN Worker.terminate()](https://developer.mozilla.org/en-US/docs/Web/API/Worker/terminate)
+- [Preact Signals docs](https://preactjs.com/guide/v10/signals/)
 
 ---
 

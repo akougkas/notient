@@ -2,61 +2,113 @@
 
 ## Current Position
 
-**Phase**: Universe → Helios Transition
-**Status**: Universe 90% complete, Helios planned
-**Updated**: 2026-01-15 (Session 7)
+**Phase**: Helios (Preparatory Waves Complete)
+**Status**: Wave 1-3 DONE, TRUE Helios scope begins next session
+**Updated**: 2026-01-15 (Session 8 - End)
 
-## Session 7 Summary
+## CRITICAL CONTEXT FOR NEXT SESSION
 
-### Reviewer 3+4 Findings Received
-- **14 issues** identified (6 HIGH, 6 MEDIUM, 2 LOW)
-- Categorized into lifecycle, data flow, and error handling themes
-- Phase Helios plan created
+> **The 3 waves we completed were PREPARATORY fixes, not the TRUE Phase Helios.**
+>
+> TRUE Helios scope: Fix ALL backend wiring/plumbing, connect everything end-to-end,
+> test every agentic flow, harden before Project Gaia (UI beautification).
+>
+> Next session: Debug Notient end-to-end — insights → notes, chat → agents, ALL functionality.
 
-### Research Wave (Partial)
-- Dispatched 4 agents: docs-fetcher, codebase-navigator, world-knowledge, advisor
-- 2/4 completed successfully (codebase-navigator, advisor)
-- Key insight from advisor: Fix H1-H2 first (foundational), then H5, then remaining
+---
 
-### Key Findings Categorized
+## Session 8 Summary (Complete)
 
-**Lifecycle Issues (main.ts):**
-- H1: EventBus handlers duplicate on reinit
-- H2: Background indexing can overlap
-- M1-M3: Cleanup gaps on unload
+### Accomplished
 
-**Data Flow Issues (useAppEvents, workerBridge):**
-- H3: Pending actions ID mismatch (action.id vs record.id)
-- H4: Chat slash results never populate placeholder
-- H5: Indexing status signal never updates
-- H6: Worker errors never reject pending promises
+| Task | Status | Details |
+|------|--------|---------|
+| Research Wave | ✅ | 3 researchers validated patterns for Helios fixes |
+| Wave 1: Lifecycle | ✅ | H1, H2, M1, M2, M3 — event cleanup, indexing guard |
+| Wave 2: Data Flow | ✅ | H3, H4, H5, H6 — signals, worker rejection |
+| Wave 3: Error Surfaces | ✅ | M4, M5, M6 — warnings, search handler, reranker |
+| Lint Cleanup | ✅ | Biome formatting resolved |
+| Build | ✅ | `bun run dev` passes |
 
-**Error Surface Issues:**
-- M4-M6: Partial failures silent, search events dead, reranker not registered
+### Multi-Agent Orchestration Patterns Learned
 
-## Git State
+1. **Parallel file-based dispatch**: Split work by file (implementer → main.ts, simplifier → other.ts)
+2. **Worktree symlinks**: Map role names to generic worktrees (implementer → coder)
+3. **Individual watchers**: `--wait-for 1` per role auto-exits on completion
+4. **Validator on different CLI**: cursor-agent for validation, claude for implementation
 
-**beta-spec HEAD**: `94695ac` (multi-CLI agent architecture)
+### Git State
 
-## Phase Universe Remaining
+**beta-spec HEAD**: `be642ab`
+
+```
+be642ab fix(useAppEvents): search error handler (Helios M5)
+563c4a0 fix(main): M4 partial warnings + M6 reranker registration (Wave 3)
+cd1834d fix(main): resolve biome formatting (Helios cleanup)
+3c273f0 fix(useAppEvents): signal wiring for H3,H4,H5 (Wave 2)
+86d278c fix(workerBridge): reject pending on error/terminate (H6)
+36dfb2e fix(lifecycle): Wave 1 safety - H1,H2,M1,M3,M2 (Wave 1)
+2b84e8a feat(taskQueue): add cancelAll method (M2)
+```
+
+---
+
+## What's Left: TRUE Phase Helios
+
+### Phase Universe Remaining (D5)
 
 | Item | Status |
 |------|--------|
 | D5: embed.worker | Not started |
 | D5: Delete absorbed agents | Not started |
-| D8: Editor Decorations | Deferred to post-Helios |
+| D8: Editor Decorations | Deferred to post-Gaia |
 
-## Next Session: Phase Helios
+### End-to-End Testing Required
 
-See `PHASE-HELIOS.md` for full plan.
+| Flow | Components | Status |
+|------|------------|--------|
+| Quick Actions → Agent → Note | UI → Orchestrator → Worker → NoteEditor | UNTESTED |
+| Chat → Agent Delegation | ChatService → Orchestrator → Worker | UNTESTED |
+| Search → Rerank → Results | Pipeline → OllamaReranker → UI | UNTESTED (M6 just wired) |
+| Action Propose → Apply → Undo | Agent → ActionHistory → ActionApplier | UNTESTED |
+| Indexing → Embedding → Search | Indexer → embed.worker → vector.worker | PARTIAL |
+| Context Menu → Agent | editor-menu → EventBus → Orchestrator | UNTESTED |
 
-**Wave 1**: Lifecycle Safety (H1, H2, M1-M3)
-**Wave 2**: Data Flow Fixes (H3-H6)
-**Wave 3**: Error Surfaces (M4-M6)
+### Known Gaps
 
-## Agent Status
-
-All agents idle. Orchestration system updated by CEO.
+1. **OllamaReranker** just registered (M6) — never tested end-to-end
+2. **Chat slash commands** (H4) — placeholder update wired, needs real test
+3. **Index status signals** (H5) — wired, but indexing flow untested
+4. **Worker error rejection** (H6) — implemented, needs failure scenario test
 
 ---
-*Session 7 complete — Phase Helios ready for execution*
+
+## Handoff Checklist
+
+- [x] All Wave 1-3 issues resolved
+- [x] Build passing (`bun run dev`)
+- [x] STATE.md updated
+- [ ] 3 reviewers completing (gap analysis, architecture, code health)
+- [ ] Agent state cleared
+- [ ] Orchestrator CLAUDE.md updated with learnings
+
+---
+
+## Next Session: TRUE Helios
+
+**Goal**: Debug Notient end-to-end before Project Gaia
+
+**Recommended approach**:
+1. Start Obsidian with test vault
+2. Test each flow manually:
+   - Quick Actions (Enhance, Classify, Connect)
+   - Chat with agent delegation
+   - Search with reranking
+   - Action apply/undo
+3. Fix issues as found
+4. Complete D5 (embed.worker + cleanup)
+5. Comprehensive validation
+
+---
+
+*Session 8 complete — Preparatory waves done, TRUE Helios begins next session*
