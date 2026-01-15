@@ -36,6 +36,7 @@ import { HealthMonitor } from "./services/healthMonitor";
 import { HNSWVectorStore } from "./services/hnswVectorStore";
 import { IndexManager } from "./services/indexManager";
 import { OllamaService } from "./services/ollama";
+import { OllamaReranker } from "./services/ollamaReranker";
 import type { NotientSettings } from "./types/settings";
 import { NotientDashboardView } from "./ui/dashboard/DashboardView";
 import { ImportModal } from "./ui/modals/ImportModal";
@@ -54,6 +55,7 @@ export default class NotientPlugin extends Plugin {
   // LLM providers
   private healthMonitor: HealthMonitor | null = null;
   private ollamaService: OllamaService | null = null;
+  private ollamaReranker: OllamaReranker | null = null;
   private llmProvider: LMStudioSDKProvider | null = null;
 
   // Database
@@ -332,6 +334,8 @@ export default class NotientPlugin extends Plugin {
     }
 
     // LLM providers
+    this.ollamaReranker?.dispose();
+    this.ollamaReranker = null;
     this.ollamaService?.dispose();
     this.ollamaService = null;
 
@@ -414,6 +418,11 @@ export default class NotientPlugin extends Plugin {
         this.kernel.obsidian.notice("Cannot connect to Ollama. Is it running on port 11434?");
         return;
       }
+
+      // M6: Initialize OllamaReranker (optional - balanced search uses it)
+      this.ollamaReranker = new OllamaReranker(this.kernel);
+      await this.ollamaReranker.initialize();
+      this.kernel.registerService("ollamaReranker", this.ollamaReranker);
 
       this.initStateMachine.updateProgress({
         stage: "providers",
@@ -1364,7 +1373,12 @@ export default class NotientPlugin extends Plugin {
         try {
           const result = await this.actionApplier.apply(actionToApply);
           if (result.success) {
-            this.kernel.obsidian.notice(`Applied: ${actionToApply.title}`);
+            // M4: Surface partial batch failures as warnings
+            if (result.error) {
+              this.kernel.obsidian.notice(`Warning: ${result.error}`, 5000);
+            } else {
+              this.kernel.obsidian.notice(`Applied: ${actionToApply.title}`);
+            }
             // Remove from workflow review queue if applicable
             this.workflowRunner?.dismissReviewItem(actionId);
           } else {
