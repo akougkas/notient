@@ -255,3 +255,181 @@ Proceed with merge?
 | docs-fetcher | gemini | read-only | - |
 | codebase-navigator | claude | read-only | - |
 | world-knowledge | gemini | read-only | - |
+
+---
+
+## Session Management (CRITICAL)
+
+### At Session Start
+
+1. **Check for handoff**: Read `.claude/orchestration/state/SESSION-HANDOFF.md`
+2. **If handoff exists** with data:
+   ```
+   🔄 RESUMING FROM PREVIOUS SESSION
+
+   Previous session was working on: {task}
+   Phase: {phase}
+   Last accomplishment: {what}
+
+   Should I continue from where we left off?
+   ```
+3. **Read project state**: `.planning/STATE.md` and `.planning/PHASE-GALAXY.md`
+4. **Check agent responses**: Hook injects pending responses automatically
+
+### Context Warning (When YOU Feel Pressure)
+
+When your context feels heavy (long conversation, many files read):
+```
+⚠️ CONTEXT CHECK
+
+I've been working for a while. Should I:
+1. Continue (I have room)
+2. Save handoff and start fresh session
+
+If we save, I'll preserve:
+- Current task and progress
+- Your decisions and preferences
+- Recommended next steps
+```
+
+### Session Handoff (Before Context Exhausts)
+
+When CEO says "save" or "handoff" or you hit ~80% context:
+
+1. **Update handoff file**:
+   ```bash
+   # Write to .claude/orchestration/state/SESSION-HANDOFF.md
+   ```
+
+2. **Include ALL of**:
+   - Current phase (e.g., "Phase Galaxy G1")
+   - In-progress task with exact state
+   - Pending decisions awaiting CEO
+   - Human preferences learned this session
+   - Recent accomplishments (with commit hashes)
+   - Git state (branch, uncommitted changes)
+   - Critical context (anything the next session MUST know)
+   - Recommended next steps
+
+3. **Commit the handoff**:
+   ```bash
+   git add .claude/orchestration/state/SESSION-HANDOFF.md .planning/STATE.md
+   git commit -m "chore(orchestration): session handoff - {brief description}"
+   ```
+
+4. **Confirm to CEO**:
+   ```
+   ✅ SESSION SAVED
+
+   Handoff written to: .claude/orchestration/state/SESSION-HANDOFF.md
+   Commit: {hash}
+
+   Next session will resume automatically.
+   Safe to close this session.
+   ```
+
+---
+
+## Git Safety Protocol (BEFORE ANY MERGE)
+
+### Pre-Merge Validation (MANDATORY)
+
+Before merging ANY agent branch to `beta-spec`:
+
+```bash
+# 1. Checkout the branch
+git checkout <role>/<task>
+
+# 2. Run full validation
+bun run typecheck && bun run build && bun run lint
+
+# 3. If ANY fails → DO NOT MERGE
+# 4. If all pass → proceed to merge
+```
+
+### Merge Procedure
+
+```bash
+# 1. Return to beta-spec
+git checkout beta-spec
+
+# 2. Merge with no-ff (preserves history)
+git merge <role>/<task> --no-ff -m "Merge <role>: <description>"
+
+# 3. Verify build AGAIN on beta-spec
+bun run typecheck && bun run build
+
+# 4. If fails → revert immediately
+git reset --hard HEAD~1
+```
+
+### Report to CEO
+
+```
+✅ MERGE COMPLETE
+
+Branch: implementer/add-retry-logic → beta-spec
+Commit: abc1234
+Validation: typecheck ✓ | build ✓ | lint ✓
+
+# OR if failed:
+
+❌ MERGE BLOCKED
+
+Branch: implementer/add-retry-logic
+Validation: typecheck ✓ | build ✗ | lint ✓
+
+Error: {build error}
+
+Options:
+1. Dispatch simplifier to fix
+2. Dispatch implementer to fix
+3. Discard branch (git branch -D)
+```
+
+---
+
+## Project State Awareness
+
+### Key Files to Know
+
+| File | Purpose | Read When |
+|------|---------|-----------|
+| `.planning/PHASE-GALAXY.md` | **MASTER SPEC** (605 lines) | Starting implementation |
+| `.planning/STATE.md` | Current phase/progress | Every session start |
+| `.planning/PROJECT.md` | Project overview | New sessions |
+| `.planning/ISSUES.md` | Known bugs/problems | Before dispatching fixes |
+
+### Current Phase: Galaxy (Fresh Implementation)
+
+```
+Phase Galaxy = TOTAL ANNIHILATION + FRESH BUILD
+- Version 0.1.0 (reset, not continuation)
+- ONE workflow: Enhance (human-driven)
+- FOUR agents: Planner → ContextBuilder → Analyst → Writer
+- NO code preservation
+
+Implementation order: G1 → G2 → G3 → G4 → G5 → G6
+```
+
+### Update STATE.md After Milestones
+
+When a phase completes or significant progress:
+```bash
+# Edit .planning/STATE.md with current status
+# Commit with:
+git commit -m "docs(planning): update state - {milestone}"
+```
+
+---
+
+## Human Preferences (Remember These)
+
+Track CEO preferences in the handoff. Examples:
+
+- **Code style**: "No abbreviations, full words"
+- **Communication**: "No ceremony, substance only"
+- **Verification**: "Always test before merge"
+- **Commits**: "Detailed commit messages"
+
+When CEO expresses a preference, note it in handoff for future sessions.

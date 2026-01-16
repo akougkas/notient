@@ -66,36 +66,79 @@ for role in $ALL_ROLES; do
   fi
 done
 
+# Check for session handoff
+HANDOFF_FILE="$ORCH_DIR/state/SESSION-HANDOFF.md"
+HANDOFF_CONTENT=""
+HAS_HANDOFF=false
+
+if [[ -f "$HANDOFF_FILE" ]]; then
+  # Check if handoff has actual data (not just template)
+  if grep -q "^### Current Phase$" "$HANDOFF_FILE" && ! grep -q "^(none)$" "$HANDOFF_FILE"; then
+    HAS_HANDOFF=true
+    HANDOFF_CONTENT=$(cat "$HANDOFF_FILE")
+  fi
+fi
+
+# Check project state
+STATE_FILE="$REPO_ROOT/.planning/STATE.md"
+STATE_SUMMARY=""
+if [[ -f "$STATE_FILE" ]]; then
+  # Extract current phase and status
+  CURRENT_PHASE=$(grep -A1 "^## Current Position" "$STATE_FILE" | tail -1 | sed 's/\*\*//g' || echo "Unknown")
+  STATE_SUMMARY="**Project State**: $CURRENT_PHASE"
+fi
+
 # Build context
 CONTEXT=""
 
+# Priority 1: Session handoff (resuming previous work)
+if [[ "$HAS_HANDOFF" == "true" ]]; then
+  CONTEXT="## 🔄 SESSION RESUME - Previous Work Detected\n\n"
+  CONTEXT+="A previous session left a handoff. Read carefully:\n\n"
+  CONTEXT+="\`\`\`markdown\n"
+  CONTEXT+="$HANDOFF_CONTENT"
+  CONTEXT+="\`\`\`\n\n"
+  CONTEXT+="**IMPORTANT**: Acknowledge this to CEO and ask if they want to continue.\n\n"
+fi
+
+# Priority 2: Pending agent responses
 if [[ ${#RESPONSES[@]} -gt 0 ]]; then
-  CONTEXT="## 📬 Pending Role Responses\n\n"
+  CONTEXT+="## 📬 Pending Role Responses\n\n"
   CONTEXT+="The following tasks completed:\n\n"
   CONTEXT+="$RESPONSE_SUMMARY"
   CONTEXT+="**Actions:**\n"
   CONTEXT+="- Review outputs above\n"
   CONTEXT+="- Clear processed: \`rm .claude/orchestration/<role>/responses/<task_id>.response\`\n"
-  CONTEXT+="- Dispatch new: \`uv run .claude/agents/dispatch.py <role> \"prompt\" --cli <platform>\`\n"
-else
-  # Fresh start
+  CONTEXT+="- Dispatch new: \`uv run .claude/agents/dispatch.py task <role> \"prompt\" --cli <platform>\`\n\n"
+fi
+
+# Priority 3: Project state reminder
+if [[ -n "$STATE_SUMMARY" ]]; then
+  CONTEXT+="## 📊 Project State\n\n"
+  CONTEXT+="$STATE_SUMMARY\n\n"
+  CONTEXT+="**Key files**: \`.planning/STATE.md\`, \`.planning/PHASE-GALAXY.md\`\n\n"
+fi
+
+# If nothing else, show ready state
+if [[ -z "$CONTEXT" ]]; then
   CONTEXT="## Orchestrator Ready\n\n"
-  CONTEXT+="No pending responses. All roles idle.\n\n"
+  CONTEXT+="No handoff, no pending responses. Fresh session.\n\n"
+  CONTEXT+="$STATE_SUMMARY\n\n"
   CONTEXT+="**Available Roles:**\n"
   CONTEXT+="- CODERS: implementer, simplifier, validator, tester, architect, advisor\n"
   CONTEXT+="- RESEARCHERS: docs-fetcher, codebase-navigator, world-knowledge\n\n"
   CONTEXT+="**Dispatch tasks:**\n"
   CONTEXT+="\`\`\`bash\n"
-  CONTEXT+="uv run .claude/agents/dispatch.py implementer \"Your task here\" --cli claude\n"
-  CONTEXT+="uv run .claude/agents/dispatch.py docs-fetcher \"Get docs for X\" --cli gemini\n"
-  CONTEXT+="uv run .claude/agents/dispatch.py --status\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py task implementer \"Your task here\" --cli claude\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py task docs-fetcher \"Get docs for X\" --cli gemini\n"
+  CONTEXT+="uv run .claude/agents/dispatch.py status\n"
   CONTEXT+="\`\`\`\n"
 fi
 
 # Log
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 RESPONSE_COUNT=${#RESPONSES[@]}
-echo "[${TIMESTAMP}] SessionStart: orchestrator (source: ${SOURCE}, pending_responses: ${RESPONSE_COUNT})" >> "${LOG_DIR}/hooks.log"
+echo "[${TIMESTAMP}] SessionStart: orchestrator (source: ${SOURCE}, pending_responses: ${RESPONSE_COUNT}, has_handoff: ${HAS_HANDOFF})" >> "${LOG_DIR}/hooks.log"
 
 # Output with context injection
 ESCAPED_CONTEXT=$(echo -e "$CONTEXT" | jq -Rs '.')
