@@ -1,0 +1,1 @@
+// TODO: Obsidian API facade

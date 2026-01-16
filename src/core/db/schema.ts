@@ -1,108 +1,71 @@
-import type { Generated, Insertable, Selectable, Updateable } from "kysely";
+/**
+ * SQLite schema for Notient - 5-table structure
+ * Source of truth: .planning/PHASE-GALAXY.md
+ */
 
-export interface Database {
-  notes: NoteTable;
-  note_tags: NoteTagTable;
-  note_meta: NoteMetaTable;
-  chunks: ChunkTable;
-  embeddings: EmbeddingTable;
-  actions: ActionTable;
-  messages: MessageTable;
-  intelligence: IntelligenceTable;
-}
+export const SCHEMA_SQL = `
+-- Table 1: Notes metadata
+CREATE TABLE IF NOT EXISTS notes (
+  path TEXT PRIMARY KEY,
+  title TEXT,
+  hash TEXT,
+  indexed_at INTEGER,
+  last_enhanced INTEGER
+);
 
-export interface NoteTable {
-  path: string;
-  hash: string;
-  mtime: number;
-  title: string | null;
-  health_score: number | null;
-  para_type: string | null;
-  word_count: number | null;
-}
+-- Table 2: Chunks (hierarchical semantic)
+CREATE TABLE IF NOT EXISTS chunks (
+  id TEXT PRIMARY KEY,
+  note_path TEXT REFERENCES notes(path) ON DELETE CASCADE,
+  content TEXT,
+  chunk_type TEXT,
+  start_line INTEGER,
+  end_line INTEGER,
+  hash TEXT
+);
 
-export interface NoteTagTable {
-  note_path: string;
-  tag: string;
-}
+-- Table 3: Embeddings
+CREATE TABLE IF NOT EXISTS embeddings (
+  chunk_id TEXT REFERENCES chunks(id) ON DELETE CASCADE,
+  model TEXT,
+  vector BLOB,
+  created_at INTEGER,
+  PRIMARY KEY (chunk_id, model)
+);
 
-export interface NoteMetaTable {
-  note_path: string;
-  key: string;
-  value_type: "text" | "number" | "bool" | "date";
-  value_text: string | null;
-  value_number: number | null;
-}
+-- Table 4: Actions (undo - last 50)
+CREATE TABLE IF NOT EXISTS actions (
+  id TEXT PRIMARY KEY,
+  note_path TEXT,
+  action_type TEXT,
+  before_state TEXT,
+  after_state TEXT,
+  applied_at INTEGER,
+  undone INTEGER DEFAULT 0
+);
 
-export interface ChunkTable {
-  id: string;
-  note_path: string;
-  tier: "note" | "section" | "block";
-  kind: string; // 'paragraph' | 'list' | 'code' | etc.
-  parent_chunk_id: string | null;
-  heading_path: string | null; // JSON array
-  text: string;
-  start_line: number | null;
-  end_line: number | null;
-}
+-- Table 5: Intelligence cache
+CREATE TABLE IF NOT EXISTS intelligence (
+  note_path TEXT PRIMARY KEY REFERENCES notes(path) ON DELETE CASCADE,
+  analysis TEXT,
+  suggestions TEXT,
+  health_score INTEGER,
+  summary TEXT,
+  version INTEGER,
+  analyzed_at INTEGER
+);
 
-export interface EmbeddingTable {
-  chunk_id: string;
-  model_key: string;
-  dimension: number;
-  vector: Uint8Array; // Float32Array as blob
-}
+-- Prune trigger: Keep only 50 most recent actions
+CREATE TRIGGER IF NOT EXISTS prune_actions AFTER INSERT ON actions
+BEGIN
+  DELETE FROM actions WHERE id NOT IN (
+    SELECT id FROM actions ORDER BY applied_at DESC LIMIT 50
+  );
+END;
 
-export interface ActionTable {
-  id: string;
-  task_id: string | null;
-  workflow_id: string | null;
-  type: string;
-  risk: string;
-  note_path: string | null;
-  title: string;
-  reason: string;
-  reasoning: string;
-  created_at: number;
-  applied_at: number | null;
-  undone_at: number | null;
-  status: string;
-  payload: string; // JSON - action payload
-  undo_payload: string; // JSON - undo data
-  changed_paths: string; // JSON array
-}
-
-export interface MessageTable {
-  id: string;
-  note_path: string | null;
-  role: string;
-  content: string;
-  thinking: string | null;
-  created_at: number;
-  attachments: string | null; // JSON array
-  status: string | null; // 'success' | 'failed' | 'cancelled'
-  reasoning_summary: string | null;
-  action_ref: string | null;
-}
-
-export interface IntelligenceTable {
-  note_path: string;
-  topic: string; // Topic bucket for grouping
-  content_hash: string;
-  model_key: string;
-  data: string; // Full IntelligenceRecord as JSON
-  updated_at: number;
-}
-
-// Helpers
-export type Note = Selectable<NoteTable>;
-export type NewNote = Insertable<NoteTable>;
-export type NoteUpdate = Updateable<NoteTable>;
-
-export type Chunk = Selectable<ChunkTable>;
-export type NewChunk = Insertable<ChunkTable>;
-export type ChunkUpdate = Updateable<ChunkTable>;
-
-export type Action = Selectable<ActionTable>;
-export type NewAction = Insertable<ActionTable>;
-export type ActionUpdate = Updateable<ActionTable>;
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_chunks_note_path ON chunks(note_path);
+CREATE INDEX IF NOT EXISTS idx_embeddings_chunk_id ON embeddings(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_actions_note_path ON actions(note_path);
+CREATE INDEX IF NOT EXISTS idx_actions_applied_at ON actions(applied_at);
+`;
