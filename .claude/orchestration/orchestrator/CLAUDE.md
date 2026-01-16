@@ -334,11 +334,11 @@ When CEO says "save" or "handoff" or you hit ~80% context:
 
 ### Pre-Merge Validation (MANDATORY)
 
-Before merging ANY agent branch to `beta-spec`:
+**IMPORTANT**: Validate in the agent's worktree, NOT in orchestrator repo.
 
 ```bash
-# 1. Checkout the branch
-git checkout <role>/<task>
+# 1. Go to agent's worktree
+cd ~/projects/_worktrees/notient-<role>
 
 # 2. Run full validation
 bun run typecheck && bun run build && bun run lint
@@ -350,7 +350,8 @@ bun run typecheck && bun run build && bun run lint
 ### Merge Procedure
 
 ```bash
-# 1. Return to beta-spec
+# 1. Return to orchestrator repo (beta-spec)
+cd ~/projects/notient
 git checkout beta-spec
 
 # 2. Merge with no-ff (preserves history)
@@ -361,6 +362,14 @@ bun run typecheck && bun run build
 
 # 4. If fails → revert immediately
 git reset --hard HEAD~1
+```
+
+### Post-Merge Cleanup (IMMEDIATELY)
+
+```bash
+# Clear responses for merged agent
+rm -f .claude/orchestration/<role>/responses/*.response
+rm -f .claude/orchestration/<role>/responses/*.md
 ```
 
 ### Report to CEO
@@ -433,3 +442,115 @@ Track CEO preferences in the handoff. Examples:
 - **Commits**: "Detailed commit messages"
 
 When CEO expresses a preference, note it in handoff for future sessions.
+
+---
+
+## Complete Execution Flow (Step by Step)
+
+### Phase 1: Pre-Task
+
+1. **Propose options** to CEO with recommended pattern
+2. **Get CEO approval** before any dispatch
+
+### Phase 2: Task Preparation
+
+3. **Prepare worktrees** for each coder agent:
+   ```bash
+   .claude/agents/git-prepare.sh <role> <role>/<task-name>
+   ```
+
+4. **Spawn variants** if parallel work needed (auto-creates temp worktree):
+   ```bash
+   uv run .claude/agents/dispatch.py spawn implementer --cli gemini
+   ```
+
+### Phase 3: Task Dispatch
+
+5. **Dispatch ALL tasks** (prepare all, then dispatch all):
+   ```bash
+   uv run .claude/agents/dispatch.py task implementer "Task 1" --cli claude
+   uv run .claude/agents/dispatch.py task implementer-gemini "Task 2" --cli gemini
+   ```
+
+6. **Start watcher** in background:
+   ```bash
+   uv run .claude/agents/watcher.py --roles implementer,implementer-gemini --wait-for 2 --notify --timeout 1800 &
+   ```
+
+### Phase 4: Agent Execution (Automatic)
+
+7. mprocs runs queue-processor (daemon) for each agent
+8. Agent picks up task, works, commits to branch
+9. Agent writes `.response` file
+10. Watcher notifies completion
+
+### Phase 5: Post-Completion
+
+11. **Validate in agent's worktree**:
+    ```bash
+    cd ~/projects/_worktrees/notient-<role>
+    bun run typecheck && bun run build && bun run lint
+    ```
+
+12. **Report validation** to CEO, ask for merge approval
+
+13. **Merge** (after CEO approval):
+    ```bash
+    cd ~/projects/notient  # orchestrator repo
+    git merge <role>/<task> --no-ff -m "Merge <role>: <description>"
+    bun run typecheck && bun run build  # verify
+    ```
+
+14. **Cleanup immediately**:
+    ```bash
+    rm -f .claude/orchestration/<role>/responses/*.response
+    rm -f .claude/orchestration/<role>/responses/*.md
+    ```
+
+15. **Report to CEO**
+
+---
+
+## Lessons Learned (Critical)
+
+### NEVER Do These
+
+1. **Don't manually manage worktrees** — use `git-prepare.sh`
+2. **Don't poll agent status manually** — use `watcher.py` in background
+3. **Don't forget post-merge cleanup** — clear responses immediately
+4. **Don't interleave parallel prep/dispatch** — prepare ALL, dispatch ALL, then watch
+5. **Don't validate in orchestrator repo** — validate in agent's worktree
+6. **Don't create worktrees for Gemini variants** — `spawn` auto-creates them
+7. **Don't do manual git commands on agent worktrees** — scripts handle it
+
+### ALWAYS Do These
+
+1. **Use the scripts** — they handle edge cases
+2. **Use the watcher** — it's designed for async notification
+3. **Follow the flow** — propose → prepare → dispatch → watch → validate → merge → cleanup
+4. **Clear responses after merge** — keep the system clean
+5. **Trust mprocs** — agents are daemons, they pick up tasks automatically
+6. **Ask CEO** — when status shows 🔴, CEO starts mprocs
+
+---
+
+## Infrastructure Notes
+
+### mprocs
+
+- CEO starts mprocs at session begin
+- Agents run as persistent daemons via queue-processor.py
+- If agents show 🔴 in status, ask CEO to start mprocs
+- Context usage tracked in `instances.json`, processor updates it automatically
+
+### Response Sources
+
+| Source | Purpose |
+|--------|---------|
+| `.response` JSON file | Orchestration signals (status, stats, timing) |
+| `REPORT.md` in worktree | Detailed code analysis for Notient work |
+
+### Worktree Lifecycle
+
+- **After merge**: Leave worktree as-is (git-prepare.sh handles reset on next task)
+- **Gemini variants**: Auto-created in `/tmp/notient-worktrees/`, auto-cleaned on kill
