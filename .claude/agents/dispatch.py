@@ -351,8 +351,13 @@ def kill_mprocs_pane(instance: str) -> bool:
 
 
 def get_mprocs_procs() -> list[str]:
-    """Get list of running mprocs processes."""
+    """Get list of running mprocs processes.
+
+    Tries mprocs ctl first, falls back to checking running processes.
+    """
     server = CONFIG["mprocs"]["server"]
+
+    # Try mprocs ctl (may not be supported in all versions)
     try:
         result = subprocess.run(
             ["mprocs", "--ctl", '{"c":"get-procs"}', "--server", server],
@@ -364,6 +369,27 @@ def get_mprocs_procs() -> list[str]:
             return [p["name"] for p in data.get("procs", [])]
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+
+    # Fallback: check running queue-processor.py processes
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", "queue-processor.py"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            running = []
+            for line in result.stdout.strip().split("\n"):
+                if "--instance" in line:
+                    # Extract instance name from command line
+                    parts = line.split("--instance")
+                    if len(parts) > 1:
+                        instance = parts[1].strip().split()[0]
+                        running.append(instance)
+            return running
+    except FileNotFoundError:
+        pass
+
     return []
 
 
