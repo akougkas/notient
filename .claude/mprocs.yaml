@@ -1,28 +1,28 @@
-# Notient Multi-Agent Orchestration v3 (Role-Based)
+# Notient Multi-Agent Orchestration v4 (Dynamic Two-Tier)
 # Usage: mprocs -c .claude/mprocs.yaml
 #
 # Architecture:
-#   User (CEO) → Orchestrator (Chief Engineer) → Role-Based Agents
+#   User (CEO) → Orchestrator (Chief Engineer) → Base Army + Dynamic Spawns
 #
-# Roles:
-#   CODERS: implementer, simplifier, validator, tester, architect, advisor
-#   RESEARCHERS: docs-fetcher, codebase-navigator, world-knowledge
+# Two-Tier System:
+#   Tier 1: Base Army (boot with orchestrator) - 4 edit agents on Claude
+#   Tier 2: Dynamic Spawns (on demand) - researchers + extra coders
 #
-# Each role can be dispatched to any CLI: claude, gemini, cursor-agent, opencode
+# Pane Naming: {role}-{model} or {role}-{model}-{N} for extras
 #
-# Workflow:
-#   1. Orchestrator proposes dispatch options to CEO
-#   2. CEO approves, orchestrator runs: dispatch.py <role> "task" --cli <platform>
-#   3. Role queue processor picks up task, runs CLI
-#   4. Orchestrator checks: dispatch.py --responses <role>
-#   5. Orchestrator reports results to CEO
+# Lifecycle Management:
+#   dispatch.py spawn <role> --cli <platform>   # Spawn dynamic agent
+#   dispatch.py kill <instance>                 # Kill dynamic agent
+#   dispatch.py refresh <instance>              # Kill + respawn (context exhaustion)
+#   dispatch.py status                          # All agents with context %
+#   dispatch.py list-instances                  # Show dynamic instances
 
 server: 127.0.0.1:4050
 log_dir: <CONFIG_DIR>/logs
 
 procs:
   # ═══════════════════════════════════════════════════════════════════════════
-  # FILE BROWSER & ORCHESTRATOR
+  # ALWAYS RUNNING
   # ═══════════════════════════════════════════════════════════════════════════
 
   repos:
@@ -45,90 +45,64 @@ procs:
     stop: "SIGTERM"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # CODER ROLES (Multi-CLI capable)
+  # BASE ARMY - Edit Agents (permanent worktrees, always running)
   # ═══════════════════════════════════════════════════════════════════════════
 
-  implementer:
-    cwd: /home/akougkas/projects/notient
+  implementer-claude:
+    cwd: /home/akougkas/projects/_worktrees/notient-implementer
     env:
       NOTIENT_ROLE: "implementer"
+      NOTIENT_INSTANCE: "implementer-claude"
       NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py implementer"
+    shell: "uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py implementer --instance implementer-claude"
     autostart: true
     stop: "SIGTERM"
 
-  simplifier:
-    cwd: /home/akougkas/projects/notient
+  simplifier-claude:
+    cwd: /home/akougkas/projects/_worktrees/notient-simplifier
     env:
       NOTIENT_ROLE: "simplifier"
+      NOTIENT_INSTANCE: "simplifier-claude"
       NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py simplifier"
+    shell: "uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py simplifier --instance simplifier-claude"
     autostart: true
     stop: "SIGTERM"
 
-  validator:
-    cwd: /home/akougkas/projects/notient
+  validator-claude:
+    cwd: /home/akougkas/projects/_worktrees/notient-validator
     env:
       NOTIENT_ROLE: "validator"
+      NOTIENT_INSTANCE: "validator-claude"
       NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py validator"
+    shell: "uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py validator --instance validator-claude"
     autostart: true
     stop: "SIGTERM"
 
-  tester:
-    cwd: /home/akougkas/projects/notient
+  tester-claude:
+    cwd: /home/akougkas/projects/_worktrees/notient-tester
     env:
       NOTIENT_ROLE: "tester"
+      NOTIENT_INSTANCE: "tester-claude"
       NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py tester"
-    autostart: false
-    stop: "SIGTERM"
-
-  architect:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_ROLE: "architect"
-      NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py architect"
-    autostart: false
-    stop: "SIGTERM"
-
-  advisor:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_ROLE: "advisor"
-      NOTIENT_CATEGORY: "coder"
-    shell: "uv run .claude/agents/queue-processor.py advisor"
-    autostart: false
-    stop: "SIGTERM"
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # RESEARCHER ROLES (Multi-CLI capable)
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  docs-fetcher:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_ROLE: "docs-fetcher"
-      NOTIENT_CATEGORY: "researcher"
-    shell: "uv run .claude/agents/queue-processor.py docs-fetcher"
+    shell: "uv run /home/akougkas/projects/notient/.claude/agents/queue-processor.py tester --instance tester-claude"
     autostart: true
     stop: "SIGTERM"
 
-  codebase-navigator:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_ROLE: "codebase-navigator"
-      NOTIENT_CATEGORY: "researcher"
-    shell: "uv run .claude/agents/queue-processor.py codebase-navigator"
-    autostart: false
-    stop: "SIGTERM"
-
-  world-knowledge:
-    cwd: /home/akougkas/projects/notient
-    env:
-      NOTIENT_ROLE: "world-knowledge"
-      NOTIENT_CATEGORY: "researcher"
-    shell: "uv run .claude/agents/queue-processor.py world-knowledge"
-    autostart: false
-    stop: "SIGTERM"
+  # ═══════════════════════════════════════════════════════════════════════════
+  # DYNAMIC AGENTS - Spawned via dispatch.py spawn
+  # ═══════════════════════════════════════════════════════════════════════════
+  # (None defined here - all dynamic via mprocs --ctl add-proc)
+  #
+  # Examples of dynamic spawns:
+  #   uv run dispatch.py spawn implementer --cli gemini
+  #     → Creates: implementer-gemini (with temp worktree)
+  #
+  #   uv run dispatch.py spawn implementer --cli claude
+  #     → Creates: implementer-claude-2 (next available number)
+  #
+  #   uv run dispatch.py spawn docs-fetcher --cli gemini
+  #     → Creates: docs-fetcher-gemini (read-only, no worktree)
+  #
+  # Dynamic agent categories:
+  #   - Read-Only Agents: advisor, docs-fetcher, codebase-navigator, world-knowledge, architect
+  #   - Extra Edit Agents: implementer-{model}-N, simplifier-{model}-N, etc.

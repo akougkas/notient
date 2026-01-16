@@ -1,4 +1,32 @@
 {
+  "agent_categories": {
+    "edit_agents": ["implementer", "simplifier", "validator", "tester"],
+    "read_only_agents": ["advisor", "docs-fetcher", "codebase-navigator", "world-knowledge", "architect"]
+  },
+  "base_army": {
+    "model": "claude-opus-4-5-20251101",
+    "agents": ["implementer", "simplifier", "validator", "tester"]
+  },
+  "role_defaults": {
+    "implementer": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "simplifier": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "validator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "tester": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "advisor": {"cli": "gemini", "model": "gemini-3-pro-preview"},
+    "docs-fetcher": {"cli": "gemini", "model": "gemini-3-pro-preview"},
+    "codebase-navigator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "world-knowledge": {"cli": "gemini", "model": "gemini-3-pro-preview"},
+    "architect": {"cli": "claude", "model": "claude-opus-4-5-20251101"}
+  },
+  "worktrees": {
+    "permanent_base": "~/projects/_worktrees",
+    "temp_base": "/tmp/notient-worktrees",
+    "main_repo": "/home/akougkas/projects/notient",
+    "base_branch": "beta-spec"
+  },
+  "mprocs": {
+    "server": "127.0.0.1:4050"
+  },
   "models": {
     "claude": "claude-opus-4-5-20251101",
     "gemini": "gemini-3-pro-preview",

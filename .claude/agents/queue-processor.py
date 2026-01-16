@@ -1,38 +1,41 @@
 # /// script
 # package = "notient-queue-processor"
-# version = "3.0.0"
+# version = "4.0.0"
 # authors = ["Anthony Kougkas | https://akougkas.io"]
-# description = "Queue processor for Notient role-based agent orchestration"
+# description = "Queue processor for Notient dynamic two-tier agent orchestration"
 # repository = "https://github.com/akougkas/notient"
 # license = "MIT"
 # dependencies = []
 # requires-python = ">=3.10"
 # ///
 """
-Notient Role Queue Processor v3
+Notient Role Queue Processor v4 - Dynamic Two-Tier Support
 
-Enhanced queue processor for role-based agents with rich terminal display:
-- Coder roles: implementer, simplifier, validator, tester, architect, advisor
-- Researcher roles: docs-fetcher, codebase-navigator, world-knowledge
+Enhanced queue processor with instance tracking for both base army and dynamic spawns:
+- Instance-aware: tracks context usage per instance
+- Registry integration: updates instances.json with real-time stats
 - Multi-CLI support: claude, gemini, cursor-agent, opencode
-- Stream-JSON parsing for real-time event display
-- Tool usage tracking with file diffs
-- Context window management
+- Rich terminal display with context monitoring
 
 Usage:
-    uv run queue-processor.py <role>
+    uv run queue-processor.py <role> [--instance <instance-name>]
 
     role: implementer, simplifier, validator, tester, architect, advisor,
           docs-fetcher, codebase-navigator, world-knowledge
+
+    --instance: Instance name (e.g., implementer-claude, implementer-gemini-2)
+                If not provided, uses role name for compatibility
 
 Workflow:
     1. Orchestrator dispatches task via dispatch.py
     2. This processor picks up task, runs appropriate CLI
     3. Parses events and displays rich formatted output
-    4. Writes JSON .response file to responses/
-    5. Orchestrator reads response when ready
+    4. Updates instances.json with context usage
+    5. Writes JSON .response file to responses/
+    6. Orchestrator reads response when ready
 """
 
+import argparse
 import json
 import os
 import signal
@@ -50,26 +53,6 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════════════════════
 
 POLL_INTERVAL = 1.0
-
-# Coder roles (shared CODER.md core identity)
-CODER_ROLES = (
-    "implementer",
-    "simplifier",
-    "validator",
-    "tester",
-    "architect",
-    "advisor",
-)
-
-# Researcher roles (shared RESEARCHER.md core identity)
-RESEARCHER_ROLES = (
-    "docs-fetcher",
-    "codebase-navigator",
-    "world-knowledge",
-)
-
-# All valid roles
-VALID_ROLES = CODER_ROLES + RESEARCHER_ROLES
 
 # Load CLI configuration from central config file
 def load_config() -> dict:
@@ -90,12 +73,21 @@ def load_config() -> dict:
             "gemini": {"cmd": "gemini", "flags": ["--output-format", "stream-json"]},
             "cursor-agent": {"cmd": "cursor-agent", "flags": ["--print", "--output-format", "stream-json"]},
             "opencode": {"cmd": "opencode", "subcommand": "run", "flags": ["--format", "json"]},
+        },
+        "agent_categories": {
+            "edit_agents": ["implementer", "simplifier", "validator", "tester"],
+            "read_only_agents": ["advisor", "docs-fetcher", "codebase-navigator", "world-knowledge", "architect"]
         }
     }
 
 CONFIG = load_config()
 DEFAULT_MODELS = CONFIG["models"]
 CLI_CONFIGS = CONFIG["cli"]
+
+# Role definitions from config
+EDIT_AGENTS = tuple(CONFIG["agent_categories"]["edit_agents"])
+READ_ONLY_AGENTS = tuple(CONFIG["agent_categories"]["read_only_agents"])
+VALID_ROLES = EDIT_AGENTS + READ_ONLY_AGENTS
 
 # Role themes for display
 ROLE_THEME = {
@@ -111,6 +103,63 @@ ROLE_THEME = {
     "codebase-navigator": {"icon": "🗺️", "color": "cyan", "name": "CODEBASE-NAVIGATOR", "category": "researcher"},
     "world-knowledge": {"icon": "🌐", "color": "magenta", "name": "WORLD-KNOWLEDGE", "category": "researcher"},
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Instance Registry Integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_repo_root() -> Path:
+    """Get main repo root."""
+    return Path(__file__).parent.parent.parent
+
+
+def get_instances_path() -> Path:
+    """Get path to instances.json."""
+    return get_repo_root() / ".claude/orchestration/state/instances.json"
+
+
+def load_instances() -> dict:
+    """Load instances registry."""
+    path = get_instances_path()
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return {"base_army": {}, "dynamic": {}}
+    return {"base_army": {}, "dynamic": {}}
+
+
+def save_instances(instances: dict):
+    """Save instances registry."""
+    path = get_instances_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(instances, indent=2))
+
+
+def update_instance_status(instance: str, status: str, context_percent: float = None, last_task: str = None):
+    """Update instance status in registry."""
+    instances = load_instances()
+    
+    # Find instance in base_army or dynamic
+    if instance in instances.get("base_army", {}):
+        target = instances["base_army"][instance]
+    elif instance in instances.get("dynamic", {}):
+        target = instances["dynamic"][instance]
+    else:
+        # Instance not registered, skip update
+        return
+    
+    target["status"] = status
+    target["last_active"] = datetime.now(timezone.utc).isoformat()
+    
+    if context_percent is not None:
+        target["context_percent"] = context_percent
+    
+    if last_task is not None:
+        target["last_task"] = last_task
+    
+    save_instances(instances)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANSI Colors and Formatting
@@ -247,6 +296,7 @@ class Task:
     role: str = ""
     category: str = ""
     context: str = ""
+    instance: str = ""
     priority: int = 0
     created_at: str = ""
 
@@ -261,6 +311,7 @@ class Task:
             role=data.get("role", ""),
             category=data.get("category", ""),
             context=data.get("context", ""),
+            instance=data.get("instance", ""),
             priority=data.get("priority", 0),
             created_at=data.get("created_at", ""),
         )
@@ -315,6 +366,7 @@ class Response:
     task_id: str
     role: str
     status: str
+    instance: str = ""
     output: str = ""
     error: Optional[str] = None
     model: str = ""
@@ -328,6 +380,7 @@ class Response:
         result = {
             "task_id": self.task_id,
             "role": self.role,
+            "instance": self.instance,
             "status": self.status,
             "output": self.output,
             "error": self.error,
@@ -367,8 +420,9 @@ class Response:
 class EventDisplay:
     """Handles formatting and display of CLI streaming events."""
 
-    def __init__(self, role: str, task: Task):
+    def __init__(self, role: str, instance: str, task: Task):
         self.role = role
+        self.instance = instance
         self.task = task
         self.theme = ROLE_THEME.get(role, {"icon": "🤖", "color": "white", "name": role.upper()})
         self.color = get_role_color(role)
@@ -403,6 +457,7 @@ class EventDisplay:
 
         print()
         print(f"{C.BRIGHT_WHITE}{C.BG_BLUE} ▶ WORKING {C.RESET} {self.color}{icon} {name}{C.RESET}")
+        print(f"{C.DIM}   Instance: {self.instance}{C.RESET}")
         print()
         print(f"{self.color}{Box.DTL}{Box.DH * (self.width - 2)}{Box.DTR}{C.RESET}")
         print(f"{self.color}{Box.DV} {C.BRIGHT_WHITE}CLI:{C.RESET} {cli:<15} {self.color}{C.BRIGHT_WHITE}MODEL:{C.RESET} {model:<30} {self.color}{Box.DV}{C.RESET}")
@@ -500,16 +555,16 @@ class EventDisplay:
                 print(f"     {C.DIM}└─ {desc}{C.RESET}")
 
         elif tool_name == "Read":
-            file_path = input_data.get("file_path", input_data.get("target_file", ""))
+            file_path = input_data.get("file_path", input_data.get("target_file", input_data.get("path", "")))
             self.stats.files_read.append(file_path)
             short_path = self._short_path(file_path)
             print(f"  {color}{icon} Read:{C.RESET} {C.BLUE}{short_path}{C.RESET}")
 
-        elif tool_name in ("Edit", "Write"):
-            file_path = input_data.get("file_path", input_data.get("target_file", ""))
+        elif tool_name in ("Edit", "Write", "StrReplace"):
+            file_path = input_data.get("file_path", input_data.get("target_file", input_data.get("path", "")))
             short_path = self._short_path(file_path)
 
-            if tool_name == "Edit":
+            if tool_name in ("Edit", "StrReplace"):
                 self.stats.files_edited.append(file_path)
                 old_str = input_data.get("old_string", "")
                 new_str = input_data.get("new_string", "")
@@ -663,17 +718,20 @@ class EventDisplay:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class QueueProcessor:
-    def __init__(self, role: str):
+    def __init__(self, role: str, instance: str = None):
         self.role = role
+        self.instance = instance or role  # Fallback to role name for backward compat
         self.running = True
         self.current_task: Optional[str] = None
         self.current_process: Optional[subprocess.Popen] = None
         self.current_display: Optional[EventDisplay] = None
 
-        repo = Path(__file__).parent.parent.parent
+        repo = get_repo_root()
         self.queue_dir = repo / f".claude/orchestration/{role}/queue"
         self.response_dir = repo / f".claude/orchestration/{role}/responses"
-        self.worktree = Path.home() / f"projects/_worktrees/notient-{role}"
+        
+        # Determine worktree from environment or config
+        self.worktree = Path(os.environ.get("NOTIENT_WORKTREE", Path.cwd()))
 
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._shutdown)
@@ -701,7 +759,7 @@ class QueueProcessor:
             color = C.YELLOW
         elif level == "SUCCESS":
             color = C.GREEN
-        print(f"{C.DIM}[{ts}]{C.RESET} {color}[{self.role.upper()}]{C.RESET} {msg}", flush=True)
+        print(f"{C.DIM}[{ts}]{C.RESET} {color}[{self.instance.upper()}]{C.RESET} {msg}", flush=True)
 
     def status(self, state: str, detail: str = ""):
         theme = ROLE_THEME.get(self.role, {"icon": "🤖"})
@@ -710,18 +768,16 @@ class QueueProcessor:
 
         if state == "idle":
             print()
-            print(f"{C.DIM}{C.BG_BLACK} ⏸ IDLE {C.RESET} {color}{icon} {self.role.upper()}{C.RESET} {C.DIM}— Waiting for tasks...{C.RESET}", flush=True)
+            print(f"{C.DIM}{C.BG_BLACK} ⏸ IDLE {C.RESET} {color}{icon} {self.instance.upper()}{C.RESET} {C.DIM}— Waiting for tasks...{C.RESET}", flush=True)
             print()
+            # Update registry
+            update_instance_status(self.instance, "idle")
         elif state == "busy":
-            pass
+            update_instance_status(self.instance, "running")
 
     def setup(self) -> bool:
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self.response_dir.mkdir(parents=True, exist_ok=True)
-
-        if not self.worktree.exists():
-            self.log(f"Worktree missing: {self.worktree}", "WARN")
-            self.log("Will run in main repo (no isolation)", "WARN")
 
         # Check default CLI availability
         result = subprocess.run(["claude", "--version"], capture_output=True)
@@ -729,7 +785,7 @@ class QueueProcessor:
             self.log("Claude CLI not found (other CLIs may still work)", "WARN")
 
         self.log(f"Queue: {self.queue_dir}")
-        self.log(f"Worktree: {self.worktree}")
+        self.log(f"Working dir: {Path.cwd()}")
         return True
 
     def pending_tasks(self) -> list[Path]:
@@ -761,8 +817,9 @@ class QueueProcessor:
 
     def execute(self, task: Task) -> Response:
         self.current_task = task.id
+        self.status("busy")
 
-        display = EventDisplay(self.role, task)
+        display = EventDisplay(self.role, self.instance, task)
         self.current_display = display
         display.start()
 
@@ -775,9 +832,6 @@ class QueueProcessor:
         cli_name = task.cli.upper()
         self.log(f"Using CLI: {cli_name} ({CLI_CONFIGS.get(task.cli, {}).get('cmd', 'unknown')})")
 
-        # Determine working directory
-        cwd = self.worktree if self.worktree.exists() else Path(__file__).parent.parent.parent
-
         start = time.time()
         result_text = ""
         error_text = None
@@ -786,7 +840,7 @@ class QueueProcessor:
         try:
             self.current_process = subprocess.Popen(
                 cmd,
-                cwd=cwd,
+                cwd=Path.cwd(),  # Use current working directory (worktree)
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -823,9 +877,18 @@ class QueueProcessor:
         self.current_task = None
         self.current_display = None
 
+        # Update instance registry with context usage
+        update_instance_status(
+            self.instance,
+            "idle",
+            context_percent=display.stats.context_percent_used,
+            last_task=task.id
+        )
+
         return Response(
             task_id=task.id,
             role=self.role,
+            instance=self.instance,
             status=status,
             output=result_text,
             error=error_text,
@@ -847,13 +910,9 @@ class QueueProcessor:
         category = theme.get("category", "unknown")
         color = get_role_color(self.role)
 
-        # Get configured defaults
-        default_cli = "claude"  # Default fallback
-        default_model = DEFAULT_MODELS.get(default_cli, "unknown")
-
         print()
         print(f"{color}{Box.DTL}{Box.DH * 68}{Box.DTR}{C.RESET}")
-        print(f"{color}{Box.DV}  {theme['icon']} {theme['name']:<20} {'│':^3} {category.upper():<12} {'│':^3} READY    {Box.DV}{C.RESET}")
+        print(f"{color}{Box.DV}  {theme['icon']} {self.instance.upper():<30} {'│':^3} {category.upper():<8} {'│':^3} READY    {Box.DV}{C.RESET}")
         print(f"{color}{Box.DV}{Box.DH * 68}{Box.DV}{C.RESET}")
         print(f"{color}{Box.DV}  📍 Queue: .claude/orchestration/{self.role}/queue/{' ' * (35 - len(self.role))}{Box.DV}{C.RESET}")
         print(f"{color}{Box.DV}  🔧 Available CLIs: claude, gemini, cursor-agent, opencode{' ' * 8}{Box.DV}{C.RESET}")
@@ -896,20 +955,42 @@ class QueueProcessor:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: uv run queue-processor.py <role>")
-        print(f"\nCoders: {', '.join(CODER_ROLES)}")
-        print(f"Researchers: {', '.join(RESEARCHER_ROLES)}")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Queue processor for Notient agent orchestration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Usage:
+    uv run queue-processor.py <role> [--instance <instance-name>]
 
-    role = sys.argv[1].lower()
+Roles: {', '.join(VALID_ROLES)}
+
+The --instance flag is used to identify this processor in the instance registry.
+If not provided, the role name is used (for backward compatibility).
+
+Examples:
+    # Base army agent
+    uv run queue-processor.py implementer --instance implementer-claude
+
+    # Dynamic spawn
+    uv run queue-processor.py implementer --instance implementer-gemini-2
+        """
+    )
+    
+    parser.add_argument("role", help=f"Role: {', '.join(VALID_ROLES)}")
+    parser.add_argument("--instance", "-i", help="Instance name for registry tracking")
+    
+    args = parser.parse_args()
+
+    role = args.role.lower()
     if role not in VALID_ROLES:
         print(f"{C.RED}Unknown role: {role}{C.RESET}")
-        print(f"\nCoders: {', '.join(CODER_ROLES)}")
-        print(f"Researchers: {', '.join(RESEARCHER_ROLES)}")
+        print(f"\nEdit Agents: {', '.join(EDIT_AGENTS)}")
+        print(f"Read-Only Agents: {', '.join(READ_ONLY_AGENTS)}")
         sys.exit(1)
 
-    sys.exit(QueueProcessor(role).run())
+    instance = args.instance or os.environ.get("NOTIENT_INSTANCE", role)
+    
+    sys.exit(QueueProcessor(role, instance).run())
 
 
 if __name__ == "__main__":
