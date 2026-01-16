@@ -1,10 +1,11 @@
-# Phase Galaxy: MVP Nucleus (v2)
+# Phase Galaxy: MVP Nucleus (FINAL)
 
-**Status**: PLANNING (Interview In Progress)
+**Status**: READY FOR IMPLEMENTATION
 **Created**: 2026-01-15 (Session 9)
-**Updated**: 2026-01-15 (Post-Review Revision)
+**Updated**: 2026-01-15 (18 Interview Rounds Complete)
 **Position**: Pre-Helios, Pre-Gaia
-**Approach**: TOTAL ANNIHILATION — Fresh implementation, no preservation
+**Version**: 0.1.0 (Fresh Start)
+**Approach**: TOTAL ANNIHILATION — Complete reimplementation
 
 ---
 
@@ -16,35 +17,157 @@ Phase Galaxy is a **complete reimplementation** of Notient's core pipeline:
 - **NO preservation**: All existing code paths deleted, rebuilt from scratch
 - **SUSPENDED**: Chat Service, Chat UI, proactive enhancements
 
-This is NOT a refactor. This is a fresh build using git history for reference only.
+This is NOT a refactor. This is a fresh build. Version 0.1.0.
 
 ---
 
-## Core Decisions (From Interview)
+## Core Philosophy
 
-### What We're Building
+### Notes Are Living Entities
 
-| Component | Decision | Rationale |
-|-----------|----------|-----------|
-| **Pipeline** | 4-step linear | Planner → ContextBuilder → Analyst → Writer. Sequential, debuggable. |
-| **Entry Point** | Single handler, 3 surfaces | Button + context menu + command palette → same handler |
-| **Output** | Suggestions only | Checklist UI, user selects which to apply |
-| **Context** | Iterative layers | Start minimal, add context layers, test LLM quality at each step |
-| **Trust Levels** | NOT in MVP | MVP is human-driven. Trust levels for future proactive mode |
-| **Undo** | SQLite persisted | Last 50 actions survive crash. Safety net. |
-| **Apply** | Immediate | Click → modify → undo in Activity tab |
+> Notes have LIFE. They EVOLVE through enhancement cycles.
+> A simple idea can become a massive project document.
+> Notes have MATURITY, VITALITY, and ORIGIN.
 
-### What We're NOT Building (MVP)
+**NOT generic categories** (meeting, daily, research). Instead:
+- **Maturity**: Raw capture → Adolescent → Mature → Synthesis-ready
+- **Vitality**: Health score, connectivity, structure, freshness
+- **I-PARA**: Inbox → Projects/Areas/Resources/Archives
+- **Origin**: User-written, web-clipped, AI-generated
 
-- Chat interface
-- Proactive/background enhancements
-- Bulk workflows
-- Multiple quick actions (only Enhance)
-- Trust-level gates (human reviews everything)
+### Human-Driven Pipeline
+
+MVP is **entirely human-driven**:
+1. User clicks Enhance
+2. Pipeline runs (may take seconds to minutes)
+3. Suggestions returned as checklist
+4. User selects which to apply
+5. User clicks Apply
+6. Changes made, undo available
+
+**NO automatic application. NO trust levels (yet).** Trust levels are for future proactive mode.
 
 ---
 
-## Fresh Architecture
+## Interview Decisions (18 Rounds, 72 Questions)
+
+### Pipeline Architecture
+
+| Decision | Choice |
+|----------|--------|
+| Pipeline Steps | 4-step: Planner → ContextBuilder → Analyst → Writer |
+| Agent Names | Planner, ContextBuilder, Analyst, Writer (no "Worker" confusion) |
+| Agent Interface | Hybrid (functional core, class wrapper for lifecycle) |
+| Communication | Direct calls for pipeline, events for UI updates |
+| Error Handling | Abort entire pipeline on any failure |
+
+### Enhance Behavior
+
+| Decision | Choice |
+|----------|--------|
+| Entry Points | Single handler, 3 surfaces (button, context menu, command palette) |
+| Output | Suggestions only (checklist, user selects) |
+| Suggestion Types | Metadata + Structure (frontmatter, links, sections, NO text rewriting) |
+| Deletions | Full editing (add/modify/delete, user reviews all) |
+| Apply Flow | Immediate (click → modify → undo in Activity tab) |
+| Cancel | Hard abort (kill immediately, discard partial) |
+| Pause | NOT SUPPORTED (removed, only cancel) |
+| No Suggestions | Show "Note already well-structured" message |
+
+### Note Intelligence
+
+| Decision | Choice |
+|----------|--------|
+| Type Detection | Heuristics (folder, tags, frontmatter) |
+| Maturity Impact | Adaptive (young→structure, adolescent→connections, mature→synthesis) |
+| PARA Moves | Suggest only (user decides on folder moves) |
+| Origin Awareness | Flag in LLM context (LLM adapts suggestions) |
+| Vitals Usage | Pass to LLM as context (LLM prioritizes based on vitals) |
+| Ambiguous Type | Best guess (proceed with highest confidence) |
+| Type Override | No override (system decides) |
+
+### Context Building
+
+| Decision | Choice |
+|----------|--------|
+| Context Strategy | Start minimal (Layer 0-2), add layers iteratively, test quality |
+| Context Layers | 0: Content → 1: Frontmatter → 2: Obsidian metadata → 3: Notient DB → 4: Linked notes → 5: Top-K similar → 6: Vault context → 7: User prefs → 8: Temporal |
+| Top-K Search | 10 results for context building |
+| Testing Method | Claude as judge comparing outputs per layer |
+
+### LLM Integration
+
+| Decision | Choice |
+|----------|--------|
+| Response Format | Flexible JSON (required + optional fields) |
+| Parse Errors | Fallback parsing (JSON → YAML → regex) |
+| Streaming | Wait for complete (buffer, parse at end) |
+| Timeout | Ask user ("LLM slow. Wait or cancel?") |
+| Agent Identity | No identity (pure task prompt) |
+| PARA Knowledge | Assume known (no explanation in prompt) |
+| Few-Shot | No examples (zero-shot) |
+| Multi-Provider | Separate providers (reasoning ≠ reranking ≠ embedding) |
+
+### Data Persistence
+
+| Decision | Choice |
+|----------|--------|
+| SQLite Tables | 5 tables (notes, chunks, embeddings, actions, intelligence) |
+| Undo History | SQLite (last 50 actions, survives crash) |
+| Cache Expiry | On note change (hash invalidation) |
+| Portable Data | Frontmatter only (notient-health, notient-summary) |
+
+### Indexing
+
+| Decision | Choice |
+|----------|--------|
+| Chunking | Hierarchical semantic (preserve existing implementation) |
+| Note Size | Soft limit (warn >50KB, index anyway) |
+| Index Refresh | File watcher for active note (Obsidian API) |
+| Index Timing | After wizard (background start) |
+| Embeddings | Web Worker (non-blocking) |
+
+### UI
+
+| Decision | Choice |
+|----------|--------|
+| Sidebar Layout | Tabbed: [Vitals] [Suggestions] [Activity] |
+| Suggestion Detail | Expandable (click for preview + reasoning) |
+| Apply Confirm | No confirm (immediate, undo available) |
+| Status Footer | Clickable (opens system health modal) |
+| Keyboard Shortcuts | None (avoid conflicts) |
+| Sidebar Resize | Obsidian default |
+
+### Settings
+
+| Decision | Choice |
+|----------|--------|
+| Scope | Full config for all active components |
+| Wizard | Full guided setup (providers, test, index options, first note) |
+| Commands | Just "Notient: Enhance note" (one command) |
+
+### System Behavior
+
+| Decision | Choice |
+|----------|--------|
+| Startup | Load SQLite only, HNSW lazy on first search |
+| Offline Mode | Graceful degradation (vitals work, Enhance disabled) |
+| DB Corruption | Attempt repair, then delete/recreate |
+| Concurrent Edit | Detect hash change before apply, abort if changed |
+| Production Logs | Errors only |
+| Dev Mode | Full debug (toggle in settings) |
+| Test Strategy | Full suite (unit + integration + E2E) |
+
+### Obsidian Integration
+
+| Decision | Choice |
+|----------|--------|
+| Write Method | processFrontMatter for frontmatter, Vault API for content |
+| Metadata Cache | Full integration (read + refresh after writes) |
+
+---
+
+## Architecture
 
 ### The Four Agents
 
@@ -58,142 +181,126 @@ This is NOT a refactor. This is a fresh build using git history for reference on
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           1. PLANNER                                    │
-│  (Orchestrator - decides what to do)                                    │
-│                                                                         │
 │  • Receives enhance request                                             │
-│  • Analyzes note type, content state                                    │
+│  • Analyzes note maturity, origin, vitals                               │
 │  • Decides enhancement strategy                                         │
-│  • Calls ContextBuilder                                                 │
 │  • Coordinates pipeline flow                                            │
-│                                                                         │
-│  Communication: Direct function calls to agents                         │
-│  On error: Abort entire pipeline                                        │
+│  • On error: Abort entire pipeline                                      │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        2. CONTEXT BUILDER                               │
-│  (Separate agent - gathers context)                                     │
 │                                                                         │
-│  ITERATIVE CONTEXT LAYERS (test each for LLM quality):                  │
+│  ITERATIVE LAYERS (start minimal, add based on testing):                │
 │                                                                         │
-│  Layer 0: Note content only (baseline)                                  │
+│  Layer 0: Note content only                                             │
 │  Layer 1: + Frontmatter metadata                                        │
 │  Layer 2: + Obsidian metadata (links, tags from cache)                  │
-│  Layer 3: + Notient metadata (prior intelligence from DB)              │
+│  Layer 3: + Notient metadata (prior intelligence from DB)               │
 │  Layer 4: + Linked notes (backlinks + outlinks)                         │
-│  Layer 5: + Top-K similar notes (vector search + rerank)                │
-│  Layer 6: + Vault context (folder structure, project relationship)      │
+│  Layer 5: + Top-10 similar notes (vector search)                        │
+│  Layer 6: + Vault context (folder structure, I-PARA)                    │
 │  Layer 7: + User preferences                                            │
 │  Layer 8: + Temporal context (recent activity)                          │
 │                                                                         │
-│  MVP starts at Layer 0-2, adds layers based on testing                  │
+│  MVP: Layers 0-2. Add layers via Claude-judged testing.                 │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           3. ANALYST                                    │
-│  (Workflow executor - runs LLM reasoning)                               │
 │                                                                         │
 │  • Receives context from ContextBuilder                                 │
-│  • Constructs prompt based on note type                                 │
+│  • Constructs lean prompt (no persona, zero-shot)                       │
 │  • Calls LLM (local, via configured provider)                           │
-│  • Parses response into structured suggestions                          │
-│  • Streams suggestions to UI as generated                               │
-│                                                                         │
-│  Output: Array of EnhancementSuggestion objects                         │
-│  Streaming: Progressive reveal to UI                                    │
+│  • Buffers complete response, then parses                               │
+│  • Handles parse errors via fallback (JSON → YAML → regex)              │
+│  • Returns structured EnhancementSuggestion[]                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                            4. WRITER                                    │
-│  (Note editor - applies changes)                                        │
 │                                                                         │
 │  • Receives user-selected suggestions                                   │
-│  • Applies changes to note via Obsidian API                             │
+│  • Checks note hash (abort if changed during enhance)                   │
+│  • Applies via processFrontMatter / vault.modify()                      │
 │  • Records action in SQLite (for undo)                                  │
+│  • Triggers metadataCache refresh                                       │
 │  • Emits action:applied event                                           │
-│                                                                         │
-│  Apply: Immediate on user selection                                     │
-│  Undo: Available in Activity tab                                        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         UI UPDATES (Events)                             │
-│                                                                         │
-│  enhance:start     → Activity tab shows "Running"                       │
-│  enhance:progress  → Progress indicator updates                         │
-│  insight:created   → Suggestions tab populates (streaming)              │
-│  enhance:complete  → Activity tab shows "Done"                          │
-│  enhance:error     → Activity tab shows error, pipeline aborted         │
-│  action:applied    → Suggestion checked off, note modified              │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Communication Pattern
+### Event System
 
-```
-PIPELINE (Direct Calls)          UI UPDATES (Events)
-─────────────────────            ──────────────────
-Planner.plan()                   EventBus.emit("enhance:start")
-  └→ ContextBuilder.build()      EventBus.emit("enhance:progress", 25%)
-       └→ Analyst.analyze()      EventBus.emit("insight:created", suggestion)
-            └→ Writer.apply()    EventBus.emit("action:applied")
-                                 EventBus.emit("enhance:complete")
-```
+```typescript
+// Pipeline events
+"enhance:start": { noteId: string; timestamp: number }
+"enhance:progress": { noteId: string; percent: number; stage: string }
+"enhance:complete": { noteId: string; suggestionCount: number }
+"enhance:error": { noteId: string; error: string }
 
-**Rule**: Direct calls for pipeline flow. Events for UI updates only.
+// Insight events
+"insight:created": { suggestion: EnhancementSuggestion }
+"insight:dismissed": { suggestionId: string }
+
+// Action events
+"action:applied": { actionId: string; noteId: string }
+"action:undone": { actionId: string }
+
+// Index events
+"index:start": { noteCount: number }
+"index:progress": { completed: number; total: number }
+"index:complete": { noteCount: number; duration: number }
+"index:error": { error: string }
+```
 
 ---
 
-## Data Architecture
-
-### SQLite Schema (Fresh - 5 Tables)
+## SQLite Schema
 
 ```sql
 -- Table 1: Notes metadata
 CREATE TABLE notes (
   path TEXT PRIMARY KEY,
   title TEXT,
-  hash TEXT,              -- Content hash for change detection
-  indexed_at INTEGER,     -- Timestamp
-  last_enhanced INTEGER   -- Timestamp of last enhance
+  hash TEXT,
+  indexed_at INTEGER,
+  last_enhanced INTEGER
 );
 
--- Table 2: Chunks for vector search
+-- Table 2: Chunks (hierarchical semantic)
 CREATE TABLE chunks (
   id TEXT PRIMARY KEY,
   note_path TEXT REFERENCES notes(path) ON DELETE CASCADE,
   content TEXT,
-  chunk_type TEXT,        -- 'full' | 'section' | 'paragraph'
+  chunk_type TEXT,  -- 'full' | 'section' | 'paragraph'
   start_line INTEGER,
   end_line INTEGER,
   hash TEXT
 );
 
--- Table 3: Embeddings (model-scoped)
+-- Table 3: Embeddings
 CREATE TABLE embeddings (
   chunk_id TEXT REFERENCES chunks(id) ON DELETE CASCADE,
-  model TEXT,             -- e.g., 'nomic-embed-text'
-  vector BLOB,            -- Float32Array as blob
+  model TEXT,
+  vector BLOB,
   created_at INTEGER,
   PRIMARY KEY (chunk_id, model)
 );
 
--- Table 4: Action history (undo - last 50)
+-- Table 4: Actions (undo - last 50)
 CREATE TABLE actions (
   id TEXT PRIMARY KEY,
   note_path TEXT,
-  action_type TEXT,       -- 'frontmatter_set' | 'content_replace' | etc.
-  before_state TEXT,      -- JSON: state before action
-  after_state TEXT,       -- JSON: state after action
+  action_type TEXT,
+  before_state TEXT,
+  after_state TEXT,
   applied_at INTEGER,
   undone INTEGER DEFAULT 0
 );
 
--- Trigger to keep only last 50 actions
 CREATE TRIGGER prune_actions AFTER INSERT ON actions
 BEGIN
   DELETE FROM actions WHERE id NOT IN (
@@ -201,92 +308,23 @@ BEGIN
   );
 END;
 
--- Table 5: Intelligence cache (per-note analysis)
+-- Table 5: Intelligence cache
 CREATE TABLE intelligence (
   note_path TEXT PRIMARY KEY REFERENCES notes(path) ON DELETE CASCADE,
-  analysis TEXT,          -- JSON: full LLM analysis output
-  suggestions TEXT,       -- JSON: cached suggestions
+  analysis TEXT,
+  suggestions TEXT,
   health_score INTEGER,
   summary TEXT,
-  version INTEGER,        -- Schema version for re-analysis trigger
+  version INTEGER,
   analyzed_at INTEGER
 );
 ```
 
-### Storage Locations
-
-```
-VAULT ROOT/
-├── notes/
-│   └── my-note.md
-│       └── frontmatter:           ← PORTABLE (syncs)
-│           notient-health: 78
-│           notient-summary: "..."
-│
-└── .obsidian/plugins/notient/     ← LOCAL ONLY (device-specific)
-    ├── data.json                  # Obsidian plugin settings
-    ├── notient.db                 # SQLite (5 tables)
-    └── hnsw.bin                   # HNSW index binary
-```
-
-### Data Classification
-
-| Data | Location | Syncs? | Persistence |
-|------|----------|--------|-------------|
-| Health/Summary | Frontmatter | ✅ Yes | Permanent |
-| Full analysis | SQLite (intelligence) | ❌ No | Permanent |
-| Embeddings | SQLite | ❌ No | Permanent |
-| Undo history | SQLite (actions) | ❌ No | Last 50 |
-| HNSW index | hnsw.bin | ❌ No | Permanent |
-
 ---
 
-## Event System (Minimal)
+## UI Layout
 
-### Required Events
-
-```typescript
-// Pipeline events
-type EnhanceEvents = {
-  "enhance:start": { noteId: string; timestamp: number };
-  "enhance:progress": { noteId: string; percent: number; stage: string };
-  "enhance:complete": { noteId: string; suggestionCount: number };
-  "enhance:error": { noteId: string; error: string };
-};
-
-// Insight events
-type InsightEvents = {
-  "insight:created": { suggestion: EnhancementSuggestion };
-  "insight:dismissed": { suggestionId: string };
-};
-
-// Action events
-type ActionEvents = {
-  "action:applied": { actionId: string; noteId: string };
-  "action:undone": { actionId: string };
-};
-
-// Index events
-type IndexEvents = {
-  "index:start": { noteCount: number };
-  "index:progress": { completed: number; total: number };
-  "index:complete": { noteCount: number; duration: number };
-  "index:error": { error: string };
-};
-```
-
-### NOT Needed (Delete)
-
-- All `chat:*` events
-- All `agent:*` events (replaced by `enhance:*`)
-- `action:proposed` (suggestions go to insight:created)
-- `action:apply-requested` (direct call to Writer)
-
----
-
-## UI Architecture
-
-### Sidebar Layout (Tabbed)
+### Sidebar (Tabbed)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -295,19 +333,14 @@ type IndexEvents = {
 │  [Vitals]  [Suggestions]  [Activity]                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                      TAB CONTENT                                 │   │
-│  │                                                                  │   │
-│  │  (Content depends on selected tab - see below)                  │   │
-│  │                                                                  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
+│  TAB CONTENT (see below)                                                │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  ● Ready  │  1,234 notes  │  v0.5.0                                     │
+│  ● Ready  │  1,234 notes  │  v0.1.0              [clickable → modal]   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Tab: Vitals
+### Vitals Tab
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -316,7 +349,8 @@ type IndexEvents = {
 │  Health: ████████░░ 78%                                                 │
 │  Links:  5 in / 12 out                                                  │
 │  Age:    Modified 3 days ago                                            │
-│  Type:   Meeting notes                                                  │
+│  Maturity: Adolescent                                                   │
+│  I-PARA: Projects/Alpha                                                 │
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                    [✨ ENHANCE]                                  │   │
@@ -326,27 +360,27 @@ type IndexEvents = {
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Tab: Suggestions (Checklist)
+### Suggestions Tab (Checklist)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  SUGGESTIONS                                              [3 pending]   │
 │                                                                         │
-│  ☐ Add tags: #meeting, #project-alpha                                  │
+│  ☐ Add tags: #meeting, #project-alpha                         [▼]      │
 │    └─ Frontmatter change                                               │
 │                                                                         │
-│  ☐ Restructure: Add "Action Items" section                             │
-│    └─ Content change (preview available)                               │
+│  ☐ Add section: "Action Items"                                [▼]      │
+│    └─ Structure change (expandable preview)                            │
 │                                                                         │
-│  ☐ Link to: [[Project Alpha Overview]]                                 │
-│    └─ Add outlink                                                      │
+│  ☐ Link to: [[Project Alpha Overview]]                        [▼]      │
+│    └─ Outlink suggestion                                               │
 │                                                                         │
 │  ─────────────────────────────────────────────────────────────────     │
 │  [Apply Selected (0)]  [Select All]  [Dismiss All]                     │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Tab: Activity (Full Control)
+### Activity Tab
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -355,144 +389,30 @@ type IndexEvents = {
 │  ▶ RUNNING: Enhance "my-note.md"                                       │
 │    Stage: Analyst (analyzing content)                                  │
 │    Progress: ████████░░ 75%                                            │
-│    [⏸ Pause]  [✕ Cancel]                                               │
+│    [✕ Cancel]                                                          │
 │                                                                         │
 │  ─────────────────────────────────────────────────────────────────     │
 │  RECENT:                                                               │
-│  ✓ Enhance "meeting-notes.md" (2 min ago) - 3 suggestions              │
-│  ✓ Enhance "project-plan.md" (5 min ago) - 5 suggestions               │
+│  ✓ Enhance "meeting-notes.md" (2 min ago)                              │
+│  ✓ Enhance "project-plan.md" (5 min ago)                               │
 │                                                                         │
 │  ─────────────────────────────────────────────────────────────────     │
 │  UNDO HISTORY:                                                         │
 │  ↩ Added tags to "my-note.md" (1 min ago)  [Undo]                      │
-│  ↩ Restructured "meeting-notes.md" (3 min ago)  [Undo]                 │
+│  ↩ Added section to "meeting.md" (3 min ago)  [Undo]                   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Settings (Full Config for Active Components)
-
-### Provider Settings
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  LLM PROVIDERS                                                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  Reasoning Model (for Enhance)                                          │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ Endpoint: [http://localhost:1234/v1                          ]  │   │
-│  │ Model:    [llama-3.1-8b-instruct         ▼]                     │   │
-│  │ [Test Connection]  ● Connected                                  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  Embedding Model (for Search)                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ Endpoint: [http://localhost:11434                            ]  │   │
-│  │ Model:    [nomic-embed-text              ▼]                     │   │
-│  │ [Test Connection]  ● Connected                                  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Index Settings
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  VAULT INDEX                                                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  Status: ● Indexed (1,234 notes)                                        │
-│  Last indexed: 2026-01-15 10:30:00                                      │
-│  Database size: 2.4 MB                                                  │
-│                                                                         │
-│  Excluded Folders:                                                      │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ .obsidian                                                        │   │
-│  │ templates                                                        │   │
-│  │ [+ Add folder]                                                   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  [Rebuild Index]  [Clear Index]                                         │
-│  ⚠️ Rebuild will re-embed all notes. May take several minutes.          │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Danger Zone
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  ⚠️ DANGER ZONE                                                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  [Clear All Intelligence]                                               │
-│  Removes all cached analysis. Notes will be re-analyzed on demand.      │
-│                                                                         │
-│  [Clear Undo History]                                                   │
-│  Removes all undo history. Actions cannot be reversed.                  │
-│                                                                         │
-│  [Reset Plugin]                                                         │
-│  Deletes all Notient data and resets to fresh install.                  │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Initialization
-
-### Startup Sequence
-
-```
-1. Plugin loads
-2. Load SQLite into memory (sync, fast)
-3. Validate database schema (migrate if needed)
-4. Register event handlers
-5. Register commands (Enhance note)
-6. Mount sidebar UI
-7. [LAZY] HNSW index loaded on first search
-8. [LAZY] Embedding worker spawned on first index operation
-```
-
-### First Run (New Vault)
-
-```
-1. Plugin loads
-2. No SQLite found → Create fresh database
-3. Show setup wizard:
-   - Configure reasoning provider
-   - Configure embedding provider
-   - Test connections
-4. Wizard completes → Show "Ready" in sidebar
-5. No indexing until user triggers Enhance or search
-```
-
-### Returning User
-
-```
-1. Plugin loads
-2. Load existing SQLite
-3. Quick validation (schema version check)
-4. Mount UI immediately (fast startup)
-5. Background: Check for changed notes (hash comparison)
-6. Offer to re-index changed notes (non-blocking)
-```
-
----
-
-## File Structure (Fresh)
-
-### New Files to Create
+## File Structure
 
 ```
 src/
 ├── main.ts                       # Plugin entry (simplified)
 ├── core/
-│   ├── kernel.ts                 # Service registry (simplified)
-│   ├── events.ts                 # EventBus + event types
+│   ├── kernel.ts                 # Service registry
+│   ├── events.ts                 # EventBus + types
 │   ├── db/
 │   │   ├── database.ts           # SQLite wrapper
 │   │   └── schema.ts             # 5-table schema
@@ -503,64 +423,183 @@ src/
 │   │   ├── analyst.ts            # Analyst agent
 │   │   └── writer.ts             # Writer agent
 │   ├── enhance/
-│   │   ├── pipeline.ts           # Enhance pipeline orchestration
+│   │   ├── pipeline.ts           # Pipeline orchestration
 │   │   ├── suggestions.ts        # Suggestion types
-│   │   └── prompts.ts            # Enhance prompts
+│   │   └── prompts.ts            # Lean prompts
 │   ├── search/
 │   │   ├── vectorStore.ts        # HNSW wrapper
-│   │   └── indexer.ts            # Note indexing
+│   │   └── indexer.ts            # Hierarchical semantic indexer
 │   └── vitals/
-│       └── calculator.ts         # Note health calculation
+│       └── calculator.ts         # Maturity, health, vitals
 ├── workers/
 │   └── embed.worker.ts           # Embedding Web Worker
 ├── ui/
 │   ├── sidebar/
-│   │   ├── Sidebar.tsx           # Main sidebar container
+│   │   ├── Sidebar.tsx           # Main container
 │   │   ├── tabs/
-│   │   │   ├── VitalsTab.tsx     # Note vitals + Enhance button
-│   │   │   ├── SuggestionsTab.tsx # Checklist UI
-│   │   │   └── ActivityTab.tsx   # Agent activity + undo
+│   │   │   ├── VitalsTab.tsx
+│   │   │   ├── SuggestionsTab.tsx
+│   │   │   └── ActivityTab.tsx
 │   │   └── components/
 │   │       ├── ProgressBar.tsx
 │   │       ├── Checkbox.tsx
-│   │       └── Button.tsx
+│   │       ├── Button.tsx
+│   │       └── HealthModal.tsx
 │   └── settings/
-│       └── SettingsTab.ts        # Settings panel
+│       ├── SettingsTab.ts
+│       └── SetupWizard.ts
 ├── adapters/
 │   └── obsidian.ts               # Obsidian API wrapper
 └── types/
     └── index.ts                  # Shared types
 ```
 
-### Files to DELETE (Everything Else)
+---
 
-All existing files not in the above structure are deleted. Git has history.
+## Initialization Flows
+
+### First Run (New Vault)
+
+```
+1. Plugin loads
+2. No SQLite → Create fresh database
+3. Show Setup Wizard:
+   - Step 1: Configure reasoning provider + test
+   - Step 2: Configure embedding provider + test
+   - Step 3: Index options (excluded folders)
+   - Step 4: Optional: Test enhance on a note
+4. Wizard completes → Start background indexing
+5. Show sidebar with "Indexing..." status
+6. Indexing completes → "Ready" status
+```
+
+### Returning User
+
+```
+1. Plugin loads
+2. Load SQLite into memory
+3. Validate schema version
+4. Mount sidebar immediately
+5. Background: Check file hashes for changes
+6. Re-index changed notes silently
+7. [LAZY] HNSW loaded on first search
+```
+
+### Offline Mode
+
+```
+1. Plugin loads
+2. LLM connection test fails
+3. Show "Offline" status in footer
+4. Vitals, history, undo: WORK
+5. Enhance button: DISABLED with message
+6. When connection restored: Re-enable
+```
 
 ---
 
-## Open Areas (Need More Interview)
+## Development Approach
 
-1. **What does "Enhance" mean for different note types?**
-   - Meeting notes vs. research notes vs. daily notes
-   - Different prompts? Different suggestions?
+### Claude-Judged Testing
 
-2. **Pause/Cancel semantics**
-   - What happens to in-flight LLM calls on cancel?
-   - Can a paused pipeline resume?
+For each context layer (0-8):
+1. Run Enhance with Layer N
+2. Run Enhance with Layer N+1
+3. Claude compares suggestion quality
+4. Measure: Better suggestions? Processing time?
+5. Decide: Include layer in MVP?
 
-3. **Error recovery**
-   - LLM timeout handling
-   - Network failure during enhance
-   - Corrupt database recovery
+### User Feedback Loop
 
-4. **Testing strategy**
-   - How do we verify LLM quality improvements per context layer?
-   - Manual testing? Automated?
+1. Each suggestion has thumbs up/down (dev mode)
+2. Feedback stored in SQLite
+3. Analyze: Which layers produce better ratings?
+4. Iterate prompts based on feedback
 
-5. **Context layer testing methodology**
-   - How do we measure if adding a context layer improves suggestions?
-   - A/B testing? User feedback?
+### Test Suite
+
+- Unit tests: Agents, parsing, vitals calculation
+- Integration tests: Pipeline end-to-end
+- E2E tests: Plugin in Obsidian
 
 ---
 
-*Phase Galaxy v2: Total annihilation, fresh implementation, no preservation.*
+## Implementation Phases
+
+### Phase G1: Foundation (Days 1-2)
+
+- [ ] Fresh project structure
+- [ ] SQLite with 5-table schema
+- [ ] EventBus with typed events
+- [ ] Kernel service registry
+
+### Phase G2: Agents (Days 3-4)
+
+- [ ] Planner agent
+- [ ] ContextBuilder (Layers 0-2)
+- [ ] Analyst agent (lean prompts)
+- [ ] Writer agent (processFrontMatter)
+
+### Phase G3: Pipeline (Day 5)
+
+- [ ] Pipeline orchestration
+- [ ] Error handling (abort all)
+- [ ] Cancel support
+- [ ] Timeout handling (ask user)
+
+### Phase G4: UI (Days 6-7)
+
+- [ ] Tabbed sidebar
+- [ ] Vitals tab
+- [ ] Suggestions tab (checklist)
+- [ ] Activity tab (undo)
+
+### Phase G5: Indexing (Day 8)
+
+- [ ] Hierarchical semantic chunker (from existing)
+- [ ] Embedding Web Worker
+- [ ] HNSW integration
+- [ ] File watcher
+
+### Phase G6: Settings & Polish (Days 9-10)
+
+- [ ] Settings panel
+- [ ] Setup wizard
+- [ ] Dev mode toggle
+- [ ] Status footer modal
+
+---
+
+## Success Criteria
+
+### Must Work
+
+- [ ] Plugin loads < 1 second
+- [ ] Enhance button triggers full pipeline
+- [ ] Suggestions appear as checklist
+- [ ] Apply modifies note correctly
+- [ ] Undo reverses changes
+- [ ] Cancel aborts pipeline cleanly
+- [ ] Offline mode degrades gracefully
+- [ ] Index builds in background
+
+### Quality Gates
+
+- [ ] Zero console errors in production
+- [ ] Unit test coverage > 80%
+- [ ] E2E tests pass
+- [ ] Claude judges Layer 0-2 suggestions as useful
+
+---
+
+## What This Unlocks
+
+**After Phase Galaxy:**
+- Phase Helios: Harden pipeline, stress test
+- Phase Gaia: UI/UX polish
+- Future: Proactive enhancements, trust levels, more workflows
+
+---
+
+*Phase Galaxy v3 FINAL: 18 interview rounds, 72 questions, complete specification.*
+*Ready for implementation.*

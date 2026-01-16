@@ -2,170 +2,125 @@
 
 ## What This Is
 
-Notient is a Sentient Notes Platform delivered as an Obsidian plugin. It transforms notes from passive files into living entities with pulse, intelligence, and agency — all powered by local LLMs. No cloud, no data leaving your machine, ever.
+Notient is a Sentient Notes Platform delivered as an Obsidian plugin. Notes are living entities with maturity, vitality, and agency — powered by local LLMs. No cloud, no data leaving your machine.
 
-**Core identity**: Research Chief of Staff — a 4-agent swarm (Orchestrator, NoteEditor, ContextBuilder, Worker) that routes user intent to specialized agents, with the vault as ambient intelligence.
+**Core identity**: Research Chief of Staff — notes evolve through enhancement cycles.
 
-## Core Value
+## Current Phase: Galaxy (Fresh Implementation)
 
-**Reliability**: Actions complete or fail gracefully. No crashes. Clear errors. This is the non-negotiable foundation that enables trust.
+> **TOTAL ANNIHILATION APPROACH**
+> All existing code deleted. Fresh build from PHASE-GALAXY.md spec.
+> Version 0.1.0 (reset, not continuation).
 
-## Current Phase: Universe (Foundation Refactor + Obsidian Integration)
+### What We're Building
 
-> **All feature work paused until Phase Universe completes.**
-> See `PHASE-UNIVERSE.md` for full specification.
+| Component | Specification |
+|-----------|---------------|
+| **Workflow** | ONE: Enhance (human-driven, suggestions-only) |
+| **Agents** | FOUR: Planner → ContextBuilder → Analyst → Writer |
+| **UI** | THREE tabs: Vitals \| Suggestions \| Activity |
+| **Output** | Metadata + Structure (NO text rewriting) |
+| **Suspended** | Chat, proactive enhancements, trust levels |
 
-### The Core Insight: "The Note is the Unit"
+### Implementation Phases
 
-Intelligence must surface IN the note (frontmatter, decorations), not just the sidebar. The sidebar is for commands and history. The note is the canvas.
+| Phase | Scope | Status |
+|-------|-------|--------|
+| G1 | Foundation (SQLite, EventBus, Kernel) | ⏳ Next |
+| G2 | Agents (Planner, ContextBuilder, Analyst, Writer) | ⏳ |
+| G3 | Pipeline (orchestration, error handling) | ⏳ |
+| G4 | UI (tabbed sidebar) | ⏳ |
+| G5 | Indexing (chunker, embeddings, HNSW) | ⏳ |
+| G6 | Settings (panel, wizard, dev mode) | ⏳ |
 
-### Two-Layer Architecture
+**Full spec**: `.planning/PHASE-GALAXY.md` (605 lines, 72 decisions)
 
-| Layer | Purpose | Deliverables |
-|-------|---------|--------------|
-| **Infrastructure** | Heavy lifting (hidden) | D1-D5: SQLite, Workers, Events |
-| **Integration** | Note-native display (visible) | D6-D9: Frontmatter, MetadataCache, Decorations, Menus |
+---
 
-### Phase Universe Progress
+## Core Philosophy
 
-| Deliverable | Description | Status |
-|-------------|-------------|--------|
-| D1: SQLite Data Layer | sql.js WASM, replace JSON files | ✅ COMPLETE |
-| D2: HNSW Worker | Vector ops in Web Worker | ✅ COMPLETE |
-| D3: Event Wiring | Fix action:proposed, applier, capability cards | ✅ COMPLETE |
-| D4: Swarm Architecture | 4-agent swarm (Phase 1-2 done, 3-5 in progress) | 🔄 IN PROGRESS |
-| D5: Cleanup | Delete absorbed agents + embed.worker | ⏳ After D4 |
-| D6: Frontmatter Bridge | Store AI insights in note properties | ✅ COMPLETE |
-| D7: MetadataCache Vitals | Use Obsidian's cache, stop duplicating | ✅ COMPLETE |
-| D8: Editor Decorations | Inline AI insights via CodeMirror 6 | ⏸️ DEFERRED |
-| D9: Context Menus | Right-click AI actions | ✅ COMPLETE |
-| D10: SQLite Migration | Replace all JSON stores | ✅ COMPLETE |
-| D11: Skills Integration | Dynamic capability injection | ✅ COMPLETE |
+### Notes Are Living Entities
 
-**Validation**: Startup <1s, Quick Actions work, Apply works, no main-thread HNSW, CPU <5% idle, `notient-health` in frontmatter.
+- **Maturity**: Raw capture → Adolescent → Mature → Synthesis-ready
+- **Vitality**: Health score, connectivity, structure, freshness
+- **I-PARA**: Inbox → Projects/Areas/Resources/Archives
+- **Origin**: User-written, web-clipped, AI-generated
 
-## Requirements
+### Human-Driven Pipeline (MVP)
 
-### Validated
+1. User clicks Enhance
+2. Pipeline runs (seconds to minutes)
+3. Suggestions returned as checklist
+4. User selects which to apply
+5. Changes made, undo available
 
-<!-- Shipped and confirmed working. -->
+**NO automatic application. NO trust levels yet.**
 
-- ✓ Kernel-based service architecture with DI
-- ✓ Multi-agent system (ChiefOfStaff orchestrating agents)
-- ✓ Skills Architecture (Dynamic capability injection)
-- ✓ LLM abstraction (LM Studio reasoning, Ollama embeddings)
-- ✓ HNSW vector search with O(log N) performance
-- ✓ Progressive search (INSTANT → EVOLVING → DEEP)
-- ✓ Streaming chat with thinking block parsing
-- ✓ Trust-level system (low/medium/high risk)
-- ✓ Three-tab sidebar (Note Vitals | Agent Streams | Chat)
-- ✓ Error boundaries in sidebar
-- ✓ Action history with undo
-- ✓ Per-note intelligence records
-- ✓ Centralized ID system (`src/core/ids.ts`)
-- ✓ SQLite data layer with Kysely (`src/core/db/`)
-- ✓ Canonical Obsidian API reference (`docs/obsidian/`)
-- ✓ HNSW Worker isolation (no main-thread hnswlib)
-- ✓ Frontmatter intelligence bridge (write-on-demand)
-- ✓ Vitals from MetadataCache (O(N) performance)
-- ✓ Context menu integration (editor + file menus)
+---
 
-### In Progress (Phase Universe)
+## Tech Stack
 
-<!-- Active work items. -->
+| Layer | Technology |
+|-------|------------|
+| Language | TypeScript (strict) |
+| Runtime | Bun |
+| Build | esbuild |
+| Lint | Biome |
+| UI | Preact + @preact/signals |
+| Reasoning LLM | LM Studio (OpenAI-compatible) |
+| Embedding LLM | Ollama |
+| Vector Store | HNSW (WASM) |
+| Database | SQLite (sql.js) |
 
-**Architecture — Swarm Refactor (D4)**
-- [x] Phase 1: Orchestrator as pure reasoning brain (`470a1bf`)
-- [x] Phase 2: Worker as unified workflow executor (`c2c111a`)
-- [ ] Phase 3: NoteEditor self-verification (Archie — dispatching)
-- [ ] Phase 4: ContextBuilder behavior tracking (Sage — dispatching)
-- [ ] Phase 5: ChatService hybrid mode (Faye — dispatching)
-- [ ] Cleanup: Delete absorbed agents (after Phase 5)
+---
 
-### Paused (Post-Universe)
+## Commands
 
-<!-- Will be re-evaluated after Phase Universe completes. -->
+```bash
+bun run dev              # Build + copy to test vault
+bun run build            # Production build
+bun run typecheck        # TypeScript check
+bun run lint             # Biome lint
+bun run test             # Run test suite
+```
 
-**Architecture**
-- [ ] ~~12-agent system~~ → Replaced by 4-agent swarm
-- [ ] Quick Actions model: 3 pinned + 3 contextual
+**Test Vault**: `/mnt/c/Users/akougk/Projects/vaultex`
 
-**Insights Stream**
-- [ ] Wire agent results to InsightStream
-- [ ] Wire proactive AI suggestions
+---
 
-**Agent Command Center**
-- [ ] Wire AgentStreamsView to services
-- [ ] Full control: pause, cancel, modify, re-run
+## Key Decisions (Phase Galaxy)
 
-**Chat Experience**
-- [ ] Contextual suggestion chips
-- [ ] Chat streams agent results inline
+| Decision | Choice |
+|----------|--------|
+| Approach | Fresh implementation, no preservation |
+| Version | 0.1.0 |
+| Agent names | Planner, ContextBuilder, Analyst, Writer |
+| Communication | Direct calls (pipeline), events (UI) |
+| Error handling | Abort entire pipeline |
+| Cancel | Hard abort, no pause |
+| Undo | SQLite (last 50 actions) |
+| Context layers | 0-8, start minimal, add via testing |
+| LLM prompts | Lean, no persona, zero-shot |
+| Testing | Claude as judge + user feedback |
 
-**Search Enhancement**
-- [ ] Confidence badges + AI justification
-
-**Settings Refactor**
-- [ ] Extract SettingsTab into panels
-
-### Out of Scope
-
-<!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
-
-- Cloud LLM support (OpenAI, Claude) — Local-only is non-negotiable, period
-- Mobile/Sync — Desktop first, sync is Obsidian's job
-- Multi-vault features — Single vault focus for Beta
-- Custom keyboard shortcuts — Conflicts across OS/Obsidian/plugins, stay visual
-- Vault pulse animation per-agent — Only during system indexing
-- Production hardening beyond reliability — Only after human testing validates needs
-- Research track (thesis, grants) — Entirely out of scope for Beta
-
-## Context
-
-**Brownfield project**: Substantial existing codebase with ~15K lines of TypeScript. Architecture is clean (kernel, services, events, agents). CODE RED fixes complete (HNSW, Error Boundaries, App.tsx refactor).
-
-**The White House Model (Evolved)**: User is President (decision maker), Orchestrator is the brain (reasoning, planning), specialized agents (NoteEditor, ContextBuilder, Worker) are executors with distinct responsibilities. See `SWARM-ARCHITECTURE.md`.
-
-**Ambient intelligence**: Notient works in the background. InsightStream surfaces suggestions without demanding user attention. The vault talks back.
-
-**Interview-validated spec**: BETA-SPEC.md captures the product vision from extensive interview. This PROJECT.md aligns with that vision while tracking implementation scope.
-
-## Constraints
-
-- **No new dependencies**: Work with existing stack only (Preact, signals, HNSW, Biome)
-- **Local-only**: All LLM operations via Ollama (embeddings) and LM Studio (reasoning)
-- **Obsidian-native**: Use metadataCache, processFrontMatter, Editor Extensions before custom
-- **Test vault**: `/mnt/c/Users/akougk/Projects/vaultex`
-
-## Key Decisions
-
-<!-- Decisions that constrain future work. Add throughout project lifecycle. -->
-
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| **"Note is the Unit"** | Intelligence surfaces IN the note, not just sidebar | ✓ Phase Universe |
-| **Two-layer architecture** | Infrastructure (hidden) + Integration (visible) | ✓ Phase Universe |
-| **SQLite for metadata** | JSON doesn't scale. Typed queries. Instant startup. | ✓ D1 Complete |
-| **HNSW in Web Worker** | Main thread sacred. Never block UI for vectors. | ✓ D2 Complete |
-| **sql.js WASM + Obsidian adapter** | Portable, safe sync via `adapter.write()` | ✓ D1 Complete |
-| **Frontmatter intelligence** | `notient-health`, `notient-summary` IN the note | ✓ D6 Complete |
-| **Use metadataCache** | Don't recalculate what Obsidian already knows | ✓ D7 Complete |
-| **Editor Decorations** | CodeMirror 6 for inline AI insights | ⏸️ D8 Deferred |
-| **Context menus** | Right-click "Find related", "Enhance this" | ✓ D9 Complete |
-| **Orchestrator = single event source** | Clear data flow. Agents never emit to UI. | 🔄 D4 In Progress |
-| **Centralized ID system** | `src/core/ids.ts` — consistent format, no chaos | ✓ Implemented |
-| Chat is UI, not agent | ChatService handles conversation, can trigger Orchestrator | 🔄 D4 Phase 5 |
-| **4-Agent Swarm** | Orchestrator + NoteEditor + ContextBuilder + Worker | 🔄 D4 Phases 3-5 |
-| **Worker absorbs workflows** | Classifier, Connection, 8 WorkflowAgents → Worker | ✓ D4 Phase 2 |
-| **Phase-based agent branches** | `{agent}/swarm-phase-{N}` naming convention | ✓ Implemented |
-| 3 pinned + 3 contextual Quick Actions | Enhance/Classify/Connect always visible, rest dynamic | — Pending |
+---
 
 ## Reference Documentation
 
-- **Obsidian API**: `docs/obsidian/` — Canonical reference for CSS, Editor, Plugin, UI
-- **Phase Plan**: `.planning/PHASE-UNIVERSE.md` — Full specification
-- **Swarm Architecture**: `.planning/SWARM-ARCHITECTURE.md` — 4-agent architecture spec
-- **State Tracking**: `.planning/STATE.md` — Current progress
+| File | Purpose |
+|------|---------|
+| `.planning/PHASE-GALAXY.md` | **MASTER SPEC** — all implementation details |
+| `.planning/STATE.md` | Current progress |
 
 ---
-*Last updated: 2026-01-14 Session 2 — Swarm Phase 3-5 dispatching*
+
+## Constraints
+
+- **Local-only**: All LLM via Ollama/LM Studio
+- **No preservation**: Old code deleted, use git history if needed
+- **Obsidian-native**: Use metadataCache, processFrontMatter
+- **Test vault**: `/mnt/c/Users/akougk/Projects/vaultex`
+
+---
+
+*Last updated: 2026-01-15 Session 9 — Phase Galaxy spec complete*
