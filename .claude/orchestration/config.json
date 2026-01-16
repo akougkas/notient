@@ -1,55 +1,100 @@
 {
-  "agent_categories": {
-    "edit_agents": ["implementer", "simplifier", "validator", "tester"],
-    "read_only_agents": ["advisor", "docs-fetcher", "codebase-navigator", "world-knowledge", "architect"]
+  "version": "2.0",
+
+  "capabilities": {
+    "write": ["implementer", "simplifier", "tester"],
+    "review": ["validator"],
+    "plan-only": ["architect"],
+    "read-only": ["advisor", "docs-fetcher", "codebase-navigator", "world-knowledge"]
   },
+
   "base_army": {
+    "description": "Always-running agents on Claude. Chief has these ready at session start.",
+    "cli": "claude",
     "model": "claude-opus-4-5-20251101",
-    "agents": ["implementer", "simplifier", "validator", "tester"]
+    "roles": ["implementer", "simplifier", "validator", "tester"]
   },
-  "role_defaults": {
-    "implementer": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "simplifier": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "validator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "tester": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "advisor": {"cli": "gemini", "model": "gemini-3-pro-preview"},
-    "docs-fetcher": {"cli": "gemini", "model": "gemini-3-pro-preview"},
-    "codebase-navigator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "world-knowledge": {"cli": "gemini", "model": "gemini-3-pro-preview"},
-    "architect": {"cli": "claude", "model": "claude-opus-4-5-20251101"}
+
+  "spawn_variants": {
+    "description": "Pre-configured variants the Chief can spawn for parallelization or different approaches.",
+    "variants": {
+      "implementer-gemini": {"role": "implementer", "cli": "gemini", "model": "gemini-3-pro-preview"},
+      "validator-gemini": {"role": "validator", "cli": "gemini", "model": "gemini-3-pro-preview"},
+      "tester-gemini": {"role": "tester", "cli": "gemini", "model": "gemini-3-pro-preview"},
+      "simplifier-gemini": {"role": "simplifier", "cli": "gemini", "model": "gemini-3-pro-preview"}
+    }
   },
+
+  "dynamic_roles": {
+    "description": "On-demand specialists spawned when needed.",
+    "roles": {
+      "architect": {"cli": "cursor-agent", "model": "gpt-5.2-codex", "capability": "plan-only"},
+      "advisor": {"cli": "opencode", "model": "opencode/glm-4.7-free", "capability": "read-only"},
+      "docs-fetcher": {"cli": "gemini", "model": "gemini-3-pro-preview", "capability": "read-only"},
+      "codebase-navigator": {"cli": "claude", "model": "claude-opus-4-5-20251101", "capability": "read-only"},
+      "world-knowledge": {"cli": "gemini", "model": "gemini-3-pro-preview", "capability": "read-only"}
+    }
+  },
+
+  "orchestration_patterns": {
+    "single": {
+      "description": "One agent, one task. Default pattern.",
+      "example": "task implementer 'Add retry logic'"
+    },
+    "parallel-isolated": {
+      "description": "Multiple agents working on separate code areas simultaneously.",
+      "example": "implementer on src/core/, implementer-gemini on src/ui/"
+    },
+    "parallel-competing": {
+      "description": "Multiple agents same task, Chief picks best result (best-of-N).",
+      "example": "implementer + implementer-gemini both try 'Add caching', Chief evaluates"
+    },
+    "pipeline": {
+      "description": "Serial chain where output feeds next agent.",
+      "example": "implementer → validator → simplifier → tester"
+    },
+    "dag": {
+      "description": "Directed Acyclic Graph. Chief defines dependency graph.",
+      "example": "codebase-navigator → (implementer || implementer-gemini) → validator → tester"
+    }
+  },
+
   "worktrees": {
     "permanent_base": "~/projects/_worktrees",
     "temp_base": "/tmp/notient-worktrees",
     "main_repo": "/home/akougkas/projects/notient",
     "base_branch": "beta-spec"
   },
+
   "mprocs": {
     "server": "127.0.0.1:4050"
   },
-  "models": {
-    "claude": "claude-opus-4-5-20251101",
-    "gemini": "gemini-3-pro-preview",
-    "cursor-agent": "gpt-5.2-codex",
-    "opencode": "opencode/glm-4.7-free"
-  },
+
   "cli": {
     "claude": {
       "cmd": "claude",
-      "flags": ["--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
+      "flags": ["--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"],
+      "trust": "high",
+      "best_for": "Complex reasoning, architecture, quality-critical code"
     },
     "gemini": {
       "cmd": "gemini",
-      "flags": ["--output-format", "stream-json"]
+      "flags": ["--output-format", "stream-json"],
+      "trust": "high",
+      "best_for": "Research, fast iteration, parallel variants"
     },
     "cursor-agent": {
       "cmd": "cursor-agent",
-      "flags": ["--print", "--output-format", "stream-json"]
+      "flags": ["--print", "--output-format", "stream-json"],
+      "trust": "medium",
+      "best_for": "Bulk code generation, plans, drafts"
     },
     "opencode": {
       "cmd": "opencode",
       "subcommand": "run",
-      "flags": ["--format", "json"]
+      "flags": ["--format", "json"],
+      "trust": "low",
+      "best_for": "Local/offline, sensitive tasks, read-only consultation"
     }
   }
 }

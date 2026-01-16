@@ -1,6 +1,6 @@
 #!/bin/bash
-# Orchestrator Stop Hook (Queue-Based v2)
-# Checks for pending agent responses after each orchestrator turn.
+# Orchestrator Stop Hook (Role-Based v3)
+# Checks for pending role responses after each orchestrator turn.
 # Injects a reminder if responses are waiting.
 #
 # Detection: Uses NOTIENT_ORCHESTRATOR env var set by mprocs.yaml
@@ -30,21 +30,26 @@ fi
 # Paths
 ORCH_DIR="/home/akougkas/projects/notient/.claude/orchestration"
 
+# Role definitions (matching config.json)
+CODER_ROLES="implementer simplifier validator tester architect advisor"
+RESEARCHER_ROLES="docs-fetcher codebase-navigator world-knowledge"
+ALL_ROLES="$CODER_ROLES $RESEARCHER_ROLES"
+
 # Count pending responses and queued tasks
 RESPONSE_COUNT=0
 QUEUE_COUNT=0
-AGENTS_WITH_RESPONSES=""
-AGENTS_WITH_QUEUE=""
+ROLES_WITH_RESPONSES=""
+ROLES_WITH_QUEUE=""
 
-for agent in archie sage faye; do
-  response_dir="$ORCH_DIR/$agent/responses"
-  queue_dir="$ORCH_DIR/$agent/queue"
+for role in $ALL_ROLES; do
+  response_dir="$ORCH_DIR/$role/responses"
+  queue_dir="$ORCH_DIR/$role/queue"
 
   if [[ -d "$response_dir" ]]; then
     count=$(find "$response_dir" -name "*.response" -type f 2>/dev/null | wc -l)
     if [[ "$count" -gt 0 ]]; then
       RESPONSE_COUNT=$((RESPONSE_COUNT + count))
-      AGENTS_WITH_RESPONSES+="$agent($count) "
+      ROLES_WITH_RESPONSES+="$role($count) "
     fi
   fi
 
@@ -52,7 +57,7 @@ for agent in archie sage faye; do
     count=$(find "$queue_dir" -name "*.task" -type f 2>/dev/null | wc -l)
     if [[ "$count" -gt 0 ]]; then
       QUEUE_COUNT=$((QUEUE_COUNT + count))
-      AGENTS_WITH_QUEUE+="$agent($count) "
+      ROLES_WITH_QUEUE+="$role($count) "
     fi
   fi
 done
@@ -61,14 +66,14 @@ done
 MESSAGE=""
 
 if [[ "$RESPONSE_COUNT" -gt 0 ]]; then
-  MESSAGE+="📬 ${RESPONSE_COUNT} response(s): ${AGENTS_WITH_RESPONSES}"
+  MESSAGE+="📬 ${RESPONSE_COUNT} response(s): ${ROLES_WITH_RESPONSES}"
 fi
 
 if [[ "$QUEUE_COUNT" -gt 0 ]]; then
   if [[ -n "$MESSAGE" ]]; then
     MESSAGE+=" | "
   fi
-  MESSAGE+="⏳ ${QUEUE_COUNT} queued: ${AGENTS_WITH_QUEUE}"
+  MESSAGE+="⏳ ${QUEUE_COUNT} queued: ${ROLES_WITH_QUEUE}"
 fi
 
 if [[ -n "$MESSAGE" ]]; then

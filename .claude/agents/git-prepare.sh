@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# git-prepare.sh - Prepare agent worktree for a new task
+# git-prepare.sh - Prepare role worktree for a new task
 #
 # Usage:
-#   ./git-prepare.sh <agent> <branch> [base]
+#   ./git-prepare.sh <role> <branch> [base]
 #
 # Examples:
-#   ./git-prepare.sh archie archie/swarm-phase-3
-#   ./git-prepare.sh sage sage/swarm-phase-4 beta-spec
-#   ./git-prepare.sh faye faye/swarm-phase-5
+#   ./git-prepare.sh implementer implementer/add-retry-logic
+#   ./git-prepare.sh validator validator/review-changes beta-spec
+#   ./git-prepare.sh simplifier simplifier/flatten-pipeline
 #
 # What it does:
-#   1. Navigates to agent's worktree
+#   1. Navigates to role's worktree
 #   2. Stashes any uncommitted changes (safety)
 #   3. Creates/resets branch from base (default: beta-spec)
 #   4. Cleans untracked files
@@ -32,45 +32,46 @@ WORKTREE_BASE="$HOME/projects/_worktrees"
 MAIN_REPO="$HOME/projects/notient"
 
 # Arguments
-AGENT="${1:-}"
+ROLE="${1:-}"
 BRANCH="${2:-}"
 BASE="${3:-beta-spec}"
 
-# Valid agents/roles
-VALID_ROLES="researcher coder reviewer tester"
-VALID_LEGACY="archie sage faye"
-VALID_ALL="$VALID_ROLES $VALID_LEGACY"
+# Valid roles (from .claude/orchestration/config.json)
+EDIT_ROLES="implementer simplifier validator tester"
+READ_ONLY_ROLES="architect advisor docs-fetcher codebase-navigator world-knowledge"
+ALL_ROLES="$EDIT_ROLES $READ_ONLY_ROLES"
 
 # Validation
-if [[ -z "$AGENT" ]] || [[ -z "$BRANCH" ]]; then
-    echo -e "${RED}Usage: $0 <agent> <branch> [base]${NC}"
+if [[ -z "$ROLE" ]] || [[ -z "$BRANCH" ]]; then
+    echo -e "${RED}Usage: $0 <role> <branch> [base]${NC}"
     echo ""
     echo "Arguments:"
-    echo "  agent   Role or agent name"
-    echo "  branch  Target branch name (e.g., coder/feature-x)"
+    echo "  role    Role name (e.g., implementer, validator)"
+    echo "  branch  Target branch name (e.g., implementer/feature-x)"
     echo "  base    Base branch to create from (default: beta-spec)"
     echo ""
-    echo "Roles (multi-CLI):  $VALID_ROLES"
-    echo "Legacy (Claude):    $VALID_LEGACY"
+    echo "Edit Roles:      $EDIT_ROLES"
+    echo "Read-Only Roles: $READ_ONLY_ROLES"
     echo ""
     echo "Examples:"
-    echo "  $0 researcher researcher/pipeline-analysis"
-    echo "  $0 coder coder/retry-logic"
-    echo "  $0 archie archie/swarm-phase-3"
+    echo "  $0 implementer implementer/add-retry-logic"
+    echo "  $0 validator validator/review-changes"
+    echo "  $0 simplifier simplifier/flatten-pipeline"
     exit 1
 fi
 
-# Validate agent
-WORKTREE_PATH="$WORKTREE_BASE/notient-$AGENT"
+# Validate role - check if worktree exists
+WORKTREE_PATH="$WORKTREE_BASE/notient-$ROLE"
 if [[ ! -d "$WORKTREE_PATH" ]]; then
     echo -e "${RED}Error: Worktree not found: $WORKTREE_PATH${NC}"
-    echo "Valid roles: $VALID_ROLES"
-    echo "Valid legacy agents: $VALID_LEGACY"
+    echo ""
+    echo "Available worktrees:"
+    ls -1 "$WORKTREE_BASE" 2>/dev/null | grep "^notient-" | sed 's/notient-/  /'
     exit 1
 fi
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Git Prepare: $AGENT${NC}"
+echo -e "${BLUE}  Git Prepare: $ROLE${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -132,7 +133,7 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  Preparation Complete${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Agent:    $AGENT"
+echo "  Role:     $ROLE"
 echo "  Worktree: $WORKTREE_PATH"
 echo "  Branch:   $(git branch --show-current)"
 echo "  HEAD:     $(git rev-parse --short HEAD)"

@@ -64,14 +64,14 @@ bun run format           # Format code
 .claude/agents/git-prepare.sh implementer implementer/retry-logic
 
 # Dispatch task with CLI choice
-uv run .claude/agents/dispatch.py implementer "Add retry logic" --cli claude
-uv run .claude/agents/dispatch.py docs-fetcher "Get Preact docs" --cli gemini
+uv run .claude/agents/dispatch.py task implementer "Add retry logic" --cli claude
+uv run .claude/agents/dispatch.py task docs-fetcher "Get Preact docs" --cli gemini
 
 # Check all roles status
-uv run .claude/agents/dispatch.py --status
+uv run .claude/agents/dispatch.py status
 
 # Check responses for a role
-uv run .claude/agents/dispatch.py --responses implementer
+uv run .claude/agents/dispatch.py responses implementer
 
 # Merge role work
 git merge implementer/retry-logic --no-ff -m "Merge implementer: retry logic"
@@ -330,7 +330,7 @@ src/
 │   ├── queue-processor.py       # Role queue processor
 │   ├── watcher.py               # Response watcher
 │   ├── git-prepare.sh           # Worktree setup
-│   └── git-prepare-all.sh       # Prepare all roles
+│   └── watcher.py               # Response watcher
 ├── orchestration/
 │   ├── orchestrator/
 │   │   └── CLAUDE.md            # Chief Engineer identity
@@ -350,7 +350,7 @@ src/
 │   ├── codebase-navigator/      # Researcher: Codebase expert
 │   ├── world-knowledge/         # Researcher: External intel
 │   └── state/
-│       └── agents.json          # Runtime state tracking
+│       └── instances.json       # Runtime state tracking
 └── hooks/                       # Session hooks
 ```
 

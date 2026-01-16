@@ -9,38 +9,41 @@
 # requires-python = ">=3.10"
 # ///
 """
-Notient Task Dispatcher v3 - Dynamic Two-Tier Orchestration
+Notient Task Dispatcher v3.1 - Dynamic Two-Tier Orchestration
 
 Two-tier agent architecture:
 - Tier 1: Base Army (4 edit agents on Claude, boot with orchestrator)
 - Tier 2: Dynamic Spawns (researchers + extra coders on demand)
 
 Usage:
-    # Dispatch tasks (existing behavior, enhanced)
-    uv run dispatch.py <role> "<prompt>" --cli <cli>
-    uv run dispatch.py implementer "Add retry logic" --cli claude
-    uv run dispatch.py docs-fetcher "Get Preact docs" --cli gemini
+    # DISPATCH TASKS (use 'task' subcommand)
+    uv run dispatch.py task <role> "<prompt>" --cli <cli>
+    uv run dispatch.py task implementer "Add retry logic" --cli claude
+    uv run dispatch.py task docs-fetcher "Get Preact docs" --cli gemini
 
-    # Lifecycle management (new subcommands)
+    # LIFECYCLE MANAGEMENT
     uv run dispatch.py spawn <role> --cli <cli>     # Spawn dynamic agent
     uv run dispatch.py kill <instance>              # Kill dynamic agent
     uv run dispatch.py refresh <instance>           # Kill + respawn fresh
     uv run dispatch.py status                       # All agents with context %
     uv run dispatch.py list-instances               # Show dynamic instances
 
+    # QUEUE INSPECTION
+    uv run dispatch.py check <role>                 # Check queue status
+    uv run dispatch.py responses <role>             # List completed responses
+
 Examples:
-    # Spawn extra implementer on Gemini
+    # Dispatch task to implementer
+    uv run dispatch.py task implementer "Add retry logic to LLM calls" --cli claude
+
+    # Spawn extra implementer on Gemini for parallel work
     uv run dispatch.py spawn implementer --cli gemini
     # Creates: implementer-gemini (with temp worktree)
 
-    # Spawn another Claude implementer
-    uv run dispatch.py spawn implementer --cli claude
-    # Creates: implementer-claude-2 (next available number)
+    # Check agent status and context usage
+    uv run dispatch.py status
 
-    # Kill when done
-    uv run dispatch.py kill implementer-gemini
-
-    # Refresh exhausted agent
+    # Refresh exhausted agent (kills and respawns fresh)
     uv run dispatch.py refresh implementer-claude
 """
 
@@ -818,115 +821,123 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Subcommands:
+  task <role> "<prompt>"      Dispatch task to role (REQUIRED for task dispatch)
   spawn <role> --cli <cli>    Spawn a dynamic agent
-  kill <instance>             Kill a dynamic agent  
+  kill <instance>             Kill a dynamic agent
   refresh <instance>          Kill + respawn (for context exhaustion)
-  status                      Show all agents with context %
+  status                      Show all agents with context usage
   list-instances              Show dynamic instances
-
-Task Dispatch:
-  <role> "<prompt>" --cli <cli>   Dispatch task to role
+  check <role>                Check queue status for a role
+  responses <role>            List responses for a role
 
 Examples:
+    # Dispatch task to base army (CORRECT SYNTAX)
+    uv run dispatch.py task implementer "Add retry logic" --cli claude
+    uv run dispatch.py task docs-fetcher "Get Preact docs" --cli gemini
+
     # Spawn extra implementer on Gemini
     uv run dispatch.py spawn implementer --cli gemini
 
-    # Dispatch to base army
-    uv run dispatch.py implementer "Add retry logic" --cli claude
-
-    # Check status
+    # Check agent status
     uv run dispatch.py status
+
+    # Check queue for a role
+    uv run dispatch.py check implementer
+
+    # List responses for a role
+    uv run dispatch.py responses implementer
 
 Roles: {', '.join(VALID_ROLES)}
 CLIs: {', '.join(VALID_CLIS)}
         """
     )
-    
-    # Add subparsers
-    subparsers = parser.add_subparsers(dest="command")
-    
+
+    # Add subparsers (REQUIRED - no more positional args on main parser)
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # task subcommand (THE primary way to dispatch tasks)
+    task_parser = subparsers.add_parser("task", help="Dispatch a task to a role")
+    task_parser.add_argument("role", help="Target role")
+    task_parser.add_argument("prompt", help="Task prompt")
+    task_parser.add_argument("--cli", default="claude", help="CLI platform (default: claude)")
+    task_parser.add_argument("--model", "-m", help="Model override")
+    task_parser.add_argument("--context", "-c", default="", help="Additional context")
+    task_parser.add_argument("--instance", help="Target specific instance")
+
     # spawn subcommand
     spawn_parser = subparsers.add_parser("spawn", help="Spawn a dynamic agent")
     spawn_parser.add_argument("role", help="Role to spawn")
-    spawn_parser.add_argument("--cli", required=True, choices=VALID_CLIS, help="CLI platform")
+    spawn_parser.add_argument("--cli", required=True, help="CLI platform")
     spawn_parser.add_argument("--model", "-m", help="Model override")
-    
+
     # kill subcommand
     kill_parser = subparsers.add_parser("kill", help="Kill a dynamic agent")
     kill_parser.add_argument("instance", help="Instance name to kill")
-    
+
     # refresh subcommand
     refresh_parser = subparsers.add_parser("refresh", help="Refresh agent (context exhaustion)")
     refresh_parser.add_argument("instance", help="Instance name to refresh")
-    
+
     # status subcommand
-    subparsers.add_parser("status", help="Show all agents with context %")
-    
+    subparsers.add_parser("status", help="Show all agents with context usage")
+
     # list-instances subcommand
     subparsers.add_parser("list-instances", help="Show dynamic instances")
-    
-    # Legacy positional arguments for task dispatch
-    parser.add_argument("role", nargs="?", help=f"Role for task dispatch")
-    parser.add_argument("prompt", nargs="?", help="Task prompt")
-    parser.add_argument("--cli", choices=VALID_CLIS, help="CLI platform")
-    parser.add_argument("--model", "-m", help="Model override")
-    parser.add_argument("--context", "-c", default="", help="Additional context")
-    parser.add_argument("--instance", help="Target specific instance")
-    
-    # Legacy flags
-    parser.add_argument("--check", action="store_true", help="Check queue status")
-    parser.add_argument("--responses", "-r", action="store_true", help="List responses")
-    parser.add_argument("--status", "-s", action="store_true", help="Show all status")
-    parser.add_argument("--instances", action="store_true", help="List dynamic instances")
-    
+
+    # check subcommand (queue status)
+    check_parser = subparsers.add_parser("check", help="Check queue status for a role")
+    check_parser.add_argument("role", help="Role to check")
+
+    # responses subcommand
+    responses_parser = subparsers.add_parser("responses", help="List responses for a role")
+    responses_parser.add_argument("role", help="Role to list responses for")
+
     args = parser.parse_args()
-    
+
+    # Helper for role validation
+    def validate_role(role: str) -> str:
+        role = role.lower()
+        if role not in VALID_ROLES:
+            print(f"Error: Unknown role '{role}'")
+            print(f"\nEdit Agents: {', '.join(EDIT_AGENTS)}")
+            print(f"Read-Only Agents: {', '.join(READ_ONLY_AGENTS)}")
+            sys.exit(1)
+        return role
+
+    # Helper for CLI validation
+    def validate_cli(cli: str) -> str:
+        if cli not in VALID_CLIS:
+            print(f"Error: Unknown CLI '{cli}'")
+            print(f"Valid CLIs: {', '.join(VALID_CLIS)}")
+            sys.exit(1)
+        return cli
+
     # Handle subcommands
-    if args.command == "spawn":
-        spawn_agent(args.role, args.cli, args.model)
-        return
+    if args.command == "task":
+        role = validate_role(args.role)
+        cli = validate_cli(args.cli)
+        dispatch_task(role, args.prompt, args.model, args.context, cli, args.instance)
+    elif args.command == "spawn":
+        role = validate_role(args.role)
+        cli = validate_cli(args.cli)
+        spawn_agent(role, cli, args.model)
     elif args.command == "kill":
         kill_agent(args.instance)
-        return
     elif args.command == "refresh":
         refresh_agent(args.instance)
-        return
     elif args.command == "status":
         show_status()
-        return
     elif args.command == "list-instances":
         list_instances()
-        return
-    
-    # Legacy flag handling
-    if args.status:
-        show_status()
-        return
-    
-    if args.instances:
-        list_instances()
-        return
-    
-    # Need a role for other operations
-    if not args.role:
+    elif args.command == "check":
+        role = validate_role(args.role)
+        check_queue(role)
+    elif args.command == "responses":
+        role = validate_role(args.role)
+        list_responses(role)
+    else:
         parser.print_help()
         sys.exit(1)
-    
-    role = args.role.lower()
-    if role not in VALID_ROLES:
-        print(f"Unknown role: {role}")
-        print(f"\nEdit Agents: {', '.join(EDIT_AGENTS)}")
-        print(f"Read-Only Agents: {', '.join(READ_ONLY_AGENTS)}")
-        sys.exit(1)
-    
-    if args.check:
-        check_queue(role)
-    elif args.responses:
-        list_responses(role)
-    elif args.prompt:
-        dispatch_task(role, args.prompt, args.model, args.context, args.cli, args.instance)
-    else:
-        check_queue(role)
 
 
 if __name__ == "__main__":
