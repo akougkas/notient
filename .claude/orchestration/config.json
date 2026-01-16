@@ -21,15 +21,16 @@
   },
 
   "role_defaults": {
+    "comment": "All roles default to Claude. Use --cli gemini only when explicitly requested.",
     "implementer": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
     "simplifier": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
     "validator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
     "tester": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "architect": {"cli": "cursor-agent", "model": "gpt-5.2-codex"},
-    "advisor": {"cli": "opencode", "model": "opencode/glm-4.7-free"},
-    "docs-fetcher": {"cli": "gemini", "model": "gemini-3-pro-preview"},
+    "architect": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "advisor": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
+    "docs-fetcher": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
     "codebase-navigator": {"cli": "claude", "model": "claude-opus-4-5-20251101"},
-    "world-knowledge": {"cli": "gemini", "model": "gemini-3-pro-preview"}
+    "world-knowledge": {"cli": "claude", "model": "claude-opus-4-5-20251101"}
   },
 
   "spawn_variants": {

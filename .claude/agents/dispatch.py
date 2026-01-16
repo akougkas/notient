@@ -664,17 +664,25 @@ def dispatch_task(
         # Find appropriate instance for this role + cli
         all_instances = get_all_instances()
         cli_short = get_cli_short_name(cli)
-        
-        # Look for base army first (if base role)
+
+        # Look for base army first (if base role and using claude)
         if role in BASE_ARMY_ROLES and cli == "claude":
             instance = f"{role}-claude"
         else:
-            # Look for dynamic instance
+            # Look for dynamic instance matching role + cli
             for name, info in all_instances.items():
                 if info.get("role") == role and info.get("cli") == cli:
                     instance = name
                     break
-    
+
+            # Warn if no instance found for non-claude CLI
+            if instance is None and cli != "claude":
+                print(f"\n⚠️  WARNING: No {cli} instance found for {role}")
+                print(f"   The task will be queued but NO agent will pick it up!")
+                print(f"   To fix, first spawn the agent:")
+                print(f"     uv run dispatch.py spawn {role} --cli {cli}")
+                print()
+
     # Build the prompt with identity file instructions
     core_identity = get_core_identity_path(role)
     role_identity = get_role_identity_path(role)

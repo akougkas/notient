@@ -838,10 +838,39 @@ class QueueProcessor:
         return True
 
     def pending_tasks(self) -> list[Path]:
+        """Get pending tasks that are targeted at this instance.
+
+        Task routing rules:
+        - If task.instance == self.instance: pick up (exact match)
+        - If task.instance is None and we're base army: pick up (legacy/fallback)
+        - Otherwise: skip (targeted at different instance)
+        """
         if not self.queue_dir.exists():
             return []
-        tasks = list(self.queue_dir.glob("*.task"))
-        return sorted(tasks, key=lambda p: p.stat().st_mtime)
+
+        matching_tasks = []
+        for task_path in self.queue_dir.glob("*.task"):
+            try:
+                task_data = json.loads(task_path.read_text())
+                task_instance = task_data.get("instance")
+
+                # Exact match - task is for us
+                if task_instance == self.instance:
+                    matching_tasks.append(task_path)
+                # No instance specified and we're base army - pick up as fallback
+                elif task_instance is None and self._is_base_army():
+                    matching_tasks.append(task_path)
+                # Otherwise skip - task is for a different instance
+            except (json.JSONDecodeError, IOError):
+                # Skip malformed tasks
+                continue
+
+        return sorted(matching_tasks, key=lambda p: p.stat().st_mtime)
+
+    def _is_base_army(self) -> bool:
+        """Check if this instance is part of base army."""
+        instances = load_instances()
+        return self.instance in instances.get("base_army", {})
 
     def _build_command(self, task: Task, prompt: str) -> list[str]:
         """Build CLI command: <cmd> [subcommand] [--model X] [flags...] "prompt"."""
