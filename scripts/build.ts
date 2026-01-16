@@ -223,12 +223,32 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
   logSection(`Building (${mode})`);
 
   try {
-    const [jsResult] = await Promise.all([
+    // Always build main.ts
+    const buildPromises: Promise<esbuild.BuildResult>[] = [
       esbuild.build(getBuildOptions(dev)),
-      esbuild.build(cssBuildOptions),
-      esbuild.build(vectorWorkerBuildOptions),
-      esbuild.build(embedWorkerBuildOptions),
-    ]);
+    ];
+
+    // Conditionally build CSS if it exists
+    if (existsSync("src/ui/styles/index.css")) {
+      buildPromises.push(esbuild.build(cssBuildOptions));
+    } else {
+      logWarn("Skipping CSS build (src/ui/styles/index.css not found)");
+    }
+
+    // Conditionally build workers if they exist
+    if (existsSync("src/workers/vector.worker.ts")) {
+      buildPromises.push(esbuild.build(vectorWorkerBuildOptions));
+    } else {
+      logWarn("Skipping vector worker build (src/workers/vector.worker.ts not found)");
+    }
+
+    if (existsSync("src/workers/embed.worker.ts")) {
+      buildPromises.push(esbuild.build(embedWorkerBuildOptions));
+    } else {
+      logWarn("Skipping embed worker build (src/workers/embed.worker.ts not found)");
+    }
+
+    const [jsResult] = await Promise.all(buildPromises);
 
     const duration = Date.now() - start;
     console.log();
@@ -242,14 +262,23 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
 }
 
 async function watchBuild(): Promise<void> {
-  const [jsCtx, cssCtx, vectorWorkerCtx, embedWorkerCtx] = await Promise.all([
-    esbuild.context(getBuildOptions(true)),
-    esbuild.context(cssBuildOptions),
-    esbuild.context(vectorWorkerBuildOptions),
-    esbuild.context(embedWorkerBuildOptions),
-  ]);
+  const contexts: esbuild.BuildContext[] = [];
 
-  await Promise.all([jsCtx.watch(), cssCtx.watch(), vectorWorkerCtx.watch(), embedWorkerCtx.watch()]);
+  // Always watch main
+  contexts.push(await esbuild.context(getBuildOptions(true)));
+
+  // Conditionally watch CSS and workers
+  if (existsSync("src/ui/styles/index.css")) {
+    contexts.push(await esbuild.context(cssBuildOptions));
+  }
+  if (existsSync("src/workers/vector.worker.ts")) {
+    contexts.push(await esbuild.context(vectorWorkerBuildOptions));
+  }
+  if (existsSync("src/workers/embed.worker.ts")) {
+    contexts.push(await esbuild.context(embedWorkerBuildOptions));
+  }
+
+  await Promise.all(contexts.map(ctx => ctx.watch()));
 
   logSection("Watch Mode");
   logInfo("Watching src/ for changes...");
@@ -273,10 +302,7 @@ async function watchBuild(): Promise<void> {
 
   process.on("SIGINT", () => {
     watcher.close();
-    jsCtx.dispose();
-    cssCtx.dispose();
-    vectorWorkerCtx.dispose();
-    embedWorkerCtx.dispose();
+    contexts.forEach(ctx => ctx.dispose());
     console.log();
     logInfo("Watch mode stopped");
     process.exit(0);
