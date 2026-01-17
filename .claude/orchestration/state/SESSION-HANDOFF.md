@@ -69,9 +69,10 @@ b5f848c Merge implementer: G1 Wave 3 - Kernel
 
 ### Git State
 - **Branch**: `beta-spec`
-- **HEAD**: `8f5b5ea`
-- **Uncommitted**: STATE.md, this handoff file (commit before ending)
+- **HEAD**: `4b25703`
+- **Uncommitted**: This handoff file (gitignored)
 - **Worktrees**: All synced to latest
+- **Test screenshot**: `image.png` in repo root
 
 ### Human Preferences (remembered)
 - No ceremony, substance only
@@ -92,22 +93,53 @@ Added to `.claude/orchestration/orchestrator/CLAUDE.md`:
 - Cyclic multi-stage dispatching pattern
 - Sync worktrees before ALL dispatches (including read-only)
 
-### Next Steps (Debug/Integration Wave)
+### First Obsidian Test Results (End of Session 12)
 
-**Priority 1: Wire Integration**
-1. Create `src/adapters/obsidian.ts` (ObsidianFacade)
-2. Connect UI to pipeline (Enhance button → runEnhancePipeline)
-3. Connect EventBus events to UI updates
+**CEO loaded plugin in Obsidian and tested.**
 
-**Priority 2: LLM Integration**
-4. Implement LLM provider (LM Studio / Ollama connection)
-5. Wire agents to use actual LLM calls
-6. Test with real responses
+**What's Working:**
+- ✅ Plugin loads (no crash)
+- ✅ Sidebar renders with correct layout
+- ✅ Three tabs visible (Vitals, Suggestions, Activity)
+- ✅ CSS styling applied correctly
+- ✅ Version shows v0.1.0 in status footer
+- ✅ Setup wizard appeared on first run
 
-**Priority 3: Test in Obsidian**
-7. Load plugin in Obsidian
-8. Test each Success Criteria from PHASE-GALAXY.md
-9. Debug runtime issues
+**What's NOT Working:**
+| Issue | Location | Problem |
+|-------|----------|---------|
+| "Offline" status | StatusFooter | LLM health check not wired |
+| "0 notes" count | StatusFooter | Indexer not running |
+| Enhance button disabled | VitalsTab | No active note detection |
+| Vitals show "--" | VitalsTab | Not connected to active file |
+| Settings tab missing | Obsidian Settings | Registration not working |
+| No console output | DevTools | Dev logging not implemented |
+| Font rendering | Title "Notient" | Font looks wrong |
+
+**Console:** No Notient errors (other plugins have errors but not ours)
+
+**Screenshot saved:** `image.png` in repo root (shows current state)
+
+---
+
+### Debug Wave Tasks (Next Session)
+
+**Priority 1: Critical Wiring**
+1. Wire active note detection → show vitals for current file
+2. Enable Enhance button when note is open
+3. Fix Settings tab registration in main.ts
+4. Add dev mode console.log statements
+
+**Priority 2: Integration**
+5. Create `src/adapters/obsidian.ts` (ObsidianFacade)
+6. Connect UI to pipeline (Enhance button → runEnhancePipeline)
+7. Connect EventBus events to UI state updates
+8. Wire status footer to LLM health check
+
+**Priority 3: LLM Connection**
+9. Implement LLM provider (LM Studio / Ollama)
+10. Wire agents to actual LLM calls
+11. Test with real responses
 
 **Success Criteria (from PHASE-GALAXY.md):**
 - [ ] Plugin loads < 1 second

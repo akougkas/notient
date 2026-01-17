@@ -16,8 +16,8 @@ import type { SidebarTab, SystemStatus } from "./types";
 /** Active tab state */
 const activeTab = signal<SidebarTab>("vitals");
 
-/** Currently active file - updated by SidebarView */
-const activeFile = signal<TFile | null>(null);
+/** Active file in editor - updated by SidebarView */
+export const activeFile = signal<TFile | null>(null);
 
 /** System status - will be wired to EventBus in G6 */
 const systemStatus = signal<SystemStatus>({
