@@ -10,6 +10,7 @@ import type {
   NoteMaturity,
   SuggestionType,
 } from "../../types";
+import type { LLMProvider } from "../llm";
 
 // =============================================================================
 // Core Agent Types
@@ -31,6 +32,8 @@ export interface AgentResult<T> {
  */
 export interface AgentConfig {
   abortSignal?: AbortSignal;
+  /** LLM provider for agents that need reasoning */
+  llmProvider?: LLMProvider;
 }
 
 // =============================================================================

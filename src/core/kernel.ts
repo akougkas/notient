@@ -9,6 +9,7 @@ import type { ObsidianFacade } from "../adapters/obsidian";
 import type { NotientSettings } from "../types";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events";
+import type { LLMProvider } from "./llm";
 
 /**
  * Context passed to kernel during initialization.
@@ -28,8 +29,8 @@ export interface ServiceRegistry {
   eventBus: EventBus;
   database: Database;
   obsidianFacade: ObsidianFacade;
+  llmProvider: LLMProvider;
   // Future services for Galaxy MVP:
-  // llmProvider: LLMProvider
   // planner: PlannerAgent
   // contextBuilder: ContextBuilderAgent
   // analyst: AnalystAgent
