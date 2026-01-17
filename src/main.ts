@@ -4,6 +4,7 @@
  */
 
 import { Notice, Plugin } from "obsidian";
+import { ObsidianFacade } from "./adapters/obsidian";
 import { Database } from "./core/db/database";
 import { EventBus } from "./core/events";
 import { kernel } from "./core/kernel";
@@ -46,6 +47,7 @@ export default class NotientPlugin extends Plugin {
   private async initializeKernel(): Promise<void> {
     kernel.register("eventBus", () => new EventBus());
     kernel.register("database", () => new Database());
+    kernel.register("obsidianFacade", () => new ObsidianFacade(this.app));
 
     await kernel.initialize({
       app: this.app,
