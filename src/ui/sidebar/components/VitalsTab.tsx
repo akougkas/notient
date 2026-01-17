@@ -6,7 +6,7 @@
 
 export function VitalsTab() {
   return (
-    <div class="nv2-tab nv2-vitals-tab" role="tabpanel" aria-label="Note Vitals">
+    <section class="nv2-tab nv2-vitals-tab" role="tabpanel" aria-label="Note Vitals">
       <section class="nv2-section">
         <h2 class="nv2-section-title">Note Vitals</h2>
         <p class="nv2-section-subtitle">Open a note to see its health</p>
@@ -37,6 +37,6 @@ export function VitalsTab() {
         </button>
         <p class="nv2-section-hint">Last enhanced: Never</p>
       </section>
-    </div>
+    </section>
   );
 }

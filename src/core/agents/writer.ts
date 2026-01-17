@@ -18,6 +18,24 @@ import type { AgentConfig, AgentResult, WriteRequest, WriteResult } from "./type
 // =============================================================================
 
 /**
+ * Parse a YAML value string into appropriate type.
+ */
+function parseYamlValue(value: string): unknown {
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return value
+      .slice(1, -1)
+      .split(",")
+      .map((s) => s.trim());
+  }
+  if (/^-?\d+(\.\d+)?$/.test(value)) {
+    return Number.parseFloat(value);
+  }
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
+}
+
+/**
  * Extract frontmatter from note content.
  * Returns the frontmatter object and the content without frontmatter.
  */
@@ -27,7 +45,6 @@ function extractFrontmatter(content: string): {
   hasFrontmatter: boolean;
 } {
   const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
-
   if (!frontmatterMatch) {
     return { frontmatter: {}, body: content, hasFrontmatter: false };
   }
@@ -36,32 +53,12 @@ function extractFrontmatter(content: string): {
   const body = content.slice(frontmatterMatch[0].length);
   const frontmatter: Record<string, unknown> = {};
 
-  // Simple YAML parsing (key: value)
   for (const line of frontmatterStr.split("\n")) {
     const colonIndex = line.indexOf(":");
     if (colonIndex > 0) {
       const key = line.slice(0, colonIndex).trim();
-      let value: unknown = line.slice(colonIndex + 1).trim();
-
-      // Try to parse arrays [a, b, c]
-      if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
-        value = value
-          .slice(1, -1)
-          .split(",")
-          .map((s) => s.trim());
-      }
-      // Try to parse numbers
-      else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
-        value = Number.parseFloat(value);
-      }
-      // Try to parse booleans
-      else if (value === "true") {
-        value = true;
-      } else if (value === "false") {
-        value = false;
-      }
-
-      frontmatter[key] = value;
+      const rawValue = line.slice(colonIndex + 1).trim();
+      frontmatter[key] = parseYamlValue(rawValue);
     }
   }
 

@@ -36,7 +36,7 @@ export function ActivityTab() {
   };
 
   return (
-    <div class="nv2-tab nv2-activity-tab" role="tabpanel" aria-label="Activity">
+    <section class="nv2-tab nv2-activity-tab" role="tabpanel" aria-label="Activity">
       {/* Running Pipeline */}
       {pipeline && (
         <section class="nv2-section nv2-pipeline-section">
@@ -104,6 +104,6 @@ export function ActivityTab() {
           </ul>
         )}
       </section>
-    </div>
+    </section>
   );
 }
