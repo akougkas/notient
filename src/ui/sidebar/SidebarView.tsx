@@ -13,10 +13,6 @@ export const VIEW_TYPE_SIDEBAR = "notient-sidebar";
 export class SidebarView extends ItemView {
   private preactRoot: HTMLElement | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
-    super(leaf);
-  }
-
   getViewType(): string {
     return VIEW_TYPE_SIDEBAR;
   }

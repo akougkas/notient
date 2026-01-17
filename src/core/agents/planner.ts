@@ -11,12 +11,7 @@
  */
 
 import type { AgentContext, NoteMaturity, SuggestionType } from "../../types";
-import type {
-  AgentConfig,
-  AgentResult,
-  EnhancementPlan,
-  EnhancementPriority,
-} from "./types";
+import type { AgentConfig, AgentResult, EnhancementPlan, EnhancementPriority } from "./types";
 
 // =============================================================================
 // Maturity-Based Priority Mapping
@@ -173,10 +168,7 @@ export class PlannerAgent {
    * @param config - Optional abort signal
    * @returns Enhancement plan with priorities and suggestion types
    */
-  async run(
-    context: AgentContext,
-    config?: AgentConfig,
-  ): Promise<AgentResult<EnhancementPlan>> {
+  async run(context: AgentContext, config?: AgentConfig): Promise<AgentResult<EnhancementPlan>> {
     return plan(context, config);
   }
 }

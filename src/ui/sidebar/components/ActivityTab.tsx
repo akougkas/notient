@@ -47,10 +47,7 @@ export function ActivityTab() {
           <div class="nv2-pipeline-info">
             <span>Stage: {pipeline.stage}</span>
             <div class="nv2-progress-bar">
-              <div
-                class="nv2-progress-fill"
-                style={`--nv2-progress-width: ${pipeline.percent}%`}
-              />
+              <div class="nv2-progress-fill" style={`--nv2-progress-width: ${pipeline.percent}%`} />
             </div>
           </div>
           <button type="button" class="nv2-button nv2-button--danger" onClick={handleCancel}>
@@ -65,7 +62,7 @@ export function ActivityTab() {
         {recent.length === 0 ? (
           <p class="nv2-section-hint">No recent activity</p>
         ) : (
-          <ul class="nv2-activity-list" role="list">
+          <ul class="nv2-activity-list">
             {recent.map((item) => (
               <li key={item.id} class="nv2-activity-item">
                 <span class={`nv2-activity-icon nv2-activity-icon--${item.status}`}>
@@ -87,7 +84,7 @@ export function ActivityTab() {
         {history.length === 0 ? (
           <p class="nv2-section-hint">No actions to undo</p>
         ) : (
-          <ul class="nv2-undo-list" role="list">
+          <ul class="nv2-undo-list">
             {history.map((item) => (
               <li key={item.id} class="nv2-undo-item">
                 <span class="nv2-undo-icon">↩</span>

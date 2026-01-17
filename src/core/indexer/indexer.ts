@@ -4,16 +4,16 @@
  * Source of truth: .planning/PHASE-GALAXY.md
  */
 
+import type { ChunkType } from "../../types";
 import type { Database } from "../db/database";
 import type { EventBus } from "../events";
-import type { ChunkType } from "../../types";
 import { chunkNote, computeNoteHash } from "./chunker";
 import {
   type Chunk,
-  type IndexerConfig,
+  DEFAULT_MAX_NOTE_SIZE,
   type IndexNoteResult,
   type IndexVaultResult,
-  DEFAULT_MAX_NOTE_SIZE,
+  type IndexerConfig,
 } from "./types";
 
 /**
@@ -46,7 +46,7 @@ export class Indexer {
     database: Database,
     eventBus: EventBus,
     fileAccessor: FileAccessor,
-    config: IndexerConfig = {}
+    config: IndexerConfig = {},
   ) {
     this.database = database;
     this.eventBus = eventBus;
@@ -69,10 +69,9 @@ export class Indexer {
     const hash = computeNoteHash(content);
 
     // Check for existing note with same hash
-    const existing = this.database.get<{ hash: string }>(
-      "SELECT hash FROM notes WHERE path = ?",
-      [notePath]
-    );
+    const existing = this.database.get<{ hash: string }>("SELECT hash FROM notes WHERE path = ?", [
+      notePath,
+    ]);
 
     if (existing && existing.hash === hash) {
       return { notePath, chunkCount: 0, skipped: true };
@@ -95,13 +94,13 @@ export class Indexer {
     const titleMatch = content.match(/^#\s+(.+)$/m);
     const title = titleMatch
       ? titleMatch[1]
-      : notePath.split("/").pop()?.replace(".md", "") ?? notePath;
+      : (notePath.split("/").pop()?.replace(".md", "") ?? notePath);
 
     // Upsert note record
     this.database.run(
       `INSERT OR REPLACE INTO notes (path, title, hash, indexed_at, last_enhanced)
        VALUES (?, ?, ?, ?, (SELECT last_enhanced FROM notes WHERE path = ?))`,
-      [notePath, title, hash, Date.now(), notePath]
+      [notePath, title, hash, Date.now(), notePath],
     );
 
     // Insert chunks
@@ -130,7 +129,7 @@ export class Indexer {
 
     const files = this.fileAccessor.listMarkdownFiles();
     const filteredFiles = files.filter(
-      (f) => !excludedFolders.some((folder) => f.path.startsWith(folder + "/"))
+      (f) => !excludedFolders.some((folder) => f.path.startsWith(`${folder}/`)),
     );
 
     this.eventBus.emit("index:start", { noteCount: filteredFiles.length });
@@ -232,10 +231,7 @@ export class Indexer {
       start_line: number;
       end_line: number;
       hash: string;
-    }>(
-      "SELECT * FROM chunks WHERE note_path = ? ORDER BY start_line",
-      [notePath]
-    );
+    }>("SELECT * FROM chunks WHERE note_path = ? ORDER BY start_line", [notePath]);
 
     return rows.map((row) => ({
       id: row.id,
@@ -257,10 +253,9 @@ export class Indexer {
    */
   needsReindex(notePath: string, content: string): boolean {
     const hash = computeNoteHash(content);
-    const existing = this.database.get<{ hash: string }>(
-      "SELECT hash FROM notes WHERE path = ?",
-      [notePath]
-    );
+    const existing = this.database.get<{ hash: string }>("SELECT hash FROM notes WHERE path = ?", [
+      notePath,
+    ]);
     return !existing || existing.hash !== hash;
   }
 
@@ -268,9 +263,7 @@ export class Indexer {
    * Get indexed note count.
    */
   getIndexedNoteCount(): number {
-    const result = this.database.get<{ count: number }>(
-      "SELECT COUNT(*) as count FROM notes"
-    );
+    const result = this.database.get<{ count: number }>("SELECT COUNT(*) as count FROM notes");
     return result?.count ?? 0;
   }
 
@@ -286,7 +279,7 @@ export class Indexer {
         chunk.startLine,
         chunk.endLine,
         chunk.hash,
-      ]
+      ],
     );
   }
 }

@@ -120,10 +120,7 @@ export class Database {
    * @param params - Parameter values in order
    * @returns First row as object, or undefined if no results
    */
-  get<T extends Record<string, unknown>>(
-    sql: string,
-    params: unknown[] = [],
-  ): T | undefined {
+  get<T extends Record<string, unknown>>(sql: string, params: unknown[] = []): T | undefined {
     if (!this.db) throw new Error("Database not initialized");
 
     const stmt = this.db.prepare(sql);
@@ -146,10 +143,7 @@ export class Database {
    * @param params - Parameter values in order
    * @returns Array of row objects
    */
-  all<T extends Record<string, unknown>>(
-    sql: string,
-    params: unknown[] = [],
-  ): T[] {
+  all<T extends Record<string, unknown>>(sql: string, params: unknown[] = []): T[] {
     if (!this.db) throw new Error("Database not initialized");
 
     const stmt = this.db.prepare(sql);

@@ -59,13 +59,11 @@ export function SuggestionsTab() {
       {items.length === 0 ? (
         <section class="nv2-section nv2-empty-state">
           <p>No suggestions yet.</p>
-          <p class="nv2-section-hint">
-            Run Enhance on a note to get suggestions.
-          </p>
+          <p class="nv2-section-hint">Run Enhance on a note to get suggestions.</p>
         </section>
       ) : (
         <>
-          <ul class="nv2-suggestion-list" role="list">
+          <ul class="nv2-suggestion-list">
             {items.map((suggestion) => {
               const isSelected = selected.has(suggestion.id);
               const isExpanded = expanded.has(suggestion.id);
@@ -80,9 +78,7 @@ export function SuggestionsTab() {
                         onChange={() => toggleSelect(suggestion.id)}
                         class="nv2-checkbox"
                       />
-                      <span class="nv2-suggestion-description">
-                        {suggestion.description}
-                      </span>
+                      <span class="nv2-suggestion-description">{suggestion.description}</span>
                     </label>
                     <button
                       type="button"
@@ -97,12 +93,8 @@ export function SuggestionsTab() {
 
                   {isExpanded && (
                     <div class="nv2-suggestion-details">
-                      <div class="nv2-suggestion-type">
-                        Type: {suggestion.type}
-                      </div>
-                      <div class="nv2-suggestion-preview">
-                        Preview: {suggestion.preview}
-                      </div>
+                      <div class="nv2-suggestion-type">Type: {suggestion.type}</div>
+                      <div class="nv2-suggestion-preview">Preview: {suggestion.preview}</div>
                       {suggestion.metadata.reasoning && (
                         <div class="nv2-suggestion-reasoning">
                           Reasoning: {suggestion.metadata.reasoning}

@@ -11,12 +11,7 @@
  */
 
 import type { EnhancementSuggestion } from "../../types";
-import type {
-  AgentConfig,
-  AgentResult,
-  WriteRequest,
-  WriteResult,
-} from "./types";
+import type { AgentConfig, AgentResult, WriteRequest, WriteResult } from "./types";
 
 // =============================================================================
 // Content Modification Helpers
@@ -50,7 +45,10 @@ function extractFrontmatter(content: string): {
 
       // Try to parse arrays [a, b, c]
       if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
-        value = value.slice(1, -1).split(",").map((s) => s.trim());
+        value = value
+          .slice(1, -1)
+          .split(",")
+          .map((s) => s.trim());
       }
       // Try to parse numbers
       else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
@@ -112,7 +110,7 @@ function hashContent(content: string): string {
   let hash = 0;
   for (let i = 0; i < content.length; i++) {
     const char = content.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash; // Convert to 32bit integer
   }
   return hash.toString(16);
@@ -126,10 +124,7 @@ function hashContent(content: string): string {
  * Apply a single suggestion to note content.
  * Returns modified content or null if suggestion type not supported.
  */
-function applySuggestion(
-  content: string,
-  suggestion: EnhancementSuggestion,
-): string | null {
+function applySuggestion(content: string, suggestion: EnhancementSuggestion): string | null {
   const { frontmatter, body, hasFrontmatter } = extractFrontmatter(content);
 
   switch (suggestion.type) {
@@ -154,7 +149,7 @@ function applySuggestion(
       // Add link at the end of the note
       const linkTarget = suggestion.metadata.linkTarget;
       if (!linkTarget) return null;
-      const newContent = body.trimEnd() + `\n\n[[${linkTarget}]]`;
+      const newContent = `${body.trimEnd()}\n\n[[${linkTarget}]]`;
       return rebuildContent(frontmatter, newContent, hasFrontmatter);
     }
 
@@ -162,7 +157,7 @@ function applySuggestion(
       // Add section at the end of the note
       const sectionTitle = suggestion.metadata.sectionTitle;
       if (!sectionTitle) return null;
-      const newContent = body.trimEnd() + `\n\n## ${sectionTitle}\n\n`;
+      const newContent = `${body.trimEnd()}\n\n## ${sectionTitle}\n\n`;
       return rebuildContent(frontmatter, newContent, hasFrontmatter);
     }
 
@@ -268,10 +263,7 @@ export class WriterAgent {
    * @param config - Optional abort signal
    * @returns Modified content and application results
    */
-  async run(
-    request: WriteRequest,
-    config?: AgentConfig,
-  ): Promise<AgentResult<WriteResult>> {
+  async run(request: WriteRequest, config?: AgentConfig): Promise<AgentResult<WriteResult>> {
     return write(request, config);
   }
 
