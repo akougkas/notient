@@ -25,13 +25,13 @@ export interface NotientSettings {
 export const DEFAULT_SETTINGS: NotientSettings = {
   reasoningProvider: {
     type: "lmstudio",
-    baseUrl: "http://localhost:1234/v1",
-    model: "default",
+    baseUrl: "http://192.168.86.249:1234/v1",
+    model: "qwen3-8b",
   },
   embeddingProvider: {
     type: "ollama",
-    baseUrl: "http://localhost:11434",
-    model: "nomic-embed-text",
+    baseUrl: "http://192.168.86.249:11434",
+    model: "nomic-embed-text-v2-moe",
   },
   excludedFolders: [".obsidian", ".trash"],
   devMode: false,
