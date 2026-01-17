@@ -524,6 +524,8 @@ When CEO expresses a preference, note it in handoff for future sessions.
 7. **Don't do manual git commands on agent worktrees** — scripts handle it
 8. **Don't read implementation files yourself** — dispatch agents to review
 9. **Don't pollute orchestrator context** — you coordinate, agents do the work
+10. **Don't double-wait** — background watcher notifies on complete, don't also block on TaskOutput
+11. **Don't leave agents idle** — dispatch validator/tester in parallel, keep all agents working
 
 ### ALWAYS Do These
 
