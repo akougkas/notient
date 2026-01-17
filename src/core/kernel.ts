@@ -5,6 +5,7 @@
  */
 
 import type { App, Plugin } from "obsidian";
+import type { ObsidianFacade } from "../adapters/obsidian";
 import type { NotientSettings } from "../types";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events";
@@ -26,6 +27,7 @@ export interface KernelContext {
 export interface ServiceRegistry {
   eventBus: EventBus;
   database: Database;
+  obsidianFacade: ObsidianFacade;
   // Future services for Galaxy MVP:
   // llmProvider: LLMProvider
   // planner: PlannerAgent
