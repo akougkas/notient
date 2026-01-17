@@ -12,9 +12,9 @@
 
 import type { AgentContext, EnhancementSuggestion, PipelineStage } from "../../types";
 import type { PipelineOptions, PipelineResult } from "./types";
-import { plan, PlannerAgent } from "../agents/planner";
-import { buildContext, ContextBuilderAgent } from "../agents/contextBuilder";
-import { analyze, AnalystAgent } from "../agents/analyst";
+import { plan } from "../agents/planner";
+import { buildContext } from "../agents/contextBuilder";
+import { analyze } from "../agents/analyst";
 import { kernel } from "../kernel";
 import type { EventBus } from "../events";
 
@@ -22,10 +22,7 @@ import type { EventBus } from "../events";
 // Progress Constants
 // =============================================================================
 
-/**
- * Progress percentages for each pipeline stage.
- * Weighted by expected execution time.
- */
+/** Progress percentages for each pipeline stage (weighted by expected execution time) */
 const STAGE_PROGRESS: Record<PipelineStage, number> = {
   idle: 0,
   planner: 15,
@@ -38,16 +35,12 @@ const STAGE_PROGRESS: Record<PipelineStage, number> = {
 // Helper Functions
 // =============================================================================
 
-/**
- * Check if pipeline should abort based on signal.
- */
+/** Check if pipeline should abort based on signal */
 function isAborted(options?: PipelineOptions): boolean {
   return options?.abortSignal?.aborted ?? false;
 }
 
-/**
- * Emit progress event and call progress callback.
- */
+/** Emit progress event and call progress callback */
 function emitProgress(
   eventBus: EventBus,
   noteId: string,
@@ -55,47 +48,73 @@ function emitProgress(
   options?: PipelineOptions,
 ): void {
   const percent = STAGE_PROGRESS[stage];
-
-  // Emit event for UI
-  eventBus.emit("enhance:progress", {
-    noteId,
-    percent,
-    stage,
-  });
-
-  // Call callback if provided
+  eventBus.emit("enhance:progress", { noteId, percent, stage });
   options?.onProgress?.(stage, percent);
 }
 
-/**
- * Create abort error result.
- */
-function createAbortResult(): PipelineResult {
-  return {
-    success: false,
-    aborted: true,
-  };
+/** Create abort result */
+function abortResult(): PipelineResult {
+  return { success: false, aborted: true };
+}
+
+/** Create error result */
+function errorResult(error: string): PipelineResult {
+  return { success: false, error };
+}
+
+/** Create success result */
+function successResult(suggestions: EnhancementSuggestion[]): PipelineResult {
+  return { success: true, suggestions };
+}
+
+// =============================================================================
+// Stage Runner
+// =============================================================================
+
+/** Generic agent result with optional data */
+interface AgentResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
 }
 
 /**
- * Create error result with message.
+ * Run a single pipeline stage with abort check and progress emission.
+ * @returns The stage data on success, or throws with error message
  */
-function createErrorResult(error: string): PipelineResult {
-  return {
-    success: false,
-    error,
-  };
+async function runStage<T>(
+  stageName: PipelineStage,
+  defaultError: string,
+  stageFn: () => Promise<AgentResult<T>>,
+  eventBus: EventBus,
+  noteId: string,
+  options?: PipelineOptions,
+): Promise<T> {
+  if (isAborted(options)) {
+    throw new AbortError();
+  }
+
+  emitProgress(eventBus, noteId, stageName, options);
+
+  const result = await stageFn();
+  if (!result.success || result.data === undefined) {
+    const error = result.error ?? defaultError;
+    eventBus.emit("enhance:error", { noteId, error });
+    throw new StageError(error);
+  }
+
+  return result.data;
 }
 
-/**
- * Create success result with suggestions.
- */
-function createSuccessResult(suggestions: EnhancementSuggestion[]): PipelineResult {
-  return {
-    success: true,
-    suggestions,
-  };
+/** Marker error for abort */
+class AbortError extends Error {
+  constructor() {
+    super("aborted");
+  }
 }
+
+/** Marker error for stage failure */
+class StageError extends Error {}
 
 // =============================================================================
 // Main Pipeline Function
@@ -119,104 +138,67 @@ export async function runEnhancePipeline(
   options?: PipelineOptions,
 ): Promise<PipelineResult> {
   const noteId = context.notePath;
+  const abortOpts = { abortSignal: options?.abortSignal };
 
   // Get EventBus from kernel
   let eventBus: EventBus;
   try {
     eventBus = kernel.get("eventBus");
   } catch {
-    return createErrorResult("EventBus not available - kernel not initialized");
+    return errorResult("EventBus not available - kernel not initialized");
   }
 
-  // Emit start event
-  eventBus.emit("enhance:start", {
-    noteId,
-    timestamp: Date.now(),
-  });
+  eventBus.emit("enhance:start", { noteId, timestamp: Date.now() });
 
   try {
-    // =========================================================================
     // Stage 1: Planner
-    // =========================================================================
-    if (isAborted(options)) {
-      return createAbortResult();
-    }
-
-    emitProgress(eventBus, noteId, "planner", options);
-
-    const planResult = await plan(context, {
-      abortSignal: options?.abortSignal,
-    });
-
-    if (!planResult.success || !planResult.data) {
-      const error = planResult.error ?? "Planner failed to produce plan";
-      eventBus.emit("enhance:error", { noteId, error });
-      return createErrorResult(error);
-    }
-
-    const enhancementPlan = planResult.data;
-
-    // =========================================================================
-    // Stage 2: ContextBuilder
-    // =========================================================================
-    if (isAborted(options)) {
-      return createAbortResult();
-    }
-
-    emitProgress(eventBus, noteId, "context-builder", options);
-
-    const contextResult = await buildContext(context, enhancementPlan, {
-      abortSignal: options?.abortSignal,
-    });
-
-    if (!contextResult.success || !contextResult.data) {
-      const error = contextResult.error ?? "ContextBuilder failed to build context";
-      eventBus.emit("enhance:error", { noteId, error });
-      return createErrorResult(error);
-    }
-
-    const builtContext = contextResult.data;
-
-    // =========================================================================
-    // Stage 3: Analyst
-    // =========================================================================
-    if (isAborted(options)) {
-      return createAbortResult();
-    }
-
-    emitProgress(eventBus, noteId, "analyst", options);
-
-    const analyzeResult = await analyze(builtContext, {
-      abortSignal: options?.abortSignal,
-    });
-
-    if (!analyzeResult.success) {
-      const error = analyzeResult.error ?? "Analyst failed to generate suggestions";
-      eventBus.emit("enhance:error", { noteId, error });
-      return createErrorResult(error);
-    }
-
-    const suggestions = analyzeResult.data ?? [];
-
-    // =========================================================================
-    // Complete
-    // =========================================================================
-    if (isAborted(options)) {
-      return createAbortResult();
-    }
-
-    // Emit complete event
-    eventBus.emit("enhance:complete", {
+    const enhancementPlan = await runStage(
+      "planner",
+      "Planner failed to produce plan",
+      () => plan(context, abortOpts),
+      eventBus,
       noteId,
-      suggestionCount: suggestions.length,
-    });
+      options,
+    );
 
-    return createSuccessResult(suggestions);
+    // Stage 2: ContextBuilder
+    const builtContext = await runStage(
+      "context-builder",
+      "ContextBuilder failed to build context",
+      () => buildContext(context, enhancementPlan, abortOpts),
+      eventBus,
+      noteId,
+      options,
+    );
+
+    // Stage 3: Analyst
+    const suggestions = await runStage(
+      "analyst",
+      "Analyst failed to generate suggestions",
+      () => analyze(builtContext, abortOpts),
+      eventBus,
+      noteId,
+      options,
+    );
+
+    // Final abort check before returning
+    if (isAborted(options)) {
+      return abortResult();
+    }
+
+    eventBus.emit("enhance:complete", { noteId, suggestionCount: suggestions.length });
+    return successResult(suggestions);
   } catch (error) {
-    // Catch any unexpected errors
+    if (error instanceof AbortError) {
+      return abortResult();
+    }
+    if (error instanceof StageError) {
+      return errorResult(error.message);
+    }
+    // Unexpected error
     const errorMessage = error instanceof Error ? error.message : String(error);
     eventBus.emit("enhance:error", { noteId, error: errorMessage });
-    return createErrorResult(errorMessage);
+    return errorResult(errorMessage);
   }
 }
 
@@ -225,31 +207,17 @@ export async function runEnhancePipeline(
 // =============================================================================
 
 /**
- * EnhancePipeline class wrapper.
- * Provides orchestration with agent instances for lifecycle management.
+ * EnhancePipeline class wrapper for consumers who prefer class-based API.
+ * Delegates to the functional runEnhancePipeline implementation.
  */
 export class EnhancePipeline {
-  private planner: PlannerAgent;
-  private contextBuilder: ContextBuilderAgent;
-  private analyst: AnalystAgent;
-
-  constructor() {
-    this.planner = new PlannerAgent();
-    this.contextBuilder = new ContextBuilderAgent();
-    this.analyst = new AnalystAgent();
-  }
-
   /**
    * Run the enhancement pipeline for a note.
-   *
    * @param context - Agent context with note content and metadata
    * @param options - Pipeline options (abort signal, progress callback)
    * @returns Pipeline result with suggestions or error
    */
-  async run(
-    context: AgentContext,
-    options?: PipelineOptions,
-  ): Promise<PipelineResult> {
+  async run(context: AgentContext, options?: PipelineOptions): Promise<PipelineResult> {
     return runEnhancePipeline(context, options);
   }
 }
