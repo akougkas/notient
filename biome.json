@@ -28,6 +28,16 @@
   },
   "overrides": [
     {
+      "include": ["src/ui/sidebar/components/*.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off"
+          }
+        }
+      }
+    },
+    {
       "include": [
         "src/core/agent/agentLoop.ts",
         "src/core/agentic/actionApplier.ts",

@@ -19,7 +19,7 @@ export function StatusFooter({ status }: StatusFooterProps) {
   };
 
   return (
-    <footer class="nv2-status-footer" role="status">
+    <output class="nv2-status-footer">
       <button
         type="button"
         class="nv2-status-button"
@@ -35,6 +35,6 @@ export function StatusFooter({ status }: StatusFooterProps) {
         <span class="nv2-status-separator">│</span>
         <span class="nv2-status-version">v{version}</span>
       </button>
-    </footer>
+    </output>
   );
 }

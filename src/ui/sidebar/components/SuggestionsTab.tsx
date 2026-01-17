@@ -48,7 +48,7 @@ export function SuggestionsTab() {
   };
 
   return (
-    <div class="nv2-tab nv2-suggestions-tab" role="tabpanel" aria-label="Suggestions">
+    <section class="nv2-tab nv2-suggestions-tab" role="tabpanel" aria-label="Suggestions">
       <section class="nv2-section">
         <div class="nv2-section-header">
           <h2 class="nv2-section-title">Suggestions</h2>
@@ -124,6 +124,6 @@ export function SuggestionsTab() {
           </section>
         </>
       )}
-    </div>
+    </section>
   );
 }

@@ -62,39 +62,32 @@ interface Section {
 }
 
 /**
+ * Find the line index where content starts (after frontmatter if present).
+ */
+function findContentStart(lines: string[]): number {
+  if (lines[0]?.trim() !== "---") return 0;
+
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return i + 1;
+  }
+  return 0;
+}
+
+/**
  * Extract sections from content based on headings.
  */
 function extractSections(lines: string[]): Section[] {
   const sections: Section[] = [];
-  let currentStart = 0;
-  let inFrontmatter = false;
-  let frontmatterEnded = false;
+  let currentStart = findContentStart(lines);
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Track frontmatter
-    if (i === 0 && line.trim() === "---") {
-      inFrontmatter = true;
-      continue;
-    }
-    if (inFrontmatter && line.trim() === "---") {
-      inFrontmatter = false;
-      frontmatterEnded = true;
-      currentStart = i + 1;
-      continue;
-    }
-    if (inFrontmatter) continue;
-
-    // Detect section start (heading)
-    const level = getHeadingLevel(line);
+  for (let i = currentStart; i < lines.length; i++) {
+    const level = getHeadingLevel(lines[i]);
     if (level > 0 && i > currentStart) {
-      // Save previous section
       const content = lines.slice(currentStart, i).join("\n").trim();
       if (content) {
         sections.push({
-          startLine: currentStart + 1, // 1-indexed
-          endLine: i, // 1-indexed (exclusive)
+          startLine: currentStart + 1,
+          endLine: i,
           content,
         });
       }
@@ -102,7 +95,6 @@ function extractSections(lines: string[]): Section[] {
     }
   }
 
-  // Add final section
   const content = lines.slice(currentStart).join("\n").trim();
   if (content) {
     sections.push({

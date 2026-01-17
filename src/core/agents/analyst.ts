@@ -110,6 +110,58 @@ function generateSuggestionId(): string {
 }
 
 /**
+ * Add type-specific fields to metadata based on suggestion type.
+ */
+function addTypeSpecificMetadata(
+  metadata: SuggestionMetadata,
+  type: SuggestionType,
+  item: Record<string, unknown>,
+): void {
+  switch (type) {
+    case "tag":
+      if (Array.isArray(item.tags)) metadata.tags = item.tags;
+      break;
+    case "link":
+      if (item.linkTarget) metadata.linkTarget = item.linkTarget as string;
+      break;
+    case "section":
+      if (item.sectionTitle) metadata.sectionTitle = item.sectionTitle as string;
+      break;
+    case "frontmatter":
+      if (item.frontmatterKey) {
+        metadata.frontmatterKey = item.frontmatterKey as string;
+        metadata.frontmatterValue = item.frontmatterValue;
+      }
+      break;
+  }
+}
+
+/**
+ * Build a validated suggestion from a raw item.
+ * Returns null if item is invalid.
+ */
+function buildSuggestion(item: Record<string, unknown>): EnhancementSuggestion | null {
+  const type = validateSuggestionType(item.type as string | undefined);
+  if (!type || !item.description || !item.preview) return null;
+
+  const metadata: SuggestionMetadata = {
+    confidence:
+      typeof item.confidence === "number" ? Math.min(100, Math.max(0, item.confidence)) : 50,
+    reasoning: item.reasoning as string | undefined,
+  };
+
+  addTypeSpecificMetadata(metadata, type, item);
+
+  return {
+    id: generateSuggestionId(),
+    type,
+    description: item.description as string,
+    preview: item.preview as string,
+    metadata,
+  };
+}
+
+/**
  * Convert raw LLM response to validated EnhancementSuggestion array.
  */
 function convertToSuggestions(raw: RawAnalystResponse): EnhancementSuggestion[] {
@@ -117,46 +169,9 @@ function convertToSuggestions(raw: RawAnalystResponse): EnhancementSuggestion[] 
     return [];
   }
 
-  const suggestions: EnhancementSuggestion[] = [];
-
-  for (const item of raw.suggestions) {
-    const type = validateSuggestionType(item.type);
-    if (!type) continue;
-
-    // Must have description and preview
-    if (!item.description || !item.preview) continue;
-
-    const metadata: SuggestionMetadata = {
-      confidence:
-        typeof item.confidence === "number" ? Math.min(100, Math.max(0, item.confidence)) : 50,
-      reasoning: item.reasoning,
-    };
-
-    // Add type-specific metadata
-    if (type === "tag" && Array.isArray(item.tags)) {
-      metadata.tags = item.tags;
-    }
-    if (type === "link" && item.linkTarget) {
-      metadata.linkTarget = item.linkTarget;
-    }
-    if (type === "section" && item.sectionTitle) {
-      metadata.sectionTitle = item.sectionTitle;
-    }
-    if (type === "frontmatter" && item.frontmatterKey) {
-      metadata.frontmatterKey = item.frontmatterKey;
-      metadata.frontmatterValue = item.frontmatterValue;
-    }
-
-    suggestions.push({
-      id: generateSuggestionId(),
-      type,
-      description: item.description,
-      preview: item.preview,
-      metadata,
-    });
-  }
-
-  return suggestions;
+  return raw.suggestions
+    .map((item) => buildSuggestion(item))
+    .filter((s): s is EnhancementSuggestion => s !== null);
 }
 
 // =============================================================================
