@@ -1,7 +1,7 @@
 # Orchestrator Session Handoff
 
 **Status**: ACTIVE HANDOFF
-**Last Updated**: 2026-01-16 (Session 12)
+**Last Updated**: 2026-01-16 (Session 13)
 
 ---
 
@@ -21,140 +21,107 @@ After CEO confirms, clear everything below the `---` line except the template.
 ## HANDOFF DATA (populated by previous session)
 
 ### Current Phase
-**Phase Galaxy COMPLETE** - Entering Debug/Integration Wave
+**Phase Galaxy Debug COMPLETE** - Ready for User Testing
 
-### What Was Accomplished (Session 12)
+### What Was Accomplished (Session 13)
 
-| Milestone | Status |
-|-----------|--------|
-| G1 Foundation (types, EventBus, SQLite, Kernel) | ✅ Complete |
-| G2 Agents (Planner, ContextBuilder, Analyst, Writer) | ✅ Complete |
-| G3 Pipeline (orchestration, abort, errors) | ✅ Complete + Optimized |
-| G4 UI (tabbed sidebar, Preact) | ✅ Complete + Lint fixes |
-| G5 Indexing (chunker, embeddings, vector) | ✅ Complete |
-| G6 Settings (wizard, commands, main.ts) | ✅ Complete |
-| Dev environment prep | ✅ |
-| First `bun run dev` | ✅ SUCCESS |
-| Lint warnings | ✅ 0 warnings |
+| Wave | Status | Description |
+|------|--------|-------------|
+| D1 | ✅ Complete | ObsidianFacade, active note detection, VitalsTab reactivity |
+| D2 | ✅ Complete | Header redesign: brand + inline tabs |
+| D3 | ✅ Complete | Pipeline wiring: Enhance → pipeline → suggestions |
+| D4 | ✅ Complete | LLM provider: LM Studio + Ollama at 192.168.86.249 |
+| D5 | ✅ Complete | Status footer: LLM health, clickable opens settings |
+| D6 | ✅ Complete | Index integration: events wired to UI note count |
 
 **Build output:**
-- styles.css: 8.4kb
-- main.js: 652.4kb
+- styles.css: 8.5kb
+- main.js: 816.3kb
 - Copied to: /mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient
 
-### Final Audit Results (Validator)
+### Key Implementations
 
-**Architecture: COMPLETE** (all G1-G6 phases implemented per PHASE-GALAXY.md)
+1. **ObsidianFacade** (`src/adapters/obsidian.ts`)
+   - getActiveFile(), readNote(), writeNote()
+   - onActiveLeafChange() subscription
+   - getLinks() for inbound/outbound
 
-**Integration Gaps (expected - next wave):**
-1. `src/adapters/obsidian.ts` - Empty file (needs ObsidianFacade)
-2. LLM provider not integrated - agents return empty/placeholder data
-3. Web workers not implemented - embedding/vector stubs only
-4. UI not wired to pipeline - Enhance button disabled, events not connected
-5. No test suite
+2. **LLM Provider** (`src/core/llm/`)
+   - provider.ts: LLMProvider interface
+   - lmstudio.ts: OpenAI-compatible at 192.168.86.249:1234
+   - ollama.ts: Native API at 192.168.86.249:11434
+   - healthCheck.ts: Connection testing
 
-### Commits (Session 12)
+3. **Pipeline Listener** (`src/core/pipeline/listener.ts`)
+   - Subscribes to enhance:start events
+   - Triggers runEnhancePipeline()
+   - Emits enhance:complete with suggestions
+
+4. **VitalsTab** - Now shows:
+   - Note name as title
+   - Links (inbound/outbound count)
+   - I-PARA derived from folder
+   - Enabled Enhance button when note open
+
+5. **Status Footer** - Now shows:
+   - Connection status from LLM health check
+   - Note count from index events
+   - Clickable to open settings
+
+### Commits (Session 13)
 
 ```
-8f5b5ea Merge simplifier: lint fixes - complexity and a11y
-d4a4c39 Merge implementer: dev environment prep
-7e7b4d2 Merge implementer: G6 - settings, wizard, main.ts integration
-f35b59c Merge implementer: G5 - indexing, chunker, embeddings
-921c2e3 Merge simplifier: G3 pipeline optimization
-c380894 Merge implementer: G4 - tabbed sidebar UI with Preact
-76a29f1 Merge implementer: G3 - pipeline orchestration
-40f04c4 Merge implementer: G2 - 4-agent pipeline
-b5f848c Merge implementer: G1 Wave 3 - Kernel
+3cf70a1 Merge simplifier: emit index events and wire to database
+c00d988 Merge implementer: wire status footer to LLM health
+edb7493 fix(ui): use semantic nav element for header tabs
+aadef1a Merge tester: implement LLM provider with LM Studio/Ollama
+ee21d8d Merge simplifier: wire enhance event to pipeline execution
+c0c4db2 Merge implementer: header redesign with inline tabs
+0555a3a Merge simplifier: make VitalsTab reactive to active note
+efe63bb Merge implementer: wire sidebar to active note changes
+535ffc0 Merge simplifier: update default LLM endpoints
+8695dc2 Merge implementer: ObsidianFacade for workspace integration
 ```
 
 ### Git State
 - **Branch**: `beta-spec`
-- **HEAD**: `4b25703`
-- **Uncommitted**: This handoff file (gitignored)
-- **Worktrees**: All synced to latest
-- **Test screenshot**: `image.png` in repo root
+- **HEAD**: `3cf70a1`
+- **Uncommitted**: This handoff file
+- **Build**: typecheck ✓ | build ✓ | lint ✓
 
 ### Human Preferences (remembered)
 - No ceremony, substance only
-- Use scripts (git-prepare.sh, dispatch.py, watcher.py) - never manual git
+- Use scripts (git-prepare.sh, dispatch.py, watcher.py)
 - Cleanup responses IMMEDIATELY after merge
 - Parallel dispatch: Prepare ALL → Dispatch ALL → Watch
-- Claude by default, Gemini ONLY if explicitly requested
-- Validation in agent's worktree, not orchestrator repo
-- Cyclic multi-stage: implementer (new) + validator (recent) + simplifier (older)
-- Keep all agents busy - don't leave idle
-- Don't double-wait (background watcher notifies)
-- Don't read files yourself - dispatch agents
+- LLM services at 192.168.86.249 (not localhost)
+- Validate in agent's worktree, not orchestrator repo
 
-### Orchestration Lessons (Session 12)
-Added to `.claude/orchestration/orchestrator/CLAUDE.md`:
-- Don't double-wait on background tasks
-- Don't leave agents idle - keep all 4 working
-- Cyclic multi-stage dispatching pattern
-- Sync worktrees before ALL dispatches (including read-only)
+### What To Test (CEO)
 
-### First Obsidian Test Results (End of Session 12)
+1. Reload Obsidian plugin
+2. Open a note → VitalsTab should show:
+   - Note name in title
+   - Link counts (X in / Y out)
+   - I-PARA category
+   - Enabled Enhance button
+3. Click Enhance → Console should show pipeline activity
+4. Status footer should show "Ready" if LLM online, note count
+5. Click footer → Should open Obsidian settings
 
-**CEO loaded plugin in Obsidian and tested.**
+### Known Gaps (Future Work)
 
-**What's Working:**
-- ✅ Plugin loads (no crash)
-- ✅ Sidebar renders with correct layout
-- ✅ Three tabs visible (Vitals, Suggestions, Activity)
-- ✅ CSS styling applied correctly
-- ✅ Version shows v0.1.0 in status footer
-- ✅ Setup wizard appeared on first run
+1. **Health score**: Currently hardcoded 75% - needs actual calculation
+2. **Maturity**: Shows "Unknown" - needs heuristic implementation
+3. **Suggestions tab**: Shows mock data when pipeline returns empty
+4. **Activity tab**: Not wired to action history yet
+5. **Last enhanced**: Always shows "Never" - needs DB query
 
-**What's NOT Working:**
-| Issue | Location | Problem |
-|-------|----------|---------|
-| "Offline" status | StatusFooter | LLM health check not wired |
-| "0 notes" count | StatusFooter | Indexer not running |
-| Enhance button disabled | VitalsTab | No active note detection |
-| Vitals show "--" | VitalsTab | Not connected to active file |
-| Settings tab missing | Obsidian Settings | Registration not working |
-| No console output | DevTools | Dev logging not implemented |
-| Font rendering | Title "Notient" | Font looks wrong |
+### Next Phase Options
 
-**Console:** No Notient errors (other plugins have errors but not ours)
-
-**Screenshot saved:** `image.png` in repo root (shows current state)
-
----
-
-### Debug Wave Tasks (Next Session)
-
-**Priority 1: Critical Wiring**
-1. Wire active note detection → show vitals for current file
-2. Enable Enhance button when note is open
-3. Fix Settings tab registration in main.ts
-4. Add dev mode console.log statements
-
-**Priority 2: Integration**
-5. Create `src/adapters/obsidian.ts` (ObsidianFacade)
-6. Connect UI to pipeline (Enhance button → runEnhancePipeline)
-7. Connect EventBus events to UI state updates
-8. Wire status footer to LLM health check
-
-**Priority 3: LLM Connection**
-9. Implement LLM provider (LM Studio / Ollama)
-10. Wire agents to actual LLM calls
-11. Test with real responses
-
-**Success Criteria (from PHASE-GALAXY.md):**
-- [ ] Plugin loads < 1 second
-- [ ] Enhance button triggers full pipeline
-- [ ] Suggestions appear as checklist
-- [ ] Apply modifies note correctly
-- [ ] Undo reverses changes
-- [ ] Cancel aborts pipeline cleanly
-- [ ] Offline mode degrades gracefully
-- [ ] Index builds in background
-
-### Files to Reference
-- `.planning/STATE.md` - Updated with Session 12 summary
-- `.planning/PHASE-GALAXY.md` - Master spec (605 lines)
-- `.claude/orchestration/orchestrator/CLAUDE.md` - Lessons learned
+1. **Phase Helios**: Harden pipeline, stress test
+2. **More Debug**: Fix remaining gaps above
+3. **User Testing**: Gather feedback on current state
 
 ---
 

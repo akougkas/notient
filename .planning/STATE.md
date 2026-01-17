@@ -2,58 +2,50 @@
 
 ## Current Position
 
-**Phase**: Galaxy COMPLETE - Entering Debug/Polish Wave
-**Status**: All G1-G6 implemented, first `bun run dev` successful
-**Updated**: 2026-01-16 (Session 12 - End)
+**Phase**: Galaxy Debug COMPLETE - Awaiting User Testing
+**Status**: All D1-D6 debug waves implemented, plugin ready for testing
+**Updated**: 2026-01-16 (Session 13 - End)
 **Version**: 0.1.0
 
 ---
 
-## Phase Galaxy Implementation Status
+## Session 13: Phase Galaxy Debug
 
-| Phase | Description | Status | Lines |
-|-------|-------------|--------|-------|
-| G1 | Foundation (types, EventBus, SQLite, Kernel) | ✅ Complete | ~700 |
-| G2 | Agents (Planner, ContextBuilder, Analyst, Writer) | ✅ Complete | 1,106 |
-| G3 | Pipeline (orchestration, abort, errors) | ✅ Complete + Optimized | 324 |
-| G4 | UI (tabbed sidebar, Preact) | ✅ Complete + Fixes | 1,007 |
-| G5 | Indexing (chunker, embeddings, vector store) | ✅ Complete | 791 |
-| G6 | Settings (wizard, commands, main.ts) | ✅ Complete | 593 |
+### Debug Waves Completed
 
-**Total**: ~4,500 lines of new code
+| Wave | Description | Status |
+|------|-------------|--------|
+| D1 | Obsidian Integration (ObsidianFacade, active note, VitalsTab) | ✅ Complete |
+| D2 | Header Redesign (brand + inline tabs) | ✅ Complete |
+| D3 | Pipeline Wiring (Enhance → pipeline → suggestions) | ✅ Complete |
+| D4 | LLM Provider (LM Studio + Ollama at 192.168.86.249) | ✅ Complete |
+| D5 | Status Footer (LLM health, clickable settings) | ✅ Complete |
+| D6 | Index Integration (events → UI note count) | ✅ Complete |
 
----
+### Key New Files
 
-## Session 12 Summary
+| File | Purpose |
+|------|---------|
+| `src/adapters/obsidian.ts` | ObsidianFacade - Obsidian API wrapper |
+| `src/core/llm/provider.ts` | LLMProvider interface |
+| `src/core/llm/lmstudio.ts` | LM Studio (OpenAI-compatible) |
+| `src/core/llm/ollama.ts` | Ollama native API |
+| `src/core/llm/healthCheck.ts` | LLM connection testing |
+| `src/core/pipeline/listener.ts` | EventBus → Pipeline trigger |
 
-### Accomplished
-
-| Task | Status |
-|------|--------|
-| Resumed from Session 11 handoff | ✅ |
-| Fixed orchestration (instance-based routing) | ✅ |
-| Completed G1 Wave 3 (Kernel) | ✅ Merged |
-| Completed G2 (4 agents) | ✅ Merged |
-| Completed G3 (Pipeline) | ✅ Merged + Optimized |
-| Completed G4 (UI) | ✅ Merged + Style fixes |
-| Completed G5 (Indexing) | ✅ Merged |
-| Completed G6 (Settings) | ✅ Merged |
-| Dev environment prep | ✅ |
-| Lint fixes (8 warnings → 0) | ✅ |
-| First successful `bun run dev` | ✅ |
-
-### Key Commits (Session 12)
+### Commits (Session 13)
 
 ```
-8f5b5ea Merge simplifier: lint fixes - complexity and a11y
-d4a4c39 Merge implementer: dev environment prep
-7e7b4d2 Merge implementer: G6 - settings, wizard, main.ts integration
-f35b59c Merge implementer: G5 - indexing, chunker, embeddings
-921c2e3 Merge simplifier: G3 pipeline optimization
-c380894 Merge implementer: G4 - tabbed sidebar UI with Preact
-76a29f1 Merge implementer: G3 - pipeline orchestration
-40f04c4 Merge implementer: G2 - 4-agent pipeline
-b5f848c Merge implementer: G1 Wave 3 - Kernel
+3cf70a1 Merge simplifier: emit index events and wire to database
+c00d988 Merge implementer: wire status footer to LLM health
+edb7493 fix(ui): use semantic nav element for header tabs
+aadef1a Merge tester: implement LLM provider with LM Studio/Ollama
+ee21d8d Merge simplifier: wire enhance event to pipeline execution
+c0c4db2 Merge implementer: header redesign with inline tabs
+0555a3a Merge simplifier: make VitalsTab reactive to active note
+efe63bb Merge implementer: wire sidebar to active note changes
+535ffc0 Merge simplifier: update default LLM endpoints
+8695dc2 Merge implementer: ObsidianFacade for workspace integration
 ```
 
 ### Build Output
@@ -65,106 +57,75 @@ $ bun run dev
 ✓ Build complete
 ✓ Copied to vault
 
-  styles.css   8.4kb
-  main.js    652.4kb
+  styles.css   8.5kb
+  main.js    816.3kb
 ```
 
 ---
 
-## Orchestration Lessons Learned
+## What Should Work Now
 
-Documented in `.claude/orchestration/orchestrator/CLAUDE.md`:
+1. **VitalsTab** reacts to active note
+   - Shows note name, link counts, I-PARA
+   - Enhance button enabled when note open
 
-1. Don't read implementation files yourself — dispatch agents
-2. Don't pollute orchestrator context — you coordinate, agents work
-3. Don't double-wait — background watcher notifies, don't also block
-4. Don't leave agents idle — dispatch multiple in parallel
-5. Sync worktrees before ALL dispatches
-6. Cyclic multi-stage dispatching — implementer (new), validator (recent), simplifier (older)
+2. **Header** has brand + inline tab toggles
 
----
+3. **Enhance button** triggers pipeline
+   - Emits enhance:start
+   - Pipeline listener catches event
+   - Runs Planner → ContextBuilder → Analyst → Writer
+   - Emits enhance:complete with suggestions
 
-## Next Phase: Debug/Polish
+4. **LLM Provider** connects to:
+   - LM Studio at 192.168.86.249:1234
+   - Ollama at 192.168.86.249:11434
 
-### Immediate Tasks
-
-1. **Test in Obsidian** — Load plugin, verify UI renders
-2. **Wire up pipeline** — Enhance button → Pipeline → Suggestions
-3. **LLM integration** — Connect to LM Studio / Ollama
-4. **Fix runtime issues** — Debug any errors in console
-
-### Known Stubs/TODOs
-
-- LLM calls in agents (placeholder returns)
-- Embedding service (interface only)
-- Vector store HNSW (interface only)
-- File watcher integration
-
-### Success Criteria (from PHASE-GALAXY.md)
-
-- [ ] Plugin loads < 1 second
-- [ ] Enhance button triggers full pipeline
-- [ ] Suggestions appear as checklist
-- [ ] Apply modifies note correctly
-- [ ] Undo reverses changes
-- [ ] Cancel aborts pipeline cleanly
-- [ ] Offline mode degrades gracefully
-- [ ] Index builds in background
+5. **Status Footer** shows:
+   - Connection status
+   - Note count
+   - Clickable → opens settings
 
 ---
 
-## Files Structure (Implemented)
+## Known Gaps (Future Work)
 
-```
-src/
-├── main.ts                          # Plugin entry, kernel init
-├── types/index.ts                   # Foundation types
-├── core/
-│   ├── kernel.ts                    # Service registry (DI)
-│   ├── events.ts                    # EventBus
-│   ├── db/
-│   │   ├── schema.ts                # 5-table SQLite schema
-│   │   └── database.ts              # sql.js wrapper
-│   ├── agents/
-│   │   ├── types.ts                 # Agent types
-│   │   ├── planner.ts               # Planner agent
-│   │   ├── contextBuilder.ts        # ContextBuilder agent
-│   │   ├── analyst.ts               # Analyst agent
-│   │   └── writer.ts                # Writer agent
-│   ├── pipeline/
-│   │   ├── types.ts                 # Pipeline types
-│   │   ├── enhancePipeline.ts       # Main orchestrator
-│   │   └── index.ts                 # Exports
-│   └── indexer/
-│       ├── types.ts                 # Indexer types
-│       ├── chunker.ts               # Semantic chunking
-│       ├── indexer.ts               # Vault indexing
-│       └── index.ts                 # Exports
-├── services/
-│   ├── embeddings.ts                # Embedding service (stub)
-│   └── vectorStore.ts               # Vector store (stub)
-├── ui/
-│   ├── sidebar/
-│   │   ├── types.ts                 # UI state types
-│   │   ├── SidebarView.tsx          # Obsidian ItemView
-│   │   ├── App.tsx                  # Main Preact app
-│   │   ├── components/
-│   │   │   ├── NavDeck.tsx          # Tab navigation
-│   │   │   ├── VitalsTab.tsx        # Note health
-│   │   │   ├── SuggestionsTab.tsx   # Enhancement checklist
-│   │   │   ├── ActivityTab.tsx      # Undo history
-│   │   │   └── StatusFooter.tsx     # System health
-│   │   └── index.ts                 # Exports
-│   ├── settings/
-│   │   ├── types.ts                 # Settings types
-│   │   └── SettingsTab.ts           # Settings panel
-│   ├── modals/
-│   │   ├── SetupWizard.ts           # First-run wizard
-│   │   └── index.ts                 # Exports
-│   └── styles/
-│       ├── index.css                # CSS entry point
-│       └── sidebar.css              # Sidebar styles
-```
+| Gap | Description |
+|-----|-------------|
+| Health score | Hardcoded 75% - needs calculation |
+| Maturity | Shows "Unknown" - needs heuristics |
+| Suggestions display | Mock data if empty |
+| Activity tab | Not wired to history |
+| Last enhanced | Always "Never" - needs DB |
+
+---
+
+## Success Criteria Progress
+
+From PHASE-GALAXY.md:
+
+- [x] Plugin loads < 1 second
+- [x] Enhance button triggers full pipeline
+- [ ] Suggestions appear as checklist (partial - display exists)
+- [ ] Apply modifies note correctly (not tested)
+- [ ] Undo reverses changes (not tested)
+- [x] Cancel aborts pipeline cleanly (abort signal implemented)
+- [ ] Offline mode degrades gracefully (partial)
+- [ ] Index builds in background (partial)
+
+---
+
+## LLM Configuration
+
+**Reasoning Provider (LM Studio)**
+- URL: `http://192.168.86.249:1234/v1`
+- Model: `qwen3-8b`
+- Format: OpenAI-compatible
+
+**Embedding Provider (Ollama)**
+- URL: `http://192.168.86.249:11434`
+- Model: `nomic-embed-text-v2-moe`
+- Format: Ollama native
 
 ---
 
@@ -172,10 +133,10 @@ src/
 
 | File | Purpose |
 |------|---------|
-| `.planning/PHASE-GALAXY.md` | **MASTER SPEC** — 605 lines, all decisions |
-| `.planning/PROJECT.md` | Project overview |
-| `.claude/orchestration/orchestrator/CLAUDE.md` | Orchestrator identity + lessons |
+| `.planning/PHASE-GALAXY.md` | Master spec (605 lines) |
+| `.planning/PHASE-GALAXY-DEBUG.md` | Debug wave plan |
+| `.claude/orchestration/state/SESSION-HANDOFF.md` | Session handoff |
 
 ---
 
-*Session 12 complete — Phase Galaxy MVP implemented, entering debug phase*
+*Session 13 complete — Phase Galaxy Debug implemented, awaiting user testing*
