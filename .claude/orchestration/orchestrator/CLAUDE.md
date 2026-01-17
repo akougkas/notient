@@ -536,6 +536,7 @@ When CEO expresses a preference, note it in handoff for future sessions.
 7. **Dispatch validators for audits** — don't read code yourself, use validator agents
 8. **Use background watcher** — `run_in_background: true` on Bash for async waiting
 9. **Parallel validation** — dispatch multiple agents (validator, tester) concurrently for thorough review
+10. **Sync worktrees before dispatch** — run `git-prepare.sh` for ALL agents before tasks (even read-only audits)
 
 ---
 
