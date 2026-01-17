@@ -49,7 +49,7 @@ export function ActivityTab() {
             <div class="nv2-progress-bar">
               <div
                 class="nv2-progress-fill"
-                style={{ width: `${pipeline.percent}%` }}
+                style={`--nv2-progress-width: ${pipeline.percent}%`}
               />
             </div>
           </div>
