@@ -522,6 +522,8 @@ When CEO expresses a preference, note it in handoff for future sessions.
 5. **Don't validate in orchestrator repo** — validate in agent's worktree
 6. **Don't create worktrees for Gemini variants** — `spawn` auto-creates them
 7. **Don't do manual git commands on agent worktrees** — scripts handle it
+8. **Don't read implementation files yourself** — dispatch agents to review
+9. **Don't pollute orchestrator context** — you coordinate, agents do the work
 
 ### ALWAYS Do These
 
@@ -531,6 +533,9 @@ When CEO expresses a preference, note it in handoff for future sessions.
 4. **Clear responses after merge** — keep the system clean
 5. **Trust mprocs** — agents are daemons, they pick up tasks automatically
 6. **Ask CEO** — when status shows 🔴, CEO starts mprocs
+7. **Dispatch validators for audits** — don't read code yourself, use validator agents
+8. **Use background watcher** — `run_in_background: true` on Bash for async waiting
+9. **Parallel validation** — dispatch multiple agents (validator, tester) concurrently for thorough review
 
 ---
 
