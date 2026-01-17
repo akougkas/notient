@@ -43,57 +43,56 @@
 }
 
 /* =============================================================================
-   Header
+   Header (merged with tabs)
    ============================================================================= */
 
 .nv2-header {
-  padding: var(--nv2-space-md) var(--nv2-space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--nv2-space-sm) var(--nv2-space-lg);
   border-bottom: 1px solid var(--nv2-border-color);
 }
 
-.nv2-header-title {
+.nv2-header-brand {
   margin: 0;
-  font-size: 1.1em;
-  font-weight: 600;
+  font-size: 0.9em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--nv2-color-accent);
 }
 
-/* =============================================================================
-   Navigation Deck (Tabs)
-   ============================================================================= */
-
-.nv2-nav-deck {
+.nv2-header-tabs {
   display: flex;
   gap: var(--nv2-space-xs);
-  padding: var(--nv2-space-sm) var(--nv2-space-lg);
-  background: var(--nv2-bg-secondary);
-  border-bottom: 1px solid var(--nv2-border-color);
 }
 
-.nv2-nav-item {
-  flex: 1;
-  padding: var(--nv2-space-sm) var(--nv2-space-md);
+.nv2-header-tab {
+  padding: var(--nv2-space-xs) var(--nv2-space-sm);
   background: transparent;
-  border: none;
-  border-radius: var(--nv2-radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--nv2-radius-md);
   color: var(--nv2-text-muted);
-  font-size: 0.85em;
+  font-size: 0.75em;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.nv2-nav-item:hover {
+.nv2-header-tab:hover {
   background: var(--background-modifier-hover);
   color: var(--nv2-text-normal);
 }
 
-.nv2-nav-item--active {
+.nv2-header-tab--active {
   background: var(--nv2-color-accent);
+  border-color: var(--nv2-color-accent);
   color: var(--nv2-text-on-accent);
 }
 
-.nv2-nav-item--active:hover {
+.nv2-header-tab--active:hover {
   background: var(--nv2-color-accent);
+  border-color: var(--nv2-color-accent);
   color: var(--nv2-text-on-accent);
 }
 

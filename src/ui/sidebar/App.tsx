@@ -40,10 +40,11 @@ export function App() {
   return (
     <div class="nv2-app">
       <header class="nv2-header">
-        <h1 class="nv2-header-title">Notient</h1>
+        <span class="nv2-header-brand">NOTIENT</span>
+        <div class="nv2-header-tabs" role="tablist" aria-label="Sidebar navigation">
+          <NavDeck activeTab={activeTab} />
+        </div>
       </header>
-
-      <NavDeck activeTab={activeTab} />
 
       <main class="nv2-content">
         {currentTab === "vitals" && <VitalsTab activeFile={activeFile} />}

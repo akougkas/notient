@@ -18,7 +18,7 @@ const TABS: Array<{ id: SidebarTab; label: string }> = [
 
 export function NavDeck({ activeTab }: NavDeckProps) {
   return (
-    <div class="nv2-nav-deck" role="tablist" aria-label="Sidebar navigation">
+    <>
       {TABS.map((tab) => {
         const isActive = activeTab.value === tab.id;
         return (
@@ -26,7 +26,7 @@ export function NavDeck({ activeTab }: NavDeckProps) {
             key={tab.id}
             type="button"
             role="tab"
-            class={`nv2-nav-item ${isActive ? "nv2-nav-item--active" : ""}`}
+            class={`nv2-header-tab ${isActive ? "nv2-header-tab--active" : ""}`}
             aria-selected={isActive}
             onClick={() => {
               activeTab.value = tab.id;
@@ -36,6 +36,6 @@ export function NavDeck({ activeTab }: NavDeckProps) {
           </button>
         );
       })}
-    </div>
+    </>
   );
 }
