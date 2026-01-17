@@ -186,7 +186,7 @@ export async function runEnhancePipeline(
       return abortResult();
     }
 
-    eventBus.emit("enhance:complete", { noteId, suggestionCount: suggestions.length });
+    eventBus.emit("enhance:complete", { noteId, suggestionCount: suggestions.length, suggestions });
     return successResult(suggestions);
   } catch (error) {
     if (error instanceof AbortError) {

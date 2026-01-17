@@ -136,6 +136,7 @@ export interface EnhanceProgressPayload {
 export interface EnhanceCompletePayload {
   noteId: string;
   suggestionCount: number;
+  suggestions: EnhancementSuggestion[];
 }
 
 export interface EnhanceErrorPayload {

@@ -8,6 +8,7 @@ import { ObsidianFacade } from "./adapters/obsidian";
 import { Database } from "./core/db/database";
 import { EventBus } from "./core/events";
 import { kernel } from "./core/kernel";
+import { startPipelineListener } from "./core/pipeline";
 import { DEFAULT_SETTINGS, type NotientSettings } from "./types";
 import { SetupWizard } from "./ui/modals";
 import { NotientSettingsTab } from "./ui/settings/SettingsTab";
@@ -15,10 +16,15 @@ import { SidebarView, VIEW_TYPE_SIDEBAR } from "./ui/sidebar/SidebarView";
 
 export default class NotientPlugin extends Plugin {
   settings: NotientSettings = DEFAULT_SETTINGS;
+  private unsubscribePipelineListener?: () => void;
 
   async onload(): Promise<void> {
     await this.loadSettings();
     await this.initializeKernel();
+
+    // Start pipeline event listener
+    const eventBus = kernel.get("eventBus");
+    this.unsubscribePipelineListener = startPipelineListener(eventBus);
 
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => new SidebarView(leaf));
     this.addSettingTab(new NotientSettingsTab(this.app, this));
@@ -31,6 +37,7 @@ export default class NotientPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
+    this.unsubscribePipelineListener?.();
     await kernel.shutdown();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_SIDEBAR);
   }

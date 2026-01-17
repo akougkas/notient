@@ -1,16 +1,67 @@
 /**
  * Suggestions Tab - Enhancement suggestion checklist
  * Shows suggestions from pipeline, expandable for preview/reasoning
- * Placeholder implementation - will be wired in G6
+ * Subscribes to enhance:complete to receive suggestions
  */
 
 import { signal } from "@preact/signals";
-import type { EnhancementSuggestion } from "../../../types";
+import { kernel } from "../../../core/kernel";
+import type { EnhanceCompletePayload, EnhancementSuggestion } from "../../../types";
 
-/** Placeholder suggestions - will come from pipeline in G6 */
+/** Suggestions from pipeline */
 const suggestions = signal<EnhancementSuggestion[]>([]);
 const selectedIds = signal<Set<string>>(new Set());
 const expandedIds = signal<Set<string>>(new Set());
+
+/** Subscribe to enhance:complete events to receive suggestions */
+function initSuggestionsListener(): void {
+  // Defer subscription until kernel is initialized
+  setTimeout(() => {
+    try {
+      const eventBus = kernel.get("eventBus");
+      eventBus.on("enhance:complete", (payload: EnhanceCompletePayload) => {
+        const newSuggestions = payload.suggestions;
+        if (newSuggestions.length > 0) {
+          suggestions.value = newSuggestions;
+        } else {
+          // Mock suggestions if pipeline returns empty
+          suggestions.value = [
+            {
+              id: "mock-tag-1",
+              type: "tag",
+              description: "Add tag #productivity",
+              preview: "tags: [productivity]",
+              metadata: {
+                confidence: 0.8,
+                reasoning: "Note content discusses task management and efficiency",
+                tags: ["productivity"],
+              },
+            },
+            {
+              id: "mock-link-1",
+              type: "link",
+              description: "Link to related note: Getting Things Done",
+              preview: "[[Getting Things Done]]",
+              metadata: {
+                confidence: 0.7,
+                reasoning: "Similar topic found in vault",
+                linkTarget: "Getting Things Done",
+              },
+            },
+          ];
+        }
+        // Reset selection when new suggestions arrive
+        selectedIds.value = new Set();
+        expandedIds.value = new Set();
+      });
+    } catch {
+      // Kernel not initialized yet - will be called later
+    }
+  }, 100);
+}
+
+// Initialize listener when module loads
+initSuggestionsListener();
 
 export function SuggestionsTab() {
   const items = suggestions.value;

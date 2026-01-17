@@ -5,3 +5,4 @@
 
 export type { PipelineOptions, PipelineResult, PipelineInput } from "./types";
 export { runEnhancePipeline, EnhancePipeline } from "./enhancePipeline";
+export { startPipelineListener } from "./listener";
