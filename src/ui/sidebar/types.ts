@@ -38,3 +38,10 @@ export interface RecentActivityItem {
   timestamp: number;
   status: "completed" | "cancelled" | "error";
 }
+
+/** Active file info for UI display */
+export interface ActiveFileInfo {
+  path: string;
+  name: string;
+  basename: string;
+}
