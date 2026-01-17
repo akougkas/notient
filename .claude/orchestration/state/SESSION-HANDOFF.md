@@ -1,7 +1,7 @@
 # Orchestrator Session Handoff
 
 **Status**: ACTIVE HANDOFF
-**Last Updated**: 2026-01-16 (Session 10)
+**Last Updated**: 2026-01-16 (Session 12)
 
 ---
 
@@ -21,72 +21,108 @@ After CEO confirms, clear everything below the `---` line except the template.
 ## HANDOFF DATA (populated by previous session)
 
 ### Current Phase
-Phase Galaxy G1 (Foundation) - Wave 1 COMPLETE, Wave 2 READY
+**Phase Galaxy COMPLETE** - Entering Debug/Integration Wave
 
-### In-Progress Task
-**G1 Wave 2: PARALLEL-ISOLATED**
-- implementer → `src/core/events.ts` (EventBus implementation)
-- implementer-gemini → `src/core/db/schema.ts` + `database.ts` (SQLite)
+### What Was Accomplished (Session 12)
 
-Wave 2 was approved but NOT dispatched. Ready to execute.
+| Milestone | Status |
+|-----------|--------|
+| G1 Foundation (types, EventBus, SQLite, Kernel) | ✅ Complete |
+| G2 Agents (Planner, ContextBuilder, Analyst, Writer) | ✅ Complete |
+| G3 Pipeline (orchestration, abort, errors) | ✅ Complete + Optimized |
+| G4 UI (tabbed sidebar, Preact) | ✅ Complete + Lint fixes |
+| G5 Indexing (chunker, embeddings, vector) | ✅ Complete |
+| G6 Settings (wizard, commands, main.ts) | ✅ Complete |
+| Dev environment prep | ✅ |
+| First `bun run dev` | ✅ SUCCESS |
+| Lint warnings | ✅ 0 warnings |
 
-### Pending Decisions (awaiting CEO)
-None - Wave 2 approach approved (parallel-isolated)
+**Build output:**
+- styles.css: 8.4kb
+- main.js: 652.4kb
+- Copied to: /mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient
+
+### Final Audit Results (Validator)
+
+**Architecture: COMPLETE** (all G1-G6 phases implemented per PHASE-GALAXY.md)
+
+**Integration Gaps (expected - next wave):**
+1. `src/adapters/obsidian.ts` - Empty file (needs ObsidianFacade)
+2. LLM provider not integrated - agents return empty/placeholder data
+3. Web workers not implemented - embedding/vector stubs only
+4. UI not wired to pipeline - Enhance button disabled, events not connected
+5. No test suite
+
+### Commits (Session 12)
+
+```
+8f5b5ea Merge simplifier: lint fixes - complexity and a11y
+d4a4c39 Merge implementer: dev environment prep
+7e7b4d2 Merge implementer: G6 - settings, wizard, main.ts integration
+f35b59c Merge implementer: G5 - indexing, chunker, embeddings
+921c2e3 Merge simplifier: G3 pipeline optimization
+c380894 Merge implementer: G4 - tabbed sidebar UI with Preact
+76a29f1 Merge implementer: G3 - pipeline orchestration
+40f04c4 Merge implementer: G2 - 4-agent pipeline
+b5f848c Merge implementer: G1 Wave 3 - Kernel
+```
+
+### Git State
+- **Branch**: `beta-spec`
+- **HEAD**: `8f5b5ea`
+- **Uncommitted**: STATE.md, this handoff file (commit before ending)
+- **Worktrees**: All synced to latest
 
 ### Human Preferences (remembered)
 - No ceremony, substance only
 - Use scripts (git-prepare.sh, dispatch.py, watcher.py) - never manual git
 - Cleanup responses IMMEDIATELY after merge
-- Parallel dispatch order: Prepare ALL → Dispatch ALL → Start watcher
-- mprocs: CEO starts it, orchestrator just dispatches
-- Validation: In agent's worktree, not orchestrator repo
+- Parallel dispatch: Prepare ALL → Dispatch ALL → Watch
+- Claude by default, Gemini ONLY if explicitly requested
+- Validation in agent's worktree, not orchestrator repo
+- Cyclic multi-stage: implementer (new) + validator (recent) + simplifier (older)
+- Keep all agents busy - don't leave idle
+- Don't double-wait (background watcher notifies)
+- Don't read files yourself - dispatch agents
 
-### Recent Accomplishments
-| Task | Commit | Status |
-|------|--------|--------|
-| G1 Wave 1: Foundation scaffold | `5c14f3d` | ✅ Merged |
-| Build config: conditional CSS/workers | `bc7188d` | ✅ Merged |
-| Merge to beta-spec | `2b21c86` | ✅ Complete |
-| Orchestration documentation | `e4d0bc7` | ✅ Complete |
+### Orchestration Lessons (Session 12)
+Added to `.claude/orchestration/orchestrator/CLAUDE.md`:
+- Don't double-wait on background tasks
+- Don't leave agents idle - keep all 4 working
+- Cyclic multi-stage dispatching pattern
+- Sync worktrees before ALL dispatches (including read-only)
 
-### Git State
-- **Branch**: `beta-spec`
-- **HEAD**: `e4d0bc7` (docs commit)
-- **Uncommitted**: None
-- **Worktrees ready**: implementer, simplifier, validator, tester
+### Next Steps (Debug/Integration Wave)
 
-### Critical Context
-1. **Wave 1 delivered**:
-   - `src/types/index.ts` - 258 lines of foundational types
-   - `src/main.ts` - Plugin skeleton
-   - `src/core/kernel.ts`, `events.ts`, `db/database.ts`, `db/schema.ts` - stubs
-   - `src/adapters/obsidian.ts` - stub
-   - `src.old/` - archived old code
+**Priority 1: Wire Integration**
+1. Create `src/adapters/obsidian.ts` (ObsidianFacade)
+2. Connect UI to pipeline (Enhance button → runEnhancePipeline)
+3. Connect EventBus events to UI updates
 
-2. **Build system updated**: Conditionally builds CSS/workers only if they exist
+**Priority 2: LLM Integration**
+4. Implement LLM provider (LM Studio / Ollama connection)
+5. Wire agents to use actual LLM calls
+6. Test with real responses
 
-3. **Documentation overhauled**:
-   - New `README.md` in orchestration/
-   - Updated `orchestrator/CLAUDE.md` with complete flow + lessons learned
+**Priority 3: Test in Obsidian**
+7. Load plugin in Obsidian
+8. Test each Success Criteria from PHASE-GALAXY.md
+9. Debug runtime issues
 
-4. **mprocs status**: Agents showed 🔴 but worked when CEO started manually
+**Success Criteria (from PHASE-GALAXY.md):**
+- [ ] Plugin loads < 1 second
+- [ ] Enhance button triggers full pipeline
+- [ ] Suggestions appear as checklist
+- [ ] Apply modifies note correctly
+- [ ] Undo reverses changes
+- [ ] Cancel aborts pipeline cleanly
+- [ ] Offline mode degrades gracefully
+- [ ] Index builds in background
 
-### Next Steps (recommended)
-1. CEO starts mprocs (if not running)
-2. Execute Wave 2:
-   ```bash
-   # Prepare
-   .claude/agents/git-prepare.sh implementer implementer/g1-wave2-eventbus
-   uv run .claude/agents/dispatch.py spawn implementer --cli gemini
-
-   # Dispatch
-   uv run .claude/agents/dispatch.py task implementer "Implement EventBus..." --cli claude
-   uv run .claude/agents/dispatch.py task implementer-gemini "Implement SQLite..." --cli gemini
-
-   # Watch
-   uv run .claude/agents/watcher.py --roles implementer --wait-for 2 --notify --timeout 1800 &
-   ```
-3. After Wave 2: Validate → Merge → Cleanup → Wave 3
+### Files to Reference
+- `.planning/STATE.md` - Updated with Session 12 summary
+- `.planning/PHASE-GALAXY.md` - Master spec (605 lines)
+- `.claude/orchestration/orchestrator/CLAUDE.md` - Lessons learned
 
 ---
 
