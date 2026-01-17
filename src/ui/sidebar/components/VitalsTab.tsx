@@ -4,12 +4,20 @@
  * Placeholder implementation - will be wired in G6
  */
 
-export function VitalsTab() {
+import type { Signal } from "@preact/signals";
+import type { TFile } from "obsidian";
+
+interface VitalsTabProps {
+  activeFile: Signal<TFile | null>;
+}
+
+export function VitalsTab({ activeFile }: VitalsTabProps) {
+  const file = activeFile.value;
   return (
     <section class="nv2-tab nv2-vitals-tab" role="tabpanel" aria-label="Note Vitals">
       <section class="nv2-section">
         <h2 class="nv2-section-title">Note Vitals</h2>
-        <p class="nv2-section-subtitle">Open a note to see its health</p>
+        <p class="nv2-section-subtitle">{file ? file.basename : "Open a note to see its health"}</p>
       </section>
 
       <section class="nv2-section nv2-vitals-grid">
