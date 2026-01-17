@@ -182,7 +182,7 @@ function convertToSuggestions(raw: RawAnalystResponse): EnhancementSuggestion[] 
  * Analyze note context and generate enhancement suggestions.
  *
  * @param context - Built context from ContextBuilder
- * @param config - Optional abort signal
+ * @param config - Optional abort signal and LLM provider
  * @returns Array of enhancement suggestions
  */
 export async function analyze(
@@ -195,23 +195,44 @@ export async function analyze(
   }
 
   // Build prompt
-  const _prompt = buildAnalysisPrompt(context);
+  const prompt = buildAnalysisPrompt(context);
 
-  // TODO: G3 will implement LLM provider
-  // For now, stub with empty response indicating LLM not available
-  // In G3, this will call: const response = await llmProvider.complete(prompt, config);
+  // Check if LLM provider is available
+  if (!config?.llmProvider) {
+    return { success: false, error: "LLM provider not configured" };
+  }
 
-  // Stub response for typecheck/build verification
-  // This will be replaced with actual LLM call in G3
-  const stubResponse: RawAnalystResponse = { suggestions: [] };
+  try {
+    // Call LLM provider
+    const response = await config.llmProvider.complete(prompt, {
+      temperature: 0.7,
+      abortSignal: config.abortSignal,
+    });
 
-  // Parse and validate response
-  const suggestions = convertToSuggestions(stubResponse);
+    // Parse and validate response
+    const parsed = parseResponse(response);
+    if (!parsed) {
+      return {
+        success: false,
+        error: "Failed to parse LLM response as JSON",
+      };
+    }
 
-  return {
-    success: true,
-    data: suggestions,
-  };
+    const suggestions = convertToSuggestions(parsed);
+
+    return {
+      success: true,
+      data: suggestions,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { success: false, error: "Aborted" };
+    }
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "LLM request failed",
+    };
+  }
 }
 
 /**
