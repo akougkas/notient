@@ -19,12 +19,28 @@ const activeTab = signal<SidebarTab>("vitals");
 /** Active file in editor - updated by SidebarView */
 export const activeFile = signal<TFile | null>(null);
 
-/** System status - wired to EventBus in SidebarView */
+/** System status - wired to EventBus for LLM health and index events */
 const systemStatus = signal<SystemStatus>({
   connected: false,
   noteCount: 0,
   version: "0.1.0",
 });
+
+/**
+ * Update the note count from index events
+ * Called when indexing completes
+ */
+export function setNoteCount(count: number): void {
+  systemStatus.value = { ...systemStatus.value, noteCount: count };
+}
+
+/**
+ * Update connection status
+ * Called when LLM provider connects/disconnects
+ */
+export function setConnected(connected: boolean): void {
+  systemStatus.value = { ...systemStatus.value, connected };
+}
 
 /**
  * Update the active file signal from SidebarView

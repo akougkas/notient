@@ -9,6 +9,7 @@ import type { ObsidianFacade } from "../adapters/obsidian";
 import type { NotientSettings } from "../types";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events";
+import type { Indexer } from "./indexer";
 import type { LLMProvider } from "./llm";
 
 /**
@@ -30,6 +31,7 @@ export interface ServiceRegistry {
   database: Database;
   obsidianFacade: ObsidianFacade;
   llmProvider: LLMProvider;
+  indexer: Indexer;
   // Future services for Galaxy MVP:
   // planner: PlannerAgent
   // contextBuilder: ContextBuilderAgent
