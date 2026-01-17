@@ -5,6 +5,7 @@
  */
 
 import { signal } from "@preact/signals";
+import type { TFile } from "obsidian";
 import { ActivityTab } from "./components/ActivityTab";
 import { NavDeck } from "./components/NavDeck";
 import { StatusFooter } from "./components/StatusFooter";
@@ -14,6 +15,9 @@ import type { SidebarTab, SystemStatus } from "./types";
 
 /** Active tab state */
 const activeTab = signal<SidebarTab>("vitals");
+
+/** Active file in editor - updated by SidebarView */
+export const activeFile = signal<TFile | null>(null);
 
 /** System status - will be wired to EventBus in G6 */
 const systemStatus = signal<SystemStatus>({
@@ -34,7 +38,7 @@ export function App() {
       <NavDeck activeTab={activeTab} />
 
       <main class="nv2-content">
-        {currentTab === "vitals" && <VitalsTab />}
+        {currentTab === "vitals" && <VitalsTab activeFile={activeFile} />}
         {currentTab === "suggestions" && <SuggestionsTab />}
         {currentTab === "activity" && <ActivityTab />}
       </main>
