@@ -1,0 +1,45 @@
+/**
+ * Root Preact component for Notient Sidebar
+ * Tab-based layout: Vitals | Suggestions | Activity
+ * Source of truth: .planning/PHASE-GALAXY.md (Phase G4)
+ */
+
+import { signal } from "@preact/signals";
+import type { SidebarTab, SystemStatus } from "./types";
+import { NavDeck } from "./components/NavDeck";
+import { VitalsTab } from "./components/VitalsTab";
+import { SuggestionsTab } from "./components/SuggestionsTab";
+import { ActivityTab } from "./components/ActivityTab";
+import { StatusFooter } from "./components/StatusFooter";
+
+/** Active tab state */
+const activeTab = signal<SidebarTab>("vitals");
+
+/** System status - will be wired to EventBus in G6 */
+const systemStatus = signal<SystemStatus>({
+  connected: false,
+  noteCount: 0,
+  version: "0.1.0",
+});
+
+export function App() {
+  const currentTab = activeTab.value;
+
+  return (
+    <div class="nv2-app">
+      <header class="nv2-header">
+        <h1 class="nv2-header-title">Notient</h1>
+      </header>
+
+      <NavDeck activeTab={activeTab} />
+
+      <main class="nv2-content">
+        {currentTab === "vitals" && <VitalsTab />}
+        {currentTab === "suggestions" && <SuggestionsTab />}
+        {currentTab === "activity" && <ActivityTab />}
+      </main>
+
+      <StatusFooter status={systemStatus} />
+    </div>
+  );
+}
