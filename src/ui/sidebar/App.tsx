@@ -41,9 +41,9 @@ export function App() {
     <div class="nv2-app">
       <header class="nv2-header">
         <span class="nv2-header-brand">NOTIENT</span>
-        <div class="nv2-header-tabs" role="tablist" aria-label="Sidebar navigation">
+        <nav class="nv2-header-tabs" aria-label="Sidebar navigation">
           <NavDeck activeTab={activeTab} />
-        </div>
+        </nav>
       </header>
 
       <main class="nv2-content">
