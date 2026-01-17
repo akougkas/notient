@@ -5,12 +5,12 @@
  */
 
 import { signal } from "@preact/signals";
-import type { SidebarTab, SystemStatus } from "./types";
-import { NavDeck } from "./components/NavDeck";
-import { VitalsTab } from "./components/VitalsTab";
-import { SuggestionsTab } from "./components/SuggestionsTab";
 import { ActivityTab } from "./components/ActivityTab";
+import { NavDeck } from "./components/NavDeck";
 import { StatusFooter } from "./components/StatusFooter";
+import { SuggestionsTab } from "./components/SuggestionsTab";
+import { VitalsTab } from "./components/VitalsTab";
+import type { SidebarTab, SystemStatus } from "./types";
 
 /** Active tab state */
 const activeTab = signal<SidebarTab>("vitals");

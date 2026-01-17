@@ -120,7 +120,7 @@ function extractSections(lines: string[]): Section[] {
  */
 function extractParagraphs(
   sectionContent: string,
-  sectionStartLine: number
+  sectionStartLine: number,
 ): { startLine: number; endLine: number; content: string }[] {
   const lines = sectionContent.split("\n");
   const paragraphs: { startLine: number; endLine: number; content: string }[] = [];

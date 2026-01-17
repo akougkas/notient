@@ -7,7 +7,7 @@
  * - Dev mode toggle
  */
 
-import { PluginSettingTab, Setting, type App } from "obsidian";
+import { type App, PluginSettingTab, Setting } from "obsidian";
 import type NotientPlugin from "../../main";
 import type { ProviderType } from "./types";
 

@@ -6,8 +6,8 @@
 
 import type { App, Plugin } from "obsidian";
 import type { NotientSettings } from "../types";
-import { Database } from "./db/database";
-import { EventBus } from "./events";
+import type { Database } from "./db/database";
+import type { EventBus } from "./events";
 
 /**
  * Context passed to kernel during initialization.
@@ -66,10 +66,7 @@ export class Kernel {
    * @param name - Service name (must be key of ServiceRegistry)
    * @param factory - Function that creates the service instance
    */
-  register<K extends ServiceName>(
-    name: K,
-    factory: ServiceFactory<ServiceRegistry[K]>,
-  ): void {
+  register<K extends ServiceName>(name: K, factory: ServiceFactory<ServiceRegistry[K]>): void {
     if (this.instances.has(name)) {
       throw new Error(`Service '${name}' already instantiated`);
     }

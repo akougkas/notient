@@ -86,19 +86,25 @@ function buildLayer2(context: AgentContext): ContextSection | null {
 
   // Inbound links (backlinks)
   if (metadata.links.inbound.length > 0) {
-    lines.push(`Inbound Links (${metadata.links.inbound.length}): ${metadata.links.inbound.slice(0, 5).join(", ")}${metadata.links.inbound.length > 5 ? "..." : ""}`);
+    lines.push(
+      `Inbound Links (${metadata.links.inbound.length}): ${metadata.links.inbound.slice(0, 5).join(", ")}${metadata.links.inbound.length > 5 ? "..." : ""}`,
+    );
   }
 
   // Outbound links
   if (metadata.links.outbound.length > 0) {
-    lines.push(`Outbound Links (${metadata.links.outbound.length}): ${metadata.links.outbound.slice(0, 5).join(", ")}${metadata.links.outbound.length > 5 ? "..." : ""}`);
+    lines.push(
+      `Outbound Links (${metadata.links.outbound.length}): ${metadata.links.outbound.slice(0, 5).join(", ")}${metadata.links.outbound.length > 5 ? "..." : ""}`,
+    );
   }
 
   // Vitals summary
   const { vitals, maturity, origin } = metadata;
   lines.push(`Maturity: ${maturity}`);
   lines.push(`Origin: ${origin}`);
-  lines.push(`Health: ${vitals.healthScore}% (connectivity: ${vitals.connectivity}, structure: ${vitals.structure}, freshness: ${vitals.freshness})`);
+  lines.push(
+    `Health: ${vitals.healthScore}% (connectivity: ${vitals.connectivity}, structure: ${vitals.structure}, freshness: ${vitals.freshness})`,
+  );
 
   if (lines.length === 0) {
     return null;

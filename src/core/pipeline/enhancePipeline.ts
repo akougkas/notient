@@ -11,12 +11,12 @@
  */
 
 import type { AgentContext, EnhancementSuggestion, PipelineStage } from "../../types";
-import type { PipelineOptions, PipelineResult } from "./types";
-import { plan } from "../agents/planner";
-import { buildContext } from "../agents/contextBuilder";
 import { analyze } from "../agents/analyst";
-import { kernel } from "../kernel";
+import { buildContext } from "../agents/contextBuilder";
+import { plan } from "../agents/planner";
 import type { EventBus } from "../events";
+import { kernel } from "../kernel";
+import type { PipelineOptions, PipelineResult } from "./types";
 
 // =============================================================================
 // Progress Constants

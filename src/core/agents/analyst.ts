@@ -11,13 +11,8 @@
  */
 
 import type { EnhancementSuggestion, SuggestionMetadata, SuggestionType } from "../../types";
-import type {
-  AgentConfig,
-  AgentResult,
-  BuiltContext,
-  RawAnalystResponse,
-} from "./types";
 import { formatContextForLLM } from "./contextBuilder";
+import type { AgentConfig, AgentResult, BuiltContext, RawAnalystResponse } from "./types";
 
 // =============================================================================
 // Prompt Building
@@ -132,7 +127,8 @@ function convertToSuggestions(raw: RawAnalystResponse): EnhancementSuggestion[] 
     if (!item.description || !item.preview) continue;
 
     const metadata: SuggestionMetadata = {
-      confidence: typeof item.confidence === "number" ? Math.min(100, Math.max(0, item.confidence)) : 50,
+      confidence:
+        typeof item.confidence === "number" ? Math.min(100, Math.max(0, item.confidence)) : 50,
       reasoning: item.reasoning,
     };
 

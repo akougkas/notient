@@ -4,13 +4,13 @@
  */
 
 import { Notice, Plugin } from "obsidian";
-import { DEFAULT_SETTINGS, type NotientSettings } from "./types";
-import { kernel } from "./core/kernel";
-import { EventBus } from "./core/events";
 import { Database } from "./core/db/database";
-import { SidebarView, VIEW_TYPE_SIDEBAR } from "./ui/sidebar/SidebarView";
-import { NotientSettingsTab } from "./ui/settings/SettingsTab";
+import { EventBus } from "./core/events";
+import { kernel } from "./core/kernel";
+import { DEFAULT_SETTINGS, type NotientSettings } from "./types";
 import { SetupWizard } from "./ui/modals";
+import { NotientSettingsTab } from "./ui/settings/SettingsTab";
+import { SidebarView, VIEW_TYPE_SIDEBAR } from "./ui/sidebar/SidebarView";
 
 export default class NotientPlugin extends Plugin {
   settings: NotientSettings = DEFAULT_SETTINGS;
@@ -87,7 +87,8 @@ export default class NotientPlugin extends Plugin {
   }
 
   private checkFirstRun(): void {
-    const hasSettings = this.settings.reasoningProvider.baseUrl !== DEFAULT_SETTINGS.reasoningProvider.baseUrl ||
+    const hasSettings =
+      this.settings.reasoningProvider.baseUrl !== DEFAULT_SETTINGS.reasoningProvider.baseUrl ||
       this.settings.embeddingProvider.baseUrl !== DEFAULT_SETTINGS.embeddingProvider.baseUrl;
 
     if (!hasSettings) {

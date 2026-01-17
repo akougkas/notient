@@ -9,10 +9,7 @@ import type { EventName, EventPayloadMap } from "../types";
 type EventListener<T extends EventName> = (payload: EventPayloadMap[T]) => void;
 
 /** Wildcard listener receives event name + payload */
-type WildcardListener = <T extends EventName>(
-  event: T,
-  payload: EventPayloadMap[T]
-) => void;
+type WildcardListener = <T extends EventName>(event: T, payload: EventPayloadMap[T]) => void;
 
 /**
  * Type-safe pub/sub event bus

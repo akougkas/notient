@@ -29,13 +29,9 @@ export function StatusFooter({ status }: StatusFooterProps) {
         <span class={`nv2-status-indicator ${connected ? "nv2-status-indicator--connected" : ""}`}>
           ●
         </span>
-        <span class="nv2-status-text">
-          {connected ? "Ready" : "Offline"}
-        </span>
+        <span class="nv2-status-text">{connected ? "Ready" : "Offline"}</span>
         <span class="nv2-status-separator">│</span>
-        <span class="nv2-status-notes">
-          {noteCount.toLocaleString()} notes
-        </span>
+        <span class="nv2-status-notes">{noteCount.toLocaleString()} notes</span>
         <span class="nv2-status-separator">│</span>
         <span class="nv2-status-version">v{version}</span>
       </button>

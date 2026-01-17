@@ -9,9 +9,9 @@
  * - Step 4: Index options (start background index)
  */
 
-import { Modal, Setting, type App, Notice } from "obsidian";
+import { type App, Modal, Notice, Setting } from "obsidian";
 import type NotientPlugin from "../../main";
-import type { WizardStep, ConnectionTestResult, ProviderType } from "../settings/types";
+import type { ConnectionTestResult, ProviderType, WizardStep } from "../settings/types";
 
 const PROVIDER_TYPES: { value: ProviderType; label: string }[] = [
   { value: "lmstudio", label: "LM Studio" },
@@ -80,39 +80,33 @@ export class SetupWizard extends Modal {
   private renderReasoningProviderStep(containerEl: HTMLElement): void {
     const { reasoningProvider } = this.plugin.settings;
 
-    new Setting(containerEl)
-      .setName("Provider type")
-      .addDropdown((dropdown) => {
-        for (const { value, label } of PROVIDER_TYPES) {
-          dropdown.addOption(value, label);
-        }
-        dropdown.setValue(reasoningProvider.type);
-        dropdown.onChange(async (value) => {
-          this.plugin.settings.reasoningProvider.type = value as ProviderType;
+    new Setting(containerEl).setName("Provider type").addDropdown((dropdown) => {
+      for (const { value, label } of PROVIDER_TYPES) {
+        dropdown.addOption(value, label);
+      }
+      dropdown.setValue(reasoningProvider.type);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.reasoningProvider.type = value as ProviderType;
+      });
+    });
+
+    new Setting(containerEl).setName("Base URL").addText((text) => {
+      text
+        .setPlaceholder("http://localhost:1234/v1")
+        .setValue(reasoningProvider.baseUrl)
+        .onChange((value) => {
+          this.plugin.settings.reasoningProvider.baseUrl = value;
         });
-      });
+    });
 
-    new Setting(containerEl)
-      .setName("Base URL")
-      .addText((text) => {
-        text
-          .setPlaceholder("http://localhost:1234/v1")
-          .setValue(reasoningProvider.baseUrl)
-          .onChange((value) => {
-            this.plugin.settings.reasoningProvider.baseUrl = value;
-          });
-      });
-
-    new Setting(containerEl)
-      .setName("Model")
-      .addText((text) => {
-        text
-          .setPlaceholder("default")
-          .setValue(reasoningProvider.model)
-          .onChange((value) => {
-            this.plugin.settings.reasoningProvider.model = value;
-          });
-      });
+    new Setting(containerEl).setName("Model").addText((text) => {
+      text
+        .setPlaceholder("default")
+        .setValue(reasoningProvider.model)
+        .onChange((value) => {
+          this.plugin.settings.reasoningProvider.model = value;
+        });
+    });
 
     this.renderNavigation(containerEl, null, "embedding-provider");
   }
@@ -120,39 +114,33 @@ export class SetupWizard extends Modal {
   private renderEmbeddingProviderStep(containerEl: HTMLElement): void {
     const { embeddingProvider } = this.plugin.settings;
 
-    new Setting(containerEl)
-      .setName("Provider type")
-      .addDropdown((dropdown) => {
-        for (const { value, label } of PROVIDER_TYPES) {
-          dropdown.addOption(value, label);
-        }
-        dropdown.setValue(embeddingProvider.type);
-        dropdown.onChange(async (value) => {
-          this.plugin.settings.embeddingProvider.type = value as ProviderType;
+    new Setting(containerEl).setName("Provider type").addDropdown((dropdown) => {
+      for (const { value, label } of PROVIDER_TYPES) {
+        dropdown.addOption(value, label);
+      }
+      dropdown.setValue(embeddingProvider.type);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.embeddingProvider.type = value as ProviderType;
+      });
+    });
+
+    new Setting(containerEl).setName("Base URL").addText((text) => {
+      text
+        .setPlaceholder("http://localhost:11434")
+        .setValue(embeddingProvider.baseUrl)
+        .onChange((value) => {
+          this.plugin.settings.embeddingProvider.baseUrl = value;
         });
-      });
+    });
 
-    new Setting(containerEl)
-      .setName("Base URL")
-      .addText((text) => {
-        text
-          .setPlaceholder("http://localhost:11434")
-          .setValue(embeddingProvider.baseUrl)
-          .onChange((value) => {
-            this.plugin.settings.embeddingProvider.baseUrl = value;
-          });
-      });
-
-    new Setting(containerEl)
-      .setName("Model")
-      .addText((text) => {
-        text
-          .setPlaceholder("nomic-embed-text")
-          .setValue(embeddingProvider.model)
-          .onChange((value) => {
-            this.plugin.settings.embeddingProvider.model = value;
-          });
-      });
+    new Setting(containerEl).setName("Model").addText((text) => {
+      text
+        .setPlaceholder("nomic-embed-text")
+        .setValue(embeddingProvider.model)
+        .onChange((value) => {
+          this.plugin.settings.embeddingProvider.model = value;
+        });
+    });
 
     this.renderNavigation(containerEl, "reasoning-provider", "test-connections");
   }
@@ -194,14 +182,9 @@ export class SetupWizard extends Modal {
         });
       });
 
-    const canProceed =
-      this.reasoningTestResult?.success && this.embeddingTestResult?.success;
+    const canProceed = this.reasoningTestResult?.success && this.embeddingTestResult?.success;
 
-    this.renderNavigation(
-      containerEl,
-      "embedding-provider",
-      canProceed ? "index-options" : null,
-    );
+    this.renderNavigation(containerEl, "embedding-provider", canProceed ? "index-options" : null);
   }
 
   private renderIndexOptionsStep(containerEl: HTMLElement): void {
@@ -260,9 +243,7 @@ export class SetupWizard extends Modal {
     }
   }
 
-  private async testConnection(
-    type: "reasoning" | "embedding",
-  ): Promise<ConnectionTestResult> {
+  private async testConnection(type: "reasoning" | "embedding"): Promise<ConnectionTestResult> {
     const config =
       type === "reasoning"
         ? this.plugin.settings.reasoningProvider
