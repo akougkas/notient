@@ -19,7 +19,7 @@ const activeTab = signal<SidebarTab>("vitals");
 /** Active file in editor - updated by SidebarView */
 export const activeFile = signal<TFile | null>(null);
 
-/** System status - will be wired to EventBus in G6 */
+/** System status - wired to EventBus in SidebarView */
 const systemStatus = signal<SystemStatus>({
   connected: false,
   noteCount: 0,
@@ -32,6 +32,33 @@ const systemStatus = signal<SystemStatus>({
  */
 export function setActiveFile(file: TFile | null): void {
   activeFile.value = file;
+}
+
+/**
+ * Update system status signal from SidebarView
+ * Called when LLM health or index state changes
+ */
+export function setSystemStatus(updates: Partial<SystemStatus>): void {
+  systemStatus.value = { ...systemStatus.value, ...updates };
+}
+
+/** Callback to open Obsidian settings - set by SidebarView */
+let openSettingsCallback: (() => void) | null = null;
+
+/**
+ * Set the callback to open Obsidian settings
+ * Called by SidebarView on mount
+ */
+export function setOpenSettingsCallback(callback: () => void): void {
+  openSettingsCallback = callback;
+}
+
+/**
+ * Open Obsidian settings to Notient tab
+ * Called by StatusFooter on click
+ */
+export function openSettings(): void {
+  openSettingsCallback?.();
 }
 
 export function App() {

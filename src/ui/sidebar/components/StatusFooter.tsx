@@ -5,6 +5,7 @@
  */
 
 import type { Signal } from "@preact/signals";
+import { openSettings } from "../App";
 import type { SystemStatus } from "../types";
 
 interface StatusFooterProps {
@@ -15,7 +16,7 @@ export function StatusFooter({ status }: StatusFooterProps) {
   const { connected, noteCount, version } = status.value;
 
   const handleClick = () => {
-    // Will open HealthModal in G6
+    openSettings();
   };
 
   return (
