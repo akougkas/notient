@@ -59,10 +59,10 @@ export class NotientSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Base URL")
-      .setDesc("API endpoint (e.g., http://localhost:1234/v1)")
+      .setDesc("API endpoint (e.g., http://192.168.86.249:1234/v1)")
       .addText((text) => {
         text
-          .setPlaceholder("http://localhost:1234/v1")
+          .setPlaceholder("http://192.168.86.249:1234/v1")
           .setValue(reasoningProvider.baseUrl)
           .onChange(async (value) => {
             this.plugin.settings.reasoningProvider.baseUrl = value;
@@ -75,7 +75,7 @@ export class NotientSettingsTab extends PluginSettingTab {
       .setDesc("Model name or identifier")
       .addText((text) => {
         text
-          .setPlaceholder("default")
+          .setPlaceholder("qwen3-8b")
           .setValue(reasoningProvider.model)
           .onChange(async (value) => {
             this.plugin.settings.reasoningProvider.model = value;
@@ -119,10 +119,10 @@ export class NotientSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Base URL")
-      .setDesc("API endpoint (e.g., http://localhost:11434)")
+      .setDesc("API endpoint (e.g., http://192.168.86.249:11434)")
       .addText((text) => {
         text
-          .setPlaceholder("http://localhost:11434")
+          .setPlaceholder("http://192.168.86.249:11434")
           .setValue(embeddingProvider.baseUrl)
           .onChange(async (value) => {
             this.plugin.settings.embeddingProvider.baseUrl = value;
@@ -135,7 +135,7 @@ export class NotientSettingsTab extends PluginSettingTab {
       .setDesc("Embedding model name")
       .addText((text) => {
         text
-          .setPlaceholder("nomic-embed-text")
+          .setPlaceholder("nomic-embed-text-v2-moe")
           .setValue(embeddingProvider.model)
           .onChange(async (value) => {
             this.plugin.settings.embeddingProvider.model = value;

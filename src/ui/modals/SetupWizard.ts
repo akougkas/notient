@@ -92,7 +92,7 @@ export class SetupWizard extends Modal {
 
     new Setting(containerEl).setName("Base URL").addText((text) => {
       text
-        .setPlaceholder("http://localhost:1234/v1")
+        .setPlaceholder("http://192.168.86.249:1234/v1")
         .setValue(reasoningProvider.baseUrl)
         .onChange((value) => {
           this.plugin.settings.reasoningProvider.baseUrl = value;
@@ -101,7 +101,7 @@ export class SetupWizard extends Modal {
 
     new Setting(containerEl).setName("Model").addText((text) => {
       text
-        .setPlaceholder("default")
+        .setPlaceholder("qwen3-8b")
         .setValue(reasoningProvider.model)
         .onChange((value) => {
           this.plugin.settings.reasoningProvider.model = value;
@@ -126,7 +126,7 @@ export class SetupWizard extends Modal {
 
     new Setting(containerEl).setName("Base URL").addText((text) => {
       text
-        .setPlaceholder("http://localhost:11434")
+        .setPlaceholder("http://192.168.86.249:11434")
         .setValue(embeddingProvider.baseUrl)
         .onChange((value) => {
           this.plugin.settings.embeddingProvider.baseUrl = value;
@@ -135,7 +135,7 @@ export class SetupWizard extends Modal {
 
     new Setting(containerEl).setName("Model").addText((text) => {
       text
-        .setPlaceholder("nomic-embed-text")
+        .setPlaceholder("nomic-embed-text-v2-moe")
         .setValue(embeddingProvider.model)
         .onChange((value) => {
           this.plugin.settings.embeddingProvider.model = value;
