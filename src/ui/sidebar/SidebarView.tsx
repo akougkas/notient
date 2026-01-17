@@ -7,13 +7,17 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { render } from "preact";
 import { kernel } from "../../core/kernel";
-import { App, setActiveFile } from "./App";
+import { checkLLMHealth } from "../../core/llm/healthCheck";
+import type { IndexCompletePayload, IndexProgressPayload } from "../../types";
+import { App, setActiveFile, setOpenSettingsCallback, setSystemStatus } from "./App";
 
 export const VIEW_TYPE_SIDEBAR = "notient-sidebar";
 
 export class SidebarView extends ItemView {
   private preactRoot: HTMLElement | null = null;
   private unsubscribeActiveLeaf: (() => void) | null = null;
+  private unsubscribeIndexComplete: (() => void) | null = null;
+  private unsubscribeIndexProgress: (() => void) | null = null;
 
   getViewType(): string {
     return VIEW_TYPE_SIDEBAR;
@@ -42,6 +46,36 @@ export class SidebarView extends ItemView {
     // Set initial active file
     setActiveFile(obsidianFacade.getActiveFile());
 
+    // Subscribe to EventBus events for status updates
+    const eventBus = kernel.get("eventBus");
+
+    const handleIndexComplete = (payload: IndexCompletePayload) => {
+      setSystemStatus({ noteCount: payload.noteCount });
+    };
+    eventBus.on("index:complete", handleIndexComplete);
+    this.unsubscribeIndexComplete = () => eventBus.off("index:complete", handleIndexComplete);
+
+    const handleIndexProgress = (_payload: IndexProgressPayload) => {
+      // Progress updates could be used for UI feedback in future
+    };
+    eventBus.on("index:progress", handleIndexProgress);
+    this.unsubscribeIndexProgress = () => eventBus.off("index:progress", handleIndexProgress);
+
+    // Check LLM health on mount
+    const settings = kernel.getContext().settings;
+    const health = await checkLLMHealth(settings);
+    setSystemStatus({ connected: health.reasoning && health.embedding });
+
+    // Set callback to open Obsidian settings to Notient tab
+    setOpenSettingsCallback(() => {
+      // Use type assertion for internal Obsidian API
+      const app = this.app as unknown as {
+        setting: { open: () => void; openTabById: (id: string) => void };
+      };
+      app.setting.open();
+      app.setting.openTabById("notient");
+    });
+
     render(<App />, this.preactRoot);
   }
 
@@ -50,6 +84,16 @@ export class SidebarView extends ItemView {
     if (this.unsubscribeActiveLeaf) {
       this.unsubscribeActiveLeaf();
       this.unsubscribeActiveLeaf = null;
+    }
+
+    // Unsubscribe from EventBus events
+    if (this.unsubscribeIndexComplete) {
+      this.unsubscribeIndexComplete();
+      this.unsubscribeIndexComplete = null;
+    }
+    if (this.unsubscribeIndexProgress) {
+      this.unsubscribeIndexProgress();
+      this.unsubscribeIndexProgress = null;
     }
 
     if (this.preactRoot) {
