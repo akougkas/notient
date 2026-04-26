@@ -15,6 +15,9 @@ import { HealthMonitor } from "./core/services/healthMonitor";
 import { VaultLock, type VaultLockHandle } from "./core/services/vaultLock";
 import { NotientSettingsTab } from "./core/settings/SettingsTab";
 import { SettingsService } from "./core/settings/settingsService";
+import { AwakenVaultModal } from "./ui/onboarding/AwakenVaultModal";
+import { AwakenRunner } from "./ui/onboarding/awakenRunner";
+import { GraphCanvasModel } from "./ui/onboarding/graphCanvas";
 import { NotientSidebarView, VIEW_TYPE_NOTIENT } from "./ui/sidebar/SidebarView";
 
 const PLUGIN_DIR = ".obsidian/plugins/notient";
@@ -163,6 +166,110 @@ export default class NotientPlugin extends Plugin {
         }
       }),
     );
+
+    const openAwakenModal = (): void => {
+      const canvasModel = new GraphCanvasModel({ width: 720, height: 420 });
+      let countersEl: HTMLElement | null = null;
+      let canvasEl: HTMLCanvasElement | null = null;
+      let rafHandle = 0;
+
+      const renderCounters = (): void => {
+        if (!countersEl) return;
+        const c = canvasModel.counts();
+        countersEl.empty();
+        const pairs: Array<[string, number]> = [
+          ["Notes", c.notes],
+          ["Concepts", c.concepts],
+          ["Claims", c.claims],
+          ["Questions", c.questions],
+          ["Edges", c.edges],
+        ];
+        for (const [label, value] of pairs) {
+          const stat = countersEl.createDiv({ cls: "stat" });
+          stat.createSpan({ cls: "label", text: label });
+          stat.createSpan({ cls: "value", text: String(value) });
+        }
+      };
+
+      const tick = (): void => {
+        if (canvasEl) {
+          const ctx = canvasEl.getContext("2d");
+          if (ctx) canvasModel.draw(ctx, Date.now());
+        }
+        rafHandle = requestAnimationFrame(tick);
+      };
+
+      const nodeOff = this.bus.on("indexer:node-added", (event) => {
+        canvasModel.addNode({
+          id: event.nodeId,
+          type: event.nodeType,
+          label: event.label,
+        });
+        renderCounters();
+      });
+      const edgeOff = this.bus.on("indexer:edge-added", (event) => {
+        canvasModel.addEdge({
+          id: event.edgeId,
+          sourceId: event.sourceId,
+          targetId: event.targetId,
+          type: event.edgeType,
+        });
+        renderCounters();
+      });
+
+      const runner = new AwakenRunner({
+        listMarkdown: () => facade.listMarkdown(),
+        indexNote: this.indexOne,
+        batchSize: 10,
+      });
+
+      const modal = new AwakenVaultModal(this.app, {
+        start: () =>
+          runner.start({
+            onProgress: () => renderCounters(),
+            onComplete: async (c) => {
+              const next = { ...this.settings.get(), awakenedAt: Date.now() };
+              await this.settings.update(next);
+              new Notice(
+                `Notient awakened: ${c.totalIndexed} notes in ${(c.durationMs / 1000).toFixed(1)}s`,
+              );
+            },
+            onError: (e) => console.warn("[Notient] awaken error", e),
+          }),
+        stop: () => runner.stop(),
+        isRunning: () => runner.isRunning(),
+        totalNotes: () => facade.listMarkdown().length,
+        onAttachCanvas: (canvas) => {
+          canvasEl = canvas;
+          tick();
+        },
+        onAttachCounters: (el) => {
+          countersEl = el;
+          renderCounters();
+        },
+      });
+
+      modal.onClose = ((original) =>
+        function (this: AwakenVaultModal): void {
+          cancelAnimationFrame(rafHandle);
+          nodeOff();
+          edgeOff();
+          original.call(this);
+        })(modal.onClose.bind(modal));
+
+      modal.open();
+    };
+
+    this.addCommand({
+      id: "awaken-vault",
+      name: "Notient: Awaken Vault",
+      callback: openAwakenModal,
+    });
+
+    if (current.awakenedAt === null) {
+      // Defer to next tick so the workspace finishes loading.
+      setTimeout(openAwakenModal, 800);
+    }
 
     this.registerView(VIEW_TYPE_NOTIENT, (leaf) => new NotientSidebarView(leaf));
     this.addRibbonIcon("brain-circuit", "Open Notient", async () => {
