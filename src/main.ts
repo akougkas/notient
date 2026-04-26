@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFile } from "obsidian";
 import { ObsidianFacade } from "./adapters/obsidianFacade";
 import { Database } from "./core/db/database";
 import { EventBus } from "./core/events/eventBus";
@@ -91,6 +91,31 @@ export default class NotientPlugin extends Plugin {
 
     health.start();
 
+    this.registerEvent(
+      this.app.vault.on("modify", async (file) => {
+        if (!(file instanceof TFile)) return;
+        if (!file.path.endsWith(".md")) return;
+        try {
+          const contents = await facade.read(file.path);
+          const sha = await sha256(contents);
+          const now = Date.now();
+          database.run(
+            `INSERT INTO notes (path, sha, word_count, indexed_at, updated_at)
+             VALUES (?,?,?,?,?)
+             ON CONFLICT(path) DO UPDATE SET sha = excluded.sha,
+               word_count = excluded.word_count,
+               updated_at = excluded.updated_at;`,
+            [file.path, sha, countWords(contents), now, now],
+          );
+          await database.persist();
+          this.bus.emit({ type: "vault:note-saved", path: file.path, sha });
+          NotientSidebarView.updateFooter(health.current(), facade.listMarkdown().length);
+        } catch (error) {
+          console.error("[Notient] save handler error", error);
+        }
+      }),
+    );
+
     this.registerView(VIEW_TYPE_NOTIENT, (leaf) => new NotientSidebarView(leaf));
     this.addRibbonIcon("brain-circuit", "Open Notient", async () => {
       const { workspace } = this.app;
@@ -132,4 +157,16 @@ export default class NotientPlugin extends Plugin {
       }
     }
   }
+}
+
+async function sha256(input: string): Promise<string> {
+  const buffer = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
