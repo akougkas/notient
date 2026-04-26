@@ -50,6 +50,7 @@ export interface SearchAppActions {
   viewAsCanvas: () => void;
   saveQuery: () => void;
   newChatFromResults: () => void;
+  openLink: (linkText: string) => void;
 }
 
 export const searchActions = signal<SearchAppActions | null>(null);

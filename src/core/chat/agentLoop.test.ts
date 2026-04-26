@@ -367,7 +367,7 @@ describe("runAgentTurn", () => {
     expect(provider.requests.length).toBe(2);
   });
 
-  test("write-gated tool reroutes through the approval gate", async () => {
+  test("write-gated tools are invoked once and own their approval preview", async () => {
     const provider = new ScriptedProvider([
       {
         toolCalls: [
@@ -380,7 +380,13 @@ describe("runAgentTurn", () => {
       },
       { contentChunks: ["Created."], finalContent: "Created." },
     ]);
-    const registry = makeRegistry([writeTool(async () => ({ created: true }))]);
+    let invocations = 0;
+    const registry = makeRegistry([
+      writeTool(async () => {
+        invocations += 1;
+        return { created: true };
+      }),
+    ]);
     const { approvalGate, pending } = makeApprovalGate();
     const generator = runAgentTurn(
       {
@@ -400,18 +406,12 @@ describe("runAgentTurn", () => {
       },
     );
     const events: AgentLoopEvent[] = [];
-    let approvalEmitted = false;
     for await (const event of generator) {
       events.push(event);
-      if (!approvalEmitted && event.type === "loop:approval-pending") {
-        approvalEmitted = true;
-        // Approve once the agent loop hands the call to the gate.
-        approvalGate.resolve(event.call.id, { approved: true });
-      }
     }
-    expect(approvalEmitted).toBe(true);
-    expect(pending.length).toBe(1);
-    expect(pending[0].name).toBe("notes.create");
+    expect(invocations).toBe(1);
+    expect(pending.length).toBe(0);
+    expect(events.some((event) => event.type === "loop:approval-pending")).toBe(false);
     const done = events.find((event) => event.type === "loop:done");
     expect(done && done.type === "loop:done" ? done.finalMessage.content : "").toBe("Created.");
   });

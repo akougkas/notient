@@ -2,8 +2,9 @@
  * Iterative tool-call loop for a single chat turn.
  *
  * Each round calls the LLM with the running message buffer plus the tool
- * catalog. If the response carries tool calls, they are routed through the
- * approval gate (write-gated tools only) and dispatched via the registry.
+ * catalog. If the response carries tool calls, they are dispatched via the
+ * registry. Write tools own their approval gate requests so they can show
+ * precise markdown previews before writing.
  * Tool results join the buffer and the next round begins. The loop ends on
  * a text-only response or when the round cap is reached.
  *
@@ -223,13 +224,6 @@ async function* dispatchSingleCall(
     };
   }
   try {
-    if (options.toolRegistry.isWriteGated(call.name)) {
-      const gateOutcome = yield* awaitApproval(context, call);
-      if (gateOutcome.rejected) {
-        yield { type: "loop:tool-result", result: gateOutcome.result };
-        return { result: gateOutcome.result, aborted: false };
-      }
-    }
     const start = now();
     const data = await options.toolRegistry.invoke(call.name, call.args, input.signal);
     const success: ToolResult = {
@@ -245,38 +239,6 @@ async function* dispatchSingleCall(
     yield { type: "loop:tool-result", result: failure };
     return { result: failure, aborted: isAbortError(error) };
   }
-}
-
-interface ApprovalOutcome {
-  rejected: boolean;
-  result: ToolResult;
-}
-
-async function* awaitApproval(
-  context: RoundContext,
-  call: ToolCall,
-): AsyncGenerator<AgentLoopEvent, ApprovalOutcome> {
-  // Kick off the request first so the gate registers the pending entry before
-  // we hand the approval-pending event to the consumer. The consumer can then
-  // call approvalGate.resolve(callId, ...) and the awaited promise resumes.
-  const decisionPromise = context.options.approvalGate.request(
-    call,
-    context.input.conversation.approvalMode,
-    JSON.stringify(call.args),
-    context.input.signal,
-  );
-  yield { type: "loop:approval-pending", call };
-  const decision = await decisionPromise;
-  if (!decision.approved) {
-    return {
-      rejected: true,
-      result: makeFailureResult(call.id, decision.reason ?? "rejected"),
-    };
-  }
-  return {
-    rejected: false,
-    result: { callId: call.id, status: "ok", data: null, durationMs: 0 },
-  };
 }
 
 function buildDoneEvent(

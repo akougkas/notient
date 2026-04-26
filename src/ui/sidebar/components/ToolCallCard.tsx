@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { ToolCall, ToolResult } from "../../../core/chat/types";
+import { chatActions } from "../chat-state";
 
 export interface ToolCallCardProps {
   call: ToolCall;
@@ -14,8 +15,10 @@ export interface ToolCallCardProps {
  */
 export function ToolCallCard({ call, result }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const actions = chatActions.value;
   const status = resolveStatus(result);
   const duration = result ? `${result.durationMs}ms` : "...";
+  const historyId = readHistoryId(result);
   return (
     <article class={`notient-chat-tool notient-chat-tool--${status}`} data-call-id={call.id}>
       <button
@@ -30,6 +33,17 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
         <span class="notient-chat-tool__name">{call.name}</span>
         <span class="notient-chat-tool__duration">{duration}</span>
       </button>
+      {historyId ? (
+        <button
+          type="button"
+          class="notient-chat-tool__undo"
+          onClick={() => {
+            void actions?.undoLastWrite(historyId);
+          }}
+        >
+          Auto-approved · undo
+        </button>
+      ) : null}
       {expanded ? (
         <div class="notient-chat-tool__body">
           <h5 class="notient-chat-tool__heading">Arguments</h5>
@@ -40,6 +54,15 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
       ) : null}
     </article>
   );
+}
+
+function readHistoryId(result: ToolResult | undefined): string | null {
+  if (!result || result.status !== "ok") return null;
+  if (!result.data || typeof result.data !== "object") return null;
+  const historyId = (result.data as Record<string, unknown>).historyId;
+  if (typeof historyId === "number" && Number.isFinite(historyId)) return String(historyId);
+  if (typeof historyId === "string" && historyId.length > 0) return historyId;
+  return null;
 }
 
 function resolveStatus(result: ToolResult | undefined): "pending" | "ok" | "error" {

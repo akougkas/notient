@@ -67,8 +67,8 @@ export class HistoryService {
       id: row.id,
       kind: row.kind as HistoryKind,
       target: row.target,
-      before: row.before === null ? null : (JSON.parse(row.before) as unknown),
-      after: row.after === null ? null : (JSON.parse(row.after) as unknown),
+      before: parseHistoryPayload(row.before),
+      after: parseHistoryPayload(row.after),
       createdAt: row.created_at,
     }));
   }
@@ -93,8 +93,8 @@ export class HistoryService {
     if (!inverter) {
       return { ok: false, error: `no inverter for ${kind}` };
     }
-    const before = raw.before === null ? null : (JSON.parse(raw.before) as unknown);
-    const after = raw.after === null ? null : (JSON.parse(raw.after) as unknown);
+    const before = parseHistoryPayload(raw.before);
+    const after = parseHistoryPayload(raw.after);
     try {
       await inverter(raw.target, before, after);
       this.db.run("DELETE FROM history WHERE id = ?;", [historyId]);
@@ -140,5 +140,14 @@ export class HistoryService {
       );
     }
     await this.db.persist();
+  }
+}
+
+function parseHistoryPayload(raw: string | null): unknown | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
   }
 }

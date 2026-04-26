@@ -6,11 +6,13 @@ import type {
   RelatedRelation,
   RelationKind,
 } from "../graph/nativeGraphBridge";
+import type { RecordHistoryInput } from "../history/types";
 
 export interface ApprovalServiceOptions {
   db: Database;
   bus: EventBus;
   bridge?: NativeGraphBridge;
+  recordHistory?: (input: RecordHistoryInput) => Promise<number>;
 }
 
 export interface PendingEdge {
@@ -76,8 +78,11 @@ export class ApprovalService {
       confidence: number;
       agent: string;
       evidence: string;
+      rationale: string | null;
+      created_at: number;
     }>(
-      "SELECT id, type, source_id, target_id, confidence, agent, evidence FROM staging_edges WHERE id = ? AND decision IS NULL;",
+      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
+       FROM staging_edges WHERE id = ? AND decision IS NULL;`,
       [id],
     )[0];
     if (!row) return;
@@ -104,6 +109,22 @@ export class ApprovalService {
       );
     });
     await this.opts.db.persist();
+    await this.opts.recordHistory?.({
+      kind: "edge.approve",
+      target: id,
+      before: {
+        id: row.id,
+        type: row.type,
+        source_id: row.source_id,
+        target_id: row.target_id,
+        confidence: row.confidence,
+        agent: row.agent,
+        evidence: row.evidence,
+        rationale: row.rationale,
+        created_at: row.created_at,
+      },
+      after: { id: liveId },
+    });
     if (this.opts.bridge) {
       const sourcePath = this.resolveNotePath(row.source_id);
       const targetPath = this.resolveNotePath(row.target_id);
@@ -126,8 +147,40 @@ export class ApprovalService {
   }
 
   async rejectEdge(id: string): Promise<void> {
+    const row = this.opts.db.query<{
+      id: string;
+      type: string;
+      source_id: string;
+      target_id: string;
+      confidence: number;
+      agent: string;
+      evidence: string;
+      rationale: string | null;
+      created_at: number;
+    }>(
+      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
+       FROM staging_edges WHERE id = ? AND decision IS NULL;`,
+      [id],
+    )[0];
+    if (!row) return;
     this.opts.db.run("DELETE FROM staging_edges WHERE id = ?;", [id]);
     await this.opts.db.persist();
+    await this.opts.recordHistory?.({
+      kind: "edge.reject",
+      target: id,
+      before: {
+        id: row.id,
+        type: row.type,
+        source_id: row.source_id,
+        target_id: row.target_id,
+        confidence: row.confidence,
+        agent: row.agent,
+        evidence: row.evidence,
+        rationale: row.rationale,
+        created_at: row.created_at,
+      },
+      after: null,
+    });
     this.opts.bus.emit({ type: "approval:decided", kind: "edge", id, decision: "rejected" });
   }
 

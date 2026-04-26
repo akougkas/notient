@@ -52,6 +52,16 @@ describe("ChatTab", () => {
     expect(html).toContain("notient-chat-header");
     expect(html).toContain("Daily review");
     expect(html).toContain("25%");
+    expect(html).toContain("Safe");
+    expect(html).toContain("notient-chat-header__mode--safe");
+  });
+
+  test("renders yolo approval mode toggle state", () => {
+    resetChatState();
+    activeConversation.value = buildConversation({ approvalMode: "yolo" });
+    const html = render(<ChatTab />);
+    expect(html).toContain("Yolo");
+    expect(html).toContain("notient-chat-header__mode--yolo");
   });
 
   test("shows the drawer when drawerOpen is true", () => {

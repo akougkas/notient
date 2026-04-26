@@ -1,3 +1,4 @@
+import { mergeFrontmatter } from "../chat/tools/notes";
 import type { Database } from "../db/database";
 import { freshness } from "./freshness";
 import type {
@@ -10,6 +11,12 @@ import type {
 
 export interface VitalsFacade {
   updateFrontmatter(path: string, patch: Record<string, unknown>): Promise<void>;
+  readNote?: (path: string) => Promise<string>;
+  writeNote?: (path: string, content: string) => Promise<void>;
+}
+
+export interface VitalsEchoGuardHook {
+  mark(path: string, sha: string): void;
 }
 
 export interface VitalsServiceOptions {
@@ -17,6 +24,8 @@ export interface VitalsServiceOptions {
   now: () => number;
   settings: () => VitalsSettings;
   facade: VitalsFacade;
+  echoGuard?: VitalsEchoGuardHook;
+  hash?: (content: string) => Promise<string>;
 }
 
 interface NoteRow {
@@ -91,7 +100,7 @@ export class VitalsService {
     ]);
     await this.options.db.persist();
     if (this.options.settings().writeToFrontmatter) {
-      await this.options.facade.updateFrontmatter(notePath, {
+      await this.persistFrontmatter(notePath, {
         notient: {
           health: round(snapshot.health, 3),
           freshness: round(snapshot.freshness, 3),
@@ -101,6 +110,26 @@ export class VitalsService {
         },
       });
     }
+  }
+
+  private async persistFrontmatter(
+    notePath: string,
+    patch: Record<string, unknown>,
+  ): Promise<void> {
+    const readNote = this.options.facade.readNote;
+    const writeNote = this.options.facade.writeNote;
+    const echoGuard = this.options.echoGuard;
+    const hash = this.options.hash;
+    if (!readNote || !writeNote || !echoGuard || !hash) {
+      await this.options.facade.updateFrontmatter(notePath, patch);
+      return;
+    }
+    const before = await readNote(notePath);
+    const next = mergeFrontmatter(before, patch);
+    if (next === before) return;
+    const sha = await hash(next);
+    echoGuard.mark(notePath, sha);
+    await writeNote(notePath, next);
   }
 }
 

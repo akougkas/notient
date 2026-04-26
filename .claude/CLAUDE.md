@@ -17,8 +17,8 @@
 | Build | esbuild |
 | Lint | Biome |
 | UI | Preact + @preact/signals |
-| Reasoning LLM | LM Studio |
-| Embedding LLM | Ollama |
+| Reasoning LLM | mini llama-server (OpenAI-compatible) |
+| Embedding LLM | mini Ollama |
 | Vector Store | HNSW (WASM) |
 
 ---

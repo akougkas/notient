@@ -98,6 +98,16 @@ export function ChatTab() {
         </span>
         <button
           type="button"
+          class={`notient-chat-header__mode notient-chat-header__mode--${conversation.approvalMode}`}
+          aria-label="Toggle chat approval mode"
+          onClick={() => {
+            void actions?.toggleYolo();
+          }}
+        >
+          {conversation.approvalMode === "yolo" ? "Yolo" : "Safe"}
+        </button>
+        <button
+          type="button"
           class="notient-chat-header__new"
           aria-label="New chat"
           onClick={() => {

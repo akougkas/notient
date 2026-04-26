@@ -179,4 +179,33 @@ describe("VitalsService", () => {
     expect(facade.frontmatterUpdates[0].path).toBe("/a.md");
     expect(facade.frontmatterUpdates[0].patch).toMatchObject({ notient: expect.any(Object) });
   });
+
+  test("persistSnapshot marks EchoGuard before guarded frontmatter write", async () => {
+    const db = await freshDb();
+    seedNote(db, { path: "/a.md", words: 100 });
+    const order: string[] = [];
+    let body = "# A\n";
+    const service = new VitalsService({
+      db,
+      now: () => 1,
+      settings: () => ({ ...settings, writeToFrontmatter: true }),
+      facade: {
+        updateFrontmatter: async () => {
+          throw new Error("guarded path should not call updateFrontmatter");
+        },
+        readNote: async () => body,
+        writeNote: async (_path, content) => {
+          order.push("write");
+          body = content;
+        },
+      },
+      echoGuard: {
+        mark: () => order.push("mark"),
+      },
+      hash: async (content) => `sha-${content.length}`,
+    });
+    await service.persistSnapshot("/a.md");
+    expect(order).toEqual(["mark", "write"]);
+    expect(body).toContain("notient:");
+  });
 });

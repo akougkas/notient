@@ -83,6 +83,7 @@ function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
     approvalMode: () => mode,
     recordHistory: async (record) => {
       history.push(record);
+      return history.length;
     },
     generateCallId: () => {
       callIdCounter += 1;
@@ -304,6 +305,16 @@ describe("notes.update_frontmatter", () => {
     expect(out).toBe("---\nfoo: bar\n---\nbody only");
   });
 
+  test("deep-merges inline notient objects and appends relation arrays idempotently", () => {
+    const before = '---\nnotient: {"health":0.5,"contradicts":["[[A]]"]}\n---\nbody\n';
+    const out = mergeFrontmatter(before, {
+      notient: { freshness: 0.9, contradicts: ["[[A]]", "[[B]]"] },
+    });
+    expect(out).toBe(
+      '---\nnotient: {"health":0.5,"contradicts":["[[A]]","[[B]]"],"freshness":0.9}\n---\nbody\n',
+    );
+  });
+
   test("validate rejects non-object patches", () => {
     const harness = newHarness("yolo");
     const tool = makeUpdateFrontmatterTool(harness.context);
@@ -317,12 +328,13 @@ describe("makeHistoryRecorder", () => {
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
     await db.init();
     const recorder = makeHistoryRecorder(db, () => 999);
-    await recorder({
+    const id = await recorder({
       kind: "notes.create",
       target: "/n.md",
       before: null,
       after: "body",
     });
+    expect(id).toBe(1);
     const rows = db.query<{
       kind: string;
       target: string;
@@ -331,7 +343,13 @@ describe("makeHistoryRecorder", () => {
       created_at: number;
     }>("SELECT kind, target, before, after, created_at FROM history;");
     expect(rows).toEqual([
-      { kind: "notes.create", target: "/n.md", before: null, after: "body", created_at: 999 },
+      {
+        kind: "notes.create",
+        target: "/n.md",
+        before: null,
+        after: JSON.stringify("body"),
+        created_at: 999,
+      },
     ]);
   });
 });

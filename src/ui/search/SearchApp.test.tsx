@@ -53,10 +53,17 @@ describe("SearchApp", () => {
     resetSearchState();
     searchSynthesis.value = null;
     searchHits.value = [fakeHit("notes/a.md", "matched body", 0.42)];
+    searchResult.value = {
+      query: "matched",
+      mode: "balanced",
+      hits: searchHits.value,
+      durationMs: 5,
+    };
     const html = render(<SearchApp />);
     expect(html).toContain("notes/a.md");
     expect(html).toContain("matched body");
     expect(html).toContain("notient-result-row");
+    expect(html).toContain("View as canvas");
   });
 
   test("highlights query terms in the preview pane", () => {

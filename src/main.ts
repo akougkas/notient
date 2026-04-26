@@ -5,6 +5,7 @@ import { Linker } from "./core/agents/linker";
 import { MaturityAdvancer } from "./core/agents/maturityAdvancer";
 import { Synthesizer } from "./core/agents/synthesizer";
 import { ApprovalService } from "./core/approvals/approvalService";
+import { generateSynthesisCanvas } from "./core/canvas/canvasGenerator";
 import { ApprovalGate } from "./core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "./core/chat/chatService";
 import { ContextManager } from "./core/chat/contextManager";
@@ -75,11 +76,14 @@ import { AwakenVaultModal } from "./ui/onboarding/AwakenVaultModal";
 import { AwakenRunner } from "./ui/onboarding/awakenRunner";
 import { GraphCanvasModel } from "./ui/onboarding/graphCanvas";
 import { SearchView, VIEW_TYPE_NOTIENT_SEARCH } from "./ui/search/SearchView";
-import { CanvasFromResults } from "./ui/search/canvasFromResults";
+import { CanvasFromResults, makeSlug } from "./ui/search/canvasFromResults";
 import {
   type SearchAppActions,
+  cancelDispatch as cancelSearchDispatch,
+  dispatchSearch,
   pushHistory as pushSearchUiHistory,
   searchHistory as searchHistoryState,
+  searchMode as searchModeState,
   searchQuery as searchQueryState,
   searchResult as searchResultState,
 } from "./ui/search/state";
@@ -101,7 +105,11 @@ import {
   pinnedContext as chatPinnedContext,
   setChatRunner,
 } from "./ui/sidebar/chat-state";
-import { streamActions, streamItemsState } from "./ui/sidebar/components/StreamTab";
+import {
+  focusedProposalIdState,
+  streamActions,
+  streamItemsState,
+} from "./ui/sidebar/components/StreamTab";
 import { vitalsActions, vitalsSnapshotState } from "./ui/sidebar/components/VitalsTab";
 import { setActiveTab } from "./ui/sidebar/state";
 
@@ -340,17 +348,26 @@ export default class NotientPlugin extends Plugin {
     // (3) Native graph bridge. Wires approved LINKS_TO + typed-relation edges
     // back into note bodies / frontmatter so Obsidian's native graph view
     // re-renders without a custom GraphView.
+    const historyServiceRef: { current: HistoryService | null } = { current: null };
+    const recordHistory = (input: Parameters<HistoryService["record"]>[0]): Promise<number> => {
+      if (!historyServiceRef.current) {
+        throw new Error("HistoryService not initialized");
+      }
+      return historyServiceRef.current.record(input);
+    };
     const nativeGraphBridge = new NativeGraphBridge({
       facade,
       echoGuard: this.echoGuard,
       hash: sha256,
       settings: () => this.settings.get().nativeGraph,
+      recordHistory,
     });
 
     const approvalService = new ApprovalService({
       db: database,
       bus: this.bus,
       bridge: nativeGraphBridge,
+      recordHistory,
     });
 
     const coAuthor = new CoAuthorService({
@@ -398,6 +415,8 @@ export default class NotientPlugin extends Plugin {
       now: () => Date.now(),
       settings: () => this.settings.get().vitals,
       facade,
+      echoGuard: this.echoGuard,
+      hash: sha256,
     });
 
     // (5) Search pipeline. Reranker shares the chat model on mini.
@@ -555,6 +574,7 @@ export default class NotientPlugin extends Plugin {
       },
       now: () => Date.now(),
     });
+    historyServiceRef.current = historyService;
     await historyService.prune();
 
     // (8) Approval gate for chat write tools. Pending approvals surface in
@@ -580,7 +600,7 @@ export default class NotientPlugin extends Plugin {
 
     // (9) Chat tool registry. Read-only tools first, then write-gated.
     const toolRegistry = new ToolRegistry();
-    const recordHistory = makeHistoryRecorder(database, () => Date.now());
+    const recordNoteHistory = makeHistoryRecorder(database, () => Date.now());
     toolRegistry.register(makeVaultSearchTool(searchPipeline));
     toolRegistry.register(makeReadNoteTool({ readNote: (path) => facade.read(path) }));
     toolRegistry.register(makeListNeighborsTool(database));
@@ -603,7 +623,7 @@ export default class NotientPlugin extends Plugin {
       echoGuard: this.echoGuard,
       hash: sha256,
       approvalMode: () => this.settings.get().chat.approvalMode,
-      recordHistory,
+      recordHistory: recordNoteHistory,
       generateCallId: () => generateRandomId(),
     };
     toolRegistry.register(makeCreateNoteTool(notesContext));
@@ -848,13 +868,13 @@ export default class NotientPlugin extends Plugin {
         }
         void searchHistory.record({
           query: trimmed,
-          mode: this.settings.get().search.defaultMode,
+          mode: searchModeState.value,
           ranAt: Date.now(),
         });
+        void dispatchSearch();
       },
       cancelSearch: () => {
-        // The state module owns its own AbortController; this hook lets the
-        // UI cancel via the runner. No additional action needed.
+        cancelSearchDispatch();
       },
       openHit: (notePath) => {
         const target = this.app.metadataCache.getFirstLinkpathDest(notePath, "");
@@ -869,6 +889,7 @@ export default class NotientPlugin extends Plugin {
         if (!result) return;
         void canvasFromResults.export(result).then((exported) => {
           new Notice(`Notient: canvas saved to ${exported.path}`);
+          void this.app.workspace.openLinkText(exported.path, "", false);
         });
       },
       saveQuery: () => {
@@ -876,7 +897,7 @@ export default class NotientPlugin extends Plugin {
         if (trimmed.length === 0) return;
         void savedQueries.save({
           query: trimmed,
-          mode: this.settings.get().search.defaultMode,
+          mode: searchModeState.value,
           filters: {},
         });
       },
@@ -889,6 +910,11 @@ export default class NotientPlugin extends Plugin {
           .then((conversation) => {
             chatActiveConversation.value = conversation;
           });
+      },
+      openLink: (linkText) => {
+        const target = normalizeWikilinkTarget(linkText);
+        if (target.length === 0) return;
+        void this.app.workspace.openLinkText(target, "", false);
       },
     };
 
@@ -957,9 +983,23 @@ export default class NotientPlugin extends Plugin {
       },
       toggleYolo: async () => {
         const next = this.settings.get().chat.approvalMode === "safe" ? "yolo" : "safe";
+        if (
+          next === "yolo" &&
+          !window.confirm(
+            "Enable Notient yolo mode for chat writes? Write tools will auto-approve and rely on undo history.",
+          )
+        ) {
+          return;
+        }
         await this.settings.update({
           chat: { ...this.settings.get().chat, approvalMode: next },
         });
+        if (chatActiveConversation.value) {
+          chatActiveConversation.value = {
+            ...chatActiveConversation.value,
+            approvalMode: next,
+          };
+        }
       },
       openLink: (linkText) => {
         void this.app.workspace.openLinkText(linkText, "", false);
@@ -987,6 +1027,10 @@ export default class NotientPlugin extends Plugin {
       },
       reject: (item) => {
         if (item.kind === "edge") void approvalService.rejectEdge(item.id);
+      },
+      previewCanvas: (item) => {
+        if (item.kind !== "node" || item.type !== "synthesis") return;
+        void exportSynthesisProposalCanvas(item.id);
       },
     };
 
@@ -1036,9 +1080,16 @@ export default class NotientPlugin extends Plugin {
       }),
     );
 
-    // (13) Vitals snapshot persistence on save.
-    this.bus.on("vault:note-saved", (event) => {
-      void vitalsService.persistSnapshot(event.path);
+    // (13) Vitals snapshot persistence after indexing. The save event fires
+    // before the note row/chunks are refreshed, so snapshots must persist from
+    // the post-index event instead.
+    this.bus.on("indexer:note-indexed", (event) => {
+      void vitalsService.persistSnapshot(event.path).then(() => {
+        const activePath = this.app.workspace.getActiveFile()?.path ?? null;
+        if (activePath === event.path) {
+          vitalsSnapshotState.value = vitalsService.computeSnapshot(event.path);
+        }
+      });
     });
 
     // (14) Editor decorations. Live Preview + Source only; Reading mode skips.
@@ -1077,11 +1128,8 @@ export default class NotientPlugin extends Plugin {
         getMaxPerViewport: () => this.settings.get().decorations.maxPerViewport,
         getDebounceMs: () => this.settings.get().decorations.debounceMs,
         onClick: (proposalId) => {
+          focusedProposalIdState.value = proposalId;
           setActiveTab("stream");
-          // Highlight the matching item in the Stream tab via re-pinning the
-          // top of the rendered list — the StreamTab honours the ranking
-          // already; clicking is a soft cue rather than an explicit focus.
-          void proposalId;
         },
         isModeAllowed: () => {
           if (!this.settings.get().decorations.enabled) return false;
@@ -1281,6 +1329,30 @@ export default class NotientPlugin extends Plugin {
         })(modal.onClose.bind(modal));
 
       modal.open();
+    };
+
+    const exportSynthesisProposalCanvas = async (id: string): Promise<void> => {
+      const row = database.query<{ label: string; payload: string | null }>(
+        "SELECT label, payload FROM staging_nodes WHERE id = ?;",
+        [id],
+      )[0];
+      if (!row) return;
+      const payload = parseObject(row.payload);
+      const memberPaths = Array.isArray(payload.memberPaths)
+        ? payload.memberPaths.filter((path): path is string => typeof path === "string")
+        : [];
+      const body = typeof payload.body === "string" ? payload.body : "";
+      const folder = this.settings.get().chat.proposalsFolder;
+      if (!(await adapter.exists(folder))) await this.app.vault.createFolder(folder);
+      const path = `${folder}/${makeSlug(row.label)}-${Date.now()}.canvas`;
+      const canvas = generateSynthesisCanvas({
+        synthesisTitle: row.label,
+        synthesisBody: body,
+        sourceNotePaths: memberPaths,
+      });
+      await facade.write(path, JSON.stringify(canvas, null, 2));
+      new Notice(`Notient: canvas saved to ${path}`);
+      await this.app.workspace.openLinkText(path, "", false);
     };
 
     this.addCommand({
@@ -1509,6 +1581,25 @@ function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
     b.addEventListener("abort", cancel, { once: true });
   }
   return controller.signal;
+}
+
+function normalizeWikilinkTarget(linkText: string): string {
+  const trimmed = linkText.trim();
+  const inner =
+    trimmed.startsWith("[[") && trimmed.endsWith("]]") ? trimmed.slice(2, -2).trim() : trimmed;
+  return inner.split("|")[0]?.trim() ?? "";
+}
+
+function parseObject(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function debugCoAuthorMain(message: string, data?: Record<string, unknown>): void {

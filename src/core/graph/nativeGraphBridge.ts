@@ -1,3 +1,5 @@
+import { mergeFrontmatter } from "../chat/tools/notes";
+import type { RecordHistoryInput } from "../history/types";
 import { addRelatedLink } from "./relatedSection";
 
 export type RelationKind = "contradicts" | "supports" | "extends" | "synthesizes_from";
@@ -23,6 +25,7 @@ export interface NativeGraphBridgeOptions {
   echoGuard: NativeGraphBridgeEchoGuard;
   hash: (content: string) => Promise<string>;
   settings: () => NativeGraphBridgeSettings;
+  recordHistory?: (input: RecordHistoryInput) => Promise<number>;
 }
 
 export interface ApprovedLink {
@@ -51,14 +54,31 @@ export class NativeGraphBridge {
     const sha = await this.options.hash(next);
     this.options.echoGuard.mark(link.sourcePath, sha);
     await this.options.facade.writeNote(link.sourcePath, next);
+    await this.options.recordHistory?.({
+      kind: "note.append_section",
+      target: link.sourcePath,
+      before: content,
+      after: next,
+    });
   }
 
   async applyApprovedRelation(relation: RelatedRelation): Promise<void> {
     const settings = this.options.settings();
     if (!settings.writeFrontmatterRelations) return;
+    const content = await this.options.facade.readNote(relation.sourcePath);
     const wikilink = `[[${basenameWithoutExtension(relation.targetPath)}]]`;
-    await this.options.facade.updateFrontmatter(relation.sourcePath, {
+    const next = mergeFrontmatter(content, {
       notient: { [relation.relation]: [wikilink] },
+    });
+    if (next === content) return;
+    const sha = await this.options.hash(next);
+    this.options.echoGuard.mark(relation.sourcePath, sha);
+    await this.options.facade.writeNote(relation.sourcePath, next);
+    await this.options.recordHistory?.({
+      kind: "note.frontmatter",
+      target: relation.sourcePath,
+      before: content,
+      after: next,
     });
   }
 }

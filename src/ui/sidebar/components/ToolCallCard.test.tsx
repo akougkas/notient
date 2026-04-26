@@ -23,6 +23,22 @@ describe("ToolCallCard", () => {
     expect(html).toContain("7ms");
   });
 
+  test("renders undo pill when a write result returns historyId", () => {
+    const html = render(
+      <ToolCallCard
+        call={{ id: "tc-1", name: "notes.create", args: { path: "x.md" } }}
+        result={{
+          callId: "tc-1",
+          status: "ok",
+          data: { applied: true, historyId: 42 },
+          durationMs: 7,
+        }}
+      />,
+    );
+    expect(html).toContain("Auto-approved · undo");
+    expect(html).toContain("notient-chat-tool__undo");
+  });
+
   test("renders error status", () => {
     const html = render(
       <ToolCallCard

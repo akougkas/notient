@@ -7,6 +7,7 @@ import {
   NativeGraphBridge,
   type RelatedRelation,
 } from "../graph/nativeGraphBridge";
+import type { RecordHistoryInput } from "../history/types";
 import { ApprovalService } from "./approvalService";
 
 async function newDb() {
@@ -30,8 +31,16 @@ describe("ApprovalService", () => {
     seedEdge(db);
     const bus = new EventBus();
     const events: string[] = [];
+    const history: RecordHistoryInput[] = [];
     bus.on("approval:decided", (e) => events.push(`${e.kind}:${e.id}:${e.decision}`));
-    const svc = new ApprovalService({ db, bus });
+    const svc = new ApprovalService({
+      db,
+      bus,
+      recordHistory: async (record) => {
+        history.push(record);
+        return history.length;
+      },
+    });
     await svc.acceptEdge("e1");
     const live = db.query<{ id: string; approved: number; agent: string }>(
       "SELECT id, approved, agent FROM graph_edges;",
@@ -44,6 +53,24 @@ describe("ApprovalService", () => {
       ["e1"],
     );
     expect(staged[0].decision).toBe("accepted");
+    expect(history).toEqual([
+      {
+        kind: "edge.approve",
+        target: "e1",
+        before: {
+          id: "e1",
+          type: "supports",
+          source_id: "note:/a.md",
+          target_id: "note:/b.md",
+          confidence: 0.84,
+          agent: "linker",
+          evidence: JSON.stringify(["c1"]),
+          rationale: "r",
+          created_at: 1,
+        },
+        after: { id: "e1" },
+      },
+    ]);
     expect(events).toEqual(["edge:e1:accepted"]);
   });
 
@@ -52,13 +79,27 @@ describe("ApprovalService", () => {
     seedEdge(db);
     const bus = new EventBus();
     const events: string[] = [];
+    const history: RecordHistoryInput[] = [];
     bus.on("approval:decided", (e) => events.push(`${e.kind}:${e.id}:${e.decision}`));
-    const svc = new ApprovalService({ db, bus });
+    const svc = new ApprovalService({
+      db,
+      bus,
+      recordHistory: async (record) => {
+        history.push(record);
+        return history.length;
+      },
+    });
     await svc.rejectEdge("e1");
     const remaining = db.query<{ id: string }>("SELECT id FROM staging_edges WHERE id = ?;", [
       "e1",
     ]);
     expect(remaining).toHaveLength(0);
+    expect(history[0]).toMatchObject({
+      kind: "edge.reject",
+      target: "e1",
+      before: { id: "e1", type: "supports" },
+      after: null,
+    });
     expect(events).toEqual(["edge:e1:rejected"]);
   });
 

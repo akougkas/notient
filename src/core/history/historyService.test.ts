@@ -72,6 +72,22 @@ describe("HistoryService", () => {
     expect(recent[1].after).toBe("first");
   });
 
+  test("getRecent tolerates legacy raw-string payloads", async () => {
+    const database = await newDb();
+    database.run(
+      "INSERT INTO history (kind, target, before, after, created_at) VALUES (?, ?, ?, ?, ?);",
+      ["notes.append", "/a.md", "before", "after", 1],
+    );
+    const service = new HistoryService({
+      db: database,
+      inverters: {},
+      retention: { max: 100, maxPerTarget: 50 },
+    });
+    const recent = service.getRecent(1);
+    expect(recent[0].before).toBe("before");
+    expect(recent[0].after).toBe("after");
+  });
+
   test("undo dispatches to the inverter for the matching kind and deletes the row", async () => {
     const database = await newDb();
     const calls: Array<{ target: string; before: unknown; after: unknown }> = [];

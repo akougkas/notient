@@ -13,6 +13,7 @@
  */
 
 import type { Database } from "../../db/database";
+import type { HistoryKind } from "../../history/types";
 import type { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
 import { type ToolDefinition, type ToolJsonSchema, isObject, requireString } from "./registry";
@@ -28,7 +29,7 @@ export interface NotesEchoGuardHook {
 }
 
 export interface NotesHistoryRecord {
-  kind: string;
+  kind: HistoryKind;
   target: string;
   before: string | null;
   after: string;
@@ -40,7 +41,7 @@ export interface NotesToolsContext {
   echoGuard: NotesEchoGuardHook;
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
-  recordHistory: (record: NotesHistoryRecord) => Promise<void>;
+  recordHistory: (record: NotesHistoryRecord) => Promise<number>;
   generateCallId: () => string;
 }
 
@@ -48,6 +49,7 @@ export interface NotesWriteSuccess {
   applied: true;
   path: string;
   sha: string;
+  historyId?: number;
 }
 
 export interface NotesWriteSkipped {
@@ -125,13 +127,13 @@ export function makeCreateNoteTool(
       const sha = await context.hash(args.body);
       context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, args.body);
-      await context.recordHistory({
+      const historyId = await context.recordHistory({
         kind: "notes.create",
         target: args.notePath,
         before: null,
         after: args.body,
       });
-      return { applied: true, path: args.notePath, sha };
+      return { applied: true, path: args.notePath, sha, historyId };
     },
   };
 }
@@ -184,13 +186,13 @@ export function makeAppendNoteTool(
       const sha = await context.hash(after);
       context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, after);
-      await context.recordHistory({
+      const historyId = await context.recordHistory({
         kind: "notes.append",
         target: args.notePath,
         before,
         after,
       });
-      return { applied: true, path: args.notePath, sha };
+      return { applied: true, path: args.notePath, sha, historyId };
     },
   };
 }
@@ -258,13 +260,13 @@ export function makeReplaceSectionTool(
       const sha = await context.hash(replaced);
       context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, replaced);
-      await context.recordHistory({
+      const historyId = await context.recordHistory({
         kind: "notes.replace_section",
         target: args.notePath,
         before,
         after: replaced,
       });
-      return { applied: true, path: args.notePath, sha };
+      return { applied: true, path: args.notePath, sha, historyId };
     },
   };
 }
@@ -319,13 +321,13 @@ export function makeUpdateFrontmatterTool(
       const sha = await context.hash(next);
       context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, next);
-      await context.recordHistory({
+      const historyId = await context.recordHistory({
         kind: "notes.update_frontmatter",
         target: args.notePath,
         before,
         after: next,
       });
-      return { applied: true, path: args.notePath, sha };
+      return { applied: true, path: args.notePath, sha, historyId };
     },
   };
 }
@@ -350,14 +352,18 @@ export interface NotesHistoryColumns {
 export function makeHistoryRecorder(
   db: Database,
   now: () => number = () => Date.now(),
-): (record: NotesHistoryRecord) => Promise<void> {
+): (record: NotesHistoryRecord) => Promise<number> {
   return async (record) => {
+    const beforeJson = record.before === null ? null : JSON.stringify(record.before);
+    const afterJson = JSON.stringify(record.after);
     db.run(
       `INSERT INTO history (kind, target, before, after, created_at)
        VALUES (?, ?, ?, ?, ?);`,
-      [record.kind, record.target, record.before, record.after, now()],
+      [record.kind, record.target, beforeJson, afterJson, now()],
     );
+    const idRow = db.query<{ id: number }>("SELECT last_insert_rowid() AS id;")[0];
     await db.persist();
+    return idRow.id;
   };
 }
 
@@ -408,6 +414,14 @@ export function mergeFrontmatter(content: string, patch: Record<string, unknown>
   const fm = readFrontmatter(content);
   const existing = fm ? parseFlatYaml(fm.yaml) : new Map<string, string>();
   for (const [key, value] of Object.entries(patch)) {
+    const current = existing.get(key);
+    if (current !== undefined && isPlainObject(value)) {
+      const parsedCurrent = parseInlineYamlValue(current);
+      if (isPlainObject(parsedCurrent)) {
+        existing.set(key, formatYamlValue(deepMergePlainObjects(parsedCurrent, value)));
+        continue;
+      }
+    }
     existing.set(key, formatYamlValue(value));
   }
   const yaml = Array.from(existing.entries())
@@ -454,4 +468,48 @@ function formatYamlValue(value: unknown): string {
     return JSON.stringify(value);
   }
   return JSON.stringify(value);
+}
+
+function parseInlineYamlValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMergePlainObjects(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = next[key];
+    if (Array.isArray(existing) && Array.isArray(value)) {
+      next[key] = appendUnique(existing, value);
+    } else if (isPlainObject(existing) && isPlainObject(value)) {
+      next[key] = deepMergePlainObjects(existing, value);
+    } else {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+function appendUnique(current: unknown[], additions: unknown[]): unknown[] {
+  const next = [...current];
+  const seen = new Set(current.map((value) => JSON.stringify(value)));
+  for (const value of additions) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(value);
+  }
+  return next;
 }

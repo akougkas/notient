@@ -60,7 +60,7 @@ describe("NativeGraphBridge", () => {
     expect(harness.record.echoMarks[0].path).toBe("/source.md");
   });
 
-  test("Typed relation writeback patches frontmatter only", async () => {
+  test("Typed relation writeback patches frontmatter with EchoGuard mark", async () => {
     const harness = makeFacade({ "/source.md": "# Source\n\nBody.\n" });
     const bridge = new NativeGraphBridge({
       facade: harness.facade,
@@ -79,11 +79,11 @@ describe("NativeGraphBridge", () => {
       agent: "contradictionHunter",
     };
     await bridge.applyApprovedRelation(relation);
-    expect(harness.record.writes).toHaveLength(0);
-    expect(harness.record.frontmatterPatches).toHaveLength(1);
-    expect(harness.record.frontmatterPatches[0].patch).toMatchObject({
-      notient: { contradicts: ["[[target]]"] },
-    });
+    expect(harness.record.writes).toHaveLength(1);
+    expect(harness.record.writes[0].content).toContain('notient: {"contradicts":["[[target]]"]}');
+    expect(harness.record.frontmatterPatches).toHaveLength(0);
+    expect(harness.record.echoMarks).toHaveLength(1);
+    expect(harness.record.echoMarks[0].path).toBe("/source.md");
   });
 
   test("Setting toggles short-circuit each writeback path", async () => {
@@ -148,22 +148,26 @@ describe("NativeGraphBridge", () => {
     expect(order).toEqual(["mark", "write"]);
   });
 
-  // Documents a known wiring gap: applyApprovedRelation goes through the
-  // opaque facade.updateFrontmatter (Obsidian's processFrontMatter under
-  // production wiring). The bridge cannot synchronously hash the post-write
-  // content from inside this call, so EchoGuard is not marked here. The
-  // production indexer-exclusion path covers Notient/* folders; for source
-  // notes that receive typed-relation patches the indexer will re-enqueue,
-  // but the patched content is byte-identical on a second pass so the
-  // chunker short-circuits via sha equality. Task 16 wiring (or a follow-up)
-  // should extend the facade contract to return the post-write content so
-  // EchoGuard.mark can fire BEFORE the write, matching the contract used by
-  // applyApprovedLink. Until then this test pins the current behavior.
-  test("applyApprovedRelation currently bypasses EchoGuard (frontmatter facade is opaque)", async () => {
+  test("applyApprovedRelation marks EchoGuard BEFORE the facade write", async () => {
+    const order: string[] = [];
     const harness = makeFacade({ "/source.md": "# Source\n\nBody.\n" });
+    const facade = {
+      readNote: harness.facade.readNote,
+      writeNote: async (path: string, content: string) => {
+        order.push("write");
+        await harness.facade.writeNote(path, content);
+      },
+      updateFrontmatter: harness.facade.updateFrontmatter,
+    };
+    const echoGuard = {
+      mark: (path: string, sha: string) => {
+        order.push("mark");
+        harness.echoGuard.mark(path, sha);
+      },
+    };
     const bridge = new NativeGraphBridge({
-      facade: harness.facade,
-      echoGuard: harness.echoGuard,
+      facade,
+      echoGuard,
       hash: harness.hash,
       settings: () => ({
         writeRelatedSection: true,
@@ -177,8 +181,39 @@ describe("NativeGraphBridge", () => {
       relation: "extends",
       agent: "linker",
     });
-    expect(harness.record.frontmatterPatches).toHaveLength(1);
-    expect(harness.record.echoMarks).toHaveLength(0);
+    expect(order).toEqual(["mark", "write"]);
+    expect(harness.record.frontmatterPatches).toHaveLength(0);
+  });
+
+  test("writebacks record undo history when configured", async () => {
+    const harness = makeFacade({ "/source.md": "# Source\n\nBody.\n" });
+    const records: unknown[] = [];
+    const bridge = new NativeGraphBridge({
+      facade: harness.facade,
+      echoGuard: harness.echoGuard,
+      hash: harness.hash,
+      settings: () => ({
+        writeRelatedSection: true,
+        writeFrontmatterRelations: true,
+        relatedSectionHeading: "Related",
+      }),
+      recordHistory: async (record) => {
+        records.push(record);
+        return records.length;
+      },
+    });
+    await bridge.applyApprovedRelation({
+      sourcePath: "/source.md",
+      targetPath: "/target.md",
+      relation: "supports",
+      agent: "linker",
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      kind: "note.frontmatter",
+      target: "/source.md",
+      before: "# Source\n\nBody.\n",
+    });
   });
 
   test("Repeated writeback is idempotent (no duplicate wikilink)", async () => {

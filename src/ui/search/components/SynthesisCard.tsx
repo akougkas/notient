@@ -34,13 +34,15 @@ export function SynthesisCard() {
               {bullet.citations.length > 0 ? (
                 <span class="notient-synthesis-card__citations">
                   {bullet.citations.map((wikilink) => (
-                    <span
+                    <button
+                      type="button"
                       key={wikilink}
                       class="notient-synthesis-card__citation"
                       data-wikilink={wikilink}
+                      onClick={() => searchActions.value?.openLink(wikilink)}
                     >
                       {wikilink}
-                    </span>
+                    </button>
                   ))}
                 </span>
               ) : null}
