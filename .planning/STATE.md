@@ -29,8 +29,8 @@ After Phase 3: **146 passing** (Phase 2.5 baseline 104 + Phase 3 additions: sche
 
 ## DoD (spec §13 row 3)
 
-- [ ] Open any note → Co-author streams its first token in <2s. Evidence 2026-04-26: deployed to vaultex with `bun run dev` at 05:42:28 after fixing unindexed-note streaming, missed active-note starts, header parsing, and SSE abort propagation. Manual Obsidian reload/click verification is still pending because this session cannot operate the Obsidian GUI.
-- [ ] Linker / Synthesizer / Contradiction Hunter / Maturity Advancer all produce ≥1 real proposal in one session. Evidence 2026-04-26: current hardening target is met, but the original all-four spec remains open; `bun run smoke:coordinator` printed `linker: 1`, `synthesizer: 21`, `contradictionHunter: 0`, `maturityAdvancer: 0`.
+- [ ] Open any note → Co-author streams its first token in <2s. Evidence 2026-04-26 (PM): the panel-stuck-on-`thinking…` failure mode is closed — `runFor` now wraps every pre-`streamSections` step in a try/catch that emits `coAuthor:done(ok:false)` with the original error, so a throw in `readNote`, the `notes` query, `neighbors()`, or `buildVoiceContext()` no longer leaves the panel hung. Locked in by `CoAuthorService > emits coAuthor:done with ok:false when readNote throws so the panel exits the skeleton` and `... when neighbors lookup throws (e.g., schema drift)`. Cancel propagation through the real `LMStudioProvider` is locked in by `CoAuthorService > cancel propagates from CoAuthorService through LMStudioProvider to the SSE reader` (asserts `cancelCalled === true` and `coAuthor:cancelled` for the active path). Deployed to vaultex via `bun run dev` at 06:28:53 (commit 02aaf94). The first-token wall clock and the manual cancel click still need a human at the Obsidian GUI to tick this box.
+- [ ] Linker / Synthesizer / Contradiction Hunter / Maturity Advancer all produce ≥1 real proposal in one session. Evidence 2026-04-26 (PM): current hardening target met deterministically — `bun run smoke:coordinator` against `/mnt/c/Users/akougk/Projects/vaultex` and LM Studio `192.168.86.143:1234/v1` with `nemotron-cascade-2-30b-a3b-i1` printed `linker: 0`, `synthesizer: 21`, `contradictionHunter: 1`, `maturityAdvancer: 0` and exited 0 (≥2 non-zero agents). The original all-four spec (Linker / MaturityAdvancer ≥1 real proposal) still depends on (a) the Linker neighborhood having approved edges to draw from and (b) the vault holding at least one note ripe for maturity advancement; neither is satisfied by the current vaultex state. The synthesizer's intermittent `undefined is not an object (evaluating 'input.trim')` crash from a malformed chatJson payload is now caught by `Synthesizer > survives malformed chatJson responses missing required fields without throwing` and `normalizeSynthesis()` (commit 68217f0).
 - [ ] Approvals UI accept promotes a staged edge to live (manual smoke)
 
 ## 2026-04-26 Phase 3 hardening evidence
@@ -43,6 +43,64 @@ After Phase 3: **146 passing** (Phase 2.5 baseline 104 + Phase 3 additions: sche
 - [x] Final automated gates. Evidence: `bun run typecheck && bun run lint && bun test` passed with 147 tests; `bun run build` passed; `bun run smoke:coordinator` passed with 2 non-zero agents; `bun run dev` copied to vaultex.
 
 (Tick during the Phase 3 close-out smoke run; the harness ships in this commit.)
+
+## 2026-04-26 PM Phase 3 hardening pass #2
+
+Live audit of phases 1–3 against the four reported regressions. All
+fixes land as separate commits on `beta-spec` with TDD-shaped tests that
+would have caught the original failure.
+
+- [x] Co-author panel skeleton can no longer stick when `runFor` setup
+  throws (commit 02aaf94, `fix(co-author): emit terminal event when
+  runFor setup throws`). Root cause: pre-`streamSections` exceptions
+  (readNote, the `notes` query, `neighbors()`, `buildVoiceContext`)
+  escaped `runFor` and were swallowed by the mutex chain
+  (`this.chain.catch(() => undefined)`); no `coAuthor:done` or
+  `coAuthor:cancelled` ever reached the panel, so the cancel button
+  also looked dead — the abort signal had nothing to interrupt. The fix
+  wraps the setup phase in a try/catch that always emits
+  `coAuthor:done(ok:false)` with the original error message. Tests:
+  `CoAuthorService > emits coAuthor:done with ok:false when readNote
+  throws so the panel exits the skeleton`, `... when neighbors lookup
+  throws (e.g., schema drift)`, and `cancel propagates from
+  CoAuthorService through LMStudioProvider to the SSE reader`
+  (`cancelCalled === true`, `coAuthor:cancelled` carries the active
+  path).
+- [x] Stale `indexer.worker.js` artifact removed from the deploy tree
+  (commit 8262f0d, `chore(deploy): strip stale indexer.worker.js from
+  vault on copy`). The Phase 3 hardening already removed the Electron
+  `app://` worker spawn (`createIndexerRuntimeConfig` returns
+  `mode: "inline"`, `workerPath: null`), so SecurityError can no longer
+  fire, but a 42 KB `indexer.worker.js` from the previous deploy still
+  sat next to `main.js` in `/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient/`.
+  `copyToVault` now removes it as part of every dev/build run; verified
+  by `ls /mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient/`
+  after `bun run dev` at 06:28:53 — only `main.js`, `manifest.json`,
+  `styles.css`, `data.json`, `notient.db`, `notient.lock`,
+  `sql-wasm.wasm`, and `vectors.bin` remain.
+- [x] Synthesizer no longer crashes the coordinator on a malformed
+  chatJson payload (commit 68217f0, `fix(synthesizer): normalize
+  partial chatJson responses`). The first re-run of
+  `bun run smoke:coordinator` after the co-author fix produced
+  `synthesizer ok=false proposals=0 71448ms error=undefined is not an
+  object (evaluating 'input.trim')`, dropping the smoke below the
+  two-non-zero-agent gate. Root cause: a quantized MoE returned
+  `{ body, memberPaths, confidence }` without a `title`; `slug(undefined)`
+  threw inside `Synthesizer.run`. `normalizeSynthesis()` now backfills
+  the body, derives a title from the body's first heading or the
+  cluster paths, defaults confidence to 0, and falls back to the
+  cluster's memberPaths when the model omits them. Test: `Synthesizer >
+  survives malformed chatJson responses missing required fields without
+  throwing`.
+- [x] Final automated gates rerun. Evidence:
+  `bun run typecheck && bun run lint && bun test` passes with 151 tests
+  (was 147; added two readNote/neighbors throw tests, one
+  CoAuthorService↔LMStudioProvider integration test, and one
+  Synthesizer normalization test). `bun run dev` rebuilt main.js (3.1 MB
+  dev bundle with inline sourcemaps) and copied to vaultex at 06:28:53
+  with no stale worker. `bun run smoke:coordinator` exited 0 with
+  `linker: 0, synthesizer: 21, contradictionHunter: 1,
+  maturityAdvancer: 0` (≥2 non-zero agents).
 
 ## Tech debt to address opportunistically
 
