@@ -39,3 +39,34 @@
   color: var(--text-muted);
   margin-left: auto;
 }
+.notient-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.notient-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.notient-tab--active {
+  background: var(--background-secondary);
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+.notient-tab__label {
+  font-weight: 500;
+}
+.notient-tab__badge {
+  margin-left: 6px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 11px;
+}
