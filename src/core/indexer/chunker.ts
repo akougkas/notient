@@ -7,6 +7,116 @@ export interface ChunkerOptions {
 
 const DEFAULT_TARGET = 400;
 const DEFAULT_MAX = 800;
+const CHARS_PER_TOKEN = 4;
+const PARAGRAPH_JOIN_TOKEN_OVERHEAD = 2;
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+function splitParagraphs(body: string): string[] {
+  return body
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0);
+}
+
+function sliceOversizedSentence(sentence: string, maxTokens: number): string[] {
+  const sliceSize = maxTokens * CHARS_PER_TOKEN;
+  const out: string[] = [];
+  for (let index = 0; index < sentence.length; index += sliceSize) {
+    out.push(sentence.slice(index, index + sliceSize).trim());
+  }
+  return out;
+}
+
+function splitOversizedParagraph(text: string, maxTokens: number): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]+\s*|[^.!?]+$/g) ?? [text];
+  const out: string[] = [];
+  let buffer = "";
+  let bufferTokens = 0;
+
+  const flushBuffer = () => {
+    if (buffer.length > 0) {
+      out.push(buffer.trim());
+      buffer = "";
+      bufferTokens = 0;
+    }
+  };
+
+  for (const sentence of sentences) {
+    const sentenceTokens = estimateTokens(sentence);
+    if (sentenceTokens > maxTokens) {
+      flushBuffer();
+      for (const piece of sliceOversizedSentence(sentence, maxTokens)) out.push(piece);
+      continue;
+    }
+    if (bufferTokens + sentenceTokens > maxTokens) {
+      out.push(buffer.trim());
+      buffer = sentence;
+      bufferTokens = sentenceTokens;
+    } else {
+      buffer += sentence;
+      bufferTokens += sentenceTokens;
+    }
+  }
+  if (buffer.trim().length > 0) out.push(buffer.trim());
+  return out;
+}
+
+function expandToSegments(paragraphs: string[], maxTokens: number): string[] {
+  const segments: string[] = [];
+  for (const paragraph of paragraphs) {
+    if (estimateTokens(paragraph) <= maxTokens) {
+      segments.push(paragraph);
+    } else {
+      for (const piece of splitOversizedParagraph(paragraph, maxTokens)) segments.push(piece);
+    }
+  }
+  return segments;
+}
+
+function mergeShortSegments(segments: string[], targetTokens: number): string[] {
+  const merged: string[] = [];
+  let buffer = "";
+  let bufferTokens = 0;
+  for (const segment of segments) {
+    const segmentTokens = estimateTokens(segment);
+    if (buffer.length === 0) {
+      buffer = segment;
+      bufferTokens = segmentTokens;
+      continue;
+    }
+    if (bufferTokens + segmentTokens + PARAGRAPH_JOIN_TOKEN_OVERHEAD <= targetTokens) {
+      buffer = `${buffer}\n\n${segment}`;
+      bufferTokens += segmentTokens + PARAGRAPH_JOIN_TOKEN_OVERHEAD;
+    } else {
+      merged.push(buffer);
+      buffer = segment;
+      bufferTokens = segmentTokens;
+    }
+  }
+  if (buffer.length > 0) merged.push(buffer);
+  return merged;
+}
+
+async function sha256(input: string): Promise<string> {
+  const buffer = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function makeChunkId(notePath: string, ord: number, text: string): Promise<string> {
+  return (await sha256(`${notePath}\n${ord}\n${text}`)).slice(0, 16);
+}
+
+async function buildChunk(notePath: string, ord: number, text: string): Promise<Chunk> {
+  const id = await makeChunkId(notePath, ord, text);
+  const sha = await sha256(text);
+  return { id, notePath, ord, text, sha, tokenEstimate: estimateTokens(text) };
+}
 
 export async function chunkNote(
   notePath: string,
@@ -15,94 +125,16 @@ export async function chunkNote(
 ): Promise<Chunk[]> {
   const target = opts.targetTokens ?? DEFAULT_TARGET;
   const max = opts.maxTokens ?? DEFAULT_MAX;
-  const paragraphs = body
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
+
+  const paragraphs = splitParagraphs(body);
   if (paragraphs.length === 0) return [];
 
-  const segments: string[] = [];
-  for (const para of paragraphs) {
-    if (estimateTokens(para) <= max) {
-      segments.push(para);
-    } else {
-      for (const piece of hardSplit(para, max)) segments.push(piece);
-    }
-  }
-
-  const merged: string[] = [];
-  let buffer = "";
-  let bufferTokens = 0;
-  for (const seg of segments) {
-    const segTokens = estimateTokens(seg);
-    if (buffer.length === 0) {
-      buffer = seg;
-      bufferTokens = segTokens;
-      continue;
-    }
-    if (bufferTokens + segTokens + 2 <= target) {
-      buffer = `${buffer}\n\n${seg}`;
-      bufferTokens += segTokens + 2;
-    } else {
-      merged.push(buffer);
-      buffer = seg;
-      bufferTokens = segTokens;
-    }
-  }
-  if (buffer.length > 0) merged.push(buffer);
+  const segments = expandToSegments(paragraphs, max);
+  const merged = mergeShortSegments(segments, target);
 
   const chunks: Chunk[] = [];
   for (let ord = 0; ord < merged.length; ord++) {
-    const text = merged[ord];
-    const id = (await sha256(`${notePath}\n${ord}\n${text}`)).slice(0, 16);
-    const sha = await sha256(text);
-    chunks.push({ id, notePath, ord, text, sha, tokenEstimate: estimateTokens(text) });
+    chunks.push(await buildChunk(notePath, ord, merged[ord]));
   }
   return chunks;
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-function hardSplit(text: string, maxTokens: number): string[] {
-  const sentences = text.match(/[^.!?]+[.!?]+\s*|[^.!?]+$/g) ?? [text];
-  const out: string[] = [];
-  let buf = "";
-  let bufTokens = 0;
-  for (const sentence of sentences) {
-    const t = estimateTokens(sentence);
-    if (t > maxTokens) {
-      if (buf.length > 0) {
-        out.push(buf.trim());
-        buf = "";
-        bufTokens = 0;
-      }
-      // Sentence itself larger than maxTokens, slice on whitespace.
-      const charsPerToken = 4;
-      const sliceSize = maxTokens * charsPerToken;
-      for (let i = 0; i < sentence.length; i += sliceSize) {
-        out.push(sentence.slice(i, i + sliceSize).trim());
-      }
-      continue;
-    }
-    if (bufTokens + t > maxTokens) {
-      out.push(buf.trim());
-      buf = sentence;
-      bufTokens = t;
-    } else {
-      buf += sentence;
-      bufTokens += t;
-    }
-  }
-  if (buf.trim().length > 0) out.push(buf.trim());
-  return out;
-}
-
-async function sha256(input: string): Promise<string> {
-  const buffer = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
