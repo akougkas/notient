@@ -100,6 +100,19 @@ export class ApprovalGate {
     pending.resolve(decision);
   }
 
+  /**
+   * Cancel every pending approval at once. Each waiting promise resolves with
+   * `{ approved: false, reason }` so callers can observe the cancellation
+   * without a try/catch. Used when the chat turn is aborted while a tool call
+   * is still parked at the approval gate.
+   */
+  cancelAll(reason = "cancelled"): void {
+    const entries = Array.from(this.pending.values());
+    for (const entry of entries) {
+      entry.resolve({ approved: false, reason });
+    }
+  }
+
   list(): PendingApproval[] {
     return Array.from(this.pending.values());
   }

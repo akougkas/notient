@@ -201,6 +201,52 @@ describe("StreamService", () => {
     service.stop();
   });
 
+  test("active-leaf-change bumps a staging_node above an off-note edge", async () => {
+    const db = await freshDb();
+    seedNode(db, "note:/x.md");
+    seedNode(db, "note:/y.md");
+    // Off-note edge with high confidence dominates while no note is active.
+    seedEdge(db, {
+      id: "e-off",
+      source: "note:/x.md",
+      target: "note:/y.md",
+      confidence: 0.95,
+      agent: "linker",
+      evidence: ["c1"],
+      createdAt: 1,
+    });
+    // Lower-confidence staging node attached to /active.md.
+    db.run(
+      "INSERT INTO staging_nodes (id, type, label, note_path, payload, agent, confidence, created_at) VALUES (?,?,?,?,?,?,?,?);",
+      ["n-active", "claim", "On-note claim", "/active.md", null, "synthesizer", 0.7, 1],
+    );
+    const bus = new EventBus();
+    let active: string | null = null;
+    const service = new StreamService({
+      db,
+      bus,
+      now: () => 1,
+      getActivePath: () => active,
+      settings: () => ({ recencyHalfLifeHours: 12, offNoteRelevanceFloor: 0.3, maxItems: 50 }),
+    });
+    service.start();
+    // Off-note edge should dominate before /active.md is open.
+    const before = service.items.value;
+    expect(before[0].id).toBe("e-off");
+    // Switching the active leaf to /active.md must bump the staging node up.
+    active = "/active.md";
+    bus.emit({ type: "active-leaf-change", notePath: "/active.md", wordCount: 100 });
+    const after = service.items.value;
+    expect(after[0].id).toBe("n-active");
+    expect(after[0].kind).toBe("node");
+    const offEdgeAfter = after.find((item) => item.id === "e-off");
+    expect(offEdgeAfter).toBeDefined();
+    if (offEdgeAfter) {
+      expect(after[0].score).toBeGreaterThan(offEdgeAfter.score);
+    }
+    service.stop();
+  });
+
   test("max-items cap limits results to settings.maxItems", async () => {
     const db = await freshDb();
     for (let index = 0; index < 10; index++) {

@@ -201,6 +201,28 @@ describe("probeToolMode", () => {
     expect(cache.store.throws).toBe("disabled");
   });
 
+  test("provider throwing on both attempts writes cache EXACTLY ONCE", async () => {
+    // Hardening: regression guard against double-writing the disabled cache
+    // entry (or skipping it). The probe must call the provider twice (first
+    // attempt + one retry) and persist `disabled` exactly once.
+    const provider = new StubProvider([
+      { fail: true, result: blankResult() },
+      { fail: true, result: blankResult() },
+    ]);
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "double-throws",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+      retryTimeoutMs: 50,
+    });
+    expect(mode).toBe("disabled");
+    expect(provider.calls).toBe(2);
+    expect(cache.writes).toEqual([{ model: "double-throws", mode: "disabled" }]);
+    expect(cache.writes).toHaveLength(1);
+  });
+
   test("uses cached value without invoking the provider", async () => {
     const provider = new StubProvider([{ result: blankResult() }]);
     const cache = makeCache({ cached: "native" });

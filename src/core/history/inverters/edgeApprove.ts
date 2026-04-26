@@ -60,6 +60,14 @@ export function makeEdgeApproveInverter(options: EdgeApproveInverterOptions): In
     if (!isStagingEdgePayload(before)) {
       throw new Error("edge.approve inverter: invalid `before` payload");
     }
+    const existing = options.db.query<{ id: string }>("SELECT id FROM graph_edges WHERE id = ?;", [
+      after.id,
+    ]);
+    if (existing.length === 0) {
+      throw new Error(
+        `edge.approve inverter: live edge ${after.id} no longer exists (deleted outside undo)`,
+      );
+    }
     options.db.transaction(() => {
       options.db.run("DELETE FROM graph_edges WHERE id = ?;", [after.id]);
       options.db.run(

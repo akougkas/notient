@@ -54,6 +54,38 @@ describe("ReasoningMutex", () => {
     expect(flag.hit).toBe(true);
   });
 
+  test("chat preempts a streaming co-author and both events surface", async () => {
+    // Last-priority-wins invariant: a chat slot taken while co-author is
+    // streaming aborts the co-author slot's signal. Both events surface to
+    // any subscriber draining the same array.
+    const m = new ReasoningMutex();
+    const events: string[] = [];
+    const coAuthor = m.runPriority("co-author", async (signal) => {
+      events.push("co-author-start");
+      await new Promise<void>((resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          events.push("co-author-aborted");
+          reject(new DOMException("aborted", "AbortError"));
+        });
+        // Long enough that chat's runPriority will arrive first.
+        setTimeout(() => {
+          events.push("co-author-finished");
+          resolve();
+        }, 200);
+      });
+    });
+    // Yield once so co-author actually starts before chat takes priority.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await m.runPriority("chat", async () => {
+      events.push("chat-start");
+      events.push("chat-end");
+    });
+    await coAuthor.catch(() => {
+      // expected: co-author rejects on abort
+    });
+    expect(events).toEqual(["co-author-start", "co-author-aborted", "chat-start", "chat-end"]);
+  });
+
   test("caller signal aborts a queued task", async () => {
     const m = new ReasoningMutex();
     const blocker = m.run("a", async () => {

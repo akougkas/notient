@@ -133,6 +133,99 @@ describe("SearchPipeline", () => {
     expect(events[1].type).toBe("search:error");
   });
 
+  test("balanced mode aborted during reranker propagates to chatJson and ends with error", async () => {
+    // Hardening: when the user retypes mid-search the controller is aborted.
+    // The reranker's underlying chatJson must observe the abort signal and
+    // reject; the pipeline must yield a search:error reason "aborted" and
+    // not yield any search:done event.
+    const db = new Database(new MemoryAdapter({ "/wasm": loadWasm() }), {
+      dbPath: "/db",
+      wasmPath: "/wasm",
+    });
+    await db.init();
+    const index = new InMemoryVectorIndex();
+    await index.init(2);
+    seed(db, "/a.md", "a1", "alpha snippet");
+    seed(db, "/b.md", "b1", "beta snippet");
+    index.add("a1", Float32Array.from([1, 0]));
+    index.add("b1", Float32Array.from([0, 1]));
+
+    const controller = new AbortController();
+    let observedSignalAborted = false;
+    const slowProvider: LLMProvider = {
+      isAvailable: async () => true,
+      chat: async () => "",
+      chatStream: async function* () {
+        yield "";
+      },
+      embed: async () => [],
+      chatJson: async <T>(
+        _messages: ChatMessage[],
+        options: ChatOptions,
+        _schema: JsonSchema,
+      ): Promise<T> => {
+        // Observe the signal we were handed — abort fires before resolving.
+        return await new Promise<T>((_resolve, reject) => {
+          const signal = options.signal;
+          if (!signal) {
+            reject(new Error("missing signal in chatJson options"));
+            return;
+          }
+          const onAbort = (): void => {
+            observedSignalAborted = true;
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          // The caller will abort before this resolves.
+          setTimeout(() => reject(new Error("never reached")), 1000);
+        });
+      },
+    };
+    const reranker = new Reranker({ provider: slowProvider, model: "rerank" });
+    const pipeline = new SearchPipeline({
+      db,
+      vectorIndex: index,
+      reranker,
+      embed: async () => Float32Array.from([1, 0]),
+      provider: slowProvider,
+      reasoningModel: "reasoning",
+      settings: () => ({
+        balanced: { topK: 10, rerankTopN: 5 },
+        deep: { graphExpansionDepth: 1, synthesisEnabled: false },
+      }),
+      now: () => 100,
+    });
+
+    // Start the run, then abort while the reranker is parked on chatJson.
+    const iterator = pipeline
+      .run({ query: "alpha", mode: "balanced" }, controller.signal)
+      [Symbol.asyncIterator]();
+    const collected: SearchEvent[] = [];
+    // Pull the first event (search:retrieving) synchronously.
+    const first = await iterator.next();
+    if (!first.done) collected.push(first.value);
+    // Schedule the abort on the next microtask so the reranker is mid-flight.
+    queueMicrotask(() => controller.abort());
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      collected.push(next.value);
+    }
+    expect(observedSignalAborted).toBe(true);
+    const error = collected.find((event) => event.type === "search:error");
+    expect(error).toBeDefined();
+    if (error && error.type === "search:error") {
+      expect(error.message.toLowerCase()).toContain("abort");
+    }
+    expect(collected.find((event) => event.type === "search:done")).toBeUndefined();
+  });
+
   test("durationMs uses the injected clock", async () => {
     const { pipeline } = await setup();
     const events = await collect(

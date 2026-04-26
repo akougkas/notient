@@ -327,6 +327,46 @@ describe("runAgentTurn", () => {
     }
   });
 
+  test("hits round cap and emits truncated:true flag with marker in final message", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
+      { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
+      { toolCalls: [{ id: "c3", name: "vault.read", args: { path: "C" } }] },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({}))]);
+    const { approvalGate } = makeApprovalGate();
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          approvalGate,
+          maxRoundsPerTurn: 2,
+          toolMode: () => "native",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "loop" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    // Loop must NOT throw; it must emit a clean truncated done event.
+    const errorEvent = events.find((event) => event.type === "loop:error");
+    expect(errorEvent).toBeUndefined();
+    const done = events.find((event) => event.type === "loop:done");
+    expect(done).toBeDefined();
+    if (done && done.type === "loop:done") {
+      expect(done.truncated).toBe(true);
+      expect(done.finalMessage.content.toLowerCase()).toContain("truncated");
+    }
+    // Provider was called exactly maxRoundsPerTurn times.
+    expect(provider.requests.length).toBe(2);
+  });
+
   test("write-gated tool reroutes through the approval gate", async () => {
     const provider = new ScriptedProvider([
       {

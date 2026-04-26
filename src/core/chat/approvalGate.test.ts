@@ -116,6 +116,43 @@ describe("ApprovalGate", () => {
     expect(recorder.resolved).toHaveLength(1);
   });
 
+  test("cancelAll resolves every pending entry as rejected with the supplied reason", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const gate = makeGate(recorder);
+    const controller = new AbortController();
+    const p1 = gate.request(makeCall("a"), "safe", "p1", controller.signal);
+    const p2 = gate.request(makeCall("b"), "safe", "p2", controller.signal);
+    expect(gate.hasPending()).toBe(true);
+    gate.cancelAll("turn-aborted");
+    const [d1, d2] = await Promise.all([p1, p2]);
+    expect(d1).toEqual({ approved: false, reason: "turn-aborted" });
+    expect(d2).toEqual({ approved: false, reason: "turn-aborted" });
+    expect(gate.hasPending()).toBe(false);
+    expect(recorder.resolved).toHaveLength(2);
+    expect(recorder.resolved.map((entry) => entry.reason)).toEqual([
+      "turn-aborted",
+      "turn-aborted",
+    ]);
+  });
+
+  test("cancelAll defaults the reason to 'cancelled'", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const gate = makeGate(recorder);
+    const controller = new AbortController();
+    const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
+    gate.cancelAll();
+    const decision = await promise;
+    expect(decision).toEqual({ approved: false, reason: "cancelled" });
+    expect(gate.hasPending()).toBe(false);
+  });
+
+  test("cancelAll is a no-op when nothing is pending", () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const gate = makeGate(recorder);
+    gate.cancelAll("anything");
+    expect(recorder.resolved).toHaveLength(0);
+  });
+
   test("list() returns the currently pending approvals", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);

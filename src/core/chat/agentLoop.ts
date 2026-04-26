@@ -40,7 +40,12 @@ export type AgentLoopEvent =
   | { type: "loop:tool-call"; call: ToolCall }
   | { type: "loop:tool-result"; result: ToolResult }
   | { type: "loop:approval-pending"; call: ToolCall }
-  | { type: "loop:done"; finalMessage: ChatMessage; toolMessages: ChatMessage[] }
+  | {
+      type: "loop:done";
+      finalMessage: ChatMessage;
+      toolMessages: ChatMessage[];
+      truncated?: boolean;
+    }
   | { type: "loop:error"; message: string };
 
 export interface AgentTurnInput {
@@ -105,10 +110,12 @@ export async function* runAgentTurn(
     finalMessage: {
       id: generateId(),
       role: "assistant",
-      content: "I've used all available tool rounds. Let me know what to try next.",
+      content:
+        "I've used all available tool rounds for this turn (truncated). Let me know what to try next.",
       createdAt: now(),
     },
     toolMessages: context.accumulatedTurnMessages,
+    truncated: true,
   };
 }
 
