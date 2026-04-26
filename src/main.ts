@@ -5,6 +5,7 @@ import { EventBus } from "./core/events/eventBus";
 import { GraphStore } from "./core/graph/graphStore";
 import { Kernel } from "./core/kernel";
 import { LMStudioProvider } from "./core/llm/lmStudioProvider";
+import { EchoGuard } from "./core/services/echoGuard";
 import { HealthMonitor } from "./core/services/healthMonitor";
 import { VaultLock, type VaultLockHandle } from "./core/services/vaultLock";
 import { NotientSettingsTab } from "./core/settings/SettingsTab";
@@ -21,6 +22,7 @@ export default class NotientPlugin extends Plugin {
   bus = new EventBus();
   settings!: SettingsService;
   private lockHandle: VaultLockHandle | null = null;
+  echoGuard = new EchoGuard();
 
   async onload(): Promise<void> {
     console.log("[Notient] onload");
@@ -83,6 +85,7 @@ export default class NotientPlugin extends Plugin {
     this.kernel.register("deepLLM", deepLLM);
     this.kernel.register("health", health);
     this.kernel.register("lock", this.lockHandle);
+    this.kernel.register("echoGuard", this.echoGuard);
     this.kernel.seal();
 
     this.bus.on("llm:health", () => {
@@ -98,6 +101,7 @@ export default class NotientPlugin extends Plugin {
         try {
           const contents = await facade.read(file.path);
           const sha = await sha256(contents);
+          if (this.echoGuard.take(file.path, sha)) return;
           const now = Date.now();
           database.run(
             `INSERT INTO notes (path, sha, word_count, indexed_at, updated_at)

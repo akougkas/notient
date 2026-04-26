@@ -25,6 +25,7 @@ describe("Kernel", () => {
       "deepLLM",
       "health",
       "lock",
+      "echoGuard",
     ] as const) {
       k.register(key, {} as never);
     }
@@ -44,6 +45,7 @@ describe("Kernel", () => {
       "deepLLM",
       "health",
       "lock",
+      "echoGuard",
     ] as const) {
       k.register(key, {} as never);
     }

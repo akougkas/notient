@@ -3,6 +3,7 @@ import type { Database } from "./db/database";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
 import type { LLMProvider } from "./llm/provider";
+import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
@@ -17,6 +18,7 @@ export interface ServiceRegistry {
   deepLLM: LLMProvider;
   health: HealthMonitor;
   lock: VaultLockHandle;
+  echoGuard: EchoGuard;
 }
 
 export type ServiceKey = keyof ServiceRegistry;
@@ -31,6 +33,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "deepLLM",
   "health",
   "lock",
+  "echoGuard",
 ];
 
 export class Kernel {
