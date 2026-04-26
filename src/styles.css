@@ -1,0 +1,33 @@
+.notient-awaken-modal {
+  min-width: 760px;
+}
+.notient-awaken-counters {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0 1rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.notient-awaken-counters .stat {
+  display: flex;
+  flex-direction: column;
+}
+.notient-awaken-counters .stat .label {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+.notient-awaken-counters .stat .value {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+.notient-awaken-canvas-wrap {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--background-secondary);
+}
+.notient-awaken-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  justify-content: flex-end;
+}
