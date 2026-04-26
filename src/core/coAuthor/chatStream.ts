@@ -39,35 +39,50 @@ export class CoAuthorService {
   async runFor(notePath: string, signal: AbortSignal): Promise<void> {
     const start = Date.now();
     debugCoAuthor("run:start", { notePath, model: this.opts.reasoningModel });
-    const noteBody = await this.opts.readNote(notePath, signal);
-    if (signal.aborted) {
-      debugCoAuthor("run:cancelled-after-read", { notePath });
-      this.opts.bus.emit({ type: "coAuthor:cancelled", notePath });
-      return;
-    }
-    const indexedWordCount =
-      this.opts.db.query<{ word_count: number }>("SELECT word_count FROM notes WHERE path = ?;", [
+    let noteBody: string;
+    let messages: ReturnType<CoAuthorService["buildMessages"]>;
+    try {
+      noteBody = await this.opts.readNote(notePath, signal);
+      if (signal.aborted) {
+        debugCoAuthor("run:cancelled-after-read", { notePath });
+        this.opts.bus.emit({ type: "coAuthor:cancelled", notePath });
+        return;
+      }
+      const indexedWordCount =
+        this.opts.db.query<{ word_count: number }>("SELECT word_count FROM notes WHERE path = ?;", [
+          notePath,
+        ])[0]?.word_count ?? 0;
+      const wordCount = Math.max(indexedWordCount, countWords(stripFrontmatter(noteBody)));
+      if (wordCount < this.opts.minWords) {
+        const error = `Note is below Co-author minimum (${wordCount}/${this.opts.minWords} words).`;
+        debugCoAuthor("run:skip-short-note", { notePath, wordCount, minWords: this.opts.minWords });
+        this.opts.bus.emit({
+          type: "coAuthor:done",
+          notePath,
+          ok: false,
+          durationMs: Date.now() - start,
+          error,
+        });
+        return;
+      }
+      messages = this.buildMessages(notePath, noteBody);
+      debugCoAuthor("run:messages-built", {
         notePath,
-      ])[0]?.word_count ?? 0;
-    const wordCount = Math.max(indexedWordCount, countWords(stripFrontmatter(noteBody)));
-    if (wordCount < this.opts.minWords) {
-      const error = `Note is below Co-author minimum (${wordCount}/${this.opts.minWords} words).`;
-      debugCoAuthor("run:skip-short-note", { notePath, wordCount, minWords: this.opts.minWords });
+        wordCount,
+        neighborCount: this.opts.neighbors(notePath).length,
+      });
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+      debugCoAuthor("run:setup-error", { notePath, error: message });
       this.opts.bus.emit({
         type: "coAuthor:done",
         notePath,
         ok: false,
         durationMs: Date.now() - start,
-        error,
+        error: message,
       });
       return;
     }
-    const messages = this.buildMessages(notePath, noteBody);
-    debugCoAuthor("run:messages-built", {
-      notePath,
-      wordCount,
-      neighborCount: this.opts.neighbors(notePath).length,
-    });
     await this.streamSections(notePath, messages, signal, start);
   }
 

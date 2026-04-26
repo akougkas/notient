@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
 import { EventBus } from "../events/eventBus";
+import { LMStudioProvider } from "../llm/lmStudioProvider";
 import type { LLMProvider } from "../llm/provider";
 import { CoAuthorService } from "./chatStream";
 
@@ -151,6 +152,124 @@ describe("CoAuthorService", () => {
     });
     await service.runFor("/short.md", new AbortController().signal);
     expect(fired).toEqual(["error"]);
+  });
+
+  test("emits coAuthor:done with ok:false when readNote throws so the panel exits the skeleton", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run(
+      "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?);",
+      ["/active.md", "s", 200, "mature", 1, 1],
+    );
+    const bus = new EventBus();
+    const doneEvents: Array<{ ok: boolean; error?: string }> = [];
+    bus.on("coAuthor:done", (event) => {
+      doneEvents.push({ ok: event.ok, error: event.error });
+    });
+    const service = new CoAuthorService({
+      db,
+      bus,
+      provider: streamProvider(["nope"]),
+      reasoningModel: "gemma",
+      readNote: async () => {
+        throw new Error("file vanished mid-open");
+      },
+      neighbors: () => [],
+      minWords: 100,
+    });
+    await service.runFor("/active.md", new AbortController().signal);
+    expect(doneEvents).toHaveLength(1);
+    expect(doneEvents[0]?.ok).toBe(false);
+    expect(doneEvents[0]?.error).toContain("file vanished mid-open");
+  });
+
+  test("emits coAuthor:done with ok:false when neighbors lookup throws (e.g., schema drift)", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run(
+      "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?);",
+      ["/active.md", "s", 200, "mature", 1, 1],
+    );
+    const bus = new EventBus();
+    const doneEvents: Array<{ ok: boolean; error?: string }> = [];
+    bus.on("coAuthor:done", (event) => {
+      doneEvents.push({ ok: event.ok, error: event.error });
+    });
+    const service = new CoAuthorService({
+      db,
+      bus,
+      provider: streamProvider(["nope"]),
+      reasoningModel: "gemma",
+      readNote: async () => `# Active\n${"word ".repeat(180)}`,
+      neighbors: () => {
+        throw new Error("no such column: approved");
+      },
+      minWords: 100,
+    });
+    await service.runFor("/active.md", new AbortController().signal);
+    expect(doneEvents).toHaveLength(1);
+    expect(doneEvents[0]?.ok).toBe(false);
+    expect(doneEvents[0]?.error).toContain("no such column: approved");
+  });
+
+  test("cancel propagates from CoAuthorService through LMStudioProvider to the SSE reader", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run(
+      "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?);",
+      ["/active.md", "s", 200, "mature", 1, 1],
+    );
+
+    const encoder = new TextEncoder();
+    let cancelCalled = false;
+    let pullCount = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount++;
+        if (pullCount === 1) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: "## SUMMARY\n" } }] })}\n`,
+            ),
+          );
+        }
+      },
+      cancel() {
+        cancelCalled = true;
+      },
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(stream, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const bus = new EventBus();
+      let cancelledNotePath: string | null = null;
+      bus.on("coAuthor:cancelled", (event) => {
+        cancelledNotePath = event.notePath;
+      });
+      const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+      const service = new CoAuthorService({
+        db,
+        bus,
+        provider,
+        reasoningModel: "gemma",
+        readNote: async () => `# Active\n${"word ".repeat(180)}`,
+        neighbors: () => [],
+        minWords: 100,
+      });
+      const ctrl = new AbortController();
+      const run = service.runFor("/active.md", ctrl.signal);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      ctrl.abort();
+      await run;
+      expect(cancelCalled).toBe(true);
+      expect(cancelledNotePath).toBe("/active.md");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("aborting cancels the stream and emits cancelled", async () => {
