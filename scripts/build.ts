@@ -409,6 +409,15 @@ async function watchBuild(): Promise<void> {
 async function copyToVault(): Promise<void> {
   await mkdir(VAULT_PLUGIN, { recursive: true });
 
+  // Phase 3 hardening: the indexer pipeline is inline. A stale indexer.worker.js
+  // in the vault would otherwise sit around forever — Obsidian no longer loads
+  // it but it confuses anyone diffing the deploy. Delete it as part of every
+  // copy so users on older builds end up with a clean tree.
+  const staleWorker = join(VAULT_PLUGIN, "indexer.worker.js");
+  if (existsSync(staleWorker)) {
+    await rm(staleWorker, { force: true });
+  }
+
   for (const file of DEPLOY_FILES) {
     const src = join(PROJECT_ROOT, file);
     if (existsSync(src)) {
