@@ -150,6 +150,34 @@ describe("Synthesizer", () => {
     expect(JSON.parse(rows[0].payload).memberPaths).toEqual(["/a.md", "/b.md"]);
   });
 
+  test("survives malformed chatJson responses missing required fields without throwing", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    seedCluster(db);
+    // Some local LLMs ignore strict json_schema and return partial objects.
+    // The Synthesizer must not crash the coordinator run when this happens.
+    const provider = fakeProvider({
+      body: "## Themes\n- whatever",
+      memberPaths: ["/a.md", "/b.md"],
+      confidence: 0.7,
+    });
+    const synth = new Synthesizer({
+      db,
+      provider,
+      reasoningModel: "nemotron",
+      epsilon: 0.05,
+      minClusterSize: 2,
+      sinceMs: 0,
+    });
+    const result = await synth.run({
+      trigger: "idle-5m",
+      notePath: null,
+      signal: new AbortController().signal,
+    });
+    expect(result.proposals).toBeGreaterThanOrEqual(0);
+  });
+
   test("returns 0 proposals when no cluster meets minSize", async () => {
     const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });

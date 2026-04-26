@@ -146,7 +146,7 @@ export class Synthesizer implements Agent {
     memberPaths: string[],
   ): Promise<SynthesisResponse> {
     try {
-      return await this.opts.provider.chatJson<SynthesisResponse>(
+      const raw = await this.opts.provider.chatJson<Partial<SynthesisResponse>>(
         messages,
         {
           model: this.opts.reasoningModel,
@@ -156,6 +156,7 @@ export class Synthesizer implements Agent {
         },
         SCHEMA,
       );
+      return normalizeSynthesis(raw, memberPaths);
     } catch (error) {
       if (error instanceof ChatJsonParseError) {
         return markdownFallback(error.raw, memberPaths);
@@ -163,6 +164,26 @@ export class Synthesizer implements Agent {
       throw error;
     }
   }
+}
+
+function normalizeSynthesis(
+  raw: Partial<SynthesisResponse>,
+  memberPaths: string[],
+): SynthesisResponse {
+  // Local LLMs (esp. quantized MoE) sometimes ignore strict json_schema and
+  // omit required fields. Backfill defensively so the staging insert and the
+  // downstream slug() call cannot crash the coordinator.
+  const body = typeof raw.body === "string" ? raw.body : "";
+  const title =
+    typeof raw.title === "string" && raw.title.trim().length > 0
+      ? raw.title
+      : (extractMarkdownTitle(body) ?? `Synthesis of ${memberPaths.slice(0, 2).join(", ")}`);
+  const responseMembers =
+    Array.isArray(raw.memberPaths) && raw.memberPaths.length > 0
+      ? raw.memberPaths.filter((p): p is string => typeof p === "string")
+      : memberPaths;
+  const confidence = typeof raw.confidence === "number" ? raw.confidence : 0;
+  return { title, body, memberPaths: responseMembers, confidence };
 }
 
 function slug(input: string): string {
