@@ -38,8 +38,6 @@ procs:
     cmd:
       - claude
       - --dangerously-skip-permissions
-      - --model
-      - claude-opus-4-5-20251101
       - "Read @.claude/orchestration/orchestrator/CLAUDE.md and confirm ready."
     autostart: true
     stop: "SIGTERM"
