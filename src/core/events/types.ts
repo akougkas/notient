@@ -19,7 +19,9 @@ export type AppEvent =
       sourceId: string;
       targetId: string;
     }
-  | { type: "indexer:note-indexed"; path: string; result: IndexerNoteResult };
+  | { type: "indexer:note-indexed"; path: string; result: IndexerNoteResult }
+  | { type: "user:active" }
+  | { type: "user:idle"; level: "30s" | "5m" | "30m" };
 
 export interface IndexerNoteResult {
   chunkCount: number;
