@@ -39,7 +39,15 @@ export type AppEvent =
       runId: number;
     }
   | { type: "user:action"; kind: "deepen"; notePath: string }
-  | { type: "active-leaf-change"; notePath: string | null; wordCount: number };
+  | { type: "active-leaf-change"; notePath: string | null; wordCount: number }
+  | {
+      type: "coAuthor:section";
+      notePath: string;
+      section: "summary" | "implies" | "connects";
+      delta: string;
+    }
+  | { type: "coAuthor:done"; notePath: string; ok: boolean; durationMs: number; error?: string }
+  | { type: "coAuthor:cancelled"; notePath: string };
 
 export interface IndexerNoteResult {
   chunkCount: number;
