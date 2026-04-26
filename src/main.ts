@@ -34,6 +34,13 @@ import { CoAuthorView, VIEW_TYPE_NOTIENT_CO_AUTHOR } from "./ui/coAuthor/CoAutho
 import { AwakenVaultModal } from "./ui/onboarding/AwakenVaultModal";
 import { AwakenRunner } from "./ui/onboarding/awakenRunner";
 import { GraphCanvasModel } from "./ui/onboarding/graphCanvas";
+import {
+  type AgentRun,
+  pendingApprovalsState,
+  recentRunsState,
+  sidebarActions,
+  tickState,
+} from "./ui/sidebar/App";
 import { NotientSidebarView, VIEW_TYPE_NOTIENT } from "./ui/sidebar/SidebarView";
 
 const PLUGIN_DIR = ".obsidian/plugins/notient";
@@ -359,6 +366,82 @@ export default class NotientPlugin extends Plugin {
       }),
     );
 
+    const refreshPendingApprovals = (): void => {
+      const row = database.query<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM staging_edges WHERE decision IS NULL;",
+      )[0];
+      pendingApprovalsState.value = row?.n ?? 0;
+    };
+    refreshPendingApprovals();
+
+    const triggerByRunId = new Map<number, string>();
+    this.bus.on("agent:run-started", (event) => {
+      triggerByRunId.set(event.runId, event.trigger);
+    });
+    this.bus.on("agent:run-finished", (event) => {
+      const next: AgentRun = {
+        id: event.runId,
+        agent: event.agent,
+        trigger: triggerByRunId.get(event.runId) ?? "",
+        ok: event.ok,
+        proposals: event.proposals,
+        durationMs: event.durationMs,
+        error: event.error,
+        finishedAt: Date.now(),
+      };
+      triggerByRunId.delete(event.runId);
+      const previous = recentRunsState.value;
+      recentRunsState.value = [next, ...previous].slice(0, 10);
+      refreshPendingApprovals();
+    });
+
+    this.bus.on("approval:decided", () => {
+      refreshPendingApprovals();
+    });
+
+    const tickInterval = window.setInterval(() => {
+      tickState.value = tickState.value + 1;
+    }, 30_000);
+    this.register(() => window.clearInterval(tickInterval));
+
+    const openInRightLeaf = async (viewType: string): Promise<void> => {
+      const { workspace } = this.app;
+      const existing = workspace.getLeavesOfType(viewType);
+      if (existing.length > 0) {
+        workspace.revealLeaf(existing[0]);
+        return;
+      }
+      const leaf = workspace.getRightLeaf(false);
+      if (leaf) {
+        await leaf.setViewState({ type: viewType, active: true });
+        workspace.revealLeaf(leaf);
+      }
+    };
+    const openSidebar = (): Promise<void> => openInRightLeaf(VIEW_TYPE_NOTIENT);
+    const openApprovals = (): Promise<void> => openInRightLeaf(VIEW_TYPE_NOTIENT_APPROVALS);
+    const openCoAuthor = async (): Promise<void> => {
+      await openInRightLeaf(VIEW_TYPE_NOTIENT_CO_AUTHOR);
+      const file = this.app.workspace.getActiveFile();
+      const path = file?.extension === "md" ? file.path : null;
+      if (!path) return;
+      const wordRow = database.query<{ word_count: number }>(
+        "SELECT word_count FROM notes WHERE path = ?;",
+        [path],
+      )[0];
+      this.bus.emit({
+        type: "active-leaf-change",
+        notePath: path,
+        wordCount: wordRow?.word_count ?? 0,
+      });
+      if (coAuthorAbort) coAuthorAbort.abort();
+      const ctrl = new AbortController();
+      coAuthorAbort = ctrl;
+      void reasoningMutex.runPriority("co-author", async (signal) => {
+        const merged = mergeSignals(signal, ctrl.signal);
+        await coAuthor.runFor(path, merged);
+      });
+    };
+
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
         if (!(file instanceof TFile)) return;
@@ -496,18 +579,43 @@ export default class NotientPlugin extends Plugin {
           bus: this.bus,
         }),
     );
-    this.addRibbonIcon("brain-circuit", "Open Notient", async () => {
-      const { workspace } = this.app;
-      const existing = workspace.getLeavesOfType(VIEW_TYPE_NOTIENT);
-      if (existing.length > 0) {
-        workspace.revealLeaf(existing[0]);
-        return;
-      }
-      const leaf = workspace.getRightLeaf(false);
-      if (leaf) {
-        await leaf.setViewState({ type: VIEW_TYPE_NOTIENT, active: true });
-        workspace.revealLeaf(leaf);
-      }
+    sidebarActions.value = {
+      openCoAuthor: () => void openCoAuthor(),
+      openApprovals: () => void openApprovals(),
+      openAwaken: openAwakenModal,
+    };
+
+    this.addRibbonIcon("brain-circuit", "Open Notient", () => void openSidebar());
+    this.addRibbonIcon("pen-tool", "Notient: Co-author", () => void openCoAuthor());
+    this.addRibbonIcon("check-circle", "Notient: Approvals", () => void openApprovals());
+
+    this.addCommand({
+      id: "open-sidebar",
+      name: "Notient: Open sidebar",
+      callback: () => void openSidebar(),
+    });
+    this.addCommand({
+      id: "open-co-author",
+      name: "Notient: Open Co-author panel",
+      callback: () => void openCoAuthor(),
+    });
+    this.addCommand({
+      id: "open-approvals",
+      name: "Notient: Open Approvals panel",
+      callback: () => void openApprovals(),
+    });
+    this.addCommand({
+      id: "deepen-active-note",
+      name: "Notient: Deepen active note (run all agents)",
+      callback: () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") {
+          new Notice("Open a markdown note first.");
+          return;
+        }
+        this.bus.emit({ type: "user:action", kind: "deepen", notePath: file.path });
+        new Notice(`Notient: deepening ${file.path}`);
+      },
     });
 
     NotientSidebarView.updateFooter(health.current(), facade.listMarkdown().length);
