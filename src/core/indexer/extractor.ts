@@ -7,20 +7,39 @@ export interface ExtractorOptions {
   signal?: AbortSignal;
 }
 
-const SYSTEM_PROMPT = `You are Notient's extractor. From a note chunk, identify:
-- entities: people, projects, named systems, recurring themes, technical terms (canonical singular form)
-- claims: atomic propositions the chunk asserts (one sentence each, declarative)
-- questions: open questions the chunk raises (end with "?")
-Return only JSON matching the schema. If a category has nothing, return an empty array. Do not invent facts.`;
+const MAX_ENTITIES_PER_CHUNK = 5;
+const MAX_CLAIMS_PER_CHUNK = 3;
+const MAX_QUESTIONS_PER_CHUNK = 3;
+
+const SYSTEM_PROMPT = `You are Notient's extractor. Read one note chunk and output ONLY what a careful human reader would highlight as worth tracking.
+
+Return at most:
+- ${MAX_ENTITIES_PER_CHUNK} entities — proper nouns (people, named projects, named systems, products), or domain-specific technical terms with strong specificity. Use the canonical singular form. Skip generic words like "system", "process", "note", "thing", "user". If the chunk has none, return [].
+- ${MAX_CLAIMS_PER_CHUNK} claims — non-trivial, specific assertions the chunk makes. A claim must be sharp enough that a thoughtful reader could disagree. Skip restatements of obvious facts and definitions. One declarative sentence each. If the chunk has none, return [].
+- ${MAX_QUESTIONS_PER_CHUNK} questions — genuine open questions the chunk raises and does not answer. End each with "?". Skip rhetorical questions. If the chunk has none, return [].
+
+Quality over quantity. Empty arrays are correct when nothing is worth tracking. Never invent facts.`;
 
 const SCHEMA: JsonSchema = {
   name: "Extraction",
   schema: {
     type: "object",
     properties: {
-      entities: { type: "array", items: { type: "string" } },
-      claims: { type: "array", items: { type: "string" } },
-      questions: { type: "array", items: { type: "string" } },
+      entities: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: MAX_ENTITIES_PER_CHUNK,
+      },
+      claims: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: MAX_CLAIMS_PER_CHUNK,
+      },
+      questions: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: MAX_QUESTIONS_PER_CHUNK,
+      },
     },
     required: ["entities", "claims", "questions"],
     additionalProperties: false,
@@ -35,7 +54,7 @@ export class Extractor {
 
   async extract(chunks: Chunk[]): Promise<Extraction> {
     if (chunks.length === 0) return { entities: [], claims: [], questions: [] };
-    const concurrency = Math.max(1, this.opts.concurrency ?? 2);
+    const concurrency = Math.max(1, this.opts.concurrency ?? 4);
     const results: Extraction[] = [];
 
     for (let i = 0; i < chunks.length; i += concurrency) {
@@ -60,9 +79,9 @@ export class Extractor {
       SCHEMA,
     );
     return {
-      entities: ensureStringArray(result.entities),
-      claims: ensureStringArray(result.claims),
-      questions: ensureStringArray(result.questions),
+      entities: ensureStringArray(result.entities).slice(0, MAX_ENTITIES_PER_CHUNK),
+      claims: ensureStringArray(result.claims).slice(0, MAX_CLAIMS_PER_CHUNK),
+      questions: ensureStringArray(result.questions).slice(0, MAX_QUESTIONS_PER_CHUNK),
     };
   }
 }

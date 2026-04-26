@@ -91,7 +91,7 @@ export default class NotientPlugin extends Plugin {
     });
     const extractor = new Extractor(primaryLLM, {
       model: current.primary.fastModel,
-      concurrency: 2,
+      concurrency: 4,
     });
 
     const indexOne = async (path: string): Promise<unknown> => {

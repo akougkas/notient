@@ -50,7 +50,10 @@ describe("Extractor", () => {
     const provider = fakeProvider({
       chatJson: async <T>() => responses[i++] as T,
     });
-    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1", concurrency: 1 });
+    const extractor = new Extractor(provider, {
+      model: "nemotron-cascade-2-30b-a3b-i1",
+      concurrency: 1,
+    });
     const out = await extractor.extract([chunk("first", 0), chunk("second", 1)]);
     expect(out.entities.sort()).toEqual(["Alice", "HPC", "POSIX"].sort());
     expect(out.claims).toEqual(["POSIX is leaky."]);
@@ -82,7 +85,10 @@ describe("Extractor", () => {
         return { entities: [`E${i}`], claims: [], questions: [] } as T;
       },
     });
-    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1", concurrency: 1 });
+    const extractor = new Extractor(provider, {
+      model: "nemotron-cascade-2-30b-a3b-i1",
+      concurrency: 1,
+    });
     const out = await extractor.extract([chunk("a", 0), chunk("b", 1), chunk("c", 2)]);
     expect(out.entities.sort()).toEqual(["E1", "E3"]);
   });

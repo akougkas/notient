@@ -232,7 +232,7 @@ async function main(): Promise<number> {
     const vectorIndex = new HnswVectorIndex({ maxElements: 50_000 });
     await vectorIndex.init(EMBED_DIM);
     const embedder = new Embedder(provider, { model: embedModel, batchSize: 16 });
-    const extractor = new Extractor(provider, { model: reasoningModel, concurrency: 2 });
+    const extractor = new Extractor(provider, { model: reasoningModel, concurrency: 4 });
 
     let notes: NoteSample[];
     if (existsSync(vaultRoot)) {
