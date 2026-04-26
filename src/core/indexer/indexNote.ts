@@ -5,11 +5,6 @@ import type { GraphEdge, GraphNode } from "../graph/types";
 import { chunkNote } from "./chunker";
 import type { Embedder } from "./embedder";
 import type { Extractor } from "./extractor";
-import type {
-  IndexerWorkerClient,
-  IndexerWorkerEmbedConfig,
-  IndexerWorkerExtractConfig,
-} from "./indexerWorkerClient";
 import type { Chunk, Extraction, IndexResult } from "./types";
 import type { VectorIndex } from "./vectorIndex";
 
@@ -22,19 +17,7 @@ export interface IndexNoteArgs {
   embedder: Embedder;
   extractor: Extractor;
   bus: EventBus;
-  /**
-   * Optional worker client. When provided, chunk+embed+extract run off the
-   * main thread. The main thread still owns the SQLite transaction and
-   * vector index writes since sql.js and HNSW live here.
-   */
-  workerClient?: IndexerWorkerClient;
-  /**
-   * Required when workerClient is provided. Specifies LM Studio endpoint and
-   * model identifiers for the worker to call directly.
-   */
-  workerEmbedConfig?: IndexerWorkerEmbedConfig;
-  workerExtractConfig?: IndexerWorkerExtractConfig;
-  /** Optional cancellation. Forwarded to the worker run when applicable. */
+  /** Optional cancellation for embedding calls. */
   signal?: AbortSignal;
 }
 
@@ -42,20 +25,8 @@ const FENCE = "---";
 
 export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const start = Date.now();
-  const {
-    notePath,
-    noteBody,
-    database,
-    graph,
-    vectorIndex,
-    embedder,
-    extractor,
-    bus,
-    workerClient,
-    workerEmbedConfig,
-    workerExtractConfig,
-    signal,
-  } = args;
+  const { notePath, noteBody, database, graph, vectorIndex, embedder, extractor, bus, signal } =
+    args;
   const sha = await sha256(noteBody);
 
   const existing = database.query<{ sha: string }>("SELECT sha FROM notes WHERE path = ?;", [
@@ -74,27 +45,15 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   }
 
   const body = stripFrontmatter(noteBody);
-  let chunks: Chunk[];
-  let vectors: number[][];
-  let extraction: Extraction;
-
-  if (workerClient && workerEmbedConfig && workerExtractConfig) {
-    const produced = await workerClient.run({
-      notePath,
-      noteBody,
-      embedConfig: workerEmbedConfig,
-      extractConfig: workerExtractConfig,
-      signal,
-    });
-    chunks = produced.chunks;
-    vectors = produced.vectors;
-    extraction = produced.extraction;
-  } else {
-    chunks = await chunkNote(notePath, body);
-    vectors =
-      chunks.length > 0 ? await embedder.embed(chunks.map((c) => c.text)) : ([] as number[][]);
-    extraction = await extractor.extract(chunks);
-  }
+  const chunks: Chunk[] = await chunkNote(notePath, body);
+  const vectors: number[][] =
+    chunks.length > 0
+      ? await embedder.embed(
+          chunks.map((c) => c.text),
+          signal,
+        )
+      : ([] as number[][]);
+  const extraction: Extraction = await extractor.extract(chunks);
 
   const nowMs = Date.now();
   const noteNode: GraphNode = {

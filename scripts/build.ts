@@ -25,13 +25,13 @@ import { basename, join } from "path";
 
 const VAULT_PLUGIN = "/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/notient";
 const PROJECT_ROOT = process.cwd();
+const ESBUILD_BIN = join(PROJECT_ROOT, "node_modules/.bin/esbuild");
 
 // Files to deploy to vault
 const DEPLOY_FILES = [
   "main.js",
   "vector.worker.js",
   "embed.worker.js",
-  "indexer.worker.js",
   "manifest.json",
   "styles.css",
 ];
@@ -41,7 +41,6 @@ const CORE_FILES = new Set([
   "main.js",
   "vector.worker.js",
   "embed.worker.js",
-  "indexer.worker.js",
   "manifest.json",
   "styles.css",
   "data.json",
@@ -229,18 +228,6 @@ const embedWorkerBuildOptions: esbuild.BuildOptions = {
   sourcemap: isDev ? "inline" : false,
 };
 
-const indexerWorkerBuildOptions: esbuild.BuildOptions = {
-  entryPoints: ["src/workers/indexer.worker.ts"],
-  bundle: true,
-  outfile: "indexer.worker.js",
-  format: "esm",
-  target: "es2022",
-  platform: "browser",
-  logLevel: "info",
-  minify: !isDev,
-  sourcemap: isDev ? "inline" : false,
-};
-
 // ============ Build Functions ============
 
 async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
@@ -250,48 +237,121 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
   logSection(`Building (${mode})`);
 
   try {
-    // Always build main.ts
-    const buildPromises: Promise<esbuild.BuildResult>[] = [
-      esbuild.build(getBuildOptions(dev)),
-    ];
+    const metafilePath = isAnalyze ? join(PROJECT_ROOT, ".notient-metafile.json") : null;
 
-    // Conditionally build CSS if it exists
+    await runEsbuildCli(mainBuildCliArgs(dev, metafilePath));
+
     if (existsSync("src/ui/styles/index.css")) {
-      buildPromises.push(esbuild.build(cssBuildOptions));
+      await runEsbuildCli(cssBuildCliArgs());
     } else {
       logWarn("Skipping CSS build (src/ui/styles/index.css not found)");
     }
 
-    // Conditionally build workers if they exist
     if (existsSync("src/workers/vector.worker.ts")) {
-      buildPromises.push(esbuild.build(vectorWorkerBuildOptions));
+      await runEsbuildCli(workerBuildCliArgs("src/workers/vector.worker.ts", "vector.worker.js", dev));
     } else {
       logWarn("Skipping vector worker build (src/workers/vector.worker.ts not found)");
     }
 
     if (existsSync("src/workers/embed.worker.ts")) {
-      buildPromises.push(esbuild.build(embedWorkerBuildOptions));
+      await runEsbuildCli(workerBuildCliArgs("src/workers/embed.worker.ts", "embed.worker.js", dev));
     } else {
       logWarn("Skipping embed worker build (src/workers/embed.worker.ts not found)");
     }
-
-    if (existsSync("src/workers/indexer.worker.ts")) {
-      buildPromises.push(esbuild.build(indexerWorkerBuildOptions));
-    } else {
-      logWarn("Skipping indexer worker build (src/workers/indexer.worker.ts not found)");
-    }
-
-    const [jsResult] = await Promise.all(buildPromises);
 
     const duration = Date.now() - start;
     console.log();
     logSuccess(`Build complete in ${duration}ms`);
 
-    return jsResult;
+    const result: esbuild.BuildResult = {};
+    if (metafilePath && existsSync(metafilePath)) {
+      result.metafile = JSON.parse(readFileSync(metafilePath, "utf8")) as esbuild.Metafile;
+      await rm(metafilePath, { force: true });
+    }
+    return result;
   } catch (error) {
     logError(`Build failed: ${error}`);
     return null;
   }
+}
+
+async function runEsbuildCli(args: string[]): Promise<void> {
+  const proc = Bun.spawn([ESBUILD_BIN, ...args], {
+    cwd: PROJECT_ROOT,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const code = await proc.exited;
+  if (code !== 0) {
+    throw new Error(`esbuild exited with ${code}`);
+  }
+}
+
+function mainBuildCliArgs(dev: boolean, metafilePath: string | null): string[] {
+  const mode = dev ? "development" : "production";
+  const version = process.env.npm_package_version || "0.3.1";
+  const banner = `/*
+ * Notient v${version}
+ * Build: ${mode} | ${new Date().toISOString().split("T")[0]}
+ * Storage: Phase 2 (chunk/embedding separation)
+ */`;
+  const args = [
+    "src/main.ts",
+    "--bundle",
+    "--outfile=main.js",
+    "--format=cjs",
+    "--target=es2022",
+    "--platform=node",
+    "--tree-shaking=true",
+    "--log-level=info",
+    `--banner:js=${banner}`,
+    `--define:process.env.NODE_ENV=${JSON.stringify(mode)}`,
+    "--jsx=automatic",
+    "--jsx-import-source=preact",
+    "--loader:.tsx=tsx",
+    "--loader:.ts=ts",
+    ...EXTERNALS.map((external) => `--external:${external}`),
+  ];
+  if (dev) {
+    args.push("--sourcemap=inline");
+  } else {
+    args.push("--minify-identifiers", "--minify-syntax");
+  }
+  if (metafilePath) {
+    args.push(`--metafile=${metafilePath}`);
+  }
+  return args;
+}
+
+function cssBuildCliArgs(): string[] {
+  const args = [
+    "src/ui/styles/index.css",
+    "--bundle",
+    "--outfile=styles.css",
+    "--log-level=info",
+  ];
+  if (!isDev && !isClean && !isReset && !isHardReset) {
+    args.push("--minify");
+  }
+  return args;
+}
+
+function workerBuildCliArgs(entryPoint: string, outfile: string, dev: boolean): string[] {
+  const args = [
+    entryPoint,
+    "--bundle",
+    `--outfile=${outfile}`,
+    "--format=esm",
+    "--target=es2022",
+    "--platform=browser",
+    "--log-level=info",
+  ];
+  if (dev) {
+    args.push("--sourcemap=inline");
+  } else {
+    args.push("--minify");
+  }
+  return args;
 }
 
 async function watchBuild(): Promise<void> {
@@ -310,10 +370,6 @@ async function watchBuild(): Promise<void> {
   if (existsSync("src/workers/embed.worker.ts")) {
     contexts.push(await esbuild.context(embedWorkerBuildOptions));
   }
-  if (existsSync("src/workers/indexer.worker.ts")) {
-    contexts.push(await esbuild.context(indexerWorkerBuildOptions));
-  }
-
   await Promise.all(contexts.map(ctx => ctx.watch()));
 
   logSection("Watch Mode");

@@ -16,11 +16,7 @@ import { Extractor } from "./core/indexer/extractor";
 import { HnswVectorIndex } from "./core/indexer/hnswVectorIndex";
 import { indexNote } from "./core/indexer/indexNote";
 import { IndexerQueue } from "./core/indexer/indexerQueue";
-import {
-  IndexerWorkerClient,
-  type IndexerWorkerEmbedConfig,
-  type IndexerWorkerExtractConfig,
-} from "./core/indexer/indexerWorkerClient";
+import { createIndexerRuntimeConfig } from "./core/indexer/indexerRuntime";
 import { Kernel } from "./core/kernel";
 import { LMStudioProvider } from "./core/llm/lmStudioProvider";
 import { EchoGuard } from "./core/services/echoGuard";
@@ -48,7 +44,6 @@ const DB_PATH = `${PLUGIN_DIR}/notient.db`;
 const WASM_PATH = `${PLUGIN_DIR}/sql-wasm.wasm`;
 const LOCK_PATH = `${PLUGIN_DIR}/notient.lock`;
 const VECTOR_PATH = `${PLUGIN_DIR}/vectors.bin`;
-const INDEXER_WORKER_PATH = `${PLUGIN_DIR}/indexer.worker.js`;
 
 export default class NotientPlugin extends Plugin {
   kernel = new Kernel();
@@ -57,7 +52,6 @@ export default class NotientPlugin extends Plugin {
   private lockHandle: VaultLockHandle | null = null;
   echoGuard = new EchoGuard();
   indexOne!: (path: string) => Promise<unknown>;
-  private indexerWorkerClient: IndexerWorkerClient | null = null;
 
   async onload(): Promise<void> {
     console.log("[Notient] onload");
@@ -119,27 +113,8 @@ export default class NotientPlugin extends Plugin {
       concurrency: 4,
     });
 
-    let indexerWorkerClient: IndexerWorkerClient | null = null;
-    try {
-      const resourcePath = adapter.getResourcePath(INDEXER_WORKER_PATH);
-      indexerWorkerClient = new IndexerWorkerClient(
-        () => new Worker(resourcePath, { type: "module" }),
-      );
-    } catch (error) {
-      console.warn("[Notient] indexer worker spawn failed, falling back to inline pipeline", error);
-    }
-    this.indexerWorkerClient = indexerWorkerClient;
-
-    const workerEmbedConfig: IndexerWorkerEmbedConfig = {
-      baseUrl: current.primary.baseUrl,
-      model: current.primary.embeddingModel,
-      batchSize: 16,
-    };
-    const workerExtractConfig: IndexerWorkerExtractConfig = {
-      baseUrl: current.primary.baseUrl,
-      model: current.primary.fastModel,
-      concurrency: 4,
-    };
+    const indexerRuntime = createIndexerRuntimeConfig();
+    console.log("[Notient] indexer pipeline", indexerRuntime.mode);
 
     const indexOne = async (path: string): Promise<unknown> => {
       const body = await facade.read(path);
@@ -152,9 +127,6 @@ export default class NotientPlugin extends Plugin {
         embedder,
         extractor,
         bus: this.bus,
-        workerClient: indexerWorkerClient ?? undefined,
-        workerEmbedConfig: indexerWorkerClient ? workerEmbedConfig : undefined,
-        workerExtractConfig: indexerWorkerClient ? workerExtractConfig : undefined,
       });
       await database.persist();
       await adapter.writeBinary(VECTOR_PATH, await vectorIndex.persist());
@@ -666,14 +638,6 @@ export default class NotientPlugin extends Plugin {
       } catch {
         // ignore
       }
-    }
-    if (this.indexerWorkerClient) {
-      try {
-        this.indexerWorkerClient.dispose();
-      } catch {
-        // ignore
-      }
-      this.indexerWorkerClient = null;
     }
     if (this.lockHandle) {
       try {

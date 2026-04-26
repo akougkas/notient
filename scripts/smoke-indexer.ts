@@ -22,9 +22,7 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
-import esbuild from "esbuild";
 import { Database, type DatabaseAdapter } from "../src/core/db/database";
 import { EventBus } from "../src/core/events/eventBus";
 import { GraphStore } from "../src/core/graph/graphStore";
@@ -32,10 +30,6 @@ import { Embedder } from "../src/core/indexer/embedder";
 import { Extractor } from "../src/core/indexer/extractor";
 import { HnswVectorIndex } from "../src/core/indexer/hnswVectorIndex";
 import { indexNote } from "../src/core/indexer/indexNote";
-import {
-  IndexerWorkerClient,
-  type WorkerLike,
-} from "../src/core/indexer/indexerWorkerClient";
 import { LMStudioProvider } from "../src/core/llm/lmStudioProvider";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
@@ -290,25 +284,6 @@ async function main(): Promise<number> {
       );
     }
 
-    // Real-Worker sanity leg: bundle the worker, spawn it via Bun's Worker
-    // support, and verify the produced (chunks, vectors, extraction) match
-    // what the inline pipeline produced for the same input.
-    let workerLegSummary = "skipped";
-    try {
-      const workerLegMs = await runWorkerLeg({
-        notes: notes.slice(0, 2),
-        baseUrl,
-        embedModel,
-        reasoningModel,
-        tempDir,
-      });
-      workerLegSummary = `ok in ${workerLegMs}ms (n=${Math.min(2, notes.length)})`;
-    } catch (error) {
-      workerLegSummary = `skipped (${(error as Error).message})`;
-      console.warn(`[smoke] worker leg ${workerLegSummary}`);
-    }
-    console.log(`[smoke] worker leg : ${workerLegSummary}`);
-
     await database.persist();
     const persistedVectors = await vectorIndex.persist();
     await adapter.writeBinary(vectorsPath, persistedVectors);
@@ -391,64 +366,6 @@ async function main(): Promise<number> {
 function countRows(database: Database, table: string): number {
   const rows = database.query<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table};`);
   return rows[0]?.n ?? 0;
-}
-
-interface WorkerLegArgs {
-  notes: NoteSample[];
-  baseUrl: string;
-  embedModel: string;
-  reasoningModel: string;
-  tempDir: string;
-}
-
-async function runWorkerLeg(args: WorkerLegArgs): Promise<number> {
-  if (args.notes.length === 0) {
-    throw new Error("no notes selected for worker leg");
-  }
-
-  const workerOut = join(args.tempDir, "indexer.worker.js");
-  await esbuild.build({
-    entryPoints: [resolve(import.meta.dir, "../src/workers/indexer.worker.ts")],
-    bundle: true,
-    outfile: workerOut,
-    format: "esm",
-    target: "es2022",
-    platform: "browser",
-    logLevel: "silent",
-    minify: false,
-  });
-
-  const workerUrl = pathToFileURL(workerOut).toString();
-  const factory = (): WorkerLike => {
-    // Bun supports the standard Worker constructor with module type. Cast
-    // through unknown because Bun's Worker doesn't perfectly satisfy the
-    // structural WorkerLike type here.
-    return new Worker(workerUrl, { type: "module" }) as unknown as WorkerLike;
-  };
-
-  const client = new IndexerWorkerClient(factory);
-  const start = Date.now();
-  try {
-    for (const note of args.notes) {
-      const out = await client.run({
-        notePath: note.path,
-        noteBody: note.body,
-        embedConfig: { baseUrl: args.baseUrl, model: args.embedModel, batchSize: 16 },
-        extractConfig: { baseUrl: args.baseUrl, model: args.reasoningModel, concurrency: 4 },
-      });
-      if (out.chunks.length === 0) {
-        throw new Error(`worker produced 0 chunks for ${note.path}`);
-      }
-      if (out.vectors.length !== out.chunks.length) {
-        throw new Error(
-          `worker chunk/vector mismatch for ${note.path}: ${out.chunks.length} vs ${out.vectors.length}`,
-        );
-      }
-    }
-  } finally {
-    client.dispose();
-  }
-  return Date.now() - start;
 }
 
 const code = await main();
