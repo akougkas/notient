@@ -5,7 +5,7 @@ export interface ProviderConfig {
 }
 
 interface ChatCompletionResponse {
-  choices: { message: { content: string } }[];
+  choices: { message: { content: string; reasoning_content?: string } }[];
 }
 
 interface ChatStreamEvent {
@@ -96,7 +96,8 @@ export class LMStudioProvider implements LLMProvider {
     });
     if (!response.ok) throw new Error(`LLM ${response.status} ${response.statusText}`);
     const data = (await response.json()) as ChatCompletionResponse;
-    const raw = data.choices[0]?.message.content ?? "";
+    const message = data.choices[0]?.message;
+    const raw = pickJsonPayload(message?.content ?? "", message?.reasoning_content ?? "");
     const stripped = stripJsonFences(raw).trim();
     try {
       return JSON.parse(stripped) as T;
@@ -106,6 +107,12 @@ export class LMStudioProvider implements LLMProvider {
       );
     }
   }
+}
+
+function pickJsonPayload(content: string, reasoningContent: string): string {
+  const trimmed = content.trim();
+  if (trimmed.length > 0) return content;
+  return reasoningContent;
 }
 
 function parseSseLine(line: string): string | "[DONE]" | null {
