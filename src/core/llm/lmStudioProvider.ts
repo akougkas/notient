@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatOptions, EmbedOptions, LLMProvider } from "./provider";
+import type { ChatMessage, ChatOptions, EmbedOptions, JsonSchema, LLMProvider } from "./provider";
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -76,6 +76,36 @@ export class LMStudioProvider implements LLMProvider {
     const data = (await response.json()) as EmbeddingResponse;
     return data.data.map((d) => d.embedding);
   }
+
+  async chatJson<T>(messages: ChatMessage[], opts: ChatOptions, schema: JsonSchema): Promise<T> {
+    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: opts.signal,
+      body: JSON.stringify({
+        model: opts.model,
+        messages,
+        temperature: opts.temperature ?? 0.1,
+        max_tokens: opts.maxTokens,
+        stream: false,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: schema.name, strict: true, schema: schema.schema },
+        },
+      }),
+    });
+    if (!response.ok) throw new Error(`LLM ${response.status} ${response.statusText}`);
+    const data = (await response.json()) as ChatCompletionResponse;
+    const raw = data.choices[0]?.message.content ?? "";
+    const stripped = stripJsonFences(raw).trim();
+    try {
+      return JSON.parse(stripped) as T;
+    } catch (error) {
+      throw new Error(
+        `chatJson failed to parse JSON: ${(error as Error).message}; raw=${raw.slice(0, 200)}`,
+      );
+    }
+  }
 }
 
 function parseSseLine(line: string): string | "[DONE]" | null {
@@ -108,4 +138,9 @@ async function* iterateSseDeltas(body: ReadableStream<Uint8Array>): AsyncIterabl
       if (delta) yield delta;
     }
   }
+}
+
+function stripJsonFences(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  return fenced ? fenced[1] : text;
 }

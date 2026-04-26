@@ -20,6 +20,9 @@ class FakeProvider implements LLMProvider {
   embed(): Promise<number[][]> {
     return Promise.resolve([]);
   }
+  chatJson<T>(): Promise<T> {
+    throw new Error("not used");
+  }
 }
 
 let originalSetInterval: typeof setInterval;

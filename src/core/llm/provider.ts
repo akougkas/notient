@@ -15,9 +15,15 @@ export interface EmbedOptions {
   signal?: AbortSignal;
 }
 
+export interface JsonSchema {
+  name: string;
+  schema: Record<string, unknown>;
+}
+
 export interface LLMProvider {
   isAvailable(signal?: AbortSignal): Promise<boolean>;
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<string>;
   chatStream(messages: ChatMessage[], opts: ChatOptions): AsyncIterable<string>;
+  chatJson<T>(messages: ChatMessage[], opts: ChatOptions, schema: JsonSchema): Promise<T>;
   embed(input: string[], opts: EmbedOptions): Promise<number[][]>;
 }

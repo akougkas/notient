@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { LMStudioProvider } from "./lmStudioProvider";
+import type { JsonSchema } from "./provider";
 
 let originalFetch: typeof fetch;
 let calls: Array<{ url: string; init: RequestInit | undefined }>;
@@ -83,5 +84,81 @@ describe("LMStudioProvider", () => {
     mockFetch(() => new Response("bad", { status: 500 }));
     const p = new LMStudioProvider({ baseUrl: "http://x/v1" });
     await expect(p.chat([{ role: "user", content: "x" }], { model: "m" })).rejects.toThrow(/500/);
+  });
+});
+
+describe("LMStudioProvider chatJson", () => {
+  test("chatJson returns parsed object", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              { message: { content: '{"entities":["X","Y"],"claims":[],"questions":[]}' } },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    const schema: JsonSchema = {
+      name: "Extraction",
+      schema: {
+        type: "object",
+        properties: {
+          entities: { type: "array", items: { type: "string" } },
+          claims: { type: "array", items: { type: "string" } },
+          questions: { type: "array", items: { type: "string" } },
+        },
+        required: ["entities", "claims", "questions"],
+      },
+    };
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const result = await provider.chatJson<{
+      entities: string[];
+      claims: string[];
+      questions: string[];
+    }>([{ role: "user", content: "hi" }], { model: "m" }, schema);
+    expect(result).toEqual({ entities: ["X", "Y"], claims: [], questions: [] });
+    const sent = JSON.parse(calls[0].init?.body as string);
+    expect(sent.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "Extraction", strict: true, schema: schema.schema },
+    });
+  });
+
+  test("chatJson throws on invalid JSON", async () => {
+    mockFetch(
+      () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: "not json at all" } }] }), {
+          status: 200,
+        }),
+    );
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    await expect(
+      provider.chatJson(
+        [{ role: "user", content: "hi" }],
+        { model: "m" },
+        { name: "S", schema: { type: "object" } },
+      ),
+    ).rejects.toThrow(/JSON/);
+  });
+
+  test("chatJson strips ```json fences if present", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '```json\n{"ok":true}\n```' } }],
+          }),
+          { status: 200 },
+        ),
+    );
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const result = await provider.chatJson<{ ok: boolean }>(
+      [{ role: "user", content: "hi" }],
+      { model: "m" },
+      { name: "S", schema: { type: "object" } },
+    );
+    expect(result).toEqual({ ok: true });
   });
 });
