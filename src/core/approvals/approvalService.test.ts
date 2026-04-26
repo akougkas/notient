@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
 import { EventBus } from "../events/eventBus";
+import {
+  type ApprovedLink,
+  NativeGraphBridge,
+  type RelatedRelation,
+} from "../graph/nativeGraphBridge";
 import { ApprovalService } from "./approvalService";
 
 async function newDb() {
@@ -55,6 +60,61 @@ describe("ApprovalService", () => {
     ]);
     expect(remaining).toHaveLength(0);
     expect(events).toEqual(["edge:e1:rejected"]);
+  });
+
+  test("accept of links_to edge invokes bridge.applyApprovedLink with resolved paths", async () => {
+    const db = await newDb();
+    db.run(
+      `INSERT INTO staging_edges (id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?);`,
+      [
+        "e-link",
+        "links_to",
+        "note:/source.md",
+        "note:/target.md",
+        0.9,
+        "linker",
+        JSON.stringify([]),
+        null,
+        1,
+      ],
+    );
+    const bus = new EventBus();
+    const linkCalls: ApprovedLink[] = [];
+    const relationCalls: RelatedRelation[] = [];
+    const bridge = new NativeGraphBridge({
+      facade: {
+        readNote: async () => "# Source\n",
+        writeNote: async () => {},
+        updateFrontmatter: async () => {},
+      },
+      echoGuard: { mark: () => {} },
+      hash: async (content) => `sha-${content.length}`,
+      settings: () => ({
+        writeRelatedSection: true,
+        writeFrontmatterRelations: true,
+        relatedSectionHeading: "Related",
+      }),
+    });
+    const originalLink = bridge.applyApprovedLink.bind(bridge);
+    const originalRelation = bridge.applyApprovedRelation.bind(bridge);
+    bridge.applyApprovedLink = async (link: ApprovedLink) => {
+      linkCalls.push(link);
+      await originalLink(link);
+    };
+    bridge.applyApprovedRelation = async (relation: RelatedRelation) => {
+      relationCalls.push(relation);
+      await originalRelation(relation);
+    };
+    const svc = new ApprovalService({ db, bus, bridge });
+    await svc.acceptEdge("e-link");
+    expect(linkCalls).toHaveLength(1);
+    expect(linkCalls[0]).toMatchObject({
+      sourcePath: "/source.md",
+      targetPath: "/target.md",
+      agent: "linker",
+    });
+    expect(relationCalls).toHaveLength(0);
   });
 
   test("listPending returns only undecided staging rows", async () => {

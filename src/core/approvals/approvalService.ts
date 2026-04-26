@@ -1,9 +1,16 @@
 import type { Database } from "../db/database";
 import type { EventBus } from "../events/eventBus";
+import type {
+  ApprovedLink,
+  NativeGraphBridge,
+  RelatedRelation,
+  RelationKind,
+} from "../graph/nativeGraphBridge";
 
 export interface ApprovalServiceOptions {
   db: Database;
   bus: EventBus;
+  bridge?: NativeGraphBridge;
 }
 
 export interface PendingEdge {
@@ -16,6 +23,17 @@ export interface PendingEdge {
   evidence: string[];
   rationale: string | null;
   createdAt: number;
+}
+
+const TYPED_RELATIONS: ReadonlyArray<RelationKind> = [
+  "contradicts",
+  "supports",
+  "extends",
+  "synthesizes_from",
+];
+
+function isTypedRelation(type: string): type is RelationKind {
+  return (TYPED_RELATIONS as ReadonlyArray<string>).includes(type);
 }
 
 export class ApprovalService {
@@ -86,6 +104,24 @@ export class ApprovalService {
       );
     });
     await this.opts.db.persist();
+    if (this.opts.bridge) {
+      const sourcePath = this.resolveNotePath(row.source_id);
+      const targetPath = this.resolveNotePath(row.target_id);
+      if (sourcePath && targetPath) {
+        if (row.type === "links_to") {
+          const link: ApprovedLink = { sourcePath, targetPath, agent: row.agent };
+          await this.opts.bridge.applyApprovedLink(link);
+        } else if (isTypedRelation(row.type)) {
+          const relation: RelatedRelation = {
+            sourcePath,
+            targetPath,
+            relation: row.type,
+            agent: row.agent,
+          };
+          await this.opts.bridge.applyApprovedRelation(relation);
+        }
+      }
+    }
     this.opts.bus.emit({ type: "approval:decided", kind: "edge", id, decision: "accepted" });
   }
 
@@ -93,5 +129,16 @@ export class ApprovalService {
     this.opts.db.run("DELETE FROM staging_edges WHERE id = ?;", [id]);
     await this.opts.db.persist();
     this.opts.bus.emit({ type: "approval:decided", kind: "edge", id, decision: "rejected" });
+  }
+
+  private resolveNotePath(nodeId: string): string | null {
+    if (nodeId.startsWith("note:")) {
+      return nodeId.slice("note:".length);
+    }
+    const rows = this.opts.db.query<{ note_path: string | null }>(
+      "SELECT note_path FROM graph_nodes WHERE id = ?;",
+      [nodeId],
+    );
+    return rows[0]?.note_path ?? null;
   }
 }
