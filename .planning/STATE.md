@@ -1,7 +1,7 @@
-# Notient v1.0 Project State
+# Notient Project State
 
+**Version:** 0.2.0
 **Current phase:** Phase 2 (Graph) — COMPLETE
-**Tag:** `v1.0.0-graph` on `beta-spec`
 **Date completed:** 2026-04-25
 **Next phase:** Phase 3 (Swarm)
 **AI substrate:** dynamo (`192.168.86.143:1234`, LM Studio, primary) + mini (`192.168.86.141:8080`, llama-server, deep)
@@ -30,7 +30,6 @@
 - [ ] Awaken Vault completes 894 notes in <10 min on dynamo+mini
 - [ ] Graph populated and queryable: notes/chunks/embeddings/graph_nodes/graph_edges all carry rows
 - [ ] Modal renders animated growth (verified by hand)
-- [ ] Tag `v1.0.0-graph` on `beta-spec`
 
 (Tick during the Phase 2 close-out smoke run.)
 
