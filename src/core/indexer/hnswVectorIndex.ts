@@ -1,3 +1,8 @@
+// The env shim must be evaluated before hnswlib-wasm is imported, otherwise the
+// bundle's `typeof window == 'object' || typeof importScripts == 'function'`
+// gate throws synchronously under Bun and Node test runtimes. The shim is a
+// no-op when a real `window` already exists (browsers, Obsidian renderer).
+import "./hnswEnvShim";
 import { loadHnswlib } from "hnswlib-wasm";
 import type { VectorIndex, VectorSearchResult } from "./vectorIndex";
 
@@ -10,16 +15,25 @@ export interface HnswOptions {
 }
 
 interface SerializedHeader {
+  version: 2;
   dim: number;
-  maxElements: number;
-  nextLabel: number;
-  idToLabel: Array<[string, number]>;
-  labelToId: Array<[number, string]>;
-  indexFileName: string;
-  indexBytesBase64: string;
   options: Required<HnswOptions>;
+  /** Raw vectors keyed by user-facing id. The HNSW graph is rebuilt on load. */
+  entries: Array<{ id: string; vector: number[] }>;
 }
 
+/**
+ * HNSW-backed vector index using `hnswlib-wasm`.
+ *
+ * Persistence note: `hnswlib-wasm@0.8.2` does not expose `Module.FS` (it sits
+ * in the unexported-symbols list). We therefore cannot extract the serialized
+ * graph file written by `index.writeIndex(...)` from the wasm filesystem from
+ * outside the runtime. Instead we serialize the raw input vectors keyed by id
+ * and rebuild the graph by replaying `addPoint` on load. This keeps
+ * persistence portable across browsers and Bun, and matches user-vault scale
+ * (rebuild cost is O(N * M * efConstruction) which is still seconds for tens
+ * of thousands of notes).
+ */
 export class HnswVectorIndex implements VectorIndex {
   // biome-ignore lint/suspicious/noExplicitAny: hnswlib-wasm types are loose at the boundary
   private lib: any = null;
@@ -29,6 +43,7 @@ export class HnswVectorIndex implements VectorIndex {
   private nextLabel = 0;
   private readonly idToLabel = new Map<string, number>();
   private readonly labelToId = new Map<number, string>();
+  private readonly idToVector = new Map<string, Float32Array>();
   private readonly options: Required<HnswOptions>;
 
   constructor(opts: HnswOptions = {}) {
@@ -66,9 +81,11 @@ export class HnswVectorIndex implements VectorIndex {
       this.idToLabel.delete(id);
     }
     const label = this.nextLabel++;
-    this.index.addPoint(Array.from(vector), label, false);
+    const stored = Float32Array.from(vector);
+    this.index.addPoint(Array.from(stored), label, false);
     this.idToLabel.set(id, label);
     this.labelToId.set(label, id);
+    this.idToVector.set(id, stored);
   }
 
   remove(id: string): void {
@@ -78,6 +95,7 @@ export class HnswVectorIndex implements VectorIndex {
     this.index.markDelete(label);
     this.idToLabel.delete(id);
     this.labelToId.delete(label);
+    this.idToVector.delete(id);
   }
 
   search(query: Float32Array, k: number): VectorSearchResult[] {
@@ -104,57 +122,53 @@ export class HnswVectorIndex implements VectorIndex {
 
   async persist(): Promise<ArrayBuffer> {
     this.requireInit();
-    const filename = `notient-hnsw-${Date.now()}.bin`;
-    await this.index.writeIndex(filename);
-    const fs = this.lib.FS;
-    const bytes = fs.readFile(filename) as Uint8Array;
-    fs.unlink(filename);
+    const entries: SerializedHeader["entries"] = [];
+    for (const [id, vector] of this.idToVector) {
+      entries.push({ id, vector: Array.from(vector) });
+    }
     const header: SerializedHeader = {
+      version: 2,
       dim: this.dim,
-      maxElements: this.options.maxElements,
-      nextLabel: this.nextLabel,
-      idToLabel: Array.from(this.idToLabel.entries()),
-      labelToId: Array.from(this.labelToId.entries()),
-      indexFileName: filename,
-      indexBytesBase64: base64Encode(bytes),
       options: this.options,
+      entries,
     };
-    const json = JSON.stringify(header);
-    return new TextEncoder().encode(json).buffer as ArrayBuffer;
+    return new TextEncoder().encode(JSON.stringify(header)).buffer as ArrayBuffer;
   }
 
   async load(blob: ArrayBuffer): Promise<void> {
     const json = new TextDecoder().decode(blob);
     const parsed = JSON.parse(json) as SerializedHeader;
+    if (parsed.version !== 2) {
+      throw new Error(`unsupported HnswVectorIndex header version ${parsed.version}`);
+    }
     this.dim = parsed.dim;
-    this.nextLabel = parsed.nextLabel;
+    Object.assign(this.options, parsed.options);
     this.idToLabel.clear();
     this.labelToId.clear();
-    for (const [id, label] of parsed.idToLabel) this.idToLabel.set(id, label);
-    for (const [label, id] of parsed.labelToId) this.labelToId.set(label, id);
+    this.idToVector.clear();
+    this.nextLabel = 0;
+
     this.lib = await loadHnswlib();
-    const fs = this.lib.FS;
-    fs.writeFile(parsed.indexFileName, base64Decode(parsed.indexBytesBase64));
-    this.index = new this.lib.HierarchicalNSW(parsed.options.space, this.dim, "");
-    await this.index.readIndex(parsed.indexFileName, parsed.maxElements);
-    this.index.setEfSearch(parsed.options.efSearch);
-    fs.unlink(parsed.indexFileName);
+    this.index = new this.lib.HierarchicalNSW(this.options.space, this.dim, "");
+    this.index.initIndex(
+      this.options.maxElements,
+      this.options.M,
+      this.options.efConstruction,
+      100,
+    );
+    this.index.setEfSearch(this.options.efSearch);
+
+    for (const entry of parsed.entries) {
+      const vector = Float32Array.from(entry.vector);
+      const label = this.nextLabel++;
+      this.index.addPoint(Array.from(vector), label, false);
+      this.idToLabel.set(entry.id, label);
+      this.labelToId.set(label, entry.id);
+      this.idToVector.set(entry.id, vector);
+    }
   }
 
   private requireInit(): void {
     if (!this.index || !this.lib) throw new Error("HnswVectorIndex.init() must be called first");
   }
-}
-
-function base64Encode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64Decode(text: string): Uint8Array {
-  const binary = atob(text);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
