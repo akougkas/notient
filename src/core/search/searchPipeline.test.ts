@@ -34,13 +34,19 @@ async function setup(): Promise<{
   const index = new InMemoryVectorIndex();
   await index.init(2);
 
-  const reranker = new Reranker({ provider: fakeProvider(["a1"]), model: "rerank" });
+  const provider = fakeProvider(["a1"]);
+  const reranker = new Reranker({ provider, model: "rerank" });
   const pipeline = new SearchPipeline({
     db,
     vectorIndex: index,
     reranker,
     embed: async () => Float32Array.from([1, 0]),
-    settings: () => ({ balanced: { topK: 10, rerankTopN: 5 } }),
+    provider,
+    reasoningModel: "reasoning",
+    settings: () => ({
+      balanced: { topK: 10, rerankTopN: 5 },
+      deep: { graphExpansionDepth: 1, synthesisEnabled: false },
+    }),
     now: () => 100,
   });
   return { db, index, pipeline };
@@ -102,15 +108,19 @@ describe("SearchPipeline", () => {
     }
   });
 
-  test("emits search:error when the underlying strategy throws", async () => {
-    const { pipeline } = await setup();
+  test("Deep mode reaches search:done with synthesis disabled", async () => {
+    const { db, index, pipeline } = await setup();
+    seed(db, "/a.md", "a1", "alpha snippet");
+    index.add("a1", Float32Array.from([1, 0]));
     const events = await collect(
-      pipeline.run({ query: "x", mode: "deep" }, new AbortController().signal),
+      pipeline.run({ query: "alpha", mode: "deep" }, new AbortController().signal),
     );
-    const error = events.find((event) => event.type === "search:error");
-    expect(error?.type).toBe("search:error");
-    if (error?.type === "search:error") {
-      expect(error.message).toMatch(/Deep/);
+    expect(events[0]).toEqual({ type: "search:retrieving", mode: "deep" });
+    const done = events.find((event) => event.type === "search:done");
+    expect(done?.type).toBe("search:done");
+    if (done?.type === "search:done") {
+      expect(done.result.mode).toBe("deep");
+      expect(done.result.synthesis).toBeNull();
     }
   });
 

@@ -1,12 +1,15 @@
 import type { Database } from "../db/database";
 import type { VectorIndex } from "../indexer/vectorIndex";
+import type { LLMProvider } from "../llm/provider";
 import type { Reranker } from "./reranker";
 import { balancedSearch } from "./strategies/balanced";
+import { deepSearch } from "./strategies/deep";
 import { quickSearch } from "./strategies/quick";
-import type { SearchEvent, SearchHit, SearchQuery, SearchResult } from "./types";
+import type { SearchEvent, SearchHit, SearchQuery, SearchResult, SynthesisCard } from "./types";
 
 export interface SearchPipelineSettings {
   balanced: { topK: number; rerankTopN: number };
+  deep: { graphExpansionDepth: number; synthesisEnabled: boolean };
 }
 
 export interface SearchPipelineDependencies {
@@ -14,15 +17,10 @@ export interface SearchPipelineDependencies {
   vectorIndex: VectorIndex;
   reranker: Reranker;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
+  provider: LLMProvider;
+  reasoningModel: string;
   settings: () => SearchPipelineSettings;
   now?: () => number;
-}
-
-export class DeepNotImplementedError extends Error {
-  constructor() {
-    super("Deep search mode is implemented in Task 7.");
-    this.name = "DeepNotImplementedError";
-  }
 }
 
 /**
@@ -43,8 +41,12 @@ export class SearchPipeline {
       yield { type: "search:error", message: "aborted" };
       return;
     }
+    if (query.mode === "deep") {
+      yield* this.runDeep(query, limit, signal, start, now);
+      return;
+    }
     try {
-      const hits = await this.execute(query, limit, signal);
+      const hits = await this.executeNonDeep(query, limit, signal);
       yield { type: "search:hits", hits };
       const result: SearchResult = {
         query: query.query,
@@ -61,7 +63,7 @@ export class SearchPipeline {
     }
   }
 
-  private async execute(
+  private async executeNonDeep(
     query: SearchQuery,
     limit: number,
     signal: AbortSignal,
@@ -74,21 +76,72 @@ export class SearchPipeline {
         limit,
       });
     }
-    if (query.mode === "balanced") {
-      const settings = this.deps.settings();
-      return balancedSearch({
+    const settings = this.deps.settings();
+    return balancedSearch({
+      db: this.deps.db,
+      vectorIndex: this.deps.vectorIndex,
+      embed: this.deps.embed,
+      reranker: this.deps.reranker,
+      query: query.query,
+      filters: query.filters,
+      topK: settings.balanced.topK,
+      rerankTopN: Math.min(limit, settings.balanced.rerankTopN),
+      signal,
+    });
+  }
+
+  private async *runDeep(
+    query: SearchQuery,
+    limit: number,
+    signal: AbortSignal,
+    start: number,
+    now: () => number,
+  ): AsyncIterable<SearchEvent> {
+    const settings = this.deps.settings();
+    let output: { hits: SearchHit[]; synthesis: SynthesisCard | null } = {
+      hits: [],
+      synthesis: null,
+    };
+    try {
+      const events = deepSearch({
         db: this.deps.db,
+        provider: this.deps.provider,
         vectorIndex: this.deps.vectorIndex,
         embed: this.deps.embed,
         reranker: this.deps.reranker,
+        reasoningModel: this.deps.reasoningModel,
         query: query.query,
         filters: query.filters,
         topK: settings.balanced.topK,
         rerankTopN: Math.min(limit, settings.balanced.rerankTopN),
+        graphDepth: settings.deep.graphExpansionDepth,
+        synthesisEnabled: settings.deep.synthesisEnabled,
         signal,
       });
+      for await (const event of events) {
+        if (event.type === "deep:result") {
+          output = event.output;
+          continue;
+        }
+        if (event.type === "search:retrieving") continue;
+        yield event;
+        if (event.type === "search:error") return;
+      }
+    } catch (error) {
+      yield {
+        type: "search:error",
+        message: error instanceof Error ? error.message : String(error),
+      };
+      return;
     }
-    throw new DeepNotImplementedError();
+    const result: SearchResult = {
+      query: query.query,
+      mode: query.mode,
+      hits: output.hits,
+      durationMs: now() - start,
+      synthesis: output.synthesis,
+    };
+    yield { type: "search:done", result };
   }
 }
 
