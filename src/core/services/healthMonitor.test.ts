@@ -69,3 +69,37 @@ describe("HealthMonitor", () => {
     monitor.stop();
   });
 });
+
+describe("HealthMonitor timeout", () => {
+  test("probes carry an AbortSignal that fires after intervalMs/2", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const aborted = new Promise<boolean>((resolveAborted) => {
+      const provider: LLMProvider = {
+        isAvailable: async (signal) => {
+          receivedSignal = signal;
+          signal?.addEventListener("abort", () => resolveAborted(true), { once: true });
+          await new Promise((resolveSleep) => setTimeout(resolveSleep, 200));
+          return true;
+        },
+        chat: async () => "",
+        chatStream: async function* () {
+          yield "";
+        },
+        chatJson: async <T>() => ({}) as T,
+        embed: async () => [],
+      };
+      const bus = new EventBus();
+      const monitor = new HealthMonitor(
+        [{ label: "primary", baseUrl: "http://x", provider }],
+        bus,
+        { intervalMs: 40 },
+      );
+      monitor.start();
+      // give probeAll() a tick to start
+      setTimeout(() => monitor.stop(), 100);
+    });
+    const wasAborted = await aborted;
+    expect(wasAborted).toBe(true);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+  });
+});

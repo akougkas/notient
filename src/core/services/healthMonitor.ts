@@ -39,10 +39,20 @@ export class HealthMonitor {
   }
 
   private async probeAll(): Promise<void> {
+    const timeoutMs = Math.max(20, Math.floor(this.config.intervalMs / 2));
     await Promise.all(
       this.endpoints.map(async (endpoint) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         const start = Date.now();
-        const ok = await endpoint.provider.isAvailable();
+        let ok = false;
+        try {
+          ok = await endpoint.provider.isAvailable(controller.signal);
+        } catch {
+          ok = false;
+        } finally {
+          clearTimeout(timer);
+        }
         const latencyMs = Date.now() - start;
         this.lastResults.set(endpoint.label, ok);
         this.bus.emit({ type: "llm:health", endpoint: endpoint.label, ok, latencyMs });
