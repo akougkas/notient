@@ -80,6 +80,44 @@ describe("LMStudioProvider", () => {
     expect(chunks.join("")).toBe("hello");
   });
 
+  test("chatStream rejects and cancels the SSE reader when aborted during a pending read", async () => {
+    const encoder = new TextEncoder();
+    let cancelCalled = false;
+    let pullCount = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount++;
+        if (pullCount === 1) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: "first" } }] })}\n`,
+            ),
+          );
+        }
+      },
+      cancel() {
+        cancelCalled = true;
+      },
+    });
+    mockFetch(() => new Response(stream, { status: 200 }));
+    const controller = new AbortController();
+    const p = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const iterator = p
+      .chatStream([{ role: "user", content: "hi" }], {
+        model: "m",
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const first = await iterator.next();
+    expect(first).toEqual({ value: "first", done: false });
+    const pending = iterator.next();
+    controller.abort();
+
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(cancelCalled).toBe(true);
+  });
+
   test("chat throws on non-OK response", async () => {
     mockFetch(() => new Response("bad", { status: 500 }));
     const p = new LMStudioProvider({ baseUrl: "http://x/v1" });

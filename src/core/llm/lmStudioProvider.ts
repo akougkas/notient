@@ -164,19 +164,14 @@ async function* iterateSseDeltas(
   signal?: AbortSignal,
 ): AsyncIterable<string> {
   const reader = body.getReader();
-  const onAbort = (): void => {
-    void reader.cancel();
-  };
-  if (signal) {
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  }
+  const abortState = attachAbortHandler(reader, signal);
   const decoder = new TextDecoder();
   let buffer = "";
   try {
     for (;;) {
-      if (signal?.aborted) throw asAbortError();
+      throwIfAborted(abortState.aborted());
       const { done, value } = await reader.read();
+      throwIfAborted(abortState.aborted());
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const drained = drainSseLines(buffer);
@@ -185,7 +180,7 @@ async function* iterateSseDeltas(
       if (drained.done) return;
     }
   } finally {
-    signal?.removeEventListener("abort", onAbort);
+    abortState.cleanup();
     try {
       reader.releaseLock();
     } catch {
@@ -194,7 +189,36 @@ async function* iterateSseDeltas(
   }
 }
 
+function attachAbortHandler(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): { aborted: () => boolean; cleanup: () => void } {
+  let abortRequested = signal?.aborted ?? false;
+  const onAbort = (): void => {
+    abortRequested = true;
+    debugLmStudioStream("abort");
+    void reader.cancel(asAbortError());
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    aborted: () => abortRequested || signal?.aborted === true,
+    cleanup: () => signal?.removeEventListener("abort", onAbort),
+  };
+}
+
+function throwIfAborted(aborted: boolean): void {
+  if (aborted) throw asAbortError();
+}
+
 function stripJsonFences(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   return fenced ? fenced[1] : text;
+}
+
+function debugLmStudioStream(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][LMStudioStream] ${message}`, data ?? {});
 }
