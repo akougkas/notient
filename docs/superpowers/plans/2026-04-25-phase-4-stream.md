@@ -5792,14 +5792,16 @@ Expected: prints `[smoke] phase4: stream=N decorations=M vitals=ok bridge=ok can
 
 - [ ] **Step 6: Update STATE.md (local-only — never staged)**
 
-`.planning/` is gitignored. STATE.md exists on disk for the next session's context but is **not** committed. Replace the local file with the content below, then move on; do not `git add` it.
+> **PRECONDITION — DO NOT WRITE THIS FILE EARLY.** The template below describes the *post-implementation* snapshot. Apply it ONLY after Tasks 0-15 have all shipped commits, `bun run typecheck && bun run lint && bun test` is green, AND `bun run smoke:phase4` printed `[smoke] phase4: ... chat=ok undo=ok` with every surface `ok`. Writing this template before those gates pass would make `.planning/STATE.md` lie about reality. If any DoD checkbox is still open, leave the existing Phase 3 STATE.md untouched and resolve the outstanding work first.
+
+`.planning/` is gitignored. STATE.md exists on disk for the next session's context but is **not** committed. Once the precondition holds, replace the local file with the content below, fill in `<Date completed>` with the actual date, then move on; do not `git add` it.
 
 ```markdown
 # Notient Project State
 
 **Version:** 0.2.0 (no git tag — tags reserved for v1.0.0 release)
 **Current phase:** Phase 4 (Stream) — COMPLETE
-**Date completed:** <fill in>
+**Date completed:** <Date completed — fill in only after Tasks 0-15 are all green and `bun run smoke:phase4` exits 0>
 **Next phase:** Phase 5 (Hardening + telemetry + docs site + notient.com landing)
 **AI substrate:** dynamo (`192.168.86.143:1234`, LM Studio, primary) + mini (`192.168.86.141:8080`, llama-server, deep)
 **Test vault:** `/mnt/c/Users/akougk/Projects/vaultex/` (894 markdown notes, PARA structure)
