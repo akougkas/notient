@@ -32,6 +32,78 @@ export interface NotientSettings {
     confidenceThreshold: number;
   };
   awakenedAt: number | null;
+
+  // Phase 4 — Stream
+  stream: {
+    recencyHalfLifeHours: number;
+    offNoteRelevanceFloor: number;
+    maxItems: number;
+  };
+
+  // Phase 4 — Vitals
+  vitals: {
+    freshnessHalfLifeDays: number;
+    healthWeights: { wordBand: number; chunkCoverage: number; hasApprovedEdges: number };
+    connectivityThresholds: { sparse: number; connected: number; hub: number };
+    writeToFrontmatter: boolean;
+  };
+
+  // Phase 4 — Editor decorations
+  decorations: {
+    enabled: boolean;
+    maxPerViewport: number;
+    debounceMs: number;
+    minWordsToDecorate: number;
+  };
+
+  // Phase 4 — Native graph bridge
+  nativeGraph: {
+    writeRelatedSection: boolean;
+    writeFrontmatterRelations: boolean;
+    relatedSectionHeading: string;
+  };
+
+  // Phase 4 — Search
+  search: {
+    defaultMode: "quick" | "balanced" | "deep";
+    balanced: { topK: number; rerankTopN: number };
+    deep: { graphExpansionDepth: number; synthesisEnabled: boolean };
+    history: { maxQueries: number };
+    savedQueriesFolder: string;
+    previewEnabled: boolean;
+  };
+
+  // Phase 4 — Chat
+  chat: {
+    enabled: boolean;
+    approvalMode: "safe" | "yolo";
+    persistReasoning: boolean;
+    toolModeByModel: Record<string, "native" | "json-fallback" | "disabled">;
+    conversationsFolder: string;
+    proposalsFolder: string;
+    maxRoundsPerTurn: number;
+    contextBudgetFraction: number;
+    context: {
+      includeUserProfile: boolean;
+      includeVaultSnapshot: boolean;
+      includeWorkspaceState: boolean;
+      includeCrossSessionMemory: boolean;
+      crossSessionTopK: number;
+      crossSessionSimThreshold: number;
+      pinnedNoteMaxTokens: number;
+    };
+  };
+
+  // Phase 4 — Universal undo
+  history: {
+    retentionMaxRows: number;
+    retentionMaxRowsPerTarget: number;
+  };
+
+  // Phase 4 — Indexer exclusion
+  indexer: {
+    excludePaths: string[];
+  };
 }
 
 // Phase 4 substrate: ONLY mini. ONLY two models — nemotron-cascade for chat/reasoning,
@@ -80,4 +152,60 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     confidenceThreshold: 0.6,
   },
   awakenedAt: null,
+  stream: {
+    recencyHalfLifeHours: 12,
+    offNoteRelevanceFloor: 0.3,
+    maxItems: 50,
+  },
+  vitals: {
+    freshnessHalfLifeDays: 14,
+    healthWeights: { wordBand: 1, chunkCoverage: 1, hasApprovedEdges: 1 },
+    connectivityThresholds: { sparse: 1, connected: 4, hub: 12 },
+    writeToFrontmatter: false,
+  },
+  decorations: {
+    enabled: true,
+    maxPerViewport: 5,
+    debounceMs: 200,
+    minWordsToDecorate: 100,
+  },
+  nativeGraph: {
+    writeRelatedSection: true,
+    writeFrontmatterRelations: true,
+    relatedSectionHeading: "Related",
+  },
+  search: {
+    defaultMode: "quick",
+    balanced: { topK: 20, rerankTopN: 5 },
+    deep: { graphExpansionDepth: 1, synthesisEnabled: true },
+    history: { maxQueries: 50 },
+    savedQueriesFolder: "Notient/searches",
+    previewEnabled: true,
+  },
+  chat: {
+    enabled: true,
+    approvalMode: "safe",
+    persistReasoning: false,
+    toolModeByModel: {},
+    conversationsFolder: "Notient/conversations",
+    proposalsFolder: "Notient/proposals",
+    maxRoundsPerTurn: 8,
+    contextBudgetFraction: 0.7,
+    context: {
+      includeUserProfile: true,
+      includeVaultSnapshot: true,
+      includeWorkspaceState: true,
+      includeCrossSessionMemory: true,
+      crossSessionTopK: 2,
+      crossSessionSimThreshold: 0.7,
+      pinnedNoteMaxTokens: 4000,
+    },
+  },
+  history: {
+    retentionMaxRows: 500,
+    retentionMaxRowsPerTarget: 50,
+  },
+  indexer: {
+    excludePaths: ["Notient/conversations", "Notient/proposals", "Notient/searches"],
+  },
 };
