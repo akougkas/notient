@@ -1,1 +1,41 @@
 /* Notient v1.0 — styles populated in Phase 4 (Stream) */
+
+.notient-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px;
+}
+.notient-header h2 {
+  margin: 0 0 4px;
+}
+.notient-subtitle {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin: 0;
+}
+.notient-body {
+  flex: 1;
+  padding: 12px 0;
+}
+.notient-status-footer {
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 6px 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.85em;
+}
+.notient-dot {
+  font-size: 0.8em;
+}
+.notient-dot.ok {
+  color: var(--color-green);
+}
+.notient-dot.down {
+  color: var(--color-red);
+}
+.notient-count {
+  color: var(--text-muted);
+  margin-left: auto;
+}
