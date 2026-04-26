@@ -20,6 +20,7 @@
     "test": "bun test",
     "smoke:indexer": "bun scripts/smoke-indexer.ts",
     "smoke:coordinator": "bun scripts/smoke-coordinator.ts",
+    "smoke:phase4": "bun scripts/smoke-phase4.ts",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",

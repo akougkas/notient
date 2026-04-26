@@ -1,5 +1,43 @@
 import { describe, expect, test } from "bun:test";
-import { Kernel } from "./kernel";
+import { Kernel, type ServiceKey } from "./kernel";
+
+const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
+  "bus",
+  "settings",
+  "facade",
+  "database",
+  "graph",
+  "primaryLLM",
+  "deepLLM",
+  "embeddingLLM",
+  "health",
+  "lock",
+  "echoGuard",
+  "indexer",
+  "vectorIndex",
+  "embedder",
+  "extractor",
+  "reasoningMutex",
+  "idleDetector",
+  "coordinator",
+  "approvalService",
+  "coAuthor",
+  "streamService",
+  "vitalsService",
+  "nativeGraphBridge",
+  "canvasFromResults",
+  "searchPipeline",
+  "savedQueries",
+  "searchHistory",
+  "conversationStore",
+  "conversationIndex",
+  "toolRegistry",
+  "approvalGate",
+  "contextManager",
+  "chatService",
+  "historyService",
+  "vaultBootstrap",
+];
 
 describe("Kernel", () => {
   test("get throws if service not registered", () => {
@@ -15,28 +53,7 @@ describe("Kernel", () => {
 
   test("seal succeeds when all required services registered", () => {
     const k = new Kernel();
-    for (const key of [
-      "bus",
-      "settings",
-      "facade",
-      "database",
-      "graph",
-      "primaryLLM",
-      "deepLLM",
-      "embeddingLLM",
-      "health",
-      "lock",
-      "echoGuard",
-      "indexer",
-      "vectorIndex",
-      "embedder",
-      "extractor",
-      "reasoningMutex",
-      "idleDetector",
-      "coordinator",
-      "approvalService",
-      "coAuthor",
-    ] as const) {
+    for (const key of ALL_SERVICE_KEYS) {
       k.register(key, {} as never);
     }
     expect(() => k.seal()).not.toThrow();
@@ -45,28 +62,7 @@ describe("Kernel", () => {
 
   test("register after seal throws", () => {
     const k = new Kernel();
-    for (const key of [
-      "bus",
-      "settings",
-      "facade",
-      "database",
-      "graph",
-      "primaryLLM",
-      "deepLLM",
-      "embeddingLLM",
-      "health",
-      "lock",
-      "echoGuard",
-      "indexer",
-      "vectorIndex",
-      "embedder",
-      "extractor",
-      "reasoningMutex",
-      "idleDetector",
-      "coordinator",
-      "approvalService",
-      "coAuthor",
-    ] as const) {
+    for (const key of ALL_SERVICE_KEYS) {
       k.register(key, {} as never);
     }
     k.seal();

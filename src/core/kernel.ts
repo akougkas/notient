@@ -1,21 +1,36 @@
 import type { ObsidianFacade } from "../adapters/obsidianFacade";
+import type { CanvasFromResults } from "../ui/search/canvasFromResults";
 import type { ApprovalService } from "./approvals/approvalService";
+import type { ApprovalGate } from "./chat/approvalGate";
+import type { ChatService } from "./chat/chatService";
+import type { ContextManager } from "./chat/contextManager";
+import type { ConversationIndex } from "./chat/conversationIndex";
+import type { ConversationStore } from "./chat/conversationStore";
+import type { ToolRegistry } from "./chat/tools/registry";
 import type { CoAuthorService } from "./coAuthor/chatStream";
 import type { Coordinator } from "./coordinator/coordinator";
 import type { ReasoningMutex } from "./coordinator/reasoningMutex";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
+import type { NativeGraphBridge } from "./graph/nativeGraphBridge";
+import type { HistoryService } from "./history/historyService";
 import type { Embedder } from "./indexer/embedder";
 import type { Extractor } from "./indexer/extractor";
 import type { IndexerQueue } from "./indexer/indexerQueue";
 import type { VectorIndex } from "./indexer/vectorIndex";
 import type { LLMProvider } from "./llm/provider";
+import type { SavedQueries } from "./search/savedQueries";
+import type { SearchHistory } from "./search/searchHistory";
+import type { SearchPipeline } from "./search/searchPipeline";
 import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
 import type { IdleDetector } from "./services/idleDetector";
+import type { VaultBootstrap } from "./services/vaultBootstrap";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
+import type { StreamService } from "./stream/streamService";
+import type { VitalsService } from "./vitals/vitalsService";
 
 export interface ServiceRegistry {
   bus: EventBus;
@@ -38,6 +53,23 @@ export interface ServiceRegistry {
   reasoningMutex: ReasoningMutex;
   approvalService: ApprovalService;
   coAuthor: CoAuthorService;
+
+  // Phase 4 services. Each registers in main.ts before kernel.seal().
+  streamService: StreamService;
+  vitalsService: VitalsService;
+  nativeGraphBridge: NativeGraphBridge;
+  canvasFromResults: CanvasFromResults;
+  searchPipeline: SearchPipeline;
+  savedQueries: SavedQueries;
+  searchHistory: SearchHistory;
+  conversationStore: ConversationStore;
+  conversationIndex: ConversationIndex;
+  toolRegistry: ToolRegistry;
+  approvalGate: ApprovalGate;
+  contextManager: ContextManager;
+  chatService: ChatService;
+  historyService: HistoryService;
+  vaultBootstrap: VaultBootstrap;
 }
 
 export type ServiceKey = keyof ServiceRegistry;
@@ -63,6 +95,21 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "coordinator",
   "approvalService",
   "coAuthor",
+  "streamService",
+  "vitalsService",
+  "nativeGraphBridge",
+  "canvasFromResults",
+  "searchPipeline",
+  "savedQueries",
+  "searchHistory",
+  "conversationStore",
+  "conversationIndex",
+  "toolRegistry",
+  "approvalGate",
+  "contextManager",
+  "chatService",
+  "historyService",
+  "vaultBootstrap",
 ];
 
 export class Kernel {
