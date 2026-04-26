@@ -21,7 +21,25 @@ export type AppEvent =
     }
   | { type: "indexer:note-indexed"; path: string; result: IndexerNoteResult }
   | { type: "user:active" }
-  | { type: "user:idle"; level: "30s" | "5m" | "30m" };
+  | { type: "user:idle"; level: "30s" | "5m" | "30m" }
+  | {
+      type: "agent:run-started";
+      agent: string;
+      trigger: string;
+      notePath: string | null;
+      runId: number;
+    }
+  | {
+      type: "agent:run-finished";
+      agent: string;
+      ok: boolean;
+      proposals: number;
+      durationMs: number;
+      error?: string;
+      runId: number;
+    }
+  | { type: "user:action"; kind: "deepen"; notePath: string }
+  | { type: "active-leaf-change"; notePath: string | null; wordCount: number };
 
 export interface IndexerNoteResult {
   chunkCount: number;
