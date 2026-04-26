@@ -3,6 +3,11 @@ import { ObsidianFacade } from "./adapters/obsidianFacade";
 import { Database } from "./core/db/database";
 import { EventBus } from "./core/events/eventBus";
 import { GraphStore } from "./core/graph/graphStore";
+import { Embedder } from "./core/indexer/embedder";
+import { Extractor } from "./core/indexer/extractor";
+import { HnswVectorIndex } from "./core/indexer/hnswVectorIndex";
+import { indexNote } from "./core/indexer/indexNote";
+import { IndexerQueue } from "./core/indexer/indexerQueue";
 import { Kernel } from "./core/kernel";
 import { LMStudioProvider } from "./core/llm/lmStudioProvider";
 import { EchoGuard } from "./core/services/echoGuard";
@@ -16,6 +21,7 @@ const PLUGIN_DIR = ".obsidian/plugins/notient";
 const DB_PATH = `${PLUGIN_DIR}/notient.db`;
 const WASM_PATH = `${PLUGIN_DIR}/sql-wasm.wasm`;
 const LOCK_PATH = `${PLUGIN_DIR}/notient.lock`;
+const VECTOR_PATH = `${PLUGIN_DIR}/vectors.bin`;
 
 export default class NotientPlugin extends Plugin {
   kernel = new Kernel();
@@ -23,6 +29,7 @@ export default class NotientPlugin extends Plugin {
   settings!: SettingsService;
   private lockHandle: VaultLockHandle | null = null;
   echoGuard = new EchoGuard();
+  indexOne!: (path: string) => Promise<unknown>;
 
   async onload(): Promise<void> {
     console.log("[Notient] onload");
@@ -67,6 +74,49 @@ export default class NotientPlugin extends Plugin {
     const primaryLLM = new LMStudioProvider({ baseUrl: current.primary.baseUrl });
     const deepLLM = new LMStudioProvider({ baseUrl: current.deep.baseUrl });
 
+    const vectorIndex = new HnswVectorIndex({ maxElements: 50_000 });
+    if (await adapter.exists(VECTOR_PATH)) {
+      const blob = await adapter.readBinary(VECTOR_PATH);
+      await vectorIndex.load(blob);
+    } else {
+      await vectorIndex.init(768); // nomic-embed-text-v2-moe
+    }
+
+    const embedder = new Embedder(primaryLLM, {
+      model: current.primary.embeddingModel,
+      batchSize: 16,
+    });
+    const extractor = new Extractor(primaryLLM, {
+      model: current.primary.fastModel,
+      concurrency: 2,
+    });
+
+    const indexOne = async (path: string): Promise<unknown> => {
+      const body = await facade.read(path);
+      const result = await indexNote({
+        notePath: path,
+        noteBody: body,
+        database,
+        graph,
+        vectorIndex,
+        embedder,
+        extractor,
+        bus: this.bus,
+      });
+      await database.persist();
+      await adapter.writeBinary(VECTOR_PATH, await vectorIndex.persist());
+      return result;
+    };
+    // Expose indexOne on the plugin instance so the AwakenVaultModal (Task 12)
+    // can drive it directly without going through the debouncer.
+    this.indexOne = indexOne;
+
+    const indexerQueue = new IndexerQueue({
+      indexNote: indexOne,
+      debounceMs: 500,
+      bus: this.bus,
+    });
+
     const health = new HealthMonitor(
       [
         { label: "primary", baseUrl: current.primary.baseUrl, provider: primaryLLM },
@@ -86,6 +136,10 @@ export default class NotientPlugin extends Plugin {
     this.kernel.register("health", health);
     this.kernel.register("lock", this.lockHandle);
     this.kernel.register("echoGuard", this.echoGuard);
+    this.kernel.register("vectorIndex", vectorIndex);
+    this.kernel.register("embedder", embedder);
+    this.kernel.register("extractor", extractor);
+    this.kernel.register("indexer", indexerQueue);
     this.kernel.seal();
 
     this.bus.on("llm:health", () => {
@@ -102,18 +156,8 @@ export default class NotientPlugin extends Plugin {
           const contents = await facade.read(file.path);
           const sha = await sha256(contents);
           if (this.echoGuard.take(file.path, sha)) return;
-          const now = Date.now();
-          database.run(
-            `INSERT INTO notes (path, sha, word_count, indexed_at, updated_at)
-             VALUES (?,?,?,?,?)
-             ON CONFLICT(path) DO UPDATE SET sha = excluded.sha,
-               word_count = excluded.word_count,
-               updated_at = excluded.updated_at;`,
-            [file.path, sha, countWords(contents), now, now],
-          );
-          await database.persist();
           this.bus.emit({ type: "vault:note-saved", path: file.path, sha });
-          NotientSidebarView.updateFooter(health.current(), facade.listMarkdown().length);
+          indexerQueue.enqueue(file.path);
         } catch (error) {
           console.error("[Notient] save handler error", error);
         }
@@ -148,6 +192,11 @@ export default class NotientPlugin extends Plugin {
         // ignore
       }
       try {
+        this.kernel.get("indexer").dispose();
+      } catch {
+        // ignore
+      }
+      try {
         await this.kernel.get("database").close();
       } catch {
         // ignore
@@ -169,8 +218,4 @@ async function sha256(input: string): Promise<string> {
   return Array.from(new Uint8Array(hash))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function countWords(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
 }

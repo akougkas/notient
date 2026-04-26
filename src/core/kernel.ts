@@ -2,6 +2,10 @@ import type { ObsidianFacade } from "../adapters/obsidianFacade";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
+import type { Embedder } from "./indexer/embedder";
+import type { Extractor } from "./indexer/extractor";
+import type { IndexerQueue } from "./indexer/indexerQueue";
+import type { VectorIndex } from "./indexer/vectorIndex";
 import type { LLMProvider } from "./llm/provider";
 import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
@@ -19,6 +23,10 @@ export interface ServiceRegistry {
   health: HealthMonitor;
   lock: VaultLockHandle;
   echoGuard: EchoGuard;
+  indexer: IndexerQueue;
+  vectorIndex: VectorIndex;
+  embedder: Embedder;
+  extractor: Extractor;
 }
 
 export type ServiceKey = keyof ServiceRegistry;
@@ -34,6 +42,10 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "health",
   "lock",
   "echoGuard",
+  "indexer",
+  "vectorIndex",
+  "embedder",
+  "extractor",
 ];
 
 export class Kernel {

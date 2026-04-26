@@ -26,6 +26,10 @@ describe("Kernel", () => {
       "health",
       "lock",
       "echoGuard",
+      "indexer",
+      "vectorIndex",
+      "embedder",
+      "extractor",
     ] as const) {
       k.register(key, {} as never);
     }
@@ -46,6 +50,10 @@ describe("Kernel", () => {
       "health",
       "lock",
       "echoGuard",
+      "indexer",
+      "vectorIndex",
+      "embedder",
+      "extractor",
     ] as const) {
       k.register(key, {} as never);
     }

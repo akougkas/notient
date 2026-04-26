@@ -34,5 +34,6 @@ function mergeSettings(base: NotientSettings, patch: Partial<NotientSettings>): 
     agents: { ...base.agents, ...(patch.agents ?? {}) },
     coAuthor: { ...base.coAuthor, ...(patch.coAuthor ?? {}) },
     approvals: { ...base.approvals, ...(patch.approvals ?? {}) },
+    awakenedAt: patch.awakenedAt !== undefined ? patch.awakenedAt : base.awakenedAt,
   };
 }

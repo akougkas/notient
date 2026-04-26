@@ -23,6 +23,7 @@ export interface NotientSettings {
   approvals: {
     confidenceThreshold: number;
   };
+  awakenedAt: number | null;
 }
 
 export const DEFAULT_SETTINGS: NotientSettings = {
@@ -54,4 +55,5 @@ export const DEFAULT_SETTINGS: NotientSettings = {
   approvals: {
     confidenceThreshold: 0.6,
   },
+  awakenedAt: null,
 };
