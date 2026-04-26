@@ -20,6 +20,16 @@ export interface JsonSchema {
   schema: Record<string, unknown>;
 }
 
+export class ChatJsonParseError extends Error {
+  constructor(
+    message: string,
+    readonly raw: string,
+  ) {
+    super(message);
+    this.name = "ChatJsonParseError";
+  }
+}
+
 export interface LLMProvider {
   isAvailable(signal?: AbortSignal): Promise<boolean>;
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<string>;

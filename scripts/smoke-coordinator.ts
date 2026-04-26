@@ -30,7 +30,7 @@ import { EchoGuard } from "../src/core/services/echoGuard";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
 const DEFAULT_LMSTUDIO_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_REASONING_MODEL = "nemotron-cascade-2-30b-a3b-i1";
+const DEFAULT_REASONING_MODEL = "qwen3.5-2b";
 
 const VAULT = process.env.SMOKE_VAULT_PATH ?? DEFAULT_VAULT;
 const LMSTUDIO_URL = process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LMSTUDIO_URL;
@@ -103,7 +103,21 @@ async function main(): Promise<void> {
     db,
     provider,
     reasoningModel: REASONING_MODEL,
-    neighborhood: async () => [],
+    neighborhood: async (notePath, options) => {
+      const rows = db.query<{ note_path: string; id: string; text: string }>(
+        `SELECT note_path, id, text FROM chunks
+         WHERE note_path <> ?
+         ORDER BY LENGTH(text) DESC
+         LIMIT ?;`,
+        [notePath, options.topK],
+      );
+      return rows.map((row) => ({
+        notePath: row.note_path,
+        chunkId: row.id,
+        text: row.text,
+        score: 0.5,
+      }));
+    },
   });
   const synthesizer = new Synthesizer({
     db,
@@ -117,7 +131,22 @@ async function main(): Promise<void> {
     db,
     provider,
     reasoningModel: REASONING_MODEL,
-    neighbors: async () => [],
+    neighbors: async (recentClaimIds, options) => {
+      if (recentClaimIds.length === 0) return [];
+      const placeholders = recentClaimIds.map(() => "?").join(",");
+      const rows = db.query<{ id: string; payload: string | null }>(
+        `SELECT id, payload FROM graph_nodes
+         WHERE type = 'claim' AND id NOT IN (${placeholders})
+         ORDER BY created_at DESC
+         LIMIT ?;`,
+        [...recentClaimIds, options.topK],
+      );
+      return rows.map((row) => ({
+        id: row.id,
+        score: 0.5,
+        chunkIds: extractChunkIds(row.payload),
+      }));
+    },
     maxPairs: 3,
   });
   const maturityAdvancer = new MaturityAdvancer({
@@ -166,10 +195,26 @@ async function main(): Promise<void> {
   await db.persist();
 
   console.log("[smoke] tally", tally);
-  const total = tally.linker + tally.synthesizer + tally.contradictionHunter + tally.maturityAdvancer;
+  const total =
+    tally.linker + tally.synthesizer + tally.contradictionHunter + tally.maturityAdvancer;
   if (total === 0) {
     console.error("[smoke] no proposals staged across any agent; failing");
     process.exit(1);
+  }
+  const nonZeroAgents = Object.values(tally).filter((count) => count > 0).length;
+  if (nonZeroAgents < 2) {
+    console.error(`[smoke] expected at least 2 agents with proposals, got ${nonZeroAgents}`);
+    process.exit(1);
+  }
+}
+
+function extractChunkIds(payload: string | null): string[] {
+  if (!payload) return [];
+  try {
+    const parsed = JSON.parse(payload) as { chunkIds?: string[] };
+    return Array.isArray(parsed.chunkIds) ? parsed.chunkIds : [];
+  } catch {
+    return [];
   }
 }
 

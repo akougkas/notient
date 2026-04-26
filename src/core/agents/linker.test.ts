@@ -156,4 +156,49 @@ describe("Linker", () => {
     });
     expect(saw).toBe(ctrl.signal);
   });
+
+  test("requests enough tokens for multi-edge JSON responses", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
+      "/active.md",
+      "sha",
+      100,
+      1,
+      1,
+    ]);
+    db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
+      "c1",
+      "/active.md",
+      0,
+      "x",
+      "s",
+    ]);
+    let maxTokens = 0;
+    const provider: LLMProvider = {
+      isAvailable: async () => true,
+      chat: async () => "",
+      chatStream: async function* () {
+        yield "";
+      },
+      chatJson: async <T>(_messages: unknown, options: { maxTokens?: number }) => {
+        maxTokens = options.maxTokens ?? 0;
+        return { edges: [] } as T;
+      },
+      embed: async () => [],
+    };
+    const linker = new Linker({
+      db,
+      provider,
+      reasoningModel: "qwen",
+      neighborhood: async () => [{ notePath: "/n.md", chunkId: "c2", text: "x", score: 0.5 }],
+    });
+    await linker.run({
+      trigger: "vault-save",
+      notePath: "/active.md",
+      signal: new AbortController().signal,
+    });
+    expect(maxTokens).toBeGreaterThanOrEqual(1600);
+  });
 });

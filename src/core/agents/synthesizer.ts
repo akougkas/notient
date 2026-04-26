@@ -1,6 +1,6 @@
 import type { Agent, AgentRunContext, AgentRunResult } from "../coordinator/types";
 import type { Database } from "../db/database";
-import type { LLMProvider } from "../llm/provider";
+import { ChatJsonParseError, type LLMProvider } from "../llm/provider";
 import { type DbscanPoint, dbscanCosine } from "./dbscan";
 
 export interface SynthesizerOptions {
@@ -72,16 +72,7 @@ export class Synthesizer implements Agent {
           content: JSON.stringify({ memberPaths, summaries: noteSummaries }),
         },
       ];
-      const response = await this.opts.provider.chatJson<SynthesisResponse>(
-        messages,
-        {
-          model: this.opts.reasoningModel,
-          temperature: 0.2,
-          signal: context.signal,
-          maxTokens: 1500,
-        },
-        SCHEMA,
-      );
+      const response = await this.draftSynthesis(messages, context.signal, memberPaths);
       if (response.confidence < 0.6) continue;
       const id = `staging:synthesis:${slug(response.title)}:${Date.now()}`;
       this.opts.db.run(
@@ -148,6 +139,30 @@ export class Synthesizer implements Agent {
       };
     });
   }
+
+  private async draftSynthesis(
+    messages: Array<{ role: "system" | "user"; content: string }>,
+    signal: AbortSignal,
+    memberPaths: string[],
+  ): Promise<SynthesisResponse> {
+    try {
+      return await this.opts.provider.chatJson<SynthesisResponse>(
+        messages,
+        {
+          model: this.opts.reasoningModel,
+          temperature: 0.2,
+          signal,
+          maxTokens: 1500,
+        },
+        SCHEMA,
+      );
+    } catch (error) {
+      if (error instanceof ChatJsonParseError) {
+        return markdownFallback(error.raw, memberPaths);
+      }
+      throw error;
+    }
+  }
 }
 
 function slug(input: string): string {
@@ -156,4 +171,21 @@ function slug(input: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function markdownFallback(raw: string, memberPaths: string[]): SynthesisResponse {
+  const body = raw.trim();
+  const title = extractMarkdownTitle(body) ?? `Synthesis of ${memberPaths.slice(0, 2).join(", ")}`;
+  return {
+    title,
+    body,
+    memberPaths,
+    confidence: 0.6,
+  };
+}
+
+function extractMarkdownTitle(body: string): string | null {
+  const match = body.match(/^\s*#\s*(?:Synthesis Note:\s*)?(.+)$/im);
+  const title = match?.[1]?.trim();
+  return title && title.length > 0 ? title : null;
 }

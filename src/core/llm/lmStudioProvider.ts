@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatOptions, EmbedOptions, JsonSchema, LLMProvider } from "./provider";
+import {
+  ChatJsonParseError,
+  type ChatMessage,
+  type ChatOptions,
+  type EmbedOptions,
+  type JsonSchema,
+  type LLMProvider,
+} from "./provider";
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -102,8 +109,9 @@ export class LMStudioProvider implements LLMProvider {
     try {
       return JSON.parse(stripped) as T;
     } catch (error) {
-      throw new Error(
+      throw new ChatJsonParseError(
         `chatJson failed to parse JSON: ${(error as Error).message}; raw=${raw.slice(0, 200)}`,
+        raw,
       );
     }
   }

@@ -100,7 +100,7 @@ export class Linker implements Agent {
         model: this.opts.reasoningModel,
         temperature: 0.1,
         signal: context.signal,
-        maxTokens: 800,
+        maxTokens: 2000,
       },
       SCHEMA,
     );
