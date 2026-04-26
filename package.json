@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "smoke:indexer": "bun scripts/smoke-indexer.ts",
+    "smoke:coordinator": "bun scripts/smoke-coordinator.ts",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",
