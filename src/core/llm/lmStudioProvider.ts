@@ -9,7 +9,7 @@ interface ChatCompletionResponse {
 }
 
 interface ChatStreamEvent {
-  choices: { delta?: { content?: string } }[];
+  choices: { delta?: { content?: string; reasoning_content?: string } }[];
 }
 
 interface EmbeddingResponse {
@@ -62,7 +62,7 @@ export class LMStudioProvider implements LLMProvider {
     if (!response.ok || !response.body) {
       throw new Error(`LLM ${response.status} ${response.statusText}`);
     }
-    yield* iterateSseDeltas(response.body);
+    yield* iterateSseDeltas(response.body, opts.signal);
   }
 
   async embed(input: string[], opts: EmbedOptions): Promise<number[][]> {
@@ -121,28 +121,75 @@ function parseSseLine(line: string): string | "[DONE]" | null {
   if (payload === "[DONE]") return "[DONE]";
   try {
     const event = JSON.parse(payload) as ChatStreamEvent;
-    return event.choices[0]?.delta?.content ?? null;
+    const delta = event.choices[0]?.delta;
+    const text = delta?.content ?? delta?.reasoning_content ?? null;
+    return text && text.length > 0 ? text : null;
   } catch {
     return null;
   }
 }
 
-async function* iterateSseDeltas(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
+function asAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("aborted", "AbortError");
+  }
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+interface DrainResult {
+  rest: string;
+  deltas: string[];
+  done: boolean;
+}
+
+function drainSseLines(buffer: string): DrainResult {
+  const deltas: string[] = [];
+  let rest = buffer;
+  for (;;) {
+    const newlineIndex = rest.indexOf("\n");
+    if (newlineIndex < 0) break;
+    const line = rest.slice(0, newlineIndex).trim();
+    rest = rest.slice(newlineIndex + 1);
+    const delta = parseSseLine(line);
+    if (delta === "[DONE]") return { rest, deltas, done: true };
+    if (delta) deltas.push(delta);
+  }
+  return { rest, deltas, done: false };
+}
+
+async function* iterateSseDeltas(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncIterable<string> {
   const reader = body.getReader();
+  const onAbort = (): void => {
+    void reader.cancel();
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
     for (;;) {
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex < 0) break;
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      const delta = parseSseLine(line);
-      if (delta === "[DONE]") return;
-      if (delta) yield delta;
+      if (signal?.aborted) throw asAbortError();
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const drained = drainSseLines(buffer);
+      buffer = drained.rest;
+      for (const delta of drained.deltas) yield delta;
+      if (drained.done) return;
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // already released
     }
   }
 }
