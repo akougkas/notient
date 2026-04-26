@@ -2,6 +2,12 @@ import {
   ChatJsonParseError,
   type ChatMessage,
   type ChatOptions,
+  type ChatToolCallDelta,
+  type ChatWithToolsEvent,
+  type ChatWithToolsHandle,
+  type ChatWithToolsRequest,
+  type ChatWithToolsResult,
+  type ChatWithToolsToolCall,
   type EmbedOptions,
   type JsonSchema,
   type LLMProvider,
@@ -82,6 +88,32 @@ export class LMStudioProvider implements LLMProvider {
     if (!response.ok) throw new Error(`Embed ${response.status} ${response.statusText}`);
     const data = (await response.json()) as EmbeddingResponse;
     return data.data.map((d) => d.embedding);
+  }
+
+  async chatWithTools(request: ChatWithToolsRequest): Promise<ChatWithToolsHandle> {
+    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: request.signal,
+      body: JSON.stringify({
+        model: request.model,
+        messages: request.messages,
+        tools: request.tools,
+        tool_choice: request.toolChoice ?? "auto",
+        temperature: request.temperature ?? 0.3,
+        max_tokens: request.maxTokens,
+        stream: true,
+      }),
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`LLM ${response.status} ${response.statusText}`);
+    }
+    const aggregator = new ToolStreamAggregator();
+    const events = iterateToolEvents(response.body, request.signal, aggregator);
+    return {
+      events,
+      result: async () => aggregator.finalize(),
+    };
   }
 
   async chatJson<T>(messages: ChatMessage[], opts: ChatOptions, schema: JsonSchema): Promise<T> {
@@ -229,4 +261,203 @@ function stripJsonFences(text: string): string {
 function debugLmStudioStream(message: string, data?: Record<string, unknown>): void {
   if (typeof window === "undefined") return;
   console.log(`[Notient][LMStudioStream] ${message}`, data ?? {});
+}
+
+interface ToolCallStreamFragment {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+interface ToolStreamSseEvent {
+  choices: {
+    delta?: {
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: ToolCallStreamFragment[];
+    };
+    message?: {
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: ToolCallStreamFragment[];
+    };
+  }[];
+}
+
+interface ToolCallAccumulator {
+  id: string;
+  name: string;
+  argsJson: string;
+}
+
+class ToolStreamAggregator {
+  private content = "";
+  private reasoning = "";
+  private readonly callsByIndex = new Map<number, ToolCallAccumulator>();
+  private readonly callOrder: number[] = [];
+  private fallbackCounter = 0;
+
+  ingestDelta(event: ToolStreamSseEvent): ChatWithToolsEvent[] {
+    const choice = event.choices[0];
+    if (!choice) return [];
+    const fragment = choice.delta ?? choice.message;
+    if (!fragment) return [];
+    const out: ChatWithToolsEvent[] = [];
+    this.ingestContent(fragment.content, out);
+    this.ingestReasoning(fragment.reasoning_content, out);
+    this.ingestToolCalls(fragment.tool_calls, out);
+    return out;
+  }
+
+  private ingestContent(content: string | undefined, out: ChatWithToolsEvent[]): void {
+    if (!content || content.length === 0) return;
+    this.content += content;
+    out.push({ type: "delta", contentDelta: content });
+  }
+
+  private ingestReasoning(reasoning: string | undefined, out: ChatWithToolsEvent[]): void {
+    if (!reasoning || reasoning.length === 0) return;
+    this.reasoning += reasoning;
+    out.push({ type: "delta", reasoningDelta: reasoning });
+  }
+
+  private ingestToolCalls(
+    pieces: ToolCallStreamFragment[] | undefined,
+    out: ChatWithToolsEvent[],
+  ): void {
+    if (!pieces) return;
+    for (const piece of pieces) {
+      const indexKey = typeof piece.index === "number" ? piece.index : this.fallbackCounter++;
+      const entry = this.upsertCall(indexKey, piece);
+      this.applyPieceToCall(entry, piece);
+      const delta: ChatToolCallDelta = {
+        id: entry.id,
+        name: entry.name,
+        argsJson: entry.argsJson,
+      };
+      out.push({ type: "delta", toolCallDelta: delta });
+    }
+  }
+
+  private upsertCall(indexKey: number, piece: ToolCallStreamFragment): ToolCallAccumulator {
+    const existing = this.callsByIndex.get(indexKey);
+    if (existing) {
+      if (piece.id) existing.id = piece.id;
+      return existing;
+    }
+    const created: ToolCallAccumulator = {
+      id: piece.id ?? `call_${indexKey}`,
+      name: "",
+      argsJson: "",
+    };
+    this.callsByIndex.set(indexKey, created);
+    this.callOrder.push(indexKey);
+    return created;
+  }
+
+  private applyPieceToCall(entry: ToolCallAccumulator, piece: ToolCallStreamFragment): void {
+    if (piece.function?.name) entry.name = piece.function.name;
+    if (typeof piece.function?.arguments === "string") {
+      entry.argsJson += piece.function.arguments;
+    }
+  }
+
+  finalize(): ChatWithToolsResult {
+    const toolCalls: ChatWithToolsToolCall[] = [];
+    for (const indexKey of this.callOrder) {
+      const entry = this.callsByIndex.get(indexKey);
+      if (!entry || !entry.name) continue;
+      const args = parseToolArguments(entry.argsJson);
+      toolCalls.push({ id: entry.id, name: entry.name, args });
+    }
+    // Phase 2.5 fallback extended to the tool path: some llama-server response
+    // shapes leak reasoning_content into the empty content channel. When the
+    // model returns no tool calls and no content but did emit reasoning, fall
+    // back to the reasoning text so downstream consumers see something useful.
+    let content = this.content;
+    if (toolCalls.length === 0 && content.trim().length === 0 && this.reasoning.length > 0) {
+      content = this.reasoning;
+    }
+    return { content, reasoningContent: this.reasoning, toolCalls };
+  }
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return {};
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseToolStreamLine(line: string): ToolStreamSseEvent | "[DONE]" | null {
+  if (!line.startsWith("data:")) return null;
+  const payload = line.slice(5).trim();
+  if (payload === "[DONE]") return "[DONE]";
+  try {
+    return JSON.parse(payload) as ToolStreamSseEvent;
+  } catch {
+    return null;
+  }
+}
+
+interface ToolDrainResult {
+  rest: string;
+  events: ToolStreamSseEvent[];
+  done: boolean;
+}
+
+function drainToolStreamLines(buffer: string): ToolDrainResult {
+  const events: ToolStreamSseEvent[] = [];
+  let rest = buffer;
+  for (;;) {
+    const newlineIndex = rest.indexOf("\n");
+    if (newlineIndex < 0) break;
+    const line = rest.slice(0, newlineIndex).trim();
+    rest = rest.slice(newlineIndex + 1);
+    const parsed = parseToolStreamLine(line);
+    if (parsed === "[DONE]") return { rest, events, done: true };
+    if (parsed) events.push(parsed);
+  }
+  return { rest, events, done: false };
+}
+
+async function* iterateToolEvents(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  aggregator: ToolStreamAggregator,
+): AsyncIterable<ChatWithToolsEvent> {
+  const reader = body.getReader();
+  const abortState = attachAbortHandler(reader, signal);
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      throwIfAborted(abortState.aborted());
+      const { done, value } = await reader.read();
+      throwIfAborted(abortState.aborted());
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const drained = drainToolStreamLines(buffer);
+      buffer = drained.rest;
+      for (const event of drained.events) {
+        for (const out of aggregator.ingestDelta(event)) yield out;
+      }
+      if (drained.done) return;
+    }
+  } finally {
+    abortState.cleanup();
+    try {
+      reader.releaseLock();
+    } catch {
+      // already released
+    }
+  }
 }
