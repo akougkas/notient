@@ -129,7 +129,11 @@ export class ContradictionHunter implements Agent {
           model: this.opts.reasoningModel,
           temperature: 0.1,
           signal: context.signal,
-          maxTokens: 1000,
+          // 8 pairs * (240-char rationale + IDs + 4 chunk IDs) ≈ 3 KB.
+          // Reasoning models also burn tokens on internal CoT before the JSON,
+          // so 1000 was reliably truncating against nemotron-cascade. Bump to
+          // 2000 to leave room for both the CoT and the structured payload.
+          maxTokens: 2000,
         },
         SCHEMA,
       );
