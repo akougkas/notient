@@ -25,6 +25,7 @@ export interface ServiceRegistry {
   graph: GraphStore;
   primaryLLM: LLMProvider;
   deepLLM: LLMProvider;
+  embeddingLLM: LLMProvider;
   health: HealthMonitor;
   lock: VaultLockHandle;
   echoGuard: EchoGuard;
@@ -49,6 +50,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "graph",
   "primaryLLM",
   "deepLLM",
+  "embeddingLLM",
   "health",
   "lock",
   "echoGuard",

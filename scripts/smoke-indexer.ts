@@ -33,9 +33,12 @@ import { indexNote } from "../src/core/indexer/indexNote";
 import { LMStudioProvider } from "../src/core/llm/lmStudioProvider";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
-const DEFAULT_LMSTUDIO_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_REASONING_MODEL = "nemotron-cascade-2-30b-a3b-i1";
-const DEFAULT_EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+// Phase 4 substrate: ONLY mini. Chat = llama-server on :8080 (Nemotron-Cascade
+// loaded); embedding = Ollama on :11434 (nomic-embed-text-v2-moe loaded).
+const DEFAULT_LLM_URL = "http://192.168.86.141:8080/v1";
+const DEFAULT_EMBED_URL = "http://192.168.86.141:11434/v1";
+const DEFAULT_REASONING_MODEL = "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M";
+const DEFAULT_EMBED_MODEL = "nomic-embed-text-v2-moe";
 const EMBED_DIM = 768;
 
 interface InlineNote {
@@ -175,7 +178,8 @@ function findFirstSmallMd(dir: string, maxBytes: number): string | null {
 
 async function main(): Promise<number> {
   const vaultRoot = process.env.SMOKE_VAULT_PATH ?? DEFAULT_VAULT;
-  const baseUrl = process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LMSTUDIO_URL;
+  const baseUrl = process.env.SMOKE_LLM_URL ?? process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LLM_URL;
+  const embedUrl = process.env.SMOKE_EMBED_URL ?? DEFAULT_EMBED_URL;
   const reasoningModel = process.env.SMOKE_REASONING_MODEL ?? DEFAULT_REASONING_MODEL;
   const embedModel = process.env.SMOKE_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
 
@@ -184,9 +188,10 @@ async function main(): Promise<number> {
   const vectorsPath = join(tempDir, "vectors.bin");
   const wasmPath = join(tempDir, "sql-wasm.wasm");
 
-  console.log("[smoke] temp dir:", tempDir);
-  console.log("[smoke] dynamo  :", baseUrl);
-  console.log("[smoke] models  :", `reasoning=${reasoningModel} embed=${embedModel}`);
+  console.log("[smoke] temp dir :", tempDir);
+  console.log("[smoke] llm url  :", baseUrl);
+  console.log("[smoke] embed url:", embedUrl);
+  console.log("[smoke] models   :", `reasoning=${reasoningModel} embed=${embedModel}`);
 
   const cleanup = (): void => {
     try {
@@ -207,31 +212,42 @@ async function main(): Promise<number> {
     console.log(`[smoke] sqlite ready (schema v${Database.currentSchemaVersion})`);
 
     const provider = new LMStudioProvider({ baseUrl });
+    const embedProvider = new LMStudioProvider({ baseUrl: embedUrl });
     const probeStart = Date.now();
     const reachable = await provider.isAvailable();
     const probeMs = Date.now() - probeStart;
     if (!reachable) {
-      console.error(`[smoke] FATAL: dynamo unreachable at ${baseUrl} (probe ${probeMs}ms)`);
-      console.error("[smoke] Ensure LM Studio is running and serving /v1/models.");
+      console.error(`[smoke] FATAL: llama-server unreachable at ${baseUrl} (probe ${probeMs}ms)`);
+      console.error("[smoke] Ensure mini's llama-server systemd unit is active and serving /v1/models.");
+      cleanup();
+      return 1;
+    }
+    const embedReachable = await embedProvider.isAvailable();
+    if (!embedReachable) {
+      console.error(`[smoke] FATAL: embedding endpoint unreachable at ${embedUrl}`);
+      console.error("[smoke] Ensure mini's ollama service is active and has nomic-embed-text-v2-moe pulled.");
       cleanup();
       return 1;
     }
     const modelsResponse = await fetch(`${baseUrl}/models`);
     const modelsBody = (await modelsResponse.json()) as { data: { id: string }[] };
     const modelIds = modelsBody.data.map((m) => m.id);
-    console.log(`[smoke] dynamo OK in ${probeMs}ms; ${modelIds.length} models loaded`);
+    console.log(`[smoke] llm OK in ${probeMs}ms; ${modelIds.length} models on llama-server`);
     if (!modelIds.includes(reasoningModel)) {
-      console.warn(`[smoke] WARN: reasoning model "${reasoningModel}" not listed by server`);
+      console.warn(`[smoke] WARN: reasoning model "${reasoningModel}" not listed by llama-server`);
     }
-    if (!modelIds.includes(embedModel)) {
-      console.warn(`[smoke] WARN: embedding model "${embedModel}" not listed by server`);
+    const embedModelsResponse = await fetch(`${embedUrl}/models`);
+    const embedModelsBody = (await embedModelsResponse.json()) as { data: { id: string }[] };
+    const embedModelIds = embedModelsBody.data.map((m) => m.id);
+    if (!embedModelIds.some((id) => id === embedModel || id === `${embedModel}:latest`)) {
+      console.warn(`[smoke] WARN: embedding model "${embedModel}" not listed by ollama`);
     }
 
     const bus = new EventBus();
     const graph = new GraphStore(database);
     const vectorIndex = new HnswVectorIndex({ maxElements: 50_000 });
     await vectorIndex.init(EMBED_DIM);
-    const embedder = new Embedder(provider, { model: embedModel, batchSize: 16 });
+    const embedder = new Embedder(embedProvider, { model: embedModel, batchSize: 16 });
     const extractor = new Extractor(provider, { model: reasoningModel, concurrency: 4 });
 
     let notes: NoteSample[];

@@ -241,14 +241,21 @@ Replace `src/core/settings/types.ts` with the extended definition (additive — 
 export interface LLMEndpointConfig {
   baseUrl: string;
   reasoningModel: string;
+  /** Legacy field. The active embedding endpoint reads from `NotientSettings.embedding`. */
   embeddingModel: string;
   fastModel: string;
   rerankerModel: string;
 }
 
+export interface EmbeddingEndpointConfig {
+  baseUrl: string;
+  model: string;
+}
+
 export interface NotientSettings {
   primary: LLMEndpointConfig;
   deep: LLMEndpointConfig;
+  embedding: EmbeddingEndpointConfig;
   agents: {
     linker: boolean;
     synthesizer: boolean;
@@ -339,20 +346,34 @@ export interface NotientSettings {
   };
 }
 
+// Phase 4 substrate: ONLY mini. ONLY two models — Nemotron-Cascade for chat/reasoning
+// (loaded in llama-server on :8080), nomic-embed-text-v2-moe for embeddings (loaded
+// in Ollama on :11434). The mini server has VRAM for exactly these two models at once.
+// `primary` and `deep` both point at the same llama-server endpoint with the same
+// chat model; `embedding` points at the Ollama OpenAI-compatible endpoint.
+const MINI_LLAMA_SERVER = "http://192.168.86.141:8080/v1";
+const MINI_OLLAMA = "http://192.168.86.141:11434/v1";
+const MINI_CHAT_MODEL = "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M";
+const MINI_EMBEDDING_MODEL = "nomic-embed-text-v2-moe";
+
 export const DEFAULT_SETTINGS: NotientSettings = {
   primary: {
-    baseUrl: "http://192.168.86.143:1234/v1",
-    reasoningModel: "nemotron-cascade-2-30b-a3b-i1",
-    embeddingModel: "text-embedding-nomic-embed-text-v2-moe",
-    fastModel: "nemotron-cascade-2-30b-a3b-i1",
-    rerankerModel: "granite-4.0-h-350m",
+    baseUrl: MINI_LLAMA_SERVER,
+    reasoningModel: MINI_CHAT_MODEL,
+    embeddingModel: MINI_EMBEDDING_MODEL, // legacy field; embedding endpoint reads from `embedding.*` below
+    fastModel: MINI_CHAT_MODEL,
+    rerankerModel: MINI_CHAT_MODEL,
   },
   deep: {
-    baseUrl: "http://192.168.86.141:8080/v1",
-    reasoningModel: "Qwen3.6-35B-A3B-UD-Q5_K_XL",
-    embeddingModel: "",
-    fastModel: "",
-    rerankerModel: "",
+    baseUrl: MINI_LLAMA_SERVER,
+    reasoningModel: MINI_CHAT_MODEL,
+    embeddingModel: MINI_EMBEDDING_MODEL,
+    fastModel: MINI_CHAT_MODEL,
+    rerankerModel: MINI_CHAT_MODEL,
+  },
+  embedding: {
+    baseUrl: MINI_OLLAMA,
+    model: MINI_EMBEDDING_MODEL,
   },
   agents: {
     linker: true,
@@ -364,7 +385,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     enabled: true,
     minWords: 100,
     debounceMs: 5000,
-    model: "gemma-4-26b-a4b-it",
+    model: MINI_CHAT_MODEL,
   },
   approvals: {
     confidenceThreshold: 0.6,
@@ -4598,13 +4619,16 @@ export function tryParseToolJson(content: string): { tool: string; args: Record<
 Per-model-family behaviour table (the implementer encodes this in a comment at the top of `toolModeProbe.ts` as guidance for future-model classification):
 
 ```text
-nemotron-cascade-2-30b-a3b-i1   → native (with reasoning_content channel; strip from history)
-llama-3.{1,3}-instruct          → native
-qwen2.5-{coder,instruct}        → native
-deepseek-r1 distills, qwq-32b   → json-fallback (R1 not trained for tools)
-gpt-oss-20b/120b                → native (reasoning_content channel)
-unknown                         → probe and cache
+Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M  → native (Phase 4 PRIMARY; reasoning_content channel; strip from history)
+nomic-embed-text-v2-moe                → embedding-only (Phase 4 PRIMARY; 768-dim; not a chat model)
+llama-3.{1,3}-instruct                 → native (out of scope for Phase 4)
+qwen2.5-{coder,instruct}                → native (out of scope)
+deepseek-r1 distills, qwq-32b           → json-fallback (out of scope)
+gpt-oss-20b/120b                        → native (out of scope)
+unknown                                 → probe and cache
 ```
+
+Phase 4 ships against ONLY the two PRIMARY models. The other rows are forward-looking guidance for users who later swap models in settings.
 
 - [ ] **Step 3: Approval gate**
 
@@ -5695,18 +5719,29 @@ try { chatService.dispose(); } catch { /* ignore */ }
 
 - [ ] **Step 3: Smoke harness**
 
-Create `scripts/smoke-phase4.ts`. Drives one happy-path through every surface against the live test vault + dynamo:
+Create `scripts/smoke-phase4.ts`. Drives one happy-path through every surface against the live test vault + the mini AI substrate (chat = llama-server on :8080 with `Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M`; embedding = Ollama on :11434 with `nomic-embed-text-v2-moe`):
 
 ```typescript
 #!/usr/bin/env bun
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 // Imports for: Database, EventBus, LMStudioProvider, all Phase 4 services + agents.
 
-const VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
+const VAULT = process.env.SMOKE_VAULT_PATH ?? "/mnt/c/Users/akougk/Projects/vaultex";
 const PLUGIN_DIR = `${VAULT}/.obsidian/plugins/notient`;
+const LLM_URL = process.env.SMOKE_LLM_URL ?? "http://192.168.86.141:8080/v1";
+const EMBED_URL = process.env.SMOKE_EMBED_URL ?? "http://192.168.86.141:11434/v1";
+const REASONING_MODEL = process.env.SMOKE_REASONING_MODEL ?? "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M";
+const EMBED_MODEL = process.env.SMOKE_EMBED_MODEL ?? "nomic-embed-text-v2-moe";
 
 async function main() {
-  const harness = await buildHarness({ vault: VAULT, pluginDir: PLUGIN_DIR });
+  const harness = await buildHarness({
+    vault: VAULT,
+    pluginDir: PLUGIN_DIR,
+    llmUrl: LLM_URL,
+    embedUrl: EMBED_URL,
+    reasoningModel: REASONING_MODEL,
+    embedModel: EMBED_MODEL,
+  });
   const tally = { stream: 0, decorations: 0, vitals: false, bridge: false, canvas: false, search: false, chat: false, undo: false };
 
   // 1. Coordinator → produce at least one staging row.
@@ -5803,7 +5838,7 @@ Expected: prints `[smoke] phase4: stream=N decorations=M vitals=ok bridge=ok can
 **Current phase:** Phase 4 (Stream) — COMPLETE
 **Date completed:** <Date completed — fill in only after Tasks 0-15 are all green and `bun run smoke:phase4` exits 0>
 **Next phase:** Phase 5 (Hardening + telemetry + docs site + notient.com landing)
-**AI substrate:** dynamo (`192.168.86.143:1234`, LM Studio, primary) + mini (`192.168.86.141:8080`, llama-server, deep)
+**AI substrate:** mini (single-node) — chat: llama-server on `192.168.86.141:8080` with `Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M`; embedding: Ollama on `192.168.86.141:11434` with `nomic-embed-text-v2-moe` (768-dim). Server has VRAM for exactly these two models.
 **Test vault:** `/mnt/c/Users/akougk/Projects/vaultex/` (894 markdown notes, PARA structure)
 
 ## What works (verified by tests + Phase 4 smoke run)

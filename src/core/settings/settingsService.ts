@@ -31,6 +31,7 @@ function mergeSettings(base: NotientSettings, patch: Partial<NotientSettings>): 
   return {
     primary: { ...base.primary, ...(patch.primary ?? {}) },
     deep: { ...base.deep, ...(patch.deep ?? {}) },
+    embedding: { ...base.embedding, ...(patch.embedding ?? {}) },
     agents: { ...base.agents, ...(patch.agents ?? {}) },
     coAuthor: { ...base.coAuthor, ...(patch.coAuthor ?? {}) },
     approvals: { ...base.approvals, ...(patch.approvals ?? {}) },

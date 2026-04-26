@@ -29,11 +29,14 @@ import { LMStudioProvider } from "../src/core/llm/lmStudioProvider";
 import { EchoGuard } from "../src/core/services/echoGuard";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
-const DEFAULT_LMSTUDIO_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_REASONING_MODEL = "qwen3.5-2b";
+// Phase 4 substrate: ONLY mini. The chat endpoint is llama-server on :8080 with
+// Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M loaded; the embedding endpoint is Ollama on
+// :11434 with nomic-embed-text-v2-moe. Override via env vars when iterating locally.
+const DEFAULT_LLM_URL = "http://192.168.86.141:8080/v1";
+const DEFAULT_REASONING_MODEL = "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M";
 
 const VAULT = process.env.SMOKE_VAULT_PATH ?? DEFAULT_VAULT;
-const LMSTUDIO_URL = process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LMSTUDIO_URL;
+const LLM_URL = process.env.SMOKE_LLM_URL ?? process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LLM_URL;
 const REASONING_MODEL = process.env.SMOKE_REASONING_MODEL ?? DEFAULT_REASONING_MODEL;
 
 const PLUGIN_DIR = `${VAULT}/.obsidian/plugins/notient`;
@@ -91,11 +94,11 @@ async function main(): Promise<void> {
   await db.init();
 
   const bus = new EventBus();
-  const provider = new LMStudioProvider({ baseUrl: LMSTUDIO_URL });
+  const provider = new LMStudioProvider({ baseUrl: LLM_URL });
 
   const ok = await provider.isAvailable();
   if (!ok) {
-    console.error(`[smoke] LMStudio not available at ${LMSTUDIO_URL}`);
+    console.error(`[smoke] llama-server not available at ${LLM_URL}`);
     process.exit(1);
   }
 

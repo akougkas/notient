@@ -95,6 +95,7 @@ export default class NotientPlugin extends Plugin {
     const current = this.settings.get();
     const primaryLLM = new LMStudioProvider({ baseUrl: current.primary.baseUrl });
     const deepLLM = new LMStudioProvider({ baseUrl: current.deep.baseUrl });
+    const embeddingLLM = new LMStudioProvider({ baseUrl: current.embedding.baseUrl });
 
     const vectorIndex = new HnswVectorIndex({ maxElements: 50_000 });
     if (await adapter.exists(VECTOR_PATH)) {
@@ -104,8 +105,8 @@ export default class NotientPlugin extends Plugin {
       await vectorIndex.init(768); // nomic-embed-text-v2-moe
     }
 
-    const embedder = new Embedder(primaryLLM, {
-      model: current.primary.embeddingModel,
+    const embedder = new Embedder(embeddingLLM, {
+      model: current.embedding.model,
       batchSize: 16,
     });
     const extractor = new Extractor(primaryLLM, {
@@ -272,6 +273,7 @@ export default class NotientPlugin extends Plugin {
       [
         { label: "primary", baseUrl: current.primary.baseUrl, provider: primaryLLM },
         { label: "deep", baseUrl: current.deep.baseUrl, provider: deepLLM },
+        { label: "embedding", baseUrl: current.embedding.baseUrl, provider: embeddingLLM },
       ],
       this.bus,
       { intervalMs: 30_000 },
@@ -284,6 +286,7 @@ export default class NotientPlugin extends Plugin {
     this.kernel.register("graph", graph);
     this.kernel.register("primaryLLM", primaryLLM);
     this.kernel.register("deepLLM", deepLLM);
+    this.kernel.register("embeddingLLM", embeddingLLM);
     this.kernel.register("health", health);
     this.kernel.register("lock", this.lockHandle);
     this.kernel.register("echoGuard", this.echoGuard);
