@@ -6,12 +6,21 @@ export interface IndexerQueueOptions {
   indexNote: IndexNoteFn;
   debounceMs?: number;
   bus: EventBus;
+  /**
+   * Predicate that returns `true` when a path must be skipped by the indexer.
+   * The producer (main.ts vault.on("modify")) is the primary defence, but the
+   * queue keeps a defensive copy so Notient-owned folders (Notient/conversations,
+   * Notient/proposals, Notient/searches) can never be indexed even if a future
+   * caller forgets to pre-filter.
+   */
+  isExcluded?: (path: string) => boolean;
 }
 
 export class IndexerQueue {
   private readonly indexNote: IndexNoteFn;
   private readonly debounceMs: number;
   private readonly bus: EventBus;
+  private readonly isExcluded: (path: string) => boolean;
   private readonly pending = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly ready: string[] = [];
   private readonly readySet = new Set<string>();
@@ -22,10 +31,12 @@ export class IndexerQueue {
     this.indexNote = opts.indexNote;
     this.debounceMs = opts.debounceMs ?? 500;
     this.bus = opts.bus;
+    this.isExcluded = opts.isExcluded ?? (() => false);
   }
 
   enqueue(path: string): void {
     if (this.disposed) return;
+    if (this.isExcluded(path)) return;
     const existing = this.pending.get(path);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {

@@ -69,4 +69,31 @@ describe("IndexerQueue", () => {
     await tick(40);
     expect(calls).toEqual([]);
   });
+
+  test("isExcluded predicate skips Notient-owned folders without enqueuing", async () => {
+    const calls: string[] = [];
+    const fn: IndexNoteFn = async (path) => {
+      calls.push(path);
+    };
+    const bus = new EventBus();
+    const excluded = new Set([
+      "Notient/conversations/2026-04-25 chat.md",
+      "Notient/proposals/p1.md",
+      "Notient/searches/s1.md",
+    ]);
+    const queue = new IndexerQueue({
+      indexNote: fn,
+      debounceMs: 5,
+      bus,
+      isExcluded: (path) => excluded.has(path),
+    });
+    queue.enqueue("Notient/conversations/2026-04-25 chat.md");
+    queue.enqueue("Notient/proposals/p1.md");
+    queue.enqueue("Notient/searches/s1.md");
+    queue.enqueue("notes/keep.md");
+    expect(queue.pendingCount()).toBe(1);
+    await tick(40);
+    expect(calls).toEqual(["notes/keep.md"]);
+    queue.dispose();
+  });
 });
