@@ -4,7 +4,30 @@ export type AppEvent =
   | { type: "vault:note-saved"; path: string; sha: string }
   | { type: "indexer:progress"; processed: number; total: number }
   | { type: "indexer:complete"; total: number }
-  | { type: "indexer:error"; message: string };
+  | { type: "indexer:error"; message: string }
+  | {
+      type: "indexer:node-added";
+      nodeId: string;
+      nodeType: "note" | "concept" | "claim" | "question";
+      label: string;
+      notePath: string | null;
+    }
+  | {
+      type: "indexer:edge-added";
+      edgeId: string;
+      edgeType: string;
+      sourceId: string;
+      targetId: string;
+    }
+  | { type: "indexer:note-indexed"; path: string; result: IndexerNoteResult };
+
+export interface IndexerNoteResult {
+  chunkCount: number;
+  embedCount: number;
+  nodeCount: number;
+  edgeCount: number;
+  durationMs: number;
+}
 
 export type EventType = AppEvent["type"];
 export type EventOf<T extends EventType> = Extract<AppEvent, { type: T }>;
