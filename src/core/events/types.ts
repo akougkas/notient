@@ -47,7 +47,13 @@ export type AppEvent =
       delta: string;
     }
   | { type: "coAuthor:done"; notePath: string; ok: boolean; durationMs: number; error?: string }
-  | { type: "coAuthor:cancelled"; notePath: string };
+  | { type: "coAuthor:cancelled"; notePath: string }
+  | {
+      type: "approval:decided";
+      kind: "edge" | "node";
+      id: string;
+      decision: "accepted" | "rejected";
+    };
 
 export interface IndexerNoteResult {
   chunkCount: number;
