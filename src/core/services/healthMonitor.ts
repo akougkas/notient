@@ -14,6 +14,7 @@ export interface HealthMonitorConfig {
 export class HealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastResults = new Map<string, boolean>();
+  private inflight = new Set<AbortController>();
 
   constructor(
     private readonly endpoints: MonitoredEndpoint[],
@@ -29,6 +30,10 @@ export class HealthMonitor {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const controller of this.inflight) {
+      controller.abort();
+    }
+    this.inflight.clear();
   }
 
   current(): { label: string; ok: boolean }[] {
@@ -38,11 +43,20 @@ export class HealthMonitor {
     }));
   }
 
+  /**
+   * Returns the set of in-flight probe controllers. Test-only accessor; the
+   * production code paths should treat this as opaque internal state.
+   */
+  inflightControllers(): ReadonlySet<AbortController> {
+    return this.inflight;
+  }
+
   private async probeAll(): Promise<void> {
-    const timeoutMs = Math.max(20, Math.floor(this.config.intervalMs / 2));
+    const timeoutMs = Math.max(500, Math.floor(this.config.intervalMs / 2));
     await Promise.all(
       this.endpoints.map(async (endpoint) => {
         const controller = new AbortController();
+        this.inflight.add(controller);
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         const start = Date.now();
         let ok = false;
@@ -52,6 +66,7 @@ export class HealthMonitor {
           ok = false;
         } finally {
           clearTimeout(timer);
+          this.inflight.delete(controller);
         }
         const latencyMs = Date.now() - start;
         this.lastResults.set(endpoint.label, ok);
