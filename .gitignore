@@ -60,7 +60,6 @@ main.js
 
 mprocs.log
 
-# Local scratch (Codex marker, planning attachments)
+# Local scratch (Codex marker, planning workspace)
 .codex
-.planning/*.pdf
-.planning/llmwiki.md
+.planning/
