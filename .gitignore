@@ -51,6 +51,7 @@ repomix-output.xml
 testbench/
 vector.worker.js
 embed.worker.js
+indexer.worker.js
 main.js
 /styles.css
 

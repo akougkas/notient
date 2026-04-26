@@ -27,10 +27,25 @@ const VAULT_PLUGIN = "/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/not
 const PROJECT_ROOT = process.cwd();
 
 // Files to deploy to vault
-const DEPLOY_FILES = ["main.js", "vector.worker.js", "embed.worker.js", "manifest.json", "styles.css"];
+const DEPLOY_FILES = [
+  "main.js",
+  "vector.worker.js",
+  "embed.worker.js",
+  "indexer.worker.js",
+  "manifest.json",
+  "styles.css",
+];
 
 // Core plugin files (never deleted)
-const CORE_FILES = new Set(["main.js", "vector.worker.js", "embed.worker.js", "manifest.json", "styles.css", "data.json"]);
+const CORE_FILES = new Set([
+  "main.js",
+  "vector.worker.js",
+  "embed.worker.js",
+  "indexer.worker.js",
+  "manifest.json",
+  "styles.css",
+  "data.json",
+]);
 
 // New structure directories (Phase 1/2)
 const NEW_STRUCTURE = {
@@ -214,6 +229,18 @@ const embedWorkerBuildOptions: esbuild.BuildOptions = {
   sourcemap: isDev ? "inline" : false,
 };
 
+const indexerWorkerBuildOptions: esbuild.BuildOptions = {
+  entryPoints: ["src/workers/indexer.worker.ts"],
+  bundle: true,
+  outfile: "indexer.worker.js",
+  format: "esm",
+  target: "es2022",
+  platform: "browser",
+  logLevel: "info",
+  minify: !isDev,
+  sourcemap: isDev ? "inline" : false,
+};
+
 // ============ Build Functions ============
 
 async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
@@ -248,6 +275,12 @@ async function build(dev: boolean): Promise<esbuild.BuildResult | null> {
       logWarn("Skipping embed worker build (src/workers/embed.worker.ts not found)");
     }
 
+    if (existsSync("src/workers/indexer.worker.ts")) {
+      buildPromises.push(esbuild.build(indexerWorkerBuildOptions));
+    } else {
+      logWarn("Skipping indexer worker build (src/workers/indexer.worker.ts not found)");
+    }
+
     const [jsResult] = await Promise.all(buildPromises);
 
     const duration = Date.now() - start;
@@ -276,6 +309,9 @@ async function watchBuild(): Promise<void> {
   }
   if (existsSync("src/workers/embed.worker.ts")) {
     contexts.push(await esbuild.context(embedWorkerBuildOptions));
+  }
+  if (existsSync("src/workers/indexer.worker.ts")) {
+    contexts.push(await esbuild.context(indexerWorkerBuildOptions));
   }
 
   await Promise.all(contexts.map(ctx => ctx.watch()));
