@@ -215,7 +215,7 @@
 - `src/core/kernel.ts` (add Phase 4 service keys)
 - `scripts/smoke-phase4.ts`
 - `package.json` (add `smoke:phase4` script)
-- `.planning/STATE.md` (Phase 4 close-out)
+- `.planning/STATE.md` (local-only — `.planning/` is gitignored; this file is updated for the next session's context but is **not** committed)
 
 ---
 
@@ -5502,7 +5502,7 @@ git commit -m "feat(history): universal undo with kind-keyed inverters across al
 - Modify: `src/core/kernel.ts` (add Phase 4 service keys)
 - Create: `scripts/smoke-phase4.ts`
 - Modify: `package.json` (add `smoke:phase4` script)
-- Modify: `.planning/STATE.md` (Phase 4 close-out)
+- Update: `.planning/STATE.md` (**local-only** — `.planning/` is gitignored; the file is rewritten for the next session's context but is **not** included in any commit)
 
 **Why:** This task wires every Phase 4 service into the plugin lifecycle, registers the SearchView, registers the new commands and ribbon icons, plumbs the chat / search / undo actions to their UI surfaces, and ships a smoke harness that drives one happy-path of every Phase 4 surface against a live LM Studio. Closes the phase with an updated STATE.md and no git tag (tags are reserved for v1.0).
 
@@ -5790,9 +5790,9 @@ Run (only when dynamo is up): `bun run smoke:phase4`
 
 Expected: prints `[smoke] phase4: stream=N decorations=M vitals=ok bridge=ok canvas=ok search=ok chat=ok undo=ok` with all bools `ok` and `stream > 0`. Copy the printed line into the STATE update below.
 
-- [ ] **Step 6: Update STATE.md**
+- [ ] **Step 6: Update STATE.md (local-only — never staged)**
 
-Replace `.planning/STATE.md` with:
+`.planning/` is gitignored. STATE.md exists on disk for the next session's context but is **not** committed. Replace the local file with the content below, then move on; do not `git add` it.
 
 ```markdown
 # Notient Project State
@@ -5864,12 +5864,14 @@ After Phase 4: ~260 passing (Phase 3 closed at 154 + Phase 4 additions: settings
 3. Same workflow: `superpowers:writing-plans` → `superpowers:subagent-driven-development` (Opus 4.7 implementers only).
 ```
 
-- [ ] **Step 7: Commit STATE update (no tag)**
+- [ ] **Step 7: Commit wiring + smoke (no tag, no STATE)**
 
 ```bash
-git add src/main.ts src/core/kernel.ts scripts/smoke-phase4.ts package.json .planning/STATE.md
-git commit -m "feat(phase4): wire all surfaces + smoke:phase4 harness + STATE close-out"
+git add src/main.ts src/core/kernel.ts scripts/smoke-phase4.ts package.json
+git commit -m "feat(phase4): wire all surfaces + smoke:phase4 harness"
 ```
+
+`.planning/STATE.md` is intentionally absent from this commit — `.planning/` is gitignored. The local file was updated in Step 6 for the next session's reading.
 
 - [ ] **Step 8: Confirm no tag was created**
 
