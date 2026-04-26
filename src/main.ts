@@ -280,7 +280,7 @@ export default class NotientPlugin extends Plugin {
       db: database,
       bus: this.bus,
       provider: primaryLLM,
-      reasoningModel: current.primary.reasoningModel,
+      reasoningModel: current.coAuthor.model,
       readNote: async (path) => facade.read(path),
       neighbors: (path) => {
         const rows = database.query<{ target_id: string }>(

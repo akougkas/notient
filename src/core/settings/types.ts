@@ -19,6 +19,8 @@ export interface NotientSettings {
     enabled: boolean;
     minWords: number;
     debounceMs: number;
+    /** Prose-friendly non-reasoning model. Reasoning models stall behind their CoT. */
+    model: string;
   };
   approvals: {
     confidenceThreshold: number;
@@ -51,6 +53,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     enabled: true,
     minWords: 100,
     debounceMs: 5000,
+    model: "gemma-4-26b-a4b-it",
   },
   approvals: {
     confidenceThreshold: 0.6,
