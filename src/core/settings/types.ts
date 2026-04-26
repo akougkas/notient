@@ -29,9 +29,9 @@ export interface NotientSettings {
 export const DEFAULT_SETTINGS: NotientSettings = {
   primary: {
     baseUrl: "http://192.168.86.143:1234/v1",
-    reasoningModel: "qwen3.6-35b-a3b",
+    reasoningModel: "nemotron-cascade-2-30b-a3b-i1",
     embeddingModel: "text-embedding-nomic-embed-text-v2-moe",
-    fastModel: "qwen3.5-2b",
+    fastModel: "nemotron-cascade-2-30b-a3b-i1",
     rerankerModel: "granite-4.0-h-350m",
   },
   deep: {

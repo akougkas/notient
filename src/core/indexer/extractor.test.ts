@@ -36,7 +36,7 @@ function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
 describe("Extractor", () => {
   test("returns empty extraction for empty chunks list", async () => {
     const provider = fakeProvider({});
-    const extractor = new Extractor(provider, { model: "qwen3.5-2b" });
+    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1" });
     const out = await extractor.extract([]);
     expect(out).toEqual({ entities: [], claims: [], questions: [] });
   });
@@ -50,7 +50,7 @@ describe("Extractor", () => {
     const provider = fakeProvider({
       chatJson: async <T>() => responses[i++] as T,
     });
-    const extractor = new Extractor(provider, { model: "qwen3.5-2b", concurrency: 1 });
+    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1", concurrency: 1 });
     const out = await extractor.extract([chunk("first", 0), chunk("second", 1)]);
     expect(out.entities.sort()).toEqual(["Alice", "HPC", "POSIX"].sort());
     expect(out.claims).toEqual(["POSIX is leaky."]);
@@ -65,10 +65,10 @@ describe("Extractor", () => {
         return { entities: [], claims: [], questions: [] } as T;
       },
     });
-    const extractor = new Extractor(provider, { model: "qwen3.5-2b" });
+    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1" });
     await extractor.extract([chunk("Alice met Bob.")]);
     expect(calls).toHaveLength(1);
-    expect(calls[0].opts.model).toBe("qwen3.5-2b");
+    expect(calls[0].opts.model).toBe("nemotron-cascade-2-30b-a3b-i1");
     expect(calls[0].schema.name).toBe("Extraction");
     expect(JSON.stringify(calls[0].messages)).toContain("Alice met Bob.");
   });
@@ -82,7 +82,7 @@ describe("Extractor", () => {
         return { entities: [`E${i}`], claims: [], questions: [] } as T;
       },
     });
-    const extractor = new Extractor(provider, { model: "qwen3.5-2b", concurrency: 1 });
+    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1", concurrency: 1 });
     const out = await extractor.extract([chunk("a", 0), chunk("b", 1), chunk("c", 2)]);
     expect(out.entities.sort()).toEqual(["E1", "E3"]);
   });

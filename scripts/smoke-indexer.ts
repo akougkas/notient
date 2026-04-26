@@ -34,7 +34,7 @@ import { LMStudioProvider } from "../src/core/llm/lmStudioProvider";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
 const DEFAULT_LMSTUDIO_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_REASONING_MODEL = "qwen3.5-2b";
+const DEFAULT_REASONING_MODEL = "nemotron-cascade-2-30b-a3b-i1";
 const DEFAULT_EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
 const EMBED_DIM = 768;
 
