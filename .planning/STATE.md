@@ -92,15 +92,46 @@ would have caught the original failure.
   cluster's memberPaths when the model omits them. Test: `Synthesizer >
   survives malformed chatJson responses missing required fields without
   throwing`.
+- [x] ContradictionHunter no longer crashes on truncated chatJson
+  payloads (commits 0f1d9fe `fix(contradictionHunter): swallow chatJson
+  parse failures + missing pairs` and 4ab9b5f
+  `fix(contradictionHunter): raise maxTokens to 2000 to fit reasoning +
+  payload`). Same defenseless code-review principle applied here:
+  `ChatJsonParseError` from `LMStudioProvider.chatJson` propagated up to
+  the coordinator and dropped the smoke gate to one non-zero agent on a
+  truncation. `response.pairs` was also dereferenced unguarded — an LLM
+  returning `{}` blew up on `.slice(...)`. The agent now catches the
+  parse error (returns `proposals: 0` with `console.warn`) and defaults
+  the array to `[]`. The truncation itself was caused by a 1000-token
+  budget that nemotron-cascade couldn't fit both its CoT preamble and
+  the structured payload into; bumped to 2000. Tests:
+  `ContradictionHunter > returns 0 proposals (no throw) when chatJson
+  rejects with ChatJsonParseError from a truncated payload` and
+  `... when chatJson returns an object missing the pairs array`.
+- [x] Reviewer follow-up #1 applied (commit a733248
+  `fix(synthesizer): warn when normalize backfills + tighten test
+  contract`). `normalizeSynthesis()` now emits
+  `[Notient][Synthesizer] chatJson payload missing required fields:
+  ...; backfilling` so a future model regression that silently
+  zero-confidences clusters leaves a forensic trail. The malformed
+  payload test was split into two tighter cases: missing title backfills
+  from the body's first heading and stages with confidence 0.7; missing
+  confidence defaults to 0 and silently disqualifies (no row staged).
+- [ ] Reviewer follow-up #2 deferred. The `mergeSignals` listener leak
+  in `src/main.ts:660` (Important per reviewer) is pre-existing and
+  out of this hardening pass's scope; file separately when the leak
+  becomes load-bearing.
 - [x] Final automated gates rerun. Evidence:
-  `bun run typecheck && bun run lint && bun test` passes with 151 tests
-  (was 147; added two readNote/neighbors throw tests, one
-  CoAuthorService↔LMStudioProvider integration test, and one
-  Synthesizer normalization test). `bun run dev` rebuilt main.js (3.1 MB
-  dev bundle with inline sourcemaps) and copied to vaultex at 06:28:53
-  with no stale worker. `bun run smoke:coordinator` exited 0 with
+  `bun run typecheck && bun run lint && bun test` passes with 154 tests
+  (was 147; added 7 new). `bun run dev` rebuilt main.js (3.1 MB dev
+  bundle with inline sourcemaps) and copied to vaultex at 06:48:41 with
+  no stale worker. Two consecutive `bun run smoke:coordinator` runs
+  (run3 06:43, run4 06:46) both exited 0 with the same tally
   `linker: 0, synthesizer: 21, contradictionHunter: 1,
-  maturityAdvancer: 0` (≥2 non-zero agents).
+  maturityAdvancer: 0` (≥2 non-zero agents). The deterministic
+  contradictionHunter result confirms the maxTokens bump killed the
+  flake; previous runs (1000-token budget) saw `contradictionHunter: 0`
+  on every other invocation due to mid-JSON truncation.
 
 ## Tech debt to address opportunistically
 
