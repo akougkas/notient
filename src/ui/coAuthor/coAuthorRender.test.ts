@@ -34,6 +34,15 @@ describe("CoAuthorPanelModel", () => {
     expect(state.sections.connects).toBe("- [[B]]: reason");
   });
 
+  test("appendSectionForNote starts the matching stream when active-note event was missed", () => {
+    const model = new CoAuthorPanelModel();
+    model.appendSectionForNote("/late.md", "summary", "First delta.");
+    const state = model.snapshot();
+    expect(state.notePath).toBe("/late.md");
+    expect(state.status).toBe("streaming");
+    expect(state.sections.summary).toBe("First delta.");
+  });
+
   test("finish, cancel, and reset transition status correctly and notify subscribers", () => {
     const model = new CoAuthorPanelModel();
     let ticks = 0;

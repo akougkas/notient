@@ -43,6 +43,13 @@ export class CoAuthorPanelModel {
     this.emit();
   }
 
+  appendSectionForNote(notePath: string, section: Section, delta: string): void {
+    if (this.state.notePath !== notePath || this.state.status === "idle") {
+      this.startStream(notePath);
+    }
+    this.appendSection(section, delta);
+  }
+
   finish(ok: boolean, error?: string): void {
     this.state.status = ok ? "done" : "error";
     this.state.errorMessage = error;

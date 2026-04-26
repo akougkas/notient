@@ -23,9 +23,9 @@ export interface CoAuthorOptions {
 type Section = "summary" | "implies" | "connects";
 
 const SECTION_HEADERS: Record<Section, RegExp> = {
-  summary: /##\s*SUMMARY/i,
-  implies: /##\s*IMPLIES/i,
-  connects: /##\s*CONNECTS/i,
+  summary: /^[ \t]*#{2,3}[ \t]+SUMMARY\b[^\r\n]*(?:\r?\n|$)/im,
+  implies: /^[ \t]*#{2,3}[ \t]+IMPLIES\b[^\r\n]*(?:\r?\n|$)/im,
+  connects: /^[ \t]*#{2,3}[ \t]+CONNECTS\b[^\r\n]*(?:\r?\n|$)/im,
 };
 
 interface StreamState {
@@ -38,18 +38,36 @@ export class CoAuthorService {
 
   async runFor(notePath: string, signal: AbortSignal): Promise<void> {
     const start = Date.now();
-    const noteRow = this.opts.db.query<{ word_count: number }>(
-      "SELECT word_count FROM notes WHERE path = ?;",
-      [notePath],
-    )[0];
-    if (!noteRow || noteRow.word_count < this.opts.minWords) return;
-
+    debugCoAuthor("run:start", { notePath, model: this.opts.reasoningModel });
     const noteBody = await this.opts.readNote(notePath, signal);
     if (signal.aborted) {
+      debugCoAuthor("run:cancelled-after-read", { notePath });
       this.opts.bus.emit({ type: "coAuthor:cancelled", notePath });
       return;
     }
+    const indexedWordCount =
+      this.opts.db.query<{ word_count: number }>("SELECT word_count FROM notes WHERE path = ?;", [
+        notePath,
+      ])[0]?.word_count ?? 0;
+    const wordCount = Math.max(indexedWordCount, countWords(stripFrontmatter(noteBody)));
+    if (wordCount < this.opts.minWords) {
+      const error = `Note is below Co-author minimum (${wordCount}/${this.opts.minWords} words).`;
+      debugCoAuthor("run:skip-short-note", { notePath, wordCount, minWords: this.opts.minWords });
+      this.opts.bus.emit({
+        type: "coAuthor:done",
+        notePath,
+        ok: false,
+        durationMs: Date.now() - start,
+        error,
+      });
+      return;
+    }
     const messages = this.buildMessages(notePath, noteBody);
+    debugCoAuthor("run:messages-built", {
+      notePath,
+      wordCount,
+      neighborCount: this.opts.neighbors(notePath).length,
+    });
     await this.streamSections(notePath, messages, signal, start);
   }
 
@@ -84,6 +102,7 @@ export class CoAuthorService {
     start: number,
   ): Promise<void> {
     const state: StreamState = { currentSection: null, pending: "" };
+    let sawFirstDelta = false;
     try {
       for await (const delta of this.opts.provider.chatStream(messages, {
         model: this.opts.reasoningModel,
@@ -91,7 +110,12 @@ export class CoAuthorService {
         signal,
         maxTokens: 1200,
       })) {
+        if (!sawFirstDelta) {
+          sawFirstDelta = true;
+          debugCoAuthor("stream:first-delta", { notePath, chars: delta.length });
+        }
         if (signal.aborted) {
+          debugCoAuthor("stream:cancelled-after-delta", { notePath });
           this.opts.bus.emit({ type: "coAuthor:cancelled", notePath });
           return;
         }
@@ -100,9 +124,11 @@ export class CoAuthorService {
       this.flush(notePath, state);
     } catch (error) {
       if (signal.aborted) {
+        debugCoAuthor("stream:cancelled-error", { notePath });
         this.opts.bus.emit({ type: "coAuthor:cancelled", notePath });
         return;
       }
+      debugCoAuthor("stream:error", { notePath, error: (error as Error).message });
       this.opts.bus.emit({
         type: "coAuthor:done",
         notePath,
@@ -112,6 +138,7 @@ export class CoAuthorService {
       });
       return;
     }
+    debugCoAuthor("stream:done", { notePath, durationMs: Date.now() - start });
     this.opts.bus.emit({
       type: "coAuthor:done",
       notePath,
@@ -126,6 +153,11 @@ export class CoAuthorService {
       const next = findNextHeader(state.pending);
       if (!next) break;
       if (state.currentSection && next.before.length > 0) {
+        debugCoAuthor("section:delta", {
+          notePath,
+          section: state.currentSection,
+          chars: next.before.length,
+        });
         this.opts.bus.emit({
           type: "coAuthor:section",
           notePath,
@@ -134,9 +166,15 @@ export class CoAuthorService {
         });
       }
       state.currentSection = next.section;
+      debugCoAuthor("section:start", { notePath, section: next.section });
       state.pending = next.after;
     }
     if (state.currentSection && state.pending.length > 0 && !containsAnyHeader(state.pending)) {
+      debugCoAuthor("section:delta", {
+        notePath,
+        section: state.currentSection,
+        chars: state.pending.length,
+      });
       this.opts.bus.emit({
         type: "coAuthor:section",
         notePath,
@@ -149,6 +187,11 @@ export class CoAuthorService {
 
   private flush(notePath: string, state: StreamState): void {
     if (state.currentSection && state.pending.length > 0) {
+      debugCoAuthor("section:flush", {
+        notePath,
+        section: state.currentSection,
+        chars: state.pending.length,
+      });
       this.opts.bus.emit({
         type: "coAuthor:section",
         notePath,
@@ -158,6 +201,20 @@ export class CoAuthorService {
       state.pending = "";
     }
   }
+}
+
+const FENCE = "---";
+
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith(FENCE)) return content;
+  const closeIdx = content.indexOf(`\n${FENCE}`, FENCE.length);
+  if (closeIdx === -1) return content;
+  const after = closeIdx + 1 + FENCE.length;
+  return content.slice(after).replace(/^\r?\n/, "");
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
 function containsAnyHeader(text: string): boolean {
@@ -175,11 +232,14 @@ function findNextHeader(text: string): { before: string; section: Section; after
     }
   }
   if (!earliest) return null;
-  const lineEnd = text.indexOf("\n", earliest.idx + earliest.matchLen);
-  const consumeUntil = lineEnd === -1 ? text.length : lineEnd + 1;
   return {
     before: text.slice(0, earliest.idx),
     section: earliest.section,
-    after: text.slice(consumeUntil),
+    after: text.slice(earliest.idx + earliest.matchLen),
   };
+}
+
+function debugCoAuthor(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][CoAuthor] ${message}`, data ?? {});
 }

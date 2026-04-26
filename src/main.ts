@@ -349,13 +349,19 @@ export default class NotientPlugin extends Plugin {
           notePath: path,
           wordCount: wordRow?.word_count ?? 0,
         });
-        if (coAuthorAbort) coAuthorAbort.abort();
+        debugCoAuthorMain("active-leaf-change", { path, wordCount: wordRow?.word_count ?? 0 });
+        if (coAuthorAbort) {
+          debugCoAuthorMain("abort-previous", { reason: "active-leaf-change" });
+          coAuthorAbort.abort();
+        }
         if (!path) return;
         const ctrl = new AbortController();
         coAuthorAbort = ctrl;
+        debugCoAuthorMain("run-priority:start", { path });
         void reasoningMutex.runPriority("co-author", async (signal) => {
           const merged = mergeSignals(signal, ctrl.signal);
           await coAuthor.runFor(path, merged);
+          debugCoAuthorMain("run-priority:finished", { path, aborted: merged.aborted });
         });
       }),
     );
@@ -420,9 +426,11 @@ export default class NotientPlugin extends Plugin {
     const openSidebar = (): Promise<void> => openInRightLeaf(VIEW_TYPE_NOTIENT);
     const openApprovals = (): Promise<void> => openInRightLeaf(VIEW_TYPE_NOTIENT_APPROVALS);
     const openCoAuthor = async (): Promise<void> => {
+      debugCoAuthorMain("open-command");
       await openInRightLeaf(VIEW_TYPE_NOTIENT_CO_AUTHOR);
       const file = this.app.workspace.getActiveFile();
       const path = file?.extension === "md" ? file.path : null;
+      debugCoAuthorMain("open-command:active-file", { path });
       if (!path) return;
       const wordRow = database.query<{ word_count: number }>(
         "SELECT word_count FROM notes WHERE path = ?;",
@@ -433,12 +441,17 @@ export default class NotientPlugin extends Plugin {
         notePath: path,
         wordCount: wordRow?.word_count ?? 0,
       });
-      if (coAuthorAbort) coAuthorAbort.abort();
+      if (coAuthorAbort) {
+        debugCoAuthorMain("abort-previous", { reason: "open-command" });
+        coAuthorAbort.abort();
+      }
       const ctrl = new AbortController();
       coAuthorAbort = ctrl;
+      debugCoAuthorMain("run-priority:start", { path });
       void reasoningMutex.runPriority("co-author", async (signal) => {
         const merged = mergeSignals(signal, ctrl.signal);
         await coAuthor.runFor(path, merged);
+        debugCoAuthorMain("run-priority:finished", { path, aborted: merged.aborted });
       });
     };
 
@@ -568,7 +581,10 @@ export default class NotientPlugin extends Plugin {
       (leaf) =>
         new CoAuthorView(leaf, {
           bus: this.bus,
-          onCancel: () => coAuthorAbort?.abort(),
+          onCancel: () => {
+            debugCoAuthorMain("cancel-click");
+            coAuthorAbort?.abort();
+          },
         }),
     );
     this.registerView(
@@ -686,4 +702,9 @@ function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
     b.addEventListener("abort", cancel, { once: true });
   }
   return controller.signal;
+}
+
+function debugCoAuthorMain(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][CoAuthorMain] ${message}`, data ?? {});
 }
