@@ -1,7 +1,7 @@
 {
   "id": "notient",
   "name": "Notient",
-  "version": "0.2.0",
+  "version": "1.0.0-foundation",
   "minAppVersion": "1.4.0",
   "description": "AI-powered vault management using local LLMs only. Fast semantic search, vault health monitoring, and intelligent note processing.",
   "author": "Anthony Kougkas",
