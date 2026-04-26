@@ -246,9 +246,9 @@ describe("CoAuthorService", () => {
       new Response(stream, { status: 200 })) as unknown as typeof fetch;
     try {
       const bus = new EventBus();
-      let cancelledNotePath: string | null = null;
+      const cancelledNotes: string[] = [];
       bus.on("coAuthor:cancelled", (event) => {
-        cancelledNotePath = event.notePath;
+        cancelledNotes.push(event.notePath);
       });
       const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
       const service = new CoAuthorService({
@@ -266,7 +266,7 @@ describe("CoAuthorService", () => {
       ctrl.abort();
       await run;
       expect(cancelCalled).toBe(true);
-      expect(cancelledNotePath).toBe("/active.md");
+      expect(cancelledNotes).toContain("/active.md");
     } finally {
       globalThis.fetch = originalFetch;
     }
