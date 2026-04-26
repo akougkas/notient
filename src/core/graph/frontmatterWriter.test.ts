@@ -1,74 +1,117 @@
 import { describe, expect, test } from "bun:test";
-import { mergeNotientBlock, readFrontmatter, writeFrontmatter } from "./frontmatterWriter";
+import {
+  type NotientFrontmatter,
+  extractNotientBlock,
+  formatNotientBlock,
+  upsertNotientBlock,
+} from "./frontmatterWriter";
 
-describe("frontmatter parse/write", () => {
-  test("reads YAML frontmatter and body", () => {
-    const md = `---
-title: Hello
-tags:
-  - a
-  - b
----
-# Body
-text`;
-    const { frontmatter, body } = readFrontmatter(md);
-    expect(frontmatter).toEqual({
-      title: "Hello",
-      tags: {},
-    });
-    // Note: our minimal YAML skips indented list items since they don't match the
-    // key:value regex; that's OK because we only round-trip our own notient block.
-    // Body extraction is what matters.
-    expect(body).toBe("# Body\ntext");
-  });
-
-  test("returns null frontmatter when no fence", () => {
-    const md = "# No frontmatter\nbody";
-    const { frontmatter, body } = readFrontmatter(md);
-    expect(frontmatter).toBeNull();
-    expect(body).toBe(md);
-  });
-
-  test("merges notient block into existing frontmatter", () => {
-    const merged = mergeNotientBlock(
-      { title: "Hello" },
-      { vitals: { health: 78, maturity: "adolescent", freshness: 0.9 } },
+describe("frontmatterWriter (merge-only)", () => {
+  test("formatNotientBlock emits canonical YAML", () => {
+    const block: NotientFrontmatter = {
+      vitals: { health: 78, maturity: "adolescent", freshness: 0.92 },
+      edges: [{ type: "supports", target: "[[Other]]", confidence: 0.84, evidence: "p3" }],
+      summary: "A short take.",
+      updated: "2026-04-25T18:00:00Z",
+    };
+    const yaml = formatNotientBlock(block);
+    expect(yaml).toBe(
+      "notient:\n" +
+        "  vitals:\n" +
+        "    health: 78\n" +
+        "    maturity: adolescent\n" +
+        "    freshness: 0.92\n" +
+        "  edges:\n" +
+        '    - { type: supports, target: "[[Other]]", confidence: 0.84, evidence: p3 }\n' +
+        "  summary: A short take.\n" +
+        "  updated: 2026-04-25T18:00:00Z\n",
     );
-    expect(merged.title).toBe("Hello");
-    expect(merged.notient).toEqual({
-      vitals: { health: 78, maturity: "adolescent", freshness: 0.9 },
-    });
   });
 
-  test("write produces valid fenced block + body", () => {
-    const body = "# Hello\n";
-    const out = writeFrontmatter(body, {
-      title: "T",
-      notient: { vitals: { health: 50, maturity: "raw", freshness: 1 } },
-    });
-    expect(out.startsWith("---\n")).toBe(true);
-    expect(out.includes("title: T")).toBe(true);
-    expect(out.includes("notient:")).toBe(true);
-    expect(out.includes("vitals:")).toBe(true);
-    expect(out.endsWith("# Hello\n")).toBe(true);
+  test("extractNotientBlock returns null when no fenced frontmatter", () => {
+    expect(extractNotientBlock("# Just a heading\n")).toBeNull();
   });
 
-  test("round-trip preserves notient block keys", () => {
-    const original = `---
-title: Foo
-notient:
-  vitals:
-    health: 80
-    maturity: mature
-    freshness: 0.7
----
-body`;
-    const { frontmatter, body } = readFrontmatter(original);
-    expect(frontmatter).not.toBeNull();
-    const out = writeFrontmatter(body, frontmatter as Record<string, unknown>);
-    const reparsed = readFrontmatter(out);
-    expect((reparsed.frontmatter?.notient as { vitals: { health: number } }).vitals.health).toBe(
-      80,
+  test("extractNotientBlock returns null when notient key missing", () => {
+    const md = "---\ntitle: Hi\n---\nbody";
+    expect(extractNotientBlock(md)).toBeNull();
+  });
+
+  test("extractNotientBlock returns the literal block text", () => {
+    const md =
+      "---\n" +
+      "title: Hi\n" +
+      "notient:\n" +
+      "  vitals:\n" +
+      "    health: 80\n" +
+      "tags: [a, b]\n" +
+      "---\n" +
+      "body";
+    const block = extractNotientBlock(md);
+    expect(block).toBe("notient:\n  vitals:\n    health: 80\n");
+  });
+
+  test("upsertNotientBlock inserts when no frontmatter exists", () => {
+    const out = upsertNotientBlock("body only\n", {
+      summary: "s",
+      updated: "2026-04-25T00:00:00Z",
+    });
+    expect(out).toBe(
+      "---\n" +
+        "notient:\n" +
+        "  summary: s\n" +
+        "  updated: 2026-04-25T00:00:00Z\n" +
+        "---\n" +
+        "body only\n",
     );
+  });
+
+  test("upsertNotientBlock inserts into existing frontmatter without touching other keys", () => {
+    const original =
+      "---\n" + "title: User Note\n" + "tags: [- a, - b]\n" + "---\n" + "# Body\nstuff";
+    const out = upsertNotientBlock(original, {
+      summary: "fresh",
+      updated: "2026-04-25T00:00:00Z",
+    });
+    expect(out).toContain("title: User Note");
+    expect(out).toContain("tags: [- a, - b]");
+    expect(out).toContain("notient:\n  summary: fresh\n  updated: 2026-04-25T00:00:00Z\n");
+    expect(out.endsWith("# Body\nstuff")).toBe(true);
+  });
+
+  test("upsertNotientBlock replaces existing notient block in place", () => {
+    const original =
+      "---\n" +
+      "title: T\n" +
+      "notient:\n" +
+      "  summary: old\n" +
+      "  updated: 2026-04-01T00:00:00Z\n" +
+      "tags: [keep, me]\n" +
+      "---\n" +
+      "body";
+    const out = upsertNotientBlock(original, {
+      summary: "new",
+      updated: "2026-04-25T00:00:00Z",
+    });
+    expect(out).toContain("title: T");
+    expect(out).toContain("tags: [keep, me]");
+    expect(out).toContain("summary: new");
+    expect(out).not.toContain("summary: old");
+  });
+
+  test("upsertNotientBlock preserves user array data verbatim across replace", () => {
+    const original =
+      "---\n" +
+      "tags:\n" +
+      "  - a\n" +
+      "  - b\n" +
+      "  - c\n" +
+      "notient:\n" +
+      "  summary: old\n" +
+      "---\n" +
+      "body";
+    const out = upsertNotientBlock(original, { summary: "new" });
+    expect(out).toContain("tags:\n  - a\n  - b\n  - c\n");
+    expect(out).toContain("summary: new");
   });
 });
