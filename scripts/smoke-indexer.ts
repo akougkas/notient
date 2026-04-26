@@ -2,10 +2,10 @@
 /**
  * Real end-to-end smoke harness for the Notient indexer pipeline.
  *
- * Runs chunker, embedder, extractor, and graph writes against a live LM Studio
- * instance (dynamo by default) and asserts that real rows land in SQLite and
- * real vectors land in HNSW. Bypasses Obsidian entirely. Bypasses test mocks
- * entirely. If dynamo is unreachable the harness exits non-zero with a clear
+ * Runs chunker, embedder, extractor, and graph writes against the live mini
+ * llama-server instance and asserts that real rows land in SQLite and real
+ * vectors land in HNSW. Bypasses Obsidian entirely. Bypasses test mocks
+ * entirely. If mini is unreachable the harness exits non-zero with a clear
  * message rather than silently degrading.
  *
  * Usage:
@@ -14,7 +14,7 @@
  *
  * Environment:
  *   SMOKE_VAULT_PATH       Override vault root (default: vaultex test vault)
- *   SMOKE_LMSTUDIO_URL     Override base URL (default: dynamo at .143:1234/v1)
+ *   SMOKE_LLM_URL          Override base URL (default: mini at .141:8080/v1)
  *   SMOKE_REASONING_MODEL  Override reasoning/extractor model
  *   SMOKE_EMBED_MODEL      Override embedding model
  */
@@ -82,10 +82,10 @@ target instruction-tuned retrieval at 107M parameters.`,
     path: "Archives/2024-q4-experiments.md",
     body: `# 2024 Q4 Experiments
 
-Tested local reranking with granite-4.0-h-350m on a corpus of 500 personal
-notes. Mean recall@10 improved from 0.62 to 0.79. The reranker added 180ms of
-latency per query on the dynamo node. Concluded that reranking is worth the
-cost for vault sizes above 1000 notes.`,
+Tested local reranking with the active reasoning model on a corpus of 500
+personal notes. Mean recall@10 improved from 0.62 to 0.79. The reranker
+added 180ms of latency per query on the mini node. Concluded that reranking
+is worth the cost for vault sizes above 1000 notes.`,
   },
   {
     path: "Projects/vault-lock-design.md",
@@ -359,7 +359,7 @@ async function main(): Promise<number> {
     console.log(`        graph_edges  : ${counts.graphEdges}`);
     console.log(`        wall time    : ${wallMs}ms`);
     console.log(`        avg per note : ${avgMs.toFixed(0)}ms`);
-    console.log(`        dynamo probe : ${probeMs}ms`);
+    console.log(`        mini probe   : ${probeMs}ms`);
 
     if (failures.length > 0) {
       console.error("[smoke] FAIL:");

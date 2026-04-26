@@ -6,7 +6,7 @@
  * MaturityAdvancer) against an already-indexed vault and prints a tally of
  * proposals staged. Requires the Phase 2 indexer to have already populated
  * the SQLite + HNSW stores under .obsidian/plugins/notient/ in the vault.
- * Bypasses Obsidian. If dynamo is unreachable, the harness exits non-zero.
+ * Bypasses Obsidian. If the mini llama-server is unreachable, the harness exits non-zero.
  *
  * Usage:
  *   bun scripts/smoke-coordinator.ts
