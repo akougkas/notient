@@ -1,6 +1,6 @@
 # Build output
 main.js
-styles.css
+/styles.css
 *.js.map
 
 # Dependencies
@@ -52,7 +52,7 @@ testbench/
 vector.worker.js
 embed.worker.js
 main.js
-styles.css
+/styles.css
 
 .claude/agents/__pycache__/
 .gemini/agents/__pycache__/
