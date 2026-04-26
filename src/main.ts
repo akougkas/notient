@@ -1,5 +1,13 @@
 import { Notice, Plugin, TFile } from "obsidian";
 import { ObsidianFacade } from "./adapters/obsidianFacade";
+import { ContradictionHunter } from "./core/agents/contradictionHunter";
+import { Linker } from "./core/agents/linker";
+import { MaturityAdvancer } from "./core/agents/maturityAdvancer";
+import { Synthesizer } from "./core/agents/synthesizer";
+import { ApprovalService } from "./core/approvals/approvalService";
+import { CoAuthorService } from "./core/coAuthor/chatStream";
+import { Coordinator } from "./core/coordinator/coordinator";
+import { ReasoningMutex } from "./core/coordinator/reasoningMutex";
 import { Database } from "./core/db/database";
 import { EventBus } from "./core/events/eventBus";
 import { GraphStore } from "./core/graph/graphStore";
@@ -17,9 +25,12 @@ import { Kernel } from "./core/kernel";
 import { LMStudioProvider } from "./core/llm/lmStudioProvider";
 import { EchoGuard } from "./core/services/echoGuard";
 import { HealthMonitor } from "./core/services/healthMonitor";
+import { IdleDetector } from "./core/services/idleDetector";
 import { VaultLock, type VaultLockHandle } from "./core/services/vaultLock";
 import { NotientSettingsTab } from "./core/settings/SettingsTab";
 import { SettingsService } from "./core/settings/settingsService";
+import { ApprovalsView, VIEW_TYPE_NOTIENT_APPROVALS } from "./ui/approvals/ApprovalsView";
+import { CoAuthorView, VIEW_TYPE_NOTIENT_CO_AUTHOR } from "./ui/coAuthor/CoAuthorView";
 import { AwakenVaultModal } from "./ui/onboarding/AwakenVaultModal";
 import { AwakenRunner } from "./ui/onboarding/awakenRunner";
 import { GraphCanvasModel } from "./ui/onboarding/graphCanvas";
@@ -152,6 +163,132 @@ export default class NotientPlugin extends Plugin {
       bus: this.bus,
     });
 
+    // -- Phase 3 Mind layer wiring --
+    const reasoningMutex = new ReasoningMutex();
+    const idleDetector = new IdleDetector(this.bus);
+
+    const linker = new Linker({
+      db: database,
+      provider: primaryLLM,
+      reasoningModel: current.primary.reasoningModel,
+      neighborhood: async (notePath, options) => {
+        const head = database.query<{ id: string; vector: Uint8Array; dim: number }>(
+          `SELECT e.chunk_id AS id, e.vector AS vector, e.dim AS dim
+           FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
+           WHERE c.note_path = ? ORDER BY c.ord LIMIT 1;`,
+          [notePath],
+        );
+        if (head.length === 0) return [];
+        const view = new Float32Array(
+          head[0].vector.buffer,
+          head[0].vector.byteOffset,
+          head[0].dim,
+        );
+        const hits = vectorIndex.search(view, options.topK);
+        const out: Array<{ notePath: string; chunkId: string; text: string; score: number }> = [];
+        for (const hit of hits) {
+          const meta = database.query<{ note_path: string; text: string }>(
+            "SELECT note_path, text FROM chunks WHERE id = ?;",
+            [hit.id],
+          );
+          if (meta.length === 0) continue;
+          if (meta[0].note_path === notePath) continue;
+          out.push({
+            notePath: meta[0].note_path,
+            chunkId: hit.id,
+            text: meta[0].text,
+            score: hit.score,
+          });
+        }
+        return out;
+      },
+    });
+
+    const synthesizer = new Synthesizer({
+      db: database,
+      provider: primaryLLM,
+      reasoningModel: current.primary.reasoningModel,
+      epsilon: 0.18,
+      minClusterSize: 3,
+      sinceMs: 24 * 60 * 60 * 1000,
+    });
+
+    const contradictionHunter = new ContradictionHunter({
+      db: database,
+      provider: primaryLLM,
+      reasoningModel: current.primary.reasoningModel,
+      neighbors: async (recentClaimIds, options) => {
+        if (recentClaimIds.length === 0) return [];
+        const probe = database.query<{ vector: Uint8Array; dim: number; chunk_id: string }>(
+          `SELECT e.vector AS vector, e.dim AS dim, e.chunk_id AS chunk_id
+           FROM graph_nodes n JOIN chunks c ON c.note_path = n.note_path
+           JOIN embeddings e ON e.chunk_id = c.id
+           WHERE n.id = ? LIMIT 1;`,
+          [recentClaimIds[0]],
+        );
+        if (probe.length === 0) return [];
+        const view = new Float32Array(
+          probe[0].vector.buffer,
+          probe[0].vector.byteOffset,
+          probe[0].dim,
+        );
+        const hits = vectorIndex.search(view, options.topK);
+        const out: Array<{ id: string; score: number; chunkIds: string[] }> = [];
+        for (const hit of hits) {
+          const claim = database.query<{ id: string }>(
+            `SELECT id FROM graph_nodes WHERE type = 'claim' AND note_path = (
+                SELECT note_path FROM chunks WHERE id = ?
+             ) LIMIT 1;`,
+            [hit.id],
+          );
+          if (claim.length === 0) continue;
+          if (recentClaimIds.includes(claim[0].id)) continue;
+          out.push({ id: claim[0].id, score: hit.score, chunkIds: [hit.id] });
+        }
+        return out;
+      },
+      maxPairs: 5,
+    });
+
+    const maturityAdvancer = new MaturityAdvancer({
+      db: database,
+      facade,
+      echoGuard: this.echoGuard,
+      hash: sha256,
+    });
+
+    const coordinator = new Coordinator({
+      bus: this.bus,
+      db: database,
+      mutex: reasoningMutex,
+      agents: { linker, synthesizer, contradictionHunter, maturityAdvancer },
+    });
+
+    const approvalService = new ApprovalService({
+      db: database,
+      bus: this.bus,
+    });
+
+    const coAuthor = new CoAuthorService({
+      db: database,
+      bus: this.bus,
+      provider: primaryLLM,
+      reasoningModel: current.primary.reasoningModel,
+      readNote: async (path) => facade.read(path),
+      neighbors: (path) => {
+        const rows = database.query<{ target_id: string }>(
+          "SELECT target_id FROM graph_edges WHERE source_id = ? AND approved = 1 LIMIT 10;",
+          [`note:${path}`],
+        );
+        return rows.map((r) => ({
+          path: r.target_id.replace(/^note:/, ""),
+          title: r.target_id,
+          summary: "",
+        }));
+      },
+      minWords: current.coAuthor.minWords,
+    });
+
     const health = new HealthMonitor(
       [
         { label: "primary", baseUrl: current.primary.baseUrl, provider: primaryLLM },
@@ -175,6 +312,11 @@ export default class NotientPlugin extends Plugin {
     this.kernel.register("embedder", embedder);
     this.kernel.register("extractor", extractor);
     this.kernel.register("indexer", indexerQueue);
+    this.kernel.register("reasoningMutex", reasoningMutex);
+    this.kernel.register("idleDetector", idleDetector);
+    this.kernel.register("coordinator", coordinator);
+    this.kernel.register("approvalService", approvalService);
+    this.kernel.register("coAuthor", coAuthor);
     this.kernel.seal();
 
     this.bus.on("llm:health", () => {
@@ -182,6 +324,40 @@ export default class NotientPlugin extends Plugin {
     });
 
     health.start();
+    coordinator.start();
+    idleDetector.start();
+
+    let coAuthorAbort: AbortController | null = null;
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        const file = this.app.workspace.getActiveFile();
+        const path = file?.extension === "md" ? file.path : null;
+        const wordRow = path
+          ? database.query<{ word_count: number }>("SELECT word_count FROM notes WHERE path = ?;", [
+              path,
+            ])[0]
+          : undefined;
+        this.bus.emit({
+          type: "active-leaf-change",
+          notePath: path,
+          wordCount: wordRow?.word_count ?? 0,
+        });
+        if (coAuthorAbort) coAuthorAbort.abort();
+        if (!path) return;
+        const ctrl = new AbortController();
+        coAuthorAbort = ctrl;
+        void reasoningMutex.runPriority("co-author", async (signal) => {
+          const merged = mergeSignals(signal, ctrl.signal);
+          await coAuthor.runFor(path, merged);
+        });
+      }),
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("editor-change", () => {
+        idleDetector.recordActivity();
+      }),
+    );
 
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
@@ -304,6 +480,22 @@ export default class NotientPlugin extends Plugin {
     }
 
     this.registerView(VIEW_TYPE_NOTIENT, (leaf) => new NotientSidebarView(leaf));
+    this.registerView(
+      VIEW_TYPE_NOTIENT_CO_AUTHOR,
+      (leaf) =>
+        new CoAuthorView(leaf, {
+          bus: this.bus,
+          onCancel: () => coAuthorAbort?.abort(),
+        }),
+    );
+    this.registerView(
+      VIEW_TYPE_NOTIENT_APPROVALS,
+      (leaf) =>
+        new ApprovalsView(leaf, {
+          service: approvalService,
+          bus: this.bus,
+        }),
+    );
     this.addRibbonIcon("brain-circuit", "Open Notient", async () => {
       const { workspace } = this.app;
       const existing = workspace.getLeavesOfType(VIEW_TYPE_NOTIENT);
@@ -325,6 +517,16 @@ export default class NotientPlugin extends Plugin {
   async onunload(): Promise<void> {
     console.log("[Notient] onunload");
     if (this.kernel.isSealed()) {
+      try {
+        this.kernel.get("coordinator").stop();
+      } catch {
+        // ignore
+      }
+      try {
+        this.kernel.get("idleDetector").stop();
+      } catch {
+        // ignore
+      }
       try {
         this.kernel.get("health").stop();
       } catch {
@@ -365,4 +567,15 @@ async function sha256(input: string): Promise<string> {
   return Array.from(new Uint8Array(hash))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const controller = new AbortController();
+  const cancel = (): void => controller.abort();
+  if (a.aborted || b.aborted) controller.abort();
+  else {
+    a.addEventListener("abort", cancel, { once: true });
+    b.addEventListener("abort", cancel, { once: true });
+  }
+  return controller.signal;
 }

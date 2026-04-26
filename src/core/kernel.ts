@@ -1,4 +1,8 @@
 import type { ObsidianFacade } from "../adapters/obsidianFacade";
+import type { ApprovalService } from "./approvals/approvalService";
+import type { CoAuthorService } from "./coAuthor/chatStream";
+import type { Coordinator } from "./coordinator/coordinator";
+import type { ReasoningMutex } from "./coordinator/reasoningMutex";
 import type { Database } from "./db/database";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
@@ -9,6 +13,7 @@ import type { VectorIndex } from "./indexer/vectorIndex";
 import type { LLMProvider } from "./llm/provider";
 import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
+import type { IdleDetector } from "./services/idleDetector";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
 
@@ -27,6 +32,11 @@ export interface ServiceRegistry {
   vectorIndex: VectorIndex;
   embedder: Embedder;
   extractor: Extractor;
+  coordinator: Coordinator;
+  idleDetector: IdleDetector;
+  reasoningMutex: ReasoningMutex;
+  approvalService: ApprovalService;
+  coAuthor: CoAuthorService;
 }
 
 export type ServiceKey = keyof ServiceRegistry;
@@ -46,6 +56,11 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "vectorIndex",
   "embedder",
   "extractor",
+  "reasoningMutex",
+  "idleDetector",
+  "coordinator",
+  "approvalService",
+  "coAuthor",
 ];
 
 export class Kernel {

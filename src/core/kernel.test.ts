@@ -30,6 +30,11 @@ describe("Kernel", () => {
       "vectorIndex",
       "embedder",
       "extractor",
+      "reasoningMutex",
+      "idleDetector",
+      "coordinator",
+      "approvalService",
+      "coAuthor",
     ] as const) {
       k.register(key, {} as never);
     }
@@ -54,6 +59,11 @@ describe("Kernel", () => {
       "vectorIndex",
       "embedder",
       "extractor",
+      "reasoningMutex",
+      "idleDetector",
+      "coordinator",
+      "approvalService",
+      "coAuthor",
     ] as const) {
       k.register(key, {} as never);
     }
