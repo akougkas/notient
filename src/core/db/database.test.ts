@@ -62,4 +62,60 @@ describe("Database", () => {
     const rows = db2.query<{ path: string }>("SELECT path FROM notes;");
     expect(rows).toEqual([{ path: "/x.md" }]);
   });
+
+  test("transaction commits on success", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.transaction(() => {
+      db.run(
+        "INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)",
+        ["/a.md", "sha", 1, 1, 1],
+      );
+      db.run(
+        "INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)",
+        ["/b.md", "sha", 1, 1, 1],
+      );
+    });
+    const rows = db.query<{ path: string }>("SELECT path FROM notes ORDER BY path;");
+    expect(rows).toEqual([{ path: "/a.md" }, { path: "/b.md" }]);
+  });
+
+  test("transaction rolls back on throw and re-raises", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
+      "/seed.md",
+      "sha",
+      1,
+      1,
+      1,
+    ]);
+    expect(() =>
+      db.transaction(() => {
+        db.run(
+          "INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)",
+          ["/inside.md", "sha", 1, 1, 1],
+        );
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    const rows = db.query<{ path: string }>("SELECT path FROM notes ORDER BY path;");
+    expect(rows).toEqual([{ path: "/seed.md" }]);
+  });
+
+  test("transaction supports a return value", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    const result = db.transaction(() => {
+      db.run(
+        "INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)",
+        ["/x.md", "sha", 1, 1, 1],
+      );
+      return 42;
+    });
+    expect(result).toBe(42);
+  });
 });

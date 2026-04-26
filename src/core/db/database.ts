@@ -57,6 +57,23 @@ export class Database {
     }
   }
 
+  transaction<T>(fn: () => T): T {
+    this.requireDb().run("BEGIN;");
+    try {
+      const result = fn();
+      this.requireDb().run("COMMIT;");
+      this.dirty = true;
+      return result;
+    } catch (error) {
+      try {
+        this.requireDb().run("ROLLBACK;");
+      } catch {
+        // ignore — primary error wins
+      }
+      throw error;
+    }
+  }
+
   async persist(): Promise<void> {
     if (!this.dirty && (await this.adapter.readBinary(this.config.dbPath))) return;
     const data = this.requireDb().export();
