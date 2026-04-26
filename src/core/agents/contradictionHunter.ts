@@ -1,6 +1,6 @@
 import type { Agent, AgentRunContext, AgentRunResult } from "../coordinator/types";
 import type { Database } from "../db/database";
-import type { LLMProvider } from "../llm/provider";
+import { ChatJsonParseError, type LLMProvider } from "../llm/provider";
 
 export interface ClaimNeighbor {
   id: string;
@@ -121,24 +121,39 @@ export class ContradictionHunter implements Agent {
       },
     ];
 
-    const response = await this.opts.provider.chatJson<PairsResponse>(
-      messages,
-      {
-        model: this.opts.reasoningModel,
-        temperature: 0.1,
-        signal: context.signal,
-        maxTokens: 1000,
-      },
-      SCHEMA,
-    );
+    let response: PairsResponse;
+    try {
+      response = await this.opts.provider.chatJson<PairsResponse>(
+        messages,
+        {
+          model: this.opts.reasoningModel,
+          temperature: 0.1,
+          signal: context.signal,
+          maxTokens: 1000,
+        },
+        SCHEMA,
+      );
+    } catch (error) {
+      if (error instanceof ChatJsonParseError) {
+        // Reasoning models on local LM Studio occasionally truncate the JSON
+        // when they hit max_tokens. Skip the run instead of crashing the
+        // coordinator; the next idle-5m tick will retry.
+        console.warn(
+          `[Notient][ContradictionHunter] chatJson parse failed: ${error.message.slice(0, 160)}`,
+        );
+        return { proposals: 0 };
+      }
+      throw error;
+    }
 
+    const pairs = Array.isArray(response.pairs) ? response.pairs : [];
     const validIds = new Set([
       ...recentClaims.map((c) => c.id),
       ...neighborClaims.map((c) => c.id),
     ]);
 
     let staged = 0;
-    for (const pair of response.pairs.slice(0, this.opts.maxPairs)) {
+    for (const pair of pairs.slice(0, this.opts.maxPairs)) {
       if (pair.confidence < 0.6) continue;
       if (!validIds.has(pair.claimAId) || !validIds.has(pair.claimBId)) continue;
       const id = `staging:${this.name}:${pair.claimAId}:${pair.claimBId}:${Date.now()}:${staged}`;

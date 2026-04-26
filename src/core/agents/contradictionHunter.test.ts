@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
-import type { JsonSchema, LLMProvider } from "../llm/provider";
+import { ChatJsonParseError, type JsonSchema, type LLMProvider } from "../llm/provider";
 import { ContradictionHunter } from "./contradictionHunter";
 
 function fakeProvider(json: unknown): LLMProvider {
@@ -74,6 +74,81 @@ describe("ContradictionHunter", () => {
     expect(rows[0].source_id).toBe("claim:abc");
     expect(rows[0].target_id).toBe("claim:def");
     expect(rows[0].confidence).toBeCloseTo(0.84);
+  });
+
+  test("returns 0 proposals (no throw) when chatJson rejects with ChatJsonParseError from a truncated payload", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run(
+      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
+       VALUES (?,?,?,?,?,?), (?,?,?,?,?,?);`,
+      [
+        "claim:abc",
+        "claim",
+        "POSIX is leaky.",
+        "/a.md",
+        JSON.stringify({ chunkIds: ["c1"] }),
+        1,
+        "claim:def",
+        "claim",
+        "POSIX is fully respected.",
+        "/b.md",
+        JSON.stringify({ chunkIds: ["c2"] }),
+        1,
+      ],
+    );
+    const provider: LLMProvider = {
+      isAvailable: async () => true,
+      chat: async () => "",
+      chatStream: async function* () {
+        yield "";
+      },
+      chatJson: async () => {
+        throw new ChatJsonParseError(
+          "JSON Parse error: Unterminated string",
+          '{ "pairs": [ { "claimAId": "claim:abc"',
+        );
+      },
+      embed: async () => [],
+    };
+    const hunter = new ContradictionHunter({
+      db,
+      provider,
+      reasoningModel: "nemotron",
+      neighbors: async () => [{ id: "claim:def", score: 0.91, chunkIds: ["c2"] }],
+      maxPairs: 5,
+    });
+    const result = await hunter.run({
+      trigger: "new-claim",
+      notePath: "/a.md",
+      signal: new AbortController().signal,
+    });
+    expect(result.proposals).toBe(0);
+  });
+
+  test("returns 0 proposals (no throw) when chatJson returns an object missing the pairs array", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    db.run(
+      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
+       VALUES (?,?,?,?,?,?), (?,?,?,?,?,?);`,
+      ["claim:abc", "claim", "x", "/a.md", null, 1, "claim:def", "claim", "y", "/b.md", null, 1],
+    );
+    const hunter = new ContradictionHunter({
+      db,
+      provider: fakeProvider({}),
+      reasoningModel: "nemotron",
+      neighbors: async () => [{ id: "claim:def", score: 0.91, chunkIds: ["c2"] }],
+      maxPairs: 5,
+    });
+    const result = await hunter.run({
+      trigger: "new-claim",
+      notePath: "/a.md",
+      signal: new AbortController().signal,
+    });
+    expect(result.proposals).toBe(0);
   });
 
   test("returns 0 proposals when no claims exist", async () => {
