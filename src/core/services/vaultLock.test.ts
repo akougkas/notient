@@ -40,23 +40,40 @@ describe("VaultLock", () => {
     expect(fs.files.has("/vault/.notient.lock")).toBe(false);
   });
 
-  test("rejects when fresh lock held by another instance", async () => {
+  test("rejects when alive holder advances its heartbeat during recheck", async () => {
     const fs = new MemFs();
     fs.files.set(
       "/vault/.notient.lock",
       JSON.stringify({ instanceId: "instance-A", timestamp: 1000 }),
     );
     const lock = new VaultLock(fs, "/vault/.notient.lock", "instance-B", clock(1500));
+    setTimeout(() => {
+      fs.files.set(
+        "/vault/.notient.lock",
+        JSON.stringify({ instanceId: "instance-A", timestamp: 9999 }),
+      );
+    }, 500);
     await expect(lock.acquire()).rejects.toThrow(/another window/);
   });
 
-  test("steals stale lock (>60s old)", async () => {
+  test("steals stale lock (timestamp older than the staleness window)", async () => {
     const fs = new MemFs();
     fs.files.set(
       "/vault/.notient.lock",
       JSON.stringify({ instanceId: "instance-A", timestamp: 1000 }),
     );
-    const lock = new VaultLock(fs, "/vault/.notient.lock", "instance-B", clock(70_000));
+    const lock = new VaultLock(fs, "/vault/.notient.lock", "instance-B", clock(20_000));
+    const handle = await lock.acquire();
+    await handle.release();
+  });
+
+  test("steals lock from dead holder whose heartbeat does not advance", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      "/vault/.notient.lock",
+      JSON.stringify({ instanceId: "instance-A", timestamp: 1000 }),
+    );
+    const lock = new VaultLock(fs, "/vault/.notient.lock", "instance-B", clock(1500));
     const handle = await lock.acquire();
     await handle.release();
   });
