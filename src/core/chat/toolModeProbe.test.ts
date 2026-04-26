@@ -215,6 +215,37 @@ describe("probeToolMode", () => {
     expect(cache.writes).toEqual([]);
   });
 
+  test("propagates AbortError without poisoning the cache as disabled", async () => {
+    const provider: LLMProvider = {
+      isAvailable: async () => true,
+      chat: async () => "",
+      chatStream: async function* () {
+        yield "";
+      },
+      embed: async () => [],
+      chatJson: async <T>() => ({}) as T,
+      chatWithTools: async () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    };
+    const cache = makeCache();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      probeToolMode({
+        provider,
+        model: "abort-mid-probe",
+        signal: controller.signal,
+        cache: cache.cache,
+        retryTimeoutMs: 50,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(cache.writes).toEqual([]);
+    expect(cache.store["abort-mid-probe"]).toBeUndefined();
+  });
+
   test("cache key is case-sensitive (exact model id)", async () => {
     const provider = new StubProvider([
       {

@@ -182,7 +182,8 @@ export class ContextManager {
     let embedding: Float32Array | null;
     try {
       embedding = await this.options.embed(query, signal);
-    } catch {
+    } catch (error) {
+      if (isAbortError(error)) throw error;
       return "";
     }
     if (!embedding) return "";
@@ -226,7 +227,8 @@ export class ContextManager {
       if (typeof result.summary === "string" && result.summary.length > 0) {
         summary = result.summary;
       }
-    } catch {
+    } catch (error) {
+      if (isAbortError(error)) throw error;
       // Network or parse failure during summarization is non-fatal: fall back
       // to the placeholder so the turn still proceeds with a smaller history.
     }
@@ -257,4 +259,16 @@ function readCountSafe(database: Database, sql: string): number {
   } catch {
     return 0;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return true;
+  if (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  ) {
+    return true;
+  }
+  return false;
 }

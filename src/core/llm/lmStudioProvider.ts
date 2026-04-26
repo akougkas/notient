@@ -162,8 +162,16 @@ function parseSseLine(line: string): string | "[DONE]" | null {
   try {
     const event = JSON.parse(payload) as ChatStreamEvent;
     const delta = event.choices[0]?.delta;
-    const text = delta?.content ?? delta?.reasoning_content ?? null;
-    return text && text.length > 0 ? text : null;
+    if (!delta) return null;
+    // Phase 4 H2: llama-server can emit `{content: "", reasoning_content: "..."}`
+    // payloads that the previous `??` form treated as content (empty string)
+    // and then dropped, losing the reasoning text entirely. Prefer non-empty
+    // content; otherwise fall back to non-empty reasoning_content.
+    const content = delta.content;
+    if (typeof content === "string" && content.length > 0) return content;
+    const reasoning = delta.reasoning_content;
+    if (typeof reasoning === "string" && reasoning.length > 0) return reasoning;
+    return null;
   } catch {
     return null;
   }

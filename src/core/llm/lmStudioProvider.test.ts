@@ -80,6 +80,21 @@ describe("LMStudioProvider", () => {
     expect(chunks.join("")).toBe("hello");
   });
 
+  test("chatStream falls back to reasoning_content deltas when content is empty", async () => {
+    const sse = `data: ${JSON.stringify({
+      choices: [{ delta: { content: "", reasoning_content: "let me think" } }],
+    })}\ndata: ${JSON.stringify({
+      choices: [{ delta: { reasoning_content: " step by step" } }],
+    })}\ndata: [DONE]\n`;
+    mockFetch(() => new Response(sse, { status: 200 }));
+    const p = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const chunks: string[] = [];
+    for await (const c of p.chatStream([{ role: "user", content: "hi" }], { model: "m" })) {
+      chunks.push(c);
+    }
+    expect(chunks.join("")).toBe("let me think step by step");
+  });
+
   test("chatStream rejects and cancels the SSE reader when aborted during a pending read", async () => {
     const encoder = new TextEncoder();
     let cancelCalled = false;
@@ -198,5 +213,89 @@ describe("LMStudioProvider chatJson", () => {
       { name: "S", schema: { type: "object" } },
     );
     expect(result).toEqual({ ok: true });
+  });
+
+  test("chatJson falls back to reasoning_content when content is empty", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "",
+                  reasoning_content: '{"ok":true,"path":"reasoning"}',
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const result = await provider.chatJson<{ ok: boolean; path: string }>(
+      [{ role: "user", content: "hi" }],
+      { model: "m" },
+      { name: "S", schema: { type: "object" } },
+    );
+    expect(result).toEqual({ ok: true, path: "reasoning" });
+  });
+});
+
+describe("LMStudioProvider chatWithTools", () => {
+  test("falls back to reasoning_content when no tool calls and content is empty", async () => {
+    const sse = `data: ${JSON.stringify({
+      choices: [{ delta: { reasoning_content: "thinking out loud" } }],
+    })}\ndata: ${JSON.stringify({
+      choices: [{ delta: { reasoning_content: " about your question" } }],
+    })}\ndata: [DONE]\n`;
+    mockFetch(() => new Response(sse, { status: 200 }));
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const handle = await provider.chatWithTools({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      signal: new AbortController().signal,
+    });
+    for await (const _event of handle.events) {
+      // drain
+    }
+    const result = await handle.result();
+    expect(result.toolCalls).toEqual([]);
+    expect(result.reasoningContent).toBe("thinking out loud about your question");
+    expect(result.content).toBe("thinking out loud about your question");
+  });
+
+  test("does not clobber non-empty content with reasoning_content", async () => {
+    const sse = `data: ${JSON.stringify({
+      choices: [{ delta: { content: "real answer", reasoning_content: "scratchpad" } }],
+    })}\ndata: [DONE]\n`;
+    mockFetch(() => new Response(sse, { status: 200 }));
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    const handle = await provider.chatWithTools({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      signal: new AbortController().signal,
+    });
+    for await (const _event of handle.events) {
+      // drain
+    }
+    const result = await handle.result();
+    expect(result.content).toBe("real answer");
+    expect(result.reasoningContent).toBe("scratchpad");
+  });
+
+  test("rejects on non-OK response", async () => {
+    mockFetch(() => new Response("nope", { status: 500 }));
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    await expect(
+      provider.chatWithTools({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/500/);
   });
 });

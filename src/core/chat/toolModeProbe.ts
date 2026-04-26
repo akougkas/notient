@@ -69,6 +69,9 @@ export async function probeToolMode(options: ToolModeProbeOptions): Promise<Tool
     return first;
   }
   // Retry once with a longer fuse before locking in `disabled`.
+  if (options.signal.aborted) {
+    throw asAbortError();
+  }
   const retryMs = options.retryTimeoutMs ?? 60_000;
   const retryController = new AbortController();
   const timeout = setTimeout(() => retryController.abort(), retryMs);
@@ -83,6 +86,15 @@ export async function probeToolMode(options: ToolModeProbeOptions): Promise<Tool
   }
   await options.cache.write(options.model, retryResult);
   return retryResult;
+}
+
+function asAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("aborted", "AbortError");
+  }
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 async function runProbe(options: ToolModeProbeOptions, signal: AbortSignal): Promise<ToolMode> {
@@ -104,9 +116,22 @@ async function runProbe(options: ToolModeProbeOptions, signal: AbortSignal): Pro
     if (result.toolCalls.length > 0) return "native";
     if (tryParseToolJson(result.content)) return "json-fallback";
     return "disabled";
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     return "disabled";
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return true;
+  if (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export interface ParsedToolJson {

@@ -319,6 +319,71 @@ describe("ContextManager.compose", () => {
     expect(result.systemPrompt).not.toContain("Current topic");
   });
 
+  test("propagates AbortError from cross-session memory embedder", async () => {
+    const { manager } = makeManager({
+      embed: async () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    });
+    const conversation = makeConversation();
+    await expect(
+      manager.compose(conversation, makeMessage("user", "anything"), new AbortController().signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("propagates AbortError from history-summarization chatJson", async () => {
+    class AbortingProvider extends FakeProvider {
+      override async chatJson<T>(): Promise<T> {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+    }
+    const provider = new AbortingProvider();
+    const longHistory: ChatMessage[] = [];
+    for (let index = 0; index < 10; index++) {
+      longHistory.push(
+        makeMessage("user", "u".repeat(120), index * 2),
+        makeMessage("assistant", "a".repeat(120), index * 2 + 1),
+      );
+    }
+    const { manager } = makeManager({
+      provider,
+      contextSettings: () =>
+        defaultSettings({
+          modelContextTokens: 200,
+          contextBudgetFraction: 0.5,
+          includeCrossSessionMemory: false,
+        }),
+      estimateTokens: (text) => text.length,
+    });
+    const conversation = makeConversation({ messages: longHistory });
+    await expect(
+      manager.compose(
+        conversation,
+        makeMessage("user", "next question"),
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("non-abort embed failure is swallowed and cross-session memory is omitted", async () => {
+    const { manager } = makeManager({
+      embed: async () => {
+        throw new Error("embed service down");
+      },
+    });
+    const conversation = makeConversation();
+    const result = await manager.compose(
+      conversation,
+      makeMessage("user", "anything"),
+      new AbortController().signal,
+    );
+    expect(result.systemPrompt).not.toContain("# Earlier conversations");
+  });
+
   test("pinned context is elided when it exceeds pinnedNoteMaxTokens", async () => {
     const longBody = "x".repeat(4000);
     const { manager } = makeManager({
