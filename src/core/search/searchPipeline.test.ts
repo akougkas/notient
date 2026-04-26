@@ -164,7 +164,7 @@ describe("SearchPipeline", () => {
         options: ChatOptions,
         _schema: JsonSchema,
       ): Promise<T> => {
-        // Observe the signal we were handed — abort fires before resolving.
+        // Observe the signal we were handed. Abort fires before resolving.
         return await new Promise<T>((_resolve, reject) => {
           const signal = options.signal;
           if (!signal) {
@@ -173,9 +173,9 @@ describe("SearchPipeline", () => {
           }
           const onAbort = (): void => {
             observedSignalAborted = true;
-            const err = new Error("aborted");
-            err.name = "AbortError";
-            reject(err);
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
           };
           if (signal.aborted) {
             onAbort();

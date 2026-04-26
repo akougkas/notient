@@ -75,7 +75,7 @@ describe("SavedQueries", () => {
     expect(raw).toContain("notient-saved-query");
   });
 
-  test("dedupes by slug — saving the same query overwrites the prior file", async () => {
+  test("dedupes by slug so saving the same query overwrites the prior file", async () => {
     let nowValue = 1_000;
     const { store, facade } = makeStore(() => nowValue);
     await store.save({ query: "Career Arc!", mode: "quick", filters: {} });

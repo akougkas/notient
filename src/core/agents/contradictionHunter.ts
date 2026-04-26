@@ -139,7 +139,7 @@ export class ContradictionHunter implements Agent {
       );
     } catch (error) {
       if (error instanceof ChatJsonParseError) {
-        // Reasoning models on local LM Studio occasionally truncate the JSON
+        // Reasoning models on the local llama-server occasionally truncate the JSON
         // when they hit max_tokens. Skip the run instead of crashing the
         // coordinator; the next idle-5m tick will retry.
         console.warn(
