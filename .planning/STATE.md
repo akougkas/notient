@@ -29,9 +29,18 @@ After Phase 3: **146 passing** (Phase 2.5 baseline 104 + Phase 3 additions: sche
 
 ## DoD (spec §13 row 3)
 
-- [ ] Open any note → Co-author streams its first token in <2s (manual smoke; verify in next dev session)
-- [ ] Linker / Synthesizer / Contradiction Hunter / Maturity Advancer all produce ≥1 real proposal in one session (`bun run smoke:coordinator` tally line)
+- [ ] Open any note → Co-author streams its first token in <2s. Evidence 2026-04-26: deployed to vaultex with `bun run dev` at 05:42:28 after fixing unindexed-note streaming, missed active-note starts, header parsing, and SSE abort propagation. Manual Obsidian reload/click verification is still pending because this session cannot operate the Obsidian GUI.
+- [ ] Linker / Synthesizer / Contradiction Hunter / Maturity Advancer all produce ≥1 real proposal in one session. Evidence 2026-04-26: current hardening target is met, but the original all-four spec remains open; `bun run smoke:coordinator` printed `linker: 1`, `synthesizer: 21`, `contradictionHunter: 0`, `maturityAdvancer: 0`.
 - [ ] Approvals UI accept promotes a staged edge to live (manual smoke)
+
+## 2026-04-26 Phase 3 hardening evidence
+
+- [x] Co-author panel no longer sticks on `thinking...` when the active note is not indexed. Evidence: `CoAuthorService > streams long notes even when the note has not been indexed yet` and `CoAuthorPanelModel > appendSectionForNote starts the matching stream when active-note event was missed`.
+- [x] Co-author parser accepts model headers such as `### Summary` and same-chunk header/body output. Evidence: `CoAuthorService > recognizes markdown section headers with different heading depth and casing`.
+- [x] Cancel propagates to the SSE reader while `reader.read()` is pending. Evidence: `LMStudioProvider > chatStream rejects and cancels the SSE reader when aborted during a pending read`.
+- [x] Electron `app://` indexer worker path removed. Evidence: `indexer runtime config > uses the inline indexer pipeline in Obsidian runtime`; `bun run build` completes in 73ms and no `indexer.worker` references remain in `src` or scripts.
+- [x] Current coordinator smoke target met. Evidence: `bun run smoke:coordinator` passed against `/mnt/c/Users/akougk/Projects/vaultex` and LM Studio `192.168.86.143:1234/v1` with `linker: 1`, `synthesizer: 21`, `contradictionHunter: 0`, `maturityAdvancer: 0`; smoke now fails unless at least 2 agents are non-zero.
+- [x] Final automated gates. Evidence: `bun run typecheck && bun run lint && bun test` passed with 147 tests; `bun run build` passed; `bun run smoke:coordinator` passed with 2 non-zero agents; `bun run dev` copied to vaultex.
 
 (Tick during the Phase 3 close-out smoke run; the harness ships in this commit.)
 
