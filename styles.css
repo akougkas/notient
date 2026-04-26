@@ -70,3 +70,31 @@
   padding: 0 6px;
   font-size: 11px;
 }
+.notient-insight-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  cursor: pointer;
+  background: var(--text-muted);
+  opacity: 0.85;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.notient-insight-dot:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+.notient-insight-dot--linker {
+  background: var(--color-blue);
+}
+.notient-insight-dot--synthesizer {
+  background: var(--color-purple);
+}
+.notient-insight-dot--contradictionHunter {
+  background: var(--color-red);
+}
+.notient-insight-dot--maturityAdvancer {
+  background: var(--color-green);
+}
