@@ -62,3 +62,54 @@ export const SCHEMA_V1 = [
     version INTEGER PRIMARY KEY
   );`,
 ];
+
+export const SCHEMA_V2 = [
+  // staging_edges: agent proposals before user approval. Promoted to graph_edges
+  // by ApprovalService. Rejected rows are deleted.
+  `CREATE TABLE IF NOT EXISTS staging_edges (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    agent TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    rationale TEXT,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decision TEXT
+  );`,
+  "CREATE INDEX IF NOT EXISTS staging_edges_agent ON staging_edges(agent);",
+  "CREATE INDEX IF NOT EXISTS staging_edges_decided ON staging_edges(decided_at);",
+  "CREATE INDEX IF NOT EXISTS staging_edges_source ON staging_edges(source_id);",
+  // staging_nodes: claim/concept/question proposals that don't yet have a home in
+  // the live graph. Synthesizer + Contradiction Hunter use this for proposed
+  // synthesis-note shells before the user accepts.
+  `CREATE TABLE IF NOT EXISTS staging_nodes (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    note_path TEXT,
+    payload TEXT,
+    agent TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decision TEXT
+  );`,
+  "CREATE INDEX IF NOT EXISTS staging_nodes_agent ON staging_nodes(agent);",
+  // agent_runs: provenance / status footer / debug trail.
+  `CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    note_path TEXT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    ok INTEGER,
+    error TEXT,
+    proposals_count INTEGER NOT NULL DEFAULT 0
+  );`,
+  "CREATE INDEX IF NOT EXISTS agent_runs_started ON agent_runs(started_at);",
+  "CREATE INDEX IF NOT EXISTS agent_runs_agent ON agent_runs(agent);",
+];

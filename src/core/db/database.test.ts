@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Database, type DatabaseAdapter } from "./database";
 
-class MemoryAdapter implements DatabaseAdapter {
+// biome-ignore lint/suspicious/noExportsInTest: shared test helper imported by migrations.test.ts
+export class MemoryAdapter implements DatabaseAdapter {
   files = new Map<string, ArrayBuffer>();
   constructor(initial: Record<string, ArrayBuffer> = {}) {
     for (const [k, v] of Object.entries(initial)) this.files.set(k, v);
@@ -16,7 +17,8 @@ class MemoryAdapter implements DatabaseAdapter {
   }
 }
 
-function loadWasm(): ArrayBuffer {
+// biome-ignore lint/suspicious/noExportsInTest: shared test helper imported by migrations.test.ts
+export function loadWasm(): ArrayBuffer {
   const wasmPath = resolve(import.meta.dir, "../../../node_modules/sql.js/dist/sql-wasm.wasm");
   const buf = readFileSync(wasmPath);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
