@@ -172,7 +172,18 @@ function normalizeSynthesis(
 ): SynthesisResponse {
   // Local LLMs (esp. quantized MoE) sometimes ignore strict json_schema and
   // omit required fields. Backfill defensively so the staging insert and the
-  // downstream slug() call cannot crash the coordinator.
+  // downstream slug() call cannot crash the coordinator. Warn so a future
+  // model regression is observable instead of silently zeroing the smoke.
+  const missing: string[] = [];
+  if (typeof raw.title !== "string" || raw.title.trim().length === 0) missing.push("title");
+  if (typeof raw.body !== "string") missing.push("body");
+  if (!Array.isArray(raw.memberPaths) || raw.memberPaths.length === 0) missing.push("memberPaths");
+  if (typeof raw.confidence !== "number") missing.push("confidence");
+  if (missing.length > 0) {
+    console.warn(
+      `[Notient][Synthesizer] chatJson payload missing required fields: ${missing.join(",")}; backfilling`,
+    );
+  }
   const body = typeof raw.body === "string" ? raw.body : "";
   const title =
     typeof raw.title === "string" && raw.title.trim().length > 0

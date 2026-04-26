@@ -150,15 +150,16 @@ describe("Synthesizer", () => {
     expect(JSON.parse(rows[0].payload).memberPaths).toEqual(["/a.md", "/b.md"]);
   });
 
-  test("survives malformed chatJson responses missing required fields without throwing", async () => {
+  test("backfills a missing title and stages with a derived label when confidence is met", async () => {
     const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
     await db.init();
     seedCluster(db);
-    // Some local LLMs ignore strict json_schema and return partial objects.
-    // The Synthesizer must not crash the coordinator run when this happens.
+    // Local LLMs occasionally drop the title field even with strict
+    // json_schema. The Synthesizer must not crash on slug(undefined) and
+    // must derive a usable label from the body's first heading.
     const provider = fakeProvider({
-      body: "## Themes\n- whatever",
+      body: "# POSIX Limits\n- whatever",
       memberPaths: ["/a.md", "/b.md"],
       confidence: 0.7,
     });
@@ -175,7 +176,41 @@ describe("Synthesizer", () => {
       notePath: null,
       signal: new AbortController().signal,
     });
-    expect(result.proposals).toBeGreaterThanOrEqual(0);
+    expect(result.proposals).toBe(1);
+    const rows = db.query<{ label: string; payload: string; confidence: number }>(
+      "SELECT label, payload, confidence FROM staging_nodes;",
+    );
+    expect(rows[0].label).toBe("POSIX Limits");
+    expect(rows[0].confidence).toBe(0.7);
+  });
+
+  test("silently disqualifies a malformed payload when confidence is missing (defaults to 0)", async () => {
+    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
+    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
+    await db.init();
+    seedCluster(db);
+    // Confidence missing → backfilled to 0 → below the 0.6 staging gate.
+    // The agent must not throw and must not stage a corrupt row.
+    const provider = fakeProvider({
+      body: "## Themes\n- whatever",
+      memberPaths: ["/a.md", "/b.md"],
+    });
+    const synth = new Synthesizer({
+      db,
+      provider,
+      reasoningModel: "nemotron",
+      epsilon: 0.05,
+      minClusterSize: 2,
+      sinceMs: 0,
+    });
+    const result = await synth.run({
+      trigger: "idle-5m",
+      notePath: null,
+      signal: new AbortController().signal,
+    });
+    expect(result.proposals).toBe(0);
+    const staged = db.query<{ id: string }>("SELECT id FROM staging_nodes;");
+    expect(staged).toHaveLength(0);
   });
 
   test("returns 0 proposals when no cluster meets minSize", async () => {
