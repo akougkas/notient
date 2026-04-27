@@ -3,7 +3,7 @@ export type AppEvent =
   | { type: "llm:health"; endpoint: string; ok: boolean; latencyMs?: number }
   | { type: "vault:note-saved"; path: string; sha: string }
   | { type: "indexer:progress"; processed: number; total: number }
-  | { type: "indexer:complete"; total: number }
+  | { type: "indexer:complete"; total: number; durationMs?: number }
   | { type: "indexer:error"; message: string }
   | {
       type: "indexer:node-added";
