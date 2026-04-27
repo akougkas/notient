@@ -14,7 +14,8 @@
     "format": "biome format --write src/",
     "build:cli": "bun build src/cli/index.ts --target=bun --outfile=dist/notient.js && bun scripts/copy-wasm.ts",
     "smoke:cli:phaseA": "bun scripts/smoke-cli-phaseA.ts",
-    "smoke:cli:phaseB": "bun scripts/smoke-cli-phaseB.ts"
+    "smoke:cli:phaseB": "bun scripts/smoke-cli-phaseB.ts",
+    "smoke:cli:phaseC": "bun scripts/smoke-cli-phaseC.ts"
   },
   "keywords": [
     "ai",
