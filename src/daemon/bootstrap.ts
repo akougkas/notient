@@ -244,8 +244,36 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     db: database,
     provider: deepLLM,
     reasoningModel: current.deep.reasoningModel,
-    neighborhood: async (notePath, opts) => {
-      return [];
+    neighborhood: async (notePath, queryOptions) => {
+      const head = database.query<{ id: string; vector: Uint8Array; dim: number }>(
+        `SELECT e.chunk_id AS id, e.vector AS vector, e.dim AS dim
+         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
+         WHERE c.note_path = ? ORDER BY c.ord LIMIT 1;`,
+        [notePath],
+      );
+      if (head.length === 0) return [];
+      const view = new Float32Array(
+        head[0].vector.buffer,
+        head[0].vector.byteOffset,
+        head[0].dim,
+      );
+      const hits = vectorIndex.search(view, queryOptions.topK);
+      const out: Array<{ notePath: string; chunkId: string; text: string; score: number }> = [];
+      for (const hit of hits) {
+        const meta = database.query<{ note_path: string; text: string }>(
+          "SELECT note_path, text FROM chunks WHERE id = ?;",
+          [hit.id],
+        );
+        if (meta.length === 0) continue;
+        if (meta[0].note_path === notePath) continue;
+        out.push({
+          notePath: meta[0].note_path,
+          chunkId: hit.id,
+          text: meta[0].text,
+          score: hit.score,
+        });
+      }
+      return out;
     },
   });
   const synthesizer = new Synthesizer({
@@ -260,8 +288,35 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     db: database,
     provider: deepLLM,
     reasoningModel: current.deep.reasoningModel,
-    neighbors: async (claimIds, opts) => {
-      return [];
+    neighbors: async (recentClaimIds, queryOptions) => {
+      if (recentClaimIds.length === 0) return [];
+      const probe = database.query<{ vector: Uint8Array; dim: number; chunk_id: string }>(
+        `SELECT e.vector AS vector, e.dim AS dim, e.chunk_id AS chunk_id
+         FROM graph_nodes n JOIN chunks c ON c.note_path = n.note_path
+         JOIN embeddings e ON e.chunk_id = c.id
+         WHERE n.id = ? LIMIT 1;`,
+        [recentClaimIds[0]],
+      );
+      if (probe.length === 0) return [];
+      const view = new Float32Array(
+        probe[0].vector.buffer,
+        probe[0].vector.byteOffset,
+        probe[0].dim,
+      );
+      const hits = vectorIndex.search(view, queryOptions.topK);
+      const out: Array<{ id: string; score: number; chunkIds: string[] }> = [];
+      for (const hit of hits) {
+        const claim = database.query<{ id: string }>(
+          `SELECT id FROM graph_nodes WHERE type = 'claim' AND note_path = (
+              SELECT note_path FROM chunks WHERE id = ?
+           ) LIMIT 1;`,
+          [hit.id],
+        );
+        if (claim.length === 0) continue;
+        if (recentClaimIds.includes(claim[0].id)) continue;
+        out.push({ id: claim[0].id, score: hit.score, chunkIds: [hit.id] });
+      }
+      return out;
     },
     maxPairs: 5,
   });
