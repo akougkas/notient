@@ -9,6 +9,7 @@ import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
 import { MethodDispatcher, parseEnvelope } from "./rpc";
 import { currentPlatform, resolveSocketPath } from "./socket";
+import { VaultWatcher } from "./watcher";
 
 const VERSION = "0.1.0-phaseA";
 const DEFAULT_IDLE_HOURS = 4;
@@ -135,6 +136,14 @@ async function main(argv: string[]): Promise<void> {
     bridgeUp = false;
   });
 
+  const watcher = new VaultWatcher({
+    root: args.vaultPath,
+    enqueue: (path) => {
+      indexer.enqueue(path);
+    },
+  });
+  await watcher.start();
+
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
@@ -164,6 +173,7 @@ async function main(argv: string[]): Promise<void> {
     for (const socket of sockets) socket.end();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(socketPath, { force: true }).catch(() => {});
+    await watcher.stop();
     await closeBootstrap();
     await removePidFile(pidPath).catch(() => {});
     process.stdout.write(
