@@ -52,6 +52,7 @@ export class LMStudioProvider implements LLMProvider {
         temperature: opts.temperature ?? 0.3,
         max_tokens: opts.maxTokens,
         stream: false,
+        ...thinkingBody(opts.enableThinking),
       }),
     });
     if (!response.ok) throw new Error(`LLM ${response.status} ${response.statusText}`);
@@ -70,6 +71,7 @@ export class LMStudioProvider implements LLMProvider {
         temperature: opts.temperature ?? 0.3,
         max_tokens: opts.maxTokens,
         stream: true,
+        ...thinkingBody(opts.enableThinking),
       }),
     });
     if (!response.ok || !response.body) {
@@ -103,6 +105,7 @@ export class LMStudioProvider implements LLMProvider {
         temperature: request.temperature ?? 0.3,
         max_tokens: request.maxTokens,
         stream: true,
+        ...thinkingBody(request.enableThinking),
       }),
     });
     if (!response.ok || !response.body) {
@@ -131,6 +134,7 @@ export class LMStudioProvider implements LLMProvider {
           type: "json_schema",
           json_schema: { name: schema.name, strict: true, schema: schema.schema },
         },
+        ...thinkingBody(opts.enableThinking),
       }),
     });
     if (!response.ok) throw new Error(`LLM ${response.status} ${response.statusText}`);
@@ -147,6 +151,11 @@ export class LMStudioProvider implements LLMProvider {
       );
     }
   }
+}
+
+function thinkingBody(enableThinking: boolean | undefined): Record<string, unknown> {
+  if (enableThinking !== false) return {};
+  return { chat_template_kwargs: { enable_thinking: false } };
 }
 
 function pickJsonPayload(content: string, reasoningContent: string): string {

@@ -106,35 +106,35 @@ export interface NotientSettings {
   };
 }
 
-// Phase 4 substrate: ONLY mini. ONLY two models — nemotron-cascade for chat/reasoning,
-// nomic-embed-text-v2-moe for embeddings. The mini server has VRAM for exactly these
-// two models at once. `primary` and `deep` both point at the same llama-server endpoint
-// using the same chat model; `embedding` points at the Ollama OpenAI-compatible
-// endpoint on the same node. Agents, co-author, fast paths, and reranking all share
-// the single chat model.
-const MINI_LLAMA_SERVER = "http://192.168.86.141:8080/v1";
-const MINI_OLLAMA = "http://192.168.86.141:11434/v1";
-const MINI_CHAT_MODEL = "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M";
-const MINI_EMBEDDING_MODEL = "nomic-embed-text-v2-moe";
+// Notient substrate: ONLY two models. Primary host is dynamo (LM Studio at :1234)
+// because it loads Nemotron-Cascade with a 1M context window split across parallel
+// slots. Mini (llama-server at :8080 / Ollama at :11434) is a hot backup with the
+// same model line; flip the constants below to roll back if dynamo goes down. The
+// chat model serves reasoning, fast, reranker, and co-author. The embedding model
+// is OpenAI-compatible on the same LM Studio endpoint, so primary.baseUrl and
+// embedding.baseUrl coincide for dynamo.
+const DYNAMO_LMSTUDIO = "http://192.168.86.143:1234/v1";
+const DYNAMO_CHAT_MODEL = "nemotron-cascade-2-30b-a3b-i1";
+const DYNAMO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v2-moe";
 
 export const DEFAULT_SETTINGS: NotientSettings = {
   primary: {
-    baseUrl: MINI_LLAMA_SERVER,
-    reasoningModel: MINI_CHAT_MODEL,
-    embeddingModel: MINI_EMBEDDING_MODEL, // legacy; embedding endpoint reads from `embedding.*` below
-    fastModel: MINI_CHAT_MODEL,
-    rerankerModel: MINI_CHAT_MODEL,
+    baseUrl: DYNAMO_LMSTUDIO,
+    reasoningModel: DYNAMO_CHAT_MODEL,
+    embeddingModel: DYNAMO_EMBEDDING_MODEL, // legacy; embedding endpoint reads from `embedding.*` below
+    fastModel: DYNAMO_CHAT_MODEL,
+    rerankerModel: DYNAMO_CHAT_MODEL,
   },
   deep: {
-    baseUrl: MINI_LLAMA_SERVER,
-    reasoningModel: MINI_CHAT_MODEL,
-    embeddingModel: MINI_EMBEDDING_MODEL,
-    fastModel: MINI_CHAT_MODEL,
-    rerankerModel: MINI_CHAT_MODEL,
+    baseUrl: DYNAMO_LMSTUDIO,
+    reasoningModel: DYNAMO_CHAT_MODEL,
+    embeddingModel: DYNAMO_EMBEDDING_MODEL,
+    fastModel: DYNAMO_CHAT_MODEL,
+    rerankerModel: DYNAMO_CHAT_MODEL,
   },
   embedding: {
-    baseUrl: MINI_OLLAMA,
-    model: MINI_EMBEDDING_MODEL,
+    baseUrl: DYNAMO_LMSTUDIO,
+    model: DYNAMO_EMBEDDING_MODEL,
   },
   agents: {
     linker: true,
@@ -146,7 +146,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     enabled: true,
     minWords: 100,
     debounceMs: 5000,
-    model: MINI_CHAT_MODEL,
+    model: DYNAMO_CHAT_MODEL,
   },
   approvals: {
     confidenceThreshold: 0.6,

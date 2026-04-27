@@ -70,12 +70,17 @@ export class Extractor {
 
   private async extractOne(chunk: Chunk): Promise<Extraction> {
     const messages: ChatMessage[] = [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: chunk.text },
+      { role: "system", content: `${SYSTEM_PROMPT}\n\n/no_think` },
+      { role: "user", content: `/no_think\n\n${chunk.text}` },
     ];
     const result = await this.provider.chatJson<Extraction>(
       messages,
-      { model: this.opts.model, signal: this.opts.signal, temperature: 0.1 },
+      {
+        model: this.opts.model,
+        signal: this.opts.signal,
+        temperature: 0.1,
+        enableThinking: false,
+      },
       SCHEMA,
     );
     return {

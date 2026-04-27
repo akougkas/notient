@@ -39,7 +39,7 @@ export class Reranker {
     try {
       const response = await this.options.provider.chatJson<RerankResponse>(
         messages,
-        { model: this.options.model, signal, temperature: 0.1 },
+        { model: this.options.model, signal, temperature: 0.1, enableThinking: false },
         RERANK_SCHEMA,
       );
       const ranked = sortByRanking(hits, response.ranking);

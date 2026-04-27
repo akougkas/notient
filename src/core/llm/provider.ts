@@ -8,6 +8,14 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /**
+   * Qwen3 / Nemotron-Cascade thinking toggle. When false, the request body
+   * carries `chat_template_kwargs: { enable_thinking: false }` so llama-server's
+   * jinja template skips the chain-of-thought preamble. Indexer extraction and
+   * structured-output reranking pass false; chat / co-author / agents leave it
+   * undefined to keep reasoning available.
+   */
+  enableThinking?: boolean;
 }
 
 export interface EmbedOptions {
@@ -53,6 +61,8 @@ export interface ChatWithToolsRequest {
   signal: AbortSignal;
   temperature?: number;
   maxTokens?: number;
+  /** See {@link ChatOptions.enableThinking}. */
+  enableThinking?: boolean;
 }
 
 export interface ChatWithToolsEvent {
