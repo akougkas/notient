@@ -151,6 +151,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const existingVectorBytes = await vault.readBinary(VECTOR_PATH);
   if (existingVectorBytes) {
     await vectorIndex.load(existingVectorBytes);
+  } else {
+    // 768 matches the locked embedding model (text-embedding-nomic-embed-text-v2-moe).
+    await vectorIndex.init(768);
   }
 
   const embedder = new Embedder(embeddingLLM, { model: current.embedding.model });
