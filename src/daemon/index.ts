@@ -2,6 +2,10 @@ import { mkdir, rm } from "node:fs/promises";
 import { type Socket, createServer } from "node:net";
 import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
+import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
+import { makeHealthHandler } from "./handlers/health";
+import { makeSearchHandler } from "./handlers/search";
+import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
 import { MethodDispatcher, parseEnvelope } from "./rpc";
 import { currentPlatform, resolveSocketPath } from "./socket";
@@ -111,6 +115,24 @@ async function main(argv: string[]): Promise<void> {
     const patch = params as Record<string, unknown>;
     await settings.update(patch);
     return { ok: true, config: settings.get() };
+  });
+
+  const indexer = kernel.get("indexer");
+  const searchPipeline = kernel.get("searchPipeline");
+  const vitalsService = kernel.get("vitalsService");
+  let bridgeUp = false;
+
+  dispatcher.register("awaken.run", makeAwakenHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }));
+  dispatcher.register("reindex.glob", makeReindexHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }));
+  dispatcher.register("search.run", makeSearchHandler({ pipeline: searchPipeline, bridgeUp: () => bridgeUp }));
+  dispatcher.register("vitals.get", makeVitalsHandler({ vitalsService }));
+  dispatcher.register("health.probe", makeHealthHandler({ health: kernel.get("health"), bridgeUp: () => bridgeUp }));
+
+  kernel.get("bus").on("bridge:up", () => {
+    bridgeUp = true;
+  });
+  kernel.get("bus").on("bridge:down", () => {
+    bridgeUp = false;
   });
 
   await new Promise<void>((resolve, reject) => {
