@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
 import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
+import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
 import { makeSearchHandler } from "./handlers/search";
 import { makeVitalsHandler } from "./handlers/vitals";
@@ -141,6 +142,20 @@ async function main(argv: string[]): Promise<void> {
     "health.probe",
     makeHealthHandler({ health: kernel.get("health"), bridgeUp: () => bridgeUp }),
   );
+
+  const chatHandlers = makeChatHandlers({
+    chatService: kernel.get("chatService"),
+    approvalGate: kernel.get("approvalGate"),
+    vault: kernel.get("vault"),
+    visionRouter: kernel.has("visionLLM") ? kernel.get("visionLLM") : null,
+    pinnedNoteMaxTokens: settings.get().chat.context.pinnedNoteMaxTokens,
+  });
+  dispatcher.register("chat.start", chatHandlers.start);
+  dispatcher.register("chat.send", chatHandlers.send);
+  dispatcher.register("chat.abort", chatHandlers.abort);
+  dispatcher.register("chat.list", chatHandlers.list);
+  dispatcher.register("chat.load", chatHandlers.load);
+  dispatcher.register("chat.approve", chatHandlers.approve);
 
   kernel.get("bus").on("bridge:up", () => {
     bridgeUp = true;
