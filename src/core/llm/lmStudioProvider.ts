@@ -95,23 +95,36 @@ export class LMStudioProvider implements LLMProvider {
   }
 
   async chatWithTools(request: ChatWithToolsRequest): Promise<ChatWithToolsHandle> {
+    const body = JSON.stringify({
+      model: request.model,
+      messages: request.messages,
+      tools: request.tools,
+      tool_choice: request.toolChoice ?? "auto",
+      temperature: request.temperature ?? 0.3,
+      max_tokens: request.maxTokens,
+      stream: true,
+      ...thinkingBody(request.enableThinking),
+    });
     const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: request.signal,
-      body: JSON.stringify({
-        model: request.model,
-        messages: request.messages,
-        tools: request.tools,
-        tool_choice: request.toolChoice ?? "auto",
-        temperature: request.temperature ?? 0.3,
-        max_tokens: request.maxTokens,
-        stream: true,
-        ...thinkingBody(request.enableThinking),
-      }),
+      body,
     });
     if (!response.ok || !response.body) {
-      throw new Error(`LLM ${response.status} ${response.statusText}`);
+      const detail = await response.text().catch(() => "");
+      if (process.env.NOTIENT_DEBUG_LLM === "1") {
+        try {
+          const file = `/tmp/notient-llm-request-${Date.now()}.json`;
+          await Bun.write(file, body);
+          process.stderr.write(`[NOTIENT_DEBUG_LLM] request body dumped to ${file}\n`);
+        } catch {
+          // best-effort dump
+        }
+      }
+      throw new Error(
+        `LLM ${response.status} ${response.statusText} ${detail.slice(0, 600)}`,
+      );
     }
     const aggregator = new ToolStreamAggregator();
     const events = iterateToolEvents(response.body, request.signal, aggregator);
