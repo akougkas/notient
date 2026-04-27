@@ -1,32 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import type { Plugin } from "obsidian";
 import { EventBus } from "../events/eventBus";
 import { SettingsService } from "./settingsService";
 import { DEFAULT_SETTINGS } from "./types";
 
-interface FakePlugin {
+interface FakeStore {
   data: unknown;
-  loadData: () => Promise<unknown>;
-  saveData: (value: unknown) => Promise<void>;
+  load: () => Promise<unknown>;
+  save: (value: unknown) => Promise<void>;
 }
 
-function makePlugin(initial: unknown): FakePlugin {
-  const plugin: FakePlugin = {
+function makeStore(initial: unknown): FakeStore {
+  const store: FakeStore = {
     data: initial,
-    loadData: async () => plugin.data,
-    saveData: async (value) => {
-      plugin.data = value;
+    load: async () => store.data,
+    save: async (value) => {
+      store.data = value;
     },
   };
-  return plugin;
+  return store;
 }
 
 describe("SettingsService merge", () => {
-  test("falls back to Phase 4 defaults when persisted data is partial", async () => {
-    const plugin = makePlugin({
-      approvals: { confidenceThreshold: 0.9 },
-    });
-    const service = new SettingsService(plugin as unknown as Plugin, new EventBus());
+  test("falls back to defaults when persisted data is partial", async () => {
+    const store = makeStore({ approvals: { confidenceThreshold: 0.9 } });
+    const service = new SettingsService(store, new EventBus());
     const loaded = await service.load();
 
     expect(loaded.approvals.confidenceThreshold).toBe(0.9);
@@ -38,11 +35,11 @@ describe("SettingsService merge", () => {
   });
 
   test("preserves persisted nested fields while filling gaps from defaults", async () => {
-    const plugin = makePlugin({
+    const store = makeStore({
       vitals: { freshnessHalfLifeDays: 30 },
       search: { balanced: { topK: 50 } },
     });
-    const service = new SettingsService(plugin as unknown as Plugin, new EventBus());
+    const service = new SettingsService(store, new EventBus());
     const loaded = await service.load();
 
     expect(loaded.vitals.freshnessHalfLifeDays).toBe(30);
@@ -50,5 +47,21 @@ describe("SettingsService merge", () => {
     expect(loaded.search.balanced.topK).toBe(50);
     expect(loaded.search.balanced.rerankTopN).toBe(DEFAULT_SETTINGS.search.balanced.rerankTopN);
     expect(loaded.search.deep).toEqual(DEFAULT_SETTINGS.search.deep);
+  });
+
+  test("update writes through to the store and emits settings:changed", async () => {
+    const store = makeStore(null);
+    const bus = new EventBus();
+    const events: string[] = [];
+    bus.on("settings:changed", (event) => {
+      events.push(event.key);
+    });
+    const service = new SettingsService(store, bus);
+    await service.load();
+    await service.update({ approvals: { confidenceThreshold: 0.42 } });
+
+    expect(service.get().approvals.confidenceThreshold).toBe(0.42);
+    expect(store.data).not.toBeNull();
+    expect(events).toEqual(["approvals"]);
   });
 });

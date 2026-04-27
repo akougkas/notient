@@ -1,17 +1,26 @@
-import type { Plugin } from "obsidian";
 import type { EventBus } from "../events/eventBus";
 import { DEFAULT_SETTINGS, type NotientSettings } from "./types";
+
+/**
+ * SettingsService persists Notient configuration through an injected
+ * ConfigStore. The daemon wires the store to <vault>/.notient/config.json
+ * via FsVault. Tests use an in-memory fake.
+ */
+export interface ConfigStore {
+  load(): Promise<unknown>;
+  save(value: unknown): Promise<void>;
+}
 
 export class SettingsService {
   private current: NotientSettings = DEFAULT_SETTINGS;
 
   constructor(
-    private readonly plugin: Plugin,
+    private readonly store: ConfigStore,
     private readonly bus: EventBus,
   ) {}
 
   async load(): Promise<NotientSettings> {
-    const raw = (await this.plugin.loadData()) as Partial<NotientSettings> | null;
+    const raw = (await this.store.load()) as Partial<NotientSettings> | null;
     this.current = mergeSettings(DEFAULT_SETTINGS, raw ?? {});
     return this.current;
   }
@@ -22,7 +31,7 @@ export class SettingsService {
 
   async update(patch: Partial<NotientSettings>): Promise<void> {
     this.current = mergeSettings(this.current, patch);
-    await this.plugin.saveData(this.current);
+    await this.store.save(this.current);
     this.bus.emit({ type: "settings:changed", key: Object.keys(patch).join(",") });
   }
 }
