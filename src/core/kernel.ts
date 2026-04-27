@@ -112,6 +112,20 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "vaultBootstrap",
 ];
 
+const PHASE_A_KEYS: ServiceKey[] = [
+  "bus",
+  "settings",
+  "vault",
+  "database",
+  "graph",
+  "primaryLLM",
+  "deepLLM",
+  "embeddingLLM",
+  "health",
+  "lock",
+  "echoGuard",
+];
+
 export class Kernel {
   private services: Partial<ServiceRegistry> = {};
   private sealed = false;
@@ -121,8 +135,9 @@ export class Kernel {
     this.services[key] = value;
   }
 
-  seal(): void {
-    const missing = REQUIRED_KEYS.filter((k) => this.services[k] === undefined);
+  seal(options: { phase?: "A" | "B" | "C" } = {}): void {
+    const required = options.phase === "A" ? PHASE_A_KEYS : REQUIRED_KEYS;
+    const missing = required.filter((key) => this.services[key] === undefined);
     if (missing.length > 0) {
       throw new Error(`Kernel.seal(): missing required services: ${missing.join(", ")}`);
     }
