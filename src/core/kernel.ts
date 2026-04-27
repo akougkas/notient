@@ -126,6 +126,22 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "echoGuard",
 ];
 
+const PHASE_B_KEYS: ServiceKey[] = [
+  ...PHASE_A_KEYS,
+  "indexer",
+  "vectorIndex",
+  "embedder",
+  "extractor",
+  "vaultBootstrap",
+  "idleDetector",
+  "reasoningMutex",
+  "searchPipeline",
+  "savedQueries",
+  "searchHistory",
+  "vitalsService",
+  "coordinator",
+];
+
 export class Kernel {
   private services: Partial<ServiceRegistry> = {};
   private sealed = false;
@@ -136,7 +152,10 @@ export class Kernel {
   }
 
   seal(options: { phase?: "A" | "B" | "C" } = {}): void {
-    const required = options.phase === "A" ? PHASE_A_KEYS : REQUIRED_KEYS;
+    let required: ServiceKey[];
+    if (options.phase === "A") required = PHASE_A_KEYS;
+    else if (options.phase === "B") required = PHASE_B_KEYS;
+    else required = REQUIRED_KEYS;
     const missing = required.filter((key) => this.services[key] === undefined);
     if (missing.length > 0) {
       throw new Error(`Kernel.seal(): missing required services: ${missing.join(", ")}`);
