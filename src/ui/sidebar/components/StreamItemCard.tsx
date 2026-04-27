@@ -42,11 +42,14 @@ export function StreamItemCard({
       aria-current={isFocused ? "true" : undefined}
     >
       <header class="notient-stream-item__head">
-        <span class={`notient-stream-item__agent notient-stream-item__agent--${item.agent}`}>
-          {item.agent}
-        </span>
-        <span class="notient-stream-item__type">{item.type}</span>
-        <span class="notient-stream-item__confidence">{confidence}%</span>
+        <h4 class="notient-stream-item__title">{item.title}</h4>
+        <div class="notient-stream-item__meta">
+          <span class={`notient-stream-item__agent notient-stream-item__agent--${item.agent}`}>
+            {item.agent}
+          </span>
+          <span class="notient-stream-item__type">{item.type}</span>
+          <span class="notient-stream-item__confidence">{confidence}%</span>
+        </div>
       </header>
       <p class="notient-stream-item__rationale">{item.rationale ?? "(no rationale)"}</p>
       <ul class="notient-stream-item__paths">

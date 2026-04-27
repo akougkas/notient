@@ -22,6 +22,8 @@ interface StagingEdgeRow {
   evidence: string;
   rationale: string | null;
   created_at: number;
+  source_label: string | null;
+  target_label: string | null;
 }
 
 interface StagingNodeRow {
@@ -68,8 +70,21 @@ export class StreamService {
     const now = this.options.now();
     const activePath = this.options.getActivePath();
     const edges = this.options.db.query<StagingEdgeRow>(
-      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-       FROM staging_edges WHERE decision IS NULL;`,
+      `SELECT staging_edges.id            AS id,
+              staging_edges.type          AS type,
+              staging_edges.source_id     AS source_id,
+              staging_edges.target_id     AS target_id,
+              staging_edges.confidence    AS confidence,
+              staging_edges.agent         AS agent,
+              staging_edges.evidence      AS evidence,
+              staging_edges.rationale     AS rationale,
+              staging_edges.created_at    AS created_at,
+              source_node.label           AS source_label,
+              target_node.label           AS target_label
+         FROM staging_edges
+         LEFT JOIN graph_nodes AS source_node ON source_node.id = staging_edges.source_id
+         LEFT JOIN graph_nodes AS target_node ON target_node.id = staging_edges.target_id
+        WHERE staging_edges.decision IS NULL;`,
     );
     const nodes = this.options.db.query<StagingNodeRow>(
       `SELECT id, type, label, note_path, agent, confidence, created_at
@@ -97,6 +112,7 @@ export class StreamService {
       items.push({
         id: edge.id,
         kind: "edge",
+        title: edgeTitle(edge),
         agent: edge.agent,
         type: edge.type,
         confidence: edge.confidence,
@@ -120,6 +136,7 @@ export class StreamService {
       items.push({
         id: node.id,
         kind: "node",
+        title: nodeTitle(node),
         agent: node.agent,
         type: node.type,
         confidence: node.confidence,
@@ -154,4 +171,27 @@ function parseEvidence(raw: string): string[] {
   } catch {
     return [];
   }
+}
+
+function edgeTitle(edge: StagingEdgeRow): string {
+  const sourceLabel = edge.source_label?.trim() ?? "";
+  const targetLabel = edge.target_label?.trim() ?? "";
+  if (sourceLabel.length > 0 && targetLabel.length > 0) {
+    return `${sourceLabel} → ${targetLabel}`;
+  }
+  const fallbackType = edge.type?.trim() ?? "";
+  if (fallbackType.length > 0) {
+    return fallbackType.charAt(0).toUpperCase() + fallbackType.slice(1);
+  }
+  return "Edge";
+}
+
+function nodeTitle(node: StagingNodeRow): string {
+  const label = node.label?.trim() ?? "";
+  if (label.length > 0) return label;
+  const fallbackType = node.type?.trim() ?? "";
+  if (fallbackType.length > 0) {
+    return fallbackType.charAt(0).toUpperCase() + fallbackType.slice(1);
+  }
+  return "Node";
 }

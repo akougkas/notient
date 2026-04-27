@@ -3,6 +3,7 @@ export type StreamItemKind = "edge" | "node";
 export interface StreamItem {
   id: string;
   kind: StreamItemKind;
+  title: string;
   agent: string;
   type: string;
   confidence: number;

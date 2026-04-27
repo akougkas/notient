@@ -889,7 +889,12 @@ export default class NotientPlugin extends Plugin {
         if (!result) return;
         void canvasFromResults.export(result).then((exported) => {
           new Notice(`Notient: canvas saved to ${exported.path}`);
-          void this.app.workspace.openLinkText(exported.path, "", false);
+          const file = this.app.vault.getAbstractFileByPath(exported.path);
+          if (file instanceof TFile) {
+            void this.app.workspace.getLeaf(false).openFile(file);
+          } else {
+            new Notice(`Notient: canvas not found at ${exported.path}`);
+          }
         });
       },
       saveQuery: () => {
@@ -926,12 +931,25 @@ export default class NotientPlugin extends Plugin {
     // Chat wiring: runner drives ChatService.sendMessage, actions cover
     // start/load/abort + pin/unpin + approval resolution + reasoning toggle.
     setChatRunner((conversation, userMessage, signal) => {
+      debugChat("dispatch", {
+        conversationId: conversation.id,
+        length: userMessage.length,
+      });
       const generator = chatService.sendMessage({ conversation, userMessage });
       return {
         async *[Symbol.asyncIterator]() {
-          for await (const event of generator) {
-            if (signal.aborted) return;
-            yield event;
+          try {
+            for await (const event of generator) {
+              if (signal.aborted) return;
+              yield event;
+            }
+            debugChat("dispatch:streamed", { conversationId: conversation.id });
+          } catch (error) {
+            debugChat("dispatch:error", {
+              conversationId: conversation.id,
+              error: String(error),
+            });
+            throw error;
           }
         },
       };
@@ -955,12 +973,18 @@ export default class NotientPlugin extends Plugin {
 
     const chatLiveActions: ChatActions = {
       newConversation: async () => {
-        const conversation = await chatService.startConversation({
-          topic: "Untitled",
-          pinnedContext: [...chatPinnedContext.value],
-        });
-        chatActiveConversation.value = conversation;
-        await refreshConversationsList();
+        try {
+          const conversation = await chatService.startConversation({
+            topic: "Untitled",
+            pinnedContext: [...chatPinnedContext.value],
+          });
+          chatActiveConversation.value = conversation;
+          await refreshConversationsList();
+          debugChat("new-conversation:created", { id: conversation.id });
+        } catch (error) {
+          debugChat("new-conversation:error", { error: String(error) });
+          new Notice(`Notient: new conversation failed (${String(error)})`);
+        }
       },
       loadConversation: async (notePath) => {
         const conversation = await chatService.loadConversation(notePath);
@@ -983,6 +1007,7 @@ export default class NotientPlugin extends Plugin {
       },
       toggleYolo: async () => {
         const next = this.settings.get().chat.approvalMode === "safe" ? "yolo" : "safe";
+        debugChat("toggle-yolo", { next });
         if (
           next === "yolo" &&
           !window.confirm(
@@ -1018,24 +1043,78 @@ export default class NotientPlugin extends Plugin {
     streamActions.value = {
       open: (item) => {
         const path = item.notePaths[0];
-        if (!path) return;
+        debugStream("open", { id: item.id, path });
+        if (!path) {
+          debugStream("open:miss", { id: item.id, reason: "no-paths" });
+          return;
+        }
         const target = this.app.metadataCache.getFirstLinkpathDest(path, "");
-        if (target) void this.app.workspace.openLinkText(target.path, "", false);
+        if (target) {
+          debugStream("open:resolved", { id: item.id, path: target.path });
+          void this.app.workspace.openLinkText(target.path, "", false);
+          return;
+        }
+        const fallback = this.app.vault.getAbstractFileByPath(path);
+        if (fallback instanceof TFile) {
+          debugStream("open:resolved", { id: item.id, path: fallback.path, source: "fallback" });
+          void this.app.workspace.getLeaf(false).openFile(fallback);
+          return;
+        }
+        debugStream("open:miss", { id: item.id, path });
+        new Notice(`Notient: note not found: ${path}`);
       },
       accept: (item) => {
-        if (item.kind === "edge") void approvalService.acceptEdge(item.id);
+        debugStream("accept", { id: item.id });
+        if (item.kind !== "edge") {
+          debugStream("accept:skip", { id: item.id, reason: "not-edge" });
+          return;
+        }
+        approvalService
+          .acceptEdge(item.id)
+          .then(() => {
+            debugStream("accept:done", { id: item.id });
+          })
+          .catch((error: unknown) => {
+            debugStream("accept:error", { id: item.id, error: String(error) });
+            new Notice(`Notient: accept failed (${String(error)})`);
+          });
       },
       reject: (item) => {
-        if (item.kind === "edge") void approvalService.rejectEdge(item.id);
+        debugStream("reject", { id: item.id });
+        if (item.kind !== "edge") {
+          debugStream("reject:skip", { id: item.id, reason: "not-edge" });
+          return;
+        }
+        approvalService
+          .rejectEdge(item.id)
+          .then(() => {
+            debugStream("reject:done", { id: item.id });
+          })
+          .catch((error: unknown) => {
+            debugStream("reject:error", { id: item.id, error: String(error) });
+            new Notice(`Notient: reject failed (${String(error)})`);
+          });
       },
       previewCanvas: (item) => {
-        if (item.kind !== "node" || item.type !== "synthesis") return;
-        void exportSynthesisProposalCanvas(item.id);
+        debugStream("preview-canvas", { id: item.id });
+        if (item.kind !== "node" || item.type !== "synthesis") {
+          debugStream("preview-canvas:skip", { id: item.id, reason: "not-synthesis-node" });
+          return;
+        }
+        exportSynthesisProposalCanvas(item.id)
+          .then(() => {
+            debugStream("preview-canvas:done", { id: item.id });
+          })
+          .catch((error: unknown) => {
+            debugStream("preview-canvas:error", { id: item.id, error: String(error) });
+            new Notice(`Notient: preview canvas failed (${String(error)})`);
+          });
       },
     };
 
     vitalsActions.value = {
       deepen: (path) => {
+        debugVitals("deepen", { path });
         this.bus.emit({ type: "user:action", kind: "deepen", notePath: path });
       },
     };
@@ -1352,7 +1431,12 @@ export default class NotientPlugin extends Plugin {
       });
       await facade.write(path, JSON.stringify(canvas, null, 2));
       new Notice(`Notient: canvas saved to ${path}`);
-      await this.app.workspace.openLinkText(path, "", false);
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) {
+        await this.app.workspace.getLeaf(false).openFile(file);
+      } else {
+        new Notice(`Notient: canvas not found at ${path}`);
+      }
     };
 
     this.addCommand({
@@ -1605,4 +1689,19 @@ function parseObject(raw: string | null): Record<string, unknown> {
 function debugCoAuthorMain(message: string, data?: Record<string, unknown>): void {
   if (typeof window === "undefined") return;
   console.log(`[Notient][CoAuthorMain] ${message}`, data ?? {});
+}
+
+function debugStream(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][Stream] ${message}`, data ?? {});
+}
+
+function debugChat(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][Chat] ${message}`, data ?? {});
+}
+
+function debugVitals(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][Vitals] ${message}`, data ?? {});
 }

@@ -56,7 +56,7 @@ function makeStore(initialNow = 1745625600000) {
 }
 
 describe("conversationStore", () => {
-  test("create writes a markdown file at the expected slug-and-date path", async () => {
+  test("create writes a markdown file at the expected slug-date-and-id path", async () => {
     const { store, facade } = makeStore(Date.UTC(2026, 3, 25, 12, 0, 0));
     const created = await store.create({
       id: "conv-1",
@@ -65,7 +65,7 @@ describe("conversationStore", () => {
       approvalMode: "safe",
       topic: "Hello World",
     });
-    expect(created.notePath).toBe("Notient/conversations/2026-04-25 hello-world.md");
+    expect(created.notePath).toBe("Notient/conversations/2026-04-25 hello-world conv10.md");
     expect(facade.raw(created.notePath)).toBeDefined();
     expect(facade.raw(created.notePath)).toContain('conversation_id: "conv-1"');
   });
@@ -242,13 +242,14 @@ describe("conversationStore helpers", () => {
     expect(slugifyTopic(long).length).toBeLessThanOrEqual(60);
   });
 
-  test("computeConversationPath assembles folder, date, and slug", () => {
+  test("computeConversationPath assembles folder, date, slug, and id suffix", () => {
     const path = computeConversationPath(
       "Notient/conversations",
       Date.UTC(2026, 0, 2, 0, 0, 0),
       "Quick Sync",
+      "abc-123-def",
     );
-    expect(path).toBe("Notient/conversations/2026-01-02 quick-sync.md");
+    expect(path).toBe("Notient/conversations/2026-01-02 quick-sync abc123.md");
   });
 });
 

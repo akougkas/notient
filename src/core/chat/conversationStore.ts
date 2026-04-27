@@ -92,7 +92,7 @@ export class ConversationStore {
     summaryEmbeddingB64?: string | null;
   }): Promise<Conversation> {
     const now = this.options.now();
-    const path = computeConversationPath(this.options.folder, now, input.topic);
+    const path = computeConversationPath(this.options.folder, now, input.topic, input.id);
     const conversation: Conversation = {
       id: input.id,
       notePath: path,
@@ -120,8 +120,19 @@ export class ConversationStore {
   }
 }
 
-export function computeConversationPath(folder: string, createdAt: number, topic: string): string {
-  return `${folder}/${formatDate(createdAt)} ${slugifyTopic(topic)}.md`;
+export function computeConversationPath(
+  folder: string,
+  createdAt: number,
+  topic: string,
+  id: string,
+): string {
+  return `${folder}/${formatDate(createdAt)} ${slugifyTopic(topic)} ${suffixFromId(id)}.md`;
+}
+
+export function suffixFromId(id: string): string {
+  const cleaned = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (cleaned.length === 0) return "000000";
+  return cleaned.slice(0, 6).padEnd(6, "0");
 }
 
 export function slugifyTopic(topic: string): string {

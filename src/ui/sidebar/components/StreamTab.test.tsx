@@ -7,6 +7,7 @@ function item(id: string): StreamItem {
   return {
     id,
     kind: "edge",
+    title: "Source → Target",
     agent: "linker",
     type: "supports",
     confidence: 0.82,
