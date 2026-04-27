@@ -1,5 +1,5 @@
-import type { ObsidianFacade } from "../adapters/obsidianFacade";
-import type { CanvasFromResults } from "../ui/search/canvasFromResults";
+import type { VaultAdapter } from "../adapters/vaultAdapter";
+import type { CanvasFromResults } from "./canvas/canvasFromResults";
 import type { ApprovalService } from "./approvals/approvalService";
 import type { ApprovalGate } from "./chat/approvalGate";
 import type { ChatService } from "./chat/chatService";
@@ -35,7 +35,7 @@ import type { VitalsService } from "./vitals/vitalsService";
 export interface ServiceRegistry {
   bus: EventBus;
   settings: SettingsService;
-  facade: ObsidianFacade;
+  vault: VaultAdapter;
   database: Database;
   graph: GraphStore;
   primaryLLM: LLMProvider;
@@ -77,7 +77,7 @@ export type ServiceKey = keyof ServiceRegistry;
 const REQUIRED_KEYS: ServiceKey[] = [
   "bus",
   "settings",
-  "facade",
+  "vault",
   "database",
   "graph",
   "primaryLLM",

@@ -4,7 +4,7 @@ import { Kernel, type ServiceKey } from "./kernel";
 const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "bus",
   "settings",
-  "facade",
+  "vault",
   "database",
   "graph",
   "primaryLLM",
