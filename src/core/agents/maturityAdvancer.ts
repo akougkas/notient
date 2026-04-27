@@ -1,4 +1,4 @@
-import type { ObsidianFacade } from "../../adapters/obsidianFacade";
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import type { Agent, AgentRunContext, AgentRunResult } from "../coordinator/types";
 import type { Database } from "../db/database";
 import { upsertNotientBlock } from "../graph/frontmatterWriter";
@@ -8,7 +8,7 @@ type Maturity = "raw" | "adolescent" | "mature" | "synthesis-ready";
 
 export interface MaturityAdvancerOptions {
   db: Database;
-  facade: Pick<ObsidianFacade, "read" | "write">;
+  facade: Pick<VaultAdapter, "read" | "write">;
   echoGuard: EchoGuard;
   hash: (input: string) => Promise<string>;
   freshnessHalfLifeMs?: number;
