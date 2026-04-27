@@ -113,8 +113,9 @@ Group 5: Watcher (parallel with Group 4 — separate file)
   Task 11: daemon/index.ts starts the watcher
 
 Group 6: Coordinator autonomous loop (sequential after Tasks 4 + 9 + 11)
-  Task 12: daemon/coordinatorRunner.ts + test
-  Task 13: daemon/index.ts wires runner; first awaken triggers Coordinator.start()
+  Task 12:   daemon/coordinatorRunner.ts + test
+  Task 13:   daemon/index.ts wires runner; first awaken triggers Coordinator.start()
+  Task 13.5: daemon/bootstrap.ts wires real Linker + ContradictionHunter callbacks
 
 Group 7: CLI verbs (parallel after Task 9)
   Task 14: cli/commands/awaken.ts                                 [parallel-safe]
@@ -640,7 +641,7 @@ import { indexNote } from "../core/indexer/indexNote";
 import { Kernel } from "../core/kernel";
 import { LMStudioProvider } from "../core/llm/lmStudioProvider";
 import { Reranker } from "../core/search/reranker";
-import { SavedQueriesStore } from "../core/search/savedQueries";
+import { SavedQueries } from "../core/search/savedQueries";
 import { SearchHistory } from "../core/search/searchHistory";
 import { SearchPipeline } from "../core/search/searchPipeline";
 import { EchoGuard } from "../core/services/echoGuard";
@@ -758,7 +759,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   if (phaseA) {
     kernel.seal({ phase: "A" });
     health.start();
-    return { kernel, close: closeFn(database, lockHandle, health, null) };
+    return {
+      kernel,
+      close: makeClose({ database, lockHandle, health, vectorIndex: null, vault, vectorPath: VECTOR_PATH }),
+    };
   }
 
   // Phase B additions.
@@ -821,13 +825,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     settings: () => current.search,
   });
 
-  const savedQueries = new SavedQueriesStore({
+  const savedQueries = new SavedQueries({
     facade: {
       list: (folder) => vault.list(folder).then((listing) => listing.files),
       read: (path) => vault.read(path),
       write: (path, content) => vault.write(path, content),
+      delete: (path) => vault.remove(path),
     },
     folder: SAVED_QUERIES_FOLDER,
+    now: () => Date.now(),
   });
 
   const searchHistory = new SearchHistory({
@@ -930,39 +936,47 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   health.start();
   idleDetector.start();
 
-  return { kernel, close: closeFn(database, lockHandle, health, vectorIndex) };
+  return {
+    kernel,
+    close: makeClose({ database, lockHandle, health, vectorIndex, vault, vectorPath: VECTOR_PATH }),
+  };
 }
 
-function closeFn(
-  database: Database,
-  lockHandle: VaultLockHandle,
-  health: HealthMonitor,
-  vectorIndex: HnswVectorIndex | null,
-) {
+interface CloseDeps {
+  database: Database;
+  lockHandle: VaultLockHandle;
+  health: HealthMonitor;
+  vectorIndex: HnswVectorIndex | null;
+  vault: FsVault;
+  vectorPath: string;
+}
+
+function makeClose(deps: CloseDeps): () => Promise<void> {
   return async (): Promise<void> => {
-    health.stop();
-    if (vectorIndex) {
-      // Vector persistence is best-effort; failures must not block shutdown.
+    deps.health.stop();
+    if (deps.vectorIndex) {
       try {
-        const bytes = await vectorIndex.serialize();
-        // Persistence path handled by the daemon close; bootstrap returns the bytes
-        // via the kernel's vault write on the next save cycle. Phase B opts to flush
-        // on close via a separate write call routed through the vault adapter.
-        void bytes;
-      } catch {
-        // swallow
+        const bytes = await deps.vectorIndex.serialize();
+        await deps.vault.writeBinary(deps.vectorPath, bytes);
+      } catch (error) {
+        // Vector persistence is best-effort: a failure here must not block the
+        // database flush or the lock release. Surface to the daemon's stderr
+        // emitter via a thrown re-attempt in Phase E if we want to escalate.
+        process.stderr.write(
+          `${JSON.stringify({ type: "daemon:vector_persist_failed", message: error instanceof Error ? error.message : String(error) })}\n`,
+        );
       }
     }
-    await database.persist();
-    await database.close();
-    await lockHandle.release();
+    await deps.database.persist();
+    await deps.database.close();
+    await deps.lockHandle.release();
   };
 }
 ```
 
-NOTE on `closeFn` above: vector persistence on shutdown is intentionally a stub here. The daemon's `index.ts` already has the vault adapter and can do the write directly in its shutdown handler. The bootstrap returns a `vectorIndex` reference via the kernel registry that `daemon/index.ts` reads and persists in Task 11.
+NOTE on `makeClose`: vector persistence is owned end-to-end here. The daemon's `index.ts` shutdown path just calls `closeBootstrap()`; it does not touch the HNSW serializer or the vault adapter directly for vectors. Failures during serialization emit `daemon:vector_persist_failed` to stderr but never block the database flush or lock release.
 
-The `linker.neighborhood` and `contradictionHunter.neighbors` callbacks are stubs that return `[]` in this commit. Wiring them to the real DB queries is intentionally deferred to Task 13 because the autonomous loop is what drives them and the loop itself is not started until first awaken. A noop neighbourhood means the linker reports `proposals: 0` in the meantime, which is the safe default.
+NOTE on agent callbacks: `linker.neighborhood` and `contradictionHunter.neighbors` are deliberately registered as `[]`-returning stubs in this commit so the bootstrap stays compilable before Task 13.5 lands. Task 13.5 replaces both with the live HNSW queries ported from `.nuked/src/main.ts`. The Coordinator does not start until the first awaken (locked decision 1), so the stubs are never invoked in production until Task 13.5 has landed.
 
 - [ ] **Step 2: Typecheck**
 
@@ -982,15 +996,17 @@ git commit -m "$(cat <<'EOF'
 feat(daemon): bootstrap Phase B services into the kernel
 
 Constructs and registers Embedder, Extractor, HnswVectorIndex (with
-optional restore from <vault>/.notient/vectors.bin), IndexerQueue (wired
-to indexNote against FsVault), SavedQueriesStore, SearchHistory,
+optional restore from <vault>/.notient/vectors.bin), IndexerQueue
+(wired to indexNote against FsVault), SavedQueries, SearchHistory,
 SearchPipeline, VitalsService, IdleDetector, ReasoningMutex,
 VaultBootstrap (creates Notient/conversations, Notient/proposals,
 Notient/searches), and Coordinator with the four agent constructors.
-Linker and ContradictionHunter neighbourhood callbacks land as no-op
-stubs returning empty arrays; wiring to real DB queries lands with the
-autonomous loop in a later commit. Kernel seals with phase: "B" by
-default; phase: "A" still available via opts.phaseA for compatibility.
+Linker and ContradictionHunter neighbourhood callbacks land as
+[]-returning stubs that Task 13.5 replaces with the live HNSW queries
+before the Coordinator can ever invoke them. makeClose owns vector
+persistence end-to-end so the daemon entry stays a thin lifecycle
+shell. Kernel seals with phase: "B" by default; phase: "A" still
+available via opts.phaseA for compatibility.
 EOF
 )"
 ```
@@ -1436,7 +1452,7 @@ const FIXTURE_SNAPSHOT: VitalsSnapshot = {
 describe("vitals handler", () => {
   test("returns the snapshot and emits an event", async () => {
     const service = {
-      computeSnapshot: async () => FIXTURE_SNAPSHOT,
+      computeSnapshot: () => FIXTURE_SNAPSHOT,
     } as unknown as VitalsService;
     const handler = makeVitalsHandler({ vitalsService: service });
     const lines: string[] = [];
@@ -1447,7 +1463,7 @@ describe("vitals handler", () => {
   });
 
   test("rejects empty path", async () => {
-    const service = { computeSnapshot: async () => FIXTURE_SNAPSHOT } as unknown as VitalsService;
+    const service = { computeSnapshot: () => FIXTURE_SNAPSHOT } as unknown as VitalsService;
     const handler = makeVitalsHandler({ vitalsService: service });
     let thrown: unknown = null;
     try {
@@ -1456,6 +1472,19 @@ describe("vitals handler", () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(Error);
+  });
+
+  test("returns INVALID_PARAMS when the note is not indexed", async () => {
+    const service = { computeSnapshot: () => null } as unknown as VitalsService;
+    const handler = makeVitalsHandler({ vitalsService: service });
+    let thrown: unknown = null;
+    try {
+      await handler({ path: "missing.md" }, () => {}, "req-1");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("not indexed");
   });
 });
 ```
@@ -1487,7 +1516,10 @@ export function makeVitalsHandler(deps: VitalsHandlerDeps) {
     if (path.trim().length === 0) {
       throw new Error("INVALID_PARAMS: path is required");
     }
-    const snapshot = await deps.vitalsService.computeSnapshot(path);
+    const snapshot = deps.vitalsService.computeSnapshot(path);
+    if (!snapshot) {
+      throw new Error(`INVALID_PARAMS: note not indexed: ${path}`);
+    }
     emit(encodeEvent(envelopeId, "vitals:snapshot", snapshot as unknown as Record<string, unknown>));
     return { ok: true, snapshot };
   };
@@ -1847,14 +1879,9 @@ In the `shutdown(reason)` function, before `await closeBootstrap()`, add:
 
 ```typescript
     await watcher.stop();
-    const vectorIndex = kernel.get("vectorIndex");
-    try {
-      const bytes = await vectorIndex.serialize();
-      await kernel.get("vault").writeBinary(`${".notient"}/vectors.bin`, bytes);
-    } catch {
-      // Vector persistence is best-effort; failures must not block shutdown.
-    }
 ```
+
+Vector persistence is owned by `bootstrap.ts`'s `makeClose()` and runs as part of `closeBootstrap()`. Do not write vectors from the daemon entry; that path is the single source of truth.
 
 - [ ] **Step 2: Typecheck**
 
@@ -1866,13 +1893,12 @@ Expected: Green.
 ```bash
 git add src/daemon/index.ts
 git commit -m "$(cat <<'EOF'
-feat(daemon): start the vault watcher and persist vectors on shutdown
+feat(daemon): start the vault watcher
 
 VaultWatcher kicks in after handlers are wired and feeds .md changes
-straight into IndexerQueue. Shutdown now persists the HNSW vector
-index to <vault>/.notient/vectors.bin so the next daemon boot can
-restore it without a full re-embed. Persistence failures are
-swallowed because shutdown must not block.
+straight into IndexerQueue. Vector persistence on shutdown is owned
+by bootstrap's makeClose so the daemon entry stays a thin lifecycle
+shell.
 EOF
 )"
 ```
@@ -2063,6 +2089,117 @@ in the shutdown path. The four agents (linker, synthesizer,
 contradictionHunter, maturityAdvancer) wake on the existing
 vault:note-saved / coordinator:* event subscriptions wired in
 bootstrap.
+EOF
+)"
+```
+
+---
+
+### Task 13.5: Bind `Linker.neighborhood` and `ContradictionHunter.neighbors` to real DB queries
+
+**Files:**
+- Modify: `/home/akougkas/projects/notient/src/daemon/bootstrap.ts`
+
+The Task 4 commit landed the agents with `[]`-returning stubs. With the Coordinator now armed (Task 13), those stubs would silently keep `linker` and `contradictionHunter` from ever surfacing real proposals. This task ports the queries from `.nuked/src/main.ts` lines 254-335 verbatim so the agents work as designed against the live HNSW index.
+
+Both queries follow the same pattern: pick a representative embedding (head chunk for the linker, claim's chunk for the hunter), call `vectorIndex.search(view, topK)`, and join the hit ids back to chunks/notes/claims.
+
+- [ ] **Step 1: Replace the linker stub**
+
+In `src/daemon/bootstrap.ts`, find the `const linker = new Linker({ ... })` block and replace its `neighborhood` field with:
+
+```typescript
+    neighborhood: async (notePath, queryOptions) => {
+      const head = database.query<{ id: string; vector: Uint8Array; dim: number }>(
+        `SELECT e.chunk_id AS id, e.vector AS vector, e.dim AS dim
+         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
+         WHERE c.note_path = ? ORDER BY c.ord LIMIT 1;`,
+        [notePath],
+      );
+      if (head.length === 0) return [];
+      const view = new Float32Array(
+        head[0].vector.buffer,
+        head[0].vector.byteOffset,
+        head[0].dim,
+      );
+      const hits = vectorIndex.search(view, queryOptions.topK);
+      const out: Array<{ notePath: string; chunkId: string; text: string; score: number }> = [];
+      for (const hit of hits) {
+        const meta = database.query<{ note_path: string; text: string }>(
+          "SELECT note_path, text FROM chunks WHERE id = ?;",
+          [hit.id],
+        );
+        if (meta.length === 0) continue;
+        if (meta[0].note_path === notePath) continue;
+        out.push({
+          notePath: meta[0].note_path,
+          chunkId: hit.id,
+          text: meta[0].text,
+          score: hit.score,
+        });
+      }
+      return out;
+    },
+```
+
+- [ ] **Step 2: Replace the contradiction hunter stub**
+
+In the same file, find `const contradictionHunter = new ContradictionHunter({ ... })` and replace its `neighbors` field with:
+
+```typescript
+    neighbors: async (recentClaimIds, queryOptions) => {
+      if (recentClaimIds.length === 0) return [];
+      const probe = database.query<{ vector: Uint8Array; dim: number; chunk_id: string }>(
+        `SELECT e.vector AS vector, e.dim AS dim, e.chunk_id AS chunk_id
+         FROM graph_nodes n JOIN chunks c ON c.note_path = n.note_path
+         JOIN embeddings e ON e.chunk_id = c.id
+         WHERE n.id = ? LIMIT 1;`,
+        [recentClaimIds[0]],
+      );
+      if (probe.length === 0) return [];
+      const view = new Float32Array(
+        probe[0].vector.buffer,
+        probe[0].vector.byteOffset,
+        probe[0].dim,
+      );
+      const hits = vectorIndex.search(view, queryOptions.topK);
+      const out: Array<{ id: string; score: number; chunkIds: string[] }> = [];
+      for (const hit of hits) {
+        const claim = database.query<{ id: string }>(
+          `SELECT id FROM graph_nodes WHERE type = 'claim' AND note_path = (
+              SELECT note_path FROM chunks WHERE id = ?
+           ) LIMIT 1;`,
+          [hit.id],
+        );
+        if (claim.length === 0) continue;
+        if (recentClaimIds.includes(claim[0].id)) continue;
+        out.push({ id: claim[0].id, score: hit.score, chunkIds: [hit.id] });
+      }
+      return out;
+    },
+```
+
+- [ ] **Step 3: Typecheck and run substrate tests**
+
+Run: `bun run typecheck && bun test src/core/agents`
+Expected: Green. Existing agent tests use injected fakes for `neighborhood` / `neighbors`, so the real-callback wiring does not change their behaviour.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/daemon/bootstrap.ts
+git commit -m "$(cat <<'EOF'
+feat(daemon): wire Linker + ContradictionHunter to live HNSW queries
+
+The Phase B bootstrap previously registered both agents with no-op
+neighbourhood callbacks because the autonomous loop only lights up
+after first awaken. This commit replaces the stubs with the real DB
+queries ported verbatim from .nuked/src/main.ts: pick a representative
+embedding, search the HNSW index, join hit ids back to chunks /
+notes / claims, filter the source row out. Both queries already
+covered by the agent tests via injected fakes; no test changes needed.
+The autonomous Coordinator can now surface coordinator:proposal events
+once awaken populates the index.
 EOF
 )"
 ```
@@ -2769,7 +2906,7 @@ Task 21 is verification only.
 - (9) Coordinator runs autonomously inside the daemon — Tasks 12 + 13. Locked decision (1): triggered after first awaken.
 - (10) `smoke:cli:phaseB` integration test — Task 20.
 
-**Placeholder scan:** The neighborhood and neighbors callbacks for `Linker` and `ContradictionHunter` land as no-op stubs returning `[]` in Task 4. The plan flags this. Phase B's smoke does not assert on linker proposals because the autonomous loop is gated behind locked decision (1) and the first awaken on the fixture vault completes after the smoke wraps. Wiring those callbacks to real DB queries is intentionally a Phase B follow-up commit if `coordinator:proposal` events are wanted live in the smoke; tracked as a known gap, not a blocker.
+**Placeholder scan:** No stubs left after Task 13.5. Linker and ContradictionHunter receive real DB-backed neighborhood callbacks ported from the archived `main.ts`; Synthesizer and MaturityAdvancer take their dependencies inline; vector persistence is owned end-to-end by `bootstrap.ts`'s `makeClose`. Every concrete service the kernel registers does real work.
 
 **Type consistency:** Every handler factory returns the `MethodHandler` type from `src/daemon/rpc.ts` (params, emit, envelopeId → Promise<Record<string, unknown>>). Every CLI verb uses the same `connectClient` + iterator pattern as the Phase A daemon verbs. The `frame.type === "result" || frame.type === "error"` break condition matches Phase A.
 
