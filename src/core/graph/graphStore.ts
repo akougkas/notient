@@ -42,9 +42,14 @@ export class GraphStore {
   }
 
   insertEdge(edge: GraphEdge): void {
+    // Idempotent on duplicate id. The indexer can produce two edges with byte-identical
+    // (type, sourceId, targetId, nowMs) when the extractor returns equivalent concepts,
+    // claims, or questions for the same note; re-asserting the same edge is the same edge.
+    // Mirrors upsertNode's ON CONFLICT pattern so the graph-store API is fully idempotent.
     this.db.run(
       `INSERT INTO graph_edges (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?);`,
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO NOTHING;`,
       [
         edge.id,
         edge.type,

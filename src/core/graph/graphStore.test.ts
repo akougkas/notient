@@ -89,6 +89,33 @@ describe("GraphStore", () => {
     expect(edges[0].approved).toBe(false);
   });
 
+  test("insertEdge is idempotent on duplicate id", () => {
+    store.insertEdge({
+      id: "edge:duplicate",
+      type: "mentions",
+      sourceId: "note:foo.md",
+      targetId: "concept:bar",
+      confidence: 1,
+      agent: "extractor",
+      evidence: [],
+      approved: true,
+      createdAt: 1,
+    });
+    store.insertEdge({
+      id: "edge:duplicate",
+      type: "mentions",
+      sourceId: "note:foo.md",
+      targetId: "concept:bar",
+      confidence: 1,
+      agent: "extractor",
+      evidence: [],
+      approved: true,
+      createdAt: 1,
+    });
+    const edges = store.edgesFor("note:foo.md");
+    expect(edges.length).toBe(1);
+  });
+
   test("approveEdge flips the flag and edgesByType filters", () => {
     store.insertEdge({
       id: "e1",
