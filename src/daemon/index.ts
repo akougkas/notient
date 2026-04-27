@@ -1,0 +1,173 @@
+import { mkdir, rm } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
+import { dirname } from "node:path";
+import { bootstrap } from "./bootstrap";
+import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
+import { MethodDispatcher, parseEnvelope } from "./rpc";
+import { currentPlatform, resolveSocketPath } from "./socket";
+
+const VERSION = "0.1.0-phaseA";
+const DEFAULT_IDLE_HOURS = 4;
+
+interface DaemonArgs {
+  vaultPath: string;
+}
+
+function parseArgs(argv: string[]): DaemonArgs {
+  const flagIndex = argv.indexOf("--vault");
+  if (flagIndex === -1 || flagIndex === argv.length - 1) {
+    throw new Error("Daemon entry requires --vault <absolute-path>.");
+  }
+  const vaultPath = argv[flagIndex + 1];
+  return { vaultPath };
+}
+
+async function main(argv: string[]): Promise<void> {
+  const args = parseArgs(argv);
+  const platform = currentPlatform();
+  const socketPath = resolveSocketPath(args.vaultPath, platform);
+
+  const { kernel, close: closeBootstrap } = await bootstrap({ vaultPath: args.vaultPath });
+  const startedAt = Date.now();
+  const instanceId = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  const pidPath = `${args.vaultPath}/.notient/notient.lock.daemon`;
+
+  await mkdir(`${args.vaultPath}/.notient`, { recursive: true });
+  await rm(socketPath, { force: true });
+
+  const dispatcher = new MethodDispatcher();
+  const idleTimer = new IdleExitTimer({
+    idleMs: DEFAULT_IDLE_HOURS * 60 * 60 * 1000,
+    onIdleExit: () => {
+      void shutdown("idle-exit");
+    },
+  });
+
+  let shuttingDown = false;
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      idleTimer.markActive();
+      buffer += chunk.toString("utf-8");
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.length > 0) handleLine(socket, line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    });
+  });
+
+  function handleLine(socket: Socket, line: string): void {
+    const parsed = parseEnvelope(line);
+    if (!parsed.ok) {
+      socket.write(
+        `${JSON.stringify({
+          id: "unknown",
+          type: "error",
+          code: "INVALID_PARAMS",
+          message: parsed.reason,
+          detail: {},
+        })}\n`,
+      );
+      return;
+    }
+    void dispatcher.dispatch(parsed.envelope, (frame) => {
+      socket.write(`${frame}\n`);
+    });
+  }
+
+  dispatcher.register("daemon.status", async () => {
+    return {
+      ok: true,
+      vault: args.vaultPath,
+      pid: process.pid,
+      socketPath,
+      startedAt,
+      version: VERSION,
+      sealed: kernel.isSealed(),
+    };
+  });
+
+  dispatcher.register("daemon.shutdown", async () => {
+    setImmediate(() => {
+      void shutdown("client-request");
+    });
+    return { ok: true };
+  });
+
+  const settings = kernel.get("settings");
+  dispatcher.register("daemon.config_get", async () => {
+    return { ok: true, config: settings.get() };
+  });
+
+  dispatcher.register("daemon.config_set", async (params) => {
+    const patch = params as Record<string, unknown>;
+    await settings.update(patch);
+    return { ok: true, config: settings.get() };
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+
+  await writePidFile(pidPath, {
+    pid: process.pid,
+    instanceId,
+    socketPath,
+    startedAt,
+    version: VERSION,
+  });
+
+  idleTimer.start();
+
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+
+  async function shutdown(reason: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    idleTimer.stop();
+    for (const socket of sockets) socket.end();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(socketPath, { force: true }).catch(() => {});
+    await closeBootstrap();
+    await removePidFile(pidPath).catch(() => {});
+    process.stdout.write(
+      `${JSON.stringify({ type: "daemon:shutting_down", reason, vault: args.vaultPath })}\n`,
+    );
+    process.exit(0);
+  }
+
+  process.stdout.write(
+    `${JSON.stringify({
+      type: "daemon:ready",
+      vault: args.vaultPath,
+      version: VERSION,
+      socketPath,
+      pid: process.pid,
+    })}\n`,
+  );
+}
+
+void dirname; // keep import; bun --compile is finicky with unused identifiers in some bundles
+void main(process.argv.slice(2)).catch((error) => {
+  process.stderr.write(
+    `${JSON.stringify({
+      type: "daemon:error",
+      message: error instanceof Error ? error.message : String(error),
+    })}\n`,
+  );
+  process.exit(1);
+});
