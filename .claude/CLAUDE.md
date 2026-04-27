@@ -369,3 +369,7 @@ src/
 
 - **Current:** 0.3.1
 - **Min Obsidian:** 1.4.0
+
+## Archive (.nuked/)
+
+`.nuked/` holds pre-pivot code retained for reference. Never import from it. Never restore without explicit approval. The directory is gitignored and excluded from tsc and biome.

@@ -86,7 +86,8 @@
       "node_modules/**",
       "dist/**",
       "main.js",
-      "*.md"
+      "*.md",
+      ".nuked/**"
     ]
   }
 }

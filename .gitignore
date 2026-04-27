@@ -63,3 +63,6 @@ mprocs.log
 # Local scratch (Codex marker, planning workspace)
 .codex
 .planning/
+
+# Notient v0.1 archive
+/.nuked/
