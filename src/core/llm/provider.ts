@@ -1,6 +1,21 @@
+export interface ChatTextPart {
+  type: "text";
+  text: string;
+}
+
+export interface ChatImagePart {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail?: "auto" | "low" | "high";
+  };
+}
+
+export type ChatContent = string | Array<ChatTextPart | ChatImagePart>;
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: ChatContent;
 }
 
 export interface ChatOptions {
@@ -89,6 +104,19 @@ export interface ChatWithToolsHandle {
   result: () => Promise<ChatWithToolsResult>;
 }
 
+export interface ChatVisionRequest {
+  messages: ChatMessage[];
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
+export interface ChatVisionResult {
+  content: string;
+  durationMs: number;
+}
+
 export interface LLMProvider {
   isAvailable(signal?: AbortSignal): Promise<boolean>;
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<string>;
@@ -102,4 +130,12 @@ export interface LLMProvider {
    * tools must check for presence or rely on the LMStudio implementation.
    */
   chatWithTools?(request: ChatWithToolsRequest): Promise<ChatWithToolsHandle>;
+  /**
+   * OpenAI-compatible vision request. Posts multipart `messages[].content`
+   * (a mix of `ChatTextPart` and `ChatImagePart`) and returns the assistant
+   * string. Optional so non-vision providers and test fakes stay assignable.
+   * The visionProbe in src/agent/visionProbe.ts uses presence-checks before
+   * attempting the call.
+   */
+  chatVision?(request: ChatVisionRequest): Promise<ChatVisionResult>;
 }

@@ -262,10 +262,12 @@ describe("ContextManager.compose", () => {
     expect(provider.summaryCalls.length).toBe(1);
     const summarySystem = result.messages.find(
       (message) =>
-        message.role === "system" && message.content.startsWith("Earlier in this conversation:"),
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("Earlier in this conversation:"),
     );
     expect(summarySystem).toBeDefined();
-    expect(summarySystem?.content).toContain("compressed earlier turns");
+    expect(summarySystem?.content as string).toContain("compressed earlier turns");
     // Newest turn must still be present verbatim.
     expect(result.messages.at(-1)?.content).toBe("next question");
   });
