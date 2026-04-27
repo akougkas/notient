@@ -9,6 +9,7 @@ import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
 import { MethodDispatcher, parseEnvelope } from "./rpc";
 import { currentPlatform, resolveSocketPath } from "./socket";
+import { CoordinatorRunner } from "./coordinatorRunner";
 import { VaultWatcher } from "./watcher";
 
 const VERSION = "0.1.0-phaseA";
@@ -144,6 +145,12 @@ async function main(argv: string[]): Promise<void> {
   });
   await watcher.start();
 
+  const coordinatorRunner = new CoordinatorRunner({
+    bus: kernel.get("bus"),
+    coordinator: kernel.get("coordinator"),
+  });
+  coordinatorRunner.arm();
+
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
@@ -173,6 +180,7 @@ async function main(argv: string[]): Promise<void> {
     for (const socket of sockets) socket.end();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(socketPath, { force: true }).catch(() => {});
+    coordinatorRunner.disarm();
     await watcher.stop();
     await closeBootstrap();
     await removePidFile(pidPath).catch(() => {});
