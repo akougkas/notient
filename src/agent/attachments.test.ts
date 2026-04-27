@@ -42,9 +42,7 @@ describe("extractMentions", () => {
   });
 
   test("captures @-prefixed quoted paths with spaces", () => {
-    expect(extractMentions('look at @"notes/Phase 4.md" today')).toEqual([
-      "notes/Phase 4.md",
-    ]);
+    expect(extractMentions('look at @"notes/Phase 4.md" today')).toEqual(["notes/Phase 4.md"]);
   });
 });
 

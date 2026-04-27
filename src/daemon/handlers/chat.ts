@@ -17,8 +17,8 @@
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { resolveAttachments } from "../../agent/attachments";
 import type { VisionRouter } from "../../agent/visionProbe";
-import type { ApprovalGate } from "../../core/chat/approvalGate";
 import type { AgentLoopEvent } from "../../core/chat/agentLoop";
+import type { ApprovalGate } from "../../core/chat/approvalGate";
 import type { ChatService } from "../../core/chat/chatService";
 import type { Conversation } from "../../core/chat/types";
 import { encodeEvent } from "../rpc";
@@ -77,81 +77,29 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       return { ok: true, conversation };
     },
     send: async (params, emit, envelopeId) => {
-      const conversationId =
-        typeof params.conversationId === "string" ? params.conversationId : "";
-      const userMessage =
-        typeof params.userMessage === "string" ? params.userMessage : "";
-      if (conversationId.length === 0) {
-        throw new Error("INVALID_PARAMS: conversationId is required");
-      }
-      if (userMessage.length === 0) {
-        throw new Error("INVALID_PARAMS: userMessage is required");
-      }
-
+      const { conversationId, userMessage } = parseSendParams(params);
       const attachments = await resolveAttachments({
         vault: deps.vault,
         message: userMessage,
         maxTokens: deps.pinnedNoteMaxTokens,
-        resolveImage: async (path, bytes, mediaType) => {
-          if (deps.visionRouter === null) {
-            throw new Error(
-              "VISION_UNAVAILABLE: vision is not supported in this session. Either load a multi-modal model in LMStudio at the primary baseUrl, or configure chat.vision.",
-            );
-          }
-          return deps.visionRouter.describe({ path, bytes, mediaType });
-        },
+        resolveImage: makeImageResolver(deps.visionRouter),
       });
 
       const conversation = await findConversationById(conversationId);
       if (attachments.pinnedContext.length > 0) {
-        conversation.pinnedContext = [
-          ...conversation.pinnedContext,
-          ...attachments.pinnedContext,
-        ];
+        conversation.pinnedContext = [...conversation.pinnedContext, ...attachments.pinnedContext];
       }
 
-      const trackedCallIds = new Set<string>();
-      const unsubscribe = deps.approvalGate.subscribe({
-        onPending: (pending) => {
-          trackedCallIds.add(pending.callId);
-          emit(
-            encodeEvent(envelopeId, "loop:approval_pending", {
-              callId: pending.callId,
-              tool: pending.toolName,
-              args: pending.args,
-              preview: pending.preview,
-            }),
-          );
-        },
-        onResolved: (callId, decision) => {
-          if (!trackedCallIds.has(callId)) return;
-          trackedCallIds.delete(callId);
-          emit(
-            encodeEvent(envelopeId, "loop:approval_resolved", {
-              callId,
-              approved: decision.approved,
-              reason: decision.reason,
-            }),
-          );
-        },
-      });
-
+      const unsubscribe = subscribeApprovalEvents(deps.approvalGate, emit, envelopeId);
       try {
-        let finalConversation: Conversation = conversation;
-        for await (const event of deps.chatService.sendMessage({
+        return await runSendStream(
+          deps.chatService,
           conversation,
           userMessage,
-        })) {
-          forwardChatEvent(emit, envelopeId, event);
-          if (event.type === "turn:complete") {
-            finalConversation = event.conversation;
-            cacheConversation(event.conversation);
-          }
-          if (event.type === "turn:aborted") {
-            throw new Error(`turn aborted: ${event.reason}`);
-          }
-        }
-        return { ok: true, conversation: finalConversation };
+          emit,
+          envelopeId,
+          cacheConversation,
+        );
       } finally {
         unsubscribe();
       }
@@ -192,6 +140,88 @@ type ChatStreamEvent =
   | { type: "turn:start"; conversationId: string; userMessage: unknown }
   | { type: "turn:complete"; conversation: Conversation }
   | { type: "turn:aborted"; reason: string };
+
+function parseSendParams(params: Record<string, unknown>): {
+  conversationId: string;
+  userMessage: string;
+} {
+  const conversationId = typeof params.conversationId === "string" ? params.conversationId : "";
+  const userMessage = typeof params.userMessage === "string" ? params.userMessage : "";
+  if (conversationId.length === 0) {
+    throw new Error("INVALID_PARAMS: conversationId is required");
+  }
+  if (userMessage.length === 0) {
+    throw new Error("INVALID_PARAMS: userMessage is required");
+  }
+  return { conversationId, userMessage };
+}
+
+function makeImageResolver(
+  visionRouter: VisionRouter | null,
+): (path: string, bytes: ArrayBuffer, mediaType: string) => Promise<string> {
+  return async (path, bytes, mediaType) => {
+    if (visionRouter === null) {
+      throw new Error(
+        "VISION_UNAVAILABLE: vision is not supported in this session. Either load a multi-modal model in LMStudio at the primary baseUrl, or configure chat.vision.",
+      );
+    }
+    return visionRouter.describe({ path, bytes, mediaType });
+  };
+}
+
+function subscribeApprovalEvents(
+  gate: ApprovalGate,
+  emit: (line: string) => void,
+  envelopeId: string,
+): () => void {
+  const trackedCallIds = new Set<string>();
+  return gate.subscribe({
+    onPending: (pending) => {
+      trackedCallIds.add(pending.callId);
+      emit(
+        encodeEvent(envelopeId, "loop:approval_pending", {
+          callId: pending.callId,
+          tool: pending.toolName,
+          args: pending.args,
+          preview: pending.preview,
+        }),
+      );
+    },
+    onResolved: (callId, decision) => {
+      if (!trackedCallIds.has(callId)) return;
+      trackedCallIds.delete(callId);
+      emit(
+        encodeEvent(envelopeId, "loop:approval_resolved", {
+          callId,
+          approved: decision.approved,
+          reason: decision.reason,
+        }),
+      );
+    },
+  });
+}
+
+async function runSendStream(
+  chatService: ChatService,
+  conversation: Conversation,
+  userMessage: string,
+  emit: (line: string) => void,
+  envelopeId: string,
+  cache: (conversation: Conversation) => void,
+): Promise<Record<string, unknown>> {
+  let finalConversation: Conversation = conversation;
+  for await (const event of chatService.sendMessage({ conversation, userMessage })) {
+    forwardChatEvent(emit, envelopeId, event);
+    if (event.type === "turn:complete") {
+      finalConversation = event.conversation;
+      cache(event.conversation);
+    }
+    if (event.type === "turn:aborted") {
+      throw new Error(`turn aborted: ${event.reason}`);
+    }
+  }
+  return { ok: true, conversation: finalConversation };
+}
 
 function forwardChatEvent(
   emit: (line: string) => void,

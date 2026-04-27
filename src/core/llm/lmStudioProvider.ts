@@ -137,9 +137,7 @@ export class LMStudioProvider implements LLMProvider {
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(
-        `vision request failed: ${response.status} ${response.statusText} ${text}`,
-      );
+      throw new Error(`vision request failed: ${response.status} ${response.statusText} ${text}`);
     }
     const data = (await response.json()) as ChatCompletionResponse;
     const content = data.choices[0]?.message.content ?? "";

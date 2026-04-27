@@ -1,4 +1,5 @@
 import { runAwakenCommand } from "./commands/awaken";
+import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
 import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
@@ -54,8 +55,8 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
     emitter.emit({
       type: "help",
-      commands: ["init", "daemon", "awaken", "reindex", "search", "vitals", "health"],
-      note: "Phase B surface; richer surface lands in Phases C-E.",
+      commands: ["init", "daemon", "awaken", "reindex", "search", "vitals", "health", "chat"],
+      note: "Phase C surface; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -67,6 +68,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "search") return await dispatchSearch(parsed, emitter);
   if (parsed.command === "vitals") return await dispatchVitals(parsed, emitter);
   if (parsed.command === "health") return await dispatchHealth(parsed, emitter);
+  if (parsed.command === "chat") return await dispatchChat(parsed, emitter);
 
   emitter.emit({
     type: "error",
@@ -129,6 +131,25 @@ async function dispatchVitals(parsed: ParsedArgs, emitter: Emitter): Promise<num
 async function dispatchHealth(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   const vaultPath = await requireVault(parsed);
   await runHealthCommand({ vaultPath, emitter });
+  return 0;
+}
+
+async function dispatchChat(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const prompt =
+    parsed.positional[0] ?? (typeof parsed.flags.prompt === "string" ? parsed.flags.prompt : "");
+  const approveFlag = parsed.flags.approve;
+  const approve: "auto" | "ask" = approveFlag === "ask" ? "ask" : "auto";
+  if (prompt.length === 0) {
+    if (!process.stdout.isTTY) {
+      throw new Error(
+        "INVALID_PARAMS: chat without a prompt requires a TTY (or pass a positional prompt)",
+      );
+    }
+    await runChatTui({ vaultPath, emitter });
+    return 0;
+  }
+  await runChatSingleShot({ vaultPath, prompt, approve, emitter });
   return 0;
 }
 

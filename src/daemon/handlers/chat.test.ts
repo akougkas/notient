@@ -61,7 +61,11 @@ describe("chat.send handler", () => {
   test("forwards turn:start, loop deltas, and turn:complete with bridged names", async () => {
     const conversation = makeConversation();
     const service = makeChatService([
-      { type: "turn:start", conversationId: conversation.id, userMessage: { role: "user", content: "hi" } },
+      {
+        type: "turn:start",
+        conversationId: conversation.id,
+        userMessage: { role: "user", content: "hi" },
+      },
       { type: "loop:assistant-token", delta: "hello" },
       { type: "loop:tool-call", call: { id: "tc1", name: "vault.search_notes", args: {} } },
       {
@@ -102,7 +106,11 @@ describe("chat.send handler", () => {
   test("forwards loop:tool_call_error when result.status === error", async () => {
     const conversation = makeConversation();
     const service = makeChatService([
-      { type: "turn:start", conversationId: conversation.id, userMessage: { role: "user", content: "hi" } },
+      {
+        type: "turn:start",
+        conversationId: conversation.id,
+        userMessage: { role: "user", content: "hi" },
+      },
       {
         type: "loop:tool-result",
         result: { callId: "tc1", status: "error", error: "boom", durationMs: 1 },
@@ -123,9 +131,7 @@ describe("chat.send handler", () => {
       "req-1",
     );
     const events = lines.map((line) => JSON.parse(line));
-    expect(events.some((event) => event.event === "loop:tool_call_error")).toBe(
-      true,
-    );
+    expect(events.some((event) => event.event === "loop:tool_call_error")).toBe(true);
   });
 
   test("rejects images when vision is unavailable", async () => {
@@ -216,11 +222,7 @@ describe("chat.send handler", () => {
     await sendPromise;
 
     const events = lines.map((line) => JSON.parse(line));
-    expect(events.some((event) => event.event === "loop:approval_pending")).toBe(
-      true,
-    );
-    expect(events.some((event) => event.event === "loop:approval_resolved")).toBe(
-      true,
-    );
+    expect(events.some((event) => event.event === "loop:approval_pending")).toBe(true);
+    expect(events.some((event) => event.event === "loop:approval_resolved")).toBe(true);
   });
 });

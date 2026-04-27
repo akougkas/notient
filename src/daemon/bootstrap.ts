@@ -8,10 +8,7 @@ import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
 import { Synthesizer } from "../core/agents/synthesizer";
 import { ApprovalGate } from "../core/chat/approvalGate";
-import {
-  type ChatRuntimeSettings,
-  ChatService,
-} from "../core/chat/chatService";
+import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
 import { ContextManager } from "../core/chat/contextManager";
 import { ConversationIndex } from "../core/chat/conversationIndex";
 import { ConversationStore } from "../core/chat/conversationStore";
@@ -449,10 +446,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     clusterCache,
   });
 
-  const embedSingle = async (
-    text: string,
-    signal: AbortSignal,
-  ): Promise<Float32Array | null> => {
+  const embedSingle = async (text: string, signal: AbortSignal): Promise<Float32Array | null> => {
     const vectors = await embedder.embed([text], signal);
     return vectors.length > 0 ? new Float32Array(vectors[0]) : null;
   };

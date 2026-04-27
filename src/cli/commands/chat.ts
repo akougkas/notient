@@ -17,60 +17,66 @@ export async function runChatSingleShot(options: ChatCommandOptions): Promise<vo
     vaultPath: options.vaultPath,
   });
 
-  let conversationId = options.conversationId;
-  if (conversationId === undefined) {
-    let started: Record<string, unknown> | null = null;
-    for await (const frame of client.call("chat.start", { topic: "single-shot" })) {
-      if (frame.type === "result") {
-        started = frame as unknown as Record<string, unknown>;
-        break;
-      }
-      if (frame.type === "error") {
-        options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
-        await client.close();
-        return;
-      }
-    }
-    if (started === null) {
-      throw new Error("chat.start returned no result frame");
-    }
-    const conversation = started.conversation as { id: string } | undefined;
-    if (conversation === undefined) {
-      throw new Error("chat.start result missing conversation");
-    }
-    conversationId = conversation.id;
+  const conversationId = options.conversationId ?? (await ensureConversation(client, options));
+  if (conversationId === null) {
+    await client.close();
+    return;
   }
 
-  let approvalClient: ClientHandle | null = null;
-  if (options.approve === "ask") {
-    approvalClient = await connectClient({
-      socketPath,
-      vaultPath: options.vaultPath,
-    });
-  }
+  const approvalClient =
+    options.approve === "ask"
+      ? await connectClient({ socketPath, vaultPath: options.vaultPath })
+      : null;
 
   try {
-    for await (const frame of client.call("chat.send", {
-      conversationId,
-      userMessage: options.prompt,
-    })) {
-      options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
-      if (
-        frame.type === "event" &&
-        (frame as { event?: string }).event === "loop:approval_pending"
-      ) {
-        await handleApproval(
-          frame as unknown as Record<string, unknown>,
-          approvalClient,
-          options,
-        );
-      }
-      if (frame.type === "result" || frame.type === "error") break;
-    }
+    await streamChatSend(client, approvalClient, conversationId, options);
   } finally {
     if (approvalClient !== null) await approvalClient.close();
     await client.close();
   }
+}
+
+async function ensureConversation(
+  client: ClientHandle,
+  options: ChatCommandOptions,
+): Promise<string | null> {
+  for await (const frame of client.call("chat.start", { topic: "single-shot" })) {
+    if (frame.type === "result") {
+      const started = frame as unknown as { conversation?: { id?: string } };
+      const id = started.conversation?.id;
+      if (typeof id !== "string") {
+        throw new Error("chat.start result missing conversation id");
+      }
+      return id;
+    }
+    if (frame.type === "error") {
+      options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
+      return null;
+    }
+  }
+  throw new Error("chat.start returned no result frame");
+}
+
+async function streamChatSend(
+  client: ClientHandle,
+  approvalClient: ClientHandle | null,
+  conversationId: string,
+  options: ChatCommandOptions,
+): Promise<void> {
+  for await (const frame of client.call("chat.send", {
+    conversationId,
+    userMessage: options.prompt,
+  })) {
+    options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
+    if (isApprovalPending(frame)) {
+      await handleApproval(frame as unknown as Record<string, unknown>, approvalClient, options);
+    }
+    if (frame.type === "result" || frame.type === "error") break;
+  }
+}
+
+function isApprovalPending(frame: { type: string; event?: string }): boolean {
+  return frame.type === "event" && frame.event === "loop:approval_pending";
 }
 
 export async function runChatTui(options: {

@@ -95,9 +95,7 @@ function makeRouter(provider: LLMProvider, model: string): VisionRouter {
   return {
     async describe(image) {
       if (typeof provider.chatVision !== "function") {
-        throw new Error(
-          "VISION_UNAVAILABLE: provider does not implement chatVision",
-        );
+        throw new Error("VISION_UNAVAILABLE: provider does not implement chatVision");
       }
       const dataUrl = bytesToDataUrl(image.bytes, image.mediaType);
       const result = await provider.chatVision({

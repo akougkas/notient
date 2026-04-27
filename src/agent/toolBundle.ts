@@ -10,6 +10,12 @@
 import type { ContradictionHunter } from "../core/agents/contradictionHunter";
 import type { Synthesizer } from "../core/agents/synthesizer";
 import type { ApprovalGate } from "../core/chat/approvalGate";
+import { makeContradictionCheckTool, makeSynthesizeTool } from "../core/chat/tools/agents";
+import {
+  type ClusterCache,
+  makeFindPathTool,
+  makeListClustersTool,
+} from "../core/chat/tools/graph";
 import {
   type NotesFacade,
   type NotesHistoryRecord,
@@ -18,19 +24,7 @@ import {
   makeReplaceSectionTool,
   makeUpdateFrontmatterTool,
 } from "../core/chat/tools/notes";
-import {
-  makeContradictionCheckTool,
-  makeSynthesizeTool,
-} from "../core/chat/tools/agents";
-import {
-  type ClusterCache,
-  makeFindPathTool,
-  makeListClustersTool,
-} from "../core/chat/tools/graph";
-import {
-  makeGetProposalTool,
-  makeListProposalsTool,
-} from "../core/chat/tools/proposals";
+import { makeGetProposalTool, makeListProposalsTool } from "../core/chat/tools/proposals";
 import { ToolRegistry } from "../core/chat/tools/registry";
 import {
   type VaultFacade,

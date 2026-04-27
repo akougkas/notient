@@ -27,11 +27,7 @@ export interface ResolveAttachmentsOptions {
   vault: VaultAdapter;
   message: string;
   maxTokens: number;
-  resolveImage: (
-    path: string,
-    bytes: ArrayBuffer,
-    mediaType: string,
-  ) => Promise<string>;
+  resolveImage: (path: string, bytes: ArrayBuffer, mediaType: string) => Promise<string>;
 }
 
 export interface ResolvedAttachments {
@@ -41,13 +37,10 @@ export interface ResolvedAttachments {
 
 export function extractMentions(message: string): string[] {
   const out: string[] = [];
-  let match: RegExpExecArray | null;
-  MENTION_PATTERN.lastIndex = 0;
-  while ((match = MENTION_PATTERN.exec(message)) !== null) {
+  for (const match of message.matchAll(MENTION_PATTERN)) {
     const captured = match[1] ?? match[2];
     if (!captured) continue;
     if (captured.includes("@")) continue;
-    if (captured.length === 0) continue;
     out.push(captured);
   }
   return out;
@@ -61,62 +54,84 @@ export async function resolveAttachments(
   const visionImages: VisionAttachment[] = [];
 
   for (const path of mentions) {
-    const extension = pathExtension(path);
     const exists = await options.vault.exists(path).catch(() => false);
     if (!exists) {
       pinnedContext.push(`[attachment: ${path}] (not found)`);
       continue;
     }
-    if (IMAGE_EXT.has(extension)) {
-      const bytes = await options.vault.readBinary(path);
-      if (!bytes) {
-        pinnedContext.push(`[attachment: ${path}] (empty binary)`);
-        continue;
-      }
-      const mediaType = imageMediaType(extension);
-      const description = await options.resolveImage(path, bytes, mediaType);
-      pinnedContext.push(
-        `[image: ${path}] ${truncateForBudget(description, options.maxTokens)}`,
-      );
-      visionImages.push({ path, bytes, mediaType });
-      continue;
-    }
-    if (extension === PDF_EXT) {
-      const bytes = await options.vault.readBinary(path);
-      if (!bytes) {
-        pinnedContext.push(`[attachment: ${path}] (empty binary)`);
-        continue;
-      }
-      const text = await extractPdfText(bytes);
-      pinnedContext.push(
-        `[attachment: ${path}]\n${truncateForBudget(text, options.maxTokens)}`,
-      );
-      continue;
-    }
-    if (extension === CANVAS_EXT) {
-      const raw = await options.vault.read(path);
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        parsed = raw;
-      }
-      const summary = JSON.stringify(parsed, null, 2);
-      pinnedContext.push(
-        `[attachment: ${path}]\n${truncateForBudget(summary, options.maxTokens)}`,
-      );
-      continue;
-    }
-    if (TEXT_EXT.has(extension) || extension === "") {
-      const raw = await options.vault.read(path);
-      pinnedContext.push(
-        `[attachment: ${path}]\n${truncateForBudget(raw, options.maxTokens)}`,
-      );
-      continue;
-    }
-    pinnedContext.push(`[attachment: ${path}] (unsupported extension ${extension})`);
+    const resolved = await resolveOne(path, options);
+    pinnedContext.push(resolved.line);
+    if (resolved.image) visionImages.push(resolved.image);
   }
   return { pinnedContext, visionImages };
+}
+
+interface ResolvedOne {
+  line: string;
+  image: VisionAttachment | null;
+}
+
+async function resolveOne(path: string, options: ResolveAttachmentsOptions): Promise<ResolvedOne> {
+  const extension = pathExtension(path);
+  if (IMAGE_EXT.has(extension)) return resolveImage(path, extension, options);
+  if (extension === PDF_EXT) return resolvePdf(path, options);
+  if (extension === CANVAS_EXT) return resolveCanvas(path, options);
+  if (TEXT_EXT.has(extension) || extension === "") return resolveText(path, options);
+  return {
+    line: `[attachment: ${path}] (unsupported extension ${extension})`,
+    image: null,
+  };
+}
+
+async function resolveImage(
+  path: string,
+  extension: string,
+  options: ResolveAttachmentsOptions,
+): Promise<ResolvedOne> {
+  const bytes = await options.vault.readBinary(path);
+  if (!bytes) return { line: `[attachment: ${path}] (empty binary)`, image: null };
+  const mediaType = imageMediaType(extension);
+  const description = await options.resolveImage(path, bytes, mediaType);
+  return {
+    line: `[image: ${path}] ${truncateForBudget(description, options.maxTokens)}`,
+    image: { path, bytes, mediaType },
+  };
+}
+
+async function resolvePdf(path: string, options: ResolveAttachmentsOptions): Promise<ResolvedOne> {
+  const bytes = await options.vault.readBinary(path);
+  if (!bytes) return { line: `[attachment: ${path}] (empty binary)`, image: null };
+  const text = await extractPdfText(bytes);
+  return {
+    line: `[attachment: ${path}]\n${truncateForBudget(text, options.maxTokens)}`,
+    image: null,
+  };
+}
+
+async function resolveCanvas(
+  path: string,
+  options: ResolveAttachmentsOptions,
+): Promise<ResolvedOne> {
+  const raw = await options.vault.read(path);
+  let parsed: unknown = raw;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = raw;
+  }
+  const summary = JSON.stringify(parsed, null, 2);
+  return {
+    line: `[attachment: ${path}]\n${truncateForBudget(summary, options.maxTokens)}`,
+    image: null,
+  };
+}
+
+async function resolveText(path: string, options: ResolveAttachmentsOptions): Promise<ResolvedOne> {
+  const raw = await options.vault.read(path);
+  return {
+    line: `[attachment: ${path}]\n${truncateForBudget(raw, options.maxTokens)}`,
+    image: null,
+  };
 }
 
 async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
