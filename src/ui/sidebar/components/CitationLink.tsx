@@ -21,7 +21,12 @@ export function CitationLink({ target, label }: CitationLinkProps) {
     actions?.openLink(target);
   };
   return (
-    <a class="notient-chat-citation" href={`#${target}`} data-target={target} onClick={handleClick}>
+    <a
+      class="notient-cite notient-chat-citation"
+      href={`#${target}`}
+      data-target={target}
+      onClick={handleClick}
+    >
       [[{text}]]
     </a>
   );

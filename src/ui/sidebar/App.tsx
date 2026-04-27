@@ -25,25 +25,36 @@ export interface SidebarActions {
   openSearch?: () => void;
 }
 
+export type HeaderStatus = "online" | "busy" | "offline";
+
 export const footerState = signal<FooterState>({ endpoints: [], noteCount: 0 });
 export const pendingApprovalsState = signal<number>(0);
 export const sidebarActions = signal<SidebarActions | null>(null);
 export const tickState = signal<number>(0);
+export const headerStatusState = signal<HeaderStatus>("online");
+export const headerModelState = signal<string>("");
 
 // Retained as a no-op buffer so existing main.ts producers keep compiling.
-// The Stream tab in Task 2 will subsume its rendering responsibility.
+// The Stream tab in Task 2 subsumes its rendering responsibility.
 export const recentRunsState = signal<AgentRun[]>([]);
 
 export function App() {
   const tab = activeTab.value;
   const pending = pendingApprovalsState.value;
+  const headerStatus = headerStatusState.value;
+  const headerModel = headerModelState.value;
   void tickState.value;
 
   return (
     <div class="notient-app">
       <header class="notient-header">
-        <h2>Notient</h2>
-        <p class="notient-subtitle">Mind layer online</p>
+        <h2 class="notient-header__brand">
+          <span>Notient</span>
+          <span class="notient-header__pip" data-status={headerStatus} aria-hidden="true" />
+        </h2>
+        <span class="notient-header__model" title={headerModel}>
+          {headerModel}
+        </span>
       </header>
       <TabBar pendingApprovals={pending} />
       <main class="notient-body">

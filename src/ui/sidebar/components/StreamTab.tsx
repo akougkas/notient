@@ -17,14 +17,20 @@ export function StreamTab() {
   const focusedProposalId = focusedProposalIdState.value;
   if (items.length === 0) {
     return (
-      <section class="notient-tab-body notient-tab-body--stream">
-        <p class="notient-empty">No pending insights. Save a note or wait for the swarm.</p>
+      <section class="notient-tab-body">
+        <div class="notient-empty">
+          <span class="notient-empty__dot" />
+          <h3 class="notient-empty__title">The swarm watches.</h3>
+          <p class="notient-empty__hint">
+            Save a note. When agents have something to propose, it appears here.
+          </p>
+        </div>
       </section>
     );
   }
   return (
-    <section class="notient-tab-body notient-tab-body--stream">
-      <ul class="notient-stream-list">
+    <section class="notient-tab-body notient-stream">
+      <ul class="notient-stream__list">
         {items.map((item) => (
           <li key={item.id}>
             <StreamItemCard

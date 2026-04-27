@@ -7,26 +7,51 @@ export interface ResultRowProps {
   onOpen: (notePath: string) => void;
 }
 
+const AGENT_LABELS: Record<string, string> = {
+  linker: "Linker",
+  synthesizer: "Synthesizer",
+  contradictionHunter: "Contradiction Hunter",
+  "contradiction-hunter": "Contradiction Hunter",
+  maturityAdvancer: "Maturity Advancer",
+  "maturity-advancer": "Maturity Advancer",
+  coauthor: "Co-author",
+  "co-author": "Co-author",
+};
+
+function normalizeAgent(agent: string): string {
+  if (agent === "contradictionHunter") return "contradiction-hunter";
+  if (agent === "maturityAdvancer") return "maturity-advancer";
+  if (agent === "coauthor") return "co-author";
+  return agent;
+}
+
 export function ResultRow({ hit, selected, onHover, onOpen }: ResultRowProps) {
   const confidence = clampUnit(hit.score);
   const confidencePct = Math.round(confidence * 100);
   const breadcrumb = breadcrumbFromPath(hit.notePath);
+  const dominantAgent = hit.agentTags && hit.agentTags.length > 0 ? hit.agentTags[0] : undefined;
+  const agentNormalized = dominantAgent ? normalizeAgent(dominantAgent) : undefined;
+  const agentLabel = dominantAgent ? (AGENT_LABELS[dominantAgent] ?? dominantAgent) : null;
   return (
     <button
       type="button"
-      class={`notient-result-row${selected ? " notient-result-row--selected" : ""}`}
+      class={`notient-result notient-result-row${selected ? " notient-result-row--selected" : ""}`}
       data-note-path={hit.notePath}
       aria-pressed={selected}
+      aria-selected={selected ? "true" : "false"}
       onMouseEnter={() => onHover(hit.notePath)}
       onFocus={() => onHover(hit.notePath)}
       onClick={() => onOpen(hit.notePath)}
     >
-      <span class="notient-result-row__head">
-        <span class="notient-result-row__title">{titleFromPath(hit.notePath)}</span>
-        <span class="notient-result-row__breadcrumb">{breadcrumb}</span>
-      </span>
-      <span class="notient-result-row__snippet">{hit.snippet}</span>
-      <span class="notient-result-row__meta">
+      <h3 class="notient-result__title notient-result-row__title">{titleFromPath(hit.notePath)}</h3>
+      <div class="notient-result__breadcrumb notient-result-row__breadcrumb">{breadcrumb}</div>
+      <p class="notient-result__snippet notient-result-row__snippet">{hit.snippet}</p>
+      <div class="notient-result__meta notient-result-row__meta">
+        {agentLabel ? (
+          <span class="notient-pip" data-agent={agentNormalized}>
+            {agentLabel}
+          </span>
+        ) : null}
         {hit.maturity ? (
           <span
             class={`notient-result-row__badge notient-result-row__badge--maturity-${hit.maturity}`}
@@ -41,16 +66,10 @@ export function ResultRow({ hit, selected, onHover, onOpen }: ResultRowProps) {
             {hit.vitalsTier}
           </span>
         ) : null}
-        {hit.agentTags?.map((tag) => (
-          <span key={tag} class="notient-result-row__chip">
-            {tag}
-          </span>
-        ))}
-        <span class="notient-result-row__confidence" aria-label="Confidence">
-          <span class="notient-result-row__confidence-bar" style={{ width: `${confidencePct}%` }} />
-          <span class="notient-result-row__confidence-text">{confidencePct}%</span>
+        <span class="notient-pip notient-pip--num notient-result-row__confidence">
+          {confidencePct}%
         </span>
-      </span>
+      </div>
     </button>
   );
 }

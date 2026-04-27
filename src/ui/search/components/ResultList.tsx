@@ -23,9 +23,15 @@ export function ResultList() {
   if (hits.length === 0) {
     return (
       <section class="notient-search-results__body" aria-live="polite">
-        <p class="notient-search-empty">
-          {running ? "Searching..." : "No results yet. Enter a query to begin."}
-        </p>
+        <div class="notient-empty">
+          <span class="notient-empty__dot" />
+          <h3 class="notient-empty__title">
+            {running ? "Searching..." : "Listening for a query."}
+          </h3>
+          <p class="notient-search-empty notient-empty__hint">
+            {running ? "Stand by." : "Type a query above to begin."}
+          </p>
+        </div>
       </section>
     );
   }
@@ -35,26 +41,26 @@ export function ResultList() {
 
   return (
     <section class="notient-search-results__body" aria-live="polite">
-      <ol class="notient-search-results__list">
+      <div class="notient-search-results__list">
         {visible.map((hit) => (
-          <li key={`${hit.notePath}::${hit.chunkId ?? "_"}`}>
-            <ResultRow
-              hit={hit}
-              selected={preview === hit.notePath}
-              onHover={(notePath) => {
-                searchPreviewPath.value = notePath;
-              }}
-              onOpen={(notePath) => {
-                searchActions.value?.openHit(notePath);
-              }}
-            />
-          </li>
+          <ResultRow
+            key={`${hit.notePath}::${hit.chunkId ?? "_"}`}
+            hit={hit}
+            selected={preview === hit.notePath}
+            onHover={(notePath) => {
+              searchPreviewPath.value = notePath;
+            }}
+            onOpen={(notePath) => {
+              searchActions.value?.openHit(notePath);
+            }}
+          />
         ))}
-      </ol>
+      </div>
       {hasMore ? (
         <button
           type="button"
-          class="notient-search-results__more"
+          class="notient-button notient-search-results__more"
+          data-emphasis="ghost"
           onClick={() => setWindowSize((current) => current + WINDOW_STEP)}
         >
           Load {Math.min(WINDOW_STEP, hits.length - visible.length)} more

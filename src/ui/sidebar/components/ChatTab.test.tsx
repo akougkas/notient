@@ -40,7 +40,7 @@ describe("ChatTab", () => {
     resetChatState();
     const html = render(<ChatTab />);
     expect(html).toContain("notient-tab-body--chat");
-    expect(html).toContain("Talk to your second brain");
+    expect(html).toContain("Your second brain is listening.");
     expect(html).toContain("Start new conversation");
   });
 
@@ -126,7 +126,7 @@ describe("ChatTab", () => {
     draftInput.value = "";
     const html = render(<ChatTab />);
     expect(html).toContain("notient-chat-input__send");
-    const sendDisabled = /class="notient-chat-input__send"[^>]*disabled/.test(html);
+    const sendDisabled = /class="[^"]*notient-chat-input__send[^"]*"[^>]*disabled/.test(html);
     expect(sendDisabled).toBe(true);
   });
 

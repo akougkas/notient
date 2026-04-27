@@ -25,6 +25,7 @@ export class AwakenVaultModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("notient-awaken-modal");
+    contentEl.addClass("notient-modal");
 
     const header = contentEl.createDiv({ cls: "notient-awaken-header" });
     header.createEl("h2", { text: "Awaken Vault" });
@@ -32,20 +33,27 @@ export class AwakenVaultModal extends Modal {
       text: `Notient is going to read every note in your vault, embed it, and grow your knowledge graph in real time. ${this.deps.totalNotes()} notes detected.`,
     });
 
-    const counters = contentEl.createDiv({ cls: "notient-awaken-counters" });
+    const counters = contentEl.createDiv({
+      cls: "notient-awaken-counters notient-modal__counters",
+    });
     this.deps.onAttachCounters(counters);
 
-    const canvasWrap = contentEl.createDiv({ cls: "notient-awaken-canvas-wrap" });
+    const canvasWrap = contentEl.createDiv({
+      cls: "notient-awaken-canvas-wrap notient-modal__canvas",
+    });
     const canvas = canvasWrap.createEl("canvas", {
       attr: { width: "720", height: "420" },
     });
     this.deps.onAttachCanvas(canvas);
 
-    const buttons = contentEl.createDiv({ cls: "notient-awaken-buttons" });
-    this.startButton = buttons.createEl("button", { text: "Begin" });
-    this.stopButton = buttons.createEl("button", { text: "Stop" });
+    const buttons = contentEl.createDiv({ cls: "notient-awaken-buttons notient-modal__buttons" });
+    this.startButton = buttons.createEl("button", { cls: "notient-button", text: "Begin" });
+    this.startButton.dataset.emphasis = "primary";
+    this.stopButton = buttons.createEl("button", { cls: "notient-button", text: "Stop" });
+    this.stopButton.dataset.emphasis = "ghost";
+    this.stopButton.dataset.tone = "danger";
     this.stopButton.disabled = true;
-    this.doneButton = buttons.createEl("button", { text: "Enter" });
+    this.doneButton = buttons.createEl("button", { cls: "notient-button", text: "Enter" });
     this.doneButton.disabled = true;
 
     this.startButton.addEventListener("click", () => {

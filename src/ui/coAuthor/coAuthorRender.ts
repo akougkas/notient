@@ -79,6 +79,18 @@ export interface RenderHandlers {
   onCancel?: () => void;
 }
 
+function titleFromPath(path: string): string {
+  const stripped = path.replace(/^\/+/, "");
+  const last = stripped.split("/").pop() ?? stripped;
+  return last.replace(/\.md$/, "");
+}
+
+const SECTION_LABELS: Record<Section, string> = {
+  summary: "Summary",
+  implies: "Implies",
+  connects: "Connects",
+};
+
 export function renderCoAuthorPanel(
   root: HTMLElement,
   model: CoAuthorPanelModel,
@@ -89,20 +101,31 @@ export function renderCoAuthorPanel(
   root.classList.add("notient-co-author");
   if (state.status === "idle") {
     const empty = document.createElement("div");
-    empty.className = "notient-co-author__empty";
-    empty.textContent = "Open a note longer than 100 words to wake the Co-author.";
+    empty.className = "notient-empty notient-co-author__empty";
+    const dot = document.createElement("span");
+    dot.className = "notient-empty__dot";
+    const heading = document.createElement("h3");
+    heading.className = "notient-empty__title";
+    heading.textContent = "Co-author is asleep.";
+    const hint = document.createElement("p");
+    hint.className = "notient-empty__hint";
+    hint.textContent = "Open a note longer than 100 words to wake the Co-author.";
+    empty.append(dot, heading, hint);
     root.append(empty);
     return;
   }
   const header = document.createElement("div");
-  header.className = "notient-co-author__header";
-  const title = document.createElement("strong");
-  title.textContent = state.notePath ?? "";
+  header.className = "notient-co-author__head notient-co-author__header";
+  const title = document.createElement("h2");
+  title.className = "notient-co-author__title";
+  title.textContent = state.notePath ? titleFromPath(state.notePath) : "";
   header.append(title);
   if (state.status === "streaming") {
     const cancel = document.createElement("button");
     cancel.className = "notient-co-author__cancel";
-    cancel.textContent = "cancel";
+    cancel.type = "button";
+    cancel.setAttribute("aria-label", "Cancel co-author stream");
+    cancel.textContent = "×";
     cancel.addEventListener("click", () => handlers.onCancel?.());
     header.append(cancel);
   }
@@ -111,7 +134,7 @@ export function renderCoAuthorPanel(
   if (state.status === "streaming" && allEmpty(state.sections)) {
     const skel = document.createElement("div");
     skel.className = "notient-co-author__skeleton";
-    skel.textContent = "thinking...";
+    skel.textContent = "Thinking...";
     root.append(skel);
     return;
   }
@@ -120,9 +143,11 @@ export function renderCoAuthorPanel(
     const block = document.createElement("section");
     block.className = `notient-co-author__section notient-co-author__section--${section}`;
     const heading = document.createElement("h4");
-    heading.textContent = section.toUpperCase();
+    heading.textContent = SECTION_LABELS[section];
     const body = document.createElement("div");
     body.className = "notient-co-author__body";
+    body.dataset.streaming =
+      state.status === "streaming" && state.sections[section].length > 0 ? "true" : "false";
     body.textContent = state.sections[section];
     block.append(heading, body);
     root.append(block);

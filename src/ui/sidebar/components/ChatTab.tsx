@@ -1,4 +1,6 @@
+import type { JSX } from "preact";
 import {
+  type ChatActions,
   activeConversation,
   chatActions,
   chatError,
@@ -18,10 +20,102 @@ import { ConversationsDrawer } from "./ConversationsDrawer";
 import { MessageBubble } from "./MessageBubble";
 import { ReasoningBlock } from "./ReasoningBlock";
 
+interface EmptyChatProps {
+  actions: ChatActions | null;
+  errorMessage: string | null;
+}
+
+function EmptyChat({ actions, errorMessage }: EmptyChatProps): JSX.Element {
+  return (
+    <section class="notient-tab-body notient-tab-body--chat">
+      <div class="notient-empty">
+        <span class="notient-empty__dot" />
+        <h3 class="notient-empty__title">Your second brain is listening.</h3>
+        <p class="notient-empty__hint">Ask a question. Pin a note. The vault answers.</p>
+        <button
+          type="button"
+          class="notient-button"
+          data-emphasis="primary"
+          onClick={() => {
+            void actions?.newConversation();
+          }}
+        >
+          Start new conversation
+        </button>
+        {errorMessage ? <p class="notient-composer__error">{errorMessage}</p> : null}
+      </div>
+    </section>
+  );
+}
+
+interface ChatComposerProps {
+  draft: string;
+  inFlight: boolean;
+  actions: ChatActions | null;
+  send: () => void;
+  onKey: (keyEvent: KeyboardEvent) => void;
+}
+
+function ChatComposer({ draft, inFlight, actions, send, onKey }: ChatComposerProps): JSX.Element {
+  return (
+    <form
+      class="notient-composer notient-chat-input"
+      onSubmit={(formEvent) => {
+        formEvent.preventDefault();
+        send();
+      }}
+    >
+      <textarea
+        class="notient-composer__field notient-chat-input__textarea"
+        value={draft}
+        placeholder={
+          inFlight
+            ? "Notient is thinking. Press Esc to abort."
+            : "Ask about your vault. Press Cmd or Ctrl plus Enter to send."
+        }
+        onInput={(input) => {
+          const target = input.currentTarget as HTMLTextAreaElement;
+          draftInput.value = target.value;
+        }}
+        onKeyDown={onKey}
+        disabled={inFlight}
+      />
+      <div class="notient-composer__row notient-chat-input__actions">
+        <span class="notient-composer__hint">Cmd or Ctrl + Enter to send</span>
+        <span class="notient-composer__buttons">
+          {inFlight ? (
+            <button
+              type="button"
+              class="notient-button notient-chat-input__abort"
+              data-emphasis="ghost"
+              data-tone="danger"
+              onClick={() => actions?.abort()}
+            >
+              Abort
+            </button>
+          ) : null}
+          <button
+            type="submit"
+            class="notient-button notient-chat-input__send"
+            data-emphasis="primary"
+            disabled={inFlight || draft.trim().length === 0}
+            onClick={(clickEvent) => {
+              clickEvent.preventDefault();
+              send();
+            }}
+          >
+            Send
+          </button>
+        </span>
+      </div>
+    </form>
+  );
+}
+
 /**
- * The ChatTab is the flagship surface from Q6. It hosts the streaming
+ * The ChatTab is the flagship Phosphor Garden surface. It hosts the streaming
  * assistant tokens, inline tool cards, write-tool approvals, the pinned
- * context chip, and the conversations drawer. Cmd/Ctrl+Enter sends; Esc
+ * context chips, and the conversations drawer. Cmd/Ctrl+Enter sends; Esc
  * aborts a turn in flight.
  */
 export function ChatTab() {
@@ -38,24 +132,7 @@ export function ChatTab() {
   const draft = draftInput.value;
 
   if (!conversation) {
-    return (
-      <section class="notient-tab-body notient-tab-body--chat">
-        <div class="notient-chat-empty">
-          <h3 class="notient-chat-empty__title">Talk to your second brain</h3>
-          <p class="notient-chat-empty__hint">Try: "What notes contradict my view on X?"</p>
-          <button
-            type="button"
-            class="notient-chat-empty__cta"
-            onClick={() => {
-              void actions?.newConversation();
-            }}
-          >
-            Start new conversation
-          </button>
-          {errorMessage ? <p class="notient-chat-error">{errorMessage}</p> : null}
-        </div>
-      </section>
-    );
+    return <EmptyChat actions={actions} errorMessage={errorMessage} />;
   }
 
   const usagePercent = usage.budget > 0 ? Math.round((usage.used / usage.budget) * 100) : 0;
@@ -79,12 +156,15 @@ export function ChatTab() {
     }
   };
 
+  const liveAssistantStreaming = inFlight && liveAssistant.length > 0;
+
   return (
-    <section class="notient-tab-body notient-tab-body--chat">
-      <header class="notient-chat-header">
+    <section class="notient-tab-body notient-tab-body--chat notient-chat">
+      <header class="notient-chat__head notient-chat-header" aria-label="Conversation header">
         <button
           type="button"
-          class="notient-chat-header__menu"
+          class="notient-button notient-chat-header__menu"
+          data-emphasis="ghost"
           aria-label="Conversations"
           onClick={() => {
             drawerOpen.value = !drawerOpen.value;
@@ -92,23 +172,36 @@ export function ChatTab() {
         >
           Menu
         </button>
-        <h3 class="notient-chat-header__title">{conversation.topic || "Untitled"}</h3>
-        <span class="notient-chat-header__usage" aria-label="Context usage">
+        <h3 class="notient-chat__topic notient-chat-header__title">
+          {conversation.topic || "Untitled"}
+        </h3>
+        <span
+          class="notient-chat-header__usage notient-pip notient-pip--num"
+          aria-label="Context usage"
+        >
           {usagePercent}%
         </span>
-        <button
-          type="button"
-          class={`notient-chat-header__mode notient-chat-header__mode--${conversation.approvalMode}`}
-          aria-label="Toggle chat approval mode"
+        <span
+          class={`notient-chat__mode notient-chat-header__mode notient-chat-header__mode--${conversation.approvalMode}`}
+          data-mode={conversation.approvalMode}
+          role="button"
+          tabIndex={0}
           onClick={() => {
             void actions?.toggleYolo();
           }}
+          onKeyDown={(keyEvent) => {
+            if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+              keyEvent.preventDefault();
+              void actions?.toggleYolo();
+            }
+          }}
         >
           {conversation.approvalMode === "yolo" ? "Yolo" : "Safe"}
-        </button>
+        </span>
         <button
           type="button"
-          class="notient-chat-header__new"
+          class="notient-button notient-chat-header__new"
+          data-emphasis="ghost"
           aria-label="New chat"
           onClick={() => {
             void actions?.newConversation();
@@ -118,15 +211,23 @@ export function ChatTab() {
         </button>
       </header>
       {drawerVisible ? <ConversationsDrawer /> : null}
-      <ContextChip />
-      {errorMessage ? <p class="notient-chat-error">{errorMessage}</p> : null}
-      <main class="notient-chat-messages">
+      <div class="notient-chat__pinned">
+        <ContextChip />
+      </div>
+      {errorMessage ? (
+        <p class="notient-composer__error notient-chat-error">{errorMessage}</p>
+      ) : null}
+      <main class="notient-chat__messages notient-chat-messages" aria-label="Conversation messages">
         {conversation.messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
-        {inFlight && liveAssistant.length > 0 ? (
-          <article class="notient-chat-message notient-chat-message--assistant notient-chat-message--live">
-            <div class="notient-chat-message__content">{liveAssistant}</div>
+        {liveAssistantStreaming ? (
+          <article
+            class="notient-msg notient-chat-message notient-chat-message--assistant notient-chat-message--live"
+            data-role="assistant"
+            data-streaming="true"
+          >
+            <div class="notient-msg__body notient-chat-message__content">{liveAssistant}</div>
           </article>
         ) : null}
         {inFlight && persistReasoningOn ? (
@@ -136,42 +237,13 @@ export function ChatTab() {
           <ApprovalCard key={pending.callId} pending={pending} />
         ))}
       </main>
-      <footer class="notient-chat-input">
-        <textarea
-          class="notient-chat-input__textarea"
-          value={draft}
-          placeholder={
-            inFlight
-              ? "Notient is thinking. Press Esc to abort."
-              : "Ask about your vault. Press Cmd or Ctrl plus Enter to send."
-          }
-          onInput={(input) => {
-            const target = input.currentTarget as HTMLTextAreaElement;
-            draftInput.value = target.value;
-          }}
-          onKeyDown={handleKey}
-          disabled={inFlight}
-        />
-        <div class="notient-chat-input__actions">
-          <button
-            type="button"
-            class="notient-chat-input__send"
-            disabled={inFlight || draft.trim().length === 0}
-            onClick={send}
-          >
-            Send
-          </button>
-          {inFlight ? (
-            <button
-              type="button"
-              class="notient-chat-input__abort"
-              onClick={() => actions?.abort()}
-            >
-              Abort
-            </button>
-          ) : null}
-        </div>
-      </footer>
+      <ChatComposer
+        draft={draft}
+        inFlight={inFlight}
+        actions={actions}
+        send={send}
+        onKey={handleKey}
+      />
     </section>
   );
 }

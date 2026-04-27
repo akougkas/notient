@@ -8,9 +8,9 @@ export interface ToolCallCardProps {
 }
 
 /**
- * Renders a single tool invocation as a collapsible card. The header carries
- * the tool name, the duration, and a status icon. Expanding the card reveals
- * the pretty-printed arguments and either the result payload or the error
+ * Renders a single tool invocation as a collapsible disclosure. Summary
+ * carries the tool name and a short result count; expanding reveals the
+ * pretty-printed arguments and either the result payload or the error
  * message returned by the tool registry.
  */
 export function ToolCallCard({ call, result }: ToolCallCardProps) {
@@ -19,20 +19,25 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
   const status = resolveStatus(result);
   const duration = result ? `${result.durationMs}ms` : "...";
   const historyId = readHistoryId(result);
+  const summary = summariseResult(call.name, result);
   return (
-    <article class={`notient-chat-tool notient-chat-tool--${status}`} data-call-id={call.id}>
-      <button
-        type="button"
-        class="notient-chat-tool__header"
-        onClick={() => setExpanded((current) => !current)}
-        aria-expanded={expanded}
-      >
-        <span class="notient-chat-tool__icon" aria-hidden="true">
-          {iconFor(status)}
+    <details
+      class={`notient-tool notient-chat-tool notient-chat-tool--${status}`}
+      open={expanded}
+      data-call-id={call.id}
+      onToggle={(toggleEvent) => {
+        const target = toggleEvent.currentTarget as HTMLDetailsElement;
+        setExpanded(target.open);
+      }}
+    >
+      <summary class="notient-chat-tool__header">
+        <span class="notient-tool__head">
+          <span class="notient-tool__name notient-chat-tool__name">{call.name}</span>
+          <span class="notient-tool__count notient-chat-tool__duration">
+            ({summary} · {duration})
+          </span>
         </span>
-        <span class="notient-chat-tool__name">{call.name}</span>
-        <span class="notient-chat-tool__duration">{duration}</span>
-      </button>
+      </summary>
       {historyId ? (
         <button
           type="button"
@@ -44,15 +49,13 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
           Auto-approved · undo
         </button>
       ) : null}
-      {expanded ? (
-        <div class="notient-chat-tool__body">
-          <h5 class="notient-chat-tool__heading">Arguments</h5>
-          <pre class="notient-chat-tool__pre">{formatJson(call.args)}</pre>
-          <h5 class="notient-chat-tool__heading">Result</h5>
-          <pre class="notient-chat-tool__pre">{formatResult(result)}</pre>
-        </div>
-      ) : null}
-    </article>
+      <div class="notient-tool__body notient-chat-tool__body">
+        <h5 class="notient-chat-tool__heading">Arguments</h5>
+        <pre class="notient-chat-tool__pre">{formatJson(call.args)}</pre>
+        <h5 class="notient-chat-tool__heading">Result</h5>
+        <pre class="notient-chat-tool__pre">{formatResult(result)}</pre>
+      </div>
+    </details>
   );
 }
 
@@ -70,15 +73,17 @@ function resolveStatus(result: ToolResult | undefined): "pending" | "ok" | "erro
   return result.status === "ok" ? "ok" : "error";
 }
 
-function iconFor(status: "pending" | "ok" | "error"): string {
-  switch (status) {
-    case "ok":
-      return "OK";
-    case "error":
-      return "ERR";
-    default:
-      return "...";
-  }
+function summariseResult(name: string, result: ToolResult | undefined): string {
+  if (!result) return "pending";
+  if (result.status === "error") return "error";
+  if (!result.data || typeof result.data !== "object") return "ok";
+  const data = result.data as Record<string, unknown>;
+  if (Array.isArray(data.results)) return `${data.results.length} results`;
+  if (Array.isArray(data.hits)) return `${data.hits.length} hits`;
+  if (typeof data.lines === "number") return `${data.lines} lines`;
+  if (typeof data.applied === "boolean") return data.applied ? "applied" : "no-op";
+  void name;
+  return "ok";
 }
 
 function formatJson(value: unknown): string {

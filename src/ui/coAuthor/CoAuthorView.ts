@@ -78,5 +78,7 @@ export class CoAuthorView extends ItemView {
 
 function debugCoAuthorView(message: string, data?: Record<string, unknown>): void {
   if (typeof window === "undefined") return;
+  // Mirrors the debugCoAuthorMain pattern in main.ts so co-author traces are
+  // observable from a single console filter.
   console.log(`[Notient][CoAuthorView] ${message}`, data ?? {});
 }

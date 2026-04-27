@@ -3,9 +3,9 @@ import { useState } from "preact/hooks";
 export interface ReasoningBlockProps {
   /** The accumulated reasoning text. May be empty during the first tokens. */
   reasoning: string;
-  /** When true, the block streams a "Thinking…" indicator while empty. */
+  /** When true, the block streams a "Thinking..." indicator while empty. */
   streaming?: boolean;
-  /** Override the default collapsed state. Defaults to `true`. */
+  /** Override the default collapsed state. Defaults to `false`. */
   defaultOpen?: boolean;
 }
 
@@ -14,7 +14,7 @@ export interface ReasoningBlockProps {
  * intentionally suppressed when both the reasoning is empty and the turn is
  * not streaming; mounting an always-on chip would clutter the conversation
  * once persistence is disabled. While a turn is in flight an empty block still
- * renders the "Thinking…" affordance so the user has a target to focus.
+ * renders the "Thinking..." affordance so the user has a target to focus.
  */
 export function ReasoningBlock({
   reasoning,
@@ -29,7 +29,7 @@ export function ReasoningBlock({
   const summary = streaming && trimmed.length === 0 ? "Thinking..." : "Show reasoning";
   return (
     <details
-      class="notient-chat-reasoning"
+      class="notient-reasoning notient-chat-reasoning"
       open={open}
       onToggle={(toggleEvent) => {
         const target = toggleEvent.currentTarget as HTMLDetailsElement;
@@ -37,7 +37,12 @@ export function ReasoningBlock({
       }}
     >
       <summary class="notient-chat-reasoning__summary">{summary}</summary>
-      <pre class="notient-chat-reasoning__body">{trimmed}</pre>
+      <div
+        class="notient-reasoning__body notient-chat-reasoning__body"
+        data-streaming={streaming ? "true" : "false"}
+      >
+        {trimmed}
+      </div>
     </details>
   );
 }

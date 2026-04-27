@@ -3,6 +3,11 @@ import type { PendingApproval } from "../../core/chat/approvalGate";
 import type { ChatStreamEvent } from "../../core/chat/chatService";
 import type { Conversation } from "../../core/chat/types";
 
+function debugChat(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][Chat] ${message}`, data ?? {});
+}
+
 /**
  * ChatTab state. Pure signals plus an injected runner so the dispatcher is
  * testable without booting the ChatService kernel slice. Mirrors the SearchView
@@ -93,6 +98,36 @@ export function resetChatState(): void {
   }
 }
 
+function finaliseDispatch(succeeded: boolean): void {
+  turnInFlight.value = false;
+  if (succeeded) {
+    liveAssistantBuffer.value = "";
+    liveReasoningBuffer.value = "";
+    return;
+  }
+  if (chatError.value !== null) {
+    debugChat("dispatch:partial-retained", {
+      assistantChars: liveAssistantBuffer.value.length,
+      reasoningChars: liveReasoningBuffer.value.length,
+    });
+    return;
+  }
+  // Aborted with no error surfaced; clear the live buffers so a new turn
+  // starts clean. This matches the previous unconditional reset behaviour
+  // for the abort path and keeps the empty-input fast-path quiet.
+  liveAssistantBuffer.value = "";
+  liveReasoningBuffer.value = "";
+}
+
+async function consumeChatStream(iterable: AsyncIterable<ChatStreamEvent>): Promise<boolean> {
+  for await (const event of iterable) {
+    applyChatEvent(event);
+    if (event.type === "turn:complete") return true;
+    if (event.type === "turn:aborted" || event.type === "loop:error") return false;
+  }
+  return false;
+}
+
 /**
  * Drive a single chat turn through the injected runner, mutating signals as
  * stream events arrive. Returns once the stream completes. A second call
@@ -122,27 +157,16 @@ export async function dispatchChat(userMessage: string): Promise<void> {
   liveAssistantBuffer.value = "";
   liveReasoningBuffer.value = "";
   chatError.value = null;
+  let succeeded = false;
   try {
-    const iterable = runner(conversation, trimmed, controller.signal);
-    for await (const event of iterable) {
-      applyChatEvent(event);
-      if (
-        event.type === "turn:complete" ||
-        event.type === "turn:aborted" ||
-        event.type === "loop:error"
-      ) {
-        break;
-      }
-    }
+    succeeded = await consumeChatStream(runner(conversation, trimmed, controller.signal));
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : String(error);
   } finally {
     if (activeAbort === controller) {
       activeAbort = null;
     }
-    turnInFlight.value = false;
-    liveAssistantBuffer.value = "";
-    liveReasoningBuffer.value = "";
+    finaliseDispatch(succeeded);
   }
 }
 

@@ -1,5 +1,18 @@
 import { searchHits, searchPreviewPath, searchQuery } from "../state";
 
+function titleFromPath(path: string): string {
+  const stripped = path.replace(/^\/+/, "");
+  const last = stripped.split("/").pop() ?? stripped;
+  return last.replace(/\.md$/, "");
+}
+
+function breadcrumbFromPath(path: string): string {
+  const stripped = path.replace(/^\/+/, "");
+  const segments = stripped.split("/");
+  if (segments.length <= 1) return "";
+  return segments.slice(0, -1).join(" / ");
+}
+
 export function PreviewPane() {
   const path = searchPreviewPath.value;
   const hits = searchHits.value;
@@ -8,26 +21,35 @@ export function PreviewPane() {
   if (!path) {
     return (
       <section class="notient-search-preview__pane" aria-label="Preview">
-        <p class="notient-search-empty">Hover a result to preview it here.</p>
+        <div class="notient-empty">
+          <span class="notient-empty__dot" />
+          <h3 class="notient-empty__title">Select a result.</h3>
+          <p class="notient-search-empty notient-empty__hint">
+            Hover or click a result to read it here.
+          </p>
+        </div>
       </section>
     );
   }
 
   const hit = hits.find((entry) => entry.notePath === path) ?? null;
+  const title = titleFromPath(path);
+  const breadcrumb = breadcrumbFromPath(path);
 
   return (
-    <section class="notient-search-preview__pane" aria-label="Preview">
+    <article class="notient-search-preview__pane notient-search__reader-body" aria-label="Preview">
       <header class="notient-search-preview__head">
-        <h3 class="notient-search-preview__title">{path}</h3>
+        <h2 class="notient-search__title notient-search-preview__title">{title}</h2>
+        {breadcrumb ? <div class="notient-result__breadcrumb">{breadcrumb}</div> : null}
       </header>
       <div class="notient-search-preview__body">
         {hit ? (
           <p class="notient-search-preview__snippet">{renderHighlighted(hit.snippet, query)}</p>
         ) : (
-          <p class="notient-search-empty">Loading preview…</p>
+          <p class="notient-search-empty">Loading preview...</p>
         )}
       </div>
-    </section>
+    </article>
   );
 }
 

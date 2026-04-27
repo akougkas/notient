@@ -89,6 +89,9 @@ import {
 } from "./ui/search/state";
 import {
   type AgentRun,
+  footerState,
+  headerModelState,
+  headerStatusState,
   pendingApprovalsState,
   recentRunsState,
   sidebarActions,
@@ -877,9 +880,19 @@ export default class NotientPlugin extends Plugin {
         cancelSearchDispatch();
       },
       openHit: (notePath) => {
+        debugSearch("open-hit", { notePath });
         const target = this.app.metadataCache.getFirstLinkpathDest(notePath, "");
-        if (!target) return;
-        void this.app.workspace.openLinkText(target.path, "", false);
+        if (target) {
+          void this.app.workspace.openLinkText(target.path, "", false);
+          return;
+        }
+        const file = this.app.vault.getAbstractFileByPath(notePath);
+        if (file instanceof TFile) {
+          void this.app.workspace.getLeaf(false).openFile(file);
+          return;
+        }
+        new Notice(`Notient: note not found (${notePath})`);
+        debugSearch("open-hit:miss", { notePath });
       },
       pinPreview: () => {
         // Preview pin state is local to the view; nothing to push to runtime.
@@ -900,11 +913,16 @@ export default class NotientPlugin extends Plugin {
       saveQuery: () => {
         const trimmed = searchQueryState.value.trim();
         if (trimmed.length === 0) return;
-        void savedQueries.save({
-          query: trimmed,
-          mode: searchModeState.value,
-          filters: {},
-        });
+        void savedQueries
+          .save({
+            query: trimmed,
+            mode: searchModeState.value,
+            filters: {},
+          })
+          .catch((error: unknown) => {
+            debugSearch("save-query:error", { error: String(error) });
+            new Notice("Notient: could not save query");
+          });
       },
       newChatFromResults: () => {
         const trimmed = searchQueryState.value.trim();
@@ -914,12 +932,31 @@ export default class NotientPlugin extends Plugin {
           .startConversation({ topic: trimmed, pinnedContext: [] })
           .then((conversation) => {
             chatActiveConversation.value = conversation;
+          })
+          .catch((error: unknown) => {
+            debugSearch("new-chat-from-results:error", { error: String(error) });
+            new Notice("Notient: could not start chat from results");
           });
       },
       openLink: (linkText) => {
+        debugSearch("open-link", { linkText });
         const target = normalizeWikilinkTarget(linkText);
-        if (target.length === 0) return;
-        void this.app.workspace.openLinkText(target, "", false);
+        if (target.length === 0) {
+          debugSearch("open-link:miss", { linkText, reason: "empty-target" });
+          return;
+        }
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(target, "");
+        if (resolved) {
+          void this.app.workspace.openLinkText(resolved.path, "", false);
+          return;
+        }
+        const file = this.app.vault.getAbstractFileByPath(target);
+        if (file instanceof TFile) {
+          void this.app.workspace.getLeaf(false).openFile(file);
+          return;
+        }
+        new Notice(`Notient: link not found (${linkText})`);
+        debugSearch("open-link:miss", { linkText });
       },
     };
 
@@ -987,8 +1024,15 @@ export default class NotientPlugin extends Plugin {
         }
       },
       loadConversation: async (notePath) => {
-        const conversation = await chatService.loadConversation(notePath);
-        chatActiveConversation.value = conversation;
+        debugChat("load-conversation", { notePath });
+        try {
+          const conversation = await chatService.loadConversation(notePath);
+          chatActiveConversation.value = conversation;
+          debugChat("load-conversation:loaded", { notePath });
+        } catch (error) {
+          debugChat("load-conversation:error", { notePath, error: String(error) });
+          new Notice(`Notient: could not load conversation (${String(error)})`);
+        }
       },
       sendMessage: async () => {
         // The dispatcher in chat-state.ts owns the actual streaming pump; this
@@ -1027,11 +1071,27 @@ export default class NotientPlugin extends Plugin {
         }
       },
       openLink: (linkText) => {
-        void this.app.workspace.openLinkText(linkText, "", false);
+        debugChat("open-link", { linkText });
+        const target = this.app.metadataCache.getFirstLinkpathDest(linkText, "");
+        if (target) {
+          void this.app.workspace.openLinkText(target.path, "", false);
+          return;
+        }
+        const file = this.app.vault.getAbstractFileByPath(linkText);
+        if (file instanceof TFile) {
+          void this.app.workspace.getLeaf(false).openFile(file);
+          return;
+        }
+        new Notice(`Notient: link not found (${linkText})`);
+        debugChat("open-link:miss", { linkText });
       },
       undoLastWrite: async (historyId) => {
         const numericId = Number(historyId);
-        if (!Number.isFinite(numericId)) return;
+        if (!Number.isFinite(numericId)) {
+          debugChat("undo:invalid", { historyId });
+          new Notice("Notient: undo target invalid");
+          return;
+        }
         const result = await historyService.undo(numericId);
         if (!result.ok) {
           new Notice(`Notient: undo failed (${result.error})`);
@@ -1258,8 +1318,19 @@ export default class NotientPlugin extends Plugin {
     refreshPendingApprovals();
 
     const triggerByRunId = new Map<number, string>();
+    const inFlightRuns = new Set<number>();
+    headerModelState.value = current.primary.reasoningModel;
+    this.bus.on("settings:changed", () => {
+      headerModelState.value = this.settings.get().primary.reasoningModel;
+    });
     this.bus.on("agent:run-started", (event) => {
       triggerByRunId.set(event.runId, event.trigger);
+      inFlightRuns.add(event.runId);
+      headerStatusState.value = "busy";
+      footerState.value = {
+        ...footerState.value,
+        currentActivity: { agent: event.agent, startedAt: Date.now() },
+      };
     });
     this.bus.on("agent:run-finished", (event) => {
       const next: AgentRun = {
@@ -1273,9 +1344,15 @@ export default class NotientPlugin extends Plugin {
         finishedAt: Date.now(),
       };
       triggerByRunId.delete(event.runId);
+      inFlightRuns.delete(event.runId);
       const previous = recentRunsState.value;
       recentRunsState.value = [next, ...previous].slice(0, 10);
       refreshPendingApprovals();
+      if (inFlightRuns.size === 0) {
+        headerStatusState.value = "online";
+        const { currentActivity: _activity, ...rest } = footerState.value;
+        footerState.value = rest;
+      }
       const path = this.app.workspace.getActiveFile()?.path ?? null;
       if (path) void vitalsService.persistSnapshot(path);
     });
@@ -1284,9 +1361,36 @@ export default class NotientPlugin extends Plugin {
       refreshPendingApprovals();
     });
 
+    this.bus.on("indexer:progress", (event) => {
+      footerState.value = {
+        ...footerState.value,
+        indexer: {
+          processed: event.processed,
+          total: event.total,
+          queueDepth: Math.max(0, event.total - event.processed),
+          etaSeconds: null,
+        },
+      };
+    });
+    this.bus.on("indexer:complete", (event) => {
+      footerState.value = {
+        ...footerState.value,
+        indexer: {
+          processed: event.total,
+          total: event.total,
+          queueDepth: 0,
+          etaSeconds: 0,
+        },
+      };
+    });
+    this.bus.on("llm:health", (event) => {
+      if (!event.ok) headerStatusState.value = "offline";
+      else if (inFlightRuns.size === 0) headerStatusState.value = "online";
+    });
+
     const tickInterval = window.setInterval(() => {
       tickState.value = tickState.value + 1;
-    }, 30_000);
+    }, 1_000);
     this.register(() => window.clearInterval(tickInterval));
 
     this.registerEvent(
@@ -1335,7 +1439,7 @@ export default class NotientPlugin extends Plugin {
           ["Edges", c.edges],
         ];
         for (const [label, value] of pairs) {
-          const stat = countersEl.createDiv({ cls: "stat" });
+          const stat = countersEl.createDiv({ cls: "stat notient-modal__stat" });
           stat.createSpan({ cls: "label", text: label });
           stat.createSpan({ cls: "value", text: String(value) });
         }
@@ -1704,4 +1808,9 @@ function debugChat(message: string, data?: Record<string, unknown>): void {
 function debugVitals(message: string, data?: Record<string, unknown>): void {
   if (typeof window === "undefined") return;
   console.log(`[Notient][Vitals] ${message}`, data ?? {});
+}
+
+function debugSearch(message: string, data?: Record<string, unknown>): void {
+  if (typeof window === "undefined") return;
+  console.log(`[Notient][Search] ${message}`, data ?? {});
 }

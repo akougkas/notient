@@ -9,25 +9,28 @@ export interface MessageBubbleProps {
 }
 
 /**
- * Renders a single ChatMessage. User messages align right; assistant and tool
- * messages align left. The body runs through a tiny markdown subset so
- * paragraphs and bullet lists round-trip without a heavyweight renderer.
- * Wikilinks inside text are upgraded to clickable {@link CitationLink}s.
+ * Renders a single ChatMessage. User messages align right inside a soft
+ * bubble; assistant messages run flush-left with a co-author rail. Tool role
+ * messages collapse to nothing because their parent assistant turn renders
+ * them through ToolCallCard. The body runs through a tiny markdown subset so
+ * paragraphs and bullet lists round-trip without a heavyweight renderer; any
+ * `[[wikilink]]` upgrades to a clickable {@link CitationLink}.
  */
 export function MessageBubble({ message }: MessageBubbleProps) {
   if (message.role === "tool") {
-    // Tool messages are rendered inline through their parent assistant turn
-    // via ToolCallCard. Collapse them to nothing here so the chat surface
-    // does not duplicate the payload.
     return null;
   }
   const role = message.role === "user" ? "user" : "assistant";
   return (
     <article
-      class={`notient-chat-message notient-chat-message--${role}`}
+      class={`notient-msg notient-chat-message notient-chat-message--${role}`}
+      data-role={role}
+      data-streaming="false"
       data-message-id={message.id}
     >
-      <div class="notient-chat-message__content">{renderBody(message.content)}</div>
+      <div class="notient-msg__body notient-chat-message__content">
+        {renderBody(message.content)}
+      </div>
       {renderToolCalls(message.toolCalls, message.toolResults)}
       {message.role === "assistant" && message.reasoningContent ? (
         <ReasoningBlock reasoning={message.reasoningContent} />

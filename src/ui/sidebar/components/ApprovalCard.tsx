@@ -13,6 +13,29 @@ export interface ApprovalCardProps {
   historyId?: string;
 }
 
+interface DiffSegment {
+  kind: "context" | "add" | "del";
+  text: string;
+}
+
+function splitDiff(preview: string): DiffSegment[] {
+  if (preview.length === 0) return [];
+  const lines = preview.split(/\r?\n/);
+  const segments: DiffSegment[] = [];
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
+    const newline = lineIndex < lines.length - 1 ? "\n" : "";
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      segments.push({ kind: "add", text: `${line}${newline}` });
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      segments.push({ kind: "del", text: `${line}${newline}` });
+    } else {
+      segments.push({ kind: "context", text: `${line}${newline}` });
+    }
+  }
+  return segments;
+}
+
 /**
  * Renders a write-tool approval request inline in the chat. In safe mode the
  * card surfaces the unified diff returned by the tool's preview and offers
@@ -26,44 +49,56 @@ export function ApprovalCard({ pending, autoApproved = false, historyId }: Appro
 
   if (autoApproved) {
     return (
-      <article
-        class="notient-chat-approval notient-chat-approval--auto"
+      <button
+        type="button"
+        class="notient-approval notient-approval--auto notient-chat-approval notient-chat-approval--auto"
         data-call-id={pending.callId}
+        onClick={() => {
+          if (!historyId) return;
+          void actions?.undoLastWrite(historyId);
+        }}
       >
         <span class="notient-chat-approval__pill">Auto-approved {pending.toolName}</span>
-        {historyId ? (
-          <button
-            type="button"
-            class="notient-chat-approval__undo"
-            onClick={() => {
-              void actions?.undoLastWrite(historyId);
-            }}
-          >
-            Undo
-          </button>
-        ) : null}
-      </article>
+        {historyId ? <span class="notient-chat-approval__undo">Undo</span> : null}
+      </button>
     );
   }
 
+  const segments = splitDiff(pending.preview);
+
   return (
-    <article class="notient-chat-approval" data-call-id={pending.callId}>
-      <header class="notient-chat-approval__header">
-        <span class="notient-chat-approval__name">{pending.toolName}</span>
-        <span class="notient-chat-approval__hint">Review the proposed write before approving.</span>
+    <article class="notient-approval notient-chat-approval" data-call-id={pending.callId}>
+      <header class="notient-approval__head notient-chat-approval__header">
+        <h4 class="notient-approval__title notient-chat-approval__name">{pending.toolName}</h4>
+        <span class="notient-pip">write</span>
       </header>
-      <pre class="notient-chat-approval__diff">{pending.preview}</pre>
-      <footer class="notient-chat-approval__actions">
+      <pre class="notient-approval__diff notient-chat-approval__diff">
+        {segments.map((segment, segmentIndex) => {
+          const key = `${segment.kind}-${segmentIndex}-${segment.text.slice(0, 16)}`;
+          if (segment.kind === "context") {
+            return <span key={key}>{segment.text}</span>;
+          }
+          return (
+            <span key={key} class={segment.kind}>
+              {segment.text}
+            </span>
+          );
+        })}
+      </pre>
+      <footer class="notient-approval__actions notient-chat-approval__actions">
         <button
           type="button"
-          class="notient-chat-approval__approve"
+          class="notient-button notient-chat-approval__approve"
+          data-emphasis="primary"
           onClick={() => actions?.resolveApproval(pending.callId, true)}
         >
           Approve
         </button>
         <button
           type="button"
-          class="notient-chat-approval__reject"
+          class="notient-button notient-chat-approval__reject"
+          data-emphasis="ghost"
+          data-tone="danger"
           onClick={() => setShowRejectInput((current) => !current)}
         >
           Reject
@@ -73,7 +108,7 @@ export function ApprovalCard({ pending, autoApproved = false, historyId }: Appro
         <div class="notient-chat-approval__reject-input">
           <input
             type="text"
-            class="notient-chat-approval__reason"
+            class="notient-composer__field notient-chat-approval__reason"
             value={reasonDraft}
             placeholder="Optional reason"
             onInput={(input) => {
@@ -83,7 +118,8 @@ export function ApprovalCard({ pending, autoApproved = false, historyId }: Appro
           />
           <button
             type="button"
-            class="notient-chat-approval__confirm-reject"
+            class="notient-button notient-chat-approval__confirm-reject"
+            data-tone="danger"
             onClick={() => {
               actions?.resolveApproval(pending.callId, false, reasonDraft.trim() || undefined);
               setShowRejectInput(false);

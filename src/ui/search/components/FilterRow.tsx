@@ -12,7 +12,11 @@ const AGENT_OPTIONS: string[] = [
   "maturityAdvancer",
 ];
 
-export function FilterRow() {
+export interface FilterRowProps {
+  open?: boolean;
+}
+
+export function FilterRow({ open = true }: FilterRowProps = {}) {
   const filters = searchFilters.value;
 
   const update = (next: SearchFilters): void => {
@@ -73,7 +77,11 @@ export function FilterRow() {
   };
 
   return (
-    <section class="notient-search-filters" aria-label="Search filters">
+    <section
+      class="notient-search__filters notient-search-filters"
+      aria-label="Search filters"
+      hidden={!open}
+    >
       <div class="notient-search-filters__group" data-group="maturity">
         <span class="notient-search-filters__label">Maturity</span>
         {MATURITY_OPTIONS.map((option) => {
@@ -85,6 +93,7 @@ export function FilterRow() {
               data-filter="maturity"
               data-value={option}
               class={`notient-filter-chip${active ? " notient-filter-chip--active" : ""}`}
+              aria-pressed={active}
               onClick={() => toggleMaturity(option)}
             >
               {option}
@@ -103,6 +112,7 @@ export function FilterRow() {
               data-filter="agent"
               data-value={option}
               class={`notient-filter-chip${active ? " notient-filter-chip--active" : ""}`}
+              aria-pressed={active}
               onClick={() => toggleAgent(option)}
             >
               {option}
@@ -121,6 +131,7 @@ export function FilterRow() {
               data-filter="connectivity"
               data-value={option}
               class={`notient-filter-chip${active ? " notient-filter-chip--active" : ""}`}
+              aria-pressed={active}
               onClick={() => toggleConnectivity(option)}
             >
               {option}
@@ -135,6 +146,7 @@ export function FilterRow() {
           class={`notient-filter-chip${
             filters.hasPendingProposals ? " notient-filter-chip--active" : ""
           }`}
+          aria-pressed={Boolean(filters.hasPendingProposals)}
           onClick={togglePending}
         >
           Pending proposals

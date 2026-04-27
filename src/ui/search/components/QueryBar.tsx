@@ -1,17 +1,29 @@
 import type { JSX } from "preact";
-import type { SearchMode } from "../../../core/search/types";
-import { searchActions, searchMode, searchQuery, searchRunning } from "../state";
+import { searchActions, searchFilters, searchQuery, searchRunning } from "../state";
 
-const MODES: { value: SearchMode; label: string }[] = [
-  { value: "quick", label: "Quick" },
-  { value: "balanced", label: "Balanced" },
-  { value: "deep", label: "Deep" },
-];
+export interface QueryBarProps {
+  filtersOpen?: boolean;
+  onToggleFilters?: () => void;
+}
 
-export function QueryBar() {
+function countActiveFilters(): number {
+  const filters = searchFilters.value;
+  let count = 0;
+  if (filters.maturity?.length) count += filters.maturity.length;
+  if (filters.agents?.length) count += filters.agents.length;
+  if (filters.connectivityTiers?.length) count += filters.connectivityTiers.length;
+  if (filters.hasPendingProposals) count += 1;
+  if (typeof filters.minConfidence === "number") count += 1;
+  if (typeof filters.fromDate === "number") count += 1;
+  if (typeof filters.toDate === "number") count += 1;
+  if (filters.folders?.length) count += filters.folders.length;
+  return count;
+}
+
+export function QueryBar({ filtersOpen = false, onToggleFilters }: QueryBarProps) {
   const running = searchRunning.value;
-  const mode = searchMode.value;
   const query = searchQuery.value;
+  const filterCount = countActiveFilters();
 
   const handleInput = (event: JSX.TargetedEvent<HTMLInputElement>): void => {
     searchQuery.value = event.currentTarget.value;
@@ -27,48 +39,41 @@ export function QueryBar() {
   };
 
   return (
-    <form class="notient-search-querybar" onSubmit={handleSubmit}>
+    <form class="notient-search__query notient-search-querybar" onSubmit={handleSubmit}>
       <input
         type="search"
-        class="notient-search-querybar__input"
-        placeholder="Search the vault"
+        class="notient-search__field notient-search-querybar__input"
+        placeholder="Search the vault..."
         value={query}
         onInput={handleInput}
         aria-label="Search query"
       />
-      <div class="notient-search-querybar__modes" aria-label="Search mode">
-        {MODES.map((option) => {
-          const isActive = mode === option.value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={isActive}
-              data-mode={option.value}
-              class={`notient-search-mode${isActive ? " notient-search-mode--active" : ""}`}
-              onClick={() => {
-                searchMode.value = option.value;
-              }}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-      <button
-        type="button"
-        class="notient-search-querybar__history"
-        aria-label="Search history"
-        disabled
-      >
-        History
-      </button>
+      {onToggleFilters ? (
+        <button
+          type="button"
+          class="notient-search__filters-pill"
+          aria-expanded={filtersOpen}
+          onClick={onToggleFilters}
+        >
+          Filters{filterCount > 0 ? ` (${filterCount})` : ""}
+        </button>
+      ) : null}
       {running ? (
-        <button type="button" class="notient-search-querybar__cancel" onClick={handleCancel}>
+        <button
+          type="button"
+          class="notient-button notient-search-querybar__cancel"
+          data-emphasis="ghost"
+          data-tone="danger"
+          onClick={handleCancel}
+        >
           Cancel
         </button>
       ) : (
-        <button type="submit" class="notient-search-querybar__run">
+        <button
+          type="submit"
+          class="notient-button notient-search-querybar__run"
+          data-emphasis="primary"
+        >
           Run
         </button>
       )}

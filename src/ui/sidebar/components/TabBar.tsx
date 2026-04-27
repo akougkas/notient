@@ -18,7 +18,7 @@ export interface TabBarProps {
 export function TabBar({ pendingApprovals }: TabBarProps) {
   const current = activeTab.value;
   return (
-    <nav class="notient-tabs" role="tablist">
+    <nav class="notient-tabbar" role="tablist">
       {TABS.map((tab) => {
         const isActive = current === tab.id;
         const showBadge = tab.id === "stream" && pendingApprovals > 0;
@@ -27,13 +27,18 @@ export function TabBar({ pendingApprovals }: TabBarProps) {
             key={tab.id}
             type="button"
             role="tab"
-            aria-selected={isActive}
             data-tab={tab.id}
-            class={`notient-tab${isActive ? " notient-tab--active" : ""}`}
+            aria-current={isActive ? "page" : undefined}
+            aria-selected={isActive}
+            class="notient-tabbar__btn"
             onClick={() => setActiveTab(tab.id)}
           >
-            <span class="notient-tab__label">{tab.label}</span>
-            {showBadge ? <span class="notient-tab__badge">{pendingApprovals}</span> : null}
+            <span class="notient-tabbar__label">{tab.label}</span>
+            {showBadge ? (
+              <span class="notient-tabbar__count" data-pulse="true">
+                {pendingApprovals}
+              </span>
+            ) : null}
           </button>
         );
       })}

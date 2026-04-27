@@ -1,16 +1,39 @@
-import { searchHistory } from "../state";
+import { searchHistory, searchQuery } from "../state";
 
 /**
- * Placeholder dropdown. Task 9 wires real history storage and pre-fill behavior;
- * for now this renders a disabled chip so the QueryBar layout is stable.
+ * Editorial dropdown listing recent queries. Saved-history wiring lives in
+ * Task 9; this surface uses the same drawer chrome as the conversations list
+ * so the QueryBar layout stays cohesive.
  */
 export function HistoryDropdown() {
   const entries = searchHistory.value;
+  const empty = entries.length === 0;
   return (
-    <div class="notient-search-history" data-empty={entries.length === 0}>
-      <button type="button" class="notient-search-history__trigger" disabled>
-        History
-      </button>
-    </div>
+    <details class="notient-search-history notient-drawer" data-empty={empty}>
+      <summary class="notient-search-history__trigger notient-drawer__head">
+        <span>Recent</span>
+      </summary>
+      <ul class="notient-drawer__list">
+        {entries.length === 0 ? (
+          <li class="notient-drawer__item">
+            <span class="notient-drawer__topic">No recent queries.</span>
+          </li>
+        ) : (
+          entries.map((entry) => (
+            <li key={entry} class="notient-drawer__item">
+              <button
+                type="button"
+                class="notient-drawer__entry"
+                onClick={() => {
+                  searchQuery.value = entry;
+                }}
+              >
+                <span class="notient-drawer__topic">{entry}</span>
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+    </details>
   );
 }
