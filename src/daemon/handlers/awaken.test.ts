@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { EventBus } from "../../core/events/eventBus";
 import type { IndexerQueue } from "../../core/indexer/indexerQueue";
-import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { makeAwakenHandler, makeReindexHandler } from "./awaken";
 
 interface FakeQueue {
@@ -41,9 +41,13 @@ describe("awaken handler", () => {
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
     });
-    const result = await handler({}, (line) => {
-      lines.push(line);
-    }, "req-1");
+    const result = await handler(
+      {},
+      (line) => {
+        lines.push(line);
+      },
+      "req-1",
+    );
     expect(queue.enqueued.sort()).toEqual(["a.md", "b.md"]);
     expect(result.ok).toBe(true);
     expect(result.queued).toBe(2);

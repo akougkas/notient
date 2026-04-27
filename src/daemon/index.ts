@@ -2,6 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { type Socket, createServer } from "node:net";
 import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
+import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeHealthHandler } from "./handlers/health";
 import { makeSearchHandler } from "./handlers/search";
@@ -9,7 +10,6 @@ import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
 import { MethodDispatcher, parseEnvelope } from "./rpc";
 import { currentPlatform, resolveSocketPath } from "./socket";
-import { CoordinatorRunner } from "./coordinatorRunner";
 import { VaultWatcher } from "./watcher";
 
 const VERSION = "0.1.0-phaseA";
@@ -124,11 +124,23 @@ async function main(argv: string[]): Promise<void> {
   const vitalsService = kernel.get("vitalsService");
   let bridgeUp = false;
 
-  dispatcher.register("awaken.run", makeAwakenHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }));
-  dispatcher.register("reindex.glob", makeReindexHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }));
-  dispatcher.register("search.run", makeSearchHandler({ pipeline: searchPipeline, bridgeUp: () => bridgeUp }));
+  dispatcher.register(
+    "awaken.run",
+    makeAwakenHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }),
+  );
+  dispatcher.register(
+    "reindex.glob",
+    makeReindexHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }),
+  );
+  dispatcher.register(
+    "search.run",
+    makeSearchHandler({ pipeline: searchPipeline, bridgeUp: () => bridgeUp }),
+  );
   dispatcher.register("vitals.get", makeVitalsHandler({ vitalsService }));
-  dispatcher.register("health.probe", makeHealthHandler({ health: kernel.get("health"), bridgeUp: () => bridgeUp }));
+  dispatcher.register(
+    "health.probe",
+    makeHealthHandler({ health: kernel.get("health"), bridgeUp: () => bridgeUp }),
+  );
 
   kernel.get("bus").on("bridge:up", () => {
     bridgeUp = true;

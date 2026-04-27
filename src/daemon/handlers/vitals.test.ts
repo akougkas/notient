@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { VitalsService } from "../../core/vitals/vitalsService";
 import type { VitalsSnapshot } from "../../core/vitals/types";
+import type { VitalsService } from "../../core/vitals/vitalsService";
 import { makeVitalsHandler } from "./vitals";
 
 const FIXTURE_SNAPSHOT: VitalsSnapshot = {

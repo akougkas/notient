@@ -1,6 +1,7 @@
+import { FsVault } from "../adapters/fsVault";
+import { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
-import { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Synthesizer } from "../core/agents/synthesizer";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
@@ -10,8 +11,8 @@ import { GraphStore } from "../core/graph/graphStore";
 import { Embedder } from "../core/indexer/embedder";
 import { Extractor } from "../core/indexer/extractor";
 import { HnswVectorIndex } from "../core/indexer/hnswVectorIndex";
-import { IndexerQueue } from "../core/indexer/indexerQueue";
 import { indexNote } from "../core/indexer/indexNote";
+import { IndexerQueue } from "../core/indexer/indexerQueue";
 import { Kernel } from "../core/kernel";
 import { LMStudioProvider } from "../core/llm/lmStudioProvider";
 import { Reranker } from "../core/search/reranker";
@@ -25,7 +26,6 @@ import { VaultBootstrap } from "../core/services/vaultBootstrap";
 import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
 import { type ConfigStore, SettingsService } from "../core/settings/settingsService";
 import { VitalsService } from "../core/vitals/vitalsService";
-import { FsVault } from "../adapters/fsVault";
 
 export interface BootstrapOptions {
   vaultPath: string;
@@ -135,7 +135,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     health.start();
     return {
       kernel,
-      close: makeClose({ database, lockHandle, health, vectorIndex: null, vault, vectorPath: VECTOR_PATH }),
+      close: makeClose({
+        database,
+        lockHandle,
+        health,
+        vectorIndex: null,
+        vault,
+        vectorPath: VECTOR_PATH,
+      }),
     };
   }
 
@@ -252,11 +259,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         [notePath],
       );
       if (head.length === 0) return [];
-      const view = new Float32Array(
-        head[0].vector.buffer,
-        head[0].vector.byteOffset,
-        head[0].dim,
-      );
+      const view = new Float32Array(head[0].vector.buffer, head[0].vector.byteOffset, head[0].dim);
       const hits = vectorIndex.search(view, queryOptions.topK);
       const out: Array<{ notePath: string; chunkId: string; text: string; score: number }> = [];
       for (const hit of hits) {

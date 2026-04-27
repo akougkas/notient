@@ -1,5 +1,5 @@
+import { posix, relative, sep } from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
-import { relative, sep, posix } from "node:path";
 
 export interface VaultWatcherOptions {
   root: string;

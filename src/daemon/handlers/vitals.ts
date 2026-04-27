@@ -19,7 +19,9 @@ export function makeVitalsHandler(deps: VitalsHandlerDeps) {
     if (!snapshot) {
       throw new Error(`INVALID_PARAMS: note not indexed: ${path}`);
     }
-    emit(encodeEvent(envelopeId, "vitals:snapshot", snapshot as unknown as Record<string, unknown>));
+    emit(
+      encodeEvent(envelopeId, "vitals:snapshot", snapshot as unknown as Record<string, unknown>),
+    );
     return { ok: true, snapshot };
   };
 }
