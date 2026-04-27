@@ -58,6 +58,12 @@ export class IndexerQueue {
     this.readySet.clear();
   }
 
+  async drain(): Promise<void> {
+    while (!this.disposed && (this.pending.size > 0 || this.ready.length > 0 || this.worker)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
   pendingCount(): number {
     return this.pending.size + this.ready.length;
   }
