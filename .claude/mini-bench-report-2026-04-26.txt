@@ -1,0 +1,167 @@
+mini node — llama.cpp router benchmark report — 2026-04-26
+============================================================
+
+HARDWARE
+  GPU:               AMD Radeon AI PRO R9700 (Navi 48 / gfx1201)
+  VRAM:              32 GB GDDR6 (31.86 GiB usable)
+  CUs:               64 (4 SE x 2 SA x 8 CU), KHR_coopmat matrix cores
+  FP32 peak:         38.5 TFLOPS
+  Driver:            amdgpu (kernel 6.17.0-1017-oem, ROCk module 6.16.6)
+
+STACK
+  llama.cpp:         build b676 / commit a279d0f0f (2026-04-17), GGML_VULKAN=ON
+  Mesa / RADV:       25.3.0.70101 (AMD repo), API 1.4.313, driver 2.0.349
+  ROCm:              7.2.0 installed but unused (Vulkan-only build)
+  Router:            upstream llama-server in --models-preset router mode
+
+ROUTER CONFIG (post-fix)
+  Service:           /etc/systemd/system/llama-server.service
+  Preset INI:        /home/akougkas/models/llama-server/models-preset.ini
+  Preset backups:    .pre-bench-20260426, .pre-kvu-20260426, .pre-1M-20260426
+
+  [*] global section now applies to ALL models (was [DEFAULT], silently ignored):
+      kv-unified = true   <-- single call can use full ctx-size
+      n-gpu-layers = 99
+      flash-attn = true
+      cache-type-k = q8_0
+      cache-type-v = q8_0
+      jinja = true
+      batch-size = 2048
+      ubatch-size = 512
+
+  Per-model ctx (matched to each model's trained max):
+      Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M : 1048576  (1M, raised from 524288; trained 1M)
+      Qwen3.6-35B-A3B-UD-Q4_K_XL           :  262144  (256K trained)
+      Qwen3.6-27B-UD-Q4_K_XL               :  262144  (raised from 120000; 256K trained)
+      gemma-4-26B-A4B-it-Q4_K_M            :  262144  (256K trained)
+
+  Per-model parallelism: 4 slots, kv-unified, continuous batching (auto-default true)
+  All four target models swap on demand (--models-max 1, --sleep-idle-seconds -1)
+
+
+STANDALONE BENCH (llama-bench, clean GPU, ngl=99 fa=1 t=8 r=2)
+============================================================
+  Model                              | size      | params | pp512 t/s    | tg128 t/s   | tg512 t/s
+  ---------------------------------- | --------- | ------ | ------------ | ----------- | -----------
+  Nemotron-Cascade-2-30B-A3B Q4_K_M  | 22.82 GiB | 31.58B | 2290 +/- 12  | 157 +/- 0.2 | 153 +/- 0.1
+  Qwen3.6-35B-A3B-UD-Q4_K_XL         | 20.81 GiB | 34.66B | 1913 +/- 359 | 128 +/- 4.5 | 134 +/- 0.1
+  gemma-4-26B-A4B-it-Q4_K_M          | 15.63 GiB | 25.23B | 1852 +/- 366 | 138 +/- 15  | 141 +/- 0.1
+  Qwen3.6-27B-UD-Q4_K_XL (dense)     | 16.39 GiB | 26.90B |  223 +/- 0.1 |  31 +/- 0.2 |  31 +/- 0.0
+
+
+ROUTER-MODE BENCH (live HTTP, kv-unified, 4 slots, q8_0 KV, FA on, jinja, no_think)
+============================================================
+End-to-end /v1/chat/completions (streaming, ~210-token prompt, max_tokens=200):
+
+                                          Cold load  Warm        Warm     Warm     4-conc    4-conc    4-conc
+  Model                          | n_ctx | + 1st tok | TTFT (ms)  TPS gen  total s  agg TPS   eff/call  TTFT (ms)
+  ------------------------------ | ----- | --------- | ---------  -------  -------  -------   --------  ---------
+  Nemotron-Cascade-2-30B-A3B (1M)| 1048K |   15.7 s  |   ~150     ~138     ~1.4 s   (=524K)   (=524K)   (=524K)
+  Nemotron-Cascade-2-30B-A3B     |  524K |   15.8 s  |    112     135.1    1.59 s   187.5     1.07 s    46/545/546/547
+  Qwen3.6-35B-A3B-UD-Q4_K_XL     |  262K |   12.2 s  |    172      81.9    2.70 s   103.7     1.93 s    231/233/235/237
+  Qwen3.6-27B-UD-Q4_K_XL (dense) |  262K |   10.8 s  |    597      30.8    7.10 s    70.0     2.86 s    526/526/526/528
+  gemma-4-26B-A4B-it-Q4_K_M      |  262K |   10.5 s  |     59      95.0    2.17 s   130.9     1.53 s    655/657/659/661
+
+  TTFT method: time from POST to first content/reasoning_content delta on the SSE stream.
+  4-conc TTFT inflated because all 4 slots receive the prompt simultaneously, contending
+  on prompt-batch decoding before any slot starts emitting tokens.
+
+
+VRAM FOOTPRINT (loaded model, kv-unified pool fully provisioned)
+============================================================
+  Model                          | n_ctx | VRAM      | model on disk | KV+workspace
+  ------------------------------ | ----- | --------- | ------------- | ------------
+  Nemotron-Cascade-2-30B-A3B     | 1048K | 29.23 GB  | 22.82 GB      |  6.41 GB  (hybrid SSM, low-growth)
+  Nemotron-Cascade-2-30B-A3B     |  524K | 26.10 GB  | 22.82 GB      |  3.28 GB
+  Qwen3.6-35B-A3B-UD-Q4_K_XL     |  262K | 24.87 GB  | 20.81 GB      |  4.06 GB  (hybrid every-4th-attn)
+  Qwen3.6-27B-UD-Q4_K_XL (dense) |  262K | 26.91 GB  | 16.39 GB      | 10.52 GB  (per-layer GQA, big KV)
+  gemma-4-26B-A4B-it-Q4_K_M      |  262K | 20.61 GB  | 15.63 GB      |  4.98 GB  (sliding-window pattern)
+
+  Headroom at chosen ctx (32 GB - VRAM):
+      Nemotron @ 1M : ~2.6 GB    (tight but stable)
+      Qwen3.6-35B   : ~7.0 GB
+      Qwen3.6-27B   : ~5.0 GB    (already at trained max, can't grow)
+      gemma-4-26B   : ~11.3 GB   (at trained max; ctx already maxed)
+
+
+ARCHITECTURE NOTES
+============================================================
+  Nemotron-Cascade-2 is nemotron_h_moe — Mamba2/SSM + sparse attention hybrid (52 blocks,
+    most SSM, some attention with 2 KV heads). 128 experts, A3.5B active. KV cache barely
+    grows with context, which is why 1M ctx fits in 6.4 GB extra.
+
+  Qwen3.6-35B-A3B is qwen35moe — hybrid SSM + full attention every 4 layers, 256 experts,
+    8 active. The "qwen35moe" arch label in llama.cpp is shared across Qwen 3.5 / 3.6 since
+    they use the same architecture; the GGUF general.name still reads "Qwen3.6-35B-A3B".
+
+  Qwen3.6-27B is qwen35 — DENSE 27B, also hybrid SSM + attention every 4 layers, 24 attn
+    heads, 4 KV heads (GQA 6:1). Bandwidth-bound at ~31 tps because all 26.9 B params get
+    fetched per token (no MoE sparsity). Standalone bench confirms: 31 tps is the GPU's
+    roofline, not a router config issue.
+
+  gemma-4-26B-A4B is gemma4 — 128-expert MoE with 4B active, per-layer GQA (sliding-window
+    pattern, head_count_kv array per layer). 16 attn heads, 30 layers. Lowest VRAM of the
+    four, fastest TTFT (59 ms warm).
+
+
+WHAT WORKED, WHAT DIDN'T (preset bug fixes applied)
+============================================================
+  [DEFAULT] -> [*]            : llama.cpp's preset parser only treats [*] as the global
+                                cascade section. [DEFAULT] was silently ignored, dropping
+                                jinja, flash-attn, cache-type-k/v, batch sizes, n-gpu-layers
+                                from every model spawn.
+
+  kv-unified = true added     : Without this, --ctx-size N + --parallel 4 splits the pool:
+                                each slot gets N/4. With it, the pool is shared — a single
+                                call can use the full N. Required for the user's "Nemotron
+                                gets 500K, others get 262K" rule to actually mean per-call.
+
+  Nemotron 524K -> 1M         : Trained context_length is 1048576. Hybrid arch keeps KV
+                                growth small enough to fit (29.23 GB total).
+
+  parallel=4 in preset        : Was already in the Nemotron section; no longer required
+                                because n_parallel=-1 (CLI default) auto-resolves to 4 in
+                                server.cpp:95-97 with kv_unified=true. Either way works.
+
+  cont-batching = true        : Default is already true in common.h:515. The preset key
+                                is redundant but harmless.
+
+  flash-attn / q8_0 KV deltas : llama-bench shows essentially noise at 512pp/128tg. Both
+                                start mattering at much longer contexts (KV memory pressure)
+                                or with very long generation. Keeping them on globally is
+                                safe and matches accepted best practice for AMD Vulkan.
+
+
+USE-CASE RECOMMENDATIONS FOR MINI
+============================================================
+  Notient extractor (4 concurrent small chunks, JSON output):
+      -> Nemotron-Cascade-2-30B-A3B
+         187 t/s aggregate, 1.07 s effective per call, 138 ms warm TTFT.
+         enable_thinking=false (Notient already does this).
+
+  Long-context single conversation (> 256K input):
+      -> Nemotron-Cascade-2-30B-A3B at 1M ctx (only model trained for it).
+
+  Snappy chat / lowest first-token delay:
+      -> gemma-4-26B-A4B (59 ms warm TTFT, 95 t/s gen, lowest VRAM at 20.6 GB).
+
+  Highest-quality dense reasoning where speed is secondary:
+      -> Qwen3.6-27B (31 t/s, but full dense 27 B params per token).
+
+  Largest model with vision (mmproj):
+      -> Qwen3.6-35B-A3B (35 B params, hybrid arch, 82 t/s gen, 4 GB KV at 256K).
+
+  Daily orchestrator default:
+      -> gemma-4-26B-A4B (current preload.sh choice). Fast TTFT, low VRAM,
+         good headroom for swapping any of the others on demand.
+
+
+FOLLOWUPS (not done; flagged for later)
+============================================================
+  - Speculative decoding: skipped per user. Could add 1.5-2x single-stream gen on dense
+    Qwen3.6-27B specifically with a small Qwen3 draft model.
+  - kv-unified=false vs true throughput: didn't compare, unified strictly better here.
+  - q8_0 vs fp16 KV cache: didn't isolate; bench showed noise at small ctx but unmeasured
+    at high ctx where it might cost more (extra dequant per token).
+  - HIP/ROCm rebuild: unnecessary; Vulkan is at the roofline on this GPU.
+  - Stack upgrades (Mesa, kernel, llama.cpp): all current, no action.

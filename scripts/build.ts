@@ -27,13 +27,16 @@ const VAULT_PLUGIN = "/mnt/c/Users/akougk/Projects/vaultex/.obsidian/plugins/not
 const PROJECT_ROOT = process.cwd();
 const ESBUILD_BIN = join(PROJECT_ROOT, "node_modules/.bin/esbuild");
 
-// Files to deploy to vault
-const DEPLOY_FILES = [
+// Files to deploy to vault. Each entry is either a string (relative to PROJECT_ROOT)
+// or a tuple [sourceRelative, destinationFilename] when the build emits the file
+// in a non-root location. styles.css is hand-authored at src/styles.css and
+// shipped verbatim so the design system stays the source of truth.
+const DEPLOY_FILES: Array<string | [string, string]> = [
   "main.js",
   "vector.worker.js",
   "embed.worker.js",
   "manifest.json",
-  "styles.css",
+  ["src/styles.css", "styles.css"],
 ];
 
 // Core plugin files (never deleted)
@@ -418,10 +421,12 @@ async function copyToVault(): Promise<void> {
     await rm(staleWorker, { force: true });
   }
 
-  for (const file of DEPLOY_FILES) {
-    const src = join(PROJECT_ROOT, file);
-    if (existsSync(src)) {
-      await cp(src, join(VAULT_PLUGIN, file));
+  for (const entry of DEPLOY_FILES) {
+    const [sourceRelative, destinationName] =
+      typeof entry === "string" ? [entry, entry] : entry;
+    const sourcePath = join(PROJECT_ROOT, sourceRelative);
+    if (existsSync(sourcePath)) {
+      await cp(sourcePath, join(VAULT_PLUGIN, destinationName));
     }
   }
 
