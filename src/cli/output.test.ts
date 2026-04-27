@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { type EmitterMode, type StructuredEvent, makeEmitter } from "./output";
 
-function captureMode(mode: EmitterMode): { lines: string[]; emit: (event: StructuredEvent) => void } {
+function captureMode(mode: EmitterMode): {
+  lines: string[];
+  emit: (event: StructuredEvent) => void;
+} {
   const lines: string[] = [];
   const emitter = makeEmitter({
     mode,

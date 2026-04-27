@@ -10,10 +10,7 @@ export type Platform = "linux" | "darwin" | "win32";
  */
 export function resolveSocketPath(absoluteVaultPath: string, platform: Platform): string {
   if (platform === "win32") {
-    const hash = createHash("sha256")
-      .update(absoluteVaultPath)
-      .digest("hex")
-      .slice(0, 8);
+    const hash = createHash("sha256").update(absoluteVaultPath).digest("hex").slice(0, 8);
     return `\\\\.\\pipe\\notient-${hash}`;
   }
   return `${absoluteVaultPath}/.notient/notient.sock`;

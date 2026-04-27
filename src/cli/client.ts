@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { connect, type Socket } from "node:net";
+import { type Socket, connect } from "node:net";
 import { dirname } from "node:path";
 
 export interface ClientOptions {
@@ -63,7 +63,10 @@ export async function connectClient(options: ClientOptions): Promise<ClientHandl
     queues.set(id, queue);
   }
 
-  async function* call(method: string, params: Record<string, unknown>): AsyncIterable<RpcResponseFrame> {
+  async function* call(
+    method: string,
+    params: Record<string, unknown>,
+  ): AsyncIterable<RpcResponseFrame> {
     const id = `req-${nextId++}`;
     socket.write(`${JSON.stringify({ id, method, params })}\n`);
     while (true) {

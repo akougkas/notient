@@ -1,7 +1,7 @@
 import { runDaemonCommand } from "./commands/daemon";
 import { runInit } from "./commands/init";
 import { defaultStateLoader, resolveVault } from "./env";
-import { type EmitterMode, defaultMode, makeEmitter } from "./output";
+import { type Emitter, type EmitterMode, defaultMode, makeEmitter } from "./output";
 
 interface ParsedArgs {
   command: string | null;
@@ -37,56 +37,53 @@ function parseArgs(argv: string[]): ParsedArgs {
   return out;
 }
 
-async function main(argv: string[]): Promise<number> {
-  const parsed = parseArgs(argv);
+function selectMode(parsed: ParsedArgs): EmitterMode {
   const modeFlag =
     (parsed.flags.json && "json") ||
     (parsed.flags.ndjson && "ndjson") ||
     (parsed.flags.pretty && "pretty");
-  const mode: EmitterMode = (modeFlag as EmitterMode) ?? defaultMode(process.stdout.isTTY === true);
-  const emitter = makeEmitter({ mode });
+  return (modeFlag as EmitterMode) ?? defaultMode(process.stdout.isTTY === true);
+}
 
-  try {
-    if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
-      emitter.emit({
-        type: "help",
-        commands: ["init", "daemon"],
-        note: "Phase A surface; richer surface lands in Phases B-E.",
-      });
-      return 0;
-    }
-
-    if (parsed.command === "init") {
-      const vaultPathArg = parsed.positional[0];
-      if (!vaultPathArg) throw new Error("init requires a vault path argument");
-      const sqlWasmSource = await resolveSqlWasmSource();
-      await runInit({
-        vaultPathArg,
-        cwd: process.cwd(),
-        emitter,
-        sqlWasmSource,
-      });
-      return 0;
-    }
-
-    if (parsed.command === "daemon") {
-      const verb = parsed.positional[0] as "start" | "stop" | "status" | "list" | undefined;
-      if (!verb) throw new Error("daemon requires a verb: start | stop | status | list");
-      const vaultPath = await resolveVaultForDaemon(parsed);
-      await runDaemonCommand({
-        verb,
-        vaultPath,
-        emitter,
-      });
-      return 0;
-    }
-
+async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+  if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
     emitter.emit({
-      type: "error",
-      code: "INVALID_PARAMS",
-      message: `Unknown command: ${parsed.command}`,
+      type: "help",
+      commands: ["init", "daemon"],
+      note: "Phase A surface; richer surface lands in Phases B-E.",
     });
-    return 2;
+    return 0;
+  }
+
+  if (parsed.command === "init") {
+    const vaultPathArg = parsed.positional[0];
+    if (!vaultPathArg) throw new Error("init requires a vault path argument");
+    const sqlWasmSource = await resolveSqlWasmSource();
+    await runInit({ vaultPathArg, cwd: process.cwd(), emitter, sqlWasmSource });
+    return 0;
+  }
+
+  if (parsed.command === "daemon") {
+    const verb = parsed.positional[0] as "start" | "stop" | "status" | "list" | undefined;
+    if (!verb) throw new Error("daemon requires a verb: start | stop | status | list");
+    const vaultPath = await resolveVaultForDaemon(parsed);
+    await runDaemonCommand({ verb, vaultPath, emitter });
+    return 0;
+  }
+
+  emitter.emit({
+    type: "error",
+    code: "INVALID_PARAMS",
+    message: `Unknown command: ${parsed.command}`,
+  });
+  return 2;
+}
+
+async function main(argv: string[]): Promise<number> {
+  const parsed = parseArgs(argv);
+  const emitter = makeEmitter({ mode: selectMode(parsed) });
+  try {
+    return await dispatch(parsed, emitter);
   } catch (error) {
     emitter.emit({
       type: "error",

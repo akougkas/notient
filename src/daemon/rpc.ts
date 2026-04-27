@@ -4,9 +4,7 @@ export interface RpcEnvelope {
   params: Record<string, unknown>;
 }
 
-export type ParseResult =
-  | { ok: true; envelope: RpcEnvelope }
-  | { ok: false; reason: string };
+export type ParseResult = { ok: true; envelope: RpcEnvelope } | { ok: false; reason: string };
 
 export function parseEnvelope(line: string): ParseResult {
   let raw: unknown;
@@ -32,11 +30,7 @@ export function encodeAck(id: string, method: string): string {
   return JSON.stringify({ id, type: "ack", method });
 }
 
-export function encodeEvent(
-  id: string,
-  event: string,
-  payload: Record<string, unknown>,
-): string {
+export function encodeEvent(id: string, event: string, payload: Record<string, unknown>): string {
   return JSON.stringify({ id, type: "event", event, ...payload });
 }
 

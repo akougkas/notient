@@ -1,5 +1,5 @@
 import { mkdir, rm } from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
+import { type Socket, createServer } from "node:net";
 import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
