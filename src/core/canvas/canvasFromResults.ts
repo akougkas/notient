@@ -1,6 +1,6 @@
-import { generateSearchResultsCanvas } from "../../core/canvas/canvasGenerator";
-import type { CanvasFile } from "../../core/canvas/types";
-import type { SearchResult } from "../../core/search/types";
+import type { SearchResult } from "../search/types";
+import { generateSearchResultsCanvas } from "./canvasGenerator";
+import type { CanvasFile } from "./types";
 
 /**
  * Exports a {@link SearchResult} as a JSON Canvas file under the saved-queries

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SearchHit, SearchResult } from "../../core/search/types";
+import type { SearchHit, SearchResult } from "../search/types";
 import {
   CanvasFromResults,
   type CanvasFromResultsFacade,
