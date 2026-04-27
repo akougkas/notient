@@ -46,14 +46,19 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
 
   const body = stripFrontmatter(noteBody);
   const chunks: Chunk[] = await chunkNote(notePath, body);
-  const vectors: number[][] =
+  // Embed and extract in parallel: distinct LM Studio models (embedding vs reasoning)
+  // share no resources, so both calls flight simultaneously and keep both models hot.
+  // Extractor runs its own internal 4-way concurrency over chunk extractions.
+  const [vectors, extraction]: [number[][], Extraction] =
     chunks.length > 0
-      ? await embedder.embed(
-          chunks.map((c) => c.text),
-          signal,
-        )
-      : ([] as number[][]);
-  const extraction: Extraction = await extractor.extract(chunks);
+      ? await Promise.all([
+          embedder.embed(
+            chunks.map((c) => c.text),
+            signal,
+          ),
+          extractor.extract(chunks),
+        ])
+      : [[] as number[][], { entities: [], claims: [], questions: [] } as Extraction];
 
   const nowMs = Date.now();
   const noteNode: GraphNode = {
