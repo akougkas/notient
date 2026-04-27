@@ -38,6 +38,14 @@ export interface ApprovalGateOptions {
    * decision even if the subsequent write fails.
    */
   recordHistoryAutoApprove: (call: ToolCall) => Promise<void>;
+  /**
+   * Per-tool override map. When the tool name is present, the override wins
+   * over the conversation-level mode: `auto` skips the gate; `ask` engages
+   * it even in yolo mode. Absent entries fall back to mode defaults
+   * (safe -> ask, yolo -> auto). Bootstrap populates this from
+   * `chat.perTool` settings.
+   */
+  perToolPolicy?: Record<string, "auto" | "ask">;
 }
 
 function asAbortError(): Error {
@@ -54,6 +62,12 @@ export class ApprovalGate {
 
   constructor(private readonly options: ApprovalGateOptions) {}
 
+  policyFor(toolName: string, mode: ApprovalMode): "auto" | "ask" {
+    const override = this.options.perToolPolicy?.[toolName];
+    if (override !== undefined) return override;
+    return mode === "yolo" ? "auto" : "ask";
+  }
+
   async request(
     call: ToolCall,
     mode: ApprovalMode,
@@ -63,7 +77,7 @@ export class ApprovalGate {
     if (signal.aborted) {
       throw asAbortError();
     }
-    if (mode === "yolo") {
+    if (this.policyFor(call.name, mode) === "auto") {
       await this.options.recordHistoryAutoApprove(call);
       const decision: ApprovalDecision = { approved: true };
       this.options.events.onResolved(call.id, decision);

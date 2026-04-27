@@ -167,4 +167,63 @@ describe("ApprovalGate", () => {
     ).toEqual(["a", "b"]);
     controller.abort();
   });
+
+  test("safe mode auto-approves a tool with explicit auto override", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const events: ApprovalGateEvents = {
+      onPending: (p) => recorder.pending.push(p),
+      onResolved: (callId, decision) =>
+        recorder.resolved.push({ callId, approved: decision.approved, reason: decision.reason }),
+    };
+    const gate = new ApprovalGate({
+      events,
+      recordHistoryAutoApprove: async (call) => {
+        recorder.autoApproved.push(call);
+      },
+      perToolPolicy: { "vault.read_note": "auto" },
+    });
+    const controller = new AbortController();
+    const decision = await gate.request(
+      { id: "c1", name: "vault.read_note", args: {} },
+      "safe",
+      "preview",
+      controller.signal,
+    );
+    expect(decision.approved).toBe(true);
+    expect(recorder.pending).toHaveLength(0);
+    expect(recorder.autoApproved).toHaveLength(1);
+  });
+
+  test("yolo mode still gates tools with explicit ask override", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const events: ApprovalGateEvents = {
+      onPending: (p) => recorder.pending.push(p),
+      onResolved: (callId, decision) =>
+        recorder.resolved.push({ callId, approved: decision.approved, reason: decision.reason }),
+    };
+    const gate = new ApprovalGate({
+      events,
+      recordHistoryAutoApprove: async () => {},
+      perToolPolicy: { "obsidian.eval": "ask" },
+    });
+    const controller = new AbortController();
+    const promise = gate.request(
+      { id: "c2", name: "obsidian.eval", args: { code: "1" } },
+      "yolo",
+      "preview",
+      controller.signal,
+    );
+    expect(gate.hasPending()).toBe(true);
+    gate.resolve("c2", { approved: true });
+    const decision = await promise;
+    expect(decision.approved).toBe(true);
+    expect(recorder.autoApproved).toHaveLength(0);
+  });
+
+  test("policyFor returns mode default when no override is present", () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const gate = makeGate(recorder);
+    expect(gate.policyFor("notes.create", "safe")).toBe("ask");
+    expect(gate.policyFor("notes.create", "yolo")).toBe("auto");
+  });
 });
