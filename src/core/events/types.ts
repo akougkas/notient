@@ -53,7 +53,9 @@ export type AppEvent =
       kind: "edge" | "node";
       id: string;
       decision: "accepted" | "rejected";
-    };
+    }
+  | { type: "bridge:up"; version?: string }
+  | { type: "bridge:down"; error?: string };
 
 export interface IndexerNoteResult {
   chunkCount: number;
