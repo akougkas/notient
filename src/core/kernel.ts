@@ -70,6 +70,21 @@ export interface ServiceRegistry {
   chatService: ChatService;
   historyService: HistoryService;
   vaultBootstrap: VaultBootstrap;
+
+  // Phase C — optional vision routing slot. Registered only when the primary
+  // LM Studio model passes the vision probe OR `chat.vision.enabled` is true
+  // and the configured fallback baseUrl probes successfully. Bootstrap omits
+  // this key when neither path is viable; chat handlers must guard with has().
+  visionLLM: VisionRouterLike;
+}
+
+/**
+ * Structural type for the vision routing slot. The concrete VisionRouter
+ * lives in `src/agent/visionProbe.ts`; the kernel is intentionally decoupled
+ * so it does not depend on the agent module.
+ */
+export interface VisionRouterLike {
+  describe(image: { path: string; bytes: ArrayBuffer; mediaType: string }): Promise<string>;
 }
 
 export type ServiceKey = keyof ServiceRegistry;
@@ -142,6 +157,16 @@ const PHASE_B_KEYS: ServiceKey[] = [
   "coordinator",
 ];
 
+const PHASE_C_KEYS: ServiceKey[] = [
+  ...PHASE_B_KEYS,
+  "conversationStore",
+  "conversationIndex",
+  "approvalGate",
+  "toolRegistry",
+  "contextManager",
+  "chatService",
+];
+
 export class Kernel {
   private services: Partial<ServiceRegistry> = {};
   private sealed = false;
@@ -155,6 +180,7 @@ export class Kernel {
     let required: ServiceKey[];
     if (options.phase === "A") required = PHASE_A_KEYS;
     else if (options.phase === "B") required = PHASE_B_KEYS;
+    else if (options.phase === "C") required = PHASE_C_KEYS;
     else required = REQUIRED_KEYS;
     const missing = required.filter((key) => this.services[key] === undefined);
     if (missing.length > 0) {
@@ -167,6 +193,10 @@ export class Kernel {
     const value = this.services[key];
     if (value === undefined) throw new Error(`Kernel: service '${key}' not registered`);
     return value as ServiceRegistry[K];
+  }
+
+  has(key: ServiceKey): boolean {
+    return this.services[key] !== undefined;
   }
 
   isSealed(): boolean {
