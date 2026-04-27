@@ -1,8 +1,22 @@
 import { FsVault } from "../adapters/fsVault";
+import { TIER_1_IDENTITY } from "../agent/identity";
+import { buildNotientAgent } from "../agent/notientAgent";
+import { buildAgentToolRegistry } from "../agent/toolBundle";
+import { probeVisionRoute } from "../agent/visionProbe";
 import { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
 import { Synthesizer } from "../core/agents/synthesizer";
+import { ApprovalGate } from "../core/chat/approvalGate";
+import {
+  type ChatRuntimeSettings,
+  ChatService,
+} from "../core/chat/chatService";
+import { ContextManager } from "../core/chat/contextManager";
+import { ConversationIndex } from "../core/chat/conversationIndex";
+import { ConversationStore } from "../core/chat/conversationStore";
+import type { ToolMode, ToolModeCache } from "../core/chat/toolModeProbe";
+import { InMemoryClusterCache } from "../core/chat/tools/graph";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import { Database } from "../core/db/database";
@@ -31,7 +45,7 @@ export interface BootstrapOptions {
   vaultPath: string;
   /** Override for LM Studio base URL when testing. Defaults to settings. */
   baseUrlOverride?: string;
-  /** When true, seal kernel with phase: "A". Default phase: "B". */
+  /** When true, seal kernel with phase: "A" (probe-only, no DB or indexer). */
   phaseA?: boolean;
 }
 
@@ -366,8 +380,165 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("searchHistory", searchHistory);
   kernel.register("vitalsService", vitalsService);
   kernel.register("coordinator", coordinator);
-  kernel.seal({ phase: "B" });
 
+  // Phase C additions: chat surface.
+
+  const conversationStore = new ConversationStore({
+    facade: {
+      list: async (folder) => (await vault.list(folder)).files,
+      read: (path) => vault.read(path),
+      write: (path, content) => vault.write(path, content),
+      delete: (path) => vault.remove(path),
+    },
+    folder: CONVERSATIONS_FOLDER,
+    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+    hash: syncHash,
+    now: () => Date.now(),
+  });
+
+  const conversationIndex = new ConversationIndex({
+    facade: {
+      read: async (path) => vault.read(path).catch(() => null),
+      write: (path, content) => vault.write(path, content),
+    },
+    indexPath: SIDECAR_PATH,
+  });
+  await conversationIndex.load();
+
+  const approvalGate = new ApprovalGate({
+    events: {
+      onPending: () => {
+        // Bootstrap registers a noop hook; the daemon's chat handler
+        // (Task 13) re-binds onPending/onResolved per turn so wire frames
+        // get emitted with a turn-scoped envelopeId.
+      },
+      onResolved: () => {
+        // See above.
+      },
+    },
+    recordHistoryAutoApprove: async () => {
+      // Phase D wires this into history; Phase C noops so the gate
+      // resolves immediately without a missing-hook error.
+    },
+    perToolPolicy: current.chat.perTool,
+  });
+
+  const clusterCache = new InMemoryClusterCache();
+
+  const notesFacade = {
+    readNote: (path: string) => vault.read(path),
+    writeNote: (path: string, content: string) => vault.write(path, content),
+    exists: (path: string) => vault.exists(path),
+  };
+
+  const toolRegistry = buildAgentToolRegistry({
+    database,
+    searchPipeline,
+    vitalsService,
+    vaultFacade: { readNote: (path) => vault.read(path) },
+    notesFacade,
+    approvalGate,
+    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+    hash: simpleHash,
+    approvalMode: () => current.chat.approvalMode,
+    recordHistory: async () => 0, // Phase D wires history table writes.
+    generateCallId: () =>
+      `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    contradictionHunter,
+    synthesizer,
+    clusterCache,
+  });
+
+  const embedSingle = async (
+    text: string,
+    signal: AbortSignal,
+  ): Promise<Float32Array | null> => {
+    const vectors = await embedder.embed([text], signal);
+    return vectors.length > 0 ? new Float32Array(vectors[0]) : null;
+  };
+
+  const contextManager = new ContextManager({
+    database,
+    provider: primaryLLM,
+    conversationIndex,
+    embed: embedSingle,
+    contextSettings: () => ({
+      ...current.chat.context,
+      contextBudgetFraction: current.chat.contextBudgetFraction,
+      modelContextTokens: 32_000,
+    }),
+    workspace: {
+      getActiveNotePath: () => null,
+      getOpenNotePaths: () => [],
+      getRecentNotePaths: () => [],
+      getRecentSearchQueries: () => [],
+    },
+    facade: { readNote: (path) => vault.read(path) },
+    voiceProfile: () => "",
+    approvalMode: () => current.chat.approvalMode,
+    toolCatalog: () =>
+      toolRegistry.list().map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+      })),
+    estimateTokens: (text) => Math.ceil(text.length / 4),
+    summaryModel: current.primary.reasoningModel,
+    identity: TIER_1_IDENTITY,
+  });
+
+  const toolModeStore = new Map<string, ToolMode>();
+  const toolModeCache: ToolModeCache = {
+    read: (model) => toolModeStore.get(model) ?? null,
+    write: async (model, mode) => {
+      toolModeStore.set(model, mode);
+    },
+  };
+
+  const chatService = buildNotientAgent({
+    provider: primaryLLM,
+    contextManager,
+    conversationStore,
+    conversationIndex,
+    toolRegistry,
+    approvalGate,
+    mutex: reasoningMutex,
+    toolModeCache,
+    embed: embedSingle,
+    settings: (): ChatRuntimeSettings => ({
+      model: current.primary.reasoningModel,
+      maxRoundsPerTurn: current.chat.maxRoundsPerTurn,
+      approvalMode: current.chat.approvalMode,
+      persistReasoning: current.chat.persistReasoning,
+    }),
+  });
+
+  kernel.register("conversationStore", conversationStore);
+  kernel.register("conversationIndex", conversationIndex);
+  kernel.register("approvalGate", approvalGate);
+  kernel.register("toolRegistry", toolRegistry);
+  kernel.register("contextManager", contextManager);
+  kernel.register("chatService", chatService);
+
+  // Optional vision routing: probe primary first; fall back to
+  // chat.vision when configured. Bootstrap omits the slot when neither
+  // path is viable; chat.send refuses image attachments with
+  // VISION_UNAVAILABLE in that case.
+  const visionConfig = current.chat.vision ?? {
+    enabled: false,
+    baseUrl: "",
+    model: "",
+  };
+  const visionRouter = await probeVisionRoute({
+    primaryLLM,
+    primaryModel: current.primary.reasoningModel,
+    visionConfig,
+    makeFallback: () => new LMStudioProvider({ baseUrl: visionConfig.baseUrl }),
+  }).catch(() => null);
+  if (visionRouter !== null) {
+    kernel.register("visionLLM", visionRouter);
+  }
+
+  kernel.seal({ phase: "C" });
   health.start();
   idleDetector.start();
 
@@ -375,6 +546,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     kernel,
     close: makeClose({ database, lockHandle, health, vectorIndex, vault, vectorPath: VECTOR_PATH }),
   };
+}
+
+async function simpleHash(content: string): Promise<string> {
+  const buffer = new TextEncoder().encode(content);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Synchronous fallback hash for the ConversationStore's EchoGuard mark. The
+ * indexer uses cryptographic SHA-256 elsewhere, but the conversation store's
+ * hash hook needs to run inline with the write call. djb2 is good enough for
+ * echo-guard de-duplication: any collision just means the indexer
+ * re-processes a self-write (worst case wasted work, never wrong content).
+ */
+function syncHash(content: string): string {
+  let hash = 5381;
+  for (let index = 0; index < content.length; index++) {
+    hash = ((hash << 5) + hash + content.charCodeAt(index)) | 0;
+  }
+  return (hash >>> 0).toString(16);
 }
 
 interface CloseDeps {
