@@ -23,7 +23,7 @@ export interface ClientHandle {
   close(): Promise<void>;
 }
 
-const SPAWN_DEFAULT_MS = 3000;
+const SPAWN_DEFAULT_MS = 5000;
 
 export async function connectClient(options: ClientOptions): Promise<ClientHandle> {
   const socket = await connectOrSpawn(options);
@@ -120,11 +120,7 @@ async function connectOrSpawn(options: ClientOptions): Promise<Socket> {
 
 function spawnDaemon(options: ClientOptions): ChildProcess {
   const command = options.daemonCommand ?? process.execPath;
-  const args = options.daemonArgs ?? [
-    new URL("../daemon/index.ts", import.meta.url).pathname,
-    "--vault",
-    options.vaultPath,
-  ];
+  const args = options.daemonArgs ?? [resolveDaemonEntry(), "--vault", options.vaultPath];
   const child = spawn(command, args, {
     detached: true,
     stdio: "ignore",
@@ -132,6 +128,19 @@ function spawnDaemon(options: ClientOptions): ChildProcess {
   });
   child.unref();
   return child;
+}
+
+function resolveDaemonEntry(): string {
+  // Two resolution targets:
+  //   - Dev/source: src/cli/client.ts is sibling of src/daemon/index.ts
+  //   - Bundled: dist/notient.js sits next to dist/daemon.js
+  // Both files are siblings under their respective root, so the same URL
+  // form works once we know which extension the runtime sees.
+  const callerUrl = import.meta.url;
+  if (callerUrl.endsWith(".ts")) {
+    return new URL("../daemon/index.ts", callerUrl).pathname;
+  }
+  return new URL("./daemon.js", callerUrl).pathname;
 }
 
 function openSocket(path: string): Promise<Socket> {

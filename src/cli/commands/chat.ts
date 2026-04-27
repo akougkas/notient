@@ -83,18 +83,11 @@ export async function runChatTui(options: {
   vaultPath: string;
   emitter: Emitter;
 }): Promise<void> {
-  // Dynamic import resolved at runtime once the TUI runtime ships in
-  // Task 16. The string-literal-as-template-tag form prevents tsc from
-  // statically resolving the module ahead of time.
-  const path = "../tui/runtime";
-  type TuiModule = {
-    startTuiRuntime: (opts: {
-      vaultPath: string;
-      emitter: Emitter;
-    }) => Promise<void>;
-  };
-  const tui = (await import(path)) as TuiModule;
-  await tui.startTuiRuntime({
+  // Lazy-loaded so the OpenTUI + React reconciler chunk only spins up when
+  // the TUI is actually launched (single-shot CLI sessions skip it). The
+  // static import lets Bun's bundler discover and emit the chunk.
+  const { startTuiRuntime } = await import("../tui/runtime");
+  await startTuiRuntime({
     vaultPath: options.vaultPath,
     emitter: options.emitter,
   });
