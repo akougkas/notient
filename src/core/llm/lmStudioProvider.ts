@@ -3,6 +3,8 @@ import {
   type ChatMessage,
   type ChatOptions,
   type ChatToolCallDelta,
+  type ChatVisionRequest,
+  type ChatVisionResult,
   type ChatWithToolsEvent,
   type ChatWithToolsHandle,
   type ChatWithToolsRequest,
@@ -117,6 +119,31 @@ export class LMStudioProvider implements LLMProvider {
       events,
       result: async () => aggregator.finalize(),
     };
+  }
+
+  async chatVision(request: ChatVisionRequest): Promise<ChatVisionResult> {
+    const start = Date.now();
+    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: request.signal,
+      body: JSON.stringify({
+        model: request.model,
+        messages: request.messages,
+        temperature: request.temperature ?? 0.2,
+        max_tokens: request.maxTokens ?? 512,
+        stream: false,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `vision request failed: ${response.status} ${response.statusText} ${text}`,
+      );
+    }
+    const data = (await response.json()) as ChatCompletionResponse;
+    const content = data.choices[0]?.message.content ?? "";
+    return { content, durationMs: Date.now() - start };
   }
 
   async chatJson<T>(messages: ChatMessage[], opts: ChatOptions, schema: JsonSchema): Promise<T> {
