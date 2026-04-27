@@ -1,37 +1,27 @@
 {
   "name": "notient",
-  "version": "0.2.0",
-  "description": "AI-powered vault management using local LLMs only",
-  "main": "main.js",
+  "version": "0.1.0-phaseA",
+  "description": "Local-first agentic CLI for sentient vaults",
   "type": "module",
+  "bin": {
+    "notient": "./dist/notient.js"
+  },
   "scripts": {
-    "verify": "bun run typecheck && bun run lint && bun scripts/build.ts build",
-    "build": "bun run typecheck && bun scripts/build.ts build",
-    "build:dev": "bun scripts/build.ts dev",
-    "dev": "bun run typecheck && bun run lint && bun scripts/build.ts dev",
-    "dev:fast": "bun scripts/build.ts fast",
-    "dev:watch": "bun scripts/build.ts dev --watch",
-    "dev:clean": "bun run typecheck && bun run lint && bun scripts/build.ts dev --clean",
-    "dev:reset": "bun scripts/build.ts reset",
-    "dev:hard-reset": "bun scripts/build.ts hard-reset",
-    "dev:status": "bun scripts/build.ts status",
-    "analyze": "bun scripts/build.ts analyze",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "smoke:indexer": "bun scripts/smoke-indexer.ts",
-    "smoke:coordinator": "bun scripts/smoke-coordinator.ts",
-    "smoke:phase4": "bun scripts/smoke-phase4.ts",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",
-    "import": "bun tools/import-bridge/index.ts"
+    "build:cli": "bun build src/cli/index.ts --target=bun --outfile=dist/notient.js && bun scripts/copy-wasm.ts",
+    "smoke:cli:phaseA": "bun scripts/smoke-cli-phaseA.ts"
   },
   "keywords": [
-    "obsidian",
     "ai",
     "local-llm",
     "semantic-search",
-    "knowledge-management"
+    "knowledge-management",
+    "cli",
+    "agentic"
   ],
   "author": "Anthony Kougkas",
   "license": "MIT",
@@ -40,22 +30,18 @@
     "@types/node": "^20.10.0",
     "@types/sql.js": "^1.4.9",
     "bun-types": "^1.0.18",
-    "esbuild": "^0.19.8",
-    "obsidian": "^1.4.11",
-    "preact-render-to-string": "^6.6.7",
     "tslib": "^2.6.2",
     "typescript": "^5.6.0"
   },
   "dependencies": {
     "@lmstudio/sdk": "^1.5.0",
-    "@preact/signals": "^2.5.1",
-    "@types/prismjs": "^1.26.5",
+    "@opentui/core": "0.1.105",
+    "@opentui/react": "0.1.105",
+    "chokidar": "^4.0.0",
     "hnswlib-wasm": "^0.8.2",
     "kysely": "^0.28.9",
-    "marked": "^17.0.1",
     "ollama": "^0.6.3",
-    "preact": "^10.28.2",
-    "prismjs": "^1.30.0",
-    "sql.js": "^1.13.0"
+    "sql.js": "^1.13.0",
+    "unpdf": "^0.12.0"
   }
 }
