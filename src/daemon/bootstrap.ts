@@ -480,11 +480,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     identity: TIER_1_IDENTITY,
   });
 
+  // Tool-mode cache reads first from chat.toolModeByModel in settings (so an
+  // operator can pin a known-good mode for a model that fails the auto-probe),
+  // then from the in-memory store populated by previous probes this session.
+  // Writes go through SettingsService.update so the setting persists across
+  // daemon restarts.
   const toolModeStore = new Map<string, ToolMode>();
   const toolModeCache: ToolModeCache = {
-    read: (model) => toolModeStore.get(model) ?? null,
+    read: (model) => {
+      const fromSettings = settings.get().chat.toolModeByModel[model];
+      if (fromSettings) return fromSettings;
+      return toolModeStore.get(model) ?? null;
+    },
     write: async (model, mode) => {
       toolModeStore.set(model, mode);
+      const next = { ...settings.get().chat.toolModeByModel, [model]: mode };
+      await settings.update({ chat: { ...settings.get().chat, toolModeByModel: next } });
     },
   };
 

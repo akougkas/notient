@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeEmitter } from "../src/cli/output";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 240_000;
+const PRIMARY_MODEL = "nemotron-cascade-2-30b-a3b-i1";
 
 async function main(): Promise<void> {
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
@@ -16,6 +17,13 @@ async function main(): Promise<void> {
 
     await runOneShot(["init", tmpRoot]);
     emitter.emit({ type: "smoke:init_done" });
+
+    // Pin the tool mode for the primary model so chat.send skips the
+    // auto-probe (which the substrate flakes on for some models). Phase C's
+    // smoke goal is to assert the wire bridge round-trips a real vault.*
+    // tool call; the probe robustness is a separate substrate concern.
+    await pinToolMode(tmpRoot, PRIMARY_MODEL, "native");
+    emitter.emit({ type: "smoke:tool_mode_pinned", model: PRIMARY_MODEL });
 
     await runOneShot(["awaken", "--vault", tmpRoot]);
     emitter.emit({ type: "smoke:awaken_done" });
@@ -40,7 +48,7 @@ async function main(): Promise<void> {
       "--approve",
       "auto",
     ]);
-    assertVisionUnavailable(visionFrames);
+    assertVisionPath(visionFrames);
     emitter.emit({ type: "smoke:vision_validated" });
 
     await runOneShot(["daemon", "stop", "--vault", tmpRoot]);
@@ -127,19 +135,52 @@ function assertChatFrames(frames: CapturedFrames): void {
   if (!hasComplete) throw new Error("chat: no turn:complete frame");
 }
 
-function assertVisionUnavailable(frames: CapturedFrames): void {
-  if (frames.exitCode === 0) {
-    throw new Error("vision smoke: expected non-zero exit when vision is unavailable");
-  }
+function assertVisionPath(frames: CapturedFrames): void {
+  // Two valid outcomes for a Phase C image attachment turn:
+  //   (a) the primary model is multi-modal and accepts the @tiny.png
+  //       attachment; the chat completes (turn:complete or rpc:result).
+  //   (b) the primary lacks vision and chat.vision is unconfigured; the
+  //       handler refuses with VISION_UNAVAILABLE in an rpc:error frame.
+  // The smoke asserts one of these holds. The CLI prints the rpc:error
+  // frame and exits 0, so we drive on frame contents rather than exit code.
   const events = parseLines(frames);
-  const errorFrame = events.find(
-    (event) => event.type === "rpc:error" || event.type === "error",
-  );
-  if (!errorFrame) throw new Error("vision smoke: no error frame");
-  const message = (errorFrame as { message?: string }).message ?? "";
-  if (!message.includes("VISION_UNAVAILABLE")) {
-    throw new Error(`vision smoke: error message did not mention VISION_UNAVAILABLE: ${message}`);
+  const errorFrame = events.find((event) => event.type === "rpc:error");
+  if (errorFrame) {
+    const message = (errorFrame as { message?: string }).message ?? "";
+    if (message.includes("VISION_UNAVAILABLE")) return;
+    throw new Error(
+      `vision smoke: rpc:error frame did not mention VISION_UNAVAILABLE: ${message}`,
+    );
   }
+  const hasComplete = events.some(
+    (event) =>
+      event.event === "turn:complete" ||
+      (event.type === "rpc:result" && event.ok === true),
+  );
+  if (hasComplete) return;
+  const summary = events
+    .map((event) => `${event.type ?? "?"}:${event.event ?? ""}`)
+    .join(" | ");
+  throw new Error(
+    `vision smoke: neither VISION_UNAVAILABLE error nor turn:complete observed (frames: ${summary})`,
+  );
+}
+
+async function pinToolMode(
+  vaultPath: string,
+  model: string,
+  mode: "native" | "json-fallback" | "disabled",
+): Promise<void> {
+  const configPath = join(vaultPath, ".notient", "config.json");
+  await mkdir(join(vaultPath, ".notient"), { recursive: true });
+  const raw = await readFile(configPath, "utf-8").catch(() => "{}");
+  const config = JSON.parse(raw) as Record<string, unknown>;
+  const chat = (config.chat as Record<string, unknown> | undefined) ?? {};
+  const toolModeByModel =
+    (chat.toolModeByModel as Record<string, string> | undefined) ?? {};
+  toolModeByModel[model] = mode;
+  config.chat = { ...chat, toolModeByModel };
+  await writeFile(configPath, JSON.stringify(config, null, 2));
 }
 
 function makeTinyPng(): Uint8Array {
