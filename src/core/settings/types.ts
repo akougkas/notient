@@ -79,6 +79,12 @@ export interface NotientSettings {
     approvalMode: "safe" | "yolo";
     persistReasoning: boolean;
     toolModeByModel: Record<string, "native" | "json-fallback" | "disabled">;
+    perTool: Record<string, "auto" | "ask">;
+    vision?: {
+      enabled: boolean;
+      baseUrl: string;
+      model: string;
+    };
     conversationsFolder: string;
     proposalsFolder: string;
     maxRoundsPerTurn: number;
@@ -187,6 +193,23 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     approvalMode: "safe",
     persistReasoning: false,
     toolModeByModel: {},
+    perTool: {
+      "vault.read_note": "auto",
+      "vault.search_notes": "auto",
+      "vault.list_neighbors": "auto",
+      "vault.get_vitals": "auto",
+      "proposals.list_pending": "auto",
+      "proposals.get": "auto",
+      "graph.find_path": "auto",
+      "graph.list_clusters": "auto",
+      "agents.contradiction_check": "auto",
+      "agents.synthesize": "auto",
+      "notes.create": "ask",
+      "notes.append": "ask",
+      "notes.replace_section": "ask",
+      "notes.update_frontmatter": "ask",
+      "proposals.upsert": "ask",
+    },
     conversationsFolder: "Notient/conversations",
     proposalsFolder: "Notient/proposals",
     maxRoundsPerTurn: 8,
