@@ -1,4 +1,4 @@
-import { readFile, readdir, rename, rm, stat, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative, sep } from "node:path";
 import { mergeFrontmatter } from "../core/chat/tools/notes";
 import { type AtomicFs, atomicWrite } from "../core/utils/atomicWrite";

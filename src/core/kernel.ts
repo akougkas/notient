@@ -1,6 +1,6 @@
 import type { VaultAdapter } from "../adapters/vaultAdapter";
-import type { CanvasFromResults } from "./canvas/canvasFromResults";
 import type { ApprovalService } from "./approvals/approvalService";
+import type { CanvasFromResults } from "./canvas/canvasFromResults";
 import type { ApprovalGate } from "./chat/approvalGate";
 import type { ChatService } from "./chat/chatService";
 import type { ContextManager } from "./chat/contextManager";
