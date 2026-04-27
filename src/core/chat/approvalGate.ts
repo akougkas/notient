@@ -59,8 +59,33 @@ function asAbortError(): Error {
 
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
+  private readonly extraListeners = new Set<ApprovalGateEvents>();
 
   constructor(private readonly options: ApprovalGateOptions) {}
+
+  /**
+   * Register an additional listener for the duration of a chat turn. Returns
+   * an unsubscribe function. The constructor-supplied `events` always fires;
+   * extra listeners fire alongside without replacing it. The chat handler
+   * uses this so each turn's NDJSON stream receives `loop:approval_pending`
+   * and `loop:approval_resolved` frames scoped to the active envelope id.
+   */
+  subscribe(listener: ApprovalGateEvents): () => void {
+    this.extraListeners.add(listener);
+    return () => {
+      this.extraListeners.delete(listener);
+    };
+  }
+
+  private emitPending(pending: PendingApproval): void {
+    this.options.events.onPending(pending);
+    for (const listener of this.extraListeners) listener.onPending(pending);
+  }
+
+  private emitResolved(callId: string, decision: ApprovalDecision): void {
+    this.options.events.onResolved(callId, decision);
+    for (const listener of this.extraListeners) listener.onResolved(callId, decision);
+  }
 
   policyFor(toolName: string, mode: ApprovalMode): "auto" | "ask" {
     const override = this.options.perToolPolicy?.[toolName];
@@ -80,7 +105,7 @@ export class ApprovalGate {
     if (this.policyFor(call.name, mode) === "auto") {
       await this.options.recordHistoryAutoApprove(call);
       const decision: ApprovalDecision = { approved: true };
-      this.options.events.onResolved(call.id, decision);
+      this.emitResolved(call.id, decision);
       return decision;
     }
     return new Promise<ApprovalDecision>((resolve, reject) => {
@@ -98,13 +123,13 @@ export class ApprovalGate {
           if (!this.pending.has(call.id)) return;
           this.pending.delete(call.id);
           signal.removeEventListener("abort", onAbort);
-          this.options.events.onResolved(call.id, decision);
+          this.emitResolved(call.id, decision);
           resolve(decision);
         },
       };
       signal.addEventListener("abort", onAbort, { once: true });
       this.pending.set(call.id, pending);
-      this.options.events.onPending(pending);
+      this.emitPending(pending);
     });
   }
 
