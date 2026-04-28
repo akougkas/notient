@@ -132,7 +132,9 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       appendHistoryToFile(historyPath, trimmed, HISTORY_MAX);
       if (isSlashCommand(trimmed)) {
         const outcome = await dispatchSlashCommand(trimmed, { client, vaultPath });
-        if (outcome.message.length > 0) {
+        if (outcome.resetTranscript) {
+          setLines([{ kind: "system", text: "Transcript cleared." }]);
+        } else if (outcome.message.length > 0) {
           setLines((prior) => [...prior, { kind: "system", text: outcome.message }]);
         }
         if (outcome.exit) onExit();

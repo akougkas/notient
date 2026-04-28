@@ -20,6 +20,7 @@ export interface SlashContext {
 export interface SlashOutcome {
   message: string;
   exit?: boolean;
+  resetTranscript?: boolean;
 }
 
 export function isSlashCommand(line: string): boolean {
@@ -56,7 +57,7 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   quit: async () => ({ message: "bye.", exit: true }),
   exit: async () => ({ message: "bye.", exit: true }),
   help: async () => ({ message: HELP_LINES.join("\n") }),
-  clear: async () => ({ message: "" }),
+  clear: async () => ({ message: "", resetTranscript: true }),
   read: async (rest, context) =>
     rest.length === 0 ? { message: "/read needs a path" } : rpcReadNote(context, rest),
   search: async (rest, context) =>
