@@ -18,13 +18,24 @@
  *   gpt-oss-20b/120b                        -> native
  *   unknown                                 -> probe and cache
  *
- * Hardening: if the first probe attempt classifies as `disabled`, the probe
- * retries once with a 60s timeout before persisting `disabled`. Llama-server
- * cold-load can take longer than the default fetch timeout, so a transient
- * failure should not poison the cache.
+ * Hardening (Phase D, locked decision 11):
+ * - First probe attempt runs at temperature 0.3.
+ * - If the first attempt returns no tool calls (and no JSON fallback), the
+ *   probe retries once at temperature 0.7 with a 60s timeout fuse. The
+ *   temperature lift is the cold-start mitigation for tool-capable models
+ *   that miss the first probe under low-temperature greedy decoding.
+ * - A returned tool call whose required arg (`value`) is missing or empty
+ *   counts as malformed and downgrades the classification away from
+ *   `native`. The probe never persists `native` on the strength of an
+ *   unparseable response.
+ * - Every terminal classification emits `loop:tool_mode_probed` on the bus
+ *   so operators can see retry counts on the wire.
+ * - AbortError propagates without writing the cache.
  */
 
-import type { LLMProvider } from "../llm/provider";
+import type { EventBus } from "../events/eventBus";
+import type { ToolModeProbedEvent } from "../events/types";
+import type { ChatWithToolsToolCall, LLMProvider } from "../llm/provider";
 
 export type ToolMode = "native" | "json-fallback" | "disabled";
 
@@ -43,6 +54,11 @@ export interface ToolModeProbeOptions {
    * Tests can lower this to keep the suite fast.
    */
   retryTimeoutMs?: number;
+  /**
+   * Optional event bus. When provided the probe emits
+   * `loop:tool_mode_probed` on every terminal classification.
+   */
+  bus?: EventBus;
 }
 
 const PROBE_TOOL = {
@@ -59,16 +75,25 @@ const PROBE_TOOL = {
 };
 
 const PROBE_PROMPT = "Call the echo tool with value=ping.";
+const FIRST_ATTEMPT_TEMPERATURE = 0.3;
+const RETRY_ATTEMPT_TEMPERATURE = 0.7;
+
+type ProbeStatus = "native" | "json-fallback" | "no-calls" | "errored";
 
 export async function probeToolMode(options: ToolModeProbeOptions): Promise<ToolMode> {
   const cached = options.cache.read(options.model);
   if (cached) return cached;
-  const first = await runProbe(options, options.signal);
-  if (first !== "disabled") {
-    await options.cache.write(options.model, first);
-    return first;
+  const first = await runProbe(options, options.signal, FIRST_ATTEMPT_TEMPERATURE);
+  if (first === "native") {
+    return await finalize(options, "native", 1);
   }
-  // Retry once with a longer fuse before locking in `disabled`.
+  if (first === "json-fallback") {
+    return await finalize(options, "json-fallback", 1);
+  }
+  if (first === "errored") {
+    return await finalize(options, "disabled", 1);
+  }
+  // first === "no-calls": retry once at higher temperature with timeout fuse.
   if (options.signal.aborted) {
     throw asAbortError();
   }
@@ -77,15 +102,36 @@ export async function probeToolMode(options: ToolModeProbeOptions): Promise<Tool
   const timeout = setTimeout(() => retryController.abort(), retryMs);
   const onParentAbort = (): void => retryController.abort();
   options.signal.addEventListener("abort", onParentAbort, { once: true });
-  let retryResult: ToolMode = "disabled";
+  let retry: ProbeStatus;
   try {
-    retryResult = await runProbe(options, retryController.signal);
+    retry = await runProbe(options, retryController.signal, RETRY_ATTEMPT_TEMPERATURE);
   } finally {
     clearTimeout(timeout);
     options.signal.removeEventListener("abort", onParentAbort);
   }
-  await options.cache.write(options.model, retryResult);
-  return retryResult;
+  if (retry === "native") {
+    return await finalize(options, "native", 2);
+  }
+  if (retry === "json-fallback") {
+    return await finalize(options, "json-fallback", 2);
+  }
+  return await finalize(options, "disabled", 2);
+}
+
+async function finalize(
+  options: ToolModeProbeOptions,
+  mode: ToolMode,
+  attempts: number,
+): Promise<ToolMode> {
+  await options.cache.write(options.model, mode);
+  const event: { type: "loop:tool_mode_probed" } & ToolModeProbedEvent = {
+    type: "loop:tool_mode_probed",
+    model: options.model,
+    mode,
+    attempts,
+  };
+  options.bus?.emit(event);
+  return mode;
 }
 
 function asAbortError(): Error {
@@ -97,8 +143,12 @@ function asAbortError(): Error {
   return error;
 }
 
-async function runProbe(options: ToolModeProbeOptions, signal: AbortSignal): Promise<ToolMode> {
-  if (!options.provider.chatWithTools) return "disabled";
+async function runProbe(
+  options: ToolModeProbeOptions,
+  signal: AbortSignal,
+  temperature: number,
+): Promise<ProbeStatus> {
+  if (!options.provider.chatWithTools) return "errored";
   const chatWithTools = options.provider.chatWithTools.bind(options.provider);
   try {
     const handle = await chatWithTools({
@@ -107,19 +157,30 @@ async function runProbe(options: ToolModeProbeOptions, signal: AbortSignal): Pro
       tools: [PROBE_TOOL],
       toolChoice: "required",
       signal,
+      temperature,
       maxTokens: 256,
     });
     for await (const _event of handle.events) {
       // Drain stream so the aggregator collects the final state.
     }
     const result = await handle.result();
-    if (result.toolCalls.length > 0) return "native";
+    if (result.toolCalls.length > 0) {
+      if (result.toolCalls.every(isToolCallWellFormed)) return "native";
+      return "no-calls";
+    }
     if (tryParseToolJson(result.content)) return "json-fallback";
-    return "disabled";
+    return "no-calls";
   } catch (error) {
     if (isAbortError(error)) throw error;
-    return "disabled";
+    return "errored";
   }
+}
+
+function isToolCallWellFormed(call: ChatWithToolsToolCall): boolean {
+  if (Object.keys(call.args).length === 0) return false;
+  const value = call.args.value;
+  if (typeof value !== "string" || value.length === 0) return false;
+  return true;
 }
 
 function isAbortError(error: unknown): boolean {

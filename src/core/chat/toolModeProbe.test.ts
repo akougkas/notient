@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { EventBus } from "../events/eventBus";
+import type { EventOf } from "../events/types";
 import type {
   ChatMessage,
   ChatOptions,
@@ -171,7 +173,7 @@ describe("probeToolMode", () => {
         result: {
           content: "",
           reasoningContent: "",
-          toolCalls: [{ id: "c", name: "echo", args: {} }],
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
         },
       },
     ]);
@@ -201,10 +203,11 @@ describe("probeToolMode", () => {
     expect(cache.store.throws).toBe("disabled");
   });
 
-  test("provider throwing on both attempts writes cache EXACTLY ONCE", async () => {
+  test("provider throwing on the first attempt terminates and writes cache EXACTLY ONCE", async () => {
     // Hardening: regression guard against double-writing the disabled cache
-    // entry (or skipping it). The probe must call the provider twice (first
-    // attempt + one retry) and persist `disabled` exactly once.
+    // entry (or skipping it). Per locked decision 11, an `errored` first
+    // attempt terminates with `disabled`; the probe does not retry on
+    // exceptions, only on `no-calls`.
     const provider = new StubProvider([
       { fail: true, result: blankResult() },
       { fail: true, result: blankResult() },
@@ -218,7 +221,7 @@ describe("probeToolMode", () => {
       retryTimeoutMs: 50,
     });
     expect(mode).toBe("disabled");
-    expect(provider.calls).toBe(2);
+    expect(provider.calls).toBe(1);
     expect(cache.writes).toEqual([{ model: "double-throws", mode: "disabled" }]);
     expect(cache.writes).toHaveLength(1);
   });
@@ -274,7 +277,7 @@ describe("probeToolMode", () => {
         result: {
           content: "",
           reasoningContent: "",
-          toolCalls: [{ id: "c", name: "echo", args: {} }],
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
         },
       },
     ]);
@@ -288,6 +291,99 @@ describe("probeToolMode", () => {
     expect(mode).toBe("native");
     expect(cache.store["Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M"]).toBe("native");
     expect(cache.store["nemotron-cascade-2-30b-a3b-i1-q4_k_m"]).toBe("json-fallback");
+  });
+
+  test("returns native after the second attempt yields a parseable tool call", async () => {
+    const provider = new StubProvider([
+      { result: { content: "no tools", reasoningContent: "", toolCalls: [] } },
+      {
+        result: {
+          content: "",
+          reasoningContent: "",
+          toolCalls: [{ id: "c", name: "echo", args: { value: "hello" } }],
+        },
+      },
+    ]);
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "test",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+      retryTimeoutMs: 50,
+    });
+    expect(mode).toBe("native");
+    expect(provider.calls).toBe(2);
+  });
+
+  test("returns disabled when both attempts yield no tool calls", async () => {
+    const provider = new StubProvider([
+      { result: { content: "blank", reasoningContent: "", toolCalls: [] } },
+      { result: { content: "blank again", reasoningContent: "", toolCalls: [] } },
+    ]);
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "no-calls",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+      retryTimeoutMs: 50,
+    });
+    expect(mode).toBe("disabled");
+  });
+
+  test("returns disabled when the second attempt yields a tool call with empty args (malformed)", async () => {
+    const provider = new StubProvider([
+      { result: { content: "blank", reasoningContent: "", toolCalls: [] } },
+      {
+        result: {
+          content: "",
+          reasoningContent: "",
+          toolCalls: [{ id: "c", name: "echo", args: {} }],
+        },
+      },
+    ]);
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "malformed",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+      retryTimeoutMs: 50,
+    });
+    expect(mode).toBe("disabled");
+  });
+
+  test("emits loop:tool_mode_probed with attempts count on classification", async () => {
+    const provider = new StubProvider([
+      {
+        result: {
+          content: "",
+          reasoningContent: "",
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
+        },
+      },
+    ]);
+    const bus = new EventBus();
+    const events: EventOf<"loop:tool_mode_probed">[] = [];
+    bus.on("loop:tool_mode_probed", (event) => {
+      events.push(event);
+    });
+    const cache = makeCache();
+    await probeToolMode({
+      provider,
+      model: "first-pass",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+      bus,
+    });
+    expect(events.length).toBe(1);
+    expect(events[0]).toEqual({
+      type: "loop:tool_mode_probed",
+      model: "first-pass",
+      mode: "native",
+      attempts: 1,
+    });
   });
 });
 
