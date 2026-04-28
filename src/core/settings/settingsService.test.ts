@@ -64,4 +64,21 @@ describe("SettingsService merge", () => {
     expect(store.data).not.toBeNull();
     expect(events).toEqual(["approvals"]);
   });
+
+  test("update treats null in chat.toolModeByModel as a delete sentinel", async () => {
+    const store = makeStore({
+      chat: { toolModeByModel: { "model-a": "native", "model-b": "disabled" } },
+    });
+    const service = new SettingsService(store, new EventBus());
+    await service.load();
+    expect(service.get().chat.toolModeByModel["model-a"]).toBe("native");
+
+    await service.update({
+      chat: { toolModeByModel: { "model-a": null } as Record<string, "native" | null> },
+    } as never);
+
+    const after = service.get().chat.toolModeByModel;
+    expect("model-a" in after).toBe(false);
+    expect(after["model-b"]).toBe("disabled");
+  });
 });

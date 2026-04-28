@@ -91,7 +91,32 @@ function mergeChat(
   return {
     ...base,
     ...(patch ?? {}),
-    toolModeByModel: { ...base.toolModeByModel, ...(patch?.toolModeByModel ?? {}) },
+    toolModeByModel: mergeToolModeByModel(base.toolModeByModel, patch?.toolModeByModel),
     context: { ...base.context, ...(patch?.context ?? {}) },
   };
+}
+
+/**
+ * Merge tool-mode pins. A `null` value in the patch deletes that key from
+ * the merged map; any other value overwrites. The deletion sentinel lets
+ * the daemon RPC `chat.invalidate_probe_cache` (or a hand-rolled
+ * `daemon.config_set` patch) unpin a model so the next chat turn re-runs
+ * the probe.
+ */
+function mergeToolModeByModel(
+  base: NotientSettings["chat"]["toolModeByModel"],
+  patch: NotientSettings["chat"]["toolModeByModel"] | undefined,
+): NotientSettings["chat"]["toolModeByModel"] {
+  const merged: NotientSettings["chat"]["toolModeByModel"] = { ...base };
+  if (patch === undefined) return merged;
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === null) {
+      delete merged[key];
+      continue;
+    }
+    if (value === "native" || value === "json-fallback" || value === "disabled") {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
