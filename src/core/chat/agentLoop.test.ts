@@ -415,4 +415,82 @@ describe("runAgentTurn", () => {
     const done = events.find((event) => event.type === "loop:done");
     expect(done && done.type === "loop:done" ? done.finalMessage.content : "").toBe("Created.");
   });
+
+  test("dispatches multiple tool calls in parallel within one round", async () => {
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          { id: "c1", name: "vault.read", args: { path: "A" } },
+          { id: "c2", name: "vault.read", args: { path: "B" } },
+          { id: "c3", name: "vault.read", args: { path: "C" } },
+        ],
+      },
+      { contentChunks: ["Done."], finalContent: "Done." },
+    ]);
+
+    // Three deferred promises so we can verify all three invokes are
+    // in-flight before any of them resolves. If the loop were serial we'd
+    // observe inflightAtPeak === 1.
+    const inflight = { count: 0, peak: 0 };
+    const resolvers: Array<(value: { ok: true }) => void> = [];
+    const registry = makeRegistry([
+      readTool(
+        (_args) =>
+          new Promise<{ ok: true }>((resolve) => {
+            inflight.count += 1;
+            inflight.peak = Math.max(inflight.peak, inflight.count);
+            resolvers.push((value) => {
+              inflight.count -= 1;
+              resolve(value);
+            });
+          }),
+      ),
+    ]);
+    const { approvalGate } = makeApprovalGate();
+    const generator = runAgentTurn(
+      {
+        provider,
+        toolRegistry: registry,
+        approvalGate,
+        maxRoundsPerTurn: 4,
+        toolMode: () => "native",
+        generateId: () => "id",
+        now: () => 0,
+      },
+      {
+        conversation: makeConversation(),
+        systemAndHistory: [{ role: "user", content: "fan out" }],
+        model: "model",
+        signal: new AbortController().signal,
+      },
+    );
+
+    // Drive the loop: pull events until we've seen all three tool-call
+    // events, by which point all three invokes should be in-flight.
+    const events: AgentLoopEvent[] = [];
+    const observed = (async () => {
+      for await (const event of generator) events.push(event);
+    })();
+
+    // Spin briefly so the loop kicks all three invokes.
+    await new Promise((r) => setTimeout(r, 5));
+    while (resolvers.length < 3) {
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(inflight.peak).toBe(3);
+
+    // Now resolve in reverse order to prove result emission stays
+    // in original tool-call order regardless of completion order.
+    resolvers[2]?.({ ok: true });
+    resolvers[1]?.({ ok: true });
+    resolvers[0]?.({ ok: true });
+    await observed;
+
+    const resultEvents = events.filter((e) => e.type === "loop:tool-result");
+    expect(resultEvents.map((e) => (e as { result: { callId: string } }).result.callId)).toEqual([
+      "c1",
+      "c2",
+      "c3",
+    ]);
+  });
 });

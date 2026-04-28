@@ -194,10 +194,23 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
   }));
   const toolResults: ToolResult[] = [];
 
+  // Emit all start events upfront so the UI knows what's running before
+  // any individual call returns.
   for (const call of toolCalls) {
-    const dispatch = yield* dispatchSingleCall(context, call);
-    toolResults.push(dispatch.result);
-    if (dispatch.aborted) {
+    yield { type: "loop:tool-call", call };
+  }
+
+  // Dispatch all calls concurrently. Each branch measures its own
+  // durationMs so per-tool timings stay meaningful even when tools share
+  // LM Studio slots. Results are emitted in original tool-call order so
+  // downstream consumers (history append, conversation parser) see a
+  // deterministic event sequence regardless of completion order.
+  const dispatches = await Promise.all(toolCalls.map((call) => runSingleCall(context, call)));
+
+  for (const { result: callResult, aborted } of dispatches) {
+    yield { type: "loop:tool-result", result: callResult };
+    toolResults.push(callResult);
+    if (aborted) {
       return { kind: "error", event: { type: "loop:error", message: "aborted" } };
     }
   }
@@ -211,33 +224,28 @@ interface CallDispatch {
   aborted: boolean;
 }
 
-async function* dispatchSingleCall(
-  context: RoundContext,
-  call: ToolCall,
-): AsyncGenerator<AgentLoopEvent, CallDispatch> {
+async function runSingleCall(context: RoundContext, call: ToolCall): Promise<CallDispatch> {
   const { options, input, now } = context;
-  yield { type: "loop:tool-call", call };
   if (input.signal.aborted) {
-    return {
-      result: makeFailureResult(call.id, "aborted"),
-      aborted: true,
-    };
+    return { result: makeFailureResult(call.id, "aborted"), aborted: true };
   }
   try {
     const start = now();
     const data = await options.toolRegistry.invoke(call.name, call.args, input.signal);
-    const success: ToolResult = {
-      callId: call.id,
-      status: "ok",
-      data,
-      durationMs: now() - start,
+    return {
+      result: {
+        callId: call.id,
+        status: "ok",
+        data,
+        durationMs: now() - start,
+      },
+      aborted: false,
     };
-    yield { type: "loop:tool-result", result: success };
-    return { result: success, aborted: false };
   } catch (error) {
-    const failure = makeFailureResult(call.id, errorMessage(error));
-    yield { type: "loop:tool-result", result: failure };
-    return { result: failure, aborted: isAbortError(error) };
+    return {
+      result: makeFailureResult(call.id, errorMessage(error)),
+      aborted: isAbortError(error),
+    };
   }
 }
 
