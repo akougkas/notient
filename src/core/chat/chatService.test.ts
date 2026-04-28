@@ -274,6 +274,19 @@ async function collect(generator: AsyncGenerator<ChatStreamEvent>): Promise<Chat
   return events;
 }
 
+interface Gate {
+  promise: Promise<void>;
+  release: () => void;
+}
+
+function createGate(): Gate {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 describe("ChatService", () => {
   test("startConversation writes a fresh markdown file", async () => {
     const fixture = makeService([{ finalContent: "ok" }]);
@@ -415,5 +428,81 @@ describe("ChatService", () => {
     expect(sentSystem.role).toBe("system");
     expect(sentSystem.content).toContain("Earlier conversations");
     expect(sentSystem.content).toContain("Project planning");
+  });
+
+  test("turn:complete fires before the post-turn summary chatJson resolves", async () => {
+    // Without this, the daemon stays in the chat-priority mutex slot during
+    // the summary refresh and the TUI's `busy` flag stays true, dropping the
+    // user's next keystrokes. Multi-turn conversations break under that race.
+    const fixture = makeService([{ finalContent: "first reply" }]);
+    const summaryGate = createGate();
+    const originalChatJson = fixture.provider.chatJson.bind(fixture.provider);
+    fixture.provider.chatJson = (async <T>(
+      messages: Parameters<typeof originalChatJson>[0],
+      options: Parameters<typeof originalChatJson>[1],
+      schema: Parameters<typeof originalChatJson>[2],
+    ): Promise<T> => {
+      await summaryGate.promise;
+      return originalChatJson<T>(messages, options, schema);
+    }) as typeof fixture.provider.chatJson;
+    const conversation = await fixture.service.startConversation({ topic: "Race" });
+    const generator = fixture.service.sendMessage({ conversation, userMessage: "Hi" });
+    let sawTurnComplete = false;
+    const drain = (async () => {
+      for await (const event of generator) {
+        if (event.type === "turn:complete") {
+          sawTurnComplete = true;
+          break;
+        }
+      }
+    })();
+    // Park briefly so the runtime can flush events but never let the gated
+    // summary call resolve. If the implementation blocks on chatJson before
+    // emitting turn:complete, sawTurnComplete stays false.
+    await Promise.race([drain, new Promise((resolve) => setTimeout(resolve, 50))]);
+    expect(sawTurnComplete).toBe(true);
+    summaryGate.release();
+    await drain;
+  });
+
+  test("two consecutive sendMessage calls preserve history and persist combined messages", async () => {
+    const fixture = makeService([
+      { finalContent: "Turn 1 reply." },
+      { finalContent: "Turn 2 reply, building on prior." },
+    ]);
+    const conversation = await fixture.service.startConversation({ topic: "Multi-turn" });
+    const eventsTurn1 = await collect(
+      fixture.service.sendMessage({ conversation, userMessage: "First" }),
+    );
+    const completeTurn1 = eventsTurn1.find((event) => event.type === "turn:complete");
+    if (!completeTurn1 || completeTurn1.type !== "turn:complete") {
+      throw new Error("turn 1 did not yield turn:complete");
+    }
+    const afterTurn1 = completeTurn1.conversation;
+    expect(afterTurn1.messages.length).toBe(2);
+    expect(afterTurn1.messages[0].content).toBe("First");
+    expect(afterTurn1.messages[1].content).toBe("Turn 1 reply.");
+
+    const eventsTurn2 = await collect(
+      fixture.service.sendMessage({ conversation: afterTurn1, userMessage: "Second" }),
+    );
+    const completeTurn2 = eventsTurn2.find((event) => event.type === "turn:complete");
+    if (!completeTurn2 || completeTurn2.type !== "turn:complete") {
+      throw new Error("turn 2 did not yield turn:complete");
+    }
+    const afterTurn2 = completeTurn2.conversation;
+    expect(afterTurn2.messages.length).toBe(4);
+    expect(afterTurn2.messages.map((message) => message.content)).toEqual([
+      "First",
+      "Turn 1 reply.",
+      "Second",
+      "Turn 2 reply, building on prior.",
+    ]);
+
+    const turn2Request = fixture.provider.toolRequests[1];
+    const replayedUser = turn2Request.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content);
+    expect(replayedUser).toEqual(["First", "Second"]);
   });
 });

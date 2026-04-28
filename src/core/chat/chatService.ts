@@ -193,9 +193,26 @@ export class ChatService {
       updatedAt: now(),
     };
 
-    const summarized = await this.refreshSummaryAndIndex(updated);
-    const saved = await this.options.conversationStore.save(summarized);
+    // Persist the conversation immediately and yield turn:complete so the UI
+    // releases its busy state. The cross-session summary refresh runs in the
+    // background; failure is non-fatal and a stale summary just means the
+    // next turn's cross-session memory lags by one round.
+    const saved = await this.options.conversationStore.save(updated);
     yield { type: "turn:complete", conversation: saved };
+    void this.refreshSummaryAndIndex(saved).then(
+      async (refreshed) => {
+        if (refreshed === saved) return;
+        try {
+          await this.options.conversationStore.save(refreshed);
+        } catch {
+          // Background save failures are non-fatal; the conversation still
+          // exists with the pre-refresh summary on disk.
+        }
+      },
+      () => {
+        // Summary refresh failures are non-fatal; the prior summary stays.
+      },
+    );
   }
 
   private async ensureToolMode(model: string, signal: AbortSignal): Promise<ToolMode> {
