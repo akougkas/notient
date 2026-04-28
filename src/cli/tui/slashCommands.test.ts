@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ClientHandle, RpcResponseFrame } from "../client";
 import {
   buildHelpTable,
@@ -212,6 +215,65 @@ describe("dispatchSlashCommand", () => {
     const [head, tail] = stripped.split(/\n\[…\d+ characters elided…\]\n/);
     expect(head?.length).toBe(3500);
     expect(tail?.length).toBe(1500);
+  });
+});
+
+describe("/copy verb", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "notient-copy-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("reports a friendly hint when no assistant reply is available yet", async () => {
+    const client = makeFakeClient([]);
+    const outcome = await dispatchSlashCommand("/copy", {
+      client,
+      vaultPath: dir,
+      getLastAssistant: () => null,
+    });
+    expect(outcome.message).toBe("/copy: no assistant reply yet to copy.");
+    expect(existsSync(join(dir, ".notient", "last.txt"))).toBe(false);
+  });
+
+  test("reports the same hint when the last assistant reply is empty", async () => {
+    const client = makeFakeClient([]);
+    const outcome = await dispatchSlashCommand("/copy", {
+      client,
+      vaultPath: dir,
+      getLastAssistant: () => "",
+    });
+    expect(outcome.message).toBe("/copy: no assistant reply yet to copy.");
+  });
+
+  test("writes the last assistant reply to <vault>/.notient/last.txt", async () => {
+    const client = makeFakeClient([]);
+    const reply = "Sure, here is the answer to your question.";
+    const outcome = await dispatchSlashCommand("/copy", {
+      client,
+      vaultPath: dir,
+      getLastAssistant: () => reply,
+    });
+    const target = join(dir, ".notient", "last.txt");
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(reply);
+    expect(outcome.message).toContain(`Copied ${reply.length} chars`);
+    expect(outcome.message).toContain(target);
+  });
+
+  test("creates .notient/ when it does not yet exist", async () => {
+    const client = makeFakeClient([]);
+    expect(existsSync(join(dir, ".notient"))).toBe(false);
+    await dispatchSlashCommand("/copy", {
+      client,
+      vaultPath: dir,
+      getLastAssistant: () => "hi",
+    });
+    expect(existsSync(join(dir, ".notient", "last.txt"))).toBe(true);
   });
 });
 
