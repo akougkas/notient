@@ -5,12 +5,15 @@ const fakeVault = {
   list: async (folder: string) => {
     if (folder === "") {
       return {
-        files: ["root.md", "Notient/conversations/x.md", ".notient/db"],
+        files: ["root.md"],
         folders: ["inbox", "Notient", ".notient"],
       };
     }
     if (folder === "inbox") {
-      return { files: ["alpha.md", "beta.md", "alphabet.md"], folders: ["nested"] };
+      return {
+        files: ["inbox/alpha.md", "inbox/beta.md", "inbox/alphabet.md"],
+        folders: ["inbox/nested"],
+      };
     }
     return { files: [], folders: [] };
   },
@@ -23,7 +26,7 @@ describe("vault.list", () => {
     expect(result.paths).toEqual(["alpha.md", "alphabet.md", "beta.md", "nested/"]);
   });
 
-  test("filter narrows by filename prefix", async () => {
+  test("filter narrows by filename prefix inside a non-root folder", async () => {
     const handlers = makeVaultHandlers({ vault: fakeVault });
     const result = await handlers.list(
       { folder: "inbox", filter: "alpha" },
