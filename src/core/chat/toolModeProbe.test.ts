@@ -22,11 +22,16 @@ interface ProbeOutcome {
 
 class StubProvider implements LLMProvider {
   public calls = 0;
+  public chatCalls = 0;
+  /** When true the warmup chat() call throws so the probe sees a cold start. */
+  public warmupFails = false;
   constructor(private readonly outcomes: ProbeOutcome[]) {}
   async isAvailable(): Promise<boolean> {
     return true;
   }
   async chat(_messages: ChatMessage[], _opts: ChatOptions): Promise<string> {
+    this.chatCalls += 1;
+    if (this.warmupFails) throw new Error("warmup simulated failure");
     return "";
   }
   async *chatStream(_messages: ChatMessage[], _opts: ChatOptions): AsyncIterable<string> {
@@ -238,6 +243,64 @@ describe("probeToolMode", () => {
     expect(mode).toBe("native");
     expect(provider.calls).toBe(0);
     expect(cache.writes).toEqual([]);
+  });
+
+  test("calls provider.chat to warm the model before the first probe attempt", async () => {
+    const provider = new StubProvider([
+      {
+        result: {
+          content: "",
+          reasoningContent: "",
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
+        },
+      },
+    ]);
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "cold-start",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+    });
+    expect(mode).toBe("native");
+    expect(provider.chatCalls).toBe(1);
+    expect(provider.calls).toBe(1);
+  });
+
+  test("warmup throwing does not abort the probe", async () => {
+    const provider = new StubProvider([
+      {
+        result: {
+          content: "",
+          reasoningContent: "",
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
+        },
+      },
+    ]);
+    provider.warmupFails = true;
+    const cache = makeCache();
+    const mode = await probeToolMode({
+      provider,
+      model: "warmup-rejects",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+    });
+    expect(mode).toBe("native");
+    expect(provider.chatCalls).toBe(1);
+    expect(provider.calls).toBe(1);
+  });
+
+  test("warmup is skipped when the cache already has a pinned mode", async () => {
+    const provider = new StubProvider([{ result: blankResult() }]);
+    const cache = makeCache({ "warm-cache": "native" });
+    await probeToolMode({
+      provider,
+      model: "warm-cache",
+      signal: new AbortController().signal,
+      cache: cache.cache,
+    });
+    expect(provider.chatCalls).toBe(0);
+    expect(provider.calls).toBe(0);
   });
 
   test("propagates AbortError without poisoning the cache as disabled", async () => {

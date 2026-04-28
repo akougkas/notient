@@ -83,6 +83,7 @@ type ProbeStatus = "native" | "json-fallback" | "no-calls" | "errored";
 export async function probeToolMode(options: ToolModeProbeOptions): Promise<ToolMode> {
   const cached = options.cache.read(options.model);
   if (cached) return cached;
+  await warmupModel(options);
   const first = await runProbe(options, options.signal, FIRST_ATTEMPT_TEMPERATURE);
   if (first === "native") {
     return await finalize(options, "native", 1);
@@ -141,6 +142,29 @@ function asAbortError(): Error {
   const error = new Error("aborted");
   error.name = "AbortError";
   return error;
+}
+
+/**
+ * Cold-start warmup. LM Studio (and llama-server) lazy-loads the model on the
+ * first chat request, and a fresh model often takes several seconds to ready
+ * the GPU buffers. The probe's chatWithTools call would otherwise race that
+ * load and return an HTTP error before the retry path has a chance, classifying
+ * a tool-capable model as `disabled`. A short non-tool chat() ping forces the
+ * load synchronously; errors here are silenced because the probe itself will
+ * still surface a real failure if the model is unavailable.
+ */
+async function warmupModel(options: ToolModeProbeOptions): Promise<void> {
+  if (options.signal.aborted) return;
+  try {
+    await options.provider.chat([{ role: "user", content: "ok" }], {
+      model: options.model,
+      signal: options.signal,
+      maxTokens: 8,
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    // Best-effort warmup: a real outage gets surfaced by the probe itself.
+  }
 }
 
 async function runProbe(
