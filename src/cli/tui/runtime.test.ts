@@ -13,9 +13,7 @@ describe("buildStatusLabel", () => {
   });
 
   test("appends pending count when > 0", () => {
-    expect(buildStatusLabel("/x/vault", false, 2)).toBe(
-      "notient · vault:vault · idle · pending:2",
-    );
+    expect(buildStatusLabel("/x/vault", false, 2)).toBe("notient · vault:vault · idle · pending:2");
   });
 
   test("does not show pending segment when count is zero", () => {

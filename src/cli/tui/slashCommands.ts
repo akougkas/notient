@@ -50,40 +50,49 @@ const HELP_LINES = [
   "/quit              — exit the TUI",
 ];
 
+type SlashHandler = (rest: string, context: SlashContext) => Promise<SlashOutcome>;
+
+const VERB_TABLE: Record<string, SlashHandler> = {
+  quit: async () => ({ message: "bye.", exit: true }),
+  exit: async () => ({ message: "bye.", exit: true }),
+  help: async () => ({ message: HELP_LINES.join("\n") }),
+  clear: async () => ({ message: "" }),
+  read: async (rest, context) =>
+    rest.length === 0 ? { message: "/read needs a path" } : rpcReadNote(context, rest),
+  search: async (rest, context) =>
+    rest.length === 0 ? { message: "/search needs a query" } : rpcSearch(context, rest),
+  awaken: async (_rest, context) => rpcAwaken(context),
+  vitals: async (rest, context) =>
+    rest.length === 0 ? { message: "/vitals needs a path" } : rpcVitals(context, rest),
+  health: async (_rest, context) => rpcHealth(context),
+  approve: async (rest, context) => approvalVerb(rest, context, true),
+  deny: async (rest, context) => approvalVerb(rest, context, false),
+  undo: async (_rest, context) => rpcUndo(context),
+  history: async (_rest, context) => rpcHistory(context),
+};
+
 export async function dispatchSlashCommand(
   line: string,
   context: SlashContext,
 ): Promise<SlashOutcome> {
   const { verb, rest } = parseSlashCommand(line);
-  if (verb === "quit" || verb === "exit") {
-    return { message: "bye.", exit: true };
+  const handler = VERB_TABLE[verb];
+  if (!handler) return { message: `unknown command: /${verb} (try /help)` };
+  return handler(rest, context);
+}
+
+async function approvalVerb(
+  rest: string,
+  context: SlashContext,
+  approved: boolean,
+): Promise<SlashOutcome> {
+  const space = rest.indexOf(" ");
+  const callId = space < 0 ? rest : rest.slice(0, space);
+  const reason = space < 0 ? "" : rest.slice(space + 1).trim();
+  if (callId.length === 0) {
+    return { message: `/${approved ? "approve" : "deny"} needs <callId>` };
   }
-  if (verb === "help") return { message: HELP_LINES.join("\n") };
-  if (verb === "clear") return { message: "" };
-  if (verb === "read") {
-    if (rest.length === 0) return { message: "/read needs a path" };
-    return rpcReadNote(context, rest);
-  }
-  if (verb === "search") {
-    if (rest.length === 0) return { message: "/search needs a query" };
-    return rpcSearch(context, rest);
-  }
-  if (verb === "awaken") return rpcAwaken(context);
-  if (verb === "vitals") {
-    if (rest.length === 0) return { message: "/vitals needs a path" };
-    return rpcVitals(context, rest);
-  }
-  if (verb === "health") return rpcHealth(context);
-  if (verb === "approve" || verb === "deny") {
-    const space = rest.indexOf(" ");
-    const callId = space < 0 ? rest : rest.slice(0, space);
-    const reason = space < 0 ? "" : rest.slice(space + 1).trim();
-    if (callId.length === 0) return { message: `/${verb} needs <callId>` };
-    return rpcChatApprove(context, callId, verb === "approve", reason);
-  }
-  if (verb === "undo") return rpcUndo(context);
-  if (verb === "history") return rpcHistory(context);
-  return { message: `unknown command: /${verb} (try /help)` };
+  return rpcChatApprove(context, callId, approved, reason);
 }
 
 async function rpcSearch(context: SlashContext, query: string): Promise<SlashOutcome> {
