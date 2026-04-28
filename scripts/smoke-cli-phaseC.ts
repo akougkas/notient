@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connectClient } from "../src/cli/client";
 import { makeEmitter } from "../src/cli/output";
+import { currentPlatform, resolveSocketPath } from "../src/daemon/socket";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 240_000;
@@ -38,6 +40,9 @@ async function main(): Promise<void> {
     ]);
     assertChatFrames(chatFrames);
     emitter.emit({ type: "smoke:chat_validated" });
+
+    await runMultiTurnPass(tmpRoot);
+    emitter.emit({ type: "smoke:multiturn_validated" });
 
     await writeFile(join(tmpRoot, "tiny.png"), Buffer.from(makeTinyPng()));
     const visionFrames = await runOneShotCollect([
@@ -164,6 +169,98 @@ function assertVisionPath(frames: CapturedFrames): void {
   throw new Error(
     `vision smoke: neither VISION_UNAVAILABLE error nor turn:complete observed (frames: ${summary})`,
   );
+}
+
+async function runMultiTurnPass(vaultPath: string): Promise<void> {
+  // Drive two consecutive chat.send calls against a single conversationId
+  // through the daemon RPC. This guards the regression where ChatService
+  // blocked turn:complete on the post-turn summary refresh and the TUI's
+  // busy flag stayed true through the second prompt's keystrokes.
+  const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+  const client = await connectClient({ socketPath, vaultPath, spawnTimeoutMs: 60_000 });
+  try {
+    const conversationId = await startMultiTurnConversation(client);
+    const turnOne = await drainChatSend(
+      client,
+      conversationId,
+      "use vault.search_notes to find any notes that mention TDD",
+    );
+    if (!turnOne.reachedTurnComplete) {
+      throw new Error(`multiturn: turn 1 did not reach turn:complete (${turnOne.failure})`);
+    }
+    const turnTwo = await drainChatSend(
+      client,
+      conversationId,
+      "name the first hit's path",
+    );
+    if (!turnTwo.reachedTurnComplete) {
+      throw new Error(`multiturn: turn 2 did not reach turn:complete (${turnTwo.failure})`);
+    }
+    if (turnTwo.assistantChars === 0) {
+      throw new Error("multiturn: turn 2 produced no assistant content");
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+async function startMultiTurnConversation(
+  client: Awaited<ReturnType<typeof connectClient>>,
+): Promise<string> {
+  for await (const frame of client.call("chat.start", { topic: "smoke multi-turn" })) {
+    if (frame.type === "result") {
+      const detail = frame as unknown as { conversation?: { id?: string } };
+      if (typeof detail.conversation?.id === "string") return detail.conversation.id;
+      throw new Error("multiturn: chat.start missing conversation.id");
+    }
+    if (frame.type === "error") {
+      throw new Error(
+        `multiturn: chat.start failed (${(frame as { message?: string }).message ?? "unknown"})`,
+      );
+    }
+  }
+  throw new Error("multiturn: chat.start stream ended without result");
+}
+
+interface ChatTurnSummary {
+  reachedTurnComplete: boolean;
+  assistantChars: number;
+  failure?: string;
+}
+
+async function drainChatSend(
+  client: Awaited<ReturnType<typeof connectClient>>,
+  conversationId: string,
+  userMessage: string,
+): Promise<ChatTurnSummary> {
+  const summary: ChatTurnSummary = { reachedTurnComplete: false, assistantChars: 0 };
+  for await (const frame of client.call("chat.send", { conversationId, userMessage })) {
+    if (frame.type === "event") {
+      const detail = frame as unknown as { event: string; [key: string]: unknown };
+      if (detail.event === "turn:complete") summary.reachedTurnComplete = true;
+      if (detail.event === "loop:assistant_delta") {
+        const delta = detail.contentDelta;
+        if (typeof delta === "string") summary.assistantChars += delta.length;
+      }
+      if (detail.event === "loop:error" && summary.failure === undefined) {
+        const message = (detail as { message?: unknown }).message;
+        summary.failure = typeof message === "string" ? message : "loop:error";
+      }
+      if (detail.event === "turn:aborted" && summary.failure === undefined) {
+        const reason = (detail as { reason?: unknown }).reason;
+        summary.failure = typeof reason === "string" ? reason : "turn:aborted";
+      }
+      continue;
+    }
+    if (frame.type === "result") return summary;
+    if (frame.type === "error") {
+      const message = (frame as { message?: unknown }).message;
+      summary.failure =
+        typeof message === "string" ? message : "rpc error without message";
+      return summary;
+    }
+  }
+  return summary;
 }
 
 async function pinToolMode(
