@@ -1,5 +1,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
-import type React from "react";
+import { Fragment, type ReactNode } from "react";
+import { type ChatLineKind, chatLineMeta, shouldRenderSpacer } from "./chatLineStyles";
 
 export type ChatLine =
   | { kind: "user"; text: string }
@@ -9,30 +10,13 @@ export type ChatLine =
   | { kind: "system"; text: string }
   | { kind: "approval"; text: string; callId: string };
 
-const COLORS: Record<ChatLine["kind"], string> = {
-  user: "#7DD3FC",
-  assistant: "#FFFFFF",
-  tool: "#A78BFA",
-  error: "#F87171",
-  system: "#94A3B8",
-  approval: "#FBBF24",
-};
-
-const PREFIXES: Record<ChatLine["kind"], string> = {
-  user: "› ",
-  assistant: "  ",
-  tool: "↻ ",
-  error: "✗ ",
-  system: "· ",
-  approval: "? ",
-};
-
 export interface ChatViewProps {
   lines: ChatLine[];
   scrollRef?: React.MutableRefObject<ScrollBoxRenderable | null>;
 }
 
-export function ChatView({ lines, scrollRef }: ChatViewProps): React.ReactNode {
+export function ChatView({ lines, scrollRef }: ChatViewProps): ReactNode {
+  const kinds = lines.map((line) => line.kind);
   return (
     <scrollbox
       ref={scrollRef ?? undefined}
@@ -46,11 +30,33 @@ export function ChatView({ lines, scrollRef }: ChatViewProps): React.ReactNode {
       stickyStart="bottom"
     >
       {lines.map((line, index) => (
-        <text key={`${line.kind}-${index}`} fg={COLORS[line.kind]}>
-          {PREFIXES[line.kind]}
-          {line.text}
-        </text>
+        <Fragment key={`${line.kind}-${index}`}>
+          {shouldRenderSpacer(kinds as ChatLineKind[], index) ? <text> </text> : null}
+          <ChatLineRow line={line} />
+        </Fragment>
       ))}
     </scrollbox>
+  );
+}
+
+function ChatLineRow({ line }: { line: ChatLine }): ReactNode {
+  const meta = chatLineMeta(line.kind);
+  if (line.kind === "approval") {
+    return (
+      <text>
+        <span fg={meta.labelColor}>{`${meta.label} ▸ `}</span>
+        <span fg={meta.bodyColor}>{"Tool wants to run. Reply "}</span>
+        <span fg="#F8FAFC">{`/approve ${line.callId}`}</span>
+        <span fg={meta.bodyColor}>{" or "}</span>
+        <span fg="#F8FAFC">{`/deny ${line.callId}`}</span>
+        <span fg={meta.bodyColor}>{"."}</span>
+      </text>
+    );
+  }
+  return (
+    <text>
+      <span fg={meta.labelColor}>{`${meta.label} ▸ `}</span>
+      <span fg={meta.bodyColor}>{line.text}</span>
+    </text>
   );
 }
