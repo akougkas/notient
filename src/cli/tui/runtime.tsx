@@ -111,6 +111,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         return;
       }
       if (busy) return;
+      if (handleLineEditingShortcut(event, setBuffer)) return;
       if (event.name === "tab" && !event.shift && !event.ctrl) {
         handleTabKey(buffer, setBuffer, setLines, client);
         return;
@@ -316,8 +317,42 @@ function handleEditingKey(
     setBuffer((prior) => prior.slice(0, -1));
     return;
   }
-  if (event.sequence.length === 1 && !event.ctrl && !event.meta) {
-    const char = event.sequence;
-    setBuffer((prior) => prior + char);
+  if (event.ctrl || event.meta) return;
+  // Pastes (and OS dictation) arrive here as a single multi-character key sequence;
+  // applyPrintableInput strips embedded control characters and appends the rest.
+  setBuffer((prior) => applyPrintableInput(prior, event.sequence));
+}
+
+function handleLineEditingShortcut(
+  event: KeyEvent,
+  setBuffer: React.Dispatch<React.SetStateAction<string>>,
+): boolean {
+  if (!event.ctrl) return false;
+  if (event.name === "u") {
+    setBuffer((prior) => killLine(prior));
+    return true;
   }
+  if (event.name === "w") {
+    setBuffer((prior) => killWord(prior));
+    return true;
+  }
+  return false;
+}
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ASCII control bytes from pasted input is the entire purpose of this regex.
+const CONTROL_CHARACTER_PATTERN = /[\x00-\x1f\x7f]/g;
+
+export function applyPrintableInput(buffer: string, sequence: string): string {
+  const printable = sequence.replace(CONTROL_CHARACTER_PATTERN, "");
+  if (printable.length === 0) return buffer;
+  return buffer + printable;
+}
+
+export function killLine(_buffer: string): string {
+  return "";
+}
+
+export function killWord(buffer: string): string {
+  if (buffer.length === 0) return "";
+  return buffer.replace(/\s*\S+\s*$/, "");
 }

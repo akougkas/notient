@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildStatusLabel, frameToErrorLine } from "./runtime";
+import {
+  applyPrintableInput,
+  buildStatusLabel,
+  frameToErrorLine,
+  killLine,
+  killWord,
+} from "./runtime";
 
 describe("buildStatusLabel", () => {
   test("renders idle status with vault basename", () => {
@@ -33,5 +39,48 @@ describe("frameToErrorLine", () => {
   test("falls back to default when message is absent", () => {
     const line = frameToErrorLine({ type: "error" } as { type: "error" });
     expect(line).toEqual({ kind: "error", text: "rpc error: unknown" });
+  });
+});
+
+describe("applyPrintableInput", () => {
+  test("appends a single printable character", () => {
+    expect(applyPrintableInput("hel", "p")).toBe("help");
+  });
+
+  test("appends a multi-character pasted string", () => {
+    expect(applyPrintableInput("note: ", "hello world")).toBe("note: hello world");
+  });
+
+  test("strips embedded control characters from a paste", () => {
+    expect(applyPrintableInput("a", "b\x00c\x1bd\x7fe")).toBe("abcde");
+  });
+
+  test("returns the buffer unchanged when sequence is only control characters", () => {
+    expect(applyPrintableInput("buffer", "\x1b\x00\x7f")).toBe("buffer");
+  });
+});
+
+describe("killLine", () => {
+  test("returns empty string regardless of buffer contents", () => {
+    expect(killLine("hello world")).toBe("");
+    expect(killLine("")).toBe("");
+  });
+});
+
+describe("killWord", () => {
+  test("returns empty string when the buffer is empty", () => {
+    expect(killWord("")).toBe("");
+  });
+
+  test("drops the final whitespace-then-word run", () => {
+    expect(killWord("hello world")).toBe("hello");
+  });
+
+  test("drops trailing whitespace before the last word", () => {
+    expect(killWord("foo bar   ")).toBe("foo");
+  });
+
+  test("clears a single trailing word with no whitespace", () => {
+    expect(killWord("solo")).toBe("");
   });
 });
