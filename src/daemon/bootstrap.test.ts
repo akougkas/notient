@@ -12,11 +12,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { NotesHistoryRecord } from "../core/chat/tools/notes";
+import type { ToolCall } from "../core/chat/types";
 import { Database } from "../core/db/database";
 import { MemoryAdapter, loadWasm } from "../core/db/database.test";
 import { HistoryService } from "../core/history/historyService";
 import type { HistoryKind } from "../core/history/types";
-import { buildHistoryInverters } from "./bootstrap";
+import { buildHistoryInverters, buildRecordHistoryAutoApprove } from "./bootstrap";
 
 async function newDb(): Promise<Database> {
   const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
@@ -52,6 +53,54 @@ describe("bootstrap recordHistory wiring", () => {
     expect(recent[0].target).toBe("scratch.md");
     expect(recent[0].after).toBe("hello world");
     expect(recent[0].before).toBeNull();
+  });
+});
+
+describe("bootstrap buildRecordHistoryAutoApprove", () => {
+  test("yolo-mode auto-approval records a chat.auto_approve audit row", async () => {
+    const database = await newDb();
+    const historyService = new HistoryService({
+      db: database,
+      inverters: {},
+      retention: { max: 200, maxPerTarget: 20 },
+    });
+    const recordHistoryAutoApprove = buildRecordHistoryAutoApprove(historyService);
+    const call: ToolCall = {
+      id: "call-1",
+      name: "notes.create",
+      args: { path: "/scratch.md", content: "hi" },
+    };
+    await recordHistoryAutoApprove(call);
+    const recent = historyService.getRecent(5);
+    expect(recent).toHaveLength(1);
+    expect(recent[0].kind).toBe("chat.auto_approve");
+    expect(recent[0].target).toBe("/scratch.md");
+    const after = recent[0].after as { tool: string; args: Record<string, unknown> };
+    expect(after.tool).toBe("notes.create");
+    expect(after.args.path).toBe("/scratch.md");
+  });
+
+  test("auto-approval rows precede the tool's own write row in history order", async () => {
+    const database = await newDb();
+    const historyService = new HistoryService({
+      db: database,
+      inverters: {},
+      retention: { max: 200, maxPerTarget: 20 },
+    });
+    const recordHistoryAutoApprove = buildRecordHistoryAutoApprove(historyService);
+    await recordHistoryAutoApprove({
+      id: "call-1",
+      name: "notes.create",
+      args: { path: "/x.md" },
+    });
+    await historyService.record({
+      kind: "notes.create",
+      target: "/x.md",
+      before: null,
+      after: "body",
+    });
+    const recent = historyService.getRecent(5);
+    expect(recent.map((row) => row.kind)).toEqual(["notes.create", "chat.auto_approve"]);
   });
 });
 

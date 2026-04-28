@@ -12,6 +12,7 @@
  *     mutations from the chat tool ones above.
  */
 export type HistoryKind =
+  | "chat.auto_approve"
   | "edge.approve"
   | "edge.reject"
   | "node.approve"

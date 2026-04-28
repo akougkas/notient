@@ -14,6 +14,7 @@ import { ConversationIndex } from "../core/chat/conversationIndex";
 import { ConversationStore } from "../core/chat/conversationStore";
 import type { ToolMode, ToolModeCache } from "../core/chat/toolModeProbe";
 import { InMemoryClusterCache } from "../core/chat/tools/graph";
+import type { ToolCall } from "../core/chat/types";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import { Database } from "../core/db/database";
@@ -412,26 +413,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
   await conversationIndex.load();
 
-  const approvalGate = new ApprovalGate({
-    events: {
-      onPending: () => {
-        // Bootstrap registers a noop hook; the daemon's chat handler
-        // (Task 13) re-binds onPending/onResolved per turn so wire frames
-        // get emitted with a turn-scoped envelopeId.
-      },
-      onResolved: () => {
-        // See above.
-      },
-    },
-    recordHistoryAutoApprove: async () => {
-      // Phase D wires this into history; Phase C noops so the gate
-      // resolves immediately without a missing-hook error.
-    },
-    perToolPolicy: current.chat.perTool,
-  });
-
-  const clusterCache = new InMemoryClusterCache();
-
   const notesFacade = {
     readNote: (path: string) => vault.read(path),
     writeNote: (path: string, content: string) => vault.write(path, content),
@@ -454,6 +435,23 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       maxPerTarget: current.chat.history.maxPerTarget,
     },
   });
+
+  const approvalGate = new ApprovalGate({
+    events: {
+      onPending: () => {
+        // Bootstrap registers a noop hook; the daemon's chat handler
+        // (Task 13) re-binds onPending/onResolved per turn so wire frames
+        // get emitted with a turn-scoped envelopeId.
+      },
+      onResolved: () => {
+        // See above.
+      },
+    },
+    recordHistoryAutoApprove: buildRecordHistoryAutoApprove(historyService),
+    perToolPolicy: current.chat.perTool,
+  });
+
+  const clusterCache = new InMemoryClusterCache();
 
   const toolRegistry = buildAgentToolRegistry({
     database,
@@ -589,6 +587,28 @@ async function simpleHash(content: string): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/**
+ * Closure the daemon installs at `ApprovalGate.recordHistoryAutoApprove`.
+ * Yolo-mode tool calls invoke this hook before the tool's own write so the
+ * audit trail records the auto-approval even when the subsequent write
+ * fails. The row uses a distinct `chat.auto_approve` kind so /history shows
+ * it alongside the regular `notes.*` rows but no inverter is registered for
+ * it, which keeps /undo from silently erasing the audit record.
+ */
+export function buildRecordHistoryAutoApprove(
+  historyService: HistoryService,
+): (call: ToolCall) => Promise<void> {
+  return async (call) => {
+    const path = typeof call.args.path === "string" ? call.args.path : "";
+    await historyService.record({
+      kind: "chat.auto_approve",
+      target: path,
+      before: null,
+      after: { tool: call.name, args: call.args },
+    });
+  };
 }
 
 export interface BuildHistoryInvertersOptions {
