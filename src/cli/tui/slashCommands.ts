@@ -37,13 +37,17 @@ export function parseSlashCommand(line: string): { verb: string; rest: string } 
 }
 
 const HELP_LINES = [
-  "/read <path>      — read a vault note",
-  "/search <query>   — balanced search",
-  "/awaken           — index the vault",
-  "/vitals <path>    — note health snapshot",
-  "/health           — substrate + bridge status",
-  "/clear            — clear the transcript",
-  "/quit             — exit the TUI",
+  "/read <path>       — read a vault note",
+  "/search <query>    — balanced search",
+  "/awaken            — index the vault",
+  "/vitals <path>     — note health snapshot",
+  "/health            — substrate + bridge status",
+  "/approve <id> [r]  — approve a pending tool call",
+  "/deny <id> [r]     — deny a pending tool call",
+  "/undo              — reverse the latest write",
+  "/history           — list recent chat-driven writes",
+  "/clear             — clear the transcript",
+  "/quit              — exit the TUI",
 ];
 
 export async function dispatchSlashCommand(
@@ -58,7 +62,7 @@ export async function dispatchSlashCommand(
   if (verb === "clear") return { message: "" };
   if (verb === "read") {
     if (rest.length === 0) return { message: "/read needs a path" };
-    return rpcVitals(context, rest);
+    return rpcReadNote(context, rest);
   }
   if (verb === "search") {
     if (rest.length === 0) return { message: "/search needs a query" };
@@ -70,6 +74,15 @@ export async function dispatchSlashCommand(
     return rpcVitals(context, rest);
   }
   if (verb === "health") return rpcHealth(context);
+  if (verb === "approve" || verb === "deny") {
+    const space = rest.indexOf(" ");
+    const callId = space < 0 ? rest : rest.slice(0, space);
+    const reason = space < 0 ? "" : rest.slice(space + 1).trim();
+    if (callId.length === 0) return { message: `/${verb} needs <callId>` };
+    return rpcChatApprove(context, callId, verb === "approve", reason);
+  }
+  if (verb === "undo") return rpcUndo(context);
+  if (verb === "history") return rpcHistory(context);
   return { message: `unknown command: /${verb} (try /help)` };
 }
 
@@ -115,6 +128,68 @@ async function rpcHealth(context: SlashContext): Promise<SlashOutcome> {
     return { message: `health error: ${formatError(result)}` };
   }
   return { message: `health: ${JSON.stringify(result)}` };
+}
+
+async function rpcChatApprove(
+  context: SlashContext,
+  callId: string,
+  approved: boolean,
+  reason: string,
+): Promise<SlashOutcome> {
+  const params: Record<string, unknown> = { callId, approved };
+  if (reason.length > 0) params.reason = reason;
+  const result = await drainResult(context.client.call("chat.approve", params));
+  if (!result || result.type === "error") {
+    return { message: `${approved ? "approve" : "deny"} error: ${formatError(result)}` };
+  }
+  return { message: `${approved ? "approved" : "denied"} ${callId}` };
+}
+
+async function rpcUndo(context: SlashContext): Promise<SlashOutcome> {
+  const result = await drainResult(context.client.call("notes.undo", {}));
+  if (!result || result.type === "error") return { message: `undo error: ${formatError(result)}` };
+  const detail = result as unknown as {
+    ok?: boolean;
+    error?: string;
+    reversed?: { kind?: string; target?: string };
+  };
+  if (detail.ok !== true) {
+    return { message: `undo: ${detail.error ?? "unknown"}` };
+  }
+  const reversed = detail.reversed;
+  return { message: `undone: ${reversed?.kind ?? "?"} ${reversed?.target ?? ""}` };
+}
+
+async function rpcHistory(context: SlashContext): Promise<SlashOutcome> {
+  const result = await drainResult(context.client.call("notes.history", { limit: 10 }));
+  if (!result || result.type === "error")
+    return { message: `history error: ${formatError(result)}` };
+  const detail = result as unknown as {
+    entries?: { kind: string; target: string; createdAt: number }[];
+  };
+  const entries = detail.entries ?? [];
+  if (entries.length === 0) return { message: "history: (empty)" };
+  return {
+    message: entries
+      .map((entry) => `${entry.kind} ${entry.target} ${new Date(entry.createdAt).toISOString()}`)
+      .join("\n"),
+  };
+}
+
+async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOutcome> {
+  const result = await drainResult(context.client.call("notes.read", { path }));
+  if (!result || result.type === "error") return { message: `read error: ${formatError(result)}` };
+  const detail = result as unknown as { body?: string };
+  const body = detail.body ?? "";
+  return { message: renderNoteBody(path, body) };
+}
+
+function renderNoteBody(_path: string, body: string): string {
+  const limit = 5000;
+  if (body.length <= limit) return `\`\`\`md\n${body}\n\`\`\``;
+  const head = body.slice(0, Math.floor(limit * 0.7));
+  const tail = body.slice(body.length - Math.floor(limit * 0.3));
+  return `\`\`\`md\n${head}\n[…${body.length - limit} characters elided…]\n${tail}\n\`\`\``;
 }
 
 async function drainResult(
