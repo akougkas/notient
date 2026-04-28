@@ -20,6 +20,7 @@
  */
 
 import type { ReasoningMutex } from "../coordinator/reasoningMutex";
+import type { EventBus } from "../events/eventBus";
 import type { LLMProvider } from "../llm/provider";
 import { type AgentLoopEvent, runAgentTurn } from "./agentLoop";
 import type { ApprovalGate } from "./approvalGate";
@@ -45,6 +46,7 @@ export interface ChatServiceOptions {
   settings: () => ChatRuntimeSettings;
   generateId?: () => string;
   now?: () => number;
+  bus?: EventBus;
 }
 
 export interface ChatRuntimeSettings {
@@ -227,6 +229,7 @@ export class ChatService {
       model,
       signal,
       cache: this.options.toolModeCache,
+      bus: this.options.bus,
     });
     return mode;
   }

@@ -19,6 +19,11 @@ import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import { Database } from "../core/db/database";
 import { EventBus } from "../core/events/eventBus";
 import { GraphStore } from "../core/graph/graphStore";
+import { HistoryService } from "../core/history/historyService";
+import { makeNoteAppendSectionInverter } from "../core/history/inverters/noteAppendSection";
+import { makeNoteCreateInverter } from "../core/history/inverters/noteCreate";
+import { makeNoteFrontmatterInverter } from "../core/history/inverters/noteFrontmatter";
+import type { InverterRegistry } from "../core/history/types";
 import { Embedder } from "../core/indexer/embedder";
 import { Extractor } from "../core/indexer/extractor";
 import { HnswVectorIndex } from "../core/indexer/hnswVectorIndex";
@@ -428,6 +433,39 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     exists: (path: string) => vault.exists(path),
   };
 
+  // Inverters for the four chat-write history kinds. Graph-side and
+  // note.maturity inverters are wired alongside their producers in Task 16.
+  const noteAppendInverter = makeNoteAppendSectionInverter({
+    facade: { writeNote: notesFacade.writeNote },
+    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+    hash: simpleHash,
+  });
+  const inverters: InverterRegistry = {
+    "notes.create": makeNoteCreateInverter({
+      facade: {
+        exists: notesFacade.exists,
+        remove: (path) => vault.remove(path),
+      },
+      echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+      hash: simpleHash,
+    }),
+    "notes.append": noteAppendInverter,
+    "notes.replace_section": noteAppendInverter,
+    "notes.update_frontmatter": makeNoteFrontmatterInverter({
+      facade: { writeNote: notesFacade.writeNote },
+      echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+      hash: simpleHash,
+    }),
+  };
+  const historyService = new HistoryService({
+    db: database,
+    inverters,
+    retention: {
+      max: current.chat.history.maxEntries,
+      maxPerTarget: current.chat.history.maxPerTarget,
+    },
+  });
+
   const toolRegistry = buildAgentToolRegistry({
     database,
     searchPipeline,
@@ -438,7 +476,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
     hash: simpleHash,
     approvalMode: () => current.chat.approvalMode,
-    recordHistory: async () => 0, // Phase D wires history table writes.
+    recordHistory: async (record) => historyService.record(record),
     generateCallId: () =>
       `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     contradictionHunter,
@@ -456,10 +494,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     provider: primaryLLM,
     conversationIndex,
     embed: embedSingle,
+    bus,
     contextSettings: () => ({
       ...current.chat.context,
       contextBudgetFraction: current.chat.contextBudgetFraction,
-      modelContextTokens: 32_000,
+      modelContextTokens: current.chat.modelContextTokens,
     }),
     workspace: {
       getActiveNotePath: () => null,
@@ -509,6 +548,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     mutex: reasoningMutex,
     toolModeCache,
     embed: embedSingle,
+    bus,
     settings: (): ChatRuntimeSettings => ({
       model: current.primary.reasoningModel,
       maxRoundsPerTurn: current.chat.maxRoundsPerTurn,
@@ -523,6 +563,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("toolRegistry", toolRegistry);
   kernel.register("contextManager", contextManager);
   kernel.register("chatService", chatService);
+  kernel.register("historyService", historyService);
 
   // Optional vision routing: probe primary first; fall back to
   // chat.vision when configured. Bootstrap omits the slot when neither
