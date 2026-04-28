@@ -1,5 +1,5 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, memo, useMemo } from "react";
 import { type AssistantSegment, parseAssistantText } from "./assistantText";
 import { type ChatLineKind, chatLineMeta, shouldRenderSpacer } from "./chatLineStyles";
 
@@ -17,7 +17,7 @@ export interface ChatViewProps {
 }
 
 export function ChatView({ lines, scrollRef }: ChatViewProps): ReactNode {
-  const kinds = lines.map((line) => line.kind);
+  const kinds = useMemo(() => lines.map((line) => line.kind) as ChatLineKind[], [lines]);
   return (
     <scrollbox
       ref={scrollRef ?? undefined}
@@ -32,7 +32,7 @@ export function ChatView({ lines, scrollRef }: ChatViewProps): ReactNode {
     >
       {lines.map((line, index) => (
         <Fragment key={`${line.kind}-${index}`}>
-          {shouldRenderSpacer(kinds as ChatLineKind[], index) ? <text> </text> : null}
+          {shouldRenderSpacer(kinds, index) ? <text> </text> : null}
           <ChatLineRow line={line} />
         </Fragment>
       ))}
@@ -40,7 +40,7 @@ export function ChatView({ lines, scrollRef }: ChatViewProps): ReactNode {
   );
 }
 
-function ChatLineRow({ line }: { line: ChatLine }): ReactNode {
+const ChatLineRow = memo(function ChatLineRow({ line }: { line: ChatLine }): ReactNode {
   const meta = chatLineMeta(line.kind);
   if (line.kind === "approval") {
     return (
@@ -65,7 +65,7 @@ function ChatLineRow({ line }: { line: ChatLine }): ReactNode {
       <span fg={meta.bodyColor}>{line.text}</span>
     </text>
   );
-}
+});
 
 interface AssistantLineProps {
   text: string;
