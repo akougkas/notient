@@ -177,8 +177,14 @@ async function runChatTurn(
         setLines,
         setPendingApprovals,
       );
+      continue;
     }
-    if (frame.type === "result" || frame.type === "error") break;
+    if (frame.type === "result") break;
+    if (frame.type === "error") {
+      const errorLine = frameToErrorLine(frame as { type: "error"; message?: unknown });
+      setLines((prior) => [...prior, errorLine]);
+      break;
+    }
   }
 }
 
