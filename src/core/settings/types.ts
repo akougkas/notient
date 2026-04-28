@@ -80,6 +80,21 @@ export interface NotientSettings {
     persistReasoning: boolean;
     toolModeByModel: Record<string, "native" | "json-fallback" | "disabled">;
     perTool: Record<string, "auto" | "ask">;
+    /**
+     * Model context window in tokens. ContextManager budgets this fraction
+     * (chat.contextBudgetFraction) before triggering history summarization.
+     * Defaults to 200_000 for the locked Nemotron-Cascade-2-30B substrate;
+     * lower for 8K/32K models (Llama 3.1 8B, Qwen2.5 7B). When the
+     * configured value is too small for a given turn the loop emits
+     * loop:context_overflow_warning so the operator can adjust.
+     */
+    modelContextTokens: number;
+    history: {
+      /** Maximum HistoryService rows kept globally; older rows prune on record. */
+      maxEntries: number;
+      /** Maximum HistoryService rows per target path; older rows prune on record. */
+      maxPerTarget: number;
+    };
     vision?: {
       enabled: boolean;
       baseUrl: string;
@@ -223,6 +238,8 @@ export const DEFAULT_SETTINGS: NotientSettings = {
       crossSessionSimThreshold: 0.7,
       pinnedNoteMaxTokens: 4000,
     },
+    modelContextTokens: 200_000,
+    history: { maxEntries: 200, maxPerTarget: 20 },
   },
   history: {
     retentionMaxRows: 500,
