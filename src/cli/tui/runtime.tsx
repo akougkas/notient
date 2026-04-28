@@ -106,6 +106,7 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
   const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
   const [model, setModel] = useState<string | null>(null);
   const [lastTurnTokens, setLastTurnTokens] = useState<number | null>(null);
+  const lastAssistantRef = useRef<string | null>(null);
 
   const historyPath = useMemo(() => join(vaultPath, ".notient", "history.txt"), [vaultPath]);
   const [historyNav, setHistoryNav] = useState<HistoryNav>(() =>
@@ -122,6 +123,23 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
     }
   }, []);
 
+  const runSlash = useCallback(
+    async (line: string): Promise<void> => {
+      const outcome = await dispatchSlashCommand(line, {
+        client,
+        vaultPath,
+        getLastAssistant: () => lastAssistantRef.current,
+      });
+      if (outcome.resetTranscript) {
+        setLines([{ kind: "system", text: "Transcript cleared." }]);
+      } else if (outcome.message.length > 0) {
+        setLines((prior) => [...prior, { kind: "system", text: outcome.message }]);
+      }
+      if (outcome.exit) onExit();
+    },
+    [client, onExit, vaultPath],
+  );
+
   const submit = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -131,19 +149,13 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       setHistoryNav((prior) => historyAppend(prior, trimmed, HISTORY_MAX));
       appendHistoryToFile(historyPath, trimmed, HISTORY_MAX);
       if (isSlashCommand(trimmed)) {
-        const outcome = await dispatchSlashCommand(trimmed, { client, vaultPath });
-        if (outcome.resetTranscript) {
-          setLines([{ kind: "system", text: "Transcript cleared." }]);
-        } else if (outcome.message.length > 0) {
-          setLines((prior) => [...prior, { kind: "system", text: outcome.message }]);
-        }
-        if (outcome.exit) onExit();
+        await runSlash(trimmed);
         return;
       }
       setLines((prior) => [...prior, { kind: "user", text: trimmed }]);
       setBusy(true);
       try {
-        await runChatTurn(
+        const finalAssistant = await runChatTurn(
           client,
           conversationId,
           trimmed,
@@ -152,11 +164,12 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
           setModel,
           setLastTurnTokens,
         );
+        if (finalAssistant.length > 0) lastAssistantRef.current = finalAssistant;
       } finally {
         setBusy(false);
       }
     },
-    [client, conversationId, historyPath, onExit, vaultPath],
+    [client, conversationId, historyPath, runSlash],
   );
 
   const tryHistoryKey = useCallback(
@@ -299,7 +312,7 @@ async function runChatTurn(
   setPendingApprovals: React.Dispatch<React.SetStateAction<Map<string, string>>>,
   setModel: React.Dispatch<React.SetStateAction<string | null>>,
   setLastTurnTokens: React.Dispatch<React.SetStateAction<number | null>>,
-): Promise<void> {
+): Promise<string> {
   const turnState: TurnState = { assistantBuffer: "" };
   for await (const frame of client.call("chat.send", {
     conversationId,
@@ -323,6 +336,7 @@ async function runChatTurn(
     }
   }
   setLastTurnTokens(estimateTokens(turnState.assistantBuffer));
+  return turnState.assistantBuffer;
 }
 
 interface TurnState {

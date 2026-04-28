@@ -10,11 +10,18 @@
  * App appends to the transcript.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ClientHandle, RpcResponseFrame } from "../client";
 
 export interface SlashContext {
   client: ClientHandle;
   vaultPath: string;
+  /**
+   * Returns the most recent fully streamed assistant reply, or null when no
+   * turn has produced an assistant message yet. Used by /copy.
+   */
+  getLastAssistant?: () => string | null;
 }
 
 export interface SlashOutcome {
@@ -83,7 +90,19 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   deny: async (rest, context) => approvalVerb(rest, context, false),
   undo: async (_rest, context) => rpcUndo(context),
   history: async (_rest, context) => rpcHistory(context),
+  copy: async (_rest, context) => copyLastAssistant(context),
 };
+
+async function copyLastAssistant(context: SlashContext): Promise<SlashOutcome> {
+  const text = context.getLastAssistant?.() ?? null;
+  if (text === null || text.length === 0) {
+    return { message: "/copy: no assistant reply yet to copy." };
+  }
+  const target = join(context.vaultPath, ".notient", "last.txt");
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, text);
+  return { message: `Copied ${text.length} chars → ${target}` };
+}
 
 export async function dispatchSlashCommand(
   line: string,
