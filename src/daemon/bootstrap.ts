@@ -46,6 +46,8 @@ import { HealthMonitor } from "../core/services/healthMonitor";
 import { IdleDetector } from "../core/services/idleDetector";
 import { VaultBootstrap } from "../core/services/vaultBootstrap";
 import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
+import { parseEnvFile } from "../core/settings/envFile";
+import type { EnvSource } from "../core/settings/envOverrides";
 import { type ConfigStore, SettingsService } from "../core/settings/settingsService";
 import { VitalsService } from "../core/vitals/vitalsService";
 
@@ -74,6 +76,35 @@ const CONVERSATIONS_FOLDER = `${NOTIENT_FOLDER}/conversations`;
 const PROPOSALS_FOLDER = `${NOTIENT_FOLDER}/proposals`;
 const SAVED_QUERIES_FOLDER = `${NOTIENT_FOLDER}/searches`;
 const SIDECAR_PATH = `${NOTIENT_FOLDER}/.index.json`;
+const ENV_PATH = `${NOTIENT_DIR}/.env`;
+const ENV_KEYS: ReadonlyArray<keyof EnvSource> = [
+  "NOTIENT_LLM_BASE_URL",
+  "NOTIENT_LLM_MODEL",
+  "NOTIENT_EMBED_MODEL",
+  "NOTIENT_CONTEXT_TOKENS",
+];
+
+/**
+ * Build an EnvSource by overlaying process.env on top of the vault's
+ * <vault>/.notient/.env file. Process env wins so an operator can run
+ * NOTIENT_LLM_MODEL=... bun ... daemon start to override the vault default
+ * for one boot. Only NOTIENT_-prefixed keys we explicitly recognize are
+ * carried through.
+ */
+async function readEnvSource(vault: FsVault, processEnv: NodeJS.ProcessEnv): Promise<EnvSource> {
+  const fileEnv = await vault
+    .read(ENV_PATH)
+    .then((text) => (text === null ? {} : parseEnvFile(text)))
+    .catch(() => ({}) as Record<string, string>);
+  const result: Record<string, string> = {};
+  for (const key of ENV_KEYS) {
+    const fileValue = fileEnv[key];
+    const processValue = processEnv[key];
+    const chosen = processValue ?? fileValue;
+    if (typeof chosen === "string" && chosen.length > 0) result[key] = chosen;
+  }
+  return result as EnvSource;
+}
 
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
   const vault = new FsVault(options.vaultPath);
@@ -95,7 +126,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   };
   const settings = new SettingsService(configStore, bus);
-  await settings.load();
+  const envSource = await readEnvSource(vault, process.env);
+  await settings.load(envSource);
   const current = settings.get();
 
   const lockFs = {

@@ -1,4 +1,5 @@
 import type { EventBus } from "../events/eventBus";
+import { type EnvSource, applyEnvOverrides } from "./envOverrides";
 import { DEFAULT_SETTINGS, type NotientSettings } from "./types";
 
 /**
@@ -12,26 +13,40 @@ export interface ConfigStore {
 }
 
 export class SettingsService {
-  private current: NotientSettings = DEFAULT_SETTINGS;
+  /** Persisted settings — what config.json holds, never includes env. */
+  private persisted: NotientSettings = DEFAULT_SETTINGS;
+  /** Env source applied on top of persisted; never written back to disk. */
+  private envSource: EnvSource = {};
 
   constructor(
     private readonly store: ConfigStore,
     private readonly bus: EventBus,
   ) {}
 
-  async load(): Promise<NotientSettings> {
+  async load(envSource: EnvSource = {}): Promise<NotientSettings> {
     const raw = (await this.store.load()) as Partial<NotientSettings> | null;
-    this.current = mergeSettings(DEFAULT_SETTINGS, raw ?? {});
-    return this.current;
+    this.persisted = mergeSettings(DEFAULT_SETTINGS, raw ?? {});
+    this.envSource = envSource;
+    return this.get();
   }
 
+  /** Returns the live view: persisted config with env overrides layered on. */
   get(): NotientSettings {
-    return this.current;
+    return applyEnvOverrides(this.persisted, this.envSource);
+  }
+
+  /**
+   * Returns the persisted view, ignoring env overrides. Use this when
+   * writing back to disk via update() or surfacing what config.json holds
+   * (e.g. /model show).
+   */
+  getPersisted(): NotientSettings {
+    return this.persisted;
   }
 
   async update(patch: Partial<NotientSettings>): Promise<void> {
-    this.current = mergeSettings(this.current, patch);
-    await this.store.save(this.current);
+    this.persisted = mergeSettings(this.persisted, patch);
+    await this.store.save(this.persisted);
     this.bus.emit({ type: "settings:changed", key: Object.keys(patch).join(",") });
   }
 }

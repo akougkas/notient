@@ -67,3 +67,9 @@ mprocs.log
 # Notient v0.1 archive
 /.nuked/
 dist/
+
+# Local operator env. The canonical config still lives in
+# <vault>/.notient/config.json and <vault>/.notient/.env; the project-root
+# .env here is just a developer convenience for `bun run dev` flows.
+.env
+.env.local
