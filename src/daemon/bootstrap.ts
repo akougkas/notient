@@ -482,11 +482,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     conversationIndex,
     embed: embedSingle,
     bus,
-    contextSettings: () => ({
-      ...current.chat.context,
-      contextBudgetFraction: current.chat.contextBudgetFraction,
-      modelContextTokens: current.chat.modelContextTokens,
-    }),
+    contextSettings: () => {
+      const live = settings.get().chat;
+      return {
+        ...live.context,
+        contextBudgetFraction: live.contextBudgetFraction,
+        modelContextTokens: live.modelContextTokens,
+      };
+    },
     workspace: {
       getActiveNotePath: () => null,
       getOpenNotePaths: () => [],
