@@ -13,6 +13,7 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "health",
   "lock",
   "echoGuard",
+  "probeCache",
   "indexer",
   "vectorIndex",
   "embedder",

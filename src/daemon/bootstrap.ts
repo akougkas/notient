@@ -44,6 +44,8 @@ import { SearchPipeline } from "../core/search/searchPipeline";
 import { EchoGuard } from "../core/services/echoGuard";
 import { HealthMonitor } from "../core/services/healthMonitor";
 import { IdleDetector } from "../core/services/idleDetector";
+import { ProbeCache } from "../core/services/probeCache";
+import { runStartupProbe } from "../core/services/startupProbe";
 import { VaultBootstrap } from "../core/services/vaultBootstrap";
 import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
 import { parseEnvFile } from "../core/settings/envFile";
@@ -183,6 +185,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("health", health);
   kernel.register("lock", lockHandle);
   kernel.register("echoGuard", echoGuard);
+  kernel.register("probeCache", new ProbeCache(bus));
 
   if (phaseA) {
     kernel.seal({ phase: "A" });
@@ -609,6 +612,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.seal({ phase: "C" });
   health.start();
   idleDetector.start();
+
+  // Fire-and-forget startup probe so boot stays fast (network roundtrip
+  // bounded by AbortController in runStartupProbe).
+  void runStartupProbe({
+    endpoint: current.primary.baseUrl,
+    modelId: current.primary.reasoningModel,
+    configuredContextTokens: current.chat.modelContextTokens,
+  }).then((event) => {
+    bus.emit({ type: "daemon:startup_probe", ...event });
+  });
 
   return {
     kernel,

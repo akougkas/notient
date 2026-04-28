@@ -93,6 +93,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   dispatcher.register("daemon.status", async () => {
+    const probe = kernel.has("probeCache") ? kernel.get("probeCache").get() : null;
     return {
       ok: true,
       vault: args.vaultPath,
@@ -101,6 +102,7 @@ async function main(argv: string[]): Promise<void> {
       startedAt,
       version: VERSION,
       sealed: kernel.isSealed(),
+      probe,
     };
   });
 

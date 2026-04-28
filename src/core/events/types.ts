@@ -58,7 +58,8 @@ export type AppEvent =
   | { type: "bridge:down"; error?: string }
   | ({ type: "loop:context_summarized" } & ContextSummarizedEvent)
   | ({ type: "loop:context_overflow_warning" } & ContextOverflowWarningEvent)
-  | ({ type: "loop:tool_mode_probed" } & ToolModeProbedEvent);
+  | ({ type: "loop:tool_mode_probed" } & ToolModeProbedEvent)
+  | ({ type: "daemon:startup_probe" } & StartupProbeEvent);
 
 export interface IndexerNoteResult {
   chunkCount: number;
@@ -86,6 +87,21 @@ export interface ToolModeProbedEvent {
   model: string;
   mode: "native" | "json-fallback" | "disabled";
   attempts: number;
+}
+
+export type StartupProbeStatus =
+  | "ok"
+  | "loaded-too-small"
+  | "model-not-loaded"
+  | "endpoint-unreachable";
+
+export interface StartupProbeEvent {
+  endpoint: string;
+  modelId: string;
+  configuredContextTokens: number;
+  loadedContextLength: number | null;
+  status: StartupProbeStatus;
+  message: string;
 }
 
 export type EventType = AppEvent["type"];

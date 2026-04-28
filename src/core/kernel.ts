@@ -26,6 +26,7 @@ import type { SearchPipeline } from "./search/searchPipeline";
 import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
 import type { IdleDetector } from "./services/idleDetector";
+import type { ProbeCache } from "./services/probeCache";
 import type { VaultBootstrap } from "./services/vaultBootstrap";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
@@ -44,6 +45,7 @@ export interface ServiceRegistry {
   health: HealthMonitor;
   lock: VaultLockHandle;
   echoGuard: EchoGuard;
+  probeCache: ProbeCache;
   indexer: IndexerQueue;
   vectorIndex: VectorIndex;
   embedder: Embedder;
@@ -101,6 +103,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "health",
   "lock",
   "echoGuard",
+  "probeCache",
   "indexer",
   "vectorIndex",
   "embedder",
@@ -139,6 +142,7 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "health",
   "lock",
   "echoGuard",
+  "probeCache",
 ];
 
 const PHASE_B_KEYS: ServiceKey[] = [

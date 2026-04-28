@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { type KeyEvent, type ScrollBoxRenderable, createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type React from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { type ClientHandle, connectClient } from "../client";
 import type { Emitter } from "../output";
@@ -114,6 +114,20 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
   );
   const historyAnchorRef = useRef<string | null>(null);
   const scrollRef = useRef<ScrollBoxRenderable | null>(null);
+
+  // Surface the daemon's startup probe once at TUI boot if it found a
+  // mismatch. The probe runs fire-and-forget at daemon seal so it is
+  // usually ready by the time the TUI connects; if it isn't yet, we just
+  // skip — the operator can re-run /model show later.
+  useEffect(() => {
+    const cancel = { value: false };
+    void surfaceProbeWarning(client, cancel, (text) => {
+      setLines((prior) => [...prior, { kind: "system", text }]);
+    });
+    return () => {
+      cancel.value = true;
+    };
+  }, [client]);
 
   const handleBufferChange = useCallback((next: string) => {
     setBuffer(next);
@@ -260,6 +274,25 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       <FooterHint />
     </box>
   );
+}
+
+async function surfaceProbeWarning(
+  client: ClientHandle,
+  cancel: { value: boolean },
+  emit: (text: string) => void,
+): Promise<void> {
+  try {
+    for await (const frame of client.call("daemon.status", {})) {
+      if (cancel.value) return;
+      if (frame.type !== "result") continue;
+      const probe = (frame as { probe?: { status: string; message: string } }).probe;
+      if (!probe || probe.status === "ok") return;
+      emit(`startup probe: ${probe.message}`);
+      return;
+    }
+  } catch {
+    // best-effort surfacing
+  }
 }
 
 function FooterHint(): React.ReactNode {
