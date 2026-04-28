@@ -1,5 +1,5 @@
 import { type KeyEvent, createCliRenderer } from "@opentui/core";
-import { createRoot, useKeyboard } from "@opentui/react";
+import { createRoot, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type React from "react";
 import { useCallback, useState } from "react";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
@@ -8,6 +8,7 @@ import type { Emitter } from "../output";
 import { type ChatLine, ChatView } from "./ChatView";
 import { InputBar } from "./InputBar";
 import { completeAtMention } from "./attachments";
+import { computeInputHeight } from "./inputBindings";
 import { dispatchSlashCommand, isSlashCommand } from "./slashCommands";
 
 export interface TuiRuntimeOptions {
@@ -83,19 +84,21 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
 
   const submit = useCallback(
     async (text: string) => {
-      if (text.trim().length === 0) return;
-      if (isSlashCommand(text)) {
-        const outcome = await dispatchSlashCommand(text, { client, vaultPath });
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return;
+      setBuffer("");
+      if (isSlashCommand(trimmed)) {
+        const outcome = await dispatchSlashCommand(trimmed, { client, vaultPath });
         if (outcome.message.length > 0) {
           setLines((prior) => [...prior, { kind: "system", text: outcome.message }]);
         }
         if (outcome.exit) onExit();
         return;
       }
-      setLines((prior) => [...prior, { kind: "user", text }]);
+      setLines((prior) => [...prior, { kind: "user", text: trimmed }]);
       setBusy(true);
       try {
-        await runChatTurn(client, conversationId, text, setLines, setPendingApprovals);
+        await runChatTurn(client, conversationId, trimmed, setLines, setPendingApprovals);
       } finally {
         setBusy(false);
       }
@@ -111,22 +114,32 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         return;
       }
       if (busy) return;
-      if (handleLineEditingShortcut(event, setBuffer)) return;
       if (event.name === "tab" && !event.shift && !event.ctrl) {
         handleTabKey(buffer, setBuffer, setLines, client);
-        return;
+        event.preventDefault();
       }
-      handleEditingKey(event, buffer, setBuffer, submit);
     },
-    [busy, buffer, client, onExit, submit],
+    [busy, buffer, client, onExit],
   );
   useKeyboard(handleKey);
+
+  const { width } = useTerminalDimensions();
+  const inputHeight = computeInputHeight(buffer, Math.max(1, width - 2), 6);
 
   return (
     <box flexDirection="column" width="100%" height="100%">
       <StatusBar vaultPath={vaultPath} busy={busy} pendingCount={pendingApprovals.size} />
       <ChatView lines={lines} />
-      <InputBar busy={busy} buffer={buffer} />
+      <InputBar
+        busy={busy}
+        value={buffer}
+        height={inputHeight}
+        focused={!busy}
+        onChange={setBuffer}
+        onSubmit={(final) => {
+          void submit(final);
+        }}
+      />
     </box>
   );
 }
@@ -300,59 +313,4 @@ function handleTabKey(
   void completeAtMention(trailing.slice(1), buffer, lastSpaceIndex, setBuffer, appendSystemLine, {
     client,
   });
-}
-
-function handleEditingKey(
-  event: KeyEvent,
-  buffer: string,
-  setBuffer: React.Dispatch<React.SetStateAction<string>>,
-  submit: (text: string) => void | Promise<void>,
-): void {
-  if (event.name === "return" || event.name === "enter") {
-    setBuffer("");
-    void submit(buffer);
-    return;
-  }
-  if (event.name === "backspace") {
-    setBuffer((prior) => prior.slice(0, -1));
-    return;
-  }
-  if (event.ctrl || event.meta) return;
-  // Pastes (and OS dictation) arrive here as a single multi-character key sequence;
-  // applyPrintableInput strips embedded control characters and appends the rest.
-  setBuffer((prior) => applyPrintableInput(prior, event.sequence));
-}
-
-function handleLineEditingShortcut(
-  event: KeyEvent,
-  setBuffer: React.Dispatch<React.SetStateAction<string>>,
-): boolean {
-  if (!event.ctrl) return false;
-  if (event.name === "u") {
-    setBuffer((prior) => killLine(prior));
-    return true;
-  }
-  if (event.name === "w") {
-    setBuffer((prior) => killWord(prior));
-    return true;
-  }
-  return false;
-}
-
-// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ASCII control bytes from pasted input is the entire purpose of this regex.
-const CONTROL_CHARACTER_PATTERN = /[\x00-\x1f\x7f]/g;
-
-export function applyPrintableInput(buffer: string, sequence: string): string {
-  const printable = sequence.replace(CONTROL_CHARACTER_PATTERN, "");
-  if (printable.length === 0) return buffer;
-  return buffer + printable;
-}
-
-export function killLine(_buffer: string): string {
-  return "";
-}
-
-export function killWord(buffer: string): string {
-  if (buffer.length === 0) return "";
-  return buffer.replace(/\s*\S+\s*$/, "");
 }
