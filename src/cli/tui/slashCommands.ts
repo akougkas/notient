@@ -37,26 +37,39 @@ export function parseSlashCommand(line: string): { verb: string; rest: string } 
   };
 }
 
-const HELP_LINES = [
-  "/read <path>       — read a vault note",
-  "/search <query>    — balanced search",
-  "/awaken            — index the vault",
-  "/vitals <path>     — note health snapshot",
-  "/health            — substrate + bridge status",
-  "/approve <id> [r]  — approve a pending tool call",
-  "/deny <id> [r]     — deny a pending tool call",
-  "/undo              — reverse the latest write",
-  "/history           — list recent chat-driven writes",
-  "/clear             — clear the transcript",
-  "/quit              — exit the TUI",
+const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["/read <path>", "read a vault note"],
+  ["/search <query>", "balanced search"],
+  ["/awaken", "index the vault"],
+  ["/vitals <path>", "note health snapshot"],
+  ["/health", "substrate + bridge status"],
+  ["/approve <id> [r]", "approve a pending tool call"],
+  ["/deny <id> [r]", "deny a pending tool call"],
+  ["/undo", "reverse the latest write"],
+  ["/history", "list recent chat-driven writes"],
+  ["/copy", "save the last assistant reply"],
+  ["/clear", "clear the transcript"],
+  ["/help", "show this table"],
+  ["/quit", "exit the TUI"],
 ];
+
+export function buildHelpTable(): string {
+  const verbWidth = HELP_ROWS.reduce((max, [verb]) => Math.max(max, verb.length), 0);
+  const descWidth = HELP_ROWS.reduce((max, [, desc]) => Math.max(max, desc.length), 0);
+  const top = `┌${"─".repeat(verbWidth + 2)}┬${"─".repeat(descWidth + 2)}┐`;
+  const bottom = `└${"─".repeat(verbWidth + 2)}┴${"─".repeat(descWidth + 2)}┘`;
+  const rows = HELP_ROWS.map(
+    ([verb, desc]) => `│ ${verb.padEnd(verbWidth)} │ ${desc.padEnd(descWidth)} │`,
+  );
+  return [top, ...rows, bottom].join("\n");
+}
 
 type SlashHandler = (rest: string, context: SlashContext) => Promise<SlashOutcome>;
 
 const VERB_TABLE: Record<string, SlashHandler> = {
   quit: async () => ({ message: "bye.", exit: true }),
   exit: async () => ({ message: "bye.", exit: true }),
-  help: async () => ({ message: HELP_LINES.join("\n") }),
+  help: async () => ({ message: buildHelpTable() }),
   clear: async () => ({ message: "", resetTranscript: true }),
   read: async (rest, context) =>
     rest.length === 0 ? { message: "/read needs a path" } : rpcReadNote(context, rest),

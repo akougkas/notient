@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ClientHandle, RpcResponseFrame } from "../client";
 import {
+  buildHelpTable,
   dispatchSlashCommand,
   isSlashCommand,
   parseSlashCommand,
@@ -26,6 +27,28 @@ describe("parseSlashCommand", () => {
 
   test("handles trailing whitespace", () => {
     expect(parseSlashCommand("/help   ")).toEqual({ verb: "help", rest: "" });
+  });
+});
+
+describe("buildHelpTable", () => {
+  test("renders a top border, rows, and bottom border", () => {
+    const table = buildHelpTable();
+    const lines = table.split("\n");
+    expect(lines[0]?.startsWith("┌")).toBe(true);
+    expect(lines.at(-1)?.startsWith("└")).toBe(true);
+    expect(lines.length).toBeGreaterThan(5);
+  });
+
+  test("aligns the verb column so every row has identical width", () => {
+    const lines = buildHelpTable().split("\n");
+    const widths = new Set(lines.filter((l) => l.startsWith("│")).map((l) => l.length));
+    expect(widths.size).toBe(1);
+  });
+
+  test("includes the /quit verb with its description", () => {
+    const table = buildHelpTable();
+    expect(table).toContain("/quit");
+    expect(table).toContain("exit the TUI");
   });
 });
 
