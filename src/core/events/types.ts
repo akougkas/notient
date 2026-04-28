@@ -55,7 +55,10 @@ export type AppEvent =
       decision: "accepted" | "rejected";
     }
   | { type: "bridge:up"; version?: string }
-  | { type: "bridge:down"; error?: string };
+  | { type: "bridge:down"; error?: string }
+  | ({ type: "loop:context_summarized" } & ContextSummarizedEvent)
+  | ({ type: "loop:context_overflow_warning" } & ContextOverflowWarningEvent)
+  | ({ type: "loop:tool_mode_probed" } & ToolModeProbedEvent);
 
 export interface IndexerNoteResult {
   chunkCount: number;
@@ -63,6 +66,26 @@ export interface IndexerNoteResult {
   nodeCount: number;
   edgeCount: number;
   durationMs: number;
+}
+
+export interface ContextSummarizedEvent {
+  conversationId: string;
+  model: string;
+  originalTokens: number;
+  summarizedTokens: number;
+}
+
+export interface ContextOverflowWarningEvent {
+  conversationId: string;
+  model: string;
+  configuredTokens: number;
+  estimatedTokens: number;
+}
+
+export interface ToolModeProbedEvent {
+  model: string;
+  mode: "native" | "json-fallback" | "disabled";
+  attempts: number;
 }
 
 export type EventType = AppEvent["type"];
