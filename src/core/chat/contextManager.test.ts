@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Database } from "../db/database";
 import { EventBus } from "../events/eventBus";
-import type { ContextSummarizedEvent } from "../events/types";
+import type { ContextOverflowWarningEvent, ContextSummarizedEvent } from "../events/types";
 import type {
   ChatOptions,
   ChatWithToolsHandle,
@@ -306,6 +306,34 @@ describe("ContextManager.compose", () => {
     expect(events[0].conversationId).toBe(conversation.id);
     expect(events[0].originalTokens).toBeGreaterThan(events[0].summarizedTokens);
     expect(events[0].model).toBe("Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M");
+  });
+
+  test("emits loop:context_overflow_warning when used > modelContextTokens", async () => {
+    const longHistory: ChatMessage[] = [];
+    for (let index = 0; index < 6; index++) {
+      longHistory.push(makeMessage("user", "y".repeat(200), index));
+    }
+    const bus = new EventBus();
+    const warnings: ContextOverflowWarningEvent[] = [];
+    bus.on("loop:context_overflow_warning", (event) => {
+      warnings.push(event);
+    });
+    const { manager } = makeManager({
+      bus,
+      contextSettings: () =>
+        defaultSettings({ modelContextTokens: 50, contextBudgetFraction: 0.5 }),
+      estimateTokens: (text) => text.length,
+    });
+    const conversation = makeConversation({ messages: longHistory });
+    await manager.compose(
+      conversation,
+      makeMessage("user", "trigger", 99),
+      new AbortController().signal,
+    );
+    expect(warnings.length).toBe(1);
+    expect(warnings[0].configuredTokens).toBe(50);
+    expect(warnings[0].estimatedTokens).toBeGreaterThan(50);
+    expect(warnings[0].conversationId).toBe(conversation.id);
   });
 
   test("cross-session memory injects top-K matches and excludes the current conversation", async () => {

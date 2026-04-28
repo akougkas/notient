@@ -101,12 +101,7 @@ export class ContextManager {
       tools: this.options.toolCatalog(),
     });
     const fullHistory = [...conversation.messages, latestUserMessage];
-    const budgeted = await this.budgetedHistory(
-      systemPrompt,
-      fullHistory,
-      signal,
-      conversation.id,
-    );
+    const budgeted = await this.budgetedHistory(systemPrompt, fullHistory, signal, conversation.id);
     const messages: ProviderChatMessage[] = [
       { role: "system", content: systemPrompt },
       ...budgeted.history.map((message) => toProviderMessage(message)),
@@ -223,6 +218,15 @@ export class ContextManager {
     let used = this.options.estimateTokens(systemPrompt);
     for (const message of history) {
       used += this.options.estimateTokens(message.content);
+    }
+    if (used > settings.modelContextTokens) {
+      this.options.bus?.emit({
+        type: "loop:context_overflow_warning",
+        conversationId,
+        model: this.options.summaryModel,
+        configuredTokens: settings.modelContextTokens,
+        estimatedTokens: used,
+      });
     }
     const originalTokens = used;
     if (used <= budget || history.length <= 4) {
