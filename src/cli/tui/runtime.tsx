@@ -236,6 +236,18 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
           void submit(final);
         }}
       />
+      <FooterHint />
+    </box>
+  );
+}
+
+function FooterHint(): React.ReactNode {
+  return (
+    <box height={1} paddingLeft={1} paddingRight={1}>
+      <text fg="#475569">
+        Ctrl+C exit · Ctrl+U cut-to-start · Ctrl+W kill word · Tab @-complete · Up/Dn history ·
+        PgUp/PgDn scroll · Shift+Enter newline
+      </text>
     </box>
   );
 }
