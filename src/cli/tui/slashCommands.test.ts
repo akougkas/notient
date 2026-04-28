@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { ClientHandle, RpcResponseFrame } from "../client";
-import { dispatchSlashCommand, isSlashCommand, parseSlashCommand } from "./slashCommands";
+import {
+  dispatchSlashCommand,
+  isSlashCommand,
+  parseSlashCommand,
+  renderNoteBody,
+} from "./slashCommands";
 
 describe("isSlashCommand", () => {
   test("matches lines beginning with /", () => {
@@ -184,5 +189,43 @@ describe("dispatchSlashCommand", () => {
     const [head, tail] = stripped.split(/\n\[…\d+ characters elided…\]\n/);
     expect(head?.length).toBe(3500);
     expect(tail?.length).toBe(1500);
+  });
+});
+
+describe("renderNoteBody frontmatter handling", () => {
+  test("preserves yaml frontmatter intact when body exceeds the limit", () => {
+    const frontmatter = "---\ntitle: example\ntags: [a, b, c]\nstatus: draft\n---\n";
+    const body = `${frontmatter}${"x".repeat(8000)}`;
+    const rendered = renderNoteBody("/example.md", body);
+    expect(rendered.startsWith("```md\n")).toBe(true);
+    expect(rendered).toContain(frontmatter);
+    // Truncation marker fires for the body portion past the limit.
+    expect(rendered).toMatch(/\[…\d+ characters elided…\]/);
+    // Frontmatter is NOT split: no `[...elided...]` marker before the closing ---.
+    const beforeFrontmatterClose = rendered.slice(0, rendered.indexOf("\n---\n") + 5);
+    expect(beforeFrontmatterClose).not.toContain("characters elided");
+  });
+
+  test("falls through to plain truncation when body has no frontmatter", () => {
+    const body = "x".repeat(6000);
+    const rendered = renderNoteBody("/no-fm.md", body);
+    expect(rendered.startsWith("```md\n")).toBe(true);
+    expect(rendered).toContain("[…1000 characters elided…]");
+    // No frontmatter signal in the output.
+    expect(rendered.startsWith("```md\n---")).toBe(false);
+  });
+
+  test("returns the body verbatim when under the limit", () => {
+    const frontmatter = "---\ntitle: short\n---\n";
+    const body = `${frontmatter}tiny body`;
+    const rendered = renderNoteBody("/short.md", body);
+    expect(rendered).toBe(`\`\`\`md\n${body}\n\`\`\``);
+  });
+
+  test("falls through to plain truncation when frontmatter is missing the closing fence", () => {
+    const body = `---\ntitle: never-closed\n${"y".repeat(8000)}`;
+    const rendered = renderNoteBody("/broken.md", body);
+    expect(rendered).toContain("[…");
+    expect(rendered).toContain("characters elided");
   });
 });

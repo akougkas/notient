@@ -193,12 +193,42 @@ async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOu
   return { message: renderNoteBody(path, body) };
 }
 
-function renderNoteBody(_path: string, body: string): string {
-  const limit = 5000;
-  if (body.length <= limit) return `\`\`\`md\n${body}\n\`\`\``;
-  const head = body.slice(0, Math.floor(limit * 0.7));
-  const tail = body.slice(body.length - Math.floor(limit * 0.3));
-  return `\`\`\`md\n${head}\n[…${body.length - limit} characters elided…]\n${tail}\n\`\`\``;
+const RENDER_LIMIT = 5000;
+
+/**
+ * Format a vault note body inside a fenced markdown block, head/tail
+ * truncated to ~5000 characters. When the body opens with a YAML
+ * frontmatter block (`---\n...\n---\n`), the entire block is preserved
+ * verbatim and only the body content after it is truncated; otherwise the
+ * head/tail split runs over the whole body. The truncation marker carries
+ * the elided character count so the operator knows how much was dropped.
+ */
+export function renderNoteBody(_path: string, body: string): string {
+  if (body.length <= RENDER_LIMIT) return `\`\`\`md\n${body}\n\`\`\``;
+  const frontmatter = extractFrontmatter(body);
+  if (frontmatter) {
+    const remaining = Math.max(RENDER_LIMIT - frontmatter.block.length, 800);
+    const truncatedRest = truncateMiddle(frontmatter.rest, remaining);
+    return `\`\`\`md\n${frontmatter.block}${truncatedRest}\n\`\`\``;
+  }
+  return `\`\`\`md\n${truncateMiddle(body, RENDER_LIMIT)}\n\`\`\``;
+}
+
+function extractFrontmatter(body: string): { block: string; rest: string } | null {
+  if (!body.startsWith("---\n")) return null;
+  const closeMarker = "\n---\n";
+  const closeIndex = body.indexOf(closeMarker, 4);
+  if (closeIndex < 0) return null;
+  const blockEnd = closeIndex + closeMarker.length;
+  return { block: body.slice(0, blockEnd), rest: body.slice(blockEnd) };
+}
+
+function truncateMiddle(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const head = text.slice(0, Math.floor(limit * 0.7));
+  const tail = text.slice(text.length - Math.floor(limit * 0.3));
+  const elided = text.length - head.length - tail.length;
+  return `${head}\n[…${elided} characters elided…]\n${tail}`;
 }
 
 async function drainResult(
