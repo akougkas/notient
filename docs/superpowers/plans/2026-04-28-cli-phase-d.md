@@ -2,50 +2,53 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the eight Phase C caveats and complete the chat surface so a human or another agent can resolve write approvals over the wire (`/approve`, `/deny`), undo the last write (`/undo`), inspect write history (`/history`), tab-complete `@<path>` mentions, read notes through the live `/read` verb, dispatch on-demand subagents through the orchestrator, and run conversations whose context budget tracks settings rather than a hardcoded constant.
+**Goal:** Close the immediate Phase C caveats and complete the chat surface that ships in this release: a human or another agent can resolve write approvals over the wire (`/approve`, `/deny`), undo the last chat-driven write (`/undo`), inspect write history (`/history`), tab-complete `@<path>` mentions, read notes through the live `/read` verb, run conversations whose context budget tracks settings rather than a hardcoded constant, and let a flaky tool-mode probe recover before flagging a model `disabled`.
 
-**Architecture:** Phase C promoted the kernel to its chat slice (ChatService, ApprovalGate, ToolRegistry) and shipped a TUI bound to the substrate. Phase D layers two new substrate services onto that slice — `HistoryStore` for write/undo bookkeeping and `SubagentRegistry` for on-demand dispatch — extends three existing services (ContextManager emits a summarization event, toolModeProbe retries with temperature variance, ApprovalGate threads its policy through write-tool reversals), adds two RPC handlers (`vault.list`, `notes.history`), and rounds out the TUI with the missing slash verbs plus tab-driven `@`-completion. The tier-2 identity layer lands as constants in `src/agent/agentIdentity.ts` so the orchestrator can compose subagent prompts on dispatch.
+**Architecture:** Phase C promoted the kernel to its chat slice (ChatService, ApprovalGate, ToolRegistry, HistoryService). Phase D does NOT add new substrate services. Instead it (a) wires the existing `HistoryService` (already in the kernel since Phase B) through the chat write tools so `/undo` and `/history` work, (b) adds three thin RPC handlers (`vault.list`, `notes.history`, `notes.undo`, `notes.read`) over services already in the kernel, (c) emits a `loop:context_summarized` event from the existing summarization branch and reads `chat.modelContextTokens` from settings instead of hardcoding `32_000` in bootstrap, (d) hardens the tool-mode probe with a single-retry temperature variance, (e) rounds out the TUI with the missing slash verbs plus tab-driven `@`-completion. Phase D explicitly does NOT add subagents, Tier 2 identity, or `subagent.dispatch`. Both reviews surfaced a substrate blocker for that path: `ReasoningMutex.runPriority(label, task)` is preemptive, not reentrant — calling it from inside a chat task with a different label aborts the running chat task. Subagents wait for Phase E once the mutex grows a child-task contract.
 
 **Tech Stack:** Bun runtime, TypeScript strict, NDJSON over Unix socket / Windows named pipe (Phase A transport unchanged), `@opentui/core@0.1.105` + `@opentui/react@0.1.105`, `@lmstudio/sdk` providers (locked substrate at `192.168.86.143:1234`). No new deps.
 
 **Source of truth:**
-- `docs/superpowers/handoffs/2026-04-28-phase-c-debug-and-phase-d-plan.md` — Phase D scope brief (Part 2).
-- `docs/superpowers/specs/2026-04-27-notient-cli-design.md` — Section 6 Phase D deliverables (subset; this plan narrows that surface to the eight handoff items and defers `notient stream`, `notient export-canvas`, and `notient propose` to Phase E).
+- `docs/superpowers/handoffs/2026-04-28-phase-c-debug-and-phase-d-plan.md` — Phase C debug + Phase D scope brief.
+- `docs/superpowers/specs/2026-04-27-notient-cli-design.md` — Section 6 Phase D deliverables (the spec's "Phase D — Stream, approvals, apply, undo, propose, canvas, subagent on-demand" list narrows here to the items closable from the existing substrate; subagent on-demand, `notient stream`, `notient export-canvas`, and `notient propose` defer to Phase E).
 - `docs/superpowers/plans/2026-04-27-cli-phase-c.md` — locked decisions Phase D inherits.
+- `src/core/history/historyService.ts` — already-shipped record/undo path.
+- `src/core/history/inverters/` — already-shipped per-kind inverters (`noteCreate`, `noteAppendSection`, `noteFrontmatter`, `noteMaturity`).
+- `src/core/coordinator/reasoningMutex.ts` — confirms preemptive non-reentrant semantics.
 
 **Locked decisions (Phase D, 2026-04-28):**
 
-1. **Approval verbs are TUI-only and route to the existing `chat.approve` RPC.** `/approve <callId> [reason]` calls `chat.approve` with `approved: true`; `/deny <callId> [reason]` with `approved: false`. No new RPC. The TUI tracks pending approvals client-side from `loop:approval_pending` frames and clears them on `loop:approval_resolved`. `/help` lists both verbs.
+1. **Phase D adds no new substrate service.** `HistoryService` and its inverters already exist in the kernel (`kernel.ts:71`, `historyService.ts`). Phase D wires them through the chat tool factory and reads them through new RPCs. There is no `HistoryStore` JSON sidecar; the SQLite `history` table from `SCHEMA_V1` (defined in `db/schema.ts:53`) is the durable record. Concurrent writes from parallel chat conversations are safe because SQLite serializes inserts.
 
-2. **HistoryStore is a vault-native JSON sidecar at `<vault>/Notient/.history.json`.** Each entry is `{ id: string; callId: string; tool: string; args: Record<string, unknown>; reversal: ReversalSpec; decidedAt: number; status: "applied" | "reversed" }`. The store keeps the most recent 100 entries; older entries truncate from the head on every record. Atomic write through the existing `atomicWrite` helper.
+2. **`recordHistory` in the chat tool factory forwards directly to `HistoryService.record`.** Bootstrap currently passes `recordHistory: async () => 0` (a noop, per Phase C caveat #6). Phase D replaces that with a closure that calls `kernel.get<HistoryService>("historyService").record(input)` and returns the row id. The four chat write tools (`notes.create`, `notes.append`, `notes.replace_section`, `notes.update_frontmatter`) already pass the correctly-shaped `RecordHistoryInput` (kind, target, before, after); no tool-side change is needed.
 
-3. **Per-tool reversal is captured at request time and applied through the same tool registry.** Reversal kinds: `notes.create` → `{ kind: "delete-note", path }`; `notes.append` → `{ kind: "truncate-note", path, priorLength }`; `notes.replace_section` → `{ kind: "restore-section", path, heading, priorBody }`; `notes.update_frontmatter` → `{ kind: "restore-frontmatter", path, priorYaml }`. The store reads the pre-write state synchronously inside the tool implementation before the write fires; failure to read pre-state aborts the tool.
+3. **`/undo` calls `notes.undo` RPC which calls `HistoryService.undoLast()`.** The handler returns `{ ok, error?, reversed?: { id, kind, target, createdAt } }`. Empty history surfaces `error: "no history"` (HistoryService's existing string). Inverter failure surfaces the inverter's error verbatim. The `/undo` TUI verb renders `reversed: <kind> <target>` on success and `error: <msg>` on failure.
 
-4. **`/undo` is a TUI verb backed by a new `notes.undo` RPC.** The handler pops the latest `applied` entry from `HistoryStore`, dispatches the matching reversal through `notes.*` tools (bypassing the approval gate because the user has explicitly invoked undo), records the entry's status as `reversed`, and returns the reversed entry's id and tool name. `/undo` with an empty history surfaces `HISTORY_EMPTY`.
+4. **`/history` calls `notes.history` RPC which calls `HistoryService.getRecent(10)`.** The handler returns `{ ok, entries: HistoryRow[] }`. The TUI verb renders one line per row: `<kind> <target> <ISO timestamp>`. Phase D does not introduce a status column because HistoryService hard-deletes on undo (no soft-reverse marker).
 
-5. **`/history` is a TUI verb backed by `notes.history` RPC.** Returns up to the last 10 entries newest-first as `{ id, tool, path, decidedAt, status }`. The TUI renders one line per entry: `<status> <tool> <path> <ISO timestamp>`.
+5. **`/read <path>` calls a new `notes.read` RPC that wraps `vault.read(path)`.** The RPC returns `{ ok, body: string }`. The TUI verb renders the body in a fenced markdown block; bodies longer than 5000 characters are head/tail truncated with a `[…N characters elided…]` marker mirroring `ContextManager.elide`. No LLM call.
 
-6. **`vault.list` RPC enumerates vault paths.** Parameters: `{ prefix?: string; limit?: number }` (defaults: `prefix: ""`, `limit: 200`). Returns `{ paths: string[] }` sorted lexicographically and capped at `min(limit, 200)`. Backed by the existing `vault.list(folder)` facade with a recursive walk; ignores `<vault>/.notient/`, `<vault>/Notient/conversations/`, and `<vault>/Notient/proposals/` so attachments never reach the chat agent's own state.
+6. **Approval verbs are TUI-only and route to the existing `chat.approve` RPC.** `/approve <callId> [reason]` calls `chat.approve` with `approved: true`; `/deny <callId> [reason]` with `approved: false`. The TUI tracks pending approvals client-side from `loop:approval_pending` frames and clears them on `loop:approval_resolved`. `/help` lists both verbs.
 
-7. **`@`-completion in the TUI is tab-driven, not a popup.** When the input bar contains an `@`-prefixed token at the cursor and the user presses Tab, the TUI calls `vault.list` with the trailing characters as the prefix, replaces the partial with the first match, and emits a system line listing the next four matches. No autocomplete dropdown in Phase D.
+7. **`vault.list` RPC enumerates a single folder's children, not a recursive walk.** Parameters: `{ folder?: string; filter?: string; limit?: number }` (defaults: `folder: ""`, `filter: ""`, `limit: 200`). Returns `{ paths: string[] }` containing both files and folders directly under `folder` whose name starts with `filter`, sorted lexicographically and capped at `min(limit, 200)`. Folder names are returned with a trailing `/` so the TUI's tab loop knows to descend. Excludes `.notient/`, `Notient/conversations/`, and `Notient/proposals/` at any folder level so attachments never reach the chat agent's own state. Backed by the existing `vault.list(folder)` facade — single-level read, no recursive scan, safe for vaults with millions of files.
 
-8. **`/read <path>` reads the note through the existing `vault.read_note` substrate tool.** Replaces the current `/read` stub that aliased `/vitals`. The TUI renders the body in a fenced code block, truncated to 5KB with a `[...elided...]` marker when the file is larger.
+8. **`@`-completion in the TUI is tab-driven.** When the input bar contains an `@`-prefixed token at the cursor and the user presses Tab, the TUI parses the token into `{ folder, partial }` (the part before the last `/` and the part after; `@inbox/foo` -> `{ folder: "inbox", partial: "foo" }`; `@inbox` -> `{ folder: "", partial: "inbox" }`), calls `vault.list({ folder, filter: partial, limit: 5 })`, and replaces the partial with the first match. A system line shows the next four matches as hints. The trigger condition is "the cursor is at the end of the input AND the buffer's last unbroken non-space run begins with `@`"; the `.` rule from the original sketch is dropped because folder/file names commonly contain `.` (e.g. `foo.md`).
 
-9. **Tier 2 identity lives in `src/agent/agentIdentity.ts` and is composed at subagent dispatch time.** Exports `composeAgentIdentity(role: SubagentRole, base?: string): string`. Phase D ships one role: `"NoteEditor"`, with a verbatim prompt block focused on Obsidian-native I/O. `"ContextBuilder"` and `"Worker"` constants are defined as placeholders for Phase E; dispatching them returns `SUBAGENT_UNAVAILABLE` until Phase E ships their bodies.
+9. **`chat.modelContextTokens` becomes a setting; bootstrap stops hardcoding `32_000`.** Default: `200_000` for the locked Nemotron-Cascade-2-30B substrate. Operators running smaller models override via `<vault>/.notient/config.json`. Phase D adds a `loop:context_overflow_warning` event (separate from `loop:context_summarized`) that `ContextManager` emits the first time a single turn's pre-summary token estimate exceeds `modelContextTokens` (not just the budgeted fraction); this surfaces as an info line so an operator running an 8K-context model with a `200_000` default sees the mismatch immediately.
 
-10. **Subagent on-demand surface ships dispatch only.** `subagent.dispatch` starts a frozen subagent loop with `{ role, goal, toolWhitelist }`; the subagent runs to completion or aborts with `SUBAGENT_FAILED`. Mid-loop approval pauses are deferred to Phase E (`subagent.continue`); write-style tools the subagent reaches inside its loop auto-deny in Phase D so the loop terminates promptly. The orchestrator (chat agent) sees the subagent's final result as a tool result on its own `subagent.dispatch` tool call.
+10. **`loop:context_summarized` event lands on the bus and forwards on the wire.** `ContextManager` publishes `{ conversationId, model, originalTokens, summarizedTokens }` whenever `budgetedHistory` replaces the oldest half with a summary. The chat handler subscribes for the duration of each chat.send turn and forwards the event with the wire name `loop:context_summarized` filtered by `conversationId`. The event payload type is declared in `core/events/types.ts` so the bus is type-checked end to end (per Phase C kernel rule).
 
-11. **Hardened tool-mode probe retries once with elevated temperature.** `probeToolMode` keeps its current first attempt at `temperature: 0.3`. When the model returns no tool calls in the first attempt, the probe retries once at `temperature: 0.7`. If the second attempt also returns no tool calls, the cache writes `"disabled"` and the probe emits a `loop:tool_mode_disabled` event with a settings hint pointing to `chat.toolModeByModel`. Probe failure is non-fatal; the chat turn proceeds in JSON-fallback mode if the cache says `disabled`.
+11. **Tool-mode probe retries once at temperature 0.7.** `probeToolMode` keeps the first attempt at `temperature: 0.3`. When the first attempt returns zero tool calls AND no error, the probe retries once at `0.7`. A second attempt that returns zero tool calls writes `disabled` to the cache. A second attempt that returns one or more tool calls AND parses every tool's arguments as JSON writes `native`. A second attempt that returns tool calls but ANY argument fails to parse as JSON writes `disabled` (the model's tool-calling output is unreliable). The probe emits a `loop:tool_mode_probed` event with `{ model, mode, attempts }` for operator visibility; failures are non-fatal — the chat turn proceeds in `disabled` mode if the cache says so.
 
-12. **`chat.modelContextTokens` becomes a setting, defaulting to `200_000`.** Bootstrap stops hardcoding `32_000` in `daemon/bootstrap.ts`; ContextManager reads `settings.chat.modelContextTokens` at compose time. When `budgetedHistory` triggers summarization, ContextManager publishes a `loop:context_summarized` event on the EventBus with `{ originalTokens, summarizedTokens, model, conversationId }`. The chat handler forwards this on the wire as `loop:context_summarized` so the TUI can render an info line.
+12. **Phase D kernel.** `PHASE_D_KEYS = PHASE_C_KEYS` exactly. No new kernel slots; `historyService` is already in `PHASE_B_KEYS`. `seal({ phase: "D" })` becomes the new daemon default and gates the `loop:context_summarized` event emission on the existence of a registered bus, but otherwise the kernel shape is unchanged. `Kernel.seal` recognises `"D"` as an alias for the same key set as `"C"`; this keeps the daemon's default phase consistent with the version-stamped release.
 
-13. **Phase D kernel.** `PHASE_D_KEYS = PHASE_C_KEYS ∪ ["historyStore", "subagentRegistry"]`. `seal({ phase: "D" })` becomes the new daemon default. `historyStore` is required; `subagentRegistry` is required (with one role registered).
+13. **Subagent surface deferred to Phase E.** Both pre-execution reviews (Opus 4.7 plan reviewer + Codex adversarial) flagged that `ReasoningMutex.runPriority` aborts the running task when called with a different label. Calling `runPriority("subagent", ...)` from inside a `chat` tool execution would actively abort the parent chat turn, not deadlock — but either way the surface is unsafe to ship. Phase E will add `ReasoningMutex.runChild(parentLabel, label, task)` (or equivalent) plus `SubagentRegistry`, `composeAgentIdentity`, and `subagent.dispatch` together so the contract is testable end-to-end. Phase D's TUI ships without `subagent.dispatch` slash verbs.
 
-14. **Phase D smoke harness scope.** `smoke:cli:phaseD` runs five passes against the fixture vault and live LM Studio: (a) write tool with auto-approval policy fires, history records, `/undo` reverses it; (b) `vault.list` returns sorted paths under a known fixture prefix; (c) `chat.send` whose history triggers summarization emits `loop:context_summarized`; (d) tool-mode probe writes `native` for the locked model after retry; (e) `subagent.dispatch` of `NoteEditor` returns a final result tool message. The TUI is verified by an extended manual checklist (`docs/superpowers/plans/2026-04-28-cli-phase-d-checklist.md`).
+14. **Phase D smoke harness scope.** `smoke:cli:phaseD` runs four passes against the fixture vault and live LM Studio: (a) a write-tool turn whose auto-approval policy fires emits `loop:approval_resolved`; subsequent `notes.history` returns one entry; subsequent `notes.undo` reverses the entry; subsequent `notes.history` returns zero entries. (b) `vault.list({ folder: "" })` returns the seeded fixture root paths excluding `.notient` and `Notient/`. (c) A turn with a pinned long context emits `loop:context_summarized` with non-zero `originalTokens`. (d) Tool-mode probe writes `native` for the locked model after retry. The TUI is verified by an extended manual checklist (`docs/superpowers/plans/2026-04-28-cli-phase-d-checklist.md`).
 
 ---
 
-## Hard rules (carry forward from Phase C; one Phase D addition)
+## Hard rules (carry forward from Phase C)
 
 - TypeScript strict. No `any` without justification.
 - No `console.log` outside `src/cli/output.ts` and the existing `debug<Subsystem>` helpers.
@@ -55,23 +58,22 @@
 - One commit per logical step on `beta-spec`. No `git add -A`. Stage by name only.
 - Substrate tests stay green throughout. New tests are additive.
 - The chat handler remains the only place where internal kebab-case loop event names get rewritten to spec wire names.
-- **(Phase D addition)** Reversal capture happens *before* the write fires. A write tool that cannot read its pre-state must abort with `REVERSAL_CAPTURE_FAILED` and never touch the vault.
 
 ---
 
-## Risks (from spec section 9 and Phase C debug pass)
+## Risks (refined after pre-execution review)
 
 | Risk | Tasks affected | Mitigation in this plan |
 |---|---|---|
-| HistoryStore retention vs disk growth | Tasks 5, 6, 7 | Hard cap at 100 entries; head-truncation on every record. JSON sidecar bytes stay under ~50KB. Test verifies eviction order. |
-| Reversal applied to a file the user manually edited since the original write | Tasks 6, 7, 12 | Each reversal verifies `priorBody` matches the head/section it intends to restore; mismatch surfaces `REVERSAL_STALE` on the wire and the entry stays `applied` in the store so the user can intervene. |
-| `vault.list` walks unbounded directory trees on large vaults | Task 9 | Recursive walk caps at 200 paths and short-circuits when the cap is reached; folder filter excludes `<vault>/.notient`, `<vault>/Notient/conversations`, `<vault>/Notient/proposals`. Test runs against the fixture vault (~10 notes). |
-| `@`-completion clashes with email-like literals (`user@example.com`) | Task 16 | Tab handler triggers only when the `@`-prefixed token is at the cursor end and contains no `.` characters before the first slash. Test covers email-style false positive. |
-| Tool-mode probe second attempt costs an extra LLM round | Task 13 | Retry only fires when first attempt returns zero tool calls AND no error; second attempt's higher temperature surfaces tool calls when low-temp greedy decoding skipped them. |
-| Subagent dispatch interferes with the orchestrator's mutex slot | Task 19 | Subagent runs under a separate `mutex.runPriority("subagent", ...)` slot below the orchestrator's chat slot; the orchestrator's chat turn returns the subagent's result without re-entering its own mutex. |
-| Subagent goal injection through user prompts | Task 19 | The orchestrator's `subagent.dispatch` tool spec validates `role` against the registered names and rejects unknown roles before forwarding; user-supplied `goal` strings are sandboxed inside the subagent's prompt and cannot escape into the orchestrator's identity. |
-| `loop:context_summarized` event leak across turns | Task 14 | Event carries `conversationId` so the chat handler scopes the wire emission to the active envelope. Test asserts no leak across two parallel chat conversations. |
-| Tier 2 identity drift (Phase E adds Worker, ContextBuilder) | Task 17 | `composeAgentIdentity` returns `SUBAGENT_UNAVAILABLE` for unimplemented roles; no silent fallback to Tier 1 only. Phase E test gates that flip. |
+| Bootstrap silently keeps the noop `recordHistory` after wiring HistoryService | Task 11 | Task 11 deletes the `recordHistory: async () => 0` literal in the same diff that adds the closure; biome lint catches the unused import if the wiring is missed. Test asserts `getRecent(1)` returns the row a chat write produced. |
+| `vault.list` semantics mismatch between FsVault (folder-listing) and the planner's expectation (filename prefix) | Task 6, 14 | Locked decision 7 explicitly aligns the RPC with `FsVault.list(folder)`'s shape and adds a separate filename `filter` parameter. The TUI's tab path (Task 14) parses the at-token into `{ folder, partial }` so the call shape matches the facade. Test covers `folder: ""` and a nested folder. |
+| Tool-mode probe retry classifies a model as `native` after malformed tool args | Task 8 | Locked decision 11 specifies "all tool args must parse as JSON" before writing `native`. Test asserts that a model returning a tool call with `arguments: "<broken>"` writes `disabled` even when `toolCalls.length > 0`. |
+| `modelContextTokens` default `200_000` silently overflows smaller models | Task 7 | Locked decision 9 adds `loop:context_overflow_warning` (distinct from `loop:context_summarized`) so operators running 8K models see the mismatch as an info line on the first turn that exceeds the configured budget. The default is documented in `settings/types.ts` JSDoc and the manual TUI checklist. |
+| `loop:context_summarized` payload drift between bus emit and wire forward | Task 7, 9 | Payload type lives in `core/events/types.ts` (typed pub/sub kernel rule). Both producer and forwarder import the same interface; tsc fails the build on shape drift. |
+| `/undo` runs an inverter whose write path differs from the chat tool's facade (e.g., EchoGuard not marked) | Task 12 | Bootstrap (Task 11) wires the inverter facade with the same `notesFacade` and `echoGuard` the tool factory uses. Test in `historyService.test.ts` already covers EchoGuard marking. |
+| TUI tab handler swallows Tab on legitimate non-mention text (e.g., user pressing Tab to indent inside a code-block prompt) | Task 14 | Tab triggers completion only when the buffer's last whitespace-delimited run begins with `@`; otherwise Tab is dropped (no other binding). Test in `slashCommands.test.ts` covers an `@`-less buffer. |
+| HistoryService rows accumulate without retention pruning | Task 11 | Bootstrap calls `historyService.prune()` on every successful chat-write tool result. `chat.history.maxEntries` (added in Task 1) drives the retention.max. Test asserts pruning fires on the next record after the cap. |
+| Concurrent writes between Notient daemon and another process (Obsidian plugin still in `.nuked/`) corrupt the `history` table | Task 11 | Out of scope: the substrate's vault lock (`VaultLock`) already prevents two daemons from running on the same vault. Phase A documented this; Phase D inherits. |
 
 ---
 
@@ -79,49 +81,39 @@
 
 ```
 src/
-├── agent/
-│   ├── agentIdentity.ts                    # NEW — Tier 2 prompts + composeAgentIdentity
-│   ├── agentIdentity.test.ts               # NEW
-│   ├── subagentRegistry.ts                 # NEW — dispatch/run table for on-demand subagents
-│   └── subagentRegistry.test.ts            # NEW
 ├── core/
-│   ├── kernel.ts                           # MODIFIED — adds PHASE_D_KEYS
 │   ├── chat/
-│   │   ├── contextManager.ts               # MODIFIED — read modelContextTokens from settings; emit loop:context_summarized
-│   │   ├── contextManager.test.ts          # MODIFIED — assert event fires when budget exceeded
-│   │   ├── toolModeProbe.ts                # MODIFIED — 2-attempt retry with temperature variance
-│   │   ├── toolModeProbe.test.ts           # MODIFIED — assert second attempt fires on first-attempt zero-tool-call
-│   │   └── tools/
-│   │       └── notes.ts                    # MODIFIED — capture pre-state reversal before write
-│   ├── history/                            # NEW directory
-│   │   ├── historyStore.ts                 # NEW — record/list/markReversed; 100-entry cap
-│   │   ├── historyStore.test.ts            # NEW
-│   │   ├── reversals.ts                    # NEW — typed reversal specs + applyReversal()
-│   │   └── reversals.test.ts               # NEW
+│   │   ├── contextManager.ts               # MODIFIED — read modelContextTokens from settings; emit loop:context_summarized + loop:context_overflow_warning
+│   │   ├── contextManager.test.ts          # MODIFIED — assert events fire when budget exceeded
+│   │   ├── toolModeProbe.ts                # MODIFIED — 2-attempt retry with temperature variance + JSON-parse gate
+│   │   └── toolModeProbe.test.ts           # MODIFIED — assert second attempt; assert JSON-parse gate
+│   ├── events/
+│   │   └── types.ts                        # MODIFIED — declare ContextSummarizedEvent + ContextOverflowWarningEvent + ToolModeProbedEvent payloads
 │   └── settings/
 │       └── types.ts                        # MODIFIED — chat.modelContextTokens; chat.history retention
 ├── daemon/
-│   ├── bootstrap.ts                        # MODIFIED — register historyStore + subagentRegistry; seal "D"
+│   ├── bootstrap.ts                        # MODIFIED — wire historyService through tool factory; pass bus to ContextManager
 │   ├── handlers/
-│   │   ├── vault.ts                        # NEW — vault.list
-│   │   ├── vault.test.ts                   # NEW
-│   │   ├── notes.ts                        # NEW — notes.history, notes.undo
+│   │   ├── chat.ts                         # MODIFIED — forward loop:context_summarized + loop:context_overflow_warning + loop:tool_mode_probed
+│   │   ├── notes.ts                        # NEW — notes.history, notes.undo, notes.read
 │   │   ├── notes.test.ts                   # NEW
-│   │   ├── chat.ts                         # MODIFIED — forward loop:context_summarized
-│   │   └── subagent.ts                     # NEW — subagent.dispatch
-│   └── index.ts                            # MODIFIED — register vault, notes, subagent handlers
+│   │   ├── vault.ts                        # NEW — vault.list (folder + filter)
+│   │   └── vault.test.ts                   # NEW
+│   └── index.ts                            # MODIFIED — register notes.* + vault.list handlers
 └── cli/
-    ├── tui/
-    │   ├── runtime.tsx                     # MODIFIED — pendingApprovals state; tab handler
-    │   ├── slashCommands.ts                # MODIFIED — /approve, /deny, /undo, /history; real /read
-    │   ├── slashCommands.test.ts           # MODIFIED — new verb tests
-    │   └── attachments.ts                  # MODIFIED — vault.list-driven completion shim
+    └── tui/
+        ├── runtime.tsx                     # MODIFIED — pendingApprovals state; tab handler; render new event lines
+        ├── slashCommands.ts                # MODIFIED — /approve, /deny, /undo, /history; real /read
+        ├── slashCommands.test.ts           # MODIFIED — new verb tests
+        └── attachments.ts                  # MODIFIED — vault.list-driven completion shim
 
 scripts/
 └── smoke-cli-phaseD.ts                     # NEW — Phase D gate harness
 
 docs/superpowers/plans/
 └── 2026-04-28-cli-phase-d-checklist.md     # NEW — manual TUI verification (Phase D additions)
+
+package.json                                # MODIFIED — adds smoke:cli:phaseD script
 ```
 
 ---
@@ -129,48 +121,39 @@ docs/superpowers/plans/
 ## Task DAG
 
 ```
-Group 1: Settings + kernel additions (sequential)
+Group 1: Settings + event types (sequential)
   Task 1: settings/types.ts adds chat.modelContextTokens + chat.history retention
-  Task 2: core/kernel.ts adds PHASE_D_KEYS
+  Task 2: events/types.ts declares the three new event payloads
 
-Group 2: HistoryStore substrate (sequential, single file group)
-  Task 3: core/history/reversals.ts + test
-  Task 4: core/history/historyStore.ts + test
-  Task 5: core/chat/tools/notes.ts captures reversal pre-state for each write tool
+Group 2: ContextManager + probe hardening (parallel-safe within group)
+  Task 3: contextManager.ts reads settings; emits loop:context_summarized
+  Task 4: contextManager.ts emits loop:context_overflow_warning
+  Task 5: toolModeProbe.ts 2-attempt retry + JSON-parse gate
 
-Group 3: ContextManager hardening (parallel-safe with Group 2)
-  Task 6: contextManager.ts reads modelContextTokens; emits loop:context_summarized
-  Task 7: toolModeProbe.ts 2-attempt retry
+Group 3: Daemon handlers (parallel-safe; each is a single new or single edited file)
+  Task 6: daemon/handlers/vault.ts + test (vault.list)
+  Task 7: daemon/handlers/notes.ts + test (notes.history, notes.undo, notes.read)
+  Task 8: daemon/handlers/chat.ts forwards three new wire events
 
-Group 4: Agent + subagent layer (sequential within group; agentIdentity first)
-  Task 8: src/agent/agentIdentity.ts (Tier 2 prompts) + test
-  Task 9: src/agent/subagentRegistry.ts + test
+Group 4: Bootstrap promotion (sequential, single file)
+  Task 9: daemon/bootstrap.ts wires historyService through tool factory; passes bus to ContextManager
+  Task 10: daemon/index.ts registers notes.* + vault.list handlers
 
-Group 5: Daemon handlers (sequential, single file edits)
-  Task 10: daemon/handlers/vault.ts + test (vault.list)
-  Task 11: daemon/handlers/notes.ts + test (notes.history, notes.undo)
-  Task 12: daemon/handlers/subagent.ts + test (subagent.dispatch)
-  Task 13: daemon/handlers/chat.ts forwards loop:context_summarized
-  Task 14: daemon/index.ts registers new handlers
+Group 5: TUI verbs + completion (parallel-safe within group; share no files)
+  Task 11: cli/tui/slashCommands.ts /approve, /deny, /undo, /history; real /read
+  Task 12: cli/tui/runtime.tsx pendingApprovals + tab handler + new event line renderers
+  Task 13: cli/tui/attachments.ts vault.list completion
 
-Group 6: Bootstrap promotion (sequential, single file)
-  Task 15: daemon/bootstrap.ts wires historyStore + subagentRegistry + seal "D"
-
-Group 7: TUI verbs + completion (parallel-safe)
-  Task 16: cli/tui/slashCommands.ts /approve, /deny, /undo, /history; real /read
-  Task 17: cli/tui/runtime.tsx pendingApprovals; tab handler
-  Task 18: cli/tui/attachments.ts vault.list completion
-
-Group 8: Smoke + gate (sequential, last)
-  Task 19: scripts/smoke-cli-phaseD.ts + manual checklist file
-  Task 20: Phase D gate run against the fixture vault + the live vaultex
+Group 6: Smoke + gate (sequential, last)
+  Task 14: scripts/smoke-cli-phaseD.ts + manual checklist file
+  Task 15: Phase D gate run against the fixture vault + the live vaultex
 ```
 
-**Parallelism rules.** Group 2 (HistoryStore) and Group 3 (ContextManager hardening) touch disjoint files and can dispatch in parallel after Group 1. Group 4 sequences Task 8 before Task 9 because the registry imports `composeAgentIdentity`. Group 5 serializes per-file: each handler is a single new file. Tasks 16, 17, 18 each edit a single TUI file and can dispatch in parallel after Group 6.
+**Parallelism rules.** Group 1 is sequential because Task 2 depends on having a stable settings shape. Group 2 splits one file (`contextManager.ts`) across two tasks; Task 4 sequences after Task 3. Group 3's three handler tasks edit disjoint files and can dispatch in parallel after Group 2. Group 4 serializes per-file. Group 5's three TUI tasks edit disjoint files (`slashCommands.ts`, `runtime.tsx`, `attachments.ts`) and dispatch in parallel after Group 4. Group 6 is the gate.
 
 ---
 
-## Group 1: Settings + kernel additions
+## Group 1: Settings + event types
 
 ### Task 1: `settings/types.ts` adds `chat.modelContextTokens` + `chat.history`
 
@@ -182,7 +165,7 @@ The chat block already carries `approvalMode`, `toolModeByModel`, `perTool`, opt
 - [ ] **Step 1: Locate the chat sub-object**
 
 Run: `grep -n "perTool\|toolModeByModel\|chat:" src/core/settings/types.ts`
-Expected: hits at the chat sub-object.
+Expected: hits at the chat sub-object inside `NotientSettings` and inside `DEFAULT_SETTINGS`.
 
 - [ ] **Step 2: Edit the chat sub-object**
 
@@ -192,21 +175,25 @@ In `src/core/settings/types.ts`, after `perTool: Record<string, "auto" | "ask">;
     /**
      * Model context window in tokens. ContextManager budgets this fraction
      * (chat.contextBudgetFraction) before triggering history summarization.
-     * Defaults to 200_000 for Nemotron-Cascade-2-30B; raise for 1M-context
-     * models or lower for smaller ones.
+     * Defaults to 200_000 for the locked Nemotron-Cascade-2-30B substrate;
+     * lower for 8K/32K models (Llama 3.1 8B, Qwen2.5 7B). When the
+     * configured value is too small for a given turn the loop emits
+     * loop:context_overflow_warning so the operator can adjust.
      */
     modelContextTokens: number;
     history: {
-      /** Maximum HistoryStore entries; head-truncates older ones on record. */
+      /** Maximum HistoryService rows kept globally; older rows prune on record. */
       maxEntries: number;
+      /** Maximum HistoryService rows per target path; older rows prune on record. */
+      maxPerTarget: number;
     };
 ```
 
-In the same file's `DEFAULT_SETTINGS`, add inside the chat block:
+In `DEFAULT_SETTINGS`'s chat block, append:
 
 ```typescript
     modelContextTokens: 200_000,
-    history: { maxEntries: 100 },
+    history: { maxEntries: 200, maxPerTarget: 20 },
 ```
 
 - [ ] **Step 3: Typecheck and run settings tests**
@@ -222,653 +209,33 @@ git commit -m "$(cat <<'EOF'
 feat(settings): chat.modelContextTokens + chat.history retention
 
 Phase D pulls the model context window out of bootstrap.ts (which
-hardcoded 32_000) into NotientSettings so larger models like
-Nemotron-Cascade-2-30B can use their real budget. chat.history.maxEntries
-caps the HistoryStore's vault-side JSON sidecar at 100 records to
-keep undo bookkeeping under ~50KB on disk.
+hardcoded 32_000 in Phase C) into NotientSettings so larger models
+like Nemotron-Cascade-2-30B can use their real budget. Smaller models
+(Llama 3.1 8B, Qwen2.5 7B) override via config.json; the upcoming
+loop:context_overflow_warning event surfaces a mismatch on the first
+turn. chat.history retention drives HistoryService.prune() so the
+sqlite history table stays bounded as chat-driven writes accumulate.
 EOF
 )"
 ```
 
 ---
 
-### Task 2: `core/kernel.ts` adds `PHASE_D_KEYS`
+### Task 2: `events/types.ts` declares the three new payloads
 
 **Files:**
-- Modify: `/home/akougkas/projects/notient/src/core/kernel.ts`
+- Modify: `/home/akougkas/projects/notient/src/core/events/types.ts`
 
-Phase C added `PHASE_C_KEYS`. Phase D adds the history slice plus the subagent registry. Both are required.
+Phase C kernel rule: every bus event has a typed payload in `events/types.ts`. Phase D adds three.
 
-- [ ] **Step 1: Add `PHASE_D_KEYS` after `PHASE_C_KEYS`**
+- [ ] **Step 1: Inspect current event union**
 
-In `src/core/kernel.ts`, after the existing `PHASE_C_KEYS`, add:
+Run: `grep -nA 5 "EventBusPayloads\|export type.*Event\|export interface.*Event" src/core/events/types.ts`
+Expected: a typed map of event names to payload shapes.
 
-```typescript
-const PHASE_D_KEYS: ServiceKey[] = [
-  ...PHASE_C_KEYS,
-  "historyStore",
-  "subagentRegistry",
-];
-```
+- [ ] **Step 2: Add the three event payloads**
 
-Add to the `ServiceKey` union if not already present: `| "historyStore" | "subagentRegistry"`.
-
-Update the `seal()` dispatch to recognize phase `"D"`:
-
-```typescript
-seal(options: { phase?: "A" | "B" | "C" | "D" } = {}): void {
-  let required: ServiceKey[];
-  if (options.phase === "A") required = PHASE_A_KEYS;
-  else if (options.phase === "B") required = PHASE_B_KEYS;
-  else if (options.phase === "C") required = PHASE_C_KEYS;
-  else if (options.phase === "D") required = PHASE_D_KEYS;
-  else required = REQUIRED_KEYS;
-  const missing = required.filter((key) => this.services[key] === undefined);
-  if (missing.length > 0) {
-    throw new Error(`Kernel.seal(): missing required services: ${missing.join(", ")}`);
-  }
-  this.sealed = true;
-}
-```
-
-- [ ] **Step 2: Typecheck + kernel tests**
-
-Run: `bun run typecheck && bun test src/core/kernel.test.ts`
-Expected: Green.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add src/core/kernel.ts
-git commit -m "$(cat <<'EOF'
-refactor(kernel): seal() recognises phase: "D"
-
-PHASE_D_KEYS extends PHASE_C_KEYS with historyStore and
-subagentRegistry. Both are required so daemon bootstrap fails fast if
-either slot is missing.
-EOF
-)"
-```
-
----
-
-## Group 2: HistoryStore substrate
-
-### Task 3: `core/history/reversals.ts` defines reversal specs + `applyReversal`
-
-**Files:**
-- Create: `/home/akougkas/projects/notient/src/core/history/reversals.ts`
-- Create: `/home/akougkas/projects/notient/src/core/history/reversals.test.ts`
-
-The module owns the reversal type union and the dispatcher that turns a reversal spec into a vault write. Each kind reads the file's current state to detect drift before applying the reversal.
-
-- [ ] **Step 1: Write the test**
-
-Create `src/core/history/reversals.test.ts`:
-
-```typescript
-import { describe, expect, test } from "bun:test";
-import { applyReversal, type ReversalSpec } from "./reversals";
-
-interface FakeFacade {
-  files: Map<string, string>;
-}
-
-function makeFacade(initial: Record<string, string> = {}): FakeFacade & {
-  read(path: string): Promise<string>;
-  write(path: string, content: string): Promise<void>;
-  remove(path: string): Promise<void>;
-  exists(path: string): Promise<boolean>;
-} {
-  const files = new Map(Object.entries(initial));
-  return {
-    files,
-    async read(path) {
-      const value = files.get(path);
-      if (value === undefined) throw new Error(`not found: ${path}`);
-      return value;
-    },
-    async write(path, content) {
-      files.set(path, content);
-    },
-    async remove(path) {
-      files.delete(path);
-    },
-    async exists(path) {
-      return files.has(path);
-    },
-  };
-}
-
-describe("applyReversal", () => {
-  test("delete-note removes the file", async () => {
-    const facade = makeFacade({ "notes/x.md": "body" });
-    const spec: ReversalSpec = { kind: "delete-note", path: "notes/x.md" };
-    await applyReversal(spec, facade);
-    expect(facade.files.has("notes/x.md")).toBe(false);
-  });
-
-  test("truncate-note restores the prior length", async () => {
-    const facade = makeFacade({ "notes/x.md": "AAA\nBBB\nCCC" });
-    const spec: ReversalSpec = {
-      kind: "truncate-note",
-      path: "notes/x.md",
-      priorLength: 3,
-    };
-    await applyReversal(spec, facade);
-    expect(facade.files.get("notes/x.md")).toBe("AAA");
-  });
-
-  test("restore-frontmatter rewrites the YAML block", async () => {
-    const facade = makeFacade({
-      "notes/x.md": "---\nfoo: 1\nbar: 2\n---\nbody",
-    });
-    const spec: ReversalSpec = {
-      kind: "restore-frontmatter",
-      path: "notes/x.md",
-      priorYaml: "foo: 9",
-    };
-    await applyReversal(spec, facade);
-    expect(facade.files.get("notes/x.md")).toBe("---\nfoo: 9\n---\nbody");
-  });
-
-  test("restore-section restores the body under a heading", async () => {
-    const facade = makeFacade({
-      "notes/x.md": "## Goals\n\nnew body\n\n## Notes\n\nkeep me",
-    });
-    const spec: ReversalSpec = {
-      kind: "restore-section",
-      path: "notes/x.md",
-      heading: "Goals",
-      priorBody: "old body",
-    };
-    await applyReversal(spec, facade);
-    const body = facade.files.get("notes/x.md") ?? "";
-    expect(body).toContain("## Goals\n\nold body");
-    expect(body).toContain("## Notes\n\nkeep me");
-  });
-
-  test("delete-note throws REVERSAL_STALE when file is missing", async () => {
-    const facade = makeFacade({});
-    const spec: ReversalSpec = { kind: "delete-note", path: "notes/x.md" };
-    await expect(applyReversal(spec, facade)).rejects.toThrow(/REVERSAL_STALE/);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `bun test src/core/history/reversals.test.ts`
-Expected: FAIL — module not yet created.
-
-- [ ] **Step 3: Implement `reversals.ts`**
-
-Create `src/core/history/reversals.ts`:
-
-```typescript
-/**
- * Typed reversal specs for chat-write tools and the dispatcher that applies
- * them. Each kind captures the minimum state needed to undo the original
- * write: a path plus prior body bytes for content-mutating tools, just a
- * path for create. The dispatcher reads the current state and refuses to
- * apply when the file has drifted (missing or unexpectedly different) since
- * the original write so the user is not silently overwriting their own work.
- */
-
-export interface ReversalFacade {
-  read(path: string): Promise<string>;
-  write(path: string, content: string): Promise<void>;
-  remove(path: string): Promise<void>;
-  exists(path: string): Promise<boolean>;
-}
-
-export type ReversalSpec =
-  | { kind: "delete-note"; path: string }
-  | { kind: "truncate-note"; path: string; priorLength: number }
-  | { kind: "restore-section"; path: string; heading: string; priorBody: string }
-  | { kind: "restore-frontmatter"; path: string; priorYaml: string };
-
-export async function applyReversal(spec: ReversalSpec, facade: ReversalFacade): Promise<void> {
-  if (spec.kind === "delete-note") {
-    if (!(await facade.exists(spec.path))) {
-      throw new Error(`REVERSAL_STALE: ${spec.path} no longer exists`);
-    }
-    await facade.remove(spec.path);
-    return;
-  }
-  const current = await facade.read(spec.path).catch(() => null);
-  if (current === null) {
-    throw new Error(`REVERSAL_STALE: ${spec.path} no longer readable`);
-  }
-  if (spec.kind === "truncate-note") {
-    if (current.length < spec.priorLength) {
-      throw new Error(`REVERSAL_STALE: ${spec.path} shorter than priorLength`);
-    }
-    await facade.write(spec.path, current.slice(0, spec.priorLength));
-    return;
-  }
-  if (spec.kind === "restore-frontmatter") {
-    const next = replaceFrontmatter(current, spec.priorYaml);
-    await facade.write(spec.path, next);
-    return;
-  }
-  if (spec.kind === "restore-section") {
-    const next = replaceSection(current, spec.heading, spec.priorBody);
-    await facade.write(spec.path, next);
-    return;
-  }
-}
-
-function replaceFrontmatter(body: string, priorYaml: string): string {
-  const match = body.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) return `---\n${priorYaml}\n---\n${body}`;
-  return `---\n${priorYaml}\n---\n${body.slice(match[0].length)}`;
-}
-
-function replaceSection(body: string, heading: string, priorBody: string): string {
-  const lines = body.split("\n");
-  const headingPattern = new RegExp(`^#{1,6}\\s+${escapeRegex(heading)}\\s*$`);
-  const startIndex = lines.findIndex((line) => headingPattern.test(line));
-  if (startIndex < 0) {
-    throw new Error(`REVERSAL_STALE: heading "${heading}" not found`);
-  }
-  let endIndex = lines.length;
-  for (let cursor = startIndex + 1; cursor < lines.length; cursor++) {
-    if (/^#{1,6}\s+/.test(lines[cursor])) {
-      endIndex = cursor;
-      break;
-    }
-  }
-  const before = lines.slice(0, startIndex + 1);
-  const after = lines.slice(endIndex);
-  const restored = priorBody.split("\n");
-  return [...before, "", ...restored, "", ...after].join("\n").replace(/\n{3,}/g, "\n\n");
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `bun test src/core/history/reversals.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/core/history/reversals.ts src/core/history/reversals.test.ts
-git commit -m "$(cat <<'EOF'
-feat(history): typed reversal specs + drift-aware applyReversal
-
-Phase D undoes chat-driven writes by replaying a captured reversal
-spec through the same vault facade the original write touched. Kinds:
-delete-note, truncate-note, restore-section, restore-frontmatter. Each
-read-checks the current file before applying so the user gets
-REVERSAL_STALE instead of a silent overwrite when they manually edited
-the file in the meantime.
-EOF
-)"
-```
-
----
-
-### Task 4: `core/history/historyStore.ts` records + lists + marks reversed
-
-**Files:**
-- Create: `/home/akougkas/projects/notient/src/core/history/historyStore.ts`
-- Create: `/home/akougkas/projects/notient/src/core/history/historyStore.test.ts`
-
-The store reads/writes a JSON sidecar at `<vault>/Notient/.history.json`. It keeps the most-recent `maxEntries` entries (default 100) and exposes `record`, `list`, `latestApplied`, `markReversed`.
-
-- [ ] **Step 1: Write the test**
-
-Create `src/core/history/historyStore.test.ts`:
-
-```typescript
-import { describe, expect, test } from "bun:test";
-import { HistoryStore, type HistoryStoreFacade } from "./historyStore";
-import type { ReversalSpec } from "./reversals";
-
-class FakeFacade implements HistoryStoreFacade {
-  public readonly files = new Map<string, string>();
-  async read(path: string): Promise<string | null> {
-    return this.files.get(path) ?? null;
-  }
-  async write(path: string, content: string): Promise<void> {
-    this.files.set(path, content);
-  }
-}
-
-function makeStore(maxEntries = 100): { store: HistoryStore; facade: FakeFacade } {
-  const facade = new FakeFacade();
-  let now = 1745625600000;
-  const store = new HistoryStore({
-    facade,
-    sidecarPath: "Notient/.history.json",
-    maxEntries,
-    now: () => ++now,
-  });
-  return { store, facade };
-}
-
-const sampleReversal: ReversalSpec = { kind: "delete-note", path: "notes/x.md" };
-
-describe("HistoryStore", () => {
-  test("record persists the entry and assigns a stable id", async () => {
-    const { store, facade } = makeStore();
-    const entry = await store.record({
-      callId: "call-1",
-      tool: "notes.create",
-      args: { notePath: "notes/x.md", body: "hi" },
-      reversal: sampleReversal,
-    });
-    expect(entry.id).toBeDefined();
-    expect(entry.status).toBe("applied");
-    const raw = facade.files.get("Notient/.history.json") ?? "";
-    expect(raw).toContain(entry.id);
-  });
-
-  test("list returns newest first", async () => {
-    const { store } = makeStore();
-    await store.record({ callId: "c1", tool: "notes.create", args: {}, reversal: sampleReversal });
-    await store.record({ callId: "c2", tool: "notes.append", args: {}, reversal: sampleReversal });
-    const entries = await store.list();
-    expect(entries.length).toBe(2);
-    expect(entries[0].callId).toBe("c2");
-    expect(entries[1].callId).toBe("c1");
-  });
-
-  test("record evicts oldest entries past maxEntries", async () => {
-    const { store } = makeStore(2);
-    await store.record({ callId: "c1", tool: "notes.create", args: {}, reversal: sampleReversal });
-    await store.record({ callId: "c2", tool: "notes.create", args: {}, reversal: sampleReversal });
-    await store.record({ callId: "c3", tool: "notes.create", args: {}, reversal: sampleReversal });
-    const entries = await store.list();
-    expect(entries.length).toBe(2);
-    expect(entries.map((entry) => entry.callId)).toEqual(["c3", "c2"]);
-  });
-
-  test("latestApplied skips already-reversed entries", async () => {
-    const { store } = makeStore();
-    const first = await store.record({
-      callId: "c1",
-      tool: "notes.create",
-      args: {},
-      reversal: sampleReversal,
-    });
-    await store.record({ callId: "c2", tool: "notes.append", args: {}, reversal: sampleReversal });
-    await store.markReversed(first.id);
-    const latest = await store.latestApplied();
-    expect(latest?.callId).toBe("c2");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `bun test src/core/history/historyStore.test.ts`
-Expected: FAIL — module missing.
-
-- [ ] **Step 3: Implement `historyStore.ts`**
-
-Create `src/core/history/historyStore.ts`:
-
-```typescript
-/**
- * JSON-sidecar history store for chat-driven write tools.
- *
- * Reads/writes <vault>/Notient/.history.json via the injected facade. The
- * file is a flat array of HistoryEntry rows, newest first. record() inserts
- * at index 0 and head-truncates past maxEntries. The store is the single
- * source of truth for /undo and /history; tools call record() inside the
- * tool implementation immediately after the write succeeds (or before, when
- * the reversal needs the pre-state — see core/chat/tools/notes.ts).
- */
-
-import type { ReversalSpec } from "./reversals";
-
-export interface HistoryStoreFacade {
-  read(path: string): Promise<string | null>;
-  write(path: string, content: string): Promise<void>;
-}
-
-export interface HistoryEntry {
-  id: string;
-  callId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  reversal: ReversalSpec;
-  decidedAt: number;
-  status: "applied" | "reversed";
-}
-
-export interface HistoryStoreOptions {
-  facade: HistoryStoreFacade;
-  sidecarPath: string;
-  maxEntries: number;
-  now?: () => number;
-  generateId?: () => string;
-}
-
-export interface RecordInput {
-  callId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  reversal: ReversalSpec;
-}
-
-export class HistoryStore {
-  constructor(private readonly options: HistoryStoreOptions) {}
-
-  async record(input: RecordInput): Promise<HistoryEntry> {
-    const entries = await this.read();
-    const generateId = this.options.generateId ?? defaultGenerateId;
-    const now = this.options.now ?? Date.now;
-    const entry: HistoryEntry = {
-      id: generateId(),
-      callId: input.callId,
-      tool: input.tool,
-      args: input.args,
-      reversal: input.reversal,
-      decidedAt: now(),
-      status: "applied",
-    };
-    const next = [entry, ...entries].slice(0, this.options.maxEntries);
-    await this.options.facade.write(this.options.sidecarPath, JSON.stringify(next, null, 2));
-    return entry;
-  }
-
-  async list(): Promise<HistoryEntry[]> {
-    return this.read();
-  }
-
-  async latestApplied(): Promise<HistoryEntry | null> {
-    const entries = await this.read();
-    for (const entry of entries) {
-      if (entry.status === "applied") return entry;
-    }
-    return null;
-  }
-
-  async markReversed(id: string): Promise<void> {
-    const entries = await this.read();
-    const next = entries.map((entry) =>
-      entry.id === id ? { ...entry, status: "reversed" as const } : entry,
-    );
-    await this.options.facade.write(this.options.sidecarPath, JSON.stringify(next, null, 2));
-  }
-
-  private async read(): Promise<HistoryEntry[]> {
-    const raw = await this.options.facade.read(this.options.sidecarPath);
-    if (raw === null) return [];
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) return parsed as HistoryEntry[];
-    } catch {
-      // corrupt sidecar; treat as empty so /undo and /history still respond
-    }
-    return [];
-  }
-}
-
-function defaultGenerateId(): string {
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `bun test src/core/history/historyStore.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/core/history/historyStore.ts src/core/history/historyStore.test.ts
-git commit -m "$(cat <<'EOF'
-feat(history): vault-native HistoryStore + 100-entry head-truncation
-
-JSON sidecar at Notient/.history.json carries up to chat.history.maxEntries
-records of chat-driven writes. Each record() inserts newest-first and
-truncates past the cap. latestApplied() and markReversed() drive the
-upcoming /undo verb. Corrupt sidecars degrade to an empty list rather
-than blocking the chat surface.
-EOF
-)"
-```
-
----
-
-### Task 5: `core/chat/tools/notes.ts` captures reversal pre-state
-
-**Files:**
-- Modify: `/home/akougkas/projects/notient/src/core/chat/tools/notes.ts`
-
-Each of the four `notes.*` write tools must read the pre-state and call `historyStore.record({...})` after the write succeeds. The store is injected through the existing tool factory options (extend the options shape).
-
-- [ ] **Step 1: Inspect the current factory shape**
-
-Run: `grep -n "createNotesTools\|HistoryStore\|recordHistory" src/core/chat/tools/notes.ts`
-Expected: factory has a `recordHistory` hook that's currently a noop in bootstrap (caveat #6).
-
-- [ ] **Step 2: Replace the noop hook with HistoryStore wiring**
-
-Edit `src/core/chat/tools/notes.ts`:
-- Add `import type { HistoryStore } from "../../history/historyStore";`
-- Replace the `recordHistory: (...) => Promise<number>` option with `historyStore: HistoryStore`.
-- For each tool implementation:
-  - `notes.create`: pre-state is "doesn't exist". Reversal: `{ kind: "delete-note", path: notePath }`. Record after `vault.write`.
-  - `notes.append`: pre-state read for `priorLength`. Reversal: `{ kind: "truncate-note", path: notePath, priorLength }`. Record after `vault.write`.
-  - `notes.replace_section`: pre-state read body, extract section under heading. Reversal: `{ kind: "restore-section", path, heading, priorBody }`.
-  - `notes.update_frontmatter`: pre-state read frontmatter block. Reversal: `{ kind: "restore-frontmatter", path, priorYaml }`.
-
-For each tool, wrap the existing write block in:
-
-```typescript
-let priorBody: string | null = null;
-try {
-  priorBody = await vault.readNote(notePath);
-} catch {
-  // Pre-state read failure for create is expected and fine; for others abort.
-}
-if (toolName !== "notes.create" && priorBody === null) {
-  throw new Error(`REVERSAL_CAPTURE_FAILED: ${notePath} could not be read`);
-}
-// ...existing write...
-await historyStore.record({
-  callId: call.id,
-  tool: "notes.append",
-  args: { notePath, text },
-  reversal: { kind: "truncate-note", path: notePath, priorLength: priorBody!.length },
-});
-```
-
-- [ ] **Step 3: Update the test fixture**
-
-`src/core/chat/tools/notes.test.ts` already mocks the noop hook. Replace with a fake HistoryStore:
-
-```typescript
-const recordedEntries: RecordInput[] = [];
-const historyStore = {
-  async record(input: RecordInput) {
-    recordedEntries.push(input);
-    return { id: "h1", ...input, decidedAt: 0, status: "applied" as const };
-  },
-  list: async () => [],
-  latestApplied: async () => null,
-  markReversed: async () => undefined,
-} satisfies Pick<HistoryStore, "record" | "list" | "latestApplied" | "markReversed">;
-```
-
-Add an assertion per tool: after the tool fires, `recordedEntries[0].reversal.kind` matches the expected kind.
-
-- [ ] **Step 4: Update bootstrap**
-
-In `src/daemon/bootstrap.ts`, replace the `recordHistory: async () => 0` hook with `historyStore` (instantiated in Task 15).
-
-For Task 5, update the typing only and leave the bootstrap wiring as a follow-up (Task 15 closes the loop). Add a `// TODO(phase-d-task-15): wire historyStore` comment if the import fails.
-
-- [ ] **Step 5: Typecheck + run notes tool tests**
-
-Run: `bun run typecheck && bun test src/core/chat/tools/notes.test.ts`
-Expected: Green once the test fake matches the new shape.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/core/chat/tools/notes.ts src/core/chat/tools/notes.test.ts
-git commit -m "$(cat <<'EOF'
-feat(history): notes.* tools capture reversal specs through HistoryStore
-
-Each of the four chat-write tools reads its pre-state inside the
-implementation and calls historyStore.record() with a reversal spec
-immediately after the write succeeds. notes.create captures
-delete-note; notes.append captures truncate-note with priorLength;
-notes.replace_section captures restore-section with the prior body;
-notes.update_frontmatter captures restore-frontmatter with the prior
-YAML. Failure to read pre-state aborts the tool with
-REVERSAL_CAPTURE_FAILED rather than touching the vault.
-EOF
-)"
-```
-
----
-
-## Group 3: ContextManager hardening (parallel-safe with Group 2)
-
-### Task 6: `contextManager.ts` reads `modelContextTokens` + emits summarization event
-
-**Files:**
-- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.ts`
-- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.test.ts`
-
-The `ContextSettingsView` already has `modelContextTokens` (test fixture sets it directly). Bootstrap currently overrides the value to a hardcoded `32_000`. Phase D removes the override and emits a `loop:context_summarized` event when `budgetedHistory` triggers the oldest-half summary.
-
-- [ ] **Step 1: Update bootstrap context settings**
-
-In `src/daemon/bootstrap.ts`, change the `contextManager` registration:
-
-```typescript
-contextSettings: () => ({
-  ...current.chat.context,
-  contextBudgetFraction: current.chat.contextBudgetFraction,
-  modelContextTokens: current.chat.modelContextTokens,
-}),
-```
-
-Drop the `32_000` literal.
-
-- [ ] **Step 2: Add a bus reference to ContextManager**
-
-Edit `src/core/chat/contextManager.ts`:
-- Add `bus?: EventBus<{ "loop:context_summarized": ContextSummarizedEvent }>;` to `ContextManagerOptions`.
-- Define `ContextSummarizedEvent`:
+Append to `src/core/events/types.ts`:
 
 ```typescript
 export interface ContextSummarizedEvent {
@@ -877,24 +244,102 @@ export interface ContextSummarizedEvent {
   originalTokens: number;
   summarizedTokens: number;
 }
+
+export interface ContextOverflowWarningEvent {
+  conversationId: string;
+  model: string;
+  configuredTokens: number;
+  estimatedTokens: number;
+}
+
+export interface ToolModeProbedEvent {
+  model: string;
+  mode: "native" | "json-fallback" | "disabled";
+  attempts: number;
+}
 ```
 
-- In `compose`, pass `conversation.id` to `budgetedHistory`. When `summarized` is true, emit:
+Add the three new keys to the EventBusPayloads union (or whatever the existing aggregate is named — match the file's convention):
 
 ```typescript
-if (budgeted.summarized && this.options.bus) {
+export interface EventBusPayloads {
+  // ...existing keys...
+  "loop:context_summarized": ContextSummarizedEvent;
+  "loop:context_overflow_warning": ContextOverflowWarningEvent;
+  "loop:tool_mode_probed": ToolModeProbedEvent;
+}
+```
+
+- [ ] **Step 3: Typecheck**
+
+Run: `bun run typecheck`
+Expected: Green. The bus may now require these keys in the dispatch table; if so, the chat handler's emit calls (Task 8) will be checked end-to-end.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/core/events/types.ts
+git commit -m "$(cat <<'EOF'
+feat(events): typed payloads for context/probe loop events
+
+Phase D's three new bus events get explicit payload interfaces so the
+producer (ContextManager, toolModeProbe) and the wire forwarder
+(daemon/handlers/chat.ts) share a tsc-checked shape:
+loop:context_summarized, loop:context_overflow_warning,
+loop:tool_mode_probed.
+EOF
+)"
+```
+
+---
+
+## Group 2: ContextManager + probe hardening
+
+### Task 3: `contextManager.ts` reads `modelContextTokens` from settings; emits `loop:context_summarized`
+
+**Files:**
+- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.ts`
+- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.test.ts`
+
+The `ContextSettingsView` already has `modelContextTokens` (test fixture sets it directly). Bootstrap currently overrides the value to a hardcoded `32_000`; the bootstrap fix lands in Task 9. The `ContextManager` itself gains a bus reference and emits the typed event when summarization fires.
+
+- [ ] **Step 1: Add bus to ContextManagerOptions**
+
+Edit `src/core/chat/contextManager.ts`:
+
+Add the import:
+
+```typescript
+import type { EventBus } from "../events/eventBus";
+import type { ContextSummarizedEvent, ContextOverflowWarningEvent } from "../events/types";
+```
+
+Extend `ContextManagerOptions`:
+
+```typescript
+export interface ContextManagerOptions {
+  // ...existing fields...
+  bus?: EventBus;
+}
+```
+
+In `compose`, after `budgetedHistory` returns:
+
+```typescript
+const composed = await this.budgetedHistory(...);
+if (composed.summarized && this.options.bus) {
   this.options.bus.emit("loop:context_summarized", {
     conversationId: conversation.id,
     model: this.options.summaryModel,
-    originalTokens: budgeted.originalTokens,
-    summarizedTokens: budgeted.summarizedTokens,
+    originalTokens: composed.originalTokens,
+    summarizedTokens: composed.summarizedTokens,
   });
 }
 ```
 
-- Update `budgetedHistory` to return `{ history, summarized, originalTokens, summarizedTokens }`.
+Update `budgetedHistory` to return `{ history, summarized, originalTokens, summarizedTokens }` (the latter two are computed inline from the existing `used` accumulator and the post-summary length).
 
-- [ ] **Step 3: Add a test**
+- [ ] **Step 2: Write the test (RED)**
 
 In `src/core/chat/contextManager.test.ts`, add:
 
@@ -905,100 +350,277 @@ test("emits loop:context_summarized when oldest half is replaced by a summary", 
     emit: (name: string, payload: ContextSummarizedEvent) => {
       if (name === "loop:context_summarized") events.push(payload);
     },
-  } as unknown as EventBus<{ "loop:context_summarized": ContextSummarizedEvent }>;
-  const manager = makeManagerWith(bus, { modelContextTokens: 50 }); // tiny budget triggers summarization
-  await manager.compose(longHistoryConversation, latestUserMessage, new AbortController().signal);
+    on: () => () => undefined,
+  } as unknown as EventBus;
+  const manager = makeManagerWith({ bus, modelContextTokens: 50 });
+  const longConversation = {
+    ...baseConversation,
+    messages: Array.from({ length: 12 }, (_, index) => ({
+      id: `m${index}`,
+      role: "user" as const,
+      content: "x".repeat(80),
+      createdAt: index,
+    })),
+  };
+  await manager.compose(
+    longConversation,
+    { id: "u", role: "user" as const, content: "now what?", createdAt: 100 },
+    new AbortController().signal,
+  );
   expect(events.length).toBe(1);
-  expect(events[0].conversationId).toBe(longHistoryConversation.id);
+  expect(events[0].conversationId).toBe(longConversation.id);
+  expect(events[0].originalTokens).toBeGreaterThan(events[0].summarizedTokens);
 });
 ```
 
-`makeManagerWith` and the long-history fixture mirror the existing test helpers; reuse `makeDatabase()` and add a conversation with ten 200-character messages so the budget overflow is unambiguous.
+`makeManagerWith` and `baseConversation` are existing helpers in the test file; reuse them.
 
-- [ ] **Step 4: Typecheck + run**
+- [ ] **Step 3: Run test to verify it fails**
 
-Run: `bun run typecheck && bun test src/core/chat/contextManager.test.ts`
-Expected: Green.
+Run: `bun test src/core/chat/contextManager.test.ts`
+Expected: FAIL — bus is not yet wired through compose.
+
+- [ ] **Step 4: Run test to verify it passes (after Step 1)**
+
+Run: `bun test src/core/chat/contextManager.test.ts`
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/chat/contextManager.ts src/core/chat/contextManager.test.ts src/daemon/bootstrap.ts
+git add src/core/chat/contextManager.ts src/core/chat/contextManager.test.ts
 git commit -m "$(cat <<'EOF'
-feat(chat): modelContextTokens from settings + loop:context_summarized
+feat(chat): ContextManager emits loop:context_summarized
 
-Bootstrap stops hardcoding 32_000; ContextManager reads
-chat.modelContextTokens from NotientSettings (default 200_000) so
-larger models like Nemotron-Cascade-2-30B can use their real budget.
-budgetedHistory emits loop:context_summarized on the EventBus when it
-replaces the oldest half of the history with a summary so the wire
-layer can render a TUI info line and so tests can assert summarization
-fires under known conditions.
+When budgetedHistory replaces the oldest half of conversation
+history with a summary, ContextManager publishes a typed event on
+the optional bus carrying conversationId, model, originalTokens,
+and summarizedTokens. The chat handler subscribes per-turn and
+forwards the event on the wire so the TUI can render an info line
+when summarization fires.
 EOF
 )"
 ```
 
 ---
 
-### Task 7: `toolModeProbe.ts` retries once with elevated temperature
+### Task 4: `contextManager.ts` emits `loop:context_overflow_warning` once per turn
+
+**Files:**
+- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.ts`
+- Modify: `/home/akougkas/projects/notient/src/core/chat/contextManager.test.ts`
+
+When the unbudgeted token estimate (`used`) exceeds `modelContextTokens` outright (not the budget fraction), the ContextManager emits a warning event so an operator running an 8K-context model with a `200_000` default sees the mismatch.
+
+- [ ] **Step 1: Emit the warning before summarization**
+
+Edit `src/core/chat/contextManager.ts`'s `budgetedHistory`:
+
+```typescript
+const settings = this.options.contextSettings();
+const budget = Math.floor(settings.modelContextTokens * settings.contextBudgetFraction);
+let used = this.options.estimateTokens(systemPrompt);
+for (const message of history) {
+  used += this.options.estimateTokens(message.content);
+}
+if (used > settings.modelContextTokens && this.options.bus) {
+  this.options.bus.emit("loop:context_overflow_warning", {
+    conversationId,
+    model: this.options.summaryModel,
+    configuredTokens: settings.modelContextTokens,
+    estimatedTokens: used,
+  });
+}
+if (used <= budget || history.length <= 4) {
+  return { history, summarized: false, originalTokens: used, summarizedTokens: used };
+}
+```
+
+Add `conversationId: string` as a parameter to `budgetedHistory` and pass it from `compose`.
+
+- [ ] **Step 2: Write the test (RED)**
+
+```typescript
+test("emits loop:context_overflow_warning when used > modelContextTokens", async () => {
+  const warnings: ContextOverflowWarningEvent[] = [];
+  const bus = {
+    emit: (name: string, payload: ContextOverflowWarningEvent) => {
+      if (name === "loop:context_overflow_warning") warnings.push(payload);
+    },
+    on: () => () => undefined,
+  } as unknown as EventBus;
+  const manager = makeManagerWith({ bus, modelContextTokens: 50 });
+  const tinyBudgetConversation = {
+    ...baseConversation,
+    messages: Array.from({ length: 6 }, (_, index) => ({
+      id: `m${index}`,
+      role: "user" as const,
+      content: "y".repeat(200),
+      createdAt: index,
+    })),
+  };
+  await manager.compose(
+    tinyBudgetConversation,
+    { id: "u", role: "user" as const, content: "trigger", createdAt: 99 },
+    new AbortController().signal,
+  );
+  expect(warnings.length).toBe(1);
+  expect(warnings[0].configuredTokens).toBe(50);
+  expect(warnings[0].estimatedTokens).toBeGreaterThan(50);
+});
+```
+
+- [ ] **Step 3: Verify FAIL then PASS**
+
+Run: `bun test src/core/chat/contextManager.test.ts`
+First (before Step 1 lands): FAIL with `warnings.length === 0`.
+Then (after Step 1): PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/core/chat/contextManager.ts src/core/chat/contextManager.test.ts
+git commit -m "$(cat <<'EOF'
+feat(chat): emit loop:context_overflow_warning once per overflowing turn
+
+When a single turn's pre-summary token estimate exceeds the configured
+modelContextTokens (not just the budget fraction), ContextManager
+publishes a warning event with the configured and estimated counts.
+Operators running smaller models (Llama 3.1 8B, Qwen2.5 7B) with a
+default 200_000 setting see the mismatch on the first turn.
+EOF
+)"
+```
+
+---
+
+### Task 5: `toolModeProbe.ts` 2-attempt retry + JSON-parse gate
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/core/chat/toolModeProbe.ts`
 - Modify: `/home/akougkas/projects/notient/src/core/chat/toolModeProbe.test.ts`
 
-`probeToolMode` currently sends one request at the provider's default temperature. When a tool-capable model returns no tool calls under low-temp greedy decoding, the probe writes `"disabled"` and the model is permanently flagged unless an operator pins the cache via settings. Phase D adds a single retry at `temperature: 0.7` to recover the common cold-start case.
+`probeToolMode` currently sends one request at the provider's default temperature. When a tool-capable model misses under low-temp greedy decoding, the probe writes `disabled` permanently. Phase D adds a single retry at `0.7` AND requires every returned tool call's arguments to parse as JSON before classifying as `native`.
 
 - [ ] **Step 1: Inspect current probe**
 
-Run: `grep -nA 30 "export.*probeToolMode\|chatWithTools" src/core/chat/toolModeProbe.ts`
+Run: `grep -nA 30 "export.*probeToolMode" src/core/chat/toolModeProbe.ts`
 Expected: a single chatWithTools call followed by a check on `result.toolCalls.length`.
 
-- [ ] **Step 2: Add retry + test**
+- [ ] **Step 2: Implement retry + JSON-parse gate**
 
-Edit `toolModeProbe.ts`:
+Replace the body of `probeToolMode` with:
 
 ```typescript
 const FIRST_TEMPERATURE = 0.3;
 const RETRY_TEMPERATURE = 0.7;
 
-async function attempt(provider: LLMProvider, model: string, signal: AbortSignal, temperature: number): Promise<boolean> {
-  if (!provider.chatWithTools) return false;
-  const handle = await provider.chatWithTools({ /* ...probeRequest with temperature */ });
-  for await (const _event of handle.events) { /* drain */ }
-  const result = await handle.result();
-  return result.toolCalls.length > 0;
+interface AttemptResult {
+  toolCalls: ChatWithToolsToolCall[];
+  errored: boolean;
+}
+
+async function attempt(
+  provider: LLMProvider,
+  model: string,
+  signal: AbortSignal,
+  temperature: number,
+): Promise<AttemptResult> {
+  if (!provider.chatWithTools) return { toolCalls: [], errored: true };
+  try {
+    const handle = await provider.chatWithTools({
+      model,
+      messages: PROBE_MESSAGES,
+      tools: PROBE_TOOLS,
+      toolChoice: "auto",
+      temperature,
+      signal,
+    });
+    for await (const _event of handle.events) { /* drain */ }
+    const result = await handle.result();
+    return { toolCalls: result.toolCalls, errored: false };
+  } catch {
+    return { toolCalls: [], errored: true };
+  }
+}
+
+function allArgsParseAsJson(toolCalls: ChatWithToolsToolCall[]): boolean {
+  for (const call of toolCalls) {
+    // ChatWithToolsToolCall.args is the parsed object form. The
+    // LMStudioProvider returns {} when JSON.parse fails (see
+    // parseToolArguments in lmStudioProvider.ts), so we cannot
+    // distinguish "valid empty object" from "broken arguments" by
+    // looking at args alone. The probe relies on the provider's raw
+    // argsJson which we expose via the handle for this gate.
+    if (call.argsJson !== undefined && call.argsJson.length > 0) {
+      try {
+        JSON.parse(call.argsJson);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export async function probeToolMode(input: ProbeInput): Promise<ToolMode> {
   const cached = input.cache.read(input.model);
   if (cached) return cached;
-  const first = await attempt(input.provider, input.model, input.signal, FIRST_TEMPERATURE).catch(() => false);
-  if (first) {
+  const first = await attempt(input.provider, input.model, input.signal, FIRST_TEMPERATURE);
+  if (first.toolCalls.length > 0 && allArgsParseAsJson(first.toolCalls)) {
     await input.cache.write(input.model, "native");
+    input.bus?.emit("loop:tool_mode_probed", { model: input.model, mode: "native", attempts: 1 });
     return "native";
   }
-  const retry = await attempt(input.provider, input.model, input.signal, RETRY_TEMPERATURE).catch(() => false);
-  if (retry) {
+  if (first.errored) {
+    await input.cache.write(input.model, "disabled");
+    input.bus?.emit("loop:tool_mode_probed", { model: input.model, mode: "disabled", attempts: 1 });
+    return "disabled";
+  }
+  const retry = await attempt(input.provider, input.model, input.signal, RETRY_TEMPERATURE);
+  if (retry.toolCalls.length > 0 && allArgsParseAsJson(retry.toolCalls)) {
     await input.cache.write(input.model, "native");
+    input.bus?.emit("loop:tool_mode_probed", { model: input.model, mode: "native", attempts: 2 });
     return "native";
   }
   await input.cache.write(input.model, "disabled");
+  input.bus?.emit("loop:tool_mode_probed", { model: input.model, mode: "disabled", attempts: 2 });
   return "disabled";
 }
 ```
 
-- [ ] **Step 3: Test**
+This requires extending `ChatWithToolsToolCall` (or the probe's handle shape) to carry the raw `argsJson` alongside the parsed `args`. If that change is too invasive, the probe re-parses each tool call's arguments string from a side-channel — but the cleanest path is exposing `argsJson` on the result.
+
+If the substrate's `ChatWithToolsToolCall` does not expose `argsJson` today, the alternative is to inject a custom-serializing probe that captures the raw stream itself: `LMStudioProvider.chatWithTools` already aggregates `argsJson` per call inside `ToolStreamAggregator`; the probe can use a thin wrapper that exposes it.
+
+The minimal change for the probe today is to use `args` parsability as the proxy: a tool call where `args === {}` AND the model's tool spec required arguments is treated as a malformed call. The probe's tool spec carries `required: ["query"]`, so:
+
+```typescript
+function looksLikeMalformed(call: ChatWithToolsToolCall): boolean {
+  if (Object.keys(call.args).length === 0) return true;
+  if (typeof call.args.query !== "string" || call.args.query.length === 0) return true;
+  return false;
+}
+
+function allArgsLookValid(toolCalls: ChatWithToolsToolCall[]): boolean {
+  return toolCalls.every((call) => !looksLikeMalformed(call));
+}
+```
+
+Use `allArgsLookValid` instead of `allArgsParseAsJson` in the calls above. Document the heuristic in a comment.
+
+- [ ] **Step 3: Write the tests (RED)**
 
 In `src/core/chat/toolModeProbe.test.ts`, add:
 
 ```typescript
-test("returns native when the second attempt yields tool calls", async () => {
+test("returns native after the second attempt yields a parseable tool call", async () => {
   let attempts = 0;
   const provider = makeProbeProvider({
     onChatWithTools: () => {
       attempts++;
       if (attempts === 1) return { toolCalls: [] };
-      return { toolCalls: [{ id: "1", name: "echo", args: {} }] };
+      return { toolCalls: [{ id: "1", name: "echo", args: { query: "hello" } }] };
     },
   });
   const cache = makeMemoryCache();
@@ -1013,296 +635,119 @@ test("returns disabled when both attempts yield no tool calls", async () => {
   const mode = await probeToolMode({ provider, model: "test", signal: new AbortController().signal, cache });
   expect(mode).toBe("disabled");
 });
+
+test("returns disabled when the second attempt yields a tool call with empty args", async () => {
+  let attempts = 0;
+  const provider = makeProbeProvider({
+    onChatWithTools: () => {
+      attempts++;
+      if (attempts === 1) return { toolCalls: [] };
+      return { toolCalls: [{ id: "1", name: "echo", args: {} }] };
+    },
+  });
+  const cache = makeMemoryCache();
+  const mode = await probeToolMode({ provider, model: "test", signal: new AbortController().signal, cache });
+  expect(mode).toBe("disabled");
+});
 ```
 
-- [ ] **Step 4: Typecheck + run probe tests**
+`makeProbeProvider` is the existing helper; it returns a fake `LLMProvider` with a stubbed `chatWithTools` that the test drives through `onChatWithTools`.
 
-Run: `bun run typecheck && bun test src/core/chat/toolModeProbe.test.ts`
-Expected: Green.
+- [ ] **Step 4: Verify FAIL then PASS**
+
+Run: `bun test src/core/chat/toolModeProbe.test.ts`
+Expected: First fail (current probe is single-attempt). Then pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/core/chat/toolModeProbe.ts src/core/chat/toolModeProbe.test.ts
 git commit -m "$(cat <<'EOF'
-feat(probe): retry once at 0.7 temperature before flagging disabled
+feat(probe): retry once at 0.7 + reject malformed tool args
 
 Tool-capable models that miss the first probe under low-temperature
-greedy decoding (the cold-start failure documented in Phase C caveat
-#1) now get a second chance at temperature 0.7. Only a model that
-returns zero tool calls under both attempts gets cached as "disabled",
-which the operator can still override via chat.toolModeByModel.
+greedy decoding (the cold-start failure documented in Phase C
+caveat #1) now get a second chance at temperature 0.7. A tool call
+whose required arg ('query' for the echo probe) is empty or missing
+reads as malformed and the probe writes "disabled" rather than
+classifying the model as "native" on the strength of an
+unparseable response. The probe emits loop:tool_mode_probed with
+the attempt count so operators can see the retry on the wire.
 EOF
 )"
 ```
 
 ---
 
-## Group 4: Agent + subagent layer
+## Group 3: Daemon handlers
 
-### Task 8: `src/agent/agentIdentity.ts` Tier 2 prompts + `composeAgentIdentity`
-
-**Files:**
-- Create: `/home/akougkas/projects/notient/src/agent/agentIdentity.ts`
-- Create: `/home/akougkas/projects/notient/src/agent/agentIdentity.test.ts`
-
-Phase D ships the NoteEditor identity body verbatim; `ContextBuilder` and `Worker` are placeholders that throw `SUBAGENT_UNAVAILABLE` until Phase E. The composer concatenates `TIER_1_IDENTITY` (already exported by `src/agent/identity.ts`) with the role's specialization block.
-
-- [ ] **Step 1: Write the test**
-
-Create `src/agent/agentIdentity.test.ts`:
-
-```typescript
-import { describe, expect, test } from "bun:test";
-import { composeAgentIdentity } from "./agentIdentity";
-
-describe("composeAgentIdentity", () => {
-  test("NoteEditor includes Tier 1 + NoteEditor specialization", () => {
-    const prompt = composeAgentIdentity("NoteEditor");
-    expect(prompt).toContain("steward of a sentient vault");
-    expect(prompt).toContain("# Role: NoteEditor");
-    expect(prompt).toContain("Obsidian-native");
-  });
-
-  test("Worker throws SUBAGENT_UNAVAILABLE in Phase D", () => {
-    expect(() => composeAgentIdentity("Worker")).toThrow(/SUBAGENT_UNAVAILABLE/);
-  });
-
-  test("ContextBuilder throws SUBAGENT_UNAVAILABLE in Phase D", () => {
-    expect(() => composeAgentIdentity("ContextBuilder")).toThrow(/SUBAGENT_UNAVAILABLE/);
-  });
-});
-```
-
-- [ ] **Step 2: Run test (FAIL)**
-
-Run: `bun test src/agent/agentIdentity.test.ts`
-Expected: FAIL — module missing.
-
-- [ ] **Step 3: Implement**
-
-Create `src/agent/agentIdentity.ts`:
-
-```typescript
-import { TIER_1_IDENTITY } from "./identity";
-
-export type SubagentRole = "NoteEditor" | "ContextBuilder" | "Worker";
-
-const NOTE_EDITOR_BLOCK = `
-# Role: NoteEditor
-
-You are the orchestrator's Obsidian-native I/O specialist. You receive a
-focused goal (rewrite a section, append a paragraph, restructure
-frontmatter) and the affected note paths. You read the current state,
-plan the smallest write that achieves the goal, and request approval
-through the standard ApprovalGate before each write. You never invent
-new note paths the orchestrator did not give you. You return a brief
-result summary the orchestrator can render to the user.
-
-Tools available: notes.create, notes.append, notes.replace_section,
-notes.update_frontmatter, vault.read_note, vault.list_neighbors. You do
-not have search tools; the orchestrator has done the searching already.
-`.trim();
-
-export function composeAgentIdentity(role: SubagentRole, base: string = TIER_1_IDENTITY): string {
-  if (role === "NoteEditor") return `${base}\n\n${NOTE_EDITOR_BLOCK}`;
-  if (role === "ContextBuilder" || role === "Worker") {
-    throw new Error(`SUBAGENT_UNAVAILABLE: ${role} ships in Phase E`);
-  }
-  throw new Error(`SUBAGENT_UNKNOWN: ${role as string}`);
-}
-```
-
-- [ ] **Step 4: Run test (PASS)**
-
-Run: `bun test src/agent/agentIdentity.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/agent/agentIdentity.ts src/agent/agentIdentity.test.ts
-git commit -m "$(cat <<'EOF'
-feat(agent): Tier 2 NoteEditor identity + composeAgentIdentity
-
-The orchestrator can now ask src/agent/agentIdentity.ts for a fully
-composed subagent prompt (Tier 1 + role specialization). Phase D
-ships NoteEditor verbatim and gates ContextBuilder + Worker behind
-SUBAGENT_UNAVAILABLE so Phase E flips them on without a contract change.
-EOF
-)"
-```
-
----
-
-### Task 9: `src/agent/subagentRegistry.ts` dispatches frozen subagent runs
-
-**Files:**
-- Create: `/home/akougkas/projects/notient/src/agent/subagentRegistry.ts`
-- Create: `/home/akougkas/projects/notient/src/agent/subagentRegistry.test.ts`
-
-The registry holds a small map of role → runner. The runner accepts `{ goal, toolWhitelist }` and returns a final string. It uses the existing `runAgentTurn` (single turn, multi-round) under a separate mutex priority slot.
-
-- [ ] **Step 1: Write the test**
-
-Create `src/agent/subagentRegistry.test.ts` — a test that registers a fake runner and dispatches it, asserting the registry forwards `goal` and returns the runner's output. The fake runner skips the real LLM loop. Mirror the structure of `src/agent/notientAgent.ts`'s test.
-
-```typescript
-import { describe, expect, test } from "bun:test";
-import { SubagentRegistry } from "./subagentRegistry";
-
-describe("SubagentRegistry", () => {
-  test("dispatch routes to the registered runner and returns its result", async () => {
-    const registry = new SubagentRegistry();
-    registry.register("NoteEditor", async (input) => `done: ${input.goal}`);
-    const result = await registry.dispatch({
-      role: "NoteEditor",
-      goal: "rename heading",
-      toolWhitelist: ["notes.replace_section"],
-    });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") expect(result.content).toBe("done: rename heading");
-  });
-
-  test("dispatch returns SUBAGENT_UNAVAILABLE for unregistered roles", async () => {
-    const registry = new SubagentRegistry();
-    const result = await registry.dispatch({ role: "Worker", goal: "x", toolWhitelist: [] });
-    expect(result.status).toBe("error");
-    if (result.status === "error") expect(result.error).toContain("SUBAGENT_UNAVAILABLE");
-  });
-});
-```
-
-- [ ] **Step 2: Run test (FAIL)**
-
-Run: `bun test src/agent/subagentRegistry.test.ts`
-Expected: FAIL — module missing.
-
-- [ ] **Step 3: Implement**
-
-Create `src/agent/subagentRegistry.ts`:
-
-```typescript
-import type { SubagentRole } from "./agentIdentity";
-
-export interface DispatchInput {
-  role: SubagentRole;
-  goal: string;
-  toolWhitelist: string[];
-}
-
-export type DispatchResult =
-  | { status: "ok"; content: string; durationMs: number }
-  | { status: "error"; error: string };
-
-export type SubagentRunner = (input: DispatchInput) => Promise<string>;
-
-export class SubagentRegistry {
-  private readonly runners = new Map<SubagentRole, SubagentRunner>();
-
-  register(role: SubagentRole, runner: SubagentRunner): void {
-    this.runners.set(role, runner);
-  }
-
-  async dispatch(input: DispatchInput): Promise<DispatchResult> {
-    const runner = this.runners.get(input.role);
-    if (!runner) {
-      return { status: "error", error: `SUBAGENT_UNAVAILABLE: ${input.role}` };
-    }
-    const start = Date.now();
-    try {
-      const content = await runner(input);
-      return { status: "ok", content, durationMs: Date.now() - start };
-    } catch (error) {
-      return {
-        status: "error",
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  has(role: SubagentRole): boolean {
-    return this.runners.has(role);
-  }
-}
-```
-
-- [ ] **Step 4: Run test (PASS)**
-
-Run: `bun test src/agent/subagentRegistry.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/agent/subagentRegistry.ts src/agent/subagentRegistry.test.ts
-git commit -m "$(cat <<'EOF'
-feat(agent): SubagentRegistry dispatches frozen subagent runs
-
-Phase D's on-demand subagent surface drops a small registry that maps
-a SubagentRole to a runner closure. dispatch() returns
-SUBAGENT_UNAVAILABLE for unregistered roles so the orchestrator's
-subagent.dispatch tool can refuse with a clear error rather than
-crashing the chat turn. Bootstrap (Task 15) registers the
-NoteEditor runner on top of the existing chat substrate.
-EOF
-)"
-```
-
----
-
-## Group 5: Daemon handlers
-
-### Task 10: `daemon/handlers/vault.ts` adds `vault.list`
+### Task 6: `daemon/handlers/vault.ts` adds `vault.list`
 
 **Files:**
 - Create: `/home/akougkas/projects/notient/src/daemon/handlers/vault.ts`
 - Create: `/home/akougkas/projects/notient/src/daemon/handlers/vault.test.ts`
 
-The handler walks `<vault>` recursively via the existing `vault.list(folder)` facade, applying the prefix filter and the cap. Excludes `.notient`, `Notient/conversations`, `Notient/proposals`.
+The handler reads a single folder via the existing `vault.list(folder)` facade, applies the filename filter, sorts, and caps. Folders return with a trailing `/`.
 
-- [ ] **Step 1: Write the test**
+- [ ] **Step 1: Write the test (RED)**
 
-Create the test using a fake VaultAdapter that returns a flat path list. Assertions: prefix filter narrows results; cap respected; excluded folders absent.
+Create `src/daemon/handlers/vault.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "bun:test";
 import { makeVaultHandlers } from "./vault";
 
 const fakeVault = {
-  list: async (folder: string) => ({
-    files: ["notes/a.md", "notes/b.md", "Notient/conversations/x.md", ".notient/db"]
-      .filter((path) => path.startsWith(folder)),
-    folders: [],
-  }),
+  list: async (folder: string) => {
+    if (folder === "") {
+      return {
+        files: ["root.md", "Notient/conversations/x.md", ".notient/db"],
+        folders: ["inbox", "Notient", ".notient"],
+      };
+    }
+    if (folder === "inbox") {
+      return { files: ["alpha.md", "beta.md", "alphabet.md"], folders: ["nested"] };
+    }
+    return { files: [], folders: [] };
+  },
 };
 
 describe("vault.list", () => {
-  test("returns sorted paths under prefix", async () => {
+  test("returns folder children with trailing slash for folders", async () => {
     const handlers = makeVaultHandlers({ vault: fakeVault });
-    const result = await handlers.list({ prefix: "notes/" }, () => undefined, "envelope-1");
-    expect(result.paths).toEqual(["notes/a.md", "notes/b.md"]);
+    const result = await handlers.list({ folder: "inbox" }, () => undefined, "envelope-1");
+    expect(result.paths).toEqual(["alpha.md", "alphabet.md", "beta.md", "nested/"]);
   });
 
-  test("excludes .notient and Notient/conversations", async () => {
+  test("filter narrows by filename prefix", async () => {
     const handlers = makeVaultHandlers({ vault: fakeVault });
-    const result = await handlers.list({ prefix: "" }, () => undefined, "envelope-2");
-    expect(result.paths).not.toContain(".notient/db");
-    expect(result.paths).not.toContain("Notient/conversations/x.md");
+    const result = await handlers.list({ folder: "inbox", filter: "alpha" }, () => undefined, "envelope-2");
+    expect(result.paths).toEqual(["alpha.md", "alphabet.md"]);
   });
 
-  test("caps result at 200", async () => {
+  test("excludes .notient and Notient at the root", async () => {
+    const handlers = makeVaultHandlers({ vault: fakeVault });
+    const result = await handlers.list({ folder: "" }, () => undefined, "envelope-3");
+    expect(result.paths).toEqual(["inbox/", "root.md"]);
+  });
+
+  test("caps at 200 even when limit is unset", async () => {
     const big = Array.from({ length: 500 }, (_, index) => `n${index}.md`);
     const handlers = makeVaultHandlers({
       vault: { list: async () => ({ files: big, folders: [] }) },
     });
-    const result = await handlers.list({ prefix: "" }, () => undefined, "envelope-3");
+    const result = await handlers.list({}, () => undefined, "envelope-4");
     expect(result.paths.length).toBe(200);
   });
 });
 ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 2: Run test to verify FAIL**
+
+Run: `bun test src/daemon/handlers/vault.test.ts`
+Expected: FAIL — module missing.
+
+- [ ] **Step 3: Implement**
 
 Create `src/daemon/handlers/vault.ts`:
 
@@ -1321,136 +766,165 @@ export interface VaultHandlers {
   ) => Promise<{ ok: boolean; paths: string[] }>;
 }
 
-const EXCLUDE_PREFIXES = [".notient/", "Notient/conversations/", "Notient/proposals/"];
 const HARD_CAP = 200;
+const ROOT_EXCLUDES = new Set([".notient", "Notient"]);
 
 export function makeVaultHandlers(deps: VaultHandlerDeps): VaultHandlers {
   return {
     list: async (params) => {
-      const prefix = typeof params.prefix === "string" ? params.prefix : "";
-      const limit = typeof params.limit === "number" ? Math.min(params.limit, HARD_CAP) : HARD_CAP;
-      const listing = await deps.vault.list(prefix);
-      const filtered = listing.files
-        .filter((path) => !EXCLUDE_PREFIXES.some((excluded) => path.startsWith(excluded)))
-        .sort()
-        .slice(0, limit);
-      return { ok: true, paths: filtered };
+      const folder = typeof params.folder === "string" ? params.folder : "";
+      const filter = typeof params.filter === "string" ? params.filter : "";
+      const limit =
+        typeof params.limit === "number" ? Math.min(params.limit, HARD_CAP) : HARD_CAP;
+      const listing = await deps.vault.list(folder);
+      const folderEntries = listing.folders
+        .filter((name) => !(folder === "" && ROOT_EXCLUDES.has(name)))
+        .filter((name) => name.startsWith(filter))
+        .map((name) => `${name}/`);
+      const fileEntries = listing.files
+        .filter((name) => !(folder === "" && name.startsWith("Notient/")))
+        .filter((name) => !(folder === "" && name.startsWith(".notient/")))
+        .filter((name) => name.startsWith(filter));
+      const paths = [...folderEntries, ...fileEntries].sort().slice(0, limit);
+      return { ok: true, paths };
     },
   };
 }
 ```
 
-- [ ] **Step 3: Run test (PASS)**
+- [ ] **Step 4: Run test to verify PASS**
 
 Run: `bun test src/daemon/handlers/vault.test.ts`
-Expected: Green.
+Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/daemon/handlers/vault.ts src/daemon/handlers/vault.test.ts
 git commit -m "$(cat <<'EOF'
-feat(daemon): vault.list RPC enumerates paths with prefix filter
+feat(daemon): vault.list RPC over single-folder facade
 
-Returns vault-relative paths sorted lexicographically and capped at 200.
-Excludes the substrate-internal folders (.notient, Notient/conversations,
-Notient/proposals) so chat-side @-completion never surfaces them. The
-handler stays thin over the existing VaultAdapter.list facade.
+Returns vault-relative children of a folder with a filename filter,
+sorted with folders (trailing slash) first by lexicographic order,
+capped at 200. Backed by the existing FsVault.list(folder) so the
+walk is single-level — safe on vaults with millions of files. Excludes
+.notient and Notient subtrees at the root so chat-side @-completion
+never surfaces substrate-internal state. Drives the upcoming TUI
+tab handler (Task 13).
 EOF
 )"
 ```
 
 ---
 
-### Task 11: `daemon/handlers/notes.ts` adds `notes.history` + `notes.undo`
+### Task 7: `daemon/handlers/notes.ts` adds `notes.history`, `notes.undo`, `notes.read`
 
 **Files:**
 - Create: `/home/akougkas/projects/notient/src/daemon/handlers/notes.ts`
 - Create: `/home/akougkas/projects/notient/src/daemon/handlers/notes.test.ts`
 
-`notes.history` returns up to 10 newest entries from the store. `notes.undo` reads `latestApplied`, applies the reversal through `applyReversal` against the vault facade, then calls `historyStore.markReversed(entry.id)`.
+`notes.history` calls `HistoryService.getRecent(10)`. `notes.undo` calls `HistoryService.undoLast()`. `notes.read` calls `vault.read(path)`.
 
-- [ ] **Step 1: Write the test**
+- [ ] **Step 1: Write the test (RED)**
 
-Create the test with a fake HistoryStore + reversal facade. Assertions: history returns the expected entry list; undo applies the reversal; undo on an empty store returns `HISTORY_EMPTY`.
+Create `src/daemon/handlers/notes.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "bun:test";
 import { makeNotesHandlers } from "./notes";
+import type { HistoryRow } from "../../core/history/types";
 
-describe("notes.history + notes.undo", () => {
-  test("history returns up to 10 newest entries", async () => {
-    const entries = Array.from({ length: 15 }, (_, index) => ({
-      id: `e${index}`,
-      callId: `c${index}`,
-      tool: "notes.create",
-      args: {},
-      reversal: { kind: "delete-note" as const, path: "notes/x.md" },
-      decidedAt: index,
-      status: "applied" as const,
-    }));
+const sampleRow: HistoryRow = {
+  id: 42,
+  kind: "notes.create",
+  target: "notes/x.md",
+  before: null,
+  after: "hello",
+  createdAt: 1700000000000,
+};
+
+describe("notes.history + notes.undo + notes.read", () => {
+  test("history returns the rows from getRecent", async () => {
     const handlers = makeNotesHandlers({
-      historyStore: { list: async () => entries, latestApplied: async () => entries[0], markReversed: async () => undefined, record: async () => entries[0] },
-      reversalFacade: { read: async () => "", write: async () => undefined, remove: async () => undefined, exists: async () => true },
+      historyService: {
+        getRecent: () => [sampleRow],
+        undoLast: async () => ({ ok: true }),
+      },
+      vault: { read: async () => "body" },
     });
-    const result = await handlers.history({}, () => undefined, "env");
-    expect(result.entries.length).toBe(10);
-    expect(result.entries[0].id).toBe("e0");
+    const result = await handlers.history({ limit: 10 }, () => undefined, "envelope-1");
+    expect(result.entries.length).toBe(1);
+    expect(result.entries[0].id).toBe(42);
   });
 
-  test("undo applies the latestApplied reversal and marks reversed", async () => {
-    let marked = "";
-    const recordedReversal: string[] = [];
+  test("undo calls undoLast and returns the reversed row metadata", async () => {
+    let called = false;
     const handlers = makeNotesHandlers({
-      historyStore: {
-        list: async () => [],
-        latestApplied: async () => ({
-          id: "e1",
-          callId: "c1",
-          tool: "notes.create",
-          args: { notePath: "notes/x.md" },
-          reversal: { kind: "delete-note", path: "notes/x.md" },
-          decidedAt: 0,
-          status: "applied",
-        }),
-        markReversed: async (id) => { marked = id; },
-        record: async () => { throw new Error("unused"); },
+      historyService: {
+        getRecent: () => [sampleRow],
+        undoLast: async () => {
+          called = true;
+          return { ok: true };
+        },
       },
-      reversalFacade: {
-        read: async () => "",
-        write: async () => undefined,
-        remove: async (path) => { recordedReversal.push(path); },
-        exists: async () => true,
-      },
+      vault: { read: async () => "body" },
     });
-    const result = await handlers.undo({}, () => undefined, "env");
+    const result = await handlers.undo({}, () => undefined, "envelope-2");
+    expect(called).toBe(true);
     expect(result.ok).toBe(true);
-    expect(recordedReversal).toEqual(["notes/x.md"]);
-    expect(marked).toBe("e1");
+    expect(result.reversed?.id).toBe(42);
   });
 
-  test("undo with no applied entry returns HISTORY_EMPTY", async () => {
+  test("undo surfaces the inverter error when undoLast returns ok:false", async () => {
     const handlers = makeNotesHandlers({
-      historyStore: { list: async () => [], latestApplied: async () => null, markReversed: async () => undefined, record: async () => { throw new Error("unused"); } },
-      reversalFacade: { read: async () => "", write: async () => undefined, remove: async () => undefined, exists: async () => false },
+      historyService: {
+        getRecent: () => [],
+        undoLast: async () => ({ ok: false, error: "no history" }),
+      },
+      vault: { read: async () => "body" },
     });
-    await expect(handlers.undo({}, () => undefined, "env")).rejects.toThrow(/HISTORY_EMPTY/);
+    const result = await handlers.undo({}, () => undefined, "envelope-3");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("no history");
+  });
+
+  test("read returns the file body from vault.read", async () => {
+    const handlers = makeNotesHandlers({
+      historyService: { getRecent: () => [], undoLast: async () => ({ ok: false, error: "x" }) },
+      vault: { read: async (path: string) => `# ${path}\n\nbody` },
+    });
+    const result = await handlers.read({ path: "notes/x.md" }, () => undefined, "envelope-4");
+    expect(result.ok).toBe(true);
+    expect(result.body).toBe("# notes/x.md\n\nbody");
+  });
+
+  test("read rejects without a path", async () => {
+    const handlers = makeNotesHandlers({
+      historyService: { getRecent: () => [], undoLast: async () => ({ ok: false, error: "x" }) },
+      vault: { read: async () => "" },
+    });
+    await expect(handlers.read({}, () => undefined, "env-5")).rejects.toThrow(/INVALID_PARAMS/);
   });
 });
 ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 2: Verify FAIL**
+
+Run: `bun test src/daemon/handlers/notes.test.ts`
+Expected: FAIL — module missing.
+
+- [ ] **Step 3: Implement**
 
 Create `src/daemon/handlers/notes.ts`:
 
 ```typescript
-import type { ReversalFacade } from "../../core/history/reversals";
-import { applyReversal } from "../../core/history/reversals";
-import type { HistoryEntry, HistoryStore } from "../../core/history/historyStore";
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import type { HistoryService } from "../../core/history/historyService";
+import type { HistoryRow } from "../../core/history/types";
 
 export interface NotesHandlerDeps {
-  historyStore: Pick<HistoryStore, "list" | "latestApplied" | "markReversed" | "record">;
-  reversalFacade: ReversalFacade;
+  historyService: Pick<HistoryService, "getRecent" | "undoLast">;
+  vault: Pick<VaultAdapter, "read">;
 }
 
 export interface NotesHandlers {
@@ -1458,196 +932,246 @@ export interface NotesHandlers {
     params: Record<string, unknown>,
     emit: (line: string) => void,
     envelopeId: string,
-  ) => Promise<{ ok: boolean; entries: HistoryEntry[] }>;
+  ) => Promise<{ ok: boolean; entries: HistoryRow[] }>;
   undo: (
     params: Record<string, unknown>,
     emit: (line: string) => void,
     envelopeId: string,
-  ) => Promise<{ ok: boolean; reversed: HistoryEntry }>;
+  ) => Promise<{ ok: boolean; reversed?: HistoryRow; error?: string }>;
+  read: (
+    params: Record<string, unknown>,
+    emit: (line: string) => void,
+    envelopeId: string,
+  ) => Promise<{ ok: boolean; body: string }>;
 }
 
 export function makeNotesHandlers(deps: NotesHandlerDeps): NotesHandlers {
   return {
-    history: async () => {
-      const entries = (await deps.historyStore.list()).slice(0, 10);
+    history: async (params) => {
+      const limit = typeof params.limit === "number" ? params.limit : 10;
+      const entries = deps.historyService.getRecent(limit);
       return { ok: true, entries };
     },
     undo: async () => {
-      const entry = await deps.historyStore.latestApplied();
-      if (!entry) {
-        throw new Error("HISTORY_EMPTY: nothing to undo");
+      const recent = deps.historyService.getRecent(1);
+      const target = recent[0];
+      const result = await deps.historyService.undoLast();
+      if (!result.ok) {
+        return { ok: false, error: result.error };
       }
-      try {
-        await applyReversal(entry.reversal, deps.reversalFacade);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`UNDO_FAILED: ${message}`);
-      }
-      await deps.historyStore.markReversed(entry.id);
-      return { ok: true, reversed: { ...entry, status: "reversed" } };
+      return { ok: true, reversed: target };
+    },
+    read: async (params) => {
+      const path = typeof params.path === "string" ? params.path : "";
+      if (path.length === 0) throw new Error("INVALID_PARAMS: path is required");
+      const body = await deps.vault.read(path);
+      return { ok: true, body };
     },
   };
 }
 ```
 
-- [ ] **Step 3: Run test (PASS)**
+- [ ] **Step 4: Verify PASS**
 
 Run: `bun test src/daemon/handlers/notes.test.ts`
+Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/daemon/handlers/notes.ts src/daemon/handlers/notes.test.ts
 git commit -m "$(cat <<'EOF'
-feat(daemon): notes.history + notes.undo over HistoryStore
+feat(daemon): notes.history + notes.undo + notes.read RPCs
 
-notes.history returns the last 10 chat-driven write entries newest
-first. notes.undo pops the latest applied entry, applies its reversal
-spec through applyReversal against the vault facade, and marks the
-entry reversed in the store. Empty history surfaces HISTORY_EMPTY;
-reversal mismatch (file drifted) surfaces UNDO_FAILED with the inner
-REVERSAL_STALE message preserved.
+Three thin wrappers over the existing HistoryService and VaultAdapter:
+notes.history reads HistoryService.getRecent(limit=10); notes.undo
+calls HistoryService.undoLast and returns the reversed row metadata
+or the inverter's error string; notes.read returns vault.read(path)
+for the upcoming /read TUI verb. No new substrate; closes Phase C
+caveats #4 (real /read) and #6 (history wiring).
 EOF
 )"
 ```
 
 ---
 
-### Task 12: `daemon/handlers/subagent.ts` adds `subagent.dispatch`
-
-**Files:**
-- Create: `/home/akougkas/projects/notient/src/daemon/handlers/subagent.ts`
-- Create: `/home/akougkas/projects/notient/src/daemon/handlers/subagent.test.ts`
-
-The handler validates `role` against the registry, forwards `goal` and `toolWhitelist`, and returns `{ ok, status, content, error }`. Mid-loop approval pauses are not in scope for Phase D; the runner handles them internally.
-
-- [ ] **Step 1: Write the test**
-
-Test that:
-- A registered role returns `{ ok: true, status: "ok", content }`.
-- An unregistered role returns `{ ok: false, status: "error", error: "SUBAGENT_UNAVAILABLE..." }`.
-- Missing `role` parameter throws `INVALID_PARAMS`.
-
-- [ ] **Step 2: Implement**
-
-```typescript
-import type { SubagentRegistry } from "../../agent/subagentRegistry";
-import type { SubagentRole } from "../../agent/agentIdentity";
-
-export interface SubagentHandlerDeps {
-  registry: SubagentRegistry;
-}
-
-export interface SubagentHandlers {
-  dispatch: (
-    params: Record<string, unknown>,
-    emit: (line: string) => void,
-    envelopeId: string,
-  ) => Promise<{ ok: boolean; status: string; content?: string; error?: string }>;
-}
-
-export function makeSubagentHandlers(deps: SubagentHandlerDeps): SubagentHandlers {
-  return {
-    dispatch: async (params) => {
-      const role = typeof params.role === "string" ? (params.role as SubagentRole) : "";
-      const goal = typeof params.goal === "string" ? params.goal : "";
-      const toolWhitelist = Array.isArray(params.toolWhitelist)
-        ? (params.toolWhitelist as string[])
-        : [];
-      if (role.length === 0) throw new Error("INVALID_PARAMS: role is required");
-      if (goal.length === 0) throw new Error("INVALID_PARAMS: goal is required");
-      const result = await deps.registry.dispatch({ role, goal, toolWhitelist });
-      if (result.status === "ok") {
-        return { ok: true, status: "ok", content: result.content };
-      }
-      return { ok: false, status: "error", error: result.error };
-    },
-  };
-}
-```
-
-- [ ] **Step 3: Test + commit (analogous to prior tasks)**
-
-```bash
-git add src/daemon/handlers/subagent.ts src/daemon/handlers/subagent.test.ts
-git commit -m "$(cat <<'EOF'
-feat(daemon): subagent.dispatch RPC over the registry
-
-Validates role + goal, forwards toolWhitelist, and returns the runner's
-final string. Unregistered roles surface SUBAGENT_UNAVAILABLE without
-crashing the daemon. Mid-loop approval pauses (subagent.continue) are
-deferred to Phase E.
-EOF
-)"
-```
-
----
-
-### Task 13: `daemon/handlers/chat.ts` forwards `loop:context_summarized`
+### Task 8: `daemon/handlers/chat.ts` forwards three new wire events
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/daemon/handlers/chat.ts`
+- Modify: `/home/akougkas/projects/notient/src/daemon/handlers/chat.test.ts`
 
-The chat handler must subscribe to the bus's `loop:context_summarized` event for the duration of the active turn and forward each event with the wire name `loop:context_summarized`.
+The chat handler subscribes to `loop:context_summarized`, `loop:context_overflow_warning`, and `loop:tool_mode_probed` for the duration of each `chat.send` and forwards each frame on the wire.
 
-- [ ] **Step 1: Subscribe + unsubscribe alongside the approval bridge**
+- [ ] **Step 1: Add bus to ChatHandlerDeps**
 
-Add inside `send`:
+```typescript
+import type { EventBus } from "../../core/events/eventBus";
+
+export interface ChatHandlerDeps {
+  // ...existing fields...
+  bus: EventBus;
+}
+```
+
+- [ ] **Step 2: Subscribe + unsubscribe inside `send`**
+
+After `subscribeApprovalEvents`, before `runSendStream`:
 
 ```typescript
 const unsubscribeSummary = deps.bus.on("loop:context_summarized", (payload) => {
   if (payload.conversationId !== conversation.id) return;
   emit(encodeEvent(envelopeId, "loop:context_summarized", payload));
 });
+const unsubscribeOverflow = deps.bus.on("loop:context_overflow_warning", (payload) => {
+  if (payload.conversationId !== conversation.id) return;
+  emit(encodeEvent(envelopeId, "loop:context_overflow_warning", payload));
+});
+const unsubscribeProbed = deps.bus.on("loop:tool_mode_probed", (payload) => {
+  emit(encodeEvent(envelopeId, "loop:tool_mode_probed", payload));
+});
 try {
   return await runSendStream(/* ... */);
 } finally {
+  unsubscribeProbed();
+  unsubscribeOverflow();
   unsubscribeSummary();
   unsubscribe();
 }
 ```
 
-`deps.bus` is added to `ChatHandlerDeps`; bootstrap passes `kernel.get("bus")`.
+`loop:tool_mode_probed` is broadcast (no `conversationId`) because the probe runs once per model and is not scoped to a turn.
 
-- [ ] **Step 2: Test + commit**
+- [ ] **Step 3: Add tests**
 
-Add a chat handler test that:
-- Stubs ContextManager to bus-emit `loop:context_summarized` during the turn.
-- Asserts the wire stream contains a `loop:context_summarized` frame for the active envelope id.
+In `src/daemon/handlers/chat.test.ts`, add a test that emits each of the three events on the bus during a fake chat turn and asserts a matching wire frame is captured. Mirror the existing approval-bridge test pattern.
+
+- [ ] **Step 4: Verify**
+
+Run: `bun test src/daemon/handlers/chat.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/daemon/handlers/chat.ts src/daemon/handlers/chat.test.ts
 git commit -m "$(cat <<'EOF'
-feat(daemon): chat handler forwards loop:context_summarized frames
+feat(daemon): chat handler forwards summarization + overflow + probe events
 
-Subscribed for the duration of each chat.send turn so a summarization
-event triggered by ContextManager surfaces on the wire as a scoped
-frame the TUI can render as an info line. Filtered by conversationId
-so parallel conversations do not cross-emit.
+Subscribed for the duration of each chat.send turn so substrate bus
+events surface on the wire as scoped frames the TUI can render as
+info lines: loop:context_summarized (filtered by conversationId),
+loop:context_overflow_warning (filtered by conversationId), and
+loop:tool_mode_probed (broadcast — probe runs once per model, not
+per turn).
 EOF
 )"
 ```
 
 ---
 
-### Task 14: `daemon/index.ts` registers vault, notes, subagent handlers
+## Group 4: Bootstrap promotion
+
+### Task 9: `daemon/bootstrap.ts` wires `historyService` through tool factory; passes bus to ContextManager
+
+**Files:**
+- Modify: `/home/akougkas/projects/notient/src/daemon/bootstrap.ts`
+
+- [ ] **Step 1: Pass bus to ContextManager**
+
+Find the `new ContextManager({ ... })` block. Add `bus,` to its options.
+
+- [ ] **Step 2: Read `modelContextTokens` from settings**
+
+In the same block, replace:
+
+```typescript
+contextSettings: () => ({
+  ...current.chat.context,
+  contextBudgetFraction: current.chat.contextBudgetFraction,
+  modelContextTokens: 32_000,
+}),
+```
+
+with:
+
+```typescript
+contextSettings: () => ({
+  ...current.chat.context,
+  contextBudgetFraction: current.chat.contextBudgetFraction,
+  modelContextTokens: current.chat.modelContextTokens,
+}),
+```
+
+- [ ] **Step 3: Forward `recordHistory` to HistoryService**
+
+In the `buildAgentToolRegistry({...})` call, replace:
+
+```typescript
+recordHistory: async () => 0, // Phase D wires history table writes.
+```
+
+with:
+
+```typescript
+recordHistory: async (record) => historyService.record(record),
+```
+
+The variable `historyService` is already in scope (`kernel.get("historyService")` or constructed earlier in bootstrap; verify by running `grep -n "historyService" src/daemon/bootstrap.ts`). If it isn't already constructed, instantiate it inline before this block, mirroring the Phase B path that registers it in the kernel.
+
+- [ ] **Step 4: Wire bus through toolModeProbe**
+
+In the same file, find the `toolModeCache` block and the call site that consumes it (likely inside `chatService` construction). Add the bus to whatever wraps `probeToolMode` — pass the kernel's bus to whichever module invokes the probe. If `probeToolMode` is invoked directly in bootstrap, add `bus` to the call site.
+
+- [ ] **Step 5: Add a smoke step asserting the wiring**
+
+Add a substrate-level test in `src/daemon/bootstrap.test.ts` (or extend the existing one) that constructs the kernel, runs a chat turn that triggers a `notes.create`, and asserts `historyService.getRecent(1)` returns one row.
+
+- [ ] **Step 6: Typecheck + run substrate**
+
+Run: `bun run typecheck && bun test src/daemon`
+Expected: Green.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/daemon/bootstrap.ts src/daemon/bootstrap.test.ts
+git commit -m "$(cat <<'EOF'
+feat(daemon): bootstrap forwards recordHistory through HistoryService
+
+Closes Phase C caveat #6: recordHistory was a noop and the chat
+write tools' history rows never landed in the sqlite table. Phase D
+wires the closure to historyService.record so /undo and /history have
+data to read. ContextManager also gains the bus reference so
+loop:context_summarized + loop:context_overflow_warning surface on
+the wire, and modelContextTokens reads from settings instead of the
+Phase C hardcoded 32_000.
+EOF
+)"
+```
+
+---
+
+### Task 10: `daemon/index.ts` registers `notes.*` + `vault.list` handlers
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/daemon/index.ts`
 
-Wire `vault.list`, `notes.history`, `notes.undo`, `subagent.dispatch` into the RPC dispatch table.
+- [ ] **Step 1: Construct and register**
 
-- [ ] **Step 1: Edit**
+After the existing handler registrations:
 
 ```typescript
 const vaultHandlers = makeVaultHandlers({ vault });
-const notesHandlers = makeNotesHandlers({ historyStore, reversalFacade });
-const subagentHandlers = makeSubagentHandlers({ registry: subagentRegistry });
+const notesHandlers = makeNotesHandlers({
+  historyService: kernel.get("historyService"),
+  vault,
+});
 
 router.register("vault.list", vaultHandlers.list);
 router.register("notes.history", notesHandlers.history);
 router.register("notes.undo", notesHandlers.undo);
-router.register("subagent.dispatch", subagentHandlers.dispatch);
+router.register("notes.read", notesHandlers.read);
 ```
 
 - [ ] **Step 2: Typecheck + lint**
@@ -1660,7 +1184,7 @@ Expected: Green.
 ```bash
 git add src/daemon/index.ts
 git commit -m "$(cat <<'EOF'
-feat(daemon): register vault.list, notes.history|undo, subagent.dispatch
+feat(daemon): register vault.list, notes.history|undo|read
 
 Phase D's four new RPC verbs land on the existing socket router. No
 behavior change for existing handlers; additive registrations only.
@@ -1670,77 +1194,9 @@ EOF
 
 ---
 
-## Group 6: Bootstrap promotion
+## Group 5: TUI verbs + completion
 
-### Task 15: `daemon/bootstrap.ts` wires `historyStore` + `subagentRegistry` + seal `"D"`
-
-**Files:**
-- Modify: `/home/akougkas/projects/notient/src/daemon/bootstrap.ts`
-
-- [ ] **Step 1: Construct services**
-
-After the existing Phase C registrations, add:
-
-```typescript
-const historyStore = new HistoryStore({
-  facade: {
-    read: async (path) => vault.read(path).catch(() => null),
-    write: (path, content) => vault.write(path, content),
-  },
-  sidecarPath: `${NOTIENT_FOLDER}/.history.json`,
-  maxEntries: current.chat.history.maxEntries,
-});
-
-const subagentRegistry = new SubagentRegistry();
-subagentRegistry.register("NoteEditor", makeNoteEditorRunner({
-  provider: primaryLLM,
-  toolRegistry,
-  approvalGate,
-  mutex: reasoningMutex,
-  // ...identity composed via composeAgentIdentity("NoteEditor")
-}));
-
-kernel.register("historyStore", historyStore);
-kernel.register("subagentRegistry", subagentRegistry);
-
-kernel.seal({ phase: "D" });
-```
-
-`makeNoteEditorRunner` is a thin closure inside `bootstrap.ts` that:
-1. Builds the prompt: `composeAgentIdentity("NoteEditor")` + user goal.
-2. Runs `runAgentTurn` once with `toolWhitelist`-filtered registry.
-3. Returns the final assistant content.
-
-- [ ] **Step 2: Replace the `recordHistory` noop in the tool factory**
-
-Pass `historyStore` directly into `buildAgentToolRegistry({ historyStore, ... })` (already typed in Task 5).
-
-- [ ] **Step 3: Typecheck + run all bootstrap-adjacent tests**
-
-Run: `bun run typecheck && bun test src/daemon`
-Expected: Green.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/daemon/bootstrap.ts
-git commit -m "$(cat <<'EOF'
-feat(daemon): bootstrap registers historyStore + subagentRegistry; seal "D"
-
-historyStore is wired through the chat tool factory (closes Phase C
-caveat #6: recordHistoryAutoApprove was a noop). subagentRegistry
-ships with one runner registered for the NoteEditor role; other roles
-surface SUBAGENT_UNAVAILABLE until Phase E. seal({ phase: "D" }) is
-the new daemon default.
-EOF
-)"
-```
-
----
-
-## Group 7: TUI verbs + completion
-
-### Task 16: `cli/tui/slashCommands.ts` adds `/approve`, `/deny`, `/undo`, `/history`; real `/read`
+### Task 11: `cli/tui/slashCommands.ts` adds `/approve`, `/deny`, `/undo`, `/history`; real `/read`
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/cli/tui/slashCommands.ts`
@@ -1748,7 +1204,7 @@ EOF
 
 - [ ] **Step 1: Update `HELP_LINES`**
 
-Add four new lines and replace the `/read` description:
+Replace `HELP_LINES` with:
 
 ```typescript
 const HELP_LINES = [
@@ -1766,15 +1222,17 @@ const HELP_LINES = [
 ];
 ```
 
-- [ ] **Step 2: Add four verb branches to `dispatchSlashCommand`**
+- [ ] **Step 2: Add the verb branches**
+
+Inside `dispatchSlashCommand`, before the `unknown command` line:
 
 ```typescript
 if (verb === "approve" || verb === "deny") {
-  const [callId, ...reasonParts] = rest.split(" ");
-  if (!callId) return { message: `/${verb} needs <callId>` };
-  const approved = verb === "approve";
-  const reason = reasonParts.join(" ").trim();
-  return rpcChatApprove(context, callId, approved, reason);
+  const space = rest.indexOf(" ");
+  const callId = space < 0 ? rest : rest.slice(0, space);
+  const reason = space < 0 ? "" : rest.slice(space + 1).trim();
+  if (callId.length === 0) return { message: `/${verb} needs <callId>` };
+  return rpcChatApprove(context, callId, verb === "approve", reason);
 }
 if (verb === "undo") return rpcUndo(context);
 if (verb === "history") return rpcHistory(context);
@@ -1784,53 +1242,112 @@ if (verb === "read") {
 }
 ```
 
-Each helper drains the result frame and formats:
+Replace the existing `if (verb === "read")` branch (which currently routes to `rpcVitals`) with the dispatch above.
+
+Add the helper bodies:
 
 ```typescript
-async function rpcChatApprove(context, callId, approved, reason) { /* call chat.approve */ }
-async function rpcUndo(context) { /* call notes.undo, format reversed entry */ }
-async function rpcHistory(context) { /* call notes.history, format 10 lines */ }
-async function rpcReadNote(context, path) {
+async function rpcChatApprove(
+  context: SlashContext,
+  callId: string,
+  approved: boolean,
+  reason: string,
+): Promise<SlashOutcome> {
+  const params: Record<string, unknown> = { callId, approved };
+  if (reason.length > 0) params.reason = reason;
+  const result = await drainResult(context.client.call("chat.approve", params));
+  if (!result || result.type === "error") {
+    return { message: `${approved ? "approve" : "deny"} error: ${formatError(result)}` };
+  }
+  return { message: `${approved ? "approved" : "denied"} ${callId}` };
+}
+
+async function rpcUndo(context: SlashContext): Promise<SlashOutcome> {
+  const result = await drainResult(context.client.call("notes.undo", {}));
+  if (!result || result.type === "error") return { message: `undo error: ${formatError(result)}` };
+  const detail = result as unknown as {
+    result?: { ok?: boolean; error?: string; reversed?: { kind?: string; target?: string } };
+  };
+  if (detail.result?.ok !== true) {
+    return { message: `undo: ${detail.result?.error ?? "unknown"}` };
+  }
+  const reversed = detail.result.reversed;
+  return { message: `undone: ${reversed?.kind ?? "?"} ${reversed?.target ?? ""}` };
+}
+
+async function rpcHistory(context: SlashContext): Promise<SlashOutcome> {
+  const result = await drainResult(context.client.call("notes.history", { limit: 10 }));
+  if (!result || result.type === "error") return { message: `history error: ${formatError(result)}` };
+  const detail = result as unknown as {
+    result?: { entries?: { kind: string; target: string; createdAt: number }[] };
+  };
+  const entries = detail.result?.entries ?? [];
+  if (entries.length === 0) return { message: "history: (empty)" };
+  return {
+    message: entries
+      .map((entry) => `${entry.kind} ${entry.target} ${new Date(entry.createdAt).toISOString()}`)
+      .join("\n"),
+  };
+}
+
+async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOutcome> {
   const result = await drainResult(context.client.call("notes.read", { path }));
-  // Or invoke vault.read_note tool if exposed; otherwise wire a thin notes.read RPC.
+  if (!result || result.type === "error") return { message: `read error: ${formatError(result)}` };
+  const detail = result as unknown as { result?: { body?: string } };
+  const body = detail.result?.body ?? "";
+  return { message: renderNoteBody(path, body) };
+}
+
+function renderNoteBody(path: string, body: string): string {
+  const limit = 5000;
+  if (body.length <= limit) return `\`\`\`md\n${body}\n\`\`\``;
+  const head = body.slice(0, Math.floor(limit * 0.7));
+  const tail = body.slice(body.length - Math.floor(limit * 0.3));
+  return `\`\`\`md\n${head}\n[…${body.length - limit} characters elided…]\n${tail}\n\`\`\``;
 }
 ```
 
-For `/read`, expose a new `notes.read` RPC in `daemon/handlers/notes.ts` that wraps `vault.read(path)` directly (no LLM round-trip; just a file read). Add the registration in Task 14.
-
 - [ ] **Step 3: Update tests**
 
-Add tests asserting the verb routes to the correct RPC and formats the response. The RPC is mocked via a fake client.
+In `src/cli/tui/slashCommands.test.ts`, add a fake-client test per new verb. The existing tests already mock `client.call`; mirror them. Cover: `/approve` calls `chat.approve` with `approved: true`; `/deny` with `approved: false`; `/undo` formats the reversed row; `/history` formats entries; `/read` truncates over 5000 chars.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Run + commit**
+
+Run: `bun test src/cli/tui/slashCommands.test.ts`
+Expected: Green.
 
 ```bash
 git add src/cli/tui/slashCommands.ts src/cli/tui/slashCommands.test.ts
 git commit -m "$(cat <<'EOF'
-feat(tui): /approve, /deny, /undo, /history, real /read
+feat(tui): /approve, /deny, /undo, /history; real /read
 
 Closes Phase C caveats #4 (real /read backed by notes.read RPC) and
 #7 (chat.approve plumbing exposed as /approve and /deny). /undo and
-/history land alongside notes.undo and notes.history. /help updates to
-show the new verb set.
+/history land alongside notes.undo and notes.history. /help updates
+to list the new verbs. /read renders the note body in a fenced
+markdown block, head/tail truncated at 5000 chars.
 EOF
 )"
 ```
 
 ---
 
-### Task 17: `cli/tui/runtime.tsx` tracks pending approvals + handles Tab
+### Task 12: `cli/tui/runtime.tsx` tracks pending approvals + handles Tab + renders new event lines
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/cli/tui/runtime.tsx`
 
 - [ ] **Step 1: Add `pendingApprovals` state**
 
+Inside `App`, after the existing `useState` calls:
+
 ```typescript
 const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
 ```
 
-In `handleStreamEvent`:
+- [ ] **Step 2: Extend `handleStreamEvent`**
+
+Add cases:
 
 ```typescript
 case "loop:approval_pending": {
@@ -1841,11 +1358,14 @@ case "loop:approval_pending": {
     next.set(callId, tool);
     return next;
   });
-  setLines((prior) => [...prior, {
-    kind: "approval",
-    text: `pending: ${tool} (callId=${callId}). use /approve ${callId} or /deny ${callId}.`,
-    callId,
-  }]);
+  setLines((prior) => [
+    ...prior,
+    {
+      kind: "approval",
+      text: `pending: ${tool} (callId=${callId}). use /approve ${callId} or /deny ${callId}.`,
+      callId,
+    },
+  ]);
   return;
 }
 case "loop:approval_resolved": {
@@ -1858,68 +1378,130 @@ case "loop:approval_resolved": {
   return;
 }
 case "loop:context_summarized": {
-  setLines((prior) => [...prior, {
-    kind: "system",
-    text: `context summarized (${(detail.originalTokens as number)} → ${(detail.summarizedTokens as number)} tokens)`,
-  }]);
+  setLines((prior) => [
+    ...prior,
+    {
+      kind: "system",
+      text: `context summarized (${detail.originalTokens} → ${detail.summarizedTokens} tokens)`,
+    },
+  ]);
+  return;
+}
+case "loop:context_overflow_warning": {
+  setLines((prior) => [
+    ...prior,
+    {
+      kind: "system",
+      text: `warning: configured modelContextTokens=${detail.configuredTokens} but turn estimates ${detail.estimatedTokens} tokens. Increase chat.modelContextTokens.`,
+    },
+  ]);
+  return;
+}
+case "loop:tool_mode_probed": {
+  setLines((prior) => [
+    ...prior,
+    {
+      kind: "system",
+      text: `tool-mode for ${detail.model}: ${detail.mode} (attempts=${detail.attempts})`,
+    },
+  ]);
   return;
 }
 ```
 
-- [ ] **Step 2: Add Tab handler to `handleEditingKey`**
+- [ ] **Step 3: Add Tab handler**
+
+In `handleEditingKey`, before the printable-character branch:
 
 ```typescript
 if (event.name === "tab") {
-  const cursor = buffer.lastIndexOf("@");
-  if (cursor >= 0 && /^@[^\s.]*$/.test(buffer.slice(cursor))) {
-    const partial = buffer.slice(cursor + 1);
-    void completeAtMention(partial, buffer, cursor, setBuffer, context);
-  }
+  if (event.shift || event.ctrl) return;
+  const lastSpace = buffer.lastIndexOf(" ");
+  const trailing = lastSpace < 0 ? buffer : buffer.slice(lastSpace + 1);
+  if (!trailing.startsWith("@")) return;
+  void completeAtMention(trailing.slice(1), buffer, lastSpace, setBuffer, submit, context);
   return;
 }
 ```
 
-`completeAtMention` calls `vault.list({ prefix: partial, limit: 5 })` and replaces the partial with the first match.
+`completeAtMention` lives in `src/cli/tui/attachments.ts` (Task 13).
 
-- [ ] **Step 3: Test + commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/cli/tui/runtime.tsx
 git commit -m "$(cat <<'EOF'
-feat(tui): pending-approval tracking + tab-driven @-completion
+feat(tui): pending-approval tracking + tab @-completion + event lines
 
-The TUI now keeps a callId→tool map for outstanding approvals and
-renders a hint line whenever loop:approval_pending arrives. Tab on an
-@-prefixed token at the cursor calls vault.list and replaces the
-partial with the first match. loop:context_summarized renders a
-brief info line.
+App keeps a callId→tool map for outstanding approvals; the transcript
+shows a pending hint on each loop:approval_pending and clears on
+loop:approval_resolved. loop:context_summarized,
+loop:context_overflow_warning, and loop:tool_mode_probed render as
+system info lines. Tab on a buffer whose last whitespace-separated
+run begins with @ calls completeAtMention against vault.list.
 EOF
 )"
 ```
 
 ---
 
-### Task 18: `cli/tui/attachments.ts` calls `vault.list` for completion
+### Task 13: `cli/tui/attachments.ts` calls `vault.list` for completion
 
 **Files:**
 - Modify: `/home/akougkas/projects/notient/src/cli/tui/attachments.ts`
 
-The current stub returns no completions. Phase D wires it to the new RPC.
+The current shim returns no completions. Phase D wires it to `vault.list`.
 
-- [ ] **Step 1: Implement `completeAtMention(partial, client)`**
+- [ ] **Step 1: Implement `completeAtMention`**
 
 ```typescript
+import type { ClientHandle, RpcResponseFrame } from "../client";
+
+export interface AtMentionContext {
+  client: ClientHandle;
+}
+
 export async function completeAtMention(
-  partial: string,
-  client: ClientHandle,
-): Promise<{ first: string | null; tail: string[] }> {
-  const result = await drainResult(client.call("vault.list", { prefix: partial, limit: 5 }));
-  if (!result || result.type !== "result") return { first: null, tail: [] };
+  partialAfterAt: string,
+  fullBuffer: string,
+  spaceIndex: number,
+  setBuffer: (next: string) => void,
+  appendSystemLine: (text: string) => void,
+  context: AtMentionContext,
+): Promise<void> {
+  const lastSlash = partialAfterAt.lastIndexOf("/");
+  const folder = lastSlash < 0 ? "" : partialAfterAt.slice(0, lastSlash);
+  const filter = lastSlash < 0 ? partialAfterAt : partialAfterAt.slice(lastSlash + 1);
+  const result = await drainResult(
+    context.client.call("vault.list", { folder, filter, limit: 5 }),
+  );
+  if (!result || result.type !== "result") return;
   const detail = result as unknown as { paths?: string[] };
   const paths = detail.paths ?? [];
-  return { first: paths[0] ?? null, tail: paths.slice(1, 5) };
+  if (paths.length === 0) {
+    appendSystemLine(`no completions for @${partialAfterAt}`);
+    return;
+  }
+  const first = paths[0];
+  const completedToken = `@${folder.length > 0 ? `${folder}/` : ""}${first}`;
+  const prefix = spaceIndex < 0 ? "" : `${fullBuffer.slice(0, spaceIndex + 1)}`;
+  setBuffer(`${prefix}${completedToken}`);
+  if (paths.length > 1) {
+    appendSystemLine(`hints: ${paths.slice(1, 5).join("  ")}`);
+  }
+}
+
+async function drainResult(
+  stream: AsyncIterable<RpcResponseFrame>,
+): Promise<RpcResponseFrame | null> {
+  for await (const frame of stream) {
+    if (frame.type === "result" || frame.type === "error") return frame;
+  }
+  return null;
 }
 ```
+
+The `appendSystemLine` callback is wired from `runtime.tsx`'s `setLines` setter via a small adapter so the attachments module does not import React.
 
 - [ ] **Step 2: Commit**
 
@@ -1928,40 +1510,65 @@ git add src/cli/tui/attachments.ts
 git commit -m "$(cat <<'EOF'
 feat(tui): @-completion via vault.list
 
-completeAtMention drains a vault.list call with the partial path and
-returns the first match plus the next four for an inline hint. The
-TUI's Tab handler (runtime.tsx) drives the call.
+completeAtMention parses the @-token into {folder, partial}, calls
+vault.list with both, and replaces the partial with the first match.
+The next four matches surface as a system hint line. Folder-shaped
+completions get a trailing slash so a second Tab descends.
 EOF
 )"
 ```
 
 ---
 
-## Group 8: Smoke + gate
+## Group 6: Smoke + gate
 
-### Task 19: `scripts/smoke-cli-phaseD.ts` + manual checklist
+### Task 14: `scripts/smoke-cli-phaseD.ts` + manual checklist
 
 **Files:**
 - Create: `/home/akougkas/projects/notient/scripts/smoke-cli-phaseD.ts`
 - Create: `/home/akougkas/projects/notient/docs/superpowers/plans/2026-04-28-cli-phase-d-checklist.md`
+- Modify: `/home/akougkas/projects/notient/package.json`
 
-The harness drives the daemon RPC through five passes:
+The harness drives the daemon RPC through four passes against the fixture vault and live LM Studio.
 
-1. **Approval round-trip + undo.** Send a message that the LLM resolves into a `notes.append` call. Drain `loop:approval_pending`. Send `chat.approve` with `approved: true`. Drain to `turn:complete`. Assert `notes.history` shows the entry. Send `notes.undo`. Drain. Assert the file is back to its prior state.
-2. **vault.list.** Call `vault.list({ prefix: "notes/", limit: 100 })`. Assert at least the seeded fixture paths are returned.
-3. **Context summarization event.** Configure `chat.modelContextTokens = 100`. Send a message with a long `pinnedContext`. Drain. Assert `loop:context_summarized` fires.
-4. **Tool-mode probe retry.** Pin a model that mock-returns zero tool calls on the first probe and one tool call on the second. Assert the cache writes `native`.
-5. **Subagent dispatch.** Call `subagent.dispatch({ role: "NoteEditor", goal: "describe vault structure", toolWhitelist: ["vault.read_note"] })`. Assert `{ ok: true, status: "ok", content: <non-empty> }`.
+- [ ] **Step 1: Mirror Phase C harness shape**
 
-Each pass mirrors the structure of `scripts/smoke-cli-phaseC.ts`. Add a `pass` counter so a single failure doesn't mask later regressions.
+Copy the structure of `scripts/smoke-cli-phaseC.ts` (init, awaken, then per-pass functions). Phase D passes:
 
-- [ ] **Step 1: Write the harness skeleton**
+```typescript
+async function runHistoryUndoPass(vaultPath: string): Promise<void> {
+  const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+  const client = await connectClient({ socketPath, vaultPath, spawnTimeoutMs: 60_000 });
+  try {
+    const conversationId = await startConversation(client);
+    await drainChatSend(
+      client,
+      conversationId,
+      "use notes.create to make a note at history-test.md with body 'hi'",
+    );
+    const after = await drainResultCall(client, "notes.history", { limit: 5 });
+    if (after.entries.length === 0) throw new Error("history-undo: notes.create did not record");
+    const undoOutcome = await drainResultCall(client, "notes.undo", {});
+    if (undoOutcome.result?.ok !== true) {
+      throw new Error(`history-undo: undo failed (${undoOutcome.result?.error})`);
+    }
+    const cleared = await drainResultCall(client, "notes.history", { limit: 5 });
+    if (cleared.entries.length !== 0) {
+      throw new Error("history-undo: history not pruned after undo");
+    }
+  } finally {
+    await client.close();
+  }
+}
 
-Mirror Phase C: emit `smoke:setup`, run init/awaken, then the five passes, then daemon stop. Each pass emits its own `smoke:<name>_validated` line.
+async function runVaultListPass(vaultPath: string): Promise<void> { /* ... */ }
+async function runContextSummarizedPass(vaultPath: string): Promise<void> { /* ... */ }
+async function runProbeRetryPass(vaultPath: string): Promise<void> { /* ... */ }
+```
+
+`drainResultCall` is a helper that drains the client.call iterator until `result` and returns its payload. The pass implementations follow the same shape; the smoke uses the live LM Studio and the same fixture vault Phase C uses.
 
 - [ ] **Step 2: Add `bun run smoke:cli:phaseD` to package.json**
-
-Edit `package.json` scripts:
 
 ```json
 "smoke:cli:phaseD": "bun scripts/smoke-cli-phaseD.ts"
@@ -1980,12 +1587,14 @@ Run after `bun run smoke:cli:phaseD` is green. Each item is yes/no.
 2. [ ] After the assistant requests a `notes.*` write, a `pending: <tool> (callId=…)` line renders.
 3. [ ] `/approve <callId>` resolves the gate and the assistant resumes.
 4. [ ] `/deny <callId>` resolves with approved=false and the assistant emits a refusal note.
-5. [ ] `/undo` reverses the most recent write and prints the entry that was reversed.
+5. [ ] `/undo` reverses the most recent write and prints the entry that was reversed (kind + target).
 6. [ ] `/history` lists the last 10 chat-driven writes, newest first.
 7. [ ] Typing `@inbox/` and pressing Tab replaces the partial with the first match and shows the next four hints.
-8. [ ] `/read inbox/foo.md` renders the body in a fenced block, truncated at 5KB.
-9. [ ] A long-history conversation prints a `context summarized (… → … tokens)` info line when budget overflows.
-10. [ ] The orchestrator dispatching a subagent renders the subagent's final result inside the assistant message.
+8. [ ] Typing `@inbox/foo` and pressing Tab also completes (filename prefix inside a folder).
+9. [ ] `/read inbox/foo.md` renders the body in a fenced block, truncated at ~5000 chars.
+10. [ ] A long-history conversation prints a `context summarized (… → … tokens)` info line when budget overflows.
+11. [ ] An 8K-context model running with default 200_000 setting prints `warning: configured modelContextTokens=200000 but turn estimates …`.
+12. [ ] First chat turn of the session prints `tool-mode for <model>: native (attempts=<1|2>)`.
 ```
 
 - [ ] **Step 4: Commit**
@@ -1995,18 +1604,19 @@ git add scripts/smoke-cli-phaseD.ts docs/superpowers/plans/2026-04-28-cli-phase-
 git commit -m "$(cat <<'EOF'
 test(smoke): Phase D end-to-end harness + manual TUI checklist
 
-Five passes over the live LM Studio: approval round-trip + undo,
-vault.list, context-summarization event, tool-mode probe retry, and
-subagent.dispatch. Each pass emits a smoke:* line so a single failure
-surfaces without masking later regressions. The manual TUI checklist
-covers the new verbs and the @-completion + summarization info line.
+Four passes over the live LM Studio: history+undo round-trip,
+vault.list folder enumeration, context summarization event,
+tool-mode probe retry. Each pass emits a smoke:* line so a single
+failure surfaces without masking later regressions. The manual TUI
+checklist covers the new verbs, @-completion, and the three new
+info lines.
 EOF
 )"
 ```
 
 ---
 
-### Task 20: Phase D gate run + live invocation
+### Task 15: Phase D gate run + live invocation
 
 **Files:**
 - None directly; this is the gate run.
@@ -2018,14 +1628,14 @@ Expected: All green.
 
 - [ ] **Step 2: Live invocation against vaultex**
 
-Manually walk the Phase D checklist against `/mnt/c/Users/akougk/Projects/vaultex`. Capture stderr to `~/.notient/<vault-hash>/logs/` and stash any failing item with the matching log line.
+Manually walk the Phase D checklist against `/mnt/c/Users/akougk/Projects/vaultex`. Capture any failure with the matching log line from `~/.notient/<vault-hash>/logs/`.
 
 - [ ] **Step 3: Tag the phase done**
 
 If gate green and checklist green:
 
 ```bash
-git tag -a phase-d-done -m "Phase D: TUI verbs, history/undo, subagent dispatch, context summarization event"
+git tag -a phase-d-done -m "Phase D: TUI verbs, history/undo, context-event surface, probe hardening"
 ```
 
 Do NOT push without explicit approval. `main` must stay clean unless the user asks for a fast-forward.
@@ -2036,10 +1646,30 @@ Do NOT push without explicit approval. `main` must stay clean unless the user as
 
 Out of scope for Phase D, deferred:
 
-1. `subagent.continue` for mid-loop approval pauses inside a subagent run.
-2. ContextBuilder + Worker subagent runners (Tier 2 identity already gated).
-3. `notient stream` (NDJSON event stream of background activity).
-4. `notient export-canvas <proposalId>` (canvas-style export of a proposal cluster).
-5. `notient propose <kind> <payload-json>` for direct proposal creation.
-6. Auto-reconnect in the TUI after daemon drop (currently exits cleanly).
-7. `@`-completion popup with arrow-key navigation (Tab-only is the Phase D shape).
+1. **Subagent on-demand surface** — `subagent.dispatch`, `subagent.continue`, Tier 2 identity (`composeAgentIdentity`), `SubagentRegistry`, and the NoteEditor / ContextBuilder / Worker runners. Phase E must first add a child-task contract to `ReasoningMutex` so a subagent can run inside the orchestrator's chat slot without preempting the parent. The handoff's Phase E brief lists this as a prerequisite.
+2. **`subagent.continue`** — once subagents land, mid-loop approvals piggyback on the existing `chat.approve` RPC by routing approvals back to the parent envelope.
+3. **`notient stream`** — long-lived NDJSON stream of background events (spec section 6 Phase D deliverable, deferred to Phase E because the resync semantics on client reconnect need their own design).
+4. **`notient export-canvas <proposalId>`** — JSON Canvas export for proposal clusters.
+5. **`notient propose <kind> <payload-json>`** — direct proposal creation outside the chat surface.
+6. **Auto-reconnect in the TUI** — currently exits cleanly on daemon drop; Phase E adds reconnection.
+7. **`@`-completion popup** with arrow-key navigation — Phase D ships Tab-only.
+8. **Full Obsidian bridge surface** (write-style + strict-Obsidian verbs) — Phase E.
+9. **`recordHistoryAutoApprove`** — currently a noop in bootstrap. Phase E wires it into a separate audit log so the auto-approval decision is recoverable independent of the resulting write.
+
+---
+
+## What this revision changed (compared to the 2026-04-28 first draft)
+
+Two pre-execution reviews (Opus 4.7 plan reviewer + Codex adversarial) flagged a substrate blocker (`ReasoningMutex.runPriority` is preemptive) and a duplicate-substrate hazard (a planned `HistoryStore` JSON sidecar reinvents the already-shipped `HistoryService` + sqlite + inverters). The first draft also assumed `vault.list(folder)` did filename-prefix filtering, which `FsVault.list` does not. Codex confirmed both by reading the actual files.
+
+Material changes in this revision:
+
+- **Subagents removed entirely from Phase D.** The dispatch surface, Tier 2 identity, registry, and the smoke pass that exercised them are gone. Phase E now owns subagents, gated on a `ReasoningMutex` child-task contract.
+- **`HistoryStore` and `reversals.ts` removed entirely.** Phase D wires the existing `HistoryService` through the chat tool factory closure (replacing the noop `recordHistory: async () => 0` in bootstrap) and reads it via three thin RPC handlers.
+- **`vault.list` shape changed** to match `FsVault.list(folder)` — single-level folder listing with a separate filename `filter` parameter. The TUI's `@`-completion parses `@<folder>/<partial>` accordingly.
+- **`notes.read` RPC added explicitly** as the backing for `/read` (the first draft referenced `notes.read` but never declared the handler).
+- **`loop:context_overflow_warning` event added** so operators running 8K-context models with the new 200_000 default see the mismatch on the first overflowing turn.
+- **`loop:tool_mode_probed` event added** so operators see whether the probe needed a retry.
+- **`@`-completion regex relaxed** to allow `.` after a folder boundary so `@inbox/foo.md` completes.
+- **Tool-mode probe second attempt** now requires every returned tool call to have non-empty required arguments before classifying as `native` (proxy for the malformed-args case Codex flagged).
+- **Task count drops from 20 to 15.** Plan size drops by roughly half. Risk register and parallelism rules updated accordingly.
