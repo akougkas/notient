@@ -1,15 +1,28 @@
+import { join } from "node:path";
 import { type KeyEvent, createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { type ClientHandle, connectClient } from "../client";
 import type { Emitter } from "../output";
 import { type ChatLine, ChatView } from "./ChatView";
 import { InputBar } from "./InputBar";
 import { completeAtMention } from "./attachments";
+import {
+  type HistoryKeyName,
+  type HistoryNav,
+  appendHistoryToFile,
+  createHistoryNav,
+  historyAppend,
+  historyReset,
+  loadHistoryFromFile,
+  routeHistoryKey,
+} from "./history";
 import { computeInputHeight } from "./inputBindings";
 import { dispatchSlashCommand, isSlashCommand } from "./slashCommands";
+
+const HISTORY_MAX = 100;
 
 export interface TuiRuntimeOptions {
   vaultPath: string;
@@ -82,11 +95,28 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
   const [busy, setBusy] = useState<boolean>(false);
   const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
 
+  const historyPath = useMemo(() => join(vaultPath, ".notient", "history.txt"), [vaultPath]);
+  const [historyNav, setHistoryNav] = useState<HistoryNav>(() =>
+    createHistoryNav(loadHistoryFromFile(historyPath, HISTORY_MAX)),
+  );
+  const historyAnchorRef = useRef<string | null>(null);
+
+  const handleBufferChange = useCallback((next: string) => {
+    setBuffer(next);
+    if (historyAnchorRef.current !== null && historyAnchorRef.current !== next) {
+      historyAnchorRef.current = null;
+      setHistoryNav((prior) => historyReset(prior));
+    }
+  }, []);
+
   const submit = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (trimmed.length === 0) return;
       setBuffer("");
+      historyAnchorRef.current = null;
+      setHistoryNav((prior) => historyAppend(prior, trimmed, HISTORY_MAX));
+      appendHistoryToFile(historyPath, trimmed, HISTORY_MAX);
       if (isSlashCommand(trimmed)) {
         const outcome = await dispatchSlashCommand(trimmed, { client, vaultPath });
         if (outcome.message.length > 0) {
@@ -103,7 +133,28 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         setBusy(false);
       }
     },
-    [client, conversationId, onExit, vaultPath],
+    [client, conversationId, historyPath, onExit, vaultPath],
+  );
+
+  const tryHistoryKey = useCallback(
+    (event: KeyEvent): boolean => {
+      const keyName: HistoryKeyName =
+        event.name === "up" ? "up" : event.name === "down" ? "down" : "other";
+      if (keyName === "other") return false;
+      const routed = routeHistoryKey({
+        keyName,
+        nav: historyNav,
+        buffer,
+        inHistory: historyAnchorRef.current !== null,
+      });
+      if (routed === null) return false;
+      setHistoryNav(routed.nav);
+      setBuffer(routed.value);
+      historyAnchorRef.current = routed.anchor;
+      event.preventDefault();
+      return true;
+    },
+    [buffer, historyNav],
   );
 
   const handleKey = useCallback(
@@ -117,9 +168,11 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
       if (event.name === "tab" && !event.shift && !event.ctrl) {
         handleTabKey(buffer, setBuffer, setLines, client);
         event.preventDefault();
+        return;
       }
+      tryHistoryKey(event);
     },
-    [busy, buffer, client, onExit],
+    [busy, buffer, client, onExit, tryHistoryKey],
   );
   useKeyboard(handleKey);
 
@@ -135,7 +188,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         value={buffer}
         height={inputHeight}
         focused={!busy}
-        onChange={setBuffer}
+        onChange={handleBufferChange}
         onSubmit={(final) => {
           void submit(final);
         }}
