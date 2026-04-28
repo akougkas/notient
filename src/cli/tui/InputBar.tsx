@@ -34,8 +34,16 @@ export function InputBar({
     textarea.cursorOffset = clamped;
   }, [value]);
 
+  const accent = focused && !busy ? "#7DD3FC" : "#334155";
   return (
-    <box height={height} backgroundColor="#0B1220" paddingLeft={1} paddingRight={1}>
+    <box
+      height={height}
+      backgroundColor="#0B1220"
+      border={["left"]}
+      borderColor={accent}
+      paddingLeft={1}
+      paddingRight={1}
+    >
       <textarea
         ref={ref}
         focused={focused && !busy}
