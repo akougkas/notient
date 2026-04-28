@@ -226,18 +226,28 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
   const { width } = useTerminalDimensions();
   const inputHeight = computeInputHeight(buffer, Math.max(1, width - 2), 6);
 
+  const statusFields = useMemo<StatusBarFields>(
+    () => ({
+      vaultPath,
+      topic,
+      model,
+      busy,
+      pendingCount: pendingApprovals.size,
+      lastTurnTokens,
+    }),
+    [vaultPath, topic, model, busy, pendingApprovals, lastTurnTokens],
+  );
+
+  const handleSubmit = useCallback(
+    (final: string) => {
+      void submit(final);
+    },
+    [submit],
+  );
+
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <StatusBar
-        fields={{
-          vaultPath,
-          topic,
-          model,
-          busy,
-          pendingCount: pendingApprovals.size,
-          lastTurnTokens,
-        }}
-      />
+      <StatusBar fields={statusFields} />
       <ChatView lines={lines} scrollRef={scrollRef} />
       <InputBar
         busy={busy}
@@ -245,9 +255,7 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
         height={inputHeight}
         focused={!busy}
         onChange={handleBufferChange}
-        onSubmit={(final) => {
-          void submit(final);
-        }}
+        onSubmit={handleSubmit}
       />
       <FooterHint />
     </box>
