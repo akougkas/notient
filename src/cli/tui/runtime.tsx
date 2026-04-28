@@ -7,6 +7,7 @@ import { type ClientHandle, connectClient } from "../client";
 import type { Emitter } from "../output";
 import { type ChatLine, ChatView } from "./ChatView";
 import { InputBar } from "./InputBar";
+import { completeAtMention } from "./attachments";
 import { dispatchSlashCommand, isSlashCommand } from "./slashCommands";
 
 export interface TuiRuntimeOptions {
@@ -78,6 +79,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
   ]);
   const [buffer, setBuffer] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
 
   const submit = useCallback(
     async (text: string) => {
@@ -93,7 +95,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
       setLines((prior) => [...prior, { kind: "user", text }]);
       setBusy(true);
       try {
-        await runChatTurn(client, conversationId, text, setLines);
+        await runChatTurn(client, conversationId, text, setLines, setPendingApprovals);
       } finally {
         setBusy(false);
       }
@@ -109,9 +111,13 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         return;
       }
       if (busy) return;
+      if (event.name === "tab" && !event.shift && !event.ctrl) {
+        handleTabKey(buffer, setBuffer, setLines, client);
+        return;
+      }
       handleEditingKey(event, buffer, setBuffer, submit);
     },
-    [busy, buffer, onExit, submit],
+    [busy, buffer, client, onExit, submit],
   );
   useKeyboard(handleKey);
 
@@ -146,6 +152,7 @@ async function runChatTurn(
   conversationId: string,
   userMessage: string,
   setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
+  setPendingApprovals: React.Dispatch<React.SetStateAction<Map<string, string>>>,
 ): Promise<void> {
   const turnState = { assistantBuffer: "" };
   for await (const frame of client.call("chat.send", {
@@ -157,6 +164,7 @@ async function runChatTurn(
         frame as unknown as { event: string; [key: string]: unknown },
         turnState,
         setLines,
+        setPendingApprovals,
       );
     }
     if (frame.type === "result" || frame.type === "error") break;
@@ -171,6 +179,7 @@ function handleStreamEvent(
   detail: { event: string; [key: string]: unknown },
   turnState: TurnState,
   setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
+  setPendingApprovals: React.Dispatch<React.SetStateAction<Map<string, string>>>,
 ): void {
   switch (detail.event) {
     case "loop:assistant_delta":
@@ -191,13 +200,57 @@ function handleStreamEvent(
         { kind: "error", text: `tool error: ${(detail.error as string) ?? ""}` },
       ]);
       return;
-    case "loop:approval_pending":
+    case "loop:approval_pending": {
+      const callId = (detail.callId as string) ?? "";
+      const tool = (detail.tool as string) ?? "tool";
+      setPendingApprovals((prior) => {
+        const next = new Map(prior);
+        next.set(callId, tool);
+        return next;
+      });
       setLines((prior) => [
         ...prior,
         {
           kind: "approval",
-          text: `approve ${(detail.tool as string) ?? "tool"}? (use /approve <id>)`,
-          callId: (detail.callId as string) ?? "",
+          text: `pending: ${tool} (callId=${callId}). use /approve ${callId} or /deny ${callId}.`,
+          callId,
+        },
+      ]);
+      return;
+    }
+    case "loop:approval_resolved": {
+      const callId = (detail.callId as string) ?? "";
+      setPendingApprovals((prior) => {
+        const next = new Map(prior);
+        next.delete(callId);
+        return next;
+      });
+      return;
+    }
+    case "loop:context_summarized":
+      setLines((prior) => [
+        ...prior,
+        {
+          kind: "system",
+          text: `context summarized (${detail.originalTokens} → ${detail.summarizedTokens} tokens)`,
+        },
+      ]);
+      return;
+    case "loop:context_overflow_warning":
+      setLines((prior) => [
+        ...prior,
+        {
+          kind: "system",
+          text: `warning: configured modelContextTokens=${detail.configuredTokens} but turn estimates ${detail.estimatedTokens} tokens. Increase chat.modelContextTokens.`,
+        },
+      ]);
+      return;
+    case "loop:tool_mode_probed":
+      setLines((prior) => [
+        ...prior,
+        {
+          kind: "system",
+          text: `tool-mode for ${detail.model}: ${detail.mode} (attempts=${detail.attempts})`,
         },
       ]);
       return;
@@ -212,6 +265,23 @@ function upsertAssistant(lines: ChatLine[], buffer: string): ChatLine[] {
     return next;
   }
   return [...lines, { kind: "assistant", text: buffer, streaming: true }];
+}
+
+function handleTabKey(
+  buffer: string,
+  setBuffer: React.Dispatch<React.SetStateAction<string>>,
+  setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
+  client: ClientHandle,
+): void {
+  const lastSpaceIndex = buffer.lastIndexOf(" ");
+  const trailing = lastSpaceIndex < 0 ? buffer : buffer.slice(lastSpaceIndex + 1);
+  if (!trailing.startsWith("@")) return;
+  const appendSystemLine = (text: string): void => {
+    setLines((prior) => [...prior, { kind: "system", text }]);
+  };
+  void completeAtMention(trailing.slice(1), buffer, lastSpaceIndex, setBuffer, appendSystemLine, {
+    client,
+  });
 }
 
 function handleEditingKey(
