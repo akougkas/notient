@@ -21,6 +21,7 @@ import type { AgentLoopEvent } from "../../core/chat/agentLoop";
 import type { ApprovalGate } from "../../core/chat/approvalGate";
 import type { ChatService } from "../../core/chat/chatService";
 import type { Conversation } from "../../core/chat/types";
+import type { EventBus } from "../../core/events/eventBus";
 import { encodeEvent } from "../rpc";
 
 export interface ChatHandlerDeps {
@@ -29,6 +30,7 @@ export interface ChatHandlerDeps {
   vault: VaultAdapter;
   visionRouter: VisionRouter | null;
   pinnedNoteMaxTokens: number;
+  bus: EventBus;
 }
 
 export type ChatHandler = (
@@ -90,7 +92,39 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
         conversation.pinnedContext = [...conversation.pinnedContext, ...attachments.pinnedContext];
       }
 
-      const unsubscribe = subscribeApprovalEvents(deps.approvalGate, emit, envelopeId);
+      const conversationIdAtTurnStart = conversation.id;
+      const unsubscribeApprovals = subscribeApprovalEvents(deps.approvalGate, emit, envelopeId);
+      const unsubscribeSummary = deps.bus.on("loop:context_summarized", (event) => {
+        if (event.conversationId !== conversationIdAtTurnStart) return;
+        emit(
+          encodeEvent(envelopeId, "loop:context_summarized", {
+            conversationId: event.conversationId,
+            model: event.model,
+            originalTokens: event.originalTokens,
+            summarizedTokens: event.summarizedTokens,
+          }),
+        );
+      });
+      const unsubscribeOverflow = deps.bus.on("loop:context_overflow_warning", (event) => {
+        if (event.conversationId !== conversationIdAtTurnStart) return;
+        emit(
+          encodeEvent(envelopeId, "loop:context_overflow_warning", {
+            conversationId: event.conversationId,
+            model: event.model,
+            configuredTokens: event.configuredTokens,
+            estimatedTokens: event.estimatedTokens,
+          }),
+        );
+      });
+      const unsubscribeProbed = deps.bus.on("loop:tool_mode_probed", (event) => {
+        emit(
+          encodeEvent(envelopeId, "loop:tool_mode_probed", {
+            model: event.model,
+            mode: event.mode,
+            attempts: event.attempts,
+          }),
+        );
+      });
       try {
         return await runSendStream(
           deps.chatService,
@@ -101,7 +135,10 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
           cacheConversation,
         );
       } finally {
-        unsubscribe();
+        unsubscribeProbed();
+        unsubscribeOverflow();
+        unsubscribeSummary();
+        unsubscribeApprovals();
       }
     },
     abort: async () => {

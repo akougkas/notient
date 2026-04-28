@@ -3,6 +3,7 @@ import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { ApprovalGate } from "../../core/chat/approvalGate";
 import type { ChatService } from "../../core/chat/chatService";
 import type { Conversation } from "../../core/chat/types";
+import { EventBus } from "../../core/events/eventBus";
 import { makeChatHandlers } from "./chat";
 
 function makeConversation(id = "conv-1"): Conversation {
@@ -85,6 +86,7 @@ describe("chat.send handler", () => {
       vault: STUB_VAULT,
       visionRouter: null,
       pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
     });
     const lines: string[] = [];
     const result = await handlers.send(
@@ -123,6 +125,7 @@ describe("chat.send handler", () => {
       vault: STUB_VAULT,
       visionRouter: null,
       pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
     });
     const lines: string[] = [];
     await handlers.send(
@@ -148,6 +151,7 @@ describe("chat.send handler", () => {
       vault: visualVault,
       visionRouter: null,
       pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
     });
     let thrown: unknown = null;
     try {
@@ -197,6 +201,7 @@ describe("chat.send handler", () => {
       vault: STUB_VAULT,
       visionRouter: null,
       pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
     });
 
     const lines: string[] = [];
@@ -224,5 +229,200 @@ describe("chat.send handler", () => {
     const events = lines.map((line) => JSON.parse(line));
     expect(events.some((event) => event.event === "loop:approval_pending")).toBe(true);
     expect(events.some((event) => event.event === "loop:approval_resolved")).toBe(true);
+  });
+
+  test("forwards loop:context_summarized scoped to the conversation", async () => {
+    const conversation = makeConversation();
+    const bus = new EventBus();
+
+    let releaseStream: () => void = () => {};
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+
+    const fakeService: ChatService = {
+      startConversation: async () => conversation,
+      listConversations: async () => [conversation],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        yield {
+          type: "turn:start",
+          conversationId: conversation.id,
+          userMessage: { role: "user", content: "hi" },
+        } as never;
+        await streamReady;
+        yield { type: "turn:complete", conversation } as never;
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+
+    const handlers = makeChatHandlers({
+      chatService: fakeService,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus,
+    });
+
+    const lines: string[] = [];
+    const sendPromise = handlers.send(
+      { conversationId: conversation.id, userMessage: "hi" },
+      (line) => lines.push(line),
+      "req-1",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    bus.emit({
+      type: "loop:context_summarized",
+      conversationId: conversation.id,
+      model: "test-model",
+      originalTokens: 100,
+      summarizedTokens: 50,
+    });
+    bus.emit({
+      type: "loop:context_summarized",
+      conversationId: "other-conversation",
+      model: "test-model",
+      originalTokens: 200,
+      summarizedTokens: 25,
+    });
+    releaseStream();
+    await sendPromise;
+
+    const events = lines.map((line) => JSON.parse(line));
+    const summarized = events.filter((event) => event.event === "loop:context_summarized");
+    expect(summarized).toHaveLength(1);
+    expect(summarized[0].conversationId).toBe(conversation.id);
+    expect(summarized[0].model).toBe("test-model");
+    expect(summarized[0].originalTokens).toBe(100);
+    expect(summarized[0].summarizedTokens).toBe(50);
+  });
+
+  test("forwards loop:context_overflow_warning scoped to the conversation", async () => {
+    const conversation = makeConversation();
+    const bus = new EventBus();
+
+    let releaseStream: () => void = () => {};
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+
+    const fakeService: ChatService = {
+      startConversation: async () => conversation,
+      listConversations: async () => [conversation],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        yield {
+          type: "turn:start",
+          conversationId: conversation.id,
+          userMessage: { role: "user", content: "hi" },
+        } as never;
+        await streamReady;
+        yield { type: "turn:complete", conversation } as never;
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+
+    const handlers = makeChatHandlers({
+      chatService: fakeService,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus,
+    });
+
+    const lines: string[] = [];
+    const sendPromise = handlers.send(
+      { conversationId: conversation.id, userMessage: "hi" },
+      (line) => lines.push(line),
+      "req-1",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    bus.emit({
+      type: "loop:context_overflow_warning",
+      conversationId: conversation.id,
+      model: "test-model",
+      configuredTokens: 4096,
+      estimatedTokens: 5000,
+    });
+    bus.emit({
+      type: "loop:context_overflow_warning",
+      conversationId: "other-conversation",
+      model: "test-model",
+      configuredTokens: 4096,
+      estimatedTokens: 9000,
+    });
+    releaseStream();
+    await sendPromise;
+
+    const events = lines.map((line) => JSON.parse(line));
+    const overflow = events.filter((event) => event.event === "loop:context_overflow_warning");
+    expect(overflow).toHaveLength(1);
+    expect(overflow[0].conversationId).toBe(conversation.id);
+    expect(overflow[0].model).toBe("test-model");
+    expect(overflow[0].configuredTokens).toBe(4096);
+    expect(overflow[0].estimatedTokens).toBe(5000);
+  });
+
+  test("forwards loop:tool_mode_probed broadcast (no conversation filter)", async () => {
+    const conversation = makeConversation();
+    const bus = new EventBus();
+
+    let releaseStream: () => void = () => {};
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+
+    const fakeService: ChatService = {
+      startConversation: async () => conversation,
+      listConversations: async () => [conversation],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        yield {
+          type: "turn:start",
+          conversationId: conversation.id,
+          userMessage: { role: "user", content: "hi" },
+        } as never;
+        await streamReady;
+        yield { type: "turn:complete", conversation } as never;
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+
+    const handlers = makeChatHandlers({
+      chatService: fakeService,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus,
+    });
+
+    const lines: string[] = [];
+    const sendPromise = handlers.send(
+      { conversationId: conversation.id, userMessage: "hi" },
+      (line) => lines.push(line),
+      "req-1",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    bus.emit({
+      type: "loop:tool_mode_probed",
+      model: "test-model",
+      mode: "native",
+      attempts: 1,
+    });
+    releaseStream();
+    await sendPromise;
+
+    const events = lines.map((line) => JSON.parse(line));
+    const probed = events.filter((event) => event.event === "loop:tool_mode_probed");
+    expect(probed).toHaveLength(1);
+    expect(probed[0].model).toBe("test-model");
+    expect(probed[0].mode).toBe("native");
+    expect(probed[0].attempts).toBe(1);
   });
 });

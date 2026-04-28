@@ -149,6 +149,7 @@ async function main(argv: string[]): Promise<void> {
     vault: kernel.get("vault"),
     visionRouter: kernel.has("visionLLM") ? kernel.get("visionLLM") : null,
     pinnedNoteMaxTokens: settings.get().chat.context.pinnedNoteMaxTokens,
+    bus: kernel.get("bus"),
   });
   dispatcher.register("chat.start", chatHandlers.start);
   dispatcher.register("chat.send", chatHandlers.send);
