@@ -122,9 +122,7 @@ export class LMStudioProvider implements LLMProvider {
           // best-effort dump
         }
       }
-      throw new Error(
-        `LLM ${response.status} ${response.statusText} ${detail.slice(0, 600)}`,
-      );
+      throw new Error(`LLM ${response.status} ${response.statusText} ${detail.slice(0, 600)}`);
     }
     const aggregator = new ToolStreamAggregator();
     const events = iterateToolEvents(response.body, request.signal, aggregator);
