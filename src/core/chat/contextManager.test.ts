@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Database } from "../db/database";
+import { EventBus } from "../events/eventBus";
+import type { ContextSummarizedEvent } from "../events/types";
 import type {
   ChatOptions,
   ChatWithToolsHandle,
@@ -161,6 +163,7 @@ function makeManager(options: Partial<ContextManagerOptions> = {}): {
     estimateTokens: options.estimateTokens ?? ((text) => Math.ceil(text.length / 4)),
     summaryModel: options.summaryModel ?? "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M",
     identity: options.identity,
+    bus: options.bus,
   });
   return { manager, provider, conversationIndex };
 }
@@ -270,6 +273,39 @@ describe("ContextManager.compose", () => {
     expect(summarySystem?.content as string).toContain("compressed earlier turns");
     // Newest turn must still be present verbatim.
     expect(result.messages.at(-1)?.content).toBe("next question");
+  });
+
+  test("emits loop:context_summarized when oldest half is replaced by a summary", async () => {
+    const provider = new FakeProvider("compressed earlier turns");
+    const longHistory: ChatMessage[] = [];
+    for (let index = 0; index < 10; index++) {
+      longHistory.push(
+        makeMessage("user", "u".repeat(120), index * 2),
+        makeMessage("assistant", "a".repeat(120), index * 2 + 1),
+      );
+    }
+    const bus = new EventBus();
+    const events: ContextSummarizedEvent[] = [];
+    bus.on("loop:context_summarized", (event) => {
+      events.push(event);
+    });
+    const { manager } = makeManager({
+      provider,
+      bus,
+      contextSettings: () =>
+        defaultSettings({ modelContextTokens: 200, contextBudgetFraction: 0.5 }),
+      estimateTokens: (text) => text.length,
+    });
+    const conversation = makeConversation({ messages: longHistory });
+    await manager.compose(
+      conversation,
+      makeMessage("user", "next question"),
+      new AbortController().signal,
+    );
+    expect(events.length).toBe(1);
+    expect(events[0].conversationId).toBe(conversation.id);
+    expect(events[0].originalTokens).toBeGreaterThan(events[0].summarizedTokens);
+    expect(events[0].model).toBe("Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M");
   });
 
   test("cross-session memory injects top-K matches and excludes the current conversation", async () => {

@@ -15,6 +15,7 @@
  */
 
 import type { Database } from "../db/database";
+import type { EventBus } from "../events/eventBus";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../llm/provider";
 import type { ConversationIndex } from "./conversationIndex";
 import { SUMMARY_JSON_SCHEMA, summarizePrompt } from "./prompts/summarize";
@@ -58,6 +59,7 @@ export interface ContextManagerOptions {
   estimateTokens: (text: string) => number;
   summaryModel: string;
   identity?: string;
+  bus?: EventBus;
 }
 
 export interface ComposedContext {
@@ -99,7 +101,12 @@ export class ContextManager {
       tools: this.options.toolCatalog(),
     });
     const fullHistory = [...conversation.messages, latestUserMessage];
-    const budgeted = await this.budgetedHistory(systemPrompt, fullHistory, signal);
+    const budgeted = await this.budgetedHistory(
+      systemPrompt,
+      fullHistory,
+      signal,
+      conversation.id,
+    );
     const messages: ProviderChatMessage[] = [
       { role: "system", content: systemPrompt },
       ...budgeted.history.map((message) => toProviderMessage(message)),
@@ -204,15 +211,22 @@ export class ContextManager {
     systemPrompt: string,
     history: ChatMessage[],
     signal: AbortSignal,
-  ): Promise<{ history: ChatMessage[]; summarized: boolean }> {
+    conversationId: string,
+  ): Promise<{
+    history: ChatMessage[];
+    summarized: boolean;
+    originalTokens: number;
+    summarizedTokens: number;
+  }> {
     const settings = this.options.contextSettings();
     const budget = Math.floor(settings.modelContextTokens * settings.contextBudgetFraction);
     let used = this.options.estimateTokens(systemPrompt);
     for (const message of history) {
       used += this.options.estimateTokens(message.content);
     }
+    const originalTokens = used;
     if (used <= budget || history.length <= 4) {
-      return { history, summarized: false };
+      return { history, summarized: false, originalTokens, summarizedTokens: used };
     }
     const cutoff = Math.max(1, Math.floor(history.length / 2));
     const oldest = history.slice(0, cutoff);
@@ -238,7 +252,19 @@ export class ContextManager {
       content: `Earlier in this conversation: ${summary}`,
       createdAt: Date.now(),
     };
-    return { history: [summaryMessage, ...newest], summarized: true };
+    const newHistory: ChatMessage[] = [summaryMessage, ...newest];
+    let summarizedTokens = this.options.estimateTokens(systemPrompt);
+    for (const message of newHistory) {
+      summarizedTokens += this.options.estimateTokens(message.content);
+    }
+    this.options.bus?.emit({
+      type: "loop:context_summarized",
+      conversationId,
+      model: this.options.summaryModel,
+      originalTokens,
+      summarizedTokens,
+    });
+    return { history: newHistory, summarized: true, originalTokens, summarizedTokens };
   }
 }
 
