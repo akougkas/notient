@@ -37,9 +37,10 @@ export function InputBar({
   const accent = focused && !busy ? "#7DD3FC" : "#334155";
   return (
     <box
-      height={height}
+      height={height + 2}
       backgroundColor="#0B1220"
-      border={["left"]}
+      border
+      borderStyle="rounded"
       borderColor={accent}
       paddingLeft={1}
       paddingRight={1}

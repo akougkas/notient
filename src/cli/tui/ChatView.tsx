@@ -37,6 +37,9 @@ export function ChatView({ lines, scrollRef }: ChatViewProps): React.ReactNode {
     <scrollbox
       ref={scrollRef ?? undefined}
       flexGrow={1}
+      border
+      borderStyle="rounded"
+      borderColor="#1E293B"
       paddingLeft={1}
       paddingRight={1}
       stickyScroll
