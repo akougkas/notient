@@ -213,13 +213,13 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       if (tryPageScroll(event)) return;
       if (busy) return;
       if (event.name === "tab" && !event.shift && !event.ctrl) {
-        handleTabKey(buffer, setBuffer, setLines, client);
+        handleTabKey(buffer, handleBufferChange, setLines, client);
         event.preventDefault();
         return;
       }
       tryHistoryKey(event);
     },
-    [busy, buffer, client, onExit, tryHistoryKey, tryPageScroll],
+    [busy, buffer, client, handleBufferChange, onExit, tryHistoryKey, tryPageScroll],
   );
   useKeyboard(handleKey);
 
@@ -441,7 +441,7 @@ function upsertAssistant(lines: ChatLine[], buffer: string): ChatLine[] {
 
 function handleTabKey(
   buffer: string,
-  setBuffer: React.Dispatch<React.SetStateAction<string>>,
+  applyBuffer: (next: string) => void,
   setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
   client: ClientHandle,
 ): void {
@@ -451,7 +451,7 @@ function handleTabKey(
   const appendSystemLine = (text: string): void => {
     setLines((prior) => [...prior, { kind: "system", text }]);
   };
-  void completeAtMention(trailing.slice(1), buffer, lastSpaceIndex, setBuffer, appendSystemLine, {
+  void completeAtMention(trailing.slice(1), buffer, lastSpaceIndex, applyBuffer, appendSystemLine, {
     client,
   });
 }
