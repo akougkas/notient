@@ -15,7 +15,8 @@
     "build:cli": "bun scripts/build-cli.ts",
     "smoke:cli:phaseA": "bun scripts/smoke-cli-phaseA.ts",
     "smoke:cli:phaseB": "bun scripts/smoke-cli-phaseB.ts",
-    "smoke:cli:phaseC": "bun scripts/smoke-cli-phaseC.ts"
+    "smoke:cli:phaseC": "bun scripts/smoke-cli-phaseC.ts",
+    "smoke:cli:phaseD": "bun scripts/smoke-cli-phaseD.ts"
   },
   "keywords": [
     "ai",
