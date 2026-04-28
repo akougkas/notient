@@ -15,6 +15,8 @@ import type { NotesHistoryRecord } from "../core/chat/tools/notes";
 import { Database } from "../core/db/database";
 import { MemoryAdapter, loadWasm } from "../core/db/database.test";
 import { HistoryService } from "../core/history/historyService";
+import type { HistoryKind } from "../core/history/types";
+import { buildHistoryInverters } from "./bootstrap";
 
 async function newDb(): Promise<Database> {
   const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
@@ -50,5 +52,35 @@ describe("bootstrap recordHistory wiring", () => {
     expect(recent[0].target).toBe("scratch.md");
     expect(recent[0].after).toBe("hello world");
     expect(recent[0].before).toBeNull();
+  });
+});
+
+describe("bootstrap buildHistoryInverters", () => {
+  test("registers an inverter for every HistoryKind", async () => {
+    const database = await newDb();
+    const inverters = buildHistoryInverters({
+      database,
+      writeNote: async () => {},
+      removeNote: async () => {},
+      noteExists: async () => false,
+      markEcho: () => {},
+      hash: async () => "sha",
+    });
+    const expected: HistoryKind[] = [
+      "edge.approve",
+      "edge.reject",
+      "node.approve",
+      "node.reject",
+      "note.append_section",
+      "note.frontmatter",
+      "note.maturity",
+      "notes.create",
+      "notes.append",
+      "notes.replace_section",
+      "notes.update_frontmatter",
+    ];
+    for (const kind of expected) {
+      expect(typeof inverters[kind]).toBe("function");
+    }
   });
 });

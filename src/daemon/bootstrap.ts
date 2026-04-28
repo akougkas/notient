@@ -20,9 +20,14 @@ import { Database } from "../core/db/database";
 import { EventBus } from "../core/events/eventBus";
 import { GraphStore } from "../core/graph/graphStore";
 import { HistoryService } from "../core/history/historyService";
+import { makeEdgeApproveInverter } from "../core/history/inverters/edgeApprove";
+import { makeEdgeRejectInverter } from "../core/history/inverters/edgeReject";
+import { makeNodeApproveInverter } from "../core/history/inverters/nodeApprove";
+import { makeNodeRejectInverter } from "../core/history/inverters/nodeReject";
 import { makeNoteAppendSectionInverter } from "../core/history/inverters/noteAppendSection";
 import { makeNoteCreateInverter } from "../core/history/inverters/noteCreate";
 import { makeNoteFrontmatterInverter } from "../core/history/inverters/noteFrontmatter";
+import { makeNoteMaturityInverter } from "../core/history/inverters/noteMaturity";
 import type { InverterRegistry } from "../core/history/types";
 import { Embedder } from "../core/indexer/embedder";
 import { Extractor } from "../core/indexer/extractor";
@@ -433,30 +438,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     exists: (path: string) => vault.exists(path),
   };
 
-  // Inverters for the four chat-write history kinds. Graph-side and
-  // note.maturity inverters are wired alongside their producers in Task 16.
-  const noteAppendInverter = makeNoteAppendSectionInverter({
-    facade: { writeNote: notesFacade.writeNote },
-    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
+  const inverters = buildHistoryInverters({
+    database,
+    writeNote: notesFacade.writeNote,
+    removeNote: (path) => vault.remove(path),
+    noteExists: notesFacade.exists,
+    markEcho: (path, sha) => echoGuard.mark(path, sha),
     hash: simpleHash,
   });
-  const inverters: InverterRegistry = {
-    "notes.create": makeNoteCreateInverter({
-      facade: {
-        exists: notesFacade.exists,
-        remove: (path) => vault.remove(path),
-      },
-      echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
-      hash: simpleHash,
-    }),
-    "notes.append": noteAppendInverter,
-    "notes.replace_section": noteAppendInverter,
-    "notes.update_frontmatter": makeNoteFrontmatterInverter({
-      facade: { writeNote: notesFacade.writeNote },
-      echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
-      hash: simpleHash,
-    }),
-  };
   const historyService = new HistoryService({
     db: database,
     inverters,
@@ -600,6 +589,68 @@ async function simpleHash(content: string): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+export interface BuildHistoryInvertersOptions {
+  database: Database;
+  writeNote: (path: string, content: string) => Promise<void>;
+  removeNote: (path: string) => Promise<void>;
+  noteExists: (path: string) => Promise<boolean>;
+  markEcho: (path: string, sha: string) => void;
+  hash: (content: string) => Promise<string>;
+}
+
+/**
+ * Build the InverterRegistry the daemon installs into HistoryService. Covers
+ * every kind in `HistoryKind`: chat-side `notes.*` writes, graph-side
+ * `edge.*`/`node.*` proposals, and the maturity advancer's body+column write.
+ *
+ * The body-edit kinds (`note.append_section`, `note.frontmatter`) reuse the
+ * chat-side append/frontmatter inverters because they share the same payload
+ * shape: prior body in `before`, EchoGuard-marked self-write back through the
+ * vault facade.
+ */
+export function buildHistoryInverters(options: BuildHistoryInvertersOptions): InverterRegistry {
+  const echoGuard = { mark: options.markEcho };
+  const writeFacade = { writeNote: options.writeNote };
+  const removeFacade = { exists: options.noteExists, remove: options.removeNote };
+  const noteAppendInverter = makeNoteAppendSectionInverter({
+    facade: writeFacade,
+    echoGuard,
+    hash: options.hash,
+  });
+  const noteFrontmatterInverter = makeNoteFrontmatterInverter({
+    facade: writeFacade,
+    echoGuard,
+    hash: options.hash,
+  });
+  return {
+    "notes.create": makeNoteCreateInverter({
+      facade: removeFacade,
+      echoGuard,
+      hash: options.hash,
+    }),
+    "notes.append": noteAppendInverter,
+    "notes.replace_section": noteAppendInverter,
+    "notes.update_frontmatter": noteFrontmatterInverter,
+    "note.append_section": noteAppendInverter,
+    "note.frontmatter": noteFrontmatterInverter,
+    "note.maturity": makeNoteMaturityInverter({
+      db: options.database,
+      facade: writeFacade,
+      echoGuard,
+      hash: options.hash,
+    }),
+    "edge.approve": makeEdgeApproveInverter({ db: options.database }),
+    "edge.reject": makeEdgeRejectInverter({ db: options.database }),
+    "node.approve": makeNodeApproveInverter({
+      db: options.database,
+      facade: removeFacade,
+      echoGuard,
+      hash: options.hash,
+    }),
+    "node.reject": makeNodeRejectInverter({ db: options.database }),
+  };
 }
 
 /**
