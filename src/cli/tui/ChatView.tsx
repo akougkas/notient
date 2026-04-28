@@ -1,3 +1,4 @@
+import type { ScrollBoxRenderable } from "@opentui/core";
 import type React from "react";
 
 export type ChatLine =
@@ -28,13 +29,21 @@ const PREFIXES: Record<ChatLine["kind"], string> = {
 
 export interface ChatViewProps {
   lines: ChatLine[];
+  scrollRef?: React.MutableRefObject<ScrollBoxRenderable | null>;
 }
 
-export function ChatView({ lines }: ChatViewProps): React.ReactNode {
+export function ChatView({ lines, scrollRef }: ChatViewProps): React.ReactNode {
   return (
-    <scrollbox flexGrow={1} paddingLeft={1} paddingRight={1}>
+    <scrollbox
+      ref={scrollRef ?? undefined}
+      flexGrow={1}
+      paddingLeft={1}
+      paddingRight={1}
+      stickyScroll
+      stickyStart="bottom"
+    >
       {lines.map((line, index) => (
-        <text key={`${line.kind}-${index}-${line.text.slice(0, 16)}`} fg={COLORS[line.kind]}>
+        <text key={`${line.kind}-${index}`} fg={COLORS[line.kind]}>
           {PREFIXES[line.kind]}
           {line.text}
         </text>

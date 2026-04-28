@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type KeyEvent, createCliRenderer } from "@opentui/core";
+import { type KeyEvent, type ScrollBoxRenderable, createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type React from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -100,6 +100,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
     createHistoryNav(loadHistoryFromFile(historyPath, HISTORY_MAX)),
   );
   const historyAnchorRef = useRef<string | null>(null);
+  const scrollRef = useRef<ScrollBoxRenderable | null>(null);
 
   const handleBufferChange = useCallback((next: string) => {
     setBuffer(next);
@@ -157,6 +158,16 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
     [buffer, historyNav],
   );
 
+  const tryPageScroll = useCallback((event: KeyEvent): boolean => {
+    if (event.name !== "pageup" && event.name !== "pagedown") return false;
+    const scroll = scrollRef.current;
+    if (scroll) {
+      scroll.scrollBy({ x: 0, y: event.name === "pageup" ? -0.9 : 0.9 }, "viewport");
+      event.preventDefault();
+    }
+    return true;
+  }, []);
+
   const handleKey = useCallback(
     (event: KeyEvent) => {
       if (event.eventType !== "press" && event.eventType !== "repeat") return;
@@ -164,6 +175,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
         onExit();
         return;
       }
+      if (tryPageScroll(event)) return;
       if (busy) return;
       if (event.name === "tab" && !event.shift && !event.ctrl) {
         handleTabKey(buffer, setBuffer, setLines, client);
@@ -172,7 +184,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
       }
       tryHistoryKey(event);
     },
-    [busy, buffer, client, onExit, tryHistoryKey],
+    [busy, buffer, client, onExit, tryHistoryKey, tryPageScroll],
   );
   useKeyboard(handleKey);
 
@@ -182,7 +194,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
   return (
     <box flexDirection="column" width="100%" height="100%">
       <StatusBar vaultPath={vaultPath} busy={busy} pendingCount={pendingApprovals.size} />
-      <ChatView lines={lines} />
+      <ChatView lines={lines} scrollRef={scrollRef} />
       <InputBar
         busy={busy}
         value={buffer}
