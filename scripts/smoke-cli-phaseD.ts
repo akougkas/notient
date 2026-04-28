@@ -442,32 +442,49 @@ async function runContextSummarizedPass(vaultPath: string): Promise<void> {
 
 async function runToolModeProbePass(vaultPath: string): Promise<void> {
   // Unpin the cached tool mode so the next chat.send re-runs the probe
-  // and emits loop:tool_mode_probed. Restore the pin afterwards so a
-  // subsequent run starts from the same baseline.
+  // and emits loop:tool_mode_probed. The null-sentinel patch removes the
+  // entry from settings; the in-memory toolModeStore is still empty for
+  // this model on a fresh daemon start, so the next turn falls through to
+  // the probe path. Restore the pin afterwards so a subsequent run starts
+  // from the same baseline.
   try {
     await withClient(vaultPath, async (client) => {
-      // Setting the entry to undefined via the merge is not exposed by the
-      // public config_set API. Instead, write `disabled` then back to
-      // `native` to force a non-cached state in between turns is not
-      // possible either. The pragmatic path: clear the on-disk
-      // toolModeByModel for the model and rely on settings reload via
-      // config_set to re-merge. SettingsService.update merges per key, so
-      // we cannot delete an existing key through a patch alone. Mark
-      // skipped if we cannot drive it from RPC.
-      const probeBefore = await detectProbedEvent(client, vaultPath);
-      if (probeBefore.observed) {
-        emitter.emit({
-          type: "smoke:tool_mode_probe_validated",
-          mode: probeBefore.mode,
-          attempts: probeBefore.attempts,
-          reason: "loop:tool_mode_probed already emitted on first turn after restart",
-        });
-        return;
+      await readResult(
+        client.call("daemon.config_set", {
+          chat: { toolModeByModel: { [PRIMARY_MODEL]: null } },
+        }),
+      );
+      const verifyResult = await readResult(client.call("daemon.config_get", {}));
+      const verifyDetail = verifyResult as unknown as {
+        config?: { chat?: { toolModeByModel?: Record<string, string> } };
+      };
+      const stillPinned = verifyDetail.config?.chat?.toolModeByModel?.[PRIMARY_MODEL];
+      if (stillPinned !== undefined) {
+        throw new Error(
+          `tool_mode_probed: null sentinel did not unpin model (still=${stillPinned})`,
+        );
+      }
+
+      const probe = await detectProbedEvent(client, vaultPath);
+      if (!probe.observed) {
+        throw new Error(
+          "tool_mode_probed: chat.send after unpin did not emit loop:tool_mode_probed",
+        );
+      }
+      if (probe.mode !== "native") {
+        throw new Error(
+          `tool_mode_probed: expected mode=native, got mode=${probe.mode ?? "unknown"}`,
+        );
+      }
+      if (probe.attempts !== 1 && probe.attempts !== 2) {
+        throw new Error(
+          `tool_mode_probed: expected attempts=1 or 2, got attempts=${probe.attempts ?? "unknown"}`,
+        );
       }
       emitter.emit({
-        type: "smoke:tool_mode_probe_skipped",
-        reason:
-          "config patch cannot delete chat.toolModeByModel entries through daemon.config_set so the cached pin survives",
+        type: "smoke:tool_mode_probe_validated",
+        mode: probe.mode,
+        attempts: probe.attempts,
       });
     });
   } finally {

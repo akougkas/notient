@@ -155,7 +155,14 @@ async function runProbe(
       model: options.model,
       messages: [{ role: "user", content: PROBE_PROMPT }],
       tools: [PROBE_TOOL],
-      toolChoice: "required",
+      // toolChoice "auto" rather than "required": some tool-capable models
+      // (Nemotron-Cascade family observed against LM Studio) interpret
+      // "required" loosely and degrade to a custom XML tool-call format
+      // emitted as reasoning text rather than the OpenAI tool_calls field,
+      // which would mis-classify them as `disabled`. The PROBE_PROMPT
+      // ("Call the echo tool with value=ping.") is unambiguous enough that
+      // a tool-capable model will pick the tool call under "auto".
+      toolChoice: "auto",
       signal,
       temperature,
       maxTokens: 256,
