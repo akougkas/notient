@@ -21,6 +21,7 @@ import {
 } from "./history";
 import { computeInputHeight } from "./inputBindings";
 import { dispatchSlashCommand, isSlashCommand } from "./slashCommands";
+import { type StatusBarFields, buildStatusBar, estimateTokens } from "./statusBar";
 
 const HISTORY_MAX = 100;
 
@@ -36,7 +37,7 @@ export async function startTuiRuntime(options: TuiRuntimeOptions): Promise<void>
     vaultPath: options.vaultPath,
   });
 
-  const conversationId = await startConversation(client);
+  const session = await startConversation(client);
   const renderer = await createCliRenderer({});
   const root = createRoot(renderer);
 
@@ -54,7 +55,8 @@ export async function startTuiRuntime(options: TuiRuntimeOptions): Promise<void>
       <App
         vaultPath={options.vaultPath}
         client={client}
-        conversationId={conversationId}
+        conversationId={session.id}
+        topic={session.topic}
         onExit={onExit}
       />,
     );
@@ -62,13 +64,20 @@ export async function startTuiRuntime(options: TuiRuntimeOptions): Promise<void>
   await client.close();
 }
 
-async function startConversation(client: ClientHandle): Promise<string> {
+interface ConversationSession {
+  readonly id: string;
+  readonly topic: string;
+}
+
+async function startConversation(client: ClientHandle): Promise<ConversationSession> {
   for await (const frame of client.call("chat.start", { topic: "TUI session" })) {
     if (frame.type === "result") {
-      const detail = frame as unknown as { conversation?: { id?: string } };
+      const detail = frame as unknown as { conversation?: { id?: string; topic?: string } };
       const id = detail.conversation?.id;
       if (typeof id !== "string") throw new Error("chat.start result missing id");
-      return id;
+      const topic =
+        typeof detail.conversation?.topic === "string" ? detail.conversation.topic : "TUI session";
+      return { id, topic };
     }
     if (frame.type === "error") {
       throw new Error(`chat.start failed: ${(frame as { message?: string }).message ?? "unknown"}`);
@@ -81,10 +90,11 @@ interface AppProps {
   vaultPath: string;
   client: ClientHandle;
   conversationId: string;
+  topic: string;
   onExit: () => void;
 }
 
-function App({ vaultPath, client, conversationId, onExit }: AppProps): React.ReactNode {
+function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): React.ReactNode {
   const [lines, setLines] = useState<ChatLine[]>([
     {
       kind: "system",
@@ -94,6 +104,8 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
   const [buffer, setBuffer] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
+  const [model, setModel] = useState<string | null>(null);
+  const [lastTurnTokens, setLastTurnTokens] = useState<number | null>(null);
 
   const historyPath = useMemo(() => join(vaultPath, ".notient", "history.txt"), [vaultPath]);
   const [historyNav, setHistoryNav] = useState<HistoryNav>(() =>
@@ -129,7 +141,15 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
       setLines((prior) => [...prior, { kind: "user", text: trimmed }]);
       setBusy(true);
       try {
-        await runChatTurn(client, conversationId, trimmed, setLines, setPendingApprovals);
+        await runChatTurn(
+          client,
+          conversationId,
+          trimmed,
+          setLines,
+          setPendingApprovals,
+          setModel,
+          setLastTurnTokens,
+        );
       } finally {
         setBusy(false);
       }
@@ -193,7 +213,16 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <StatusBar vaultPath={vaultPath} busy={busy} pendingCount={pendingApprovals.size} />
+      <StatusBar
+        fields={{
+          vaultPath,
+          topic,
+          model,
+          busy,
+          pendingCount: pendingApprovals.size,
+          lastTurnTokens,
+        }}
+      />
       <ChatView lines={lines} scrollRef={scrollRef} />
       <InputBar
         busy={busy}
@@ -209,27 +238,38 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
   );
 }
 
-function StatusBar({
-  vaultPath,
-  busy,
-  pendingCount,
-}: {
-  vaultPath: string;
-  busy: boolean;
-  pendingCount: number;
-}): React.ReactNode {
+function StatusBar({ fields }: { fields: StatusBarFields }): React.ReactNode {
+  const segments = buildStatusBar(fields);
   return (
-    <box height={1} backgroundColor="#222222" paddingLeft={1} paddingRight={1}>
-      <text fg="#94A3B8">{buildStatusLabel(vaultPath, busy, pendingCount)}</text>
+    <box
+      height={1}
+      backgroundColor="#0F172A"
+      paddingLeft={1}
+      paddingRight={1}
+      flexDirection="row"
+      justifyContent="space-between"
+    >
+      <text fg="#94A3B8">{segments.left}</text>
+      <text fg="#94A3B8">{segments.right}</text>
     </box>
   );
 }
 
+/**
+ * Re-exported so existing callers (notably runtime.test.ts) keep their
+ * single-line label assertions while the rendered status bar uses the new
+ * two-segment layout.
+ */
 export function buildStatusLabel(vaultPath: string, busy: boolean, pendingCount: number): string {
-  const vaultLabel = vaultPath.split("/").pop() ?? vaultPath;
-  const state = busy ? "thinking…" : "idle";
-  const base = `notient · vault:${vaultLabel} · ${state}`;
-  return pendingCount > 0 ? `${base} · pending:${pendingCount}` : base;
+  const segs = buildStatusBar({
+    vaultPath,
+    topic: "",
+    model: null,
+    busy,
+    pendingCount,
+    lastTurnTokens: null,
+  });
+  return segs.right === "" ? segs.left : `${segs.left} · ${segs.right}`;
 }
 
 export function frameToErrorLine(frame: { type: "error"; message?: unknown }): ChatLine {
@@ -243,8 +283,10 @@ async function runChatTurn(
   userMessage: string,
   setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
   setPendingApprovals: React.Dispatch<React.SetStateAction<Map<string, string>>>,
+  setModel: React.Dispatch<React.SetStateAction<string | null>>,
+  setLastTurnTokens: React.Dispatch<React.SetStateAction<number | null>>,
 ): Promise<void> {
-  const turnState = { assistantBuffer: "" };
+  const turnState: TurnState = { assistantBuffer: "" };
   for await (const frame of client.call("chat.send", {
     conversationId,
     userMessage,
@@ -255,6 +297,7 @@ async function runChatTurn(
         turnState,
         setLines,
         setPendingApprovals,
+        setModel,
       );
       continue;
     }
@@ -265,6 +308,7 @@ async function runChatTurn(
       break;
     }
   }
+  setLastTurnTokens(estimateTokens(turnState.assistantBuffer));
 }
 
 interface TurnState {
@@ -276,6 +320,7 @@ function handleStreamEvent(
   turnState: TurnState,
   setLines: React.Dispatch<React.SetStateAction<ChatLine[]>>,
   setPendingApprovals: React.Dispatch<React.SetStateAction<Map<string, string>>>,
+  setModel: React.Dispatch<React.SetStateAction<string | null>>,
 ): void {
   switch (detail.event) {
     case "loop:assistant_delta":
@@ -324,6 +369,7 @@ function handleStreamEvent(
       return;
     }
     case "loop:context_summarized":
+      if (typeof detail.model === "string" && detail.model.length > 0) setModel(detail.model);
       setLines((prior) => [
         ...prior,
         {
@@ -333,6 +379,7 @@ function handleStreamEvent(
       ]);
       return;
     case "loop:context_overflow_warning":
+      if (typeof detail.model === "string" && detail.model.length > 0) setModel(detail.model);
       setLines((prior) => [
         ...prior,
         {
@@ -342,6 +389,7 @@ function handleStreamEvent(
       ]);
       return;
     case "loop:tool_mode_probed":
+      if (typeof detail.model === "string" && detail.model.length > 0) setModel(detail.model);
       setLines((prior) => [
         ...prior,
         {
