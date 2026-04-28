@@ -3,11 +3,21 @@ import { cp, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeEmitter } from "../src/cli/output";
-import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
+import {
+  buildSmokeEnv,
+  captureNotientEnv,
+  stripNotientEnvFromProcess,
+  writeVaultEnvFile,
+} from "./lib/spawnEnv";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 
 async function main(): Promise<void> {
+  // Capture the project-root NOTIENT_* env BEFORE stripping; the snapshot
+  // becomes the tmp vault's .notient/.env so the daemon's bootstrap can
+  // satisfy assertEndpointConfigured without inheriting any model identity
+  // from the parent shell.
+  const envSnapshot = captureNotientEnv();
   stripNotientEnvFromProcess();
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-A-"));
@@ -16,6 +26,7 @@ async function main(): Promise<void> {
     emitter.emit({ type: "smoke:setup", tmpRoot });
 
     await runOneShot(["init", tmpRoot]);
+    await writeVaultEnvFile(tmpRoot, envSnapshot);
     emitter.emit({ type: "smoke:init_done" });
 
     const statusFrames = await runOneShotCollect(["daemon", "status", "--vault", tmpRoot]);

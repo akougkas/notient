@@ -33,12 +33,10 @@ import { indexNote } from "../src/core/indexer/indexNote";
 import { LMStudioProvider } from "../src/core/llm/lmStudioProvider";
 
 const DEFAULT_VAULT = "/mnt/c/Users/akougk/Projects/vaultex";
-// Phase 4 substrate: ONLY mini. Chat = llama-server on :8080 (Nemotron-Cascade
-// loaded); embedding = Ollama on :11434 (nomic-embed-text-v2-moe loaded).
-const DEFAULT_LLM_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_EMBED_URL = "http://192.168.86.143:1234/v1";
-const DEFAULT_REASONING_MODEL = "nemotron-cascade-2-30b-a3b-i1";
-const DEFAULT_EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+// Operator supplies the substrate identity via NOTIENT_LLM_BASE_URL,
+// NOTIENT_LLM_MODEL, NOTIENT_EMBED_MODEL (project-root .env or process env).
+// SMOKE_* overrides win when set, so a developer can point one run at a
+// different endpoint without touching the project .env.
 const EMBED_DIM = 768;
 
 interface InlineNote {
@@ -178,10 +176,26 @@ function findFirstSmallMd(dir: string, maxBytes: number): string | null {
 
 async function main(): Promise<number> {
   const vaultRoot = process.env.SMOKE_VAULT_PATH ?? DEFAULT_VAULT;
-  const baseUrl = process.env.SMOKE_LLM_URL ?? process.env.SMOKE_LMSTUDIO_URL ?? DEFAULT_LLM_URL;
-  const embedUrl = process.env.SMOKE_EMBED_URL ?? DEFAULT_EMBED_URL;
-  const reasoningModel = process.env.SMOKE_REASONING_MODEL ?? DEFAULT_REASONING_MODEL;
-  const embedModel = process.env.SMOKE_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
+  const baseUrl =
+    process.env.SMOKE_LLM_URL ??
+    process.env.SMOKE_LMSTUDIO_URL ??
+    process.env.NOTIENT_LLM_BASE_URL ??
+    "";
+  const embedUrl =
+    process.env.SMOKE_EMBED_URL ?? process.env.NOTIENT_LLM_BASE_URL ?? "";
+  const reasoningModel =
+    process.env.SMOKE_REASONING_MODEL ?? process.env.NOTIENT_LLM_MODEL ?? "";
+  const embedModel = process.env.SMOKE_EMBED_MODEL ?? process.env.NOTIENT_EMBED_MODEL ?? "";
+
+  const missing: string[] = [];
+  if (baseUrl.length === 0) missing.push("NOTIENT_LLM_BASE_URL (or SMOKE_LLM_URL)");
+  if (reasoningModel.length === 0)
+    missing.push("NOTIENT_LLM_MODEL (or SMOKE_REASONING_MODEL)");
+  if (embedModel.length === 0) missing.push("NOTIENT_EMBED_MODEL (or SMOKE_EMBED_MODEL)");
+  if (missing.length > 0) {
+    console.error(`[smoke] FATAL: missing env: ${missing.join(", ")}`);
+    return 1;
+  }
 
   const tempDir = mkdtempSync(join(tmpdir(), "notient-smoke-"));
   const dbPath = join(tempDir, "notient-smoke.db");

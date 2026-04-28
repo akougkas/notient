@@ -3,12 +3,20 @@ import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeEmitter } from "../src/cli/output";
-import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
+import {
+  buildSmokeEnv,
+  captureNotientEnv,
+  stripNotientEnvFromProcess,
+  writeVaultEnvFile,
+} from "./lib/spawnEnv";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 120_000;
 
 async function main(): Promise<void> {
+  // Capture project-root NOTIENT_* before stripping so the snapshot can seed
+  // the tmp vault's .notient/.env. See smoke-cli-phaseA.ts for the rationale.
+  const envSnapshot = captureNotientEnv();
   stripNotientEnvFromProcess();
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-B-"));
@@ -17,6 +25,7 @@ async function main(): Promise<void> {
     emitter.emit({ type: "smoke:setup", tmpRoot });
 
     await runOneShot(["init", tmpRoot]);
+    await writeVaultEnvFile(tmpRoot, envSnapshot);
     emitter.emit({ type: "smoke:init_done" });
 
     const awakenFrames = await runOneShotCollect(["awaken", "--vault", tmpRoot]);

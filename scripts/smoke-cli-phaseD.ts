@@ -25,16 +25,25 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectClient, type RpcResponseFrame } from "../src/cli/client";
-import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
+import {
+  buildSmokeEnv,
+  captureNotientEnv,
+  stripNotientEnvFromProcess,
+  writeVaultEnvFile,
+} from "./lib/spawnEnv";
 import { makeEmitter } from "../src/cli/output";
 import { currentPlatform, resolveSocketPath } from "../src/daemon/socket";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 240_000;
-const PRIMARY_MODEL = "nemotron-cascade-2-30b-a3b-i1";
 
 async function main(): Promise<void> {
+  // Capture project-root NOTIENT_* env BEFORE the strip so the chat model
+  // identifier survives into the smoke body. The snapshot drives the vault
+  // .env file (so the daemon seals) AND the tool-mode pin/unpin flow.
+  const envSnapshot = captureNotientEnv();
   stripNotientEnvFromProcess();
+  const primaryModel = envSnapshot.chatModel;
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-D-"));
   try {
@@ -42,17 +51,18 @@ async function main(): Promise<void> {
     emitter.emit({ type: "smoke:setup", tmpRoot });
 
     await runOneShot(["init", tmpRoot]);
+    await writeVaultEnvFile(tmpRoot, envSnapshot);
     emitter.emit({ type: "smoke:init_done" });
 
     // Pre-seed config: pin primary model tool mode AND auto-approve
     // notes.create. Both are read by bootstrap on daemon start, so they
     // must land on disk before the first awaken/connect.
     await preSeedConfig(tmpRoot, {
-      toolModeModel: PRIMARY_MODEL,
+      toolModeModel: primaryModel,
       toolMode: "native",
       autoApproveNotesCreate: true,
     });
-    emitter.emit({ type: "smoke:config_seeded", model: PRIMARY_MODEL });
+    emitter.emit({ type: "smoke:config_seeded", model: primaryModel });
 
     await runOneShot(["awaken", "--vault", tmpRoot]);
     emitter.emit({ type: "smoke:awaken_done" });
@@ -64,7 +74,7 @@ async function main(): Promise<void> {
 
     await runContextSummarizedPass(tmpRoot);
 
-    await runToolModeProbePass(tmpRoot);
+    await runToolModeProbePass(tmpRoot, primaryModel);
 
     await runOneShot(["daemon", "stop", "--vault", tmpRoot]);
     emitter.emit({ type: "smoke:complete" });
@@ -442,7 +452,7 @@ async function runContextSummarizedPass(vaultPath: string): Promise<void> {
   }
 }
 
-async function runToolModeProbePass(vaultPath: string): Promise<void> {
+async function runToolModeProbePass(vaultPath: string, primaryModel: string): Promise<void> {
   // Unpin the cached tool mode so the next chat.send re-runs the probe
   // and emits loop:tool_mode_probed. The null-sentinel patch removes the
   // entry from settings; the in-memory toolModeStore is still empty for
@@ -453,14 +463,14 @@ async function runToolModeProbePass(vaultPath: string): Promise<void> {
     await withClient(vaultPath, async (client) => {
       await readResult(
         client.call("daemon.config_set", {
-          chat: { toolModeByModel: { [PRIMARY_MODEL]: null } },
+          chat: { toolModeByModel: { [primaryModel]: null } },
         }),
       );
       const verifyResult = await readResult(client.call("daemon.config_get", {}));
       const verifyDetail = verifyResult as unknown as {
         config?: { chat?: { toolModeByModel?: Record<string, string> } };
       };
-      const stillPinned = verifyDetail.config?.chat?.toolModeByModel?.[PRIMARY_MODEL];
+      const stillPinned = verifyDetail.config?.chat?.toolModeByModel?.[primaryModel];
       if (stillPinned !== undefined) {
         throw new Error(
           `tool_mode_probed: null sentinel did not unpin model (still=${stillPinned})`,
@@ -491,7 +501,7 @@ async function runToolModeProbePass(vaultPath: string): Promise<void> {
     });
   } finally {
     await preSeedConfig(vaultPath, {
-      toolModeModel: PRIMARY_MODEL,
+      toolModeModel: primaryModel,
       toolMode: "native",
       autoApproveNotesCreate: true,
     }).catch(() => {

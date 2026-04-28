@@ -5,13 +5,22 @@ import { join } from "node:path";
 import { connectClient } from "../src/cli/client";
 import { makeEmitter } from "../src/cli/output";
 import { currentPlatform, resolveSocketPath } from "../src/daemon/socket";
-import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
+import {
+  buildSmokeEnv,
+  captureNotientEnv,
+  stripNotientEnvFromProcess,
+  writeVaultEnvFile,
+} from "./lib/spawnEnv";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 240_000;
-const PRIMARY_MODEL = "nemotron-cascade-2-30b-a3b-i1";
 
 async function main(): Promise<void> {
+  // Capture the substrate identity from the project-root .env BEFORE
+  // stripping; the snapshot becomes the tmp vault's .notient/.env, and the
+  // chat model identifier drives both the tool-mode pin and any
+  // model-specific assertion later in the suite.
+  const envSnapshot = captureNotientEnv();
   stripNotientEnvFromProcess();
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-C-"));
@@ -20,14 +29,15 @@ async function main(): Promise<void> {
     emitter.emit({ type: "smoke:setup", tmpRoot });
 
     await runOneShot(["init", tmpRoot]);
+    await writeVaultEnvFile(tmpRoot, envSnapshot);
     emitter.emit({ type: "smoke:init_done" });
 
     // Pin the tool mode for the primary model so chat.send skips the
     // auto-probe (which the substrate flakes on for some models). Phase C's
     // smoke goal is to assert the wire bridge round-trips a real vault.*
     // tool call; the probe robustness is a separate substrate concern.
-    await pinToolMode(tmpRoot, PRIMARY_MODEL, "native");
-    emitter.emit({ type: "smoke:tool_mode_pinned", model: PRIMARY_MODEL });
+    await pinToolMode(tmpRoot, envSnapshot.chatModel, "native");
+    emitter.emit({ type: "smoke:tool_mode_pinned", model: envSnapshot.chatModel });
 
     await runOneShot(["awaken", "--vault", tmpRoot]);
     emitter.emit({ type: "smoke:awaken_done" });
