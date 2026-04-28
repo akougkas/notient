@@ -63,7 +63,7 @@ describe("Linker", () => {
     const linker = new Linker({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighborhood: async () => [
         {
           notePath: "/neighbor.md",
@@ -96,7 +96,7 @@ describe("Linker", () => {
     const linker = new Linker({
       db,
       provider: fakeProvider({ edges: [] }),
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighborhood: async () => [],
     });
     const result = await linker.run({
@@ -145,7 +145,7 @@ describe("Linker", () => {
     const linker = new Linker({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighborhood: async () => [{ notePath: "/n.md", chunkId: "c2", text: "x", score: 0.5 }],
     });
     const ctrl = new AbortController();

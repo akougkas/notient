@@ -53,7 +53,7 @@ describe("ContradictionHunter", () => {
     const hunter = new ContradictionHunter({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighbors: async () => [{ id: "claim:def", score: 0.91, chunkIds: ["c2"] }],
       maxPairs: 5,
     });
@@ -115,7 +115,7 @@ describe("ContradictionHunter", () => {
     const hunter = new ContradictionHunter({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighbors: async () => [{ id: "claim:def", score: 0.91, chunkIds: ["c2"] }],
       maxPairs: 5,
     });
@@ -139,7 +139,7 @@ describe("ContradictionHunter", () => {
     const hunter = new ContradictionHunter({
       db,
       provider: fakeProvider({}),
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighbors: async () => [{ id: "claim:def", score: 0.91, chunkIds: ["c2"] }],
       maxPairs: 5,
     });
@@ -158,7 +158,7 @@ describe("ContradictionHunter", () => {
     const hunter = new ContradictionHunter({
       db,
       provider: fakeProvider({ pairs: [] }),
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       neighbors: async () => [],
       maxPairs: 5,
     });

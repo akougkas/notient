@@ -31,12 +31,12 @@ describe("buildStatusBar", () => {
     const segs = buildStatusBar({
       vaultPath: "/v",
       topic: "",
-      model: "nemotron",
+      model: "test-model",
       busy: true,
       pendingCount: 0,
       lastTurnTokens: 320,
     });
-    expect(segs.right).toBe("thinking… · ~320 tok · nemotron");
+    expect(segs.right).toBe("thinking… · ~320 tok · test-model");
   });
 
   test("hides pending segment when zero", () => {

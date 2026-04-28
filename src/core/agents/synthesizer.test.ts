@@ -87,7 +87,7 @@ describe("Synthesizer", () => {
     const synth = new Synthesizer({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       epsilon: 0.05,
       minClusterSize: 2,
       sinceMs: 0,
@@ -166,7 +166,7 @@ describe("Synthesizer", () => {
     const synth = new Synthesizer({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       epsilon: 0.05,
       minClusterSize: 2,
       sinceMs: 0,
@@ -198,7 +198,7 @@ describe("Synthesizer", () => {
     const synth = new Synthesizer({
       db,
       provider,
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       epsilon: 0.05,
       minClusterSize: 2,
       sinceMs: 0,
@@ -220,7 +220,7 @@ describe("Synthesizer", () => {
     const synth = new Synthesizer({
       db,
       provider: fakeProvider({}),
-      reasoningModel: "nemotron",
+      reasoningModel: "test-model",
       epsilon: 0.05,
       minClusterSize: 2,
       sinceMs: 0,

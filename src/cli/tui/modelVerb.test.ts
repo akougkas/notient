@@ -37,22 +37,22 @@ describe("formatModelView", () => {
 
 describe("buildUseModelPatch", () => {
   test("touches every reasoning slot and the co-author model", () => {
-    const patch = buildUseModelPatch("omni");
+    const patch = buildUseModelPatch("test-model");
     expect(patch.primary).toEqual({
-      reasoningModel: "omni",
-      fastModel: "omni",
-      rerankerModel: "omni",
+      reasoningModel: "test-model",
+      fastModel: "test-model",
+      rerankerModel: "test-model",
     } as never);
     expect(patch.deep).toEqual({
-      reasoningModel: "omni",
-      fastModel: "omni",
-      rerankerModel: "omni",
+      reasoningModel: "test-model",
+      fastModel: "test-model",
+      rerankerModel: "test-model",
     } as never);
-    expect(patch.coAuthor).toEqual({ model: "omni" } as never);
+    expect(patch.coAuthor).toEqual({ model: "test-model" } as never);
   });
 
   test("does not touch endpoint or embedding", () => {
-    const patch = buildUseModelPatch("omni");
+    const patch = buildUseModelPatch("test-model");
     expect(patch.embedding).toBeUndefined();
     expect((patch.primary as Record<string, unknown> | undefined)?.baseUrl).toBeUndefined();
   });

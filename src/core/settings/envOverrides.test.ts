@@ -18,14 +18,14 @@ describe("applyEnvOverrides", () => {
   });
 
   test("NOTIENT_LLM_MODEL overrides every chat-style model slot", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_LLM_MODEL: "omni" });
-    expect(result.primary.reasoningModel).toBe("omni");
-    expect(result.primary.fastModel).toBe("omni");
-    expect(result.primary.rerankerModel).toBe("omni");
-    expect(result.deep.reasoningModel).toBe("omni");
-    expect(result.deep.fastModel).toBe("omni");
-    expect(result.deep.rerankerModel).toBe("omni");
-    expect(result.coAuthor.model).toBe("omni");
+    const result = applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_LLM_MODEL: "test-model" });
+    expect(result.primary.reasoningModel).toBe("test-model");
+    expect(result.primary.fastModel).toBe("test-model");
+    expect(result.primary.rerankerModel).toBe("test-model");
+    expect(result.deep.reasoningModel).toBe("test-model");
+    expect(result.deep.fastModel).toBe("test-model");
+    expect(result.deep.rerankerModel).toBe("test-model");
+    expect(result.coAuthor.model).toBe("test-model");
   });
 
   test("NOTIENT_EMBED_MODEL overrides embedding slots", () => {

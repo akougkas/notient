@@ -122,14 +122,12 @@ describe("probeToolMode", () => {
     const cache = makeCache();
     const mode = await probeToolMode({
       provider,
-      model: "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M",
+      model: "Test-Model-Mixed-Case",
       signal: new AbortController().signal,
       cache: cache.cache,
     });
     expect(mode).toBe("native");
-    expect(cache.writes).toEqual([
-      { model: "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M", mode: "native" },
-    ]);
+    expect(cache.writes).toEqual([{ model: "Test-Model-Mixed-Case", mode: "native" }]);
   });
 
   test("returns json-fallback when content carries a {tool, args} JSON object", async () => {
@@ -344,16 +342,16 @@ describe("probeToolMode", () => {
         },
       },
     ]);
-    const cache = makeCache({ "nemotron-cascade-2-30b-a3b-i1-q4_k_m": "json-fallback" });
+    const cache = makeCache({ "test-model-mixed-case": "json-fallback" });
     const mode = await probeToolMode({
       provider,
-      model: "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M",
+      model: "Test-Model-Mixed-Case",
       signal: new AbortController().signal,
       cache: cache.cache,
     });
     expect(mode).toBe("native");
-    expect(cache.store["Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M"]).toBe("native");
-    expect(cache.store["nemotron-cascade-2-30b-a3b-i1-q4_k_m"]).toBe("json-fallback");
+    expect(cache.store["Test-Model-Mixed-Case"]).toBe("native");
+    expect(cache.store["test-model-mixed-case"]).toBe("json-fallback");
   });
 
   test("returns native after the second attempt yields a parseable tool call", async () => {

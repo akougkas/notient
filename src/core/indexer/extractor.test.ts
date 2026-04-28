@@ -36,7 +36,7 @@ function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
 describe("Extractor", () => {
   test("returns empty extraction for empty chunks list", async () => {
     const provider = fakeProvider({});
-    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1" });
+    const extractor = new Extractor(provider, { model: "test-model" });
     const out = await extractor.extract([]);
     expect(out).toEqual({ entities: [], claims: [], questions: [] });
   });
@@ -51,7 +51,7 @@ describe("Extractor", () => {
       chatJson: async <T>() => responses[i++] as T,
     });
     const extractor = new Extractor(provider, {
-      model: "nemotron-cascade-2-30b-a3b-i1",
+      model: "test-model",
       concurrency: 1,
     });
     const out = await extractor.extract([chunk("first", 0), chunk("second", 1)]);
@@ -68,10 +68,10 @@ describe("Extractor", () => {
         return { entities: [], claims: [], questions: [] } as T;
       },
     });
-    const extractor = new Extractor(provider, { model: "nemotron-cascade-2-30b-a3b-i1" });
+    const extractor = new Extractor(provider, { model: "test-model" });
     await extractor.extract([chunk("Alice met Bob.")]);
     expect(calls).toHaveLength(1);
-    expect(calls[0].opts.model).toBe("nemotron-cascade-2-30b-a3b-i1");
+    expect(calls[0].opts.model).toBe("test-model");
     expect(calls[0].schema.name).toBe("Extraction");
     expect(JSON.stringify(calls[0].messages)).toContain("Alice met Bob.");
   });
@@ -86,7 +86,7 @@ describe("Extractor", () => {
       },
     });
     const extractor = new Extractor(provider, {
-      model: "nemotron-cascade-2-30b-a3b-i1",
+      model: "test-model",
       concurrency: 1,
     });
     const out = await extractor.extract([chunk("a", 0), chunk("b", 1), chunk("c", 2)]);
