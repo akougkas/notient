@@ -6,7 +6,9 @@ import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
+import { makeNotesHandlers } from "./handlers/notes";
 import { makeSearchHandler } from "./handlers/search";
+import { makeVaultHandlers } from "./handlers/vault";
 import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
 import { MethodDispatcher, parseEnvelope } from "./rpc";
@@ -157,6 +159,17 @@ async function main(argv: string[]): Promise<void> {
   dispatcher.register("chat.list", chatHandlers.list);
   dispatcher.register("chat.load", chatHandlers.load);
   dispatcher.register("chat.approve", chatHandlers.approve);
+
+  const vaultHandlers = makeVaultHandlers({ vault: kernel.get("vault") });
+  const notesHandlers = makeNotesHandlers({
+    historyService: kernel.get("historyService"),
+    vault: kernel.get("vault"),
+  });
+
+  dispatcher.register("vault.list", vaultHandlers.list);
+  dispatcher.register("notes.history", notesHandlers.history);
+  dispatcher.register("notes.undo", notesHandlers.undo);
+  dispatcher.register("notes.read", notesHandlers.read);
 
   kernel.get("bus").on("bridge:up", () => {
     bridgeUp = true;
