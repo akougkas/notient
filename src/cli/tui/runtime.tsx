@@ -123,7 +123,7 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <StatusBar vaultPath={vaultPath} busy={busy} />
+      <StatusBar vaultPath={vaultPath} busy={busy} pendingCount={pendingApprovals.size} />
       <ChatView lines={lines} />
       <InputBar busy={busy} buffer={buffer} />
     </box>
@@ -133,18 +133,29 @@ function App({ vaultPath, client, conversationId, onExit }: AppProps): React.Rea
 function StatusBar({
   vaultPath,
   busy,
+  pendingCount,
 }: {
   vaultPath: string;
   busy: boolean;
+  pendingCount: number;
 }): React.ReactNode {
-  const vaultLabel = vaultPath.split("/").pop() ?? vaultPath;
   return (
     <box height={1} backgroundColor="#222222" paddingLeft={1} paddingRight={1}>
-      <text fg="#94A3B8">
-        notient · vault:{vaultLabel} · {busy ? "thinking…" : "idle"}
-      </text>
+      <text fg="#94A3B8">{buildStatusLabel(vaultPath, busy, pendingCount)}</text>
     </box>
   );
+}
+
+export function buildStatusLabel(vaultPath: string, busy: boolean, pendingCount: number): string {
+  const vaultLabel = vaultPath.split("/").pop() ?? vaultPath;
+  const state = busy ? "thinking…" : "idle";
+  const base = `notient · vault:${vaultLabel} · ${state}`;
+  return pendingCount > 0 ? `${base} · pending:${pendingCount}` : base;
+}
+
+export function frameToErrorLine(frame: { type: "error"; message?: unknown }): ChatLine {
+  const message = typeof frame.message === "string" ? frame.message : "unknown";
+  return { kind: "error", text: `rpc error: ${message}` };
 }
 
 async function runChatTurn(
