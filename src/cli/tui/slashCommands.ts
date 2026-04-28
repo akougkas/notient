@@ -12,7 +12,17 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { NotientSettings } from "../../core/settings/types";
 import type { ClientHandle, RpcResponseFrame } from "../client";
+import {
+  type ModelInfo,
+  buildEndpointPatch,
+  buildModelView,
+  buildUseEmbedPatch,
+  buildUseModelPatch,
+  formatModelList,
+  formatModelView,
+} from "./modelVerb";
 
 export interface SlashContext {
   client: ClientHandle;
@@ -50,6 +60,11 @@ const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["/awaken", "index the vault"],
   ["/vitals <path>", "note health snapshot"],
   ["/health", "substrate + bridge status"],
+  ["/model", "show endpoint, model, embed, context"],
+  ["/model list", "list models on the active endpoint"],
+  ["/model use <id>", "switch the chat model"],
+  ["/model embed <id>", "switch the embedding model"],
+  ["/model endpoint <url>", "switch the OpenAI-compatible endpoint"],
   ["/approve <id> [r]", "approve a pending tool call"],
   ["/deny <id> [r]", "deny a pending tool call"],
   ["/undo", "reverse the latest write"],
@@ -91,7 +106,85 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   undo: async (_rest, context) => rpcUndo(context),
   history: async (_rest, context) => rpcHistory(context),
   copy: async (_rest, context) => copyLastAssistant(context),
+  model: async (rest, context) => modelVerb(rest, context),
 };
+
+async function modelVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
+  const space = rest.indexOf(" ");
+  const sub = (space < 0 ? rest : rest.slice(0, space)).trim();
+  const arg = space < 0 ? "" : rest.slice(space + 1).trim();
+  if (sub.length === 0) return modelShow(context);
+  if (sub === "show") return modelShow(context);
+  if (sub === "list") return modelList(context);
+  if (sub === "use") {
+    if (arg.length === 0) return { message: "/model use needs <id>" };
+    return modelApplyPatch(context, buildUseModelPatch(arg), `chat model → ${arg}`);
+  }
+  if (sub === "embed") {
+    if (arg.length === 0) return { message: "/model embed needs <id>" };
+    return modelApplyPatch(context, buildUseEmbedPatch(arg), `embed model → ${arg}`);
+  }
+  if (sub === "endpoint") {
+    if (arg.length === 0) return { message: "/model endpoint needs <url>" };
+    return modelApplyPatch(context, buildEndpointPatch(arg), `endpoint → ${arg}`);
+  }
+  return { message: `/model: unknown action '${sub}' (try /help)` };
+}
+
+async function modelShow(context: SlashContext): Promise<SlashOutcome> {
+  const settings = await fetchSettings(context);
+  if (settings === null) return { message: "/model: failed to read daemon config." };
+  return { message: formatModelView(buildModelView(settings)) };
+}
+
+async function modelList(context: SlashContext): Promise<SlashOutcome> {
+  const settings = await fetchSettings(context);
+  if (settings === null) return { message: "/model list: failed to read daemon config." };
+  const baseUrl = settings.primary.baseUrl.replace(/\/v1\/?$/, "");
+  try {
+    const response = await fetch(`${baseUrl}/api/v0/models`);
+    if (!response.ok) {
+      return { message: `/model list: endpoint returned HTTP ${response.status}` };
+    }
+    const body = (await response.json()) as { data?: ReadonlyArray<Record<string, unknown>> };
+    const models = (body.data ?? []).map(
+      (m): ModelInfo => ({
+        id: String(m.id ?? ""),
+        type: String(m.type ?? "?"),
+        state: m.state === "loaded" ? "loaded" : "not-loaded",
+        loadedContextLength:
+          typeof m.loaded_context_length === "number" ? m.loaded_context_length : undefined,
+        maxContextLength:
+          typeof m.max_context_length === "number" ? m.max_context_length : undefined,
+      }),
+    );
+    return { message: formatModelList(models) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    return { message: `/model list: fetch failed — ${message}` };
+  }
+}
+
+async function modelApplyPatch(
+  context: SlashContext,
+  patch: Partial<NotientSettings>,
+  label: string,
+): Promise<SlashOutcome> {
+  const result = await drainResult(
+    context.client.call("daemon.config_set", patch as Record<string, unknown>),
+  );
+  if (!result || result.type === "error") {
+    return { message: `/model: config update failed — ${formatError(result)}` };
+  }
+  return { message: `/model: ${label}.` };
+}
+
+async function fetchSettings(context: SlashContext): Promise<NotientSettings | null> {
+  const result = await drainResult(context.client.call("daemon.config_get", {}));
+  if (!result || result.type !== "result") return null;
+  const detail = result as unknown as { config?: NotientSettings };
+  return detail.config ?? null;
+}
 
 async function copyLastAssistant(context: SlashContext): Promise<SlashOutcome> {
   const text = context.getLastAssistant?.() ?? null;
