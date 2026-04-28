@@ -93,6 +93,28 @@ const ENV_KEYS: ReadonlyArray<keyof EnvSource> = [
  * for one boot. Only NOTIENT_-prefixed keys we explicitly recognize are
  * carried through.
  */
+/**
+ * Refuse to seal the daemon if the operator hasn't pointed it at a real
+ * LM Studio endpoint and a real chat model. The DEFAULT_SETTINGS values
+ * are empty strings so that no model name is ever pinned in source code;
+ * the configuration must come from <vault>/.notient/config.json or the
+ * NOTIENT_LLM_BASE_URL / NOTIENT_LLM_MODEL / NOTIENT_EMBED_MODEL env vars
+ * (read from <vault>/.notient/.env or process.env).
+ */
+function assertEndpointConfigured(settings: {
+  primary: { baseUrl: string; reasoningModel: string };
+  embedding: { model: string };
+}): void {
+  const missing: string[] = [];
+  if (settings.primary.baseUrl.trim().length === 0) missing.push("primary.baseUrl");
+  if (settings.primary.reasoningModel.trim().length === 0) missing.push("primary.reasoningModel");
+  if (settings.embedding.model.trim().length === 0) missing.push("embedding.model");
+  if (missing.length === 0) return;
+  throw new Error(
+    `notient: required configuration missing: ${missing.join(", ")}. Set values in <vault>/.notient/config.json or define NOTIENT_LLM_BASE_URL, NOTIENT_LLM_MODEL, NOTIENT_EMBED_MODEL in <vault>/.notient/.env (or process env).`,
+  );
+}
+
 async function readEnvSource(vault: FsVault, processEnv: NodeJS.ProcessEnv): Promise<EnvSource> {
   const fileEnv = await vault
     .read(ENV_PATH)
@@ -131,6 +153,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const envSource = await readEnvSource(vault, process.env);
   await settings.load(envSource);
   const current = settings.get();
+  assertEndpointConfigured(current);
 
   const lockFs = {
     exists: (path: string) => vault.exists(path),

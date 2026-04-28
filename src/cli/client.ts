@@ -120,8 +120,20 @@ async function connectOrSpawn(options: ClientOptions): Promise<Socket> {
 
 function spawnDaemon(options: ClientOptions): ChildProcess {
   const command = options.daemonCommand ?? process.execPath;
-  const args = options.daemonArgs ?? [resolveDaemonEntry(), "--vault", options.vaultPath];
-  const child = spawn(command, args, {
+  // Bun re-reads .env from the spawned-process cwd at startup regardless of
+  // the inherited parent env. The daemon already reads <vault>/.notient/.env
+  // explicitly via readEnvSource in bootstrap.ts, so we disable Bun's
+  // auto-load to keep the daemon's env source surface limited to (a) what
+  // the parent process passed in `env` and (b) the vault-scoped .env file.
+  // This prevents a project-root .env from leaking into a tmp-vault daemon
+  // spawned by tests or by `notient daemon start --vault /elsewhere`.
+  const baseArgs = options.daemonArgs ?? [
+    "--env-file=/dev/null",
+    resolveDaemonEntry(),
+    "--vault",
+    options.vaultPath,
+  ];
+  const child = spawn(command, baseArgs, {
     detached: true,
     stdio: "ignore",
     env: process.env,

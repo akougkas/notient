@@ -25,6 +25,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectClient, type RpcResponseFrame } from "../src/cli/client";
+import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
 import { makeEmitter } from "../src/cli/output";
 import { currentPlatform, resolveSocketPath } from "../src/daemon/socket";
 
@@ -33,6 +34,7 @@ const SMOKE_TIMEOUT_MS = 240_000;
 const PRIMARY_MODEL = "nemotron-cascade-2-30b-a3b-i1";
 
 async function main(): Promise<void> {
+  stripNotientEnvFromProcess();
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-D-"));
   try {
@@ -94,8 +96,8 @@ async function runOneShotCollect(argv: string[]): Promise<CapturedFrames> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["run", "src/cli/index.ts", ...argv, "--ndjson"],
-      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } },
+      ["--env-file=/dev/null", "run", "src/cli/index.ts", ...argv, "--ndjson"],
+      { stdio: ["ignore", "pipe", "pipe"], env: buildSmokeEnv() },
     );
     const stdoutBuffer: string[] = [];
     const stderrBuffer: string[] = [];

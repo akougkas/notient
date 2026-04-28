@@ -3,11 +3,13 @@ import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeEmitter } from "../src/cli/output";
+import { buildSmokeEnv, stripNotientEnvFromProcess } from "./lib/spawnEnv";
 
 const emitter = makeEmitter({ mode: "ndjson" });
 const SMOKE_TIMEOUT_MS = 120_000;
 
 async function main(): Promise<void> {
+  stripNotientEnvFromProcess();
   const fixtureRoot = join(process.cwd(), "tests", "fixtures", "sentient-vault");
   const tmpRoot = await mkdtemp(join(tmpdir(), "notient-smoke-B-"));
   try {
@@ -75,8 +77,8 @@ async function runOneShotCollect(argv: string[]): Promise<CapturedFrames> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["run", "src/cli/index.ts", ...argv, "--ndjson"],
-      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } },
+      ["--env-file=/dev/null", "run", "src/cli/index.ts", ...argv, "--ndjson"],
+      { stdio: ["ignore", "pipe", "pipe"], env: buildSmokeEnv() },
     );
     const stdoutBuffer: string[] = [];
     const stderrBuffer: string[] = [];

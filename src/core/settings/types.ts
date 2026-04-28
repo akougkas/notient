@@ -127,35 +127,34 @@ export interface NotientSettings {
   };
 }
 
-// Notient substrate: ONLY two models. Primary host is dynamo (LM Studio at :1234)
-// because it loads Nemotron-Cascade with a 1M context window split across parallel
-// slots. Mini (llama-server at :8080 / Ollama at :11434) is a hot backup with the
-// same model line; flip the constants below to roll back if dynamo goes down. The
-// chat model serves reasoning, fast, reranker, and co-author. The embedding model
-// is OpenAI-compatible on the same LM Studio endpoint, so primary.baseUrl and
-// embedding.baseUrl coincide for dynamo.
-const DYNAMO_LMSTUDIO = "http://192.168.86.143:1234/v1";
-const DYNAMO_CHAT_MODEL = "nemotron-cascade-2-30b-a3b-i1";
-const DYNAMO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+// DEFAULT_SETTINGS leaves every endpoint and model slot empty. The operator
+// supplies real values via either <vault>/.notient/config.json (persistent)
+// or <vault>/.notient/.env / process env (overlay). Bootstrap validates
+// the chosen values before sealing — see assertEndpointConfigured below.
+// Hardcoding any specific model name in this file is a regression: smokes,
+// tests, and production all read what the operator configured.
+const DEFAULT_BASE_URL = "";
+const DEFAULT_CHAT_MODEL = "";
+const DEFAULT_EMBEDDING_MODEL = "";
 
 export const DEFAULT_SETTINGS: NotientSettings = {
   primary: {
-    baseUrl: DYNAMO_LMSTUDIO,
-    reasoningModel: DYNAMO_CHAT_MODEL,
-    embeddingModel: DYNAMO_EMBEDDING_MODEL, // legacy; embedding endpoint reads from `embedding.*` below
-    fastModel: DYNAMO_CHAT_MODEL,
-    rerankerModel: DYNAMO_CHAT_MODEL,
+    baseUrl: DEFAULT_BASE_URL,
+    reasoningModel: DEFAULT_CHAT_MODEL,
+    embeddingModel: DEFAULT_EMBEDDING_MODEL, // legacy; embedding endpoint reads from `embedding.*` below
+    fastModel: DEFAULT_CHAT_MODEL,
+    rerankerModel: DEFAULT_CHAT_MODEL,
   },
   deep: {
-    baseUrl: DYNAMO_LMSTUDIO,
-    reasoningModel: DYNAMO_CHAT_MODEL,
-    embeddingModel: DYNAMO_EMBEDDING_MODEL,
-    fastModel: DYNAMO_CHAT_MODEL,
-    rerankerModel: DYNAMO_CHAT_MODEL,
+    baseUrl: DEFAULT_BASE_URL,
+    reasoningModel: DEFAULT_CHAT_MODEL,
+    embeddingModel: DEFAULT_EMBEDDING_MODEL,
+    fastModel: DEFAULT_CHAT_MODEL,
+    rerankerModel: DEFAULT_CHAT_MODEL,
   },
   embedding: {
-    baseUrl: DYNAMO_LMSTUDIO,
-    model: DYNAMO_EMBEDDING_MODEL,
+    baseUrl: DEFAULT_BASE_URL,
+    model: DEFAULT_EMBEDDING_MODEL,
   },
   agents: {
     linker: true,
@@ -167,7 +166,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     enabled: true,
     minWords: 100,
     debounceMs: 5000,
-    model: DYNAMO_CHAT_MODEL,
+    model: DEFAULT_CHAT_MODEL,
   },
   approvals: {
     confidenceThreshold: 0.6,
