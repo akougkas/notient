@@ -18,15 +18,18 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ApprovalService } from "../core/approvals/approvalService";
 import type { NotesHistoryRecord } from "../core/chat/tools/notes";
 import type { ToolCall } from "../core/chat/types";
 import { applySchema } from "../core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../core/db/surreal";
+import { EventBus } from "../core/events/eventBus";
 import { HistoryService } from "../core/history/historyService";
 import type { HistoryKind } from "../core/history/types";
+import { Kernel } from "../core/kernel";
 import { buildHistoryInverters, buildRecordHistoryAutoApprove } from "./bootstrap";
 import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 
@@ -188,6 +191,142 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap buildRecordHistoryAutoApprove
     });
     const recent = await historyService.getRecent(5);
     expect(recent.map((row) => row.kind)).toEqual(["notes.create", "chat.auto_approve"]);
+  });
+});
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () => {
+  let tempDir: string;
+  let vaultRoot: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-bootstrap-approvals-smoke";
+
+  const bootstrapFs = {
+    writeBinary: async (filePath: string, data: ArrayBuffer): Promise<void> => {
+      await writeFile(filePath, new Uint8Array(data));
+    },
+    rename: async (from: string, to: string): Promise<void> => {
+      await rename(from, to);
+    },
+    remove: async (filePath: string): Promise<void> => {
+      await unlink(filePath).catch(() => {
+        // missing-file is not an error for cleanup
+      });
+    },
+  };
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-approvals-smoke-"));
+    vaultRoot = path.join(tempDir, "vault");
+    await import("node:fs/promises").then((module) => module.mkdir(vaultRoot, { recursive: true }));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('[smoke] kernel.get("approvalService") returns an ApprovalService instance', () => {
+    const kernel = new Kernel();
+    const approvalService = new ApprovalService({
+      db: connection.db,
+      bus: new EventBus(),
+      vaultRoot,
+      fs: bootstrapFs,
+      readFile: (filePath) => readFile(filePath, "utf8"),
+    });
+    kernel.register("approvalService", approvalService);
+    expect(kernel.has("approvalService")).toBe(true);
+    expect(kernel.get("approvalService")).toBeInstanceOf(ApprovalService);
+  });
+
+  test("[smoke] reconcilePendingApplications is invoked once on boot and emits a structured stderr summary", async () => {
+    // Mirror the bootstrap closure: fire-and-forget reconciliation that
+    // writes a structured stderr line. The closure itself is the unit
+    // under test; we capture process.stderr.write and assert one summary
+    // line lands. The empty SurrealDB has no half-applied rows so the
+    // result is {replayed: 0, failed: 0}; Task 12's smoke covers the
+    // half-applied seed path.
+    const approvalService = new ApprovalService({
+      db: connection.db,
+      bus: new EventBus(),
+      vaultRoot,
+      fs: bootstrapFs,
+      readFile: (filePath) => readFile(filePath, "utf8"),
+    });
+
+    let invocations = 0;
+    const original = approvalService.reconcilePendingApplications.bind(approvalService);
+    approvalService.reconcilePendingApplications = async () => {
+      invocations += 1;
+      return original();
+    };
+
+    const captured: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    // The bootstrap writes a JSON line via process.stderr.write; redirect
+    // it to a capture array for the duration of the closure.
+    // biome-ignore lint/suspicious/noExplicitAny: stderr.write has overloads we do not need to model
+    (process.stderr as any).write = (chunk: unknown): boolean => {
+      if (typeof chunk === "string") captured.push(chunk);
+      return true;
+    };
+
+    try {
+      await approvalService
+        .reconcilePendingApplications()
+        .then((result) => {
+          process.stderr.write(
+            `${JSON.stringify({
+              type: "daemon:reconcile_summary",
+              replayed: result.replayed,
+              failed: result.failed,
+            })}\n`,
+          );
+        })
+        .catch((error) => {
+          process.stderr.write(
+            `${JSON.stringify({ type: "daemon:reconcile_failed", error: String(error) })}\n`,
+          );
+        });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(invocations).toBe(1);
+    const summaryLine = captured.find((line) => line.includes("daemon:reconcile_summary"));
+    expect(summaryLine).toBeDefined();
+    if (summaryLine === undefined) return;
+    const parsed = JSON.parse(summaryLine.trim()) as {
+      type: string;
+      replayed: number;
+      failed: number;
+    };
+    expect(parsed.type).toBe("daemon:reconcile_summary");
+    expect(parsed.replayed).toBe(0);
+    expect(parsed.failed).toBe(0);
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFile as readFileFs, rename, unlink, writeFile } from "node:fs/promises";
 import { FsVault } from "../adapters/fsVault";
 import { TIER_1_IDENTITY } from "../agent/identity";
 import { buildNotientAgent } from "../agent/notientAgent";
@@ -7,6 +8,7 @@ import { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
 import { Synthesizer } from "../core/agents/synthesizer";
+import { ApprovalService } from "../core/approvals/approvalService";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
 import { ContextManager } from "../core/chat/contextManager";
@@ -525,6 +527,31 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   });
 
+  // ApprovalService writes to absolute filesystem paths (vaultRoot joined
+  // with the SurrealDB `note.path` value). FsVault's internal AtomicFs
+  // treats paths as relative-to-root, so the production wiring constructs
+  // a separate adapter that operates on absolute paths via node:fs/promises.
+  // The smoke harness in approvalService.test.ts uses the same shape.
+  const approvalService = new ApprovalService({
+    db: surrealDbConnection.db,
+    bus,
+    vaultRoot: options.vaultPath,
+    fs: {
+      writeBinary: async (filePath, data) => {
+        await writeFile(filePath, new Uint8Array(data));
+      },
+      rename: async (from, to) => {
+        await rename(from, to);
+      },
+      remove: async (filePath) => {
+        await unlink(filePath).catch(() => {
+          // missing-file is not an error for cleanup
+        });
+      },
+    },
+    readFile: (filePath) => readFileFs(filePath, "utf8"),
+  });
+
   const approvalGate = new ApprovalGate({
     events: {
       onPending: () => {
@@ -650,6 +677,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("contextManager", contextManager);
   kernel.register("chatService", chatService);
   kernel.register("historyService", historyService);
+  kernel.register("approvalService", approvalService);
   kernel.register("transcriptDistiller", transcriptDistiller);
 
   // Optional vision routing: probe primary first; fall back to
@@ -674,6 +702,28 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.seal({ phase: "C" });
   health.start();
   idleDetector.start();
+
+  // Phase 5 Task 2: replay any approve-and-write rows that landed in
+  // state 2 of the pending-state contract (approved=true, applied=false)
+  // before a previous daemon crashed. The call is fire-and-forget so
+  // boot stays fast; the supervisor reads the structured stderr summary.
+  // A reconciliation crash MUST NOT take down the daemon.
+  void approvalService
+    .reconcilePendingApplications()
+    .then((result) => {
+      process.stderr.write(
+        `${JSON.stringify({
+          type: "daemon:reconcile_summary",
+          replayed: result.replayed,
+          failed: result.failed,
+        })}\n`,
+      );
+    })
+    .catch((error) => {
+      process.stderr.write(
+        `${JSON.stringify({ type: "daemon:reconcile_failed", error: String(error) })}\n`,
+      );
+    });
 
   // Fire-and-forget startup probe so boot stays fast (network roundtrip
   // bounded by AbortController in runStartupProbe).

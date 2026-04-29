@@ -55,7 +55,6 @@ export interface ServiceRegistry {
   coordinator: Coordinator;
   idleDetector: IdleDetector;
   reasoningMutex: ReasoningMutex;
-  approvalService: ApprovalService;
   coAuthor: CoAuthorService;
 
   // Phase 4 services. Each registers in main.ts before kernel.seal().
@@ -72,6 +71,7 @@ export interface ServiceRegistry {
   contextManager: ContextManager;
   chatService: ChatService;
   historyService: HistoryService;
+  approvalService: ApprovalService;
   transcriptDistiller: TranscriptDistiller;
   vaultBootstrap: VaultBootstrap;
 
@@ -190,6 +190,8 @@ const PHASE_C_KEYS: ServiceKey[] = [
   "toolModeCache",
   "contextManager",
   "chatService",
+  "historyService",
+  "approvalService",
   "transcriptDistiller",
 ];
 
