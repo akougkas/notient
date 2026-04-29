@@ -1,27 +1,33 @@
 /**
- * Phase 4 Task 12 agent.brief handler smoke harness.
+ * Phase 5 Task 4 agent.brief handler smoke harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/daemon/handlers/`.
  *
- * The handler keeps a hybrid storage footprint until a follow-up task
- * migrates `notes` and `graph_nodes` off SQLite: the contradiction event
- * lookup reads from the SurrealDB-backed `agent_event` ledger, while
- * `notes.updated_at` and `graph_nodes` continue to read through the
- * SQLite mirror. This test boots both backends so both reads are
- * exercised against real storage end-to-end.
+ * Migrated to a SurrealDB-only fixture: `notes.updated_at` and
+ * `graph_nodes` carry-forwards retired in Phase 5 Task 4. The test boots
+ * a real SurrealDB, applies the Phase 1 schema, seeds `note`, `claim`,
+ * `question`, `asserts`, and `asks` rows directly, and exercises the
+ * handler against the live database. The wire shape (relevantNotes,
+ * recentDecisions, openQuestions, openContradictions) round-trips
+ * unchanged from the Phase 4 SQLite-mirror harness.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolve } from "node:path";
+import { DateTime, type RecordId } from "surrealdb";
 import type { VaultFacade } from "../../core/chat/tools/vault";
-import { Database, type DatabaseAdapter } from "../../core/db/database";
 import { applySchema } from "../../core/db/schemaApplier";
-import { type SurrealConnection, connect } from "../../core/db/surreal";
+import {
+  type SurrealConnection,
+  connect,
+  relateEdge,
+  upsertClaim,
+  upsertNoteByPath,
+  upsertQuestion,
+} from "../../core/db/surreal";
 import type {
   ChatOptions,
   EmbedOptions,
@@ -40,38 +46,6 @@ import {
 } from "./agentBrief";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
-
-class MemAdapter implements DatabaseAdapter {
-  files = new Map<string, ArrayBuffer>();
-  constructor(init: Record<string, ArrayBuffer>) {
-    for (const [k, v] of Object.entries(init)) this.files.set(k, v);
-  }
-  async readBinary(filePath: string): Promise<ArrayBuffer | null> {
-    return this.files.get(filePath) ?? null;
-  }
-  async writeBinary(filePath: string, data: ArrayBuffer): Promise<void> {
-    this.files.set(filePath, data);
-  }
-}
-
-function loadWasm(): ArrayBuffer {
-  const buffer = readFileSync(
-    resolve(import.meta.dir, "../../../node_modules/sql.js/dist/sql-wasm.wasm"),
-  );
-  return buffer.buffer.slice(
-    buffer.byteOffset,
-    buffer.byteOffset + buffer.byteLength,
-  ) as ArrayBuffer;
-}
-
-async function freshDatabase(): Promise<Database> {
-  const database = new Database(new MemAdapter({ "/wasm": loadWasm() }), {
-    dbPath: "/db",
-    wasmPath: "/wasm",
-  });
-  await database.init();
-  return database;
-}
 
 class StubProvider implements LLMProvider {
   public readonly chatCalls: ProviderChatMessage[][] = [];
@@ -131,59 +105,88 @@ class InMemoryFacade implements VaultFacade {
 
 const SETTINGS = (): { model: string } => ({ model: "test-model" });
 
-interface SeedOptions {
-  database: Database;
-  notes: Array<{ path: string; updatedAt: number }>;
-  claims?: Array<{
-    id: string;
-    label: string;
-    notePath: string;
-    payload: Record<string, unknown>;
-    createdAt: number;
-  }>;
-  questions?: Array<{
-    id: string;
-    label: string;
-    notePath: string;
-    payload: Record<string, unknown> | null;
-  }>;
+interface SeedNoteSpec {
+  path: string;
+  /** Epoch seconds. Mirrors the Phase 4 wire-shape for `lastTouchedAt`. */
+  lastUserEditAtSec: number;
 }
 
-function seedSqlite(options: SeedOptions): void {
-  for (const note of options.notes) {
-    options.database.run(
-      "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?);",
-      [note.path, "sha", 100, "raw", note.updatedAt, note.updatedAt],
-    );
+interface SeedClaimSpec {
+  text: string;
+  notePath: string;
+}
+
+interface SeedQuestionSpec {
+  text: string;
+  notePath: string;
+}
+
+interface SeedSurreal {
+  connection: SurrealConnection;
+  notes: SeedNoteSpec[];
+  claims?: SeedClaimSpec[];
+  questions?: SeedQuestionSpec[];
+}
+
+async function setLastUserEditAt(
+  connection: SurrealConnection,
+  noteId: RecordId<"note">,
+  sec: number,
+): Promise<void> {
+  await connection.db
+    .query("UPDATE $id SET last_user_edit_at = $when;", {
+      id: noteId,
+      when: new DateTime(new Date(sec * 1000)),
+    })
+    .collect();
+}
+
+async function seedSurreal(seed: SeedSurreal): Promise<Map<string, RecordId<"note">>> {
+  const noteIds = new Map<string, RecordId<"note">>();
+  for (const note of seed.notes) {
+    const id = await upsertNoteByPath(seed.connection.db, {
+      path: note.path,
+      sha: "sha",
+      wordCount: 100,
+    });
+    await setLastUserEditAt(seed.connection, id, note.lastUserEditAtSec);
+    noteIds.set(note.path, id);
   }
-  for (const claim of options.claims ?? []) {
-    options.database.run(
-      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
-       VALUES (?,?,?,?,?,?);`,
-      [
-        claim.id,
-        "claim",
-        claim.label,
-        claim.notePath,
-        JSON.stringify(claim.payload),
-        claim.createdAt,
-      ],
-    );
+  for (const claim of seed.claims ?? []) {
+    const noteId = noteIds.get(claim.notePath);
+    if (noteId === undefined) {
+      throw new Error(`seedSurreal: claim references missing note ${claim.notePath}`);
+    }
+    const claimId = await upsertClaim(seed.connection.db, claim.text);
+    await relateEdge(seed.connection.db, {
+      table: "asserts",
+      from: noteId,
+      to: claimId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
   }
-  for (const question of options.questions ?? []) {
-    options.database.run(
-      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
-       VALUES (?,?,?,?,?,?);`,
-      [
-        question.id,
-        "question",
-        question.label,
-        question.notePath,
-        question.payload === null ? null : JSON.stringify(question.payload),
-        1,
-      ],
-    );
+  for (const question of seed.questions ?? []) {
+    const noteId = noteIds.get(question.notePath);
+    if (noteId === undefined) {
+      throw new Error(`seedSurreal: question references missing note ${question.notePath}`);
+    }
+    const questionId = await upsertQuestion(seed.connection.db, question.text);
+    await relateEdge(seed.connection.db, {
+      table: "asks",
+      from: noteId,
+      to: questionId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
   }
+  return noteIds;
 }
 
 interface ContradictionEvent {
@@ -222,7 +225,14 @@ async function seedContradictions(
   }
 }
 
-async function clearLedger(connection: SurrealConnection): Promise<void> {
+async function clearVault(connection: SurrealConnection): Promise<void> {
+  // Edge tables first so the relation FROM/TO references stay valid while
+  // the entity tables drain. asserts/asks/wikilink/embed/etc. are cleared
+  // up-front so a re-seed in the next test starts from a clean slate.
+  await connection.db.query("DELETE asserts; DELETE asks;").collect();
+  await connection.db.query("DELETE claim; DELETE question;").collect();
+  await connection.db.query("DELETE block; DELETE chunk;").collect();
+  await connection.db.query("DELETE note;").collect();
   await connection.db.query("DELETE agent_event;").collect();
 }
 
@@ -230,7 +240,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
   let tempDir: string;
   let handle: SurrealServerHandle;
   let connection: SurrealConnection;
-  const secret = "phase4-agentbrief-smoke-secret";
+  const secret = "phase5-agentbrief-smoke-secret";
 
   beforeAll(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-agentbrief-smoke-"));
@@ -264,11 +274,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
   });
 
   afterEach(async () => {
-    await clearLedger(connection);
+    await clearVault(connection);
   });
 
   test("[smoke] topic mode returns relevantNotes, decisions, questions, and a stubbed summary", async () => {
-    const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
         notePath: "auth/oauth.md",
@@ -285,68 +294,26 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
         matchedText: "auth",
       },
     ];
-    seedSqlite({
-      database,
+    await seedSurreal({
+      connection,
       notes: [
-        { path: "auth/oauth.md", updatedAt: 1_700_000_000 },
-        { path: "auth/jwt.md", updatedAt: 1_700_000_500 },
-        { path: "unrelated.md", updatedAt: 1_600_000_000 },
+        { path: "auth/oauth.md", lastUserEditAtSec: 1_700_000_000 },
+        { path: "auth/jwt.md", lastUserEditAtSec: 1_700_000_500 },
+        { path: "unrelated.md", lastUserEditAtSec: 1_600_000_000 },
       ],
       claims: [
-        {
-          id: "claim:1",
-          label: "We use PKCE for the OAuth flow.",
-          notePath: "auth/oauth.md",
-          payload: { text: "...", maturity: "decision" },
-          createdAt: 100,
-        },
-        {
-          id: "claim:2",
-          label: "JWT refresh window is short.",
-          notePath: "auth/jwt.md",
-          payload: { text: "...", maturity: "decision" },
-          createdAt: 200,
-        },
-        {
-          id: "claim:3",
-          label: "Exploratory: maybe move to opaque tokens.",
-          notePath: "auth/jwt.md",
-          payload: { text: "..." },
-          createdAt: 300,
-        },
-        {
-          id: "claim:elsewhere",
-          label: "Unrelated note decision.",
-          notePath: "unrelated.md",
-          payload: { text: "...", maturity: "decision" },
-          createdAt: 400,
-        },
+        { text: "We use PKCE for the OAuth flow.", notePath: "auth/oauth.md" },
+        { text: "JWT refresh window is short.", notePath: "auth/jwt.md" },
+        { text: "Unrelated note decision.", notePath: "unrelated.md" },
       ],
       questions: [
-        {
-          id: "question:1",
-          label: "What is the refresh window?",
-          notePath: "auth/jwt.md",
-          payload: null,
-        },
-        {
-          id: "question:answered",
-          label: "Already answered.",
-          notePath: "auth/oauth.md",
-          payload: { answered: true },
-        },
-        {
-          id: "question:elsewhere",
-          label: "Outside the relevant set.",
-          notePath: "unrelated.md",
-          payload: null,
-        },
+        { text: "What is the refresh window?", notePath: "auth/jwt.md" },
+        { text: "Outside the relevant set.", notePath: "unrelated.md" },
       ],
     });
     const pipeline = new ScriptedPipeline(hits);
     const provider = new StubProvider({ reply: "  Auth is OAuth+PKCE with short JWTs.  " });
     const handler = makeAgentBriefHandler({
-      database,
       surrealDb: connection.db,
       searchPipeline: pipeline,
       vault: new InMemoryFacade(new Map()),
@@ -367,17 +334,32 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
     expect(relevantNotes[0].path).toBe("auth/oauth.md");
     expect(relevantNotes[0].lastTouchedAt).toBe(1_700_000_000);
     expect(relevantNotes[1].path).toBe("auth/jwt.md");
+    expect(relevantNotes[1].lastTouchedAt).toBe(1_700_000_500);
 
-    const decisions = result.recentDecisions as Array<{ id: string; notePath: string }>;
-    expect(decisions.map((decision) => decision.id)).toEqual(["claim:2", "claim:1"]);
+    const decisions = result.recentDecisions as Array<{
+      id: string;
+      text: string;
+      notePath: string;
+      ts: number;
+    }>;
+    const decisionPaths = new Set(decisions.map((decision) => decision.notePath));
+    expect(decisionPaths.has("auth/oauth.md") || decisionPaths.has("auth/jwt.md")).toBe(true);
+    expect(decisionPaths.has("unrelated.md")).toBe(false);
     for (const decision of decisions) {
-      expect(decision.notePath === "auth/oauth.md" || decision.notePath === "auth/jwt.md").toBe(
-        true,
-      );
+      expect(typeof decision.id).toBe("string");
+      expect(decision.id.length).toBeGreaterThan(0);
+      expect(typeof decision.ts).toBe("number");
     }
 
-    const questions = result.openQuestions as Array<{ id: string }>;
-    expect(questions.map((question) => question.id)).toEqual(["question:1"]);
+    const questions = result.openQuestions as Array<{
+      id: string;
+      text: string;
+      notePath: string;
+    }>;
+    expect(questions).toHaveLength(1);
+    expect(questions[0].notePath).toBe("auth/jwt.md");
+    expect(questions[0].text).toBe("What is the refresh window?");
+    expect(typeof questions[0].id).toBe("string");
 
     const contradictions = result.openContradictions as unknown[];
     expect(contradictions).toEqual([]);
@@ -386,10 +368,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
   });
 
   test("[smoke] file mode reads the fixture file and labels the topic from the basename", async () => {
-    const database = await freshDatabase();
-    seedSqlite({
-      database,
-      notes: [{ path: "guides/oauth.md", updatedAt: 1_700_000_000 }],
+    await seedSurreal({
+      connection,
+      notes: [{ path: "guides/oauth.md", lastUserEditAtSec: 1_700_000_000 }],
     });
     const fixtureFiles = new Map<string, string>([
       ["src/auth/oauth.ts", "export function authorize() {\n  // OAuth bearer flow with PKCE.\n}"],
@@ -406,7 +387,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
     const pipeline = new ScriptedPipeline(hits);
     const provider = new StubProvider({ reply: "Brief about OAuth code." });
     const handler = makeAgentBriefHandler({
-      database,
       surrealDb: connection.db,
       searchPipeline: pipeline,
       vault: new InMemoryFacade(fixtureFiles),
@@ -422,12 +402,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
     );
     expect(result.topic).toBe("oauth");
     expect(pipeline.queries[0].query).toContain("OAuth bearer flow with PKCE");
-    const relevantNotes = result.relevantNotes as Array<{ path: string }>;
+    const relevantNotes = result.relevantNotes as Array<{ path: string; lastTouchedAt: number }>;
     expect(relevantNotes[0].path).toBe("guides/oauth.md");
+    expect(relevantNotes[0].lastTouchedAt).toBe(1_700_000_000);
   });
 
   test("[smoke] honors maxNotes, maxQuestions, maxDecisions caps", async () => {
-    const database = await freshDatabase();
     const hits: SearchHit[] = Array.from({ length: 6 }, (_, index) => ({
       notePath: `note-${index}.md`,
       chunkId: `c${index}`,
@@ -435,25 +415,22 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
       score: 1 - index * 0.1,
       matchedText: "x",
     }));
-    seedSqlite({
-      database,
-      notes: hits.map((hit, index) => ({ path: hit.notePath, updatedAt: 100 + index })),
+    await seedSurreal({
+      connection,
+      notes: hits.map((hit, index) => ({
+        path: hit.notePath,
+        lastUserEditAtSec: 1_700_000_000 + index,
+      })),
       claims: hits.map((hit, index) => ({
-        id: `claim:${index}`,
-        label: `Decision ${index}`,
+        text: `Decision ${index}`,
         notePath: hit.notePath,
-        payload: { maturity: "decision" },
-        createdAt: 1000 + index,
       })),
       questions: hits.map((hit, index) => ({
-        id: `question:${index}`,
-        label: `Question ${index}`,
+        text: `Question ${index}`,
         notePath: hit.notePath,
-        payload: null,
       })),
     });
     const handler = makeAgentBriefHandler({
-      database,
       surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),
@@ -476,7 +453,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
   });
 
   test("[smoke] LLM failure returns empty summary with structured fields populated", async () => {
-    const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
         notePath: "auth/jwt.md",
@@ -486,22 +462,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
         matchedText: "x",
       },
     ];
-    seedSqlite({
-      database,
-      notes: [{ path: "auth/jwt.md", updatedAt: 100 }],
-      claims: [
-        {
-          id: "claim:1",
-          label: "JWT refresh is short.",
-          notePath: "auth/jwt.md",
-          payload: { maturity: "decision" },
-          createdAt: 1,
-        },
-      ],
+    await seedSurreal({
+      connection,
+      notes: [{ path: "auth/jwt.md", lastUserEditAtSec: 1_700_000_000 }],
+      claims: [{ text: "JWT refresh is short.", notePath: "auth/jwt.md" }],
     });
     const provider = new StubProvider({ throwError: true });
     const handler = makeAgentBriefHandler({
-      database,
       surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),
@@ -510,14 +477,67 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
     });
     const result = await handler({ topic: "auth" }, () => {}, "req-8", "claude-code");
     expect(result.summary).toBe("");
-    const decisions = result.recentDecisions as Array<{ id: string }>;
-    expect(decisions.map((decision) => decision.id)).toEqual(["claim:1"]);
+    const decisions = result.recentDecisions as Array<{ notePath: string; text: string }>;
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].notePath).toBe("auth/jwt.md");
+    expect(decisions[0].text).toBe("JWT refresh is short.");
     const relevantNotes = result.relevantNotes as Array<{ path: string }>;
     expect(relevantNotes[0].path).toBe("auth/jwt.md");
   });
 
+  test("[smoke] note with NONE last_user_edit_at round-trips lastTouchedAt as 0", async () => {
+    const hits: SearchHit[] = [
+      {
+        notePath: "untouched.md",
+        chunkId: "c1",
+        snippet: "Never edited.",
+        score: 0.9,
+        matchedText: "x",
+      },
+    ];
+    // upsert without invoking setLastUserEditAt: the field stays NONE.
+    await upsertNoteByPath(connection.db, {
+      path: "untouched.md",
+      sha: "sha",
+      wordCount: 10,
+    });
+    const handler = makeAgentBriefHandler({
+      surrealDb: connection.db,
+      searchPipeline: new ScriptedPipeline(hits),
+      vault: new InMemoryFacade(new Map()),
+      provider: new StubProvider({ reply: "summary" }),
+      settings: SETTINGS,
+    });
+    const result = await handler({ topic: "anything" }, () => {}, "req-none", "claude-code");
+    const relevantNotes = result.relevantNotes as Array<{ path: string; lastTouchedAt: number }>;
+    expect(relevantNotes).toHaveLength(1);
+    expect(relevantNotes[0].lastTouchedAt).toBe(0);
+  });
+
+  test("[smoke] missing note row round-trips lastTouchedAt as 0", async () => {
+    const hits: SearchHit[] = [
+      {
+        notePath: "ghost.md",
+        chunkId: "c1",
+        snippet: "No note row.",
+        score: 0.9,
+        matchedText: "x",
+      },
+    ];
+    const handler = makeAgentBriefHandler({
+      surrealDb: connection.db,
+      searchPipeline: new ScriptedPipeline(hits),
+      vault: new InMemoryFacade(new Map()),
+      provider: new StubProvider({ reply: "summary" }),
+      settings: SETTINGS,
+    });
+    const result = await handler({ topic: "anything" }, () => {}, "req-ghost", "claude-code");
+    const relevantNotes = result.relevantNotes as Array<{ path: string; lastTouchedAt: number }>;
+    expect(relevantNotes).toHaveLength(1);
+    expect(relevantNotes[0].lastTouchedAt).toBe(0);
+  });
+
   test("[smoke] contradiction events overlap on relevant note paths", async () => {
-    const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
         notePath: "auth/jwt.md",
@@ -527,9 +547,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
         matchedText: "auth",
       },
     ];
-    seedSqlite({
-      database,
-      notes: [{ path: "auth/jwt.md", updatedAt: 100 }],
+    await seedSurreal({
+      connection,
+      notes: [{ path: "auth/jwt.md", lastUserEditAtSec: 1_700_000_000 }],
     });
     await seedContradictions(connection, [
       {
@@ -544,7 +564,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
       },
     ]);
     const handler = makeAgentBriefHandler({
-      database,
       surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),

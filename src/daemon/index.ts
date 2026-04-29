@@ -186,7 +186,6 @@ async function main(argv: string[]): Promise<void> {
   dispatcher.register("agent.ask", agentAskHandler);
 
   const agentBriefHandler = makeAgentBriefHandler({
-    database: kernel.get("database"),
     surrealDb: kernel.get("surrealDb").db,
     searchPipeline,
     vault: kernel.get("vault"),

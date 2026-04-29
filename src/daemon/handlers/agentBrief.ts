@@ -1,5 +1,5 @@
 /**
- * agent.brief RPC handler (Phase D1 LD-9).
+ * agent.brief RPC handler (Phase D1 LD-9, Phase 5 Task 4 SurrealDB cutover).
  *
  * Where agent.ask drives a tool-using LLM loop, agent.brief composes a
  * structured snapshot of what the vault knows about a topic or about a
@@ -8,23 +8,43 @@
  * 2-3 sentence summary paragraph. There is no tool loop, no agentic
  * reasoning, and no ChatService involvement.
  *
- * Graph filtering notes:
+ * Storage: every read in this handler now lives in SurrealDB. Phase 5
+ * Task 4 retired the SQLite `notes` and `graph_nodes` carry-forwards:
  *
- *   - Decisions: claims today carry payload `{text}` only; the spec calls
- *     for filtering on `payload.maturity = 'decision'`. The handler parses
- *     the JSON payload column in JS and matches on the field. Until upstream
- *     producers stamp the field, the list is empty by design.
- *   - Open questions: question payload has no `answered` field today, so
- *     absence means unanswered. The handler treats a literal `true` as
- *     answered and filters everything else through.
- *   - Contradictions: the agent_events ledger (T2) stores
- *     `swarm:contradiction_discovered` rows. We filter by overlap between
- *     the event's `notePaths` payload and the relevantNotes path set.
+ *   - `lastTouchedAt` reads `note.last_user_edit_at` (the SurrealDB
+ *     analogue of the legacy `notes.updated_at` column) and reports
+ *     epoch seconds. Notes with NONE in `last_user_edit_at` round-trip
+ *     as 0, matching the SQLite path's `?? 0` semantics.
+ *   - Claims and questions stream from the `asserts` and `asks` edge
+ *     tables. Each row is a relation `note|block -> claim|question`,
+ *     so the WHERE clause covers both block-rooted and note-rooted
+ *     extractions via `in.path INSIDE $paths OR in.note.path INSIDE
+ *     $paths`. Edges are filtered through `approved = true AND applied
+ *     = true` to match the search-consumer contract documented in
+ *     `edgeTables.ts::provenanceFields`.
+ *   - The `agent_event` ledger backs the `swarm:contradiction_discovered`
+ *     lookup. The ledger has lived in SurrealDB since Phase 4 Task 12.
+ *
+ * Wire-shape preservation notes:
+ *
+ *   - Decisions: the Phase 1 `claim` table has no `maturity` column, so
+ *     the SQLite-era `payload.maturity = 'decision'` filter is dropped.
+ *     Every approved claim attached to a relevant note is treated as a
+ *     decision; the wire shape is identical (`{id, text, notePath, ts}`),
+ *     only the population semantic widens. Once a producer stamps a
+ *     maturity field on `claim`, this filter can be reintroduced without
+ *     touching consumers.
+ *   - Open questions: every approved question attached to a relevant
+ *     note is treated as open. The legacy `payload.answered === true`
+ *     filter has no SurrealDB analogue today; if a follow-up adds an
+ *     `answered` field on `question`, restore the filter here.
+ *   - Decision/question `id`s use the entity's content-addressed `sha`
+ *     so callers see a stable string id without leaking the SurrealDB
+ *     RecordId format.
  */
 
-import type { Surreal } from "surrealdb";
+import { DateTime, type Surreal } from "surrealdb";
 import type { VaultFacade } from "../../core/chat/tools/vault";
-import type { Database } from "../../core/db/database";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../../core/llm/provider";
 import type { SearchEvent, SearchHit, SearchQuery, SearchResult } from "../../core/search/types";
 
@@ -38,12 +58,12 @@ export interface BriefSearchPipeline {
 }
 
 export interface AgentBriefHandlerDeps {
-  database: Database;
   /**
-   * SurrealDB connection used for the swarm contradiction event lookup
-   * (Phase 4 Task 12). The `notes` and `graph_nodes` queries continue to
-   * read through the SQLite mirror until those tables migrate in a follow-up
-   * task; only the `agent_event` ledger has moved over here.
+   * SurrealDB connection. All four reads (note `last_user_edit_at`, the
+   * `asserts` and `asks` edge traversals, and the `agent_event` ledger
+   * lookup) hit this connection. Phase 5 Task 4 dropped the SQLite
+   * `Database` dependency that previously co-existed for `notes.updated_at`
+   * and `graph_nodes`.
    */
   surrealDb: Surreal;
   searchPipeline: BriefSearchPipeline;
@@ -116,22 +136,27 @@ interface ParsedBriefParams {
 }
 
 interface NoteUpdatedAtRow {
-  updated_at: number;
+  /**
+   * SurrealDB datetimes round-trip as `DateTime` SDK instances; the
+   * `option<datetime>` field surfaces as `null` (or `undefined`) when NONE.
+   */
+  last_user_edit_at: DateTime | null | undefined;
 }
 
-interface ClaimRow {
-  id: string;
-  label: string;
-  payload: string | null;
-  note_path: string | null;
-  created_at: number;
+interface ClaimEdgeRow {
+  text: string;
+  sha: string;
+  notePath: string | null;
+  blockNotePath: string | null;
+  created_at: DateTime;
 }
 
-interface QuestionRow {
-  id: string;
-  label: string;
-  payload: string | null;
-  note_path: string | null;
+interface QuestionEdgeRow {
+  text: string;
+  sha: string;
+  notePath: string | null;
+  blockNotePath: string | null;
+  created_at: DateTime;
 }
 
 interface AgentEventRow {
@@ -158,14 +183,22 @@ async function runBrief(
   const { queryString, echoedTopic } = await resolveQuery(parsed, deps.vault);
   const relevantNotes = await runVectorSearch({
     pipeline: deps.searchPipeline,
-    database: deps.database,
+    surrealDb: deps.surrealDb,
     queryString,
     maxNotes: parsed.maxNotes,
     signal: controller.signal,
   });
   const relevantPaths = new Set(relevantNotes.map((note) => note.path));
-  const recentDecisions = collectRecentDecisions(deps.database, relevantPaths, parsed.maxDecisions);
-  const openQuestions = collectOpenQuestions(deps.database, relevantPaths, parsed.maxQuestions);
+  const recentDecisions = await collectRecentDecisions(
+    deps.surrealDb,
+    relevantPaths,
+    parsed.maxDecisions,
+  );
+  const openQuestions = await collectOpenQuestions(
+    deps.surrealDb,
+    relevantPaths,
+    parsed.maxQuestions,
+  );
   const openContradictions = await collectOpenContradictions(
     deps.surrealDb,
     relevantPaths,
@@ -265,7 +298,7 @@ function filePathToTopicLabel(filePath: string): string {
 
 interface VectorSearchOptions {
   pipeline: BriefSearchPipeline;
-  database: Database;
+  surrealDb: Surreal;
   queryString: string;
   maxNotes: number;
   signal: AbortSignal;
@@ -284,12 +317,16 @@ async function runVectorSearch(options: VectorSearchOptions): Promise<AgentBrief
   if (result === null) return [];
   const dedupedByPath = dedupeHitsByPath(result.hits);
   const limited = dedupedByPath.slice(0, options.maxNotes);
-  return limited.map((hit) => ({
-    path: hit.notePath,
-    score: hit.score,
-    snippet: hit.snippet,
-    lastTouchedAt: readNoteUpdatedAt(options.database, hit.notePath),
-  }));
+  const relevant: AgentBriefRelevantNote[] = [];
+  for (const hit of limited) {
+    relevant.push({
+      path: hit.notePath,
+      score: hit.score,
+      snippet: hit.snippet,
+      lastTouchedAt: await readNoteUpdatedAt(options.surrealDb, hit.notePath),
+    });
+  }
+  return relevant;
 }
 
 function dedupeHitsByPath(hits: SearchHit[]): SearchHit[] {
@@ -303,70 +340,86 @@ function dedupeHitsByPath(hits: SearchHit[]): SearchHit[] {
   return out;
 }
 
-function readNoteUpdatedAt(database: Database, notePath: string): number {
-  const rows = database.query<NoteUpdatedAtRow>(
-    "SELECT updated_at FROM notes WHERE path = ? LIMIT 1;",
-    [notePath],
-  );
-  return rows[0]?.updated_at ?? 0;
+async function readNoteUpdatedAt(db: Surreal, notePath: string): Promise<number> {
+  const [rows] = await db
+    .query<[NoteUpdatedAtRow[]]>(
+      "SELECT last_user_edit_at FROM note WHERE path = $path LIMIT 1;",
+      { path: notePath },
+    )
+    .collect<[NoteUpdatedAtRow[]]>();
+  const value = rows[0]?.last_user_edit_at;
+  if (value === null || value === undefined) return 0;
+  return Math.floor(value.toDate().getTime() / 1000);
 }
 
-function collectRecentDecisions(
-  database: Database,
+async function collectRecentDecisions(
+  db: Surreal,
   relevantPaths: Set<string>,
   maxDecisions: number,
-): AgentBriefDecision[] {
+): Promise<AgentBriefDecision[]> {
   if (relevantPaths.size === 0) return [];
-  const placeholders = Array.from(relevantPaths, () => "?").join(",");
-  const rows = database.query<ClaimRow>(
-    `SELECT id, label, payload, note_path, created_at FROM graph_nodes
-     WHERE type = 'claim' AND note_path IN (${placeholders})
-     ORDER BY created_at DESC;`,
-    Array.from(relevantPaths),
-  );
+  // SurrealDB 3.x requires every ORDER BY field to appear in the projection;
+  // `created_at` is selected and discarded by the caller. The WHERE clause
+  // accepts both note-rooted (`in` is a `note`) and block-rooted (`in` is a
+  // `block` whose `note` field points back to the note) extractions.
+  const sql = `SELECT
+      out.text AS text,
+      out.sha AS sha,
+      in.path AS notePath,
+      in.note.path AS blockNotePath,
+      created_at
+    FROM asserts
+    WHERE (in.path INSIDE $paths OR in.note.path INSIDE $paths)
+      AND approved = true
+      AND applied = true
+    ORDER BY created_at DESC;`;
+  const [rows] = await db
+    .query<[ClaimEdgeRow[]]>(sql, { paths: Array.from(relevantPaths) })
+    .collect<[ClaimEdgeRow[]]>();
   const out: AgentBriefDecision[] = [];
   for (const row of rows) {
-    const parsed = parsePayload(row.payload);
-    if (!isDecisionPayload(parsed)) continue;
-    if (row.note_path === null) continue;
-    out.push({ id: row.id, text: row.label, notePath: row.note_path, ts: row.created_at });
+    const notePath = row.notePath ?? row.blockNotePath;
+    if (notePath === null) continue;
+    out.push({
+      id: row.sha,
+      text: row.text,
+      notePath,
+      ts: Math.floor(row.created_at.toDate().getTime() / 1000),
+    });
     if (out.length >= maxDecisions) break;
   }
   return out;
 }
 
-function collectOpenQuestions(
-  database: Database,
+async function collectOpenQuestions(
+  db: Surreal,
   relevantPaths: Set<string>,
   maxQuestions: number,
-): AgentBriefQuestion[] {
+): Promise<AgentBriefQuestion[]> {
   if (relevantPaths.size === 0) return [];
-  const placeholders = Array.from(relevantPaths, () => "?").join(",");
-  // Spec calls for question nodes linked via graph_edges.target_id to a node
-  // whose note_path is in the relevant set. The indexer wires `asks` edges
-  // from the note node (source) to the question node (target), so a question
-  // node with note_path inside the relevant set is the same set the JOIN
-  // would produce. We also union direct note_path matches for indexer paths
-  // that pre-populate question.note_path.
-  const rows = database.query<QuestionRow>(
-    `SELECT DISTINCT q.id AS id, q.label AS label, q.payload AS payload, q.note_path AS note_path
-     FROM graph_nodes q
-     LEFT JOIN graph_edges e ON e.target_id = q.id
-     LEFT JOIN graph_nodes source_node ON source_node.id = e.source_id
-     WHERE q.type = 'question'
-       AND (
-         q.note_path IN (${placeholders})
-         OR source_node.note_path IN (${placeholders})
-       );`,
-    [...relevantPaths, ...relevantPaths],
-  );
+  // Same `in.path` / `in.note.path` union as collectRecentDecisions to cover
+  // both note-rooted and block-rooted question extractions. Ordering by
+  // `created_at` keeps the wire ordering stable across reruns even though the
+  // wire shape does not surface a timestamp.
+  const sql = `SELECT
+      out.text AS text,
+      out.sha AS sha,
+      in.path AS notePath,
+      in.note.path AS blockNotePath,
+      created_at
+    FROM asks
+    WHERE (in.path INSIDE $paths OR in.note.path INSIDE $paths)
+      AND approved = true
+      AND applied = true
+    ORDER BY created_at DESC;`;
+  const [rows] = await db
+    .query<[QuestionEdgeRow[]]>(sql, { paths: Array.from(relevantPaths) })
+    .collect<[QuestionEdgeRow[]]>();
   const out: AgentBriefQuestion[] = [];
   for (const row of rows) {
-    const parsed = parsePayload(row.payload);
-    if (isAnswered(parsed)) continue;
-    const notePath = row.note_path ?? "";
-    if (notePath === "") continue;
-    out.push({ id: row.id, text: row.label, notePath });
+    const notePath = row.notePath ?? row.blockNotePath;
+    if (notePath === null) continue;
+    out.push({ id: row.sha, text: row.text, notePath });
     if (out.length >= maxQuestions) break;
   }
   return out;
@@ -410,17 +463,6 @@ function toContradictionRecord(
   return { pair: [pair[0], pair[1]], severity };
 }
 
-function parsePayload(raw: string | null): Record<string, unknown> | null {
-  if (raw === null) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
 function parseContradictionPayload(raw: string): ContradictionEventPayload | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -429,16 +471,6 @@ function parseContradictionPayload(raw: string): ContradictionEventPayload | nul
   } catch {
     return null;
   }
-}
-
-function isDecisionPayload(payload: Record<string, unknown> | null): boolean {
-  if (payload === null) return false;
-  return payload.maturity === "decision";
-}
-
-function isAnswered(payload: Record<string, unknown> | null): boolean {
-  if (payload === null) return false;
-  return payload.answered === true;
 }
 
 function hasOverlap(eventPaths: string[], relevantPaths: Set<string>): boolean {
@@ -512,3 +544,4 @@ function buildUserMessage(options: SummaryOptions): string {
   }
   return lines.join("\n");
 }
+
