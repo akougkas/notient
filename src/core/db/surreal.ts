@@ -84,18 +84,20 @@ export async function createNote(db: Surreal, input: CreateNoteInput): Promise<N
 }
 
 export async function relateWikilink(db: Surreal, input: RelateWikilinkInput): Promise<void> {
-  const sql =
-    "RELATE $from->wikilink->$to SET source = $source, class = $cls, confidence = $confidence, agent = $agent;";
-  await db
-    .query(sql, {
-      from: input.from,
-      to: input.to,
-      source: input.source,
-      cls: input.confidenceClass,
-      confidence: input.confidence,
-      agent: input.agent ?? null,
-    })
-    .collect();
+  const hasAgent = input.agent !== undefined;
+  const agentClause = hasAgent ? ", agent = $agent" : "";
+  const sql = `RELATE $from->wikilink->$to SET source = $source, class = $cls, confidence = $confidence${agentClause};`;
+  const bindings: Record<string, unknown> = {
+    from: input.from,
+    to: input.to,
+    source: input.source,
+    cls: input.confidenceClass,
+    confidence: input.confidence,
+  };
+  if (hasAgent) {
+    bindings.agent = input.agent;
+  }
+  await db.query(sql, bindings).collect();
 }
 
 interface ChunkSearchRow {
