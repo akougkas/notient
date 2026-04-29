@@ -4,7 +4,7 @@
 
 **Goal:** Replace the regex-based `nativeGraphBridge` with an AST-aware writeback module, populate the `daemon_write` provenance table on every approved write, delete the no-op `echoGuard` shim and its 25+ call sites, ship the awaken control plane (pause/resume/cancel/status), and introduce the per-vault TOML configuration file. Migrate the consumers that still read SQLite (`approvalService`, `historyService`, search) to SurrealDB so the daemon is fully on the new substrate.
 
-**Architecture:** Three concurrent threads of work in this phase. (1) Markdown writeback: a single `src/core/markdown/writeback.ts` module replaces `nativeGraphBridge`, `relatedSection`, and `frontmatterWriter`. Both `applyApprovedLink` and `applyApprovedRelation` parse → mutate AST → stringify, and they record provenance in `daemon_write` BEFORE writing the file so Tier 1's wikilink reader can attribute the resulting wikilink to the agent that wrote it. (2) Awaken control plane: the `awaken_run` table from Phase 1's schema becomes the source of truth for an in-flight awaken. Pause/resume/cancel are writes to the row's `status` field that the worker subscribes to via `LIVE SELECT`. (3) Consumer DAL migration: `approvalService` writes `UPDATE supports SET approved = true` instead of moving a row from `staging_edges` to `graph_edges`. `historyService` and search consumers move to SurrealDB queries.
+**Architecture:** Three concurrent threads of work in this phase. (1) Markdown writeback: a single `src/core/markdown/writeback.ts` module replaces `nativeGraphBridge`, `relatedSection`, and `frontmatterWriter`. Both `applyApprovedLink` and `applyApprovedRelation` parse → mutate AST → stringify, with provenance recorded in `daemon_write` so Tier 1's wikilink reader can attribute the resulting wikilink to the agent that wrote it. The approval-and-write flow has documented failure semantics (see Locked Decision #3). (2) Awaken control plane: the `awaken_run` table from Phase 1's schema becomes the source of truth for an in-flight awaken. Pause/resume/cancel are writes to the row's `status` field that the worker subscribes to via `LIVE SELECT`. (3) Consumer DAL migration: `approvalService` writes `UPDATE supports SET approved = true` instead of moving a row from `staging_edges` to `graph_edges`. `historyService` and search consumers move to SurrealDB queries.
 
 **Tech Stack:** unified/remark (already in Phase 2). SurrealDB live queries. Bun's `Bun.file` for atomic writes. `@iarna/toml` for parsing config (or `smol-toml` if smaller). No new substrate.
 
@@ -17,7 +17,12 @@
 
 1. **Single `src/core/markdown/writeback.ts` module replaces three.** Both `applyApprovedLink({ notePath, target, heading?, block? })` and `applyApprovedRelation({ notePath, key, target })` live in one file with a shared internal parse-mutate-stringify helper. `relatedSection.ts`, `frontmatterWriter.ts`, `nativeGraphBridge.ts` are deleted in the same phase; their consumers update imports.
 2. **The writeback round-trips through the unified pipeline.** No string regex mutation. The `## Related` section becomes a list-of-wikilinks AST node; frontmatter relations land as YAML strings under `notient.<key>` arrays. Idempotent: applying the same approved edge twice is a no-op.
-3. **`daemon_write` is recorded BEFORE the file write.** The order is: parse → mutate → stringify → compute new SHA → INSERT INTO daemon_write → atomic file write → INSERT INTO history. If any step fails, no `daemon_write` row leaks because the writeback function does not commit until all DB writes succeed; if the file write fails after the daemon_write insert, the row stays and Tier 1 attributes the (still-old) content correctly. The 5-second window in `last_user_edit_at` derivation tolerates this race.
+3. **Approval-and-write flow has documented failure semantics.** The flow involves four side-effects in this order: (1) UPDATE edge approved=true, (2) compute new file body via AST writeback, (3) atomic file write, (4) record history. Crashes between any two steps must not leave inconsistent state visible to consumers. The implementation MUST satisfy at least one of these contracts:
+
+   - **Pending-state contract:** the edge starts as `approved=true, applied=false`. The writeback runs; only after history is recorded does `applied=true` flip. Consumers query `approved AND applied`. A reconciliation job clears stale `applied=false` rows on daemon start by re-running the writeback. OR
+   - **Inverted-order contract:** compute the new body and write the file first (atomic + fsync), then UPDATE edge approved=true within a single SurrealDB transaction that also INSERTs the daemon_write and history rows. If the transaction fails, the file write is reverted by reading the previous content from history. (This contract requires the file's previous content to be in history, OR a tombstoned-content table.)
+
+   The plan does not pick between contracts; the executing agent picks one and documents the choice in the writeback module's top-level comment. Either way, acceptance tests inject failures (kill the process, force the transaction to fail) at every step boundary and verify the system reaches a consistent state on recovery.
 4. **EchoGuard shim is DELETED in this phase.** All 25+ consumer call sites (`echoGuard.mark(path, sha)`, `echoGuard.has(path, sha)`) are removed simultaneously. The replacement is implicit: Tier 1's wikilink reader cross-references `daemon_write` to attribute the wikilink's `source` field. Consumers that previously called `echoGuard.mark` now do nothing — the `daemon_write` insert in the writeback function covers it.
 5. **Awaken control plane uses one row per run, never deleted.** `awaken_run` rows accumulate as a history log. The "current" run is identified by `status IN ('running','paused')`; at most one row matches at any time. `notient awaken --resume` finds the latest `paused` or `failed` row and updates it to `running`. `notient awaken --cancel` is destructive only of in-progress work; the row stays as `cancelled`.
 6. **The awaken worker subscribes to the run's status via `LIVE SELECT`.** A single live query `LIVE SELECT status FROM $runId` notifies the worker of pause/cancel writes. The worker checks `status` between notes, not mid-note (mid-note pause would leave Tier 2/3 in inconsistent state).
@@ -92,202 +97,21 @@ Same as prior phases. TS strict, no `any`, no abbreviations, no dash-clause pros
 
 ## Tasks
 
-### Task 1: AST writeback module — `applyApprovedLink`
+### Task 1: AST writeback module — `applyApprovedLink` and `applyApprovedRelation`
 
 **Files:**
 - Create: `src/core/markdown/writeback.ts`
 - Create: `src/core/markdown/writeback.test.ts`
 - Create: `src/core/markdown/__fixtures__/writeback-input.md`
 
-- [ ] **Step 1: Failing test for the link path**
+**Objective:** Implement a single writeback module exposing `applyApprovedLink(source, { target, heading?, block? })` and `applyApprovedRelation(source, { key, target })`. Both round-trip through the unified/remark pipeline (no regex mutation): parse → mutate AST → stringify. Links land as list items under `## Related` (creating the section if absent); relations land as YAML wikilink strings under `frontmatter.notient.<key>` (creating frontmatter if absent).
 
-```typescript
-// src/core/markdown/writeback.test.ts
-import { describe, expect, test } from "bun:test";
-import { applyApprovedLink, applyApprovedRelation } from "./writeback";
+**Invariants:**
+- The writeback round-trip is byte-deterministic for a given AST input. Applying the same approved edge twice MUST be a no-op (returns the input string unchanged).
+- The functions are pure: input string in, output string in. They do not touch the filesystem and do not record provenance — those are the caller's responsibility (see Task 3 and Locked Decision #3).
+- Wikilink formatting follows: `[[target]]`, `[[target#heading]]`, or `[[target#^block]]` depending on which optional qualifier is set.
 
-describe("writeback applyApprovedLink", () => {
-  test("appends [[target]] under ## Related when section exists", () => {
-    const input = `# Title\n\nBody.\n\n## Related\n\n- [[existing]]\n`;
-    const out = applyApprovedLink(input, { target: "new-link" });
-    expect(out).toContain("- [[existing]]");
-    expect(out).toContain("- [[new-link]]");
-    expect(out.indexOf("- [[new-link]]")).toBeGreaterThan(out.indexOf("## Related"));
-  });
-
-  test("creates ## Related section if missing", () => {
-    const input = `# Title\n\nBody only.\n`;
-    const out = applyApprovedLink(input, { target: "new-link" });
-    expect(out).toContain("## Related");
-    expect(out).toContain("- [[new-link]]");
-  });
-
-  test("idempotent: applying the same target twice is a no-op", () => {
-    const input = `# Title\n\n## Related\n\n- [[x]]\n`;
-    const once = applyApprovedLink(input, { target: "x" });
-    const twice = applyApprovedLink(once, { target: "x" });
-    expect(once).toBe(twice);
-  });
-
-  test("with heading qualifier emits [[target#heading]]", () => {
-    const input = `# Title\n`;
-    const out = applyApprovedLink(input, { target: "note", heading: "Section" });
-    expect(out).toContain("[[note#Section]]");
-  });
-});
-
-describe("writeback applyApprovedRelation", () => {
-  test("merges into frontmatter notient.supports array", () => {
-    const input = `---\ntitle: Test\n---\n\nBody.\n`;
-    const out = applyApprovedRelation(input, { key: "supports", target: "alpha" });
-    expect(out).toContain("notient:");
-    expect(out).toContain("supports:");
-    expect(out).toContain("[[alpha]]");
-  });
-
-  test("idempotent", () => {
-    const input = `---\nnotient:\n  supports:\n    - "[[alpha]]"\n---\n\nBody.\n`;
-    const out = applyApprovedRelation(input, { key: "supports", target: "alpha" });
-    expect(out).toBe(input);
-  });
-
-  test("creates frontmatter if missing", () => {
-    const input = `# Title\n\nNo frontmatter here.\n`;
-    const out = applyApprovedRelation(input, { key: "extends", target: "beta" });
-    expect(out.startsWith("---\n")).toBe(true);
-    expect(out).toContain("[[beta]]");
-  });
-});
-```
-
-- [ ] **Step 2: Implement `applyApprovedLink`**
-
-```typescript
-// src/core/markdown/writeback.ts
-import { parse, stringify } from "./pipeline";
-import type { Root, Heading, List, ListItem, Paragraph, Yaml } from "mdast";
-import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
-
-export interface ApplyLinkParams {
-  target: string;
-  heading?: string;
-  block?: string;
-}
-
-export function applyApprovedLink(source: string, params: ApplyLinkParams): string {
-  const ast = parse(source);
-  const wikilink = formatWikilink(params);
-  const relatedHeading = findHeading(ast, "Related");
-
-  if (relatedHeading === null) {
-    // Append a new ## Related section with one list item.
-    ast.children.push(
-      { type: "heading", depth: 2, children: [{ type: "text", value: "Related" }] },
-      makeListItemList(wikilink),
-    );
-  } else {
-    // Find the list under the Related heading, or create one.
-    const listIndex = findListAfter(ast, relatedHeading);
-    if (listIndex === null) {
-      ast.children.splice(relatedHeading + 1, 0, makeListItemList(wikilink));
-    } else {
-      const list = ast.children[listIndex] as List;
-      if (listAlreadyContains(list, wikilink)) return source; // idempotent
-      list.children.push(makeListItem(wikilink));
-    }
-  }
-  return stringify(ast);
-}
-
-export interface ApplyRelationParams {
-  key: string;
-  target: string;
-}
-
-export function applyApprovedRelation(source: string, params: ApplyRelationParams): string {
-  const ast = parse(source);
-  const wikilinkString = `[[${params.target}]]`;
-
-  const yamlNodeIndex = ast.children.findIndex((c) => (c as { type: string }).type === "yaml");
-  let frontmatter: Record<string, unknown> = {};
-  if (yamlNodeIndex >= 0) {
-    const node = ast.children[yamlNodeIndex] as Yaml;
-    try { frontmatter = (parseYaml(node.value) as Record<string, unknown>) ?? {}; } catch { frontmatter = {}; }
-  }
-
-  const notient = (frontmatter.notient as Record<string, unknown> | undefined) ?? {};
-  const arr = (notient[params.key] as string[] | undefined) ?? [];
-  if (arr.includes(wikilinkString)) return source; // idempotent
-  arr.push(wikilinkString);
-  notient[params.key] = arr;
-  frontmatter.notient = notient;
-
-  const yamlText = stringifyYaml(frontmatter).trim();
-  if (yamlNodeIndex >= 0) {
-    (ast.children[yamlNodeIndex] as Yaml).value = yamlText;
-  } else {
-    ast.children.unshift({ type: "yaml", value: yamlText } as Yaml);
-  }
-  return stringify(ast);
-}
-
-function formatWikilink(params: ApplyLinkParams): string {
-  if (params.block) return `[[${params.target}#^${params.block}]]`;
-  if (params.heading) return `[[${params.target}#${params.heading}]]`;
-  return `[[${params.target}]]`;
-}
-
-function findHeading(ast: Root, text: string): number | null {
-  for (let i = 0; i < ast.children.length; i++) {
-    const c = ast.children[i];
-    if (c.type === "heading" && c.depth === 2) {
-      const heading = c as Heading;
-      const headingText = heading.children.map((ch) => (ch as { value?: string }).value ?? "").join("").trim();
-      if (headingText === text) return i;
-    }
-  }
-  return null;
-}
-
-function findListAfter(ast: Root, headingIndex: number): number | null {
-  for (let i = headingIndex + 1; i < ast.children.length; i++) {
-    const c = ast.children[i];
-    if (c.type === "heading") return null;
-    if (c.type === "list") return i;
-  }
-  return null;
-}
-
-function makeListItem(wikilinkText: string): ListItem {
-  return {
-    type: "listItem",
-    spread: false,
-    children: [{ type: "paragraph", children: [{ type: "text", value: wikilinkText }] } as Paragraph],
-  };
-}
-
-function makeListItemList(wikilinkText: string): List {
-  return { type: "list", ordered: false, spread: false, children: [makeListItem(wikilinkText)] };
-}
-
-function listAlreadyContains(list: List, wikilinkText: string): boolean {
-  for (const item of list.children) {
-    const para = item.children[0] as Paragraph;
-    const text = para.children.map((c) => (c as { value?: string }).value ?? "").join("");
-    if (text.trim() === wikilinkText) return true;
-  }
-  return false;
-}
-```
-
-- [ ] **Step 3: Run test, fix until green, commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/markdown/writeback.test.ts
-git add src/core/markdown/writeback.ts src/core/markdown/writeback.test.ts
-git commit -m "feat(markdown): AST-aware writeback for approved links and relations"
-```
+**Acceptance:** Tests in `writeback.test.ts` cover (a) appending under existing `## Related`, (b) creating `## Related` when absent, (c) idempotency for both functions, (d) heading and block qualifier formatting, (e) merging into existing `notient.<key>` frontmatter array, (f) creating frontmatter from scratch. All tests green via `bun test src/core/markdown/writeback.test.ts`. Commit as one logical unit.
 
 ---
 
@@ -296,87 +120,20 @@ git commit -m "feat(markdown): AST-aware writeback for approved links and relati
 **Files:**
 - Modify: `src/core/db/surreal.ts`
 - Modify: `src/core/indexer/tier1.ts`
+- Modify: `src/core/indexer/tier1.test.ts`
 
-- [ ] **Step 1: Add daemon_write DAL**
+**Objective:** Add two DAL helpers to `surreal.ts`: `recordDaemonWrite({ noteId, sha, agent, targets })` returns the new row's id; `findRecentDaemonWrite({ noteId, sha, withinSeconds? })` returns `{ agent, targets } | null` for the most recent row matching the (note, sha) pair within the window (default 5s). Update `runTier1` so that, after upserting the note row, it queries `findRecentDaemonWrite` for the current body sha and uses the returned `agent`/`targets` to override the `source` field on matching wikilink edges (otherwise `source = 'wikilink' | 'embed'`).
 
-Append to `src/core/db/surreal.ts`:
+**Invariants:**
+- `daemon_write` rows are immutable once inserted; they are the audit trail.
+- The 5-second window in `findRecentDaemonWrite` tolerates the race between the writeback's atomic file write and the filesystem watcher firing a re-index.
+- Tier 1 only overrides `source` when both the SHA and the target id match a recent row. A SHA collision alone is not sufficient.
 
-```typescript
-export interface DaemonWriteRow {
-  id: RecordId<"daemon_write">;
-  noteId: RecordId<"note">;
-  sha: string;
-  agent: string;
-  targets: RecordId[];
-  writtenAt: Date;
-}
-
-export async function recordDaemonWrite(db: Surreal, params: {
-  noteId: RecordId<"note">;
-  sha: string;
-  agent: string;
-  targets: RecordId[];
-}): Promise<RecordId<"daemon_write">> {
-  const result = await db.query<[Array<{ id: RecordId<"daemon_write"> }>]>(
-    `CREATE daemon_write SET note = $n, sha = $s, agent = $a, targets = $t RETURN id;`,
-    { n: params.noteId, s: params.sha, a: params.agent, t: params.targets },
-  );
-  return ((result[0] as Array<{ id: RecordId<"daemon_write"> }>)[0]).id;
-}
-
-export async function findRecentDaemonWrite(db: Surreal, params: {
-  noteId: RecordId<"note">;
-  sha: string;
-  withinSeconds?: number;
-}): Promise<{ agent: string; targets: RecordId[] } | null> {
-  const within = params.withinSeconds ?? 5;
-  const result = await db.query<[Array<{ agent: string; targets: RecordId[] }>]>(
-    `SELECT agent, targets FROM daemon_write
-     WHERE note = $n AND sha = $s AND written_at > time::now() - ${within}s
-     ORDER BY written_at DESC LIMIT 1;`,
-    { n: params.noteId, s: params.sha },
-  );
-  const row = (result[0] as Array<{ agent: string; targets: RecordId[] }>)[0];
-  return row ?? null;
-}
-```
-
-- [ ] **Step 2: Update Tier 1 to cross-reference**
-
-In `src/core/indexer/tier1.ts`, after computing the body SHA but before inserting wikilink edges:
-
-```typescript
-import { findRecentDaemonWrite } from "../db/surreal";
-
-// Inside runTier1, after upsertNoteByPath:
-const recentWrite = await findRecentDaemonWrite(db, { noteId, sha: ex.bodySha });
-const overrideTargets = new Set<string>(
-  recentWrite ? recentWrite.targets.map((t) => t.toString()) : [],
-);
-const overrideAgent = recentWrite?.agent ?? null;
-
-// When inserting each wikilink edge:
-const isOverridden = toId !== null && overrideTargets.has(toId.toString());
-await relateEdge(db, table, {
-  from: fromId, to: toId,
-  source: isOverridden ? (overrideAgent === "linker" ? "linker" : "user") : (w.isEmbed ? "embed" : "wikilink"),
-  agent: isOverridden ? overrideAgent ?? undefined : undefined,
-  confidenceClass: "EXTRACTED", confidence: 1.0,
-});
-```
-
-- [ ] **Step 3: Update tests + commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/db/surreal.test.ts src/core/indexer/tier1.test.ts
-git add src/core/db/surreal.ts src/core/indexer/tier1.ts
-git commit -m "feat(indexer): tier 1 attributes wikilink source via daemon_write provenance"
-```
+**Acceptance:** Unit tests cover `recordDaemonWrite` returning a typed `RecordId<"daemon_write">`, `findRecentDaemonWrite` filtering by the time window, and Tier 1 attributing `source = '<agent>'` (e.g. `'linker'`) when the daemon wrote the wikilink in the last 5s versus `source = 'wikilink'` when no match. `bun test src/core/db/surreal.test.ts src/core/indexer/tier1.test.ts` green. One commit.
 
 ---
 
-### Task 3: Migrate `approvalService` to SurrealDB
+### Task 3: Migrate `approvalService` to SurrealDB with documented failure semantics
 
 **Files:**
 - Modify: `src/core/approvals/approvalService.ts`
@@ -385,81 +142,22 @@ git commit -m "feat(indexer): tier 1 attributes wikilink source via daemon_write
 - Delete: `src/core/history/inverters/edgeReject.ts`
 - Delete: `src/core/history/inverters/nodeApprove.ts`
 - Delete: `src/core/history/inverters/nodeReject.ts`
+- Modify: `src/core/history/inverters/index.ts` (drop deleted entries)
 
-- [ ] **Step 1: Read current `approvalService.ts`**
+**Objective:** Replace the SQLite-based staging-promotion path with direct SurrealDB writes. `approveEdge(edgeRecord, edgeTable)` resolves the source/target paths from the edge row, calls `applyApprovedLink` or `applyApprovedRelation` (per `edgeTable`), records `daemon_write`, writes the file, and records history — all subject to the chosen failure-semantics contract from Locked Decision #3. `rejectEdge(edgeRecord, edgeTable)` simply deletes the row. The four deleted inverters are replaced by direct UPDATE/DELETE in this service.
 
-Identify: `approve(edgeId)` and `reject(edgeId)` methods, their current SQLite path, the inverters they invoke.
+**Invariants:**
+- `daemon_write` rows are inserted as part of the same atomic boundary as the file write — see Locked Decision #3 for the chosen contract.
+- The chosen contract (pending-state or inverted-order) is named in the writeback module's top-level comment so the executing agent's choice is discoverable from code.
+- A no-op writeback (idempotent re-application) MUST NOT insert a duplicate `daemon_write` row and MUST NOT record an empty history entry.
+- `rejectEdge` is total: deleting an already-deleted edge is not an error.
 
-- [ ] **Step 2: Replace with direct SurrealDB writes**
-
-```typescript
-// approvalService.ts (relevant fragment)
-import { applyApprovedLink, applyApprovedRelation } from "../markdown/writeback";
-import { recordDaemonWrite } from "../db/surreal";
-
-export class ApprovalService {
-  async approveEdge(edgeRecord: RecordId, edgeTable: EdgeTable): Promise<void> {
-    // 1. Mark approved.
-    await this.db.query(`UPDATE $e SET approved = true;`, { e: edgeRecord });
-
-    // 2. Resolve the source note path and target note path for writeback.
-    const result = await this.db.query<[Array<{ inPath: string; outPath: string; agent: string }>]>(
-      `SELECT in.path AS inPath, out.path AS outPath, agent FROM $e;`,
-      { e: edgeRecord },
-    );
-    const row = (result[0] as Array<{ inPath: string; outPath: string; agent: string }>)[0];
-    if (!row) return;
-
-    // 3. Apply writeback (edge type drives whether this becomes a [[target]] in ## Related, or a frontmatter relation).
-    const body = await this.facade.readNote(row.inPath);
-    let next: string;
-    if (edgeTable === "wikilink" || edgeTable === "embed") {
-      next = applyApprovedLink(body, { target: stripMd(row.outPath) });
-    } else {
-      next = applyApprovedRelation(body, { key: edgeTable, target: stripMd(row.outPath) });
-    }
-    if (next === body) return;
-
-    const sha = await sha256(next);
-    const noteId = await lookupNoteByPath(this.db, row.inPath);
-    if (!noteId) return;
-    await recordDaemonWrite(this.db, {
-      noteId, sha, agent: row.agent ?? "linker",
-      targets: [await lookupNoteByPath(this.db, row.outPath) as RecordId],
-    });
-    await this.facade.writeNote(row.inPath, next);
-    await this.history.record({ kind: `edge_approved:${edgeTable}`, target: row.inPath, before: body, after: next });
-  }
-
-  async rejectEdge(edgeRecord: RecordId, edgeTable: EdgeTable): Promise<void> {
-    await this.db.query(`DELETE $e;`, { e: edgeRecord });
-  }
-}
-
-function stripMd(path: string): string { return path.endsWith(".md") ? path.slice(0, -3) : path; }
-```
-
-- [ ] **Step 3: Delete the four inverters**
-
-```bash
-cd ~/projects/notient
-git rm src/core/history/inverters/edgeApprove.ts src/core/history/inverters/edgeReject.ts src/core/history/inverters/nodeApprove.ts src/core/history/inverters/nodeReject.ts
-```
-
-Update `src/core/history/inverters/index.ts` (or the inverter registry) to drop these four entries. Update `historyService.ts` if it references their kinds explicitly.
-
-- [ ] **Step 4: Migrate `approvalService.test.ts`**
-
-Update mocks to use the SurrealDB fake from Phase 1's smoke pattern.
-
-- [ ] **Step 5: Run tests, commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/approvals/
-git add src/core/approvals/approvalService.ts src/core/approvals/approvalService.test.ts src/core/history/inverters/index.ts
-git commit -m "feat(approvals): SurrealDB DAL + AST writeback; drop staging inverters"
-```
+**Acceptance:**
+- Unit tests cover the happy path (approve → file mutated → daemon_write present → history present) and the reject path.
+- **Failure-injection tests cover at least three scenarios: crash between edge UPDATE and file write; crash between file write and history INSERT; crash between history INSERT and the consumer reading the result. After each crash, daemon restart must result in consistent state (no `approved` rows without applied writeback, no orphan `daemon_write` rows, no file-vs-history divergence).**
+- **The chosen contract (pending-state or inverted-order) is named in the writeback module's top-level comment.**
+- The four removed inverters are unreferenced (`grep -rn "edgeApprove\|edgeReject\|nodeApprove\|nodeReject" src/` returns empty).
+- `bun test src/core/approvals/` green. One commit.
 
 ---
 
@@ -470,46 +168,13 @@ git commit -m "feat(approvals): SurrealDB DAL + AST writeback; drop staging inve
 - Modify: `src/core/history/inverters/noteCreate.ts`, `noteAppendSection.ts`, `noteFrontmatter.ts`, `noteMaturity.ts`
 - Modify: corresponding `.test.ts` files
 
-- [ ] **Step 1: Replace SQLite queries with SurrealDB**
+**Objective:** Replace SQLite queries in `historyService` with SurrealDB queries against the `history` table (already in `schema.surql` from Phase 1). Public API stays the same: `record(input)`, `getRecent(limit)`, `undoLast()`. The four remaining inverters get DAL-only updates: their `before`/`after` body is applied through the markdown facade (unchanged) and the SurrealDB `note` row's `sha` field is updated to match the new body.
 
-`history` table already exists in `schema.surql` (Phase 1 retained it). Update `historyService.ts` to:
+**Invariants:**
+- The `history` row's `kind`, `target`, `before`, `after`, `client_identity`, and `created_at` semantics are unchanged from the SQLite version. Only the storage backend changes.
+- `undoLast()` is atomic: either the inverter applies cleanly and the history row is consumed, or nothing happens.
 
-```typescript
-async record(input: { kind: string; target: string; before: string; after: string; clientIdentity?: string | null }): Promise<RecordId<"history">> {
-  const result = await this.db.query<[Array<{ id: RecordId<"history"> }>]>(
-    `CREATE history SET kind = $k, target = $t, before = $b, after = $a, client_identity = $c, created_at = time::now() RETURN id;`,
-    { k: input.kind, t: input.target, b: input.before, a: input.after, c: input.clientIdentity ?? null },
-  );
-  return ((result[0] as Array<{ id: RecordId<"history"> }>)[0]).id;
-}
-
-async getRecent(limit: number): Promise<HistoryRow[]> {
-  const result = await this.db.query<[HistoryRow[]]>(
-    `SELECT id, kind, target, before, after, client_identity, created_at FROM history ORDER BY created_at DESC LIMIT $l;`,
-    { l: limit },
-  );
-  return result[0] as HistoryRow[];
-}
-
-async undoLast(): Promise<{ ok: boolean; reversed?: { id: RecordId<"history">; kind: string; target: string; createdAt: Date }; error?: string }> {
-  // Same logic; just SurrealDB queries.
-}
-```
-
-The four remaining inverters (`noteCreate`, `noteAppendSection`, `noteFrontmatter`, `noteMaturity`) get DAL-only updates: their `before` / `after` body is now applied through the markdown facade (unchanged) and the SurrealDB `note` row's `sha` field is updated.
-
-- [ ] **Step 2: Migrate tests**
-
-Update test fakes to the SurrealDB pattern.
-
-- [ ] **Step 3: Run tests, commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/history/
-git add src/core/history/
-git commit -m "feat(history): SurrealDB DAL for record/getRecent/undoLast + 4 inverters"
-```
+**Acceptance:** All existing `historyService` and inverter tests pass after migration to SurrealDB fakes, with no test-shape changes beyond the DAL swap. `bun test src/core/history/` green. One commit.
 
 ---
 
@@ -519,47 +184,15 @@ git commit -m "feat(history): SurrealDB DAL for record/getRecent/undoLast + 4 in
 - Delete: `src/core/graph/nativeGraphBridge.ts`, `nativeGraphBridge.test.ts`
 - Delete: `src/core/graph/relatedSection.ts`, `relatedSection.test.ts`
 - Delete: `src/core/graph/frontmatterWriter.ts`, `frontmatterWriter.test.ts`
+- Modify: importing files (e.g. `chatStream.ts`, `bootstrap.ts`, `synthesis.ts`)
 
-- [ ] **Step 1: Find all importers**
+**Objective:** Remove the three legacy modules and update all importers to call the new `markdown/writeback.ts` functions directly. Importers that currently wrap the bridge in their own logic move to invoking `applyApprovedLink` / `applyApprovedRelation` and handling the file write inline (or via the approvalService for approved edges).
 
-```bash
-cd ~/projects/notient
-grep -rln "nativeGraphBridge\|relatedSection\|frontmatterWriter" src/
-```
+**Invariants:**
+- After this task, `grep -rln "nativeGraphBridge\|relatedSection\|frontmatterWriter" src/` returns empty.
+- No regression in the existing approval-write tests (covered by Task 3's tests, which exercise the writeback functions end-to-end).
 
-Expected: `chatStream.ts`, `bootstrap.ts`, `synthesis.ts`, plus their tests.
-
-- [ ] **Step 2: Migrate importers to `markdown/writeback.ts`**
-
-For each importer, replace `bridge.applyApprovedLink(...)` / `bridge.applyApprovedRelation(...)` with direct calls to the writeback module functions (which take the body string in / return the body string out, and the caller handles the file write).
-
-For consumers that wrote SHA-based echo marks, drop the echoGuard call (Phase 4 Task 6 deletes the shim).
-
-- [ ] **Step 3: Delete the files**
-
-```bash
-cd ~/projects/notient
-git rm src/core/graph/nativeGraphBridge.ts src/core/graph/nativeGraphBridge.test.ts
-git rm src/core/graph/relatedSection.ts src/core/graph/relatedSection.test.ts
-git rm src/core/graph/frontmatterWriter.ts src/core/graph/frontmatterWriter.test.ts
-```
-
-- [ ] **Step 4: Verify no references remain**
-
-```bash
-cd ~/projects/notient
-grep -rln "nativeGraphBridge\|relatedSection\|frontmatterWriter" src/
-```
-Expected: empty.
-
-- [ ] **Step 5: Run all tests, commit**
-
-```bash
-cd ~/projects/notient
-bun test
-git add src/
-git commit -m "feat(graph): delete nativeGraphBridge + relatedSection + frontmatterWriter; consumers on markdown/writeback"
-```
+**Acceptance:** Full `bun test` green. The three modules and their tests are gone. Importers compile against the new writeback module. One commit.
 
 ---
 
@@ -567,50 +200,15 @@ git commit -m "feat(graph): delete nativeGraphBridge + relatedSection + frontmat
 
 **Files:**
 - Delete: `src/core/services/echoGuard.ts`
-- Modify: ~25 consumer files
+- Modify: ~25 consumer files (mechanical removals)
 
-- [ ] **Step 1: List all call sites**
+**Objective:** Remove the `echoGuard` shim and every `echoGuard.mark(...)` / `echoGuard.has(...)` invocation across the codebase, plus any constructor-injection plumbing and the kernel registration. The replacement (Tier 1 cross-referencing `daemon_write`) is already in place from Task 2.
 
-```bash
-cd ~/projects/notient
-grep -rln "echoGuard\|EchoGuard" src/
-```
+**Invariants:**
+- After this task, `grep -rln "echoGuard\|EchoGuard" src/` returns empty.
+- No behavioral regression: callers that previously marked a SHA simply do nothing now; callers that previously checked `echoGuard.has` are removed entirely (the check moved into Tier 1's `daemon_write` lookup).
 
-Expected: ~25 files.
-
-- [ ] **Step 2: Remove all `mark` and `has` calls**
-
-For each file in the grep output:
-- Remove the `import { ... } from "../services/echoGuard"` line.
-- Remove any `echoGuard.mark(...)` or `echoGuard.has(...)` invocations.
-- Remove any `echoGuard` constructor parameter and store-it-on-this assignment.
-- Remove any `kernel.set("echoGuard", ...)` registration in bootstrap.
-
-This is mechanical. Each removal is 1-3 lines.
-
-- [ ] **Step 3: Delete the shim**
-
-```bash
-cd ~/projects/notient
-git rm src/core/services/echoGuard.ts
-```
-
-- [ ] **Step 4: Verify no references remain**
-
-```bash
-cd ~/projects/notient
-grep -rln "echoGuard\|EchoGuard" src/
-```
-Expected: empty.
-
-- [ ] **Step 5: Run all tests, commit**
-
-```bash
-cd ~/projects/notient
-bun test
-git add src/
-git commit -m "feat(echoGuard): delete shim and 25 consumer call sites; daemon_write is the replacement"
-```
+**Acceptance:** Full `bun test` green. The shim file and all 25+ call sites are gone. One commit.
 
 ---
 
@@ -620,88 +218,14 @@ git commit -m "feat(echoGuard): delete shim and 25 consumer call sites; daemon_w
 - Create: `src/core/awaken/awakenRun.ts`
 - Create: `src/core/awaken/awakenRun.test.ts`
 
-- [ ] **Step 1: Implement DAL**
+**Objective:** Implement the `awaken_run` DAL: `createRun({ tierFilter, priorityGlobs, total })`, `findCurrent()` (status in running|paused), `findLatestResumable()` (status in paused|failed), `updateStatus(runId, status, extra?)` (sets `finished_at` on terminal states), and `subscribeToStatus(runId, onChange)` returning a `StatusSubscription` with a `close()` method. The status type is `"running" | "paused" | "cancelled" | "completed" | "failed"`.
 
-```typescript
-// src/core/awaken/awakenRun.ts
-import type { Surreal, RecordId } from "surrealdb";
+**Invariants:**
+- At most one row matches `status IN ('running','paused')` at any time. The CLI commands enforce this by refusing to start a fresh run when one is active.
+- `awaken_run` rows are append-only history; never deleted, only updated.
+- `subscribeToStatus` filters live-query notifications to the specific `runId`; other rows' updates are ignored.
 
-export type AwakenStatus = "running" | "paused" | "cancelled" | "completed" | "failed";
-
-export interface AwakenRun {
-  id: RecordId<"awaken_run">;
-  status: AwakenStatus;
-  total: number;
-  processed: number;
-  failed: number;
-  tier_filter: number[];
-  priority_globs: string[];
-  cursor: string | null;
-  started_at: Date;
-  finished_at: Date | null;
-  error: string | null;
-}
-
-export async function createRun(db: Surreal, params: { tierFilter: number[]; priorityGlobs: string[]; total: number }): Promise<RecordId<"awaken_run">> {
-  const result = await db.query<[Array<{ id: RecordId<"awaken_run"> }>]>(
-    `CREATE awaken_run SET status = "running", total = $t, tier_filter = $tf, priority_globs = $pg RETURN id;`,
-    { t: params.total, tf: params.tierFilter, pg: params.priorityGlobs },
-  );
-  return ((result[0] as Array<{ id: RecordId<"awaken_run"> }>)[0]).id;
-}
-
-export async function findCurrent(db: Surreal): Promise<AwakenRun | null> {
-  const result = await db.query<[AwakenRun[]]>(
-    `SELECT * FROM awaken_run WHERE status IN ['running','paused'] ORDER BY started_at DESC LIMIT 1;`,
-  );
-  return ((result[0] as AwakenRun[])[0]) ?? null;
-}
-
-export async function findLatestResumable(db: Surreal): Promise<AwakenRun | null> {
-  const result = await db.query<[AwakenRun[]]>(
-    `SELECT * FROM awaken_run WHERE status IN ['paused','failed'] ORDER BY started_at DESC LIMIT 1;`,
-  );
-  return ((result[0] as AwakenRun[])[0]) ?? null;
-}
-
-export async function updateStatus(db: Surreal, runId: RecordId<"awaken_run">, status: AwakenStatus, extra?: { processed?: number; failed?: number; cursor?: string; error?: string }): Promise<void> {
-  const sets: string[] = [`status = $s`];
-  const vars: Record<string, unknown> = { id: runId, s: status };
-  if (extra?.processed !== undefined) { sets.push(`processed = $p`); vars.p = extra.processed; }
-  if (extra?.failed !== undefined) { sets.push(`failed = $f`); vars.f = extra.failed; }
-  if (extra?.cursor !== undefined) { sets.push(`cursor = $c`); vars.c = extra.cursor; }
-  if (extra?.error !== undefined) { sets.push(`error = $e`); vars.e = extra.error; }
-  if (status === "completed" || status === "cancelled" || status === "failed") {
-    sets.push(`finished_at = time::now()`);
-  }
-  await db.query(`UPDATE $id SET ${sets.join(", ")};`, vars);
-}
-
-export interface StatusSubscription { close(): Promise<void> }
-
-export async function subscribeToStatus(db: Surreal, runId: RecordId<"awaken_run">, onChange: (status: AwakenStatus) => void): Promise<StatusSubscription> {
-  // SurrealDB live query on a single record's status field.
-  const live = await db.live<{ status: AwakenStatus }>("awaken_run", (action, result) => {
-    if (action === "UPDATE" && (result as { id: RecordId; status: AwakenStatus }).id.toString() === runId.toString()) {
-      onChange((result as { status: AwakenStatus }).status);
-    }
-  });
-  return { close: async () => { await db.kill(live); } };
-}
-```
-
-- [ ] **Step 2: Test (DAL only — live query test in Task 8)**
-
-Cover: createRun returns an id, findCurrent returns null when no run exists, findLatestResumable returns the right row, updateStatus advances state and sets finished_at on terminal states.
-
-- [ ] **Step 3: Commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/awaken/awakenRun.test.ts
-git add src/core/awaken/
-git commit -m "feat(awaken): awaken_run DAL + live status subscription helper"
-```
+**Acceptance:** Unit tests cover create returning a typed id, `findCurrent` returning null when empty, `findLatestResumable` returning the right row, `updateStatus` advancing state and stamping `finished_at` on terminal transitions. Live-query behavior is covered by Task 8's worker smoke. `bun test src/core/awaken/awakenRun.test.ts` green. One commit.
 
 ---
 
@@ -711,99 +235,14 @@ git commit -m "feat(awaken): awaken_run DAL + live status subscription helper"
 - Create: `src/core/awaken/awakenWorker.ts`
 - Create: `src/core/awaken/awakenWorker.test.ts`
 
-- [ ] **Step 1: Implement the worker loop**
+**Objective:** Implement `runAwakenWorker({ db, vaultFacade, indexerQueue, tierFilter, priorityGlobs, resume })` that either creates a new run or resumes the latest resumable one, walks the vault sorted by priority globs, enqueues each path into the indexer queue, awaits per-path completion, checkpoints `processed`/`failed`/`cursor` every 10 notes, and respects pause/cancel via the live-query subscription.
 
-```typescript
-// src/core/awaken/awakenWorker.ts
-import type { Surreal, RecordId } from "surrealdb";
-import type { IndexerQueue } from "../indexer/indexerQueue";
-import type { VaultFacade } from "../vault/types";
-import { createRun, updateStatus, subscribeToStatus, findLatestResumable, type AwakenStatus } from "./awakenRun";
+**Invariants:**
+- **Awaken worker checks status between notes, never mid-note (mid-note pause leaves Tier 2/3 inconsistent).**
+- On `paused` or `cancelled` observation between notes, the worker breaks the loop, persists the final `processed`/`failed` counters, and closes the live subscription cleanly in a `finally`.
+- On natural completion, terminal status is `completed`. The worker does not overwrite a `paused`/`cancelled` status with `completed` if the user paused mid-flight.
 
-export interface AwakenWorkerOptions {
-  db: Surreal;
-  vaultFacade: VaultFacade;
-  indexerQueue: IndexerQueue;
-  tierFilter: number[];
-  priorityGlobs: string[];
-  resume: boolean;
-}
-
-export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<{ runId: RecordId<"awaken_run">; status: AwakenStatus }> {
-  let runId: RecordId<"awaken_run">;
-  let processed = 0;
-  let failed = 0;
-
-  if (options.resume) {
-    const existing = await findLatestResumable(options.db);
-    if (!existing) throw new Error("no resumable awaken run found");
-    runId = existing.id;
-    processed = existing.processed;
-    failed = existing.failed;
-    await updateStatus(options.db, runId, "running");
-  } else {
-    const allPaths = await options.vaultFacade.listAllNotePaths();
-    runId = await createRun(options.db, { tierFilter: options.tierFilter, priorityGlobs: options.priorityGlobs, total: allPaths.length });
-  }
-
-  let status: AwakenStatus = "running";
-  const sub = await subscribeToStatus(options.db, runId, (s) => { status = s; });
-
-  try {
-    const allPaths = await options.vaultFacade.listAllNotePaths();
-    const sorted = sortByPriorityGlobs(allPaths, options.priorityGlobs);
-    for (const path of sorted) {
-      // Re-check status between notes.
-      if (status === "paused" || status === "cancelled") break;
-      try {
-        // Enqueue at priority 0 to drain Tier 1 first; the queue itself enforces tier ordering.
-        options.indexerQueue.enqueue(path, 0);
-        // Wait for the queue to process this path (or use a per-path promise).
-        await waitForPath(options.indexerQueue, path);
-        processed++;
-      } catch (error) {
-        failed++;
-      }
-      if (processed % 10 === 0) {
-        await updateStatus(options.db, runId, status, { processed, failed, cursor: path });
-      }
-    }
-    if (status === "running") {
-      await updateStatus(options.db, runId, "completed", { processed, failed });
-      status = "completed";
-    } else {
-      await updateStatus(options.db, runId, status, { processed, failed });
-    }
-  } finally {
-    await sub.close();
-  }
-
-  return { runId, status };
-}
-
-function sortByPriorityGlobs(paths: string[], globs: string[]): string[] {
-  if (globs.length === 0) return paths;
-  // Naive ordering: paths matching any glob first, in glob order; rest after.
-  // Production: use minimatch or picomatch for the glob match.
-  return paths;
-}
-
-async function waitForPath(queue: IndexerQueue, path: string): Promise<void> {
-  // Hook into the queue's per-path completion event. Implementation depends on the queue's event surface.
-  return new Promise((resolve) => queue.onComplete(path, resolve));
-}
-```
-
-- [ ] **Step 2: Smoke test** (small fixture vault, mocked indexer queue, assert pause + resume + cancel transitions).
-
-- [ ] **Step 3: Commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/awaken/awakenWorker.test.ts
-git add src/core/awaken/awakenWorker.ts src/core/awaken/awakenWorker.test.ts
-git commit -m "feat(awaken): worker loop with live status subscription + cursor checkpoints"
-```
+**Acceptance:** Smoke test against a fixture vault with a mocked indexer queue exercises pause-mid-flight, resume-from-paused, and cancel transitions; asserts the row's status, processed counter, and cursor reflect the observed transitions. `bun test src/core/awaken/awakenWorker.test.ts` green. One commit.
 
 ---
 
@@ -811,59 +250,17 @@ git commit -m "feat(awaken): worker loop with live status subscription + cursor 
 
 **Files:**
 - Create: `src/cli/commands/awakenStatus.ts`, `awakenPause.ts`, `awakenResume.ts`, `awakenCancel.ts`
-- Modify: `src/cli/commands/awaken.ts`
+- Modify: `src/cli/commands/awaken.ts` (dispatch on flags)
+- Modify: `src/cli/index.ts` (wire dispatcher)
 
-- [ ] **Step 1: Implement each command (~30 lines each)**
+**Objective:** Each of the four control commands is a thin client over the awaken DAL: `--pause` calls `findCurrent` + `updateStatus(paused)`; `--resume` calls `findLatestResumable` + dispatches into `runAwakenWorker({ resume: true })`; `--cancel` calls `findCurrent` + `updateStatus(cancelled)`; `--status` polls the run row at 1Hz and emits NDJSON until the status reaches a terminal state. `awaken.ts` dispatches on the flag set; default (no flag) starts a fresh run.
 
-```typescript
-// src/cli/commands/awakenPause.ts
-import { findCurrent, updateStatus } from "../../core/awaken/awakenRun";
-import { connectToDaemon } from "../client";
+**Invariants:**
+- `--pause` and `--cancel` are no-ops with exit code 1 and a stderr message when no current run exists. Process never crashes on missing rows.
+- `--status` exits 0 on terminal status, never blocks indefinitely if the daemon is gone (a connect failure is a clear exit code).
+- The CLI never invokes the worker loop directly for `--pause`/`--resume`/`--cancel`/`--status`; only the default `awaken` invocation runs the loop.
 
-export async function awakenPauseCommand(): Promise<number> {
-  const { surrealDb } = await connectToDaemon();
-  const current = await findCurrent(surrealDb.db);
-  if (!current) { console.error("no active awaken run"); return 1; }
-  await updateStatus(surrealDb.db, current.id, "paused");
-  console.log(`paused run ${current.id} at ${current.processed}/${current.total}`);
-  return 0;
-}
-```
-
-(Similar for resume, cancel, status. Status emits NDJSON every 1s by polling the run row until status terminal.)
-
-- [ ] **Step 2: Update `awaken.ts` to dispatch flags**
-
-```typescript
-// awaken.ts
-import { awakenPauseCommand } from "./awakenPause";
-import { awakenResumeCommand } from "./awakenResume";
-import { awakenCancelCommand } from "./awakenCancel";
-import { awakenStatusCommand } from "./awakenStatus";
-import { runAwakenWorker } from "../../core/awaken/awakenWorker";
-
-export async function awakenCommand(args: { pause?: boolean; resume?: boolean; cancel?: boolean; status?: boolean; tier?: number[]; priority?: string[]; background?: boolean }): Promise<number> {
-  if (args.pause) return awakenPauseCommand();
-  if (args.resume) return awakenResumeCommand({ tierFilter: args.tier ?? [1, 2, 3], priorityGlobs: args.priority ?? [] });
-  if (args.cancel) return awakenCancelCommand();
-  if (args.status) return awakenStatusCommand();
-  // Default: start a fresh run (block until done unless --background).
-  const { runId, status } = await runAwakenWorker({ /* ... */ });
-  console.log(`awaken ${status}: ${runId}`);
-  return status === "completed" ? 0 : 1;
-}
-```
-
-- [ ] **Step 3: Wire into CLI dispatcher in `src/cli/index.ts`**
-
-- [ ] **Step 4: Smoke + commit**
-
-```bash
-cd ~/projects/notient
-bun run src/cli/index.ts awaken --status
-git add src/cli/commands/awaken*.ts src/cli/index.ts
-git commit -m "feat(cli): awaken --pause/--resume/--cancel/--status verbs"
-```
+**Acceptance:** Manual smoke `bun run src/cli/index.ts awaken --status` against a running daemon emits NDJSON status lines. Pause/resume cycle is exercised by the Task 13 smoke harness. One commit.
 
 ---
 
@@ -873,86 +270,16 @@ git commit -m "feat(cli): awaken --pause/--resume/--cancel/--status verbs"
 - Create: `src/core/config/configFile.ts`
 - Create: `src/core/config/configFile.test.ts`
 - Add dep: `smol-toml` (or `@iarna/toml`)
-- Modify: `src/core/indexer/indexerQueue.ts`, `src/core/indexer/embedder.ts`, `src/core/indexer/concurrencyDefaults.ts` to read overrides
+- Modify: `src/daemon/bootstrap.ts`, `src/cli/commands/init.ts`, plus consumers of `concurrencyDefaults` in `src/core/indexer/`
 
-- [ ] **Step 1: Add the dep**
+**Objective:** Implement `loadVaultConfig(vaultPath): VaultConfig` that reads `<vault>/.notient/config.toml`, parses with `smol-toml`, and deep-merges over the defaults sourced from `concurrencyDefaults.ts`. The schema covers `indexer` (debounce, concurrency, chunk sizing), `awaken` (default tier filter and priority globs), and `surrealdb` (HNSW cache MiB, log level). Bootstrap reads the config once and threads values into the indexer queue, embedder, awaken worker, and the `surreal start` env.
 
-```bash
-cd ~/projects/notient
-bun add smol-toml
-```
+**Invariants:**
+- No live reload. Daemon restart picks up changes. This is a deliberate simplicity choice.
+- Missing file falls back to defaults silently. Malformed TOML logs a warning and falls back to defaults; it does not crash boot.
+- `notient init` writes a default `config.toml` only if one does not exist; existing files are never overwritten.
 
-- [ ] **Step 2: Implement the loader**
-
-```typescript
-// src/core/config/configFile.ts
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { parse as parseToml } from "smol-toml";
-import { CONCURRENCY, CHUNK } from "../indexer/concurrencyDefaults";
-
-export interface VaultConfig {
-  indexer: {
-    debounce_ms: number;
-    concurrency: { embed: number; extract: number };
-    chunk: { target_tokens: number; max_tokens: number };
-  };
-  awaken: {
-    default_tier_filter: number[];
-    default_priority_globs: string[];
-  };
-  surrealdb: {
-    hnsw_cache_mib: number;
-    log_level: "warn" | "info" | "debug";
-  };
-}
-
-const DEFAULTS: VaultConfig = {
-  indexer: {
-    debounce_ms: 500,
-    concurrency: { embed: CONCURRENCY.embed, extract: CONCURRENCY.extract },
-    chunk: { target_tokens: CHUNK.targetTokens, max_tokens: CHUNK.maxTokens },
-  },
-  awaken: { default_tier_filter: [1, 2, 3], default_priority_globs: [] },
-  surrealdb: { hnsw_cache_mib: 512, log_level: "warn" },
-};
-
-export function loadVaultConfig(vaultPath: string): VaultConfig {
-  const path = join(vaultPath, ".notient", "config.toml");
-  if (!existsSync(path)) return DEFAULTS;
-  const raw = readFileSync(path, "utf8");
-  let parsed: Record<string, unknown>;
-  try { parsed = parseToml(raw) as Record<string, unknown>; } catch { return DEFAULTS; }
-  return mergeDeep(DEFAULTS, parsed) as VaultConfig;
-}
-
-function mergeDeep(base: unknown, override: unknown): unknown {
-  if (typeof override !== "object" || override === null || Array.isArray(override)) return override;
-  if (typeof base !== "object" || base === null || Array.isArray(base)) return override;
-  const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
-  for (const [k, v] of Object.entries(override as Record<string, unknown>)) {
-    out[k] = mergeDeep((base as Record<string, unknown>)[k], v);
-  }
-  return out;
-}
-```
-
-- [ ] **Step 3: Test merging + missing-file fallback**
-
-- [ ] **Step 4: Wire into bootstrap**
-
-In `src/daemon/bootstrap.ts`, read config once and pass into `IndexerQueue`, `embedAll`, `awakenWorker`. Set `SURREAL_HNSW_CACHE_SIZE` env var on the `surreal start` spawn from `config.surrealdb.hnsw_cache_mib`.
-
-- [ ] **Step 5: Update `notient init` to write a default config.toml**
-
-- [ ] **Step 6: Commit**
-
-```bash
-cd ~/projects/notient
-bun test src/core/config/
-git add src/core/config/ src/daemon/bootstrap.ts src/cli/commands/init.ts package.json bun.lockb
-git commit -m "feat(config): per-vault TOML config with concurrency, chunk, awaken, surrealdb sections"
-```
+**Acceptance:** Tests cover the missing-file fallback, the malformed-TOML fallback, and the deep merge (overriding one nested field leaves siblings at default). Bootstrap smoke verifies overrides take effect (e.g. setting `indexer.concurrency.embed = 1` and observing the embedder's parallelism). `bun test src/core/config/` green. One commit.
 
 ---
 
@@ -962,42 +289,13 @@ git commit -m "feat(config): per-vault TOML config with concurrency, chunk, awak
 - Modify: `src/core/search/searchPipeline.ts`, `src/core/search/strategies/{quick,balanced,deep}.ts`, `src/core/search/graphExpansion.ts`, `src/core/search/filters.ts`, `src/core/search/synthesis.ts`
 - Modify: corresponding `.test.ts` files
 
-- [ ] **Step 1: Replace SQLite + HNSW with SurrealQL in the kNN path**
+**Objective:** Replace `hnswVectorIndex.search(...)` + sql.js follow-ups in the strategy files with single SurrealQL queries: kNN via `vector <|K,EF|> $q`, BM25 via the `chunk_text` index, hybrid scoring (deep strategy) in one query with both predicates. Replace `graphExpansion`'s recursive CTE with recursive SurrealQL traversal (`note.{..1}->wikilink->note`). Public APIs of the strategies stay intact.
 
-In each strategy, replace the existing `hnswVectorIndex.search(...)` + sql.js follow-up with one SurrealQL:
+**Invariants:**
+- Result shape per strategy is unchanged so downstream synthesis does not need to migrate.
+- Filters (date ranges, tag filters) compose as additional WHERE predicates inside the same query rather than as a Node-side filter pass.
 
-```typescript
-const result = await db.query<[Array<{ note: string; chunkText: string; d: number }>]>(
-  `SELECT note.path AS note, text AS chunkText, vector::distance::knn() AS d
-     FROM chunk WHERE vector <|${k},${ef}|> $q
-     ORDER BY d LIMIT $k;`,
-  { q: queryVector, k },
-);
-```
-
-For `deep` strategy: combine vector + BM25 in one query using both predicates.
-
-- [ ] **Step 2: Replace `graphExpansion`'s recursive CTE with recursive SurrealQL**
-
-```typescript
-const result = await db.query<[Array<{ path: string }>]>(
-  `SELECT note.{..1}->wikilink->note.path AS path FROM $seedNote;`,
-);
-```
-
-- [ ] **Step 3: Run search tests**
-
-```bash
-cd ~/projects/notient
-bun test src/core/search/
-```
-
-- [ ] **Step 4: Commit (split into 2-3 commits if the change spans many files)**
-
-```bash
-git add src/core/search/
-git commit -m "feat(search): migrate strategies + graphExpansion to SurrealDB native HNSW + recursive RELATE"
-```
+**Acceptance:** All existing search tests pass against the SurrealDB-backed strategies. `bun test src/core/search/` green. May be split into 2-3 commits if the change spans many files.
 
 ---
 
@@ -1007,26 +305,13 @@ git commit -m "feat(search): migrate strategies + graphExpansion to SurrealDB na
 - Modify: `src/daemon/handlers/agentAsk.ts`, `agentBrief.ts`, `agentDistill.ts`, `agentEvents.ts`, `session.ts`, `sessionGrant.ts`, `sessionList.ts`, `sessionRevoke.ts`
 - Modify: corresponding tests
 
-- [ ] **Step 1: For each handler, swap the SQLite DAL for SurrealDB**
+**Objective:** Swap each handler's SQLite DAL calls for SurrealDB equivalents against `agent_event`, `agent_session`, `agent_run` (already present in `schema.surql`). RPC shapes are unchanged; only the queries inside each handler change.
 
-The handlers' RPC shapes are unchanged. Only the queries they issue change. `agent_event`, `agent_session`, `agent_run` tables exist in `schema.surql`; their shape is preserved.
+**Invariants:**
+- No RPC contract change. Phase D1 smoke tests pass without modification.
+- Pagination, filtering, and ordering behavior of each handler is preserved exactly.
 
-- [ ] **Step 2: Run Phase D1 smoke tests**
-
-```bash
-cd ~/projects/notient
-bun test src/daemon/handlers/
-bun run smoke:cli:phaseD  # if this script exists from Phase D1; otherwise the equivalent
-```
-
-Expected: every Phase D1 verb green against new schema.
-
-- [ ] **Step 3: Commit (one per handler family or one big commit if changes are mechanical)**
-
-```bash
-git add src/daemon/handlers/
-git commit -m "feat(d1): migrate ask/brief/distill/events/session handlers to SurrealDB DAL"
-```
+**Acceptance:** `bun test src/daemon/handlers/` green; the Phase D1 smoke (`bun run smoke:cli:phaseD` if present, otherwise its equivalent) green. One commit per handler family or one big commit if changes are mechanical.
 
 ---
 
@@ -1035,27 +320,15 @@ git commit -m "feat(d1): migrate ask/brief/distill/events/session handlers to Su
 **Files:**
 - Create: `src/daemon/__smoke__/phase4.smoke.test.ts`
 
-- [ ] **Step 1: End-to-end smoke**
+**Objective:** End-to-end smoke that exercises the awaken control plane, AST writeback, daemon_write provenance, and the failure-semantics contract from Locked Decision #3.
 
-A test that:
-1. Starts a fresh awaken run.
-2. Pauses mid-flight via a separate `awaken --pause` CLI invocation.
-3. Asserts `awaken_run.status = 'paused'` and `processed > 0`.
-4. Resumes via `awaken --resume`.
-5. Asserts the run reaches `completed`.
-6. Approves a linker proposal via the approval service.
-7. Reads the source note's body and asserts the new wikilink lands in `## Related`.
-8. Reads `daemon_write` and asserts a row exists with the right SHA, agent, and target.
-9. Saves the note again (simulating user save) and asserts Tier 1 attributes the wikilink with `source = 'linker'` (because of the daemon_write match).
+The smoke must (1) start a fresh awaken run, (2) pause mid-flight via a separate `awaken --pause` CLI invocation and assert `status='paused'` with `processed > 0`, (3) resume via `awaken --resume` and assert the run reaches `completed`, (4) approve a linker proposal via the approval service, (5) read the source note and assert the new wikilink lands in `## Related`, (6) read `daemon_write` and assert a row exists with the right SHA, agent, and targets, (7) save the note again to simulate a user save and assert Tier 1 attributes the wikilink with `source = 'linker'` because of the `daemon_write` match.
 
-- [ ] **Step 2: Run, commit**
+**Invariants:**
+- The smoke runs against a real SurrealDB instance (the same fixture pattern from Phase 2/3 smokes), not a mock.
+- The smoke is hermetic: each run uses a fresh fixture vault and a fresh DB.
 
-```bash
-cd ~/projects/notient
-bun test src/daemon/__smoke__/phase4.smoke.test.ts
-git add src/daemon/__smoke__/phase4.smoke.test.ts
-git commit -m "test(smoke): phase 4 awaken control plane + AST writeback + provenance"
-```
+**Acceptance:** `bun test src/daemon/__smoke__/phase4.smoke.test.ts` green. One commit.
 
 ---
 
@@ -1064,27 +337,20 @@ git commit -m "test(smoke): phase 4 awaken control plane + AST writeback + prove
 **Files:**
 - Create: `docs/superpowers/handoffs/2026-04-29-phase-4-vault-enrichment-handoff.md`
 
-- [ ] **Step 1: Write under 80 lines**
+**Objective:** Write a handoff under 80 lines documenting what shipped: AST writeback, daemon_write provenance, echoGuard removal, awaken control plane, search migration, Phase D1 verbs on new schema, config file. Name the chosen failure-semantics contract (pending-state or inverted-order) so Phase 5 inherits the constraint. Phase 5 entry point: new CLI verbs (graph dump/stats, links sync/audit, backup/restore/nuke, migrate-vault), final SQLite cutover (delete `database.ts`, `schema.ts`, `migrations.ts`, `hnswVectorIndex.ts`, `graphStore.ts`; remove sql.js dep).
 
-Document: AST writeback shipped, daemon_write provenance live, echoGuard fully removed, awaken control plane functional, search consumers on SurrealDB, Phase D1 verbs green against new schema, config file in place. Phase 5 entry point: new CLI verbs (graph dump/stats, links sync/audit, backup/restore/nuke, migrate-vault), final SQLite cutover (delete database.ts, schema.ts, migrations.ts, hnswVectorIndex.ts, graphStore.ts; remove sql.js dep).
+**Invariants:**
+- The chosen failure-semantics contract is named explicitly. Phase 5 must not silently flip contracts.
 
-- [ ] **Step 2: Commit**
-
-```bash
-cd ~/projects/notient
-git add docs/superpowers/handoffs/2026-04-29-phase-4-vault-enrichment-handoff.md
-git commit -m "docs(handoff): phase 4 awaken + writeback + consumer migration shipped"
-```
+**Acceptance:** File exists, under 80 lines, names the chosen contract. One commit.
 
 ---
 
 ## Self-review
 
-**Spec coverage:** §3.5 daemon_write + awaken_run (Tasks 2, 7), §8.4 AST writeback (Task 1), §9 awaken control plane (Tasks 7, 8, 9), §10 configuration (Task 10). Consumer migrations (Tasks 3, 4, 11, 12). Echo guard final removal (Task 6). All covered.
+**Spec coverage:** §3.5 daemon_write + awaken_run (Tasks 2, 7), §8.4 AST writeback (Task 1), §9 awaken control plane (Tasks 7, 8, 9), §10 configuration (Task 10). Consumer migrations (Tasks 3, 4, 11, 12). EchoGuard removal (Task 6). Failure semantics for the approval flow encoded in Locked Decision #3 and exercised in Task 3's acceptance and Task 13's smoke.
 
-**Placeholder scan:** Several "implementation depends on the file structure" pointers in the consumer-migration tasks. These are unavoidable adapt-to-existing-code points. The shapes are documented (SurrealDB-equivalents of the SQLite calls); the executor reads each file and adapts.
-
-**Type consistency:** `applyApprovedLink` / `applyApprovedRelation` return strings consumed by `approvalService` write path (Task 3). `daemon_write` row structure consistent across `recordDaemonWrite` (Task 2) and `findRecentDaemonWrite` (Task 2 / Tier 1). `AwakenStatus` enum consistent across DAL (Task 7), worker (Task 8), and CLI (Task 9).
+**Type consistency:** `applyApprovedLink` / `applyApprovedRelation` return strings consumed by the approvalService write path (Task 3). `daemon_write` row structure consistent across `recordDaemonWrite` (Task 2) and `findRecentDaemonWrite` (Task 2 / Tier 1). `AwakenStatus` enum consistent across DAL (Task 7), worker (Task 8), and CLI (Task 9).
 
 **Known transient state during phase:** Between Tasks 3 and 5, `nativeGraphBridge` is unused but not yet deleted. This is one-commit-distance, so the executor merges Tasks 3-5 into a contiguous PR.
 
