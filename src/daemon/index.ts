@@ -187,6 +187,7 @@ async function main(argv: string[]): Promise<void> {
 
   const agentBriefHandler = makeAgentBriefHandler({
     database: kernel.get("database"),
+    surrealDb: kernel.get("surrealDb").db,
     searchPipeline,
     vault: kernel.get("vault"),
     provider: kernel.get("primaryLLM"),

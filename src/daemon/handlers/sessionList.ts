@@ -42,7 +42,7 @@ export type SessionListHandler = (
 export function makeSessionListHandler(deps: SessionListHandlerDeps): SessionListHandler {
   return async (params) => {
     const filter = parseListParams(params);
-    const grants = deps.sessionGrants.list(filter);
+    const grants = await deps.sessionGrants.list(filter);
     const response: SessionListResponse = {
       sessions: grants.map(grantToEntry),
     };

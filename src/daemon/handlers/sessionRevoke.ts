@@ -31,7 +31,7 @@ export type SessionRevokeHandler = (
 export function makeSessionRevokeHandler(deps: SessionRevokeHandlerDeps): SessionRevokeHandler {
   return async (params) => {
     const sessionId = parseSessionId(params.sessionId);
-    const revoked = deps.sessionGrants.revoke(sessionId);
+    const revoked = await deps.sessionGrants.revoke(sessionId);
     if (revoked === null) {
       throw new Error(`SESSION_NOT_FOUND: no session with id ${sessionId}`);
     }

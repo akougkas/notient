@@ -102,7 +102,7 @@ async function runEvents(
   parsed: ParsedEventsParams,
   flushIntervalMs: number,
 ): Promise<Record<string, unknown>> {
-  const firstRead = deps.agentEventStore.since(parsed.since, parsed.limit);
+  const firstRead = await deps.agentEventStore.since(parsed.since, parsed.limit);
   if (firstRead.length > 0) {
     return buildResponse({
       events: firstRead,
@@ -126,7 +126,7 @@ async function runEvents(
     });
   }
   await delay(flushIntervalMs);
-  const followUp = deps.agentEventStore.since(parsed.since, parsed.limit);
+  const followUp = await deps.agentEventStore.since(parsed.since, parsed.limit);
   return buildResponse({
     events: followUp,
     since: parsed.since,

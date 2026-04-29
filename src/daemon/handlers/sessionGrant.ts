@@ -39,7 +39,7 @@ export type SessionGrantHandler = (
 export function makeSessionGrantHandler(deps: SessionGrantHandlerDeps): SessionGrantHandler {
   return async (params) => {
     const parsed = parseGrantParams(params);
-    const grant = deps.sessionGrants.grant({
+    const grant = await deps.sessionGrants.grant({
       client: parsed.client,
       allowedFolders: parsed.allowedFolders,
       allowedTools: parsed.allowedTools,

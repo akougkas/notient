@@ -7,8 +7,12 @@
  * matching writes without prompting. Expired, revoked, or exhausted grants
  * degrade gracefully to the global per-tool policy.
  *
- * T7 ships only the storage layer plus the RPC verbs. T8 wires the lookup
- * into ApprovalGate.
+ * Phase 4 Task 12 migrated the storage backend from SQLite to SurrealDB.
+ * The wire-shape contract (`SessionGrant.id` is a numeric `seq`) is
+ * preserved by stamping each row with a monotonically-assigned `seq`
+ * inside a `BEGIN; ...; COMMIT;` block. The `incrementWriteCount` UPDATE
+ * stays atomic at the SurrealDB level (`SET used_writes = used_writes + 1`)
+ * so concurrent calls cannot lose an increment.
  *
  * Folder match: each entry in `allowed_folders` is normalized at insert time
  * so it ends with `/`. The find query uses `String#startsWith` against the
@@ -17,15 +21,10 @@
  *
  * Tool match: an empty `allowed_tools` JSON array is the explicit "all writes"
  * sentinel. Otherwise the tool name must appear in the array exactly.
- *
- * Write counter: callers (ApprovalGate in T8) call `incrementWriteCount`
- * after a successful auto-approval. The UPDATE is atomic at the SQL level
- * (`SET used_writes = used_writes + 1`) so concurrent calls cannot lose an
- * increment even if SessionGrants instances are shared across handlers.
  */
 
+import type { RecordId, Surreal } from "surrealdb";
 import { normalizeAgentId } from "../../cli/identity";
-import type { Database } from "../db/database";
 
 export interface SessionGrant {
   id: number;
@@ -60,31 +59,39 @@ export interface SessionListFilter {
 }
 
 export interface SessionGrantsOptions {
-  database: Database;
+  db: Surreal;
 }
 
 export const SESSION_GRANT_TTL_MAX_MINUTES = 24 * 60;
 
 interface SessionGrantRow {
-  id: number;
+  id: RecordId<"agent_session">;
+  seq: number;
   client: string;
   granted_at: number;
   expires_at: number;
   allowed_folders: string;
   allowed_tools: string;
-  max_writes: number | null;
+  max_writes: number | null | undefined;
   used_writes: number;
-  revoked_at: number | null;
+  revoked_at: number | null | undefined;
 }
 
+interface SeqRow {
+  seq: number;
+}
+
+const ROW_PROJECTION =
+  "id, seq, client, granted_at, expires_at, allowed_folders, allowed_tools, max_writes, used_writes, revoked_at";
+
 export class SessionGrants {
-  private readonly database: Database;
+  private readonly db: Surreal;
 
   constructor(options: SessionGrantsOptions) {
-    this.database = options.database;
+    this.db = options.db;
   }
 
-  grant(options: SessionGrantOptions): SessionGrant {
+  async grant(options: SessionGrantOptions): Promise<SessionGrant> {
     const client = normalizeAgentId(options.client);
     const allowedFolders = normalizeAllowedFolders(options.allowedFolders);
     const allowedTools = options.allowedTools ?? [];
@@ -94,81 +101,92 @@ export class SessionGrants {
 
     const grantedAt = Date.now();
     const expiresAt = grantedAt + ttlMinutes * 60_000;
-    this.database.run(
-      `INSERT INTO agent_sessions
-         (client, granted_at, expires_at, allowed_folders, allowed_tools,
-          max_writes, used_writes, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, NULL);`,
-      [
-        client,
-        grantedAt,
-        expiresAt,
-        JSON.stringify(allowedFolders),
-        JSON.stringify(allowedTools),
-        maxWrites,
-      ],
-    );
-    const idRow = this.database.query<{ id: number }>("SELECT last_insert_rowid() AS id;")[0];
-    const id = idRow?.id ?? 0;
-    return {
-      id,
+    // Multi-statement BEGIN/COMMIT; the post-commit SELECT reads the row
+    // back so the caller sees the assigned seq without a second roundtrip.
+    const setClauses: string[] = [
+      "seq: ($next ?? 0) + 1",
+      "client: $client",
+      "granted_at: $grantedAt",
+      "expires_at: $expiresAt",
+      "allowed_folders: $allowedFolders",
+      "allowed_tools: $allowedTools",
+      "used_writes: 0",
+    ];
+    const bindings: Record<string, unknown> = {
       client,
       grantedAt,
       expiresAt,
-      allowedFolders,
-      allowedTools,
-      maxWrites,
-      usedWrites: 0,
-      revokedAt: null,
+      allowedFolders: JSON.stringify(allowedFolders),
+      allowedTools: JSON.stringify(allowedTools),
     };
+    if (maxWrites !== null) {
+      setClauses.push("max_writes: $maxWrites");
+      bindings.maxWrites = maxWrites;
+    }
+    const sql = [
+      "BEGIN;",
+      "LET $next = (SELECT VALUE seq FROM agent_session ORDER BY seq DESC LIMIT 1)[0];",
+      `LET $row = CREATE ONLY agent_session CONTENT { ${setClauses.join(", ")} };`,
+      "COMMIT;",
+      `SELECT ${ROW_PROJECTION} FROM agent_session WHERE granted_at = $grantedAt AND client = $client ORDER BY seq DESC LIMIT 1;`,
+    ].join("\n");
+    const results = await this.db.query(sql, bindings).collect<unknown[]>();
+    const lastSlice = results[results.length - 1];
+    const rows = (
+      Array.isArray(lastSlice) ? (lastSlice as SessionGrantRow[]) : []
+    ) as SessionGrantRow[];
+    const row = rows[0];
+    if (row === undefined) {
+      throw new Error("SessionGrants.grant: SurrealDB returned no row");
+    }
+    return rowToGrant(row);
   }
 
-  revoke(id: number): SessionGrant | null {
-    const existing = this.readOne(id);
+  async revoke(seq: number): Promise<SessionGrant | null> {
+    const existing = await this.findBySeq(seq);
     if (existing === null) return null;
     if (existing.revokedAt !== null) return existing;
     const revokedAt = Date.now();
-    this.database.run("UPDATE agent_sessions SET revoked_at = ? WHERE id = ?;", [revokedAt, id]);
+    await this.db
+      .query("UPDATE agent_session SET revoked_at = $revokedAt WHERE seq = $seq;", {
+        revokedAt,
+        seq,
+      })
+      .collect();
     return { ...existing, revokedAt };
   }
 
-  list(filter: SessionListFilter): SessionGrant[] {
+  async list(filter: SessionListFilter): Promise<SessionGrant[]> {
     const activeOnly = filter.activeOnly !== false;
     const conditions: string[] = [];
-    const params: unknown[] = [];
+    const bindings: Record<string, unknown> = {};
     if (filter.client !== undefined) {
-      conditions.push("client = ?");
-      params.push(filter.client);
+      conditions.push("client = $client");
+      bindings.client = filter.client;
     }
     if (activeOnly) {
-      conditions.push("revoked_at IS NULL");
-      conditions.push("expires_at > ?");
-      params.push(Date.now());
+      conditions.push("revoked_at = NONE");
+      conditions.push("expires_at > $now");
+      bindings.now = Date.now();
     }
     const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
-    const rows = this.database.query<SessionGrantRow>(
-      `SELECT id, client, granted_at, expires_at, allowed_folders, allowed_tools,
-              max_writes, used_writes, revoked_at
-       FROM agent_sessions
-       ${where}
-       ORDER BY granted_at DESC;`,
-      params,
-    );
+    const sql = `SELECT ${ROW_PROJECTION} FROM agent_session ${where} ORDER BY granted_at DESC, seq DESC;`;
+    const [rows] = await this.db
+      .query<[SessionGrantRow[]]>(sql, bindings)
+      .collect<[SessionGrantRow[]]>();
     return rows.map(rowToGrant);
   }
 
-  find(query: SessionGrantFindQuery): SessionGrant | null {
-    const rows = this.database.query<SessionGrantRow>(
-      `SELECT id, client, granted_at, expires_at, allowed_folders, allowed_tools,
-              max_writes, used_writes, revoked_at
-       FROM agent_sessions
-       WHERE client = ?
-         AND revoked_at IS NULL
-         AND expires_at > ?
-         AND (max_writes IS NULL OR used_writes < max_writes)
-       ORDER BY granted_at DESC;`,
-      [query.client, query.now],
-    );
+  async find(query: SessionGrantFindQuery): Promise<SessionGrant | null> {
+    const sql = `SELECT ${ROW_PROJECTION} FROM agent_session
+       WHERE client = $client
+         AND revoked_at = NONE
+         AND expires_at > $now
+         AND (max_writes = NONE OR used_writes < max_writes)
+       ORDER BY granted_at DESC, seq DESC;`;
+    const [rows] = await this.db
+      .query<[SessionGrantRow[]]>(sql, { client: query.client, now: query.now })
+      .collect<[SessionGrantRow[]]>();
     for (const row of rows) {
       const grant = rowToGrant(row);
       if (!toolMatches(grant.allowedTools, query.tool)) continue;
@@ -178,21 +196,26 @@ export class SessionGrants {
     return null;
   }
 
-  incrementWriteCount(id: number): void {
-    this.database.run("UPDATE agent_sessions SET used_writes = used_writes + 1 WHERE id = ?;", [
-      id,
-    ]);
+  async incrementWriteCount(seq: number): Promise<void> {
+    await this.db
+      .query("UPDATE agent_session SET used_writes = used_writes + 1 WHERE seq = $seq;", { seq })
+      .collect();
   }
 
-  private readOne(id: number): SessionGrant | null {
-    const rows = this.database.query<SessionGrantRow>(
-      `SELECT id, client, granted_at, expires_at, allowed_folders, allowed_tools,
-              max_writes, used_writes, revoked_at
-       FROM agent_sessions
-       WHERE id = ?
-       LIMIT 1;`,
-      [id],
-    );
+  async latestSeq(): Promise<number> {
+    const [rows] = await this.db
+      .query<[SeqRow[]]>("SELECT seq FROM agent_session ORDER BY seq DESC LIMIT 1;")
+      .collect<[SeqRow[]]>();
+    return rows[0]?.seq ?? 0;
+  }
+
+  private async findBySeq(seq: number): Promise<SessionGrant | null> {
+    const [rows] = await this.db
+      .query<[SessionGrantRow[]]>(
+        `SELECT ${ROW_PROJECTION} FROM agent_session WHERE seq = $seq LIMIT 1;`,
+        { seq },
+      )
+      .collect<[SessionGrantRow[]]>();
     if (rows.length === 0) return null;
     return rowToGrant(rows[0]);
   }
@@ -245,15 +268,15 @@ function clampTtlMinutes(raw: number): number {
 
 function rowToGrant(row: SessionGrantRow): SessionGrant {
   return {
-    id: row.id,
+    id: row.seq,
     client: row.client,
     grantedAt: row.granted_at,
     expiresAt: row.expires_at,
     allowedFolders: parseStringArray(row.allowed_folders),
     allowedTools: parseStringArray(row.allowed_tools),
-    maxWrites: row.max_writes,
+    maxWrites: row.max_writes ?? null,
     usedWrites: row.used_writes,
-    revokedAt: row.revoked_at,
+    revokedAt: row.revoked_at ?? null,
   };
 }
 

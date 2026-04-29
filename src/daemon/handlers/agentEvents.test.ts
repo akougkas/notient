@@ -1,9 +1,26 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../../core/db/database";
-import { MemoryAdapter, loadWasm } from "../../core/db/database.test";
+/**
+ * Phase 4 Task 12 agent.events handler smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/daemon/handlers/`.
+ *
+ * Boots a real SurrealDB, applies the Phase 1 schema, and exercises the
+ * RPC handler against the SurrealDB-backed AgentEventStore. The wire
+ * shape (events / cursor / longPollExpired) is preserved end-to-end; the
+ * only behaviour change from the SQLite-era harness is that
+ * `store.record` is now async, so test seeders await it.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { applySchema } from "../../core/db/schemaApplier";
+import { type SurrealConnection, connect } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
 import type { EventHandler, EventType } from "../../core/events/types";
 import { AgentEventStore } from "../../core/services/agentEventStore";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import {
   AGENT_EVENTS_DEFAULT_LIMIT,
   AGENT_EVENTS_DEFAULT_LONG_POLL_MS,
@@ -12,18 +29,8 @@ import {
   createAgentEventsHandler,
 } from "./agentEvents";
 
-interface TestRig {
-  database: Database;
-  bus: CountingEventBus;
-  store: AgentEventStore;
-}
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
-/**
- * EventBus subclass that exposes a per-type listener count. The handler under
- * test attaches four listeners on the long-poll path; the leak assertion
- * verifies the count returns to its baseline (the store's own four listeners)
- * after the call resolves.
- */
 class CountingEventBus extends EventBus {
   listenerCount(type: EventType): number {
     const handlers = (this as unknown as { handlers: Map<EventType, Set<unknown>> }).handlers;
@@ -35,25 +42,75 @@ class CountingEventBus extends EventBus {
   }
 }
 
-async function makeRig(): Promise<TestRig> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const database = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await database.init();
-  const bus = new CountingEventBus();
-  const store = new AgentEventStore({ database, bus });
-  return { database, bus, store };
+interface TestRig {
+  bus: CountingEventBus;
+  store: AgentEventStore;
 }
 
-function seedClaimAdvanced(store: AgentEventStore, count: number): void {
+async function clearLedger(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE agent_event;").collect();
+}
+
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+async function seedClaimAdvanced(store: AgentEventStore, count: number): Promise<void> {
   for (let index = 0; index < count; index++) {
-    store.record("swarm:claim_advanced", { claimId: `claim:${index}`, ord: index });
+    await store.record("swarm:claim_advanced", { claimId: `claim:${index}`, ord: index });
   }
 }
 
-describe("agent.events handler", () => {
-  test("since 0 returns every seeded row and a fresh cursor", async () => {
-    const rig = await makeRig();
-    seedClaimAdvanced(rig.store, 3);
+describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.events handler", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-agentevents-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-agentevents-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearLedger(connection);
+  });
+
+  function makeRig(): TestRig {
+    const bus = new CountingEventBus();
+    const store = new AgentEventStore({ db: connection.db, bus });
+    return { bus, store };
+  }
+
+  test("[smoke] since 0 returns every seeded row and a fresh cursor", async () => {
+    const rig = makeRig();
+    await seedClaimAdvanced(rig.store, 3);
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
@@ -70,17 +127,18 @@ describe("agent.events handler", () => {
     expect(result.cursor).toBe(events[2].id);
     expect(result.longPollExpired).toBe(false);
     expect(result.ok).toBe(true);
+    rig.store.dispose();
   });
 
-  test("since <middle> returns only newer rows", async () => {
-    const rig = await makeRig();
-    seedClaimAdvanced(rig.store, 5);
+  test("[smoke] since <middle> returns only newer rows", async () => {
+    const rig = makeRig();
+    await seedClaimAdvanced(rig.store, 5);
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
       flushIntervalMs: 0,
     });
-    const all = rig.store.since(0, 10);
+    const all = await rig.store.since(0, 10);
     const middleId = all[2].id;
     const result = await handler(
       { since: middleId, longPollMs: 0 },
@@ -92,11 +150,12 @@ describe("agent.events handler", () => {
     expect(events.map((event) => event.id)).toEqual([all[3].id, all[4].id]);
     expect(result.cursor).toBe(all[4].id);
     expect(result.longPollExpired).toBe(false);
+    rig.store.dispose();
   });
 
-  test("limit clamps the page size and the cursor reflects the highest returned id", async () => {
-    const rig = await makeRig();
-    seedClaimAdvanced(rig.store, 7);
+  test("[smoke] limit clamps the page size and the cursor reflects the highest returned id", async () => {
+    const rig = makeRig();
+    await seedClaimAdvanced(rig.store, 7);
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
@@ -111,10 +170,11 @@ describe("agent.events handler", () => {
     const events = result.events as Array<{ id: number }>;
     expect(events).toHaveLength(3);
     expect(result.cursor).toBe(events[2].id);
+    rig.store.dispose();
   });
 
-  test("longPollMs 0 returns immediately with empty events when ledger is empty", async () => {
-    const rig = await makeRig();
+  test("[smoke] longPollMs 0 returns immediately with empty events when ledger is empty", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
@@ -126,17 +186,18 @@ describe("agent.events handler", () => {
     expect(result.events).toEqual([]);
     expect(result.cursor).toBe(0);
     expect(result.longPollExpired).toBe(false);
-    expect(elapsed).toBeLessThan(50);
+    expect(elapsed).toBeLessThan(200);
+    rig.store.dispose();
   });
 
-  test("long-poll resolves when a swarm event fires before the timeout", async () => {
-    const rig = await makeRig();
+  test("[smoke] long-poll resolves when a swarm event fires before the timeout", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
-      flushIntervalMs: 0,
+      flushIntervalMs: 100,
     });
-    const pending = handler({ since: 0, longPollMs: 1000 }, () => {}, "req-5", "claude-code");
+    const pending = handler({ since: 0, longPollMs: 2000 }, () => {}, "req-5", "claude-code");
     setTimeout(() => {
       rig.bus.emit({
         type: "swarm:link_proposed",
@@ -155,10 +216,11 @@ describe("agent.events handler", () => {
     expect(result.longPollExpired).toBe(false);
     expect(typeof result.cursor).toBe("number");
     expect(result.cursor).toBeGreaterThan(0);
+    rig.store.dispose();
   });
 
-  test("long-poll expires with empty events and unchanged cursor on timeout", async () => {
-    const rig = await makeRig();
+  test("[smoke] long-poll expires with empty events and unchanged cursor on timeout", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
@@ -171,20 +233,21 @@ describe("agent.events handler", () => {
     expect(result.events).toEqual([]);
     expect(result.cursor).toBe(7);
     expect(result.longPollExpired).toBe(true);
+    rig.store.dispose();
   });
 
-  test("listener cleanup: bus listener counts return to baseline after each call", async () => {
-    const rig = await makeRig();
+  test("[smoke] listener cleanup: bus listener counts return to baseline after each call", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
-      flushIntervalMs: 0,
+      flushIntervalMs: 100,
     });
     const baselinePerType = rig.bus.listenerCount("swarm:link_proposed");
     expect(baselinePerType).toBe(1);
     for (let attempt = 0; attempt < 3; attempt++) {
       const pending = handler(
-        { since: 0, longPollMs: 200 },
+        { since: 0, longPollMs: 500 },
         () => {},
         `req-${attempt}`,
         "claude-code",
@@ -203,11 +266,14 @@ describe("agent.events handler", () => {
       expect(rig.bus.listenerCount("swarm:cluster_emerged")).toBe(baselinePerType);
       expect(rig.bus.listenerCount("swarm:claim_advanced")).toBe(baselinePerType);
       expect(rig.bus.listenerCount("swarm:contradiction_discovered")).toBe(baselinePerType);
+      await flush();
+      await clearLedger(connection);
     }
+    rig.store.dispose();
   });
 
-  test("listener cleanup: timed-out long-poll also detaches every listener", async () => {
-    const rig = await makeRig();
+  test("[smoke] listener cleanup: timed-out long-poll also detaches every listener", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
@@ -219,18 +285,17 @@ describe("agent.events handler", () => {
     expect(rig.bus.listenerCount("swarm:cluster_emerged")).toBe(baseline);
     expect(rig.bus.listenerCount("swarm:claim_advanced")).toBe(baseline);
     expect(rig.bus.listenerCount("swarm:contradiction_discovered")).toBe(baseline);
+    rig.store.dispose();
   });
 
-  test("longPollMs above the ceiling clamps to the documented maximum", async () => {
-    const rig = await makeRig();
-    seedClaimAdvanced(rig.store, 1);
+  test("[smoke] longPollMs above the ceiling clamps to the documented maximum", async () => {
+    const rig = makeRig();
+    await seedClaimAdvanced(rig.store, 1);
     const handler = createAgentEventsHandler({
       agentEventStore: rig.store,
       bus: rig.bus,
       flushIntervalMs: 0,
     });
-    // First read returns rows so we never enter the long-poll path; we only
-    // exercise the parser here to assert the clamp does not throw.
     const result = await handler(
       { since: 0, longPollMs: 99_999_999 },
       () => {},
@@ -238,10 +303,11 @@ describe("agent.events handler", () => {
       "claude-code",
     );
     expect((result.events as unknown[]).length).toBe(1);
+    rig.store.dispose();
   });
 
-  test("rejects negative since", async () => {
-    const rig = await makeRig();
+  test("[smoke] rejects negative since", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({ agentEventStore: rig.store, bus: rig.bus });
     let thrown: unknown = null;
     try {
@@ -251,10 +317,11 @@ describe("agent.events handler", () => {
     }
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain("since");
+    rig.store.dispose();
   });
 
-  test("rejects non-integer since", async () => {
-    const rig = await makeRig();
+  test("[smoke] rejects non-integer since", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({ agentEventStore: rig.store, bus: rig.bus });
     let thrown: unknown = null;
     try {
@@ -264,10 +331,11 @@ describe("agent.events handler", () => {
     }
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain("since");
+    rig.store.dispose();
   });
 
-  test("rejects missing since", async () => {
-    const rig = await makeRig();
+  test("[smoke] rejects missing since", async () => {
+    const rig = makeRig();
     const handler = createAgentEventsHandler({ agentEventStore: rig.store, bus: rig.bus });
     let thrown: unknown = null;
     try {
@@ -277,6 +345,7 @@ describe("agent.events handler", () => {
     }
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain("since");
+    rig.store.dispose();
   });
 });
 

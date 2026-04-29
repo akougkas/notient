@@ -169,6 +169,62 @@ DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
 
+-- Phase D1 ledger of swarm discoveries surfaced through `notient events
+-- --since <cursor>`. The `seq` field is the wire cursor: the producer assigns
+-- it monotonically inside a transaction so external clients can drain a
+-- consistent stream by passing the highest seq they have seen. `payload` is
+-- JSON-stringified at insert time because SurrealDB 3.x does not accept
+-- option<any> for arbitrary nested payloads; the producer and consumer agree
+-- on JSON.parse at read time. `ts_ms` mirrors the historical SQLite `ts`
+-- column so the wire shape stays a number rather than a SurrealDB datetime.
+DEFINE TABLE OVERWRITE agent_event SCHEMAFULL;
+DEFINE FIELD OVERWRITE seq ON agent_event TYPE int;
+DEFINE FIELD OVERWRITE kind ON agent_event TYPE string;
+DEFINE FIELD OVERWRITE payload ON agent_event TYPE option<string>;
+DEFINE FIELD OVERWRITE ts_ms ON agent_event TYPE int;
+DEFINE FIELD OVERWRITE created_at ON agent_event TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE agent_event_seq ON agent_event FIELDS seq UNIQUE;
+DEFINE INDEX OVERWRITE agent_event_kind ON agent_event FIELDS kind;
+
+-- Phase D1 scoped trust grants for unattended writes. `seq` mirrors the
+-- numeric id the wire shape exposes so callers see the same stable identifier
+-- across the SQLite-era and SurrealDB-era storage. `allowed_folders` and
+-- `allowed_tools` stay JSON-stringified because the consumer (ApprovalGate)
+-- expects a string array on read; encoding parity with the SQLite mirror
+-- keeps the JSON.parse path identical.
+DEFINE TABLE OVERWRITE agent_session SCHEMAFULL;
+DEFINE FIELD OVERWRITE seq ON agent_session TYPE int;
+DEFINE FIELD OVERWRITE client ON agent_session TYPE string;
+DEFINE FIELD OVERWRITE granted_at ON agent_session TYPE int;
+DEFINE FIELD OVERWRITE expires_at ON agent_session TYPE int;
+DEFINE FIELD OVERWRITE allowed_folders ON agent_session TYPE string;
+DEFINE FIELD OVERWRITE allowed_tools ON agent_session TYPE string;
+DEFINE FIELD OVERWRITE max_writes ON agent_session TYPE option<int>;
+DEFINE FIELD OVERWRITE used_writes ON agent_session TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE revoked_at ON agent_session TYPE option<int>;
+DEFINE INDEX OVERWRITE agent_session_seq ON agent_session FIELDS seq UNIQUE;
+DEFINE INDEX OVERWRITE agent_session_client ON agent_session FIELDS client;
+
+-- Phase D1 swarm-agent run provenance. Coordinator stamps one row per
+-- agent invocation (`linker`, `synthesizer`, `contradictionHunter`,
+-- `maturityAdvancer`); `swarm:*` ledger rows reference `seq` so the agent
+-- streams UI can join an event back to the run that emitted it. Migration
+-- of the Coordinator producer is scoped for a follow-on task; this schema
+-- definition lands now so the table exists when that migration runs.
+DEFINE TABLE OVERWRITE agent_run SCHEMAFULL;
+DEFINE FIELD OVERWRITE seq ON agent_run TYPE int;
+DEFINE FIELD OVERWRITE agent ON agent_run TYPE string;
+DEFINE FIELD OVERWRITE trigger ON agent_run TYPE string;
+DEFINE FIELD OVERWRITE note_path ON agent_run TYPE option<string>;
+DEFINE FIELD OVERWRITE started_at ON agent_run TYPE int;
+DEFINE FIELD OVERWRITE finished_at ON agent_run TYPE option<int>;
+DEFINE FIELD OVERWRITE ok ON agent_run TYPE option<bool>;
+DEFINE FIELD OVERWRITE error ON agent_run TYPE option<string>;
+DEFINE FIELD OVERWRITE proposals_count ON agent_run TYPE int DEFAULT 0;
+DEFINE INDEX OVERWRITE agent_run_seq ON agent_run FIELDS seq UNIQUE;
+DEFINE INDEX OVERWRITE agent_run_agent ON agent_run FIELDS agent;
+DEFINE INDEX OVERWRITE agent_run_started ON agent_run FIELDS started_at;
+
 -- §3.6 Agent identity
 DEFINE ACCESS OVERWRITE agent_jwt ON DATABASE TYPE JWT
   ALGORITHM HS512 KEY $NOTIENT_AGENT_JWT_KEY

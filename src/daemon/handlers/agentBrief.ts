@@ -22,6 +22,7 @@
  *     the event's `notePaths` payload and the relevantNotes path set.
  */
 
+import type { Surreal } from "surrealdb";
 import type { VaultFacade } from "../../core/chat/tools/vault";
 import type { Database } from "../../core/db/database";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../../core/llm/provider";
@@ -38,6 +39,13 @@ export interface BriefSearchPipeline {
 
 export interface AgentBriefHandlerDeps {
   database: Database;
+  /**
+   * SurrealDB connection used for the swarm contradiction event lookup
+   * (Phase 4 Task 12). The `notes` and `graph_nodes` queries continue to
+   * read through the SQLite mirror until those tables migrate in a follow-up
+   * task; only the `agent_event` ledger has moved over here.
+   */
+  surrealDb: Surreal;
   searchPipeline: BriefSearchPipeline;
   vault: VaultFacade;
   provider: LLMProvider;
@@ -127,7 +135,7 @@ interface QuestionRow {
 }
 
 interface AgentEventRow {
-  payload: string;
+  payload: string | null | undefined;
 }
 
 interface ContradictionEventPayload {
@@ -158,8 +166,8 @@ async function runBrief(
   const relevantPaths = new Set(relevantNotes.map((note) => note.path));
   const recentDecisions = collectRecentDecisions(deps.database, relevantPaths, parsed.maxDecisions);
   const openQuestions = collectOpenQuestions(deps.database, relevantPaths, parsed.maxQuestions);
-  const openContradictions = collectOpenContradictions(
-    deps.database,
+  const openContradictions = await collectOpenContradictions(
+    deps.surrealDb,
     relevantPaths,
     parsed.maxQuestions,
   );
@@ -364,17 +372,22 @@ function collectOpenQuestions(
   return out;
 }
 
-function collectOpenContradictions(
-  database: Database,
+async function collectOpenContradictions(
+  db: Surreal,
   relevantPaths: Set<string>,
   maxContradictions: number,
-): AgentBriefContradiction[] {
+): Promise<AgentBriefContradiction[]> {
   if (relevantPaths.size === 0) return [];
-  const rows = database.query<AgentEventRow>(
-    "SELECT payload FROM agent_events WHERE type = 'swarm:contradiction_discovered' ORDER BY id DESC;",
-  );
+  // SurrealDB 3.x requires every ORDER BY field to appear in the projection;
+  // `seq` is the cursor field assigned at insert time by AgentEventStore.
+  const [rows] = await db
+    .query<[AgentEventRow[]]>(
+      "SELECT payload, seq FROM agent_event WHERE kind = 'swarm:contradiction_discovered' ORDER BY seq DESC;",
+    )
+    .collect<[AgentEventRow[]]>();
   const out: AgentBriefContradiction[] = [];
   for (const row of rows) {
+    if (row.payload === null || row.payload === undefined) continue;
     const candidate = toContradictionRecord(row.payload, relevantPaths);
     if (candidate === null) continue;
     out.push(candidate);

@@ -12,16 +12,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type RecordId, Table } from "surrealdb";
+import { EDGE_TABLES } from "../../core/db/edgeTables";
+import { applySchema } from "../../core/db/schemaApplier";
 import {
+  type NoteRecord,
   type SurrealConnection,
   connect,
   createNote,
-  type NoteRecord,
   relateWikilink,
   searchVector,
 } from "../../core/db/surreal";
-import { EDGE_TABLES } from "../../core/db/edgeTables";
-import { applySchema } from "../../core/db/schemaApplier";
 import { type SurrealServerHandle, startSurreal } from "../surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -71,7 +71,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
     }
   });
 
-  test("[smoke] INFO FOR DB reports all 26 expected tables", async () => {
+  test("[smoke] INFO FOR DB reports all 30 expected tables", async () => {
     const [info] = await connection.db
       .query<[{ tables: Record<string, string> }]>("INFO FOR DB;")
       .collect<[{ tables: Record<string, string> }]>();
@@ -79,14 +79,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
     const present = new Set(Object.keys(info.tables));
 
     const entityTables = ["note", "block", "chunk", "tag", "concept", "claim", "question"];
-    const opsTables = ["daemon_write", "awaken_run"];
+    const opsTables = [
+      "daemon_write",
+      "awaken_run",
+      "history",
+      "agent_event",
+      "agent_session",
+      "agent_run",
+    ];
     const unresolvedTables = ["wikilink_unresolved", "embed_unresolved"];
     const expected = [...entityTables, ...EDGE_TABLES, ...unresolvedTables, ...opsTables];
 
     for (const name of expected) {
       expect(present.has(name)).toBe(true);
     }
-    expect(expected.length).toBe(26);
+    expect(expected.length).toBe(30);
   });
 
   test("[smoke] createNote round-trips path/sha/word_count", async () => {
@@ -125,9 +132,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
       targets: string[];
     }
     const [rows] = await connection.db
-      .query<
-        [TraversalRow[]]
-      >("SELECT ->wikilink->note.path AS targets FROM $a;", { a: noteA.id })
+      .query<[TraversalRow[]]>("SELECT ->wikilink->note.path AS targets FROM $a;", { a: noteA.id })
       .collect<[TraversalRow[]]>();
 
     expect(rows.length).toBeGreaterThan(0);

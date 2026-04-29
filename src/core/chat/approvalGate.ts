@@ -29,10 +29,15 @@ import type { ApprovalMode, ToolCall } from "./types";
  * Carrying the slice (rather than the class) keeps tests cheap: harnesses can
  * assemble a stub literal without standing up a real database, and the live
  * `SessionGrants` instance from bootstrap satisfies it via duck typing.
+ *
+ * Phase 4 Task 12 widened the return shape to a Promise so the SurrealDB
+ * implementation can satisfy it; tests that wire a synchronous stub remain
+ * compatible because TypeScript accepts a sync return value where a Promise
+ * is expected.
  */
 export interface SessionGrantLookup {
-  find(query: SessionGrantFindQuery): SessionGrant | null;
-  incrementWriteCount(id: number): void;
+  find(query: SessionGrantFindQuery): Promise<SessionGrant | null> | SessionGrant | null;
+  incrementWriteCount(id: number): Promise<void> | void;
 }
 
 export interface PendingApproval {
@@ -203,14 +208,25 @@ export class ApprovalGate {
     if (signal.aborted) {
       throw asAbortError();
     }
-    const grant = this.sessionGrants.find({
+    // Sync-or-async lookup: existing test stubs return SessionGrant | null
+    // synchronously; the SurrealDB-backed implementation returns a Promise.
+    // Detect a Promise return so the synchronous fast path stays sync (the
+    // pending-state assertion in approvalGate.test.ts samples
+    // `gate.hasPending()` immediately after `gate.request(...)` returns and
+    // depends on the request body running far enough to push into the
+    // pending map without yielding to a microtask).
+    const grantLookup = this.sessionGrants.find({
       client: context?.clientIdentity ?? "human",
       tool: call.name,
       folder: extractFolder(readPathArg(call.args)),
       now: this.now(),
     });
+    const grant = grantLookup instanceof Promise ? await grantLookup : grantLookup;
     if (grant !== null) {
-      this.sessionGrants.incrementWriteCount(grant.id);
+      const incrementResult = this.sessionGrants.incrementWriteCount(grant.id);
+      if (incrementResult instanceof Promise) {
+        await incrementResult;
+      }
       const decision: ApprovalDecision = {
         approved: true,
         reason: `session-grant#${grant.id}`,

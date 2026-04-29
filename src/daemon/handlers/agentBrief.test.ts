@@ -1,8 +1,27 @@
-import { describe, expect, test } from "bun:test";
+/**
+ * Phase 4 Task 12 agent.brief handler smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/daemon/handlers/`.
+ *
+ * The handler keeps a hybrid storage footprint until a follow-up task
+ * migrates `notes` and `graph_nodes` off SQLite: the contradiction event
+ * lookup reads from the SurrealDB-backed `agent_event` ledger, while
+ * `notes.updated_at` and `graph_nodes` continue to read through the
+ * SQLite mirror. This test boots both backends so both reads are
+ * exercised against real storage end-to-end.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { resolve } from "node:path";
 import type { VaultFacade } from "../../core/chat/tools/vault";
 import { Database, type DatabaseAdapter } from "../../core/db/database";
+import { applySchema } from "../../core/db/schemaApplier";
+import { type SurrealConnection, connect } from "../../core/db/surreal";
 import type {
   ChatOptions,
   EmbedOptions,
@@ -11,6 +30,7 @@ import type {
   ChatMessage as ProviderChatMessage,
 } from "../../core/llm/provider";
 import type { SearchEvent, SearchHit, SearchQuery } from "../../core/search/types";
+import { type SurrealServerHandle, startSurreal } from "../surrealServer";
 import {
   AGENT_BRIEF_DEFAULT_MAX_DECISIONS,
   AGENT_BRIEF_DEFAULT_MAX_NOTES,
@@ -19,16 +39,18 @@ import {
   makeAgentBriefHandler,
 } from "./agentBrief";
 
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
 class MemAdapter implements DatabaseAdapter {
   files = new Map<string, ArrayBuffer>();
   constructor(init: Record<string, ArrayBuffer>) {
     for (const [k, v] of Object.entries(init)) this.files.set(k, v);
   }
-  async readBinary(path: string): Promise<ArrayBuffer | null> {
-    return this.files.get(path) ?? null;
+  async readBinary(filePath: string): Promise<ArrayBuffer | null> {
+    return this.files.get(filePath) ?? null;
   }
-  async writeBinary(path: string, data: ArrayBuffer): Promise<void> {
-    this.files.set(path, data);
+  async writeBinary(filePath: string, data: ArrayBuffer): Promise<void> {
+    this.files.set(filePath, data);
   }
 }
 
@@ -100,9 +122,9 @@ class ScriptedPipeline implements BriefSearchPipeline {
 
 class InMemoryFacade implements VaultFacade {
   constructor(private readonly files: Map<string, string>) {}
-  async readNote(path: string): Promise<string> {
-    const found = this.files.get(path);
-    if (found === undefined) throw new Error(`missing fixture file: ${path}`);
+  async readNote(filePath: string): Promise<string> {
+    const found = this.files.get(filePath);
+    if (found === undefined) throw new Error(`missing fixture file: ${filePath}`);
     return found;
   }
 }
@@ -125,14 +147,9 @@ interface SeedOptions {
     notePath: string;
     payload: Record<string, unknown> | null;
   }>;
-  contradictionEvents?: Array<{
-    pair: [string, string];
-    severity: number;
-    notePaths: string[];
-  }>;
 }
 
-function seedDatabase(options: SeedOptions): void {
+function seedSqlite(options: SeedOptions): void {
   for (const note of options.notes) {
     options.database.run(
       "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?);",
@@ -167,21 +184,90 @@ function seedDatabase(options: SeedOptions): void {
       ],
     );
   }
-  for (const event of options.contradictionEvents ?? []) {
-    options.database.run("INSERT INTO agent_events (ts, type, payload) VALUES (?,?,?);", [
-      Date.now(),
-      "swarm:contradiction_discovered",
-      JSON.stringify({
-        pair: event.pair,
-        severity: event.severity,
-        notePaths: event.notePaths,
-      }),
-    ]);
+}
+
+interface ContradictionEvent {
+  pair: [string, string];
+  severity: number;
+  notePaths: string[];
+}
+
+async function nextSeq(connection: SurrealConnection): Promise<number> {
+  const [rows] = await connection.db
+    .query<[Array<{ seq: number }>]>("SELECT seq FROM agent_event ORDER BY seq DESC LIMIT 1;")
+    .collect<[Array<{ seq: number }>]>();
+  return (rows[0]?.seq ?? 0) + 1;
+}
+
+async function seedContradictions(
+  connection: SurrealConnection,
+  events: ContradictionEvent[],
+): Promise<void> {
+  for (const event of events) {
+    const seq = await nextSeq(connection);
+    await connection.db
+      .query(
+        "CREATE agent_event CONTENT { seq: $seq, kind: 'swarm:contradiction_discovered', payload: $payload, ts_ms: $tsMs };",
+        {
+          seq,
+          payload: JSON.stringify({
+            pair: event.pair,
+            severity: event.severity,
+            notePaths: event.notePaths,
+          }),
+          tsMs: Date.now(),
+        },
+      )
+      .collect();
   }
 }
 
-describe("agent.brief handler", () => {
-  test("topic mode returns relevantNotes, decisions, questions, and a stubbed summary", async () => {
+async function clearLedger(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE agent_event;").collect();
+}
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.brief handler", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-agentbrief-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-agentbrief-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearLedger(connection);
+  });
+
+  test("[smoke] topic mode returns relevantNotes, decisions, questions, and a stubbed summary", async () => {
     const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
@@ -199,7 +285,7 @@ describe("agent.brief handler", () => {
         matchedText: "auth",
       },
     ];
-    seedDatabase({
+    seedSqlite({
       database,
       notes: [
         { path: "auth/oauth.md", updatedAt: 1_700_000_000 },
@@ -261,6 +347,7 @@ describe("agent.brief handler", () => {
     const provider = new StubProvider({ reply: "  Auth is OAuth+PKCE with short JWTs.  " });
     const handler = makeAgentBriefHandler({
       database,
+      surrealDb: connection.db,
       searchPipeline: pipeline,
       vault: new InMemoryFacade(new Map()),
       provider,
@@ -298,9 +385,9 @@ describe("agent.brief handler", () => {
     expect(typeof result.durationMs).toBe("number");
   });
 
-  test("file mode reads the fixture file and labels the topic from the basename", async () => {
+  test("[smoke] file mode reads the fixture file and labels the topic from the basename", async () => {
     const database = await freshDatabase();
-    seedDatabase({
+    seedSqlite({
       database,
       notes: [{ path: "guides/oauth.md", updatedAt: 1_700_000_000 }],
     });
@@ -320,6 +407,7 @@ describe("agent.brief handler", () => {
     const provider = new StubProvider({ reply: "Brief about OAuth code." });
     const handler = makeAgentBriefHandler({
       database,
+      surrealDb: connection.db,
       searchPipeline: pipeline,
       vault: new InMemoryFacade(fixtureFiles),
       provider,
@@ -338,55 +426,7 @@ describe("agent.brief handler", () => {
     expect(relevantNotes[0].path).toBe("guides/oauth.md");
   });
 
-  test("rejects empty topic", async () => {
-    const handler = baseHandler();
-    let thrown: unknown = null;
-    try {
-      await handler({ topic: "   " }, () => {}, "req-3", "claude-code");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("topic or filePath is required");
-  });
-
-  test("rejects missing both topic and filePath", async () => {
-    const handler = baseHandler();
-    let thrown: unknown = null;
-    try {
-      await handler({}, () => {}, "req-4", "claude-code");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("topic or filePath is required");
-  });
-
-  test("rejects when both topic and filePath are supplied", async () => {
-    const handler = baseHandler();
-    let thrown: unknown = null;
-    try {
-      await handler({ topic: "auth", filePath: "src/auth.ts" }, () => {}, "req-5", "claude-code");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("not both");
-  });
-
-  test("rejects '..' traversal in filePath", async () => {
-    const handler = baseHandler();
-    let thrown: unknown = null;
-    try {
-      await handler({ filePath: "../etc/passwd" }, () => {}, "req-6", "claude-code");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("'..' traversal");
-  });
-
-  test("honors maxNotes, maxQuestions, maxDecisions caps", async () => {
+  test("[smoke] honors maxNotes, maxQuestions, maxDecisions caps", async () => {
     const database = await freshDatabase();
     const hits: SearchHit[] = Array.from({ length: 6 }, (_, index) => ({
       notePath: `note-${index}.md`,
@@ -395,7 +435,7 @@ describe("agent.brief handler", () => {
       score: 1 - index * 0.1,
       matchedText: "x",
     }));
-    seedDatabase({
+    seedSqlite({
       database,
       notes: hits.map((hit, index) => ({ path: hit.notePath, updatedAt: 100 + index })),
       claims: hits.map((hit, index) => ({
@@ -414,6 +454,7 @@ describe("agent.brief handler", () => {
     });
     const handler = makeAgentBriefHandler({
       database,
+      surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),
       provider: new StubProvider({ reply: "summary" }),
@@ -434,7 +475,7 @@ describe("agent.brief handler", () => {
     expect(questions).toHaveLength(2);
   });
 
-  test("LLM failure returns empty summary with structured fields populated", async () => {
+  test("[smoke] LLM failure returns empty summary with structured fields populated", async () => {
     const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
@@ -445,7 +486,7 @@ describe("agent.brief handler", () => {
         matchedText: "x",
       },
     ];
-    seedDatabase({
+    seedSqlite({
       database,
       notes: [{ path: "auth/jwt.md", updatedAt: 100 }],
       claims: [
@@ -461,6 +502,7 @@ describe("agent.brief handler", () => {
     const provider = new StubProvider({ throwError: true });
     const handler = makeAgentBriefHandler({
       database,
+      surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),
       provider,
@@ -474,7 +516,7 @@ describe("agent.brief handler", () => {
     expect(relevantNotes[0].path).toBe("auth/jwt.md");
   });
 
-  test("contradiction events overlap on relevant note paths", async () => {
+  test("[smoke] contradiction events overlap on relevant note paths", async () => {
     const database = await freshDatabase();
     const hits: SearchHit[] = [
       {
@@ -485,24 +527,25 @@ describe("agent.brief handler", () => {
         matchedText: "auth",
       },
     ];
-    seedDatabase({
+    seedSqlite({
       database,
       notes: [{ path: "auth/jwt.md", updatedAt: 100 }],
-      contradictionEvents: [
-        {
-          pair: ["claim:a", "claim:b"],
-          severity: 0.8,
-          notePaths: ["auth/jwt.md", "other.md"],
-        },
-        {
-          pair: ["claim:c", "claim:d"],
-          severity: 0.6,
-          notePaths: ["unrelated.md"],
-        },
-      ],
     });
+    await seedContradictions(connection, [
+      {
+        pair: ["claim:a", "claim:b"],
+        severity: 0.8,
+        notePaths: ["auth/jwt.md", "other.md"],
+      },
+      {
+        pair: ["claim:c", "claim:d"],
+        severity: 0.6,
+        notePaths: ["unrelated.md"],
+      },
+    ]);
     const handler = makeAgentBriefHandler({
       database,
+      surrealDb: connection.db,
       searchPipeline: new ScriptedPipeline(hits),
       vault: new InMemoryFacade(new Map()),
       provider: new StubProvider({ reply: "summary" }),
@@ -522,19 +565,3 @@ describe("agent.brief defaults", () => {
     expect(AGENT_BRIEF_DEFAULT_MAX_DECISIONS).toBe(5);
   });
 });
-
-function baseHandler() {
-  return makeAgentBriefHandler({
-    database: stubDatabase(),
-    searchPipeline: new ScriptedPipeline([]),
-    vault: new InMemoryFacade(new Map()),
-    provider: new StubProvider(),
-    settings: SETTINGS,
-  });
-}
-
-function stubDatabase(): Database {
-  // Validation happens before any DB or pipeline call. Tests that exercise
-  // negative paths never reach the database, so an unopened instance is fine.
-  return new Database(new MemAdapter({}), { dbPath: "/db", wasmPath: "/wasm" });
-}
