@@ -302,24 +302,13 @@ export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<v
     setClauses.push("target_unresolved = $targetUnresolved");
     bindings.targetUnresolved = input.targetUnresolved;
   }
-  if (input.to !== null) {
-    bindings.to = input.to;
-    await db
-      .query(`RELATE $from->${input.table}->$to SET ${setClauses.join(", ")};`, bindings)
-      .collect();
-    return;
-  }
-  const insertFields = ["in: $from", "source: $source", "class: $cls", "confidence: $confidence"];
-  if (input.agent !== undefined) {
-    insertFields.push("agent: $agent");
-  }
-  if (hasTargetUnresolved) {
-    insertFields.push("target_unresolved: $targetUnresolved");
-  }
+  bindings.to = input.to ?? UNRESOLVED_NOTE_ID;
   await db
-    .query(`INSERT INTO ${input.table} { ${insertFields.join(", ")} };`, bindings)
+    .query(`RELATE $from->${input.table}->$to SET ${setClauses.join(", ")};`, bindings)
     .collect();
 }
+
+const UNRESOLVED_NOTE_ID = new RecordId("note", "unresolved");
 
 export async function markTier1Done(db: Surreal, noteId: RecordId<"note">): Promise<void> {
   await db.query("UPDATE $id SET tier1_at = time::now();", { id: noteId }).collect();

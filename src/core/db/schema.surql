@@ -84,12 +84,15 @@ DEFINE INDEX OVERWRITE question_sha ON question FIELDS sha UNIQUE;
 -- §3.4 Edge tables (15 total). Provenance fields are appended at runtime
 -- by the schema applier via src/core/db/edgeTables.ts::provenanceFields().
 
--- Deterministic (Tier 1; class = 'EXTRACTED')
+-- Deterministic (Tier 1; class = 'EXTRACTED').
+-- TYPE RELATION enforces `out` as a non-null record. Tier 1 routes
+-- unresolved wikilink/embed targets through the `note:unresolved`
+-- sentinel record (created below) and stores the raw target string in
+-- `target_unresolved`; spec §locked-decision-7 is satisfied at the
+-- audit layer rather than via a NONE `out` field.
 DEFINE TABLE OVERWRITE wikilink TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
-DEFINE FIELD OVERWRITE out ON wikilink TYPE option<record<note|block>>;
 DEFINE FIELD OVERWRITE target_unresolved ON wikilink TYPE option<string>;
 DEFINE TABLE OVERWRITE embed TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
-DEFINE FIELD OVERWRITE out ON embed TYPE option<record<note|block>>;
 DEFINE FIELD OVERWRITE target_unresolved ON embed TYPE option<string>;
 DEFINE TABLE OVERWRITE frontmatter_ref TYPE RELATION FROM note TO note SCHEMAFULL;
 DEFINE TABLE OVERWRITE tagged TYPE RELATION FROM note|block TO tag SCHEMAFULL;
@@ -131,6 +134,15 @@ DEFINE FIELD OVERWRITE tier_filter ON awaken_run TYPE array<int> DEFAULT [1,2,3]
 DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
+
+-- Sentinel note for unresolved wikilink/embed targets. RELATE requires a
+-- non-null `out` on TYPE RELATION tables; routing unresolved edges to this
+-- record lets Phase 5's `links audit` query the wikilink table directly.
+UPSERT note:unresolved CONTENT {
+  path: "_notient_unresolved",
+  sha: "_notient_unresolved",
+  word_count: 0
+};
 
 -- §3.6 Agent identity
 DEFINE ACCESS OVERWRITE agent_jwt ON DATABASE TYPE JWT
