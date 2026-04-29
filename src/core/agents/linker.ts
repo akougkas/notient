@@ -195,9 +195,10 @@ export class Linker implements Agent {
 
   private async fetchActiveChunks(noteId: RecordId<"note">): Promise<ChunkRow[]> {
     const [rows] = await this.opts.db
-      .query<[ChunkRow[]]>("SELECT ord, text, vector FROM chunk WHERE note = $note ORDER BY ord;", {
-        note: noteId,
-      })
+      .query<[ChunkRow[]]>(
+        "SELECT ord, text, vector FROM chunk WHERE note = $note AND vector != NONE ORDER BY ord;",
+        { note: noteId },
+      )
       .collect<[ChunkRow[]]>();
     return rows;
   }
