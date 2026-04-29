@@ -77,7 +77,10 @@ describe("MaturityAdvancer", () => {
     });
     const written = facade.files.get("/a.md") as string;
     const writtenSha = await sha(written);
-    expect(echo.take("/a.md", writtenSha)).toBe(true);
+    // PHASE-1-SHIM: EchoGuard is now a no-op shim, so take() always returns
+    // false. Phase 4 restores real provenance via the SurrealDB daemon_write
+    // table; this assertion will flip back to .toBe(true) at that point.
+    expect(echo.take("/a.md", writtenSha)).toBe(false);
   });
 
   test("does not promote a note that does not meet criteria", async () => {
