@@ -4,6 +4,12 @@ import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
 import { parseDistillFormat, runDistillCommand } from "./commands/distill";
+import {
+  parseEventsLongPollMs,
+  parseEventsPositiveInt,
+  parseEventsSince,
+  runEventsCommand,
+} from "./commands/events";
 import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
 import { runReindexCommand } from "./commands/reindex";
@@ -71,8 +77,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "ask",
         "brief",
         "distill",
+        "events",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -90,6 +97,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "ask") return await dispatchAsk(parsed, emitter, clientIdentity);
   if (parsed.command === "brief") return await dispatchBrief(parsed, emitter, clientIdentity);
   if (parsed.command === "distill") return await dispatchDistill(parsed, emitter, clientIdentity);
+  if (parsed.command === "events") return await dispatchEvents(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -285,6 +293,27 @@ async function dispatchDistill(
     transcriptPath: fromFlag,
     format,
     dryRun,
+    emitter,
+    clientIdentity,
+  });
+}
+
+async function dispatchEvents(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const since = parseEventsSince(parsed.flags.since);
+  const limit = parseEventsPositiveInt(parsed.flags.limit, "limit");
+  const longPollMs = parseEventsLongPollMs(parsed.flags["long-poll-ms"]);
+  const noPoll = parsed.flags["no-poll"] === true;
+  return await runEventsCommand({
+    vaultPath,
+    since,
+    limit,
+    longPollMs,
+    noPoll,
     emitter,
     clientIdentity,
   });

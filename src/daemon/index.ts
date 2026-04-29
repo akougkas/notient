@@ -6,6 +6,7 @@ import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAgentAskHandler } from "./handlers/agentAsk";
 import { makeAgentBriefHandler } from "./handlers/agentBrief";
 import { makeAgentDistillHandler } from "./handlers/agentDistill";
+import { createAgentEventsHandler } from "./handlers/agentEvents";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
@@ -198,6 +199,12 @@ async function main(argv: string[]): Promise<void> {
     distiller: kernel.get("transcriptDistiller"),
   });
   dispatcher.register("agent.distill", agentDistillHandler);
+
+  const agentEventsHandler = createAgentEventsHandler({
+    agentEventStore: kernel.get("agentEventStore"),
+    bus: kernel.get("bus"),
+  });
+  dispatcher.register("agent.events", agentEventsHandler);
 
   const vaultHandlers = makeVaultHandlers({ vault: kernel.get("vault") });
   const notesHandlers = makeNotesHandlers({
