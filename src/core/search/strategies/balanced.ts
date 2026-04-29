@@ -1,13 +1,12 @@
-import type { Database } from "../../db/database";
-import type { VectorIndex } from "../../indexer/vectorIndex";
-import { buildPathFilter } from "../filters";
+import type { Surreal } from "surrealdb";
+import { searchVectorWithPath } from "../../db/surreal";
+import { buildChunkNoteFilter } from "../filters";
 import type { Reranker } from "../reranker";
 import type { SearchFilters, SearchHit } from "../types";
 import { quickSearch } from "./quick";
 
 export interface BalancedSearchOptions {
-  db: Database;
-  vectorIndex: VectorIndex;
+  db: Surreal;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
   reranker: Reranker;
   query: string;
@@ -15,19 +14,20 @@ export interface BalancedSearchOptions {
   topK: number;
   rerankTopN: number;
   signal: AbortSignal;
-}
-
-interface ChunkRow {
-  id: string;
-  note_path: string;
-  text: string;
+  /**
+   * Optional ef value forwarded to the SurrealDB HNSW search operator. When
+   * omitted the helper drops the parameter and SurrealDB picks an internal
+   * default. The linker uses a tuned ef of 40; balanced search leaves it
+   * unset to keep retrieval breadth high.
+   */
+  ef?: number;
 }
 
 /**
- * Balanced mode: HNSW vector retrieval (top-K) followed by an LLM rerank
- * (top-N). When the embedder returns null (typically because the embedding
- * service is unreachable) the strategy falls back to Quick mode so the user
- * still gets results.
+ * Balanced mode: SurrealDB HNSW kNN retrieval (top-K) followed by an LLM
+ * rerank (top-N). When the embedder returns null (typically because the
+ * embedding service is unreachable) the strategy falls back to Quick mode
+ * (BM25) so the user still gets results.
  */
 export async function balancedSearch(options: BalancedSearchOptions): Promise<SearchHit[]> {
   if (options.rerankTopN <= 0) return [];
@@ -40,31 +40,21 @@ export async function balancedSearch(options: BalancedSearchOptions): Promise<Se
       limit: options.rerankTopN,
     });
   }
-  const candidates = options.vectorIndex.search(embedding, options.topK);
-  if (candidates.length === 0) return [];
-
-  const placeholders = candidates.map(() => "?").join(",");
-  const fragment = buildPathFilter(options.filters);
-  const rows = options.db.query<ChunkRow>(
-    `SELECT chunks.id AS id, chunks.note_path AS note_path, chunks.text AS text
-     FROM chunks
-     JOIN notes ON chunks.note_path = notes.path
-     WHERE chunks.id IN (${placeholders})${fragment.where};`,
-    [...candidates.map((candidate) => candidate.id), ...fragment.params],
-  );
-  const byId = new Map(rows.map((row) => [row.id, row] as const));
-  const initial: SearchHit[] = [];
-  for (const candidate of candidates) {
-    const row = byId.get(candidate.id);
-    if (!row) continue;
-    initial.push({
-      notePath: row.note_path,
-      chunkId: candidate.id,
-      snippet: row.text.slice(0, 240),
-      score: candidate.score,
-      matchedText: options.query,
-    });
-  }
-  if (initial.length === 0) return [];
+  const fragment = buildChunkNoteFilter(options.filters);
+  const rows = await searchVectorWithPath(options.db, {
+    vector: Array.from(embedding),
+    k: options.topK,
+    ...(options.ef !== undefined ? { ef: options.ef } : {}),
+    extraWhere: fragment.where,
+    extraBindings: fragment.bindings,
+  });
+  if (rows.length === 0) return [];
+  const initial: SearchHit[] = rows.map((row) => ({
+    notePath: row.notePath,
+    chunkId: row.chunkId.toString(),
+    snippet: row.text.slice(0, 240),
+    score: row.distance === null ? 0 : 1 - row.distance,
+    matchedText: options.query,
+  }));
   return options.reranker.rerank(options.query, initial, options.rerankTopN, options.signal);
 }

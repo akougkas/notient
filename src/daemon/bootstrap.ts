@@ -35,7 +35,6 @@ import { Embedder } from "../core/indexer/embedder";
 import { Extractor } from "../core/indexer/extractor";
 import { indexNote } from "../core/indexer/indexNote";
 import { IndexerQueue } from "../core/indexer/indexerQueue";
-import type { VectorIndex, VectorSearchResult } from "../core/indexer/vectorIndex";
 import { Kernel } from "../core/kernel";
 import { LMStudioProvider } from "../core/llm/lmStudioProvider";
 import { Reranker } from "../core/search/reranker";
@@ -83,38 +82,6 @@ const DB_PATH = `${NOTIENT_DIR}/notient.db`;
 const WASM_PATH = `${NOTIENT_DIR}/sql-wasm.wasm`;
 const LOCK_PATH = `${NOTIENT_DIR}/notient.lock`;
 const CONFIG_PATH = `${NOTIENT_DIR}/config.json`;
-
-/**
- * No-op VectorIndex used while Phase 3 transitions kNN reads onto Surreal-backed
- * embeddings. Satisfies the VectorIndex contract so SearchPipeline,
- * balancedSearch, and deepSearch keep their typed dependency wiring, but every
- * search returns an empty result set. Phase 3 §locked-decision-7 keeps
- * SearchPipeline on SQLite reads, so callers degrade to BM25/text-match hits
- * for now. Task 12 documents this behavior in the handoff.
- */
-class EmptyVectorIndex implements VectorIndex {
-  async init(_dim: number): Promise<void> {
-    /* no-op */
-  }
-  add(_id: string, _vector: Float32Array): void {
-    /* no-op */
-  }
-  remove(_id: string): void {
-    /* no-op */
-  }
-  search(_query: Float32Array, _k: number): VectorSearchResult[] {
-    return [];
-  }
-  size(): number {
-    return 0;
-  }
-  async persist(): Promise<ArrayBuffer> {
-    return new ArrayBuffer(0);
-  }
-  async load(_blob: ArrayBuffer): Promise<void> {
-    /* no-op */
-  }
-}
 
 const NOTIENT_FOLDER = "Notient";
 const CONVERSATIONS_FOLDER = `${NOTIENT_FOLDER}/conversations`;
@@ -274,13 +241,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Phase B additions.
-  // 768 matches the locked embedding model (text-embedding-nomic-embed-text-v2-moe).
-  // The vector index is currently a no-op stub (Phase 3 Task 10): SearchPipeline,
-  // ContradictionHunter, and Synthesizer all see empty kNN results until kNN is
-  // re-implemented on top of Surreal-backed embeddings.
-  const vectorIndex: VectorIndex = new EmptyVectorIndex();
-  await vectorIndex.init(768);
-
   const embedder = new Embedder(embeddingLLM, {
     model: current.embedding.model,
     concurrency: vaultConfig.indexer.concurrency.embed,
@@ -308,19 +268,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const reranker = new Reranker({
     provider: deepLLM,
     model: current.deep.rerankerModel,
-  });
-
-  const searchPipeline = new SearchPipeline({
-    db: database,
-    vectorIndex,
-    reranker,
-    embed: async (text, signal) => {
-      const vectors = await embedder.embed([text], signal);
-      return vectors.length > 0 ? new Float32Array(vectors[0]) : null;
-    },
-    provider: deepLLM,
-    reasoningModel: current.deep.reasoningModel,
-    settings: () => current.search,
   });
 
   const savedQueries = new SavedQueries({
@@ -399,6 +346,28 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     kernel.register("surrealDb", surrealConnection);
   }
 
+  // SearchPipeline (Phase 4 Task 11) reads kNN, BM25, and graph expansion
+  // directly through SurrealDB. Constructing it requires the live connection
+  // established above; bootstrap therefore refuses to seal Phase B without
+  // SurrealDB. The only path that yields a null connection is the
+  // test-only `skipSurreal` opt-out, which has no production consumers.
+  if (surrealConnection === null) {
+    throw new Error(
+      "bootstrap: SearchPipeline requires a SurrealDB connection (Phase 4 Task 11); skipSurreal is incompatible with Phase B wiring",
+    );
+  }
+  const searchPipeline = new SearchPipeline({
+    db: surrealConnection.db,
+    reranker,
+    embed: async (text, signal) => {
+      const vectors = await embedder.embed([text], signal);
+      return vectors.length > 0 ? new Float32Array(vectors[0]) : null;
+    },
+    provider: deepLLM,
+    reasoningModel: current.deep.reasoningModel,
+    settings: () => current.search,
+  });
+
   // The Linker (Phase 3) requires a live SurrealDB connection. When the
   // operator skipped SurrealDB or a Phase 3 deploy has not yet provisioned
   // it, fall back to a no-op linker so the Coordinator's agents map stays
@@ -428,7 +397,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         noteBody: body,
         database,
         graph,
-        vectorIndex,
         embedder,
         extractor,
         bus,
@@ -451,10 +419,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     db: database,
     provider: deepLLM,
     reasoningModel: current.deep.reasoningModel,
-    // Phase 3 Task 10: kNN over claims is offline while the vector index is a
-    // no-op stub. ContradictionHunter receives an empty neighbor list and
-    // therefore proposes zero contradiction edges per cycle. Task 12 documents
-    // the behavior; restoration depends on the Surreal-backed kNN replacement.
+    // Phase 3 Task 10 left ContradictionHunter without a kNN source after the
+    // vector index became a no-op stub. Phase 4 Task 11 deletes that stub but
+    // does not re-wire ContradictionHunter onto SurrealDB; the neighbor
+    // closure stays empty so the agent proposes zero contradiction edges per
+    // cycle. Task 12 documents the behavior; restoration depends on a future
+    // ContradictionHunter migration onto the SurrealDB kNN reader.
     neighbors: async () => [],
     maxPairs: 5,
   });
@@ -479,7 +449,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
 
   kernel.register("indexer", indexer);
-  kernel.register("vectorIndex", vectorIndex);
   kernel.register("embedder", embedder);
   kernel.register("extractor", extractor);
   kernel.register("vaultBootstrap", vaultBootstrap);

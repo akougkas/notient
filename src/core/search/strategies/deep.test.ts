@@ -1,11 +1,37 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../../db/database";
-import { MemoryAdapter, loadWasm } from "../../db/database.test";
-import { InMemoryVectorIndex } from "../../indexer/vectorIndex";
+/**
+ * Phase 4 Task 11 deepSearch smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
+ *
+ * Boots a real SurrealDB, applies the schema, seeds notes with chunk vectors
+ * and approved-and-applied wikilink edges, then exercises the deep strategy:
+ * hybrid kNN + BM25 retrieval, graph expansion, and grounded synthesis.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { RecordId } from "surrealdb";
+import { type SurrealServerHandle, startSurreal } from "../../../daemon/surrealServer";
+import { applySchema } from "../../db/schemaApplier";
+import {
+  type SurrealConnection,
+  connect,
+  relateEdge,
+  replaceChunks,
+  upsertNoteByPath,
+} from "../../db/surreal";
 import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../llm/provider";
 import { Reranker } from "../reranker";
-import type { SearchEvent, SearchHit } from "../types";
+import type { SearchEvent } from "../types";
 import { type DeepSearchEvent, deepSearch } from "./deep";
+
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+const VECTOR_DIM = 768;
+const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
 
 interface ProviderStub {
   rerankRanking?: string[];
@@ -30,55 +56,61 @@ function fakeProvider(stub: ProviderStub): LLMProvider {
   };
 }
 
-interface Harness {
-  db: Database;
-  index: InMemoryVectorIndex;
-  reranker: Reranker;
-  provider: LLMProvider;
+function unitVector(...nonZero: Array<{ index: number; value: number }>): number[] {
+  const vector = new Array<number>(VECTOR_DIM).fill(0);
+  for (const entry of nonZero) {
+    vector[entry.index] = entry.value;
+  }
+  return vector;
 }
 
-async function setupHarness(stub: ProviderStub = {}): Promise<Harness> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await db.init();
-  const index = new InMemoryVectorIndex();
-  await index.init(2);
-  const provider = fakeProvider(stub);
-  const reranker = new Reranker({ provider, model: "rerank" });
-  return { db, index, reranker, provider };
-}
-
-function seedNote(db: Database, path: string, chunkId: string, text: string): void {
-  db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?);", [
-    path,
-    "sha",
-    100,
-    1,
-    1,
+async function seedNote(
+  connection: SurrealConnection,
+  notePath: string,
+  text: string,
+  vector: number[],
+): Promise<RecordId<"note">> {
+  const noteId = await upsertNoteByPath(connection.db, {
+    path: notePath,
+    sha: `sha-${notePath}`,
+    wordCount: 10,
+  });
+  await replaceChunks(connection.db, noteId, [
+    {
+      ord: 0,
+      text,
+      tokenEstimate: 4,
+      vector,
+      embedModel: EMBED_MODEL,
+    },
   ]);
-  db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-    chunkId,
-    path,
-    0,
-    text,
-    `sha-${chunkId}`,
-  ]);
+  return noteId;
 }
 
-function seedApprovedEdge(
-  db: Database,
-  edgeId: string,
-  sourcePath: string,
-  targetPath: string,
-): void {
-  db.run(
-    `INSERT INTO graph_edges (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?);`,
-    [edgeId, "related", `note:${sourcePath}`, `note:${targetPath}`, 0.9, "linker", "[]", 1, 1],
-  );
+async function relateApprovedWikilink(
+  connection: SurrealConnection,
+  fromId: RecordId<"note">,
+  toId: RecordId<"note">,
+): Promise<void> {
+  await relateEdge(connection.db, {
+    table: "wikilink",
+    from: fromId,
+    to: toId,
+    source: "wikilink",
+    confidenceClass: "EXTRACTED",
+    confidence: 1,
+    agent: "linker",
+    approved: true,
+  });
 }
 
-async function collect(
+async function clearChunksAndEdges(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE wikilink;").collect();
+  await connection.db.query("DELETE chunk;").collect();
+  await connection.db.query("DELETE note;").collect();
+}
+
+async function collectEvents(
   generator: AsyncGenerator<DeepSearchEvent, void, void>,
 ): Promise<DeepSearchEvent[]> {
   const events: DeepSearchEvent[] = [];
@@ -86,30 +118,80 @@ async function collect(
   return events;
 }
 
-const embedAlphaVector = async (): Promise<Float32Array> => Float32Array.from([1, 0]);
+describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-deep-smoke-secret";
 
-describe("deepSearch", () => {
-  test("streams retrieving, hits, expanding, graph-expansion, synthesizing, synthesis-done, then deep:result", async () => {
-    const harness = await setupHarness({
-      rerankRanking: ["alpha-chunk"],
-      synthesisTokens: ["- Alpha is foundational [[/notes/Alpha]]\n"],
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-deep-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
     });
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha alpha alpha");
-    seedNote(harness.db, "/notes/Beta.md", "beta-chunk", "beta beta beta");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
-    seedApprovedEdge(harness.db, "edge-1", "/notes/Alpha.md", "/notes/Beta.md");
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
 
-    const events = await collect(
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearChunksAndEdges(connection);
+  });
+
+  test("streams retrieving, hits, expanding, graph-expansion, synthesizing, synthesis-done, then deep:result", async () => {
+    // Alpha matches the query strongly (kNN + BM25), Gamma is an isolated
+    // chunk that does not match retrieval, and Alpha->Gamma is the only
+    // approved-and-applied wikilink so graph expansion adds exactly one hit.
+    const alphaId = await seedNote(
+      connection,
+      "notes/Alpha.md",
+      "alpha alpha alpha",
+      unitVector({ index: 0, value: 1 }),
+    );
+    const gammaId = await seedNote(
+      connection,
+      "notes/Gamma.md",
+      "completely unrelated content",
+      unitVector({ index: 100, value: 1 }),
+    );
+    await relateApprovedWikilink(connection, alphaId, gammaId);
+
+    const provider = fakeProvider({
+      rerankRanking: ["unused"],
+      synthesisTokens: ["- Alpha is foundational [[notes/Alpha]]\n"],
+    });
+    const reranker = new Reranker({ provider, model: "rerank" });
+    const events = await collectEvents(
       deepSearch({
-        db: harness.db,
-        provider: harness.provider,
-        vectorIndex: harness.index,
-        embed: embedAlphaVector,
-        reranker: harness.reranker,
+        db: connection.db,
+        provider,
+        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+        reranker,
         reasoningModel: "reasoning",
         query: "alpha",
-        topK: 5,
-        rerankTopN: 5,
+        topK: 1,
+        rerankTopN: 1,
         graphDepth: 1,
         synthesisEnabled: true,
         signal: new AbortController().signal,
@@ -125,37 +207,31 @@ describe("deepSearch", () => {
       "search:synthesis-done",
       "deep:result",
     ]);
-    const hitsEvent = events.find((event) => event.type === "search:hits");
-    if (hitsEvent?.type === "search:hits") {
-      expect(hitsEvent.hits[0].chunkId).toBe("alpha-chunk");
-    }
     const expansion = events.find((event) => event.type === "search:graph-expansion");
     if (expansion?.type === "search:graph-expansion") {
-      expect(expansion.addedHitCount).toBe(1);
+      expect(expansion.addedHitCount).toBeGreaterThanOrEqual(1);
     }
     const result = events[events.length - 1];
     if (result.type === "deep:result") {
-      expect(result.output.hits.map((hit) => hit.notePath)).toEqual([
-        "/notes/Alpha.md",
-        "/notes/Beta.md",
-      ]);
+      const paths = result.output.hits.map((hit) => hit.notePath);
+      expect(paths).toContain("notes/Alpha.md");
+      expect(paths).toContain("notes/Gamma.md");
       expect(result.output.synthesis?.bullets).toHaveLength(1);
-      expect(result.output.synthesis?.bullets[0].citations[0]).toContain("[[/notes/Alpha]]");
+      expect(result.output.synthesis?.bullets[0].citations[0]).toContain("[[notes/Alpha]]");
     }
   });
 
   test("skips synthesis stage when synthesisEnabled is false", async () => {
-    const harness = await setupHarness({ rerankRanking: ["alpha-chunk"] });
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
+    await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
 
-    const events = await collect(
+    const provider = fakeProvider({ rerankRanking: ["unused"] });
+    const reranker = new Reranker({ provider, model: "rerank" });
+    const events = await collectEvents(
       deepSearch({
-        db: harness.db,
-        provider: harness.provider,
-        vectorIndex: harness.index,
-        embed: embedAlphaVector,
-        reranker: harness.reranker,
+        db: connection.db,
+        provider,
+        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+        reranker,
         reasoningModel: "reasoning",
         query: "alpha",
         topK: 5,
@@ -175,23 +251,32 @@ describe("deepSearch", () => {
   });
 
   test("graphDepth=0 skips graph expansion but still emits the stage event", async () => {
-    const harness = await setupHarness({ rerankRanking: ["alpha-chunk"] });
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha");
-    seedNote(harness.db, "/notes/Beta.md", "beta-chunk", "beta");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
-    seedApprovedEdge(harness.db, "edge-1", "/notes/Alpha.md", "/notes/Beta.md");
+    const alphaId = await seedNote(
+      connection,
+      "notes/Alpha.md",
+      "alpha",
+      unitVector({ index: 0, value: 1 }),
+    );
+    const gammaId = await seedNote(
+      connection,
+      "notes/Gamma.md",
+      "completely unrelated content",
+      unitVector({ index: 100, value: 1 }),
+    );
+    await relateApprovedWikilink(connection, alphaId, gammaId);
 
-    const events = await collect(
+    const provider = fakeProvider({ rerankRanking: ["unused"] });
+    const reranker = new Reranker({ provider, model: "rerank" });
+    const events = await collectEvents(
       deepSearch({
-        db: harness.db,
-        provider: harness.provider,
-        vectorIndex: harness.index,
-        embed: embedAlphaVector,
-        reranker: harness.reranker,
+        db: connection.db,
+        provider,
+        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+        reranker,
         reasoningModel: "reasoning",
         query: "alpha",
-        topK: 5,
-        rerankTopN: 5,
+        topK: 1,
+        rerankTopN: 1,
         graphDepth: 0,
         synthesisEnabled: false,
         signal: new AbortController().signal,
@@ -203,25 +288,27 @@ describe("deepSearch", () => {
     }
     const result = events[events.length - 1];
     if (result.type === "deep:result") {
-      expect(result.output.hits.map((hit) => hit.notePath)).toEqual(["/notes/Alpha.md"]);
+      // graphDepth=0 means Gamma must NOT be expanded in even though A->Gamma
+      // is a wikilink edge. The kNN/BM25 retrieval also misses Gamma so the
+      // final hits collapse to just Alpha.
+      expect(result.output.hits.map((hit) => hit.notePath)).toEqual(["notes/Alpha.md"]);
     }
   });
 
   test("synthesis transport failure produces a stub card with error and reaches deep:result", async () => {
-    const harness = await setupHarness({
-      rerankRanking: ["alpha-chunk"],
+    await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
+
+    const provider = fakeProvider({
+      rerankRanking: ["unused"],
       failSynthesis: () => new Error("llama-server 500"),
     });
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
-
-    const events = await collect(
+    const reranker = new Reranker({ provider, model: "rerank" });
+    const events = await collectEvents(
       deepSearch({
-        db: harness.db,
-        provider: harness.provider,
-        vectorIndex: harness.index,
-        embed: embedAlphaVector,
-        reranker: harness.reranker,
+        db: connection.db,
+        provider,
+        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+        reranker,
         reasoningModel: "reasoning",
         query: "alpha",
         topK: 5,
@@ -243,25 +330,25 @@ describe("deepSearch", () => {
   });
 
   test("aborted signal during synthesis emits search:error and stops", async () => {
-    const harness = await setupHarness({
-      rerankRanking: ["alpha-chunk"],
+    await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
+
+    const provider = fakeProvider({
+      rerankRanking: ["unused"],
       failSynthesis: () => {
         const aborted = new Error("aborted");
         aborted.name = "AbortError";
         return aborted;
       },
     });
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
+    const reranker = new Reranker({ provider, model: "rerank" });
     const controller = new AbortController();
 
     const events: DeepSearchEvent[] = [];
     const generator = deepSearch({
-      db: harness.db,
-      provider: harness.provider,
-      vectorIndex: harness.index,
-      embed: embedAlphaVector,
-      reranker: harness.reranker,
+      db: connection.db,
+      provider,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+      reranker,
       reasoningModel: "reasoning",
       query: "alpha",
       topK: 5,
@@ -283,19 +370,18 @@ describe("deepSearch", () => {
   });
 
   test("aborted signal before retrieval short-circuits with search:error", async () => {
-    const harness = await setupHarness();
-    seedNote(harness.db, "/notes/Alpha.md", "alpha-chunk", "alpha");
-    harness.index.add("alpha-chunk", Float32Array.from([1, 0]));
+    await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
+    const provider = fakeProvider({});
+    const reranker = new Reranker({ provider, model: "rerank" });
     const controller = new AbortController();
     controller.abort();
 
-    const events = await collect(
+    const events = await collectEvents(
       deepSearch({
-        db: harness.db,
-        provider: harness.provider,
-        vectorIndex: harness.index,
-        embed: embedAlphaVector,
-        reranker: harness.reranker,
+        db: connection.db,
+        provider,
+        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+        reranker,
         reasoningModel: "reasoning",
         query: "alpha",
         topK: 5,

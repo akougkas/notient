@@ -16,7 +16,6 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "agentEventStore",
   "sessionGrants",
   "indexer",
-  "vectorIndex",
   "embedder",
   "extractor",
   "reasoningMutex",

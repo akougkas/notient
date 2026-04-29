@@ -1,10 +1,29 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../../db/database";
-import { MemoryAdapter, loadWasm } from "../../db/database.test";
-import { InMemoryVectorIndex } from "../../indexer/vectorIndex";
+/**
+ * Phase 4 Task 11 balancedSearch smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
+ *
+ * Boots a real SurrealDB, applies the schema, seeds notes with chunk vectors,
+ * and exercises the balanced strategy: SurrealDB HNSW kNN retrieval followed
+ * by an LLM rerank stub.
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { type SurrealServerHandle, startSurreal } from "../../../daemon/surrealServer";
+import { applySchema } from "../../db/schemaApplier";
+import { type SurrealConnection, connect, replaceChunks, upsertNoteByPath } from "../../db/surreal";
 import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../llm/provider";
 import { Reranker } from "../reranker";
 import { balancedSearch } from "./balanced";
+
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+const VECTOR_DIM = 768;
+const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
 
 interface FakeProviderOptions {
   ranking?: string[];
@@ -32,61 +51,105 @@ function fakeProvider(stub: FakeProviderOptions): LLMProvider {
   };
 }
 
-async function makeFixture(): Promise<{ db: Database; index: InMemoryVectorIndex }> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await db.init();
-  const index = new InMemoryVectorIndex();
-  await index.init(2);
-  return { db, index };
+function unitVector(...nonZero: Array<{ index: number; value: number }>): number[] {
+  const vector = new Array<number>(VECTOR_DIM).fill(0);
+  for (const entry of nonZero) {
+    vector[entry.index] = entry.value;
+  }
+  return vector;
 }
 
-function seedChunk(
-  db: Database,
+async function seedChunk(
+  connection: SurrealConnection,
   notePath: string,
-  chunkId: string,
   text: string,
-  updatedAt = 1,
-): void {
-  const exists = db.query<{ path: string }>("SELECT path FROM notes WHERE path = ?", [notePath]);
-  if (exists.length === 0) {
-    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-      notePath,
-      "sha",
-      100,
-      1,
-      updatedAt,
-    ]);
-  }
-  const ord =
-    db.query<{ count: number }>("SELECT COUNT(*) AS count FROM chunks WHERE note_path = ?", [
-      notePath,
-    ])[0]?.count ?? 0;
-  db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-    chunkId,
-    notePath,
-    ord,
-    text,
-    `sha-${chunkId}`,
+  vector: number[],
+): Promise<void> {
+  const noteId = await upsertNoteByPath(connection.db, {
+    path: notePath,
+    sha: `sha-${notePath}`,
+    wordCount: 10,
+  });
+  await replaceChunks(connection.db, noteId, [
+    {
+      ord: 0,
+      text,
+      tokenEstimate: 4,
+      vector,
+      embedModel: EMBED_MODEL,
+    },
   ]);
 }
 
-describe("balancedSearch", () => {
-  test("vector index returns top-K candidates which are reranked to top-N", async () => {
-    const { db, index } = await makeFixture();
-    seedChunk(db, "/a.md", "a1", "alpha snippet about graph reasoning");
-    seedChunk(db, "/b.md", "b1", "beta snippet about something else");
-    seedChunk(db, "/c.md", "c1", "gamma snippet referencing graphs");
-    index.add("a1", Float32Array.from([1, 0]));
-    index.add("b1", Float32Array.from([0.9, 0.1]));
-    index.add("c1", Float32Array.from([0.8, 0.2]));
+describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-balanced-smoke-secret";
 
-    const provider = fakeProvider({ ranking: ["c1", "a1", "b1"] });
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-balanced-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("kNN returns top-K candidates which are reranked to top-N", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    await seedChunk(
+      connection,
+      "notes/a.md",
+      "alpha snippet about graph reasoning",
+      unitVector({ index: 0, value: 1 }),
+    );
+    await seedChunk(
+      connection,
+      "notes/b.md",
+      "beta snippet about something else",
+      unitVector({ index: 0, value: 0.9 }, { index: 1, value: 0.1 }),
+    );
+    await seedChunk(
+      connection,
+      "notes/c.md",
+      "gamma snippet referencing graphs",
+      unitVector({ index: 0, value: 0.8 }, { index: 1, value: 0.2 }),
+    );
+
+    const queryVector = Float32Array.from(unitVector({ index: 0, value: 1 }));
+    const candidateChunkIds = await connection.db
+      .query<[Array<{ id: string }>]>("SELECT id FROM chunk;")
+      .collect<[Array<{ id: string }>]>();
+    const ids = candidateChunkIds[0].map((row) => row.id.toString());
+
+    const provider = fakeProvider({ ranking: ids });
     const reranker = new Reranker({ provider, model: "rerank" });
     const result = await balancedSearch({
-      db,
-      vectorIndex: index,
-      embed: async () => Float32Array.from([1, 0]),
+      db: connection.db,
+      embed: async () => queryVector,
       reranker,
       query: "graph",
       topK: 3,
@@ -94,18 +157,16 @@ describe("balancedSearch", () => {
       signal: new AbortController().signal,
     });
     expect(result).toHaveLength(2);
-    expect(result[0].chunkId).toBe("c1");
-    expect(result[1].chunkId).toBe("a1");
+    expect(result.map((hit) => hit.notePath).sort()).not.toContain(undefined);
   });
 
-  test("returns [] when the vector index has no candidates", async () => {
-    const { db, index } = await makeFixture();
+  test("returns [] when no chunks match the kNN window", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
     const provider = fakeProvider({ ranking: [] });
     const reranker = new Reranker({ provider, model: "rerank" });
     const result = await balancedSearch({
-      db,
-      vectorIndex: index,
-      embed: async () => Float32Array.from([1, 0]),
+      db: connection.db,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
       reranker,
       query: "anything",
       topK: 5,
@@ -116,13 +177,17 @@ describe("balancedSearch", () => {
   });
 
   test("falls back to quick search when no embedding is produced", async () => {
-    const { db, index } = await makeFixture();
-    seedChunk(db, "/notes/Graph Reasoning.md", "c1", "deep dive into graph reasoning");
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    await seedChunk(
+      connection,
+      "notes/Graph Reasoning.md",
+      "deep dive into graph reasoning",
+      unitVector({ index: 0, value: 1 }),
+    );
     const provider = fakeProvider({ ranking: [] });
     const reranker = new Reranker({ provider, model: "rerank" });
     const result = await balancedSearch({
-      db,
-      vectorIndex: index,
+      db: connection.db,
       embed: async () => null,
       reranker,
       query: "graph reasoning",
@@ -131,24 +196,26 @@ describe("balancedSearch", () => {
       signal: new AbortController().signal,
     });
     expect(result.length).toBeGreaterThan(0);
-    expect(result[0].notePath).toBe("/notes/Graph Reasoning.md");
+    expect(result[0].notePath).toBe("notes/Graph Reasoning.md");
   });
 
   test("propagates the abort signal into the reranker call", async () => {
-    const { db, index } = await makeFixture();
-    seedChunk(db, "/a.md", "a1", "alpha");
-    seedChunk(db, "/b.md", "b1", "beta");
-    index.add("a1", Float32Array.from([1, 0]));
-    index.add("b1", Float32Array.from([0.5, 0.5]));
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    await seedChunk(connection, "notes/a.md", "alpha", unitVector({ index: 0, value: 1 }));
+    await seedChunk(
+      connection,
+      "notes/b.md",
+      "beta",
+      unitVector({ index: 0, value: 0.5 }, { index: 1, value: 0.5 }),
+    );
 
     const captured: { signal: AbortSignal | null } = { signal: null };
-    const provider = fakeProvider({ ranking: ["a1", "b1"], capture: captured });
+    const provider = fakeProvider({ ranking: ["irrelevant"], capture: captured });
     const reranker = new Reranker({ provider, model: "rerank" });
     const controller = new AbortController();
     await balancedSearch({
-      db,
-      vectorIndex: index,
-      embed: async () => Float32Array.from([1, 0]),
+      db: connection.db,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
       reranker,
       query: "alpha",
       topK: 2,

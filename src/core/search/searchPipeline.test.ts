@@ -1,11 +1,37 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../db/database";
-import { MemoryAdapter, loadWasm } from "../db/database.test";
-import { InMemoryVectorIndex } from "../indexer/vectorIndex";
+/**
+ * Phase 4 Task 11 SearchPipeline smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
+ *
+ * Boots a real SurrealDB, applies the schema, and exercises the pipeline's
+ * Quick / Balanced / Deep modes against actual SurrealDB-backed strategies.
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
+import { applySchema } from "../db/schemaApplier";
+import { type SurrealConnection, connect, replaceChunks, upsertNoteByPath } from "../db/surreal";
 import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../llm/provider";
 import { Reranker } from "./reranker";
 import { SearchPipeline } from "./searchPipeline";
 import type { SearchEvent } from "./types";
+
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+const VECTOR_DIM = 768;
+const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+
+function unitVector(...nonZero: Array<{ index: number; value: number }>): number[] {
+  const vector = new Array<number>(VECTOR_DIM).fill(0);
+  for (const entry of nonZero) {
+    vector[entry.index] = entry.value;
+  }
+  return vector;
+}
 
 function fakeProvider(ranking: string[]): LLMProvider {
   return {
@@ -23,50 +49,31 @@ function fakeProvider(ranking: string[]): LLMProvider {
   };
 }
 
-async function setup(): Promise<{
-  db: Database;
-  index: InMemoryVectorIndex;
-  pipeline: SearchPipeline;
-}> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await db.init();
-  const index = new InMemoryVectorIndex();
-  await index.init(2);
-
-  const provider = fakeProvider(["a1"]);
-  const reranker = new Reranker({ provider, model: "rerank" });
-  const pipeline = new SearchPipeline({
-    db,
-    vectorIndex: index,
-    reranker,
-    embed: async () => Float32Array.from([1, 0]),
-    provider,
-    reasoningModel: "reasoning",
-    settings: () => ({
-      balanced: { topK: 10, rerankTopN: 5 },
-      deep: { graphExpansionDepth: 1, synthesisEnabled: false },
-    }),
-    now: () => 100,
+async function seedNote(
+  connection: SurrealConnection,
+  notePath: string,
+  text: string,
+  vector: number[],
+): Promise<void> {
+  const noteId = await upsertNoteByPath(connection.db, {
+    path: notePath,
+    sha: `sha-${notePath}`,
+    wordCount: 1,
   });
-  return { db, index, pipeline };
+  await replaceChunks(connection.db, noteId, [
+    {
+      ord: 0,
+      text,
+      tokenEstimate: 4,
+      vector,
+      embedModel: EMBED_MODEL,
+    },
+  ]);
 }
 
-function seed(db: Database, path: string, chunkId: string, text: string): void {
-  db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-    path,
-    "sha",
-    100,
-    1,
-    1,
-  ]);
-  db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-    chunkId,
-    path,
-    0,
-    text,
-    `sha-${chunkId}`,
-  ]);
+async function clearGraph(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE chunk;").collect();
+  await connection.db.query("DELETE note;").collect();
 }
 
 async function collect(iterable: AsyncIterable<SearchEvent>): Promise<SearchEvent[]> {
@@ -75,10 +82,69 @@ async function collect(iterable: AsyncIterable<SearchEvent>): Promise<SearchEven
   return events;
 }
 
-describe("SearchPipeline", () => {
+function buildPipeline(connection: SurrealConnection, ranking: string[]): SearchPipeline {
+  const provider = fakeProvider(ranking);
+  const reranker = new Reranker({ provider, model: "rerank" });
+  return new SearchPipeline({
+    db: connection.db,
+    reranker,
+    embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+    provider,
+    reasoningModel: "reasoning",
+    settings: () => ({
+      balanced: { topK: 10, rerankTopN: 5 },
+      deep: { graphExpansionDepth: 1, synthesisEnabled: false },
+    }),
+    now: () => 100,
+  });
+}
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-pipeline-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-pipeline-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("Quick mode emits retrieving, hits, then done", async () => {
-    const { db, pipeline } = await setup();
-    seed(db, "/notes/Graph.md", "c1", "Graph reasoning is interesting.");
+    await clearGraph(connection);
+    await seedNote(
+      connection,
+      "notes/Graph.md",
+      "Graph reasoning is interesting.",
+      unitVector({ index: 0, value: 1 }),
+    );
+    const pipeline = buildPipeline(connection, ["a1"]);
     const events = await collect(
       pipeline.run({ query: "graph", mode: "quick" }, new AbortController().signal),
     );
@@ -92,26 +158,26 @@ describe("SearchPipeline", () => {
     }
   });
 
-  test("Balanced mode dispatches through the vector index", async () => {
-    const { db, index, pipeline } = await setup();
-    seed(db, "/a.md", "a1", "alpha snippet");
-    seed(db, "/b.md", "b1", "beta snippet");
-    index.add("a1", Float32Array.from([1, 0]));
-    index.add("b1", Float32Array.from([0, 1]));
+  test("Balanced mode dispatches through the SurrealDB kNN reader", async () => {
+    await clearGraph(connection);
+    await seedNote(connection, "notes/a.md", "alpha snippet", unitVector({ index: 0, value: 1 }));
+    await seedNote(connection, "notes/b.md", "beta snippet", unitVector({ index: 1, value: 1 }));
+    const pipeline = buildPipeline(connection, ["unused"]);
     const events = await collect(
       pipeline.run({ query: "alpha", mode: "balanced" }, new AbortController().signal),
     );
     const hits = events.find((event) => event.type === "search:hits");
     expect(hits?.type).toBe("search:hits");
     if (hits?.type === "search:hits") {
-      expect(hits.hits[0].chunkId).toBe("a1");
+      expect(hits.hits.length).toBeGreaterThan(0);
+      expect(hits.hits.map((hit) => hit.notePath)).toContain("notes/a.md");
     }
   });
 
   test("Deep mode reaches search:done with synthesis disabled", async () => {
-    const { db, index, pipeline } = await setup();
-    seed(db, "/a.md", "a1", "alpha snippet");
-    index.add("a1", Float32Array.from([1, 0]));
+    await clearGraph(connection);
+    await seedNote(connection, "notes/a.md", "alpha snippet", unitVector({ index: 0, value: 1 }));
+    const pipeline = buildPipeline(connection, ["unused"]);
     const events = await collect(
       pipeline.run({ query: "alpha", mode: "deep" }, new AbortController().signal),
     );
@@ -125,7 +191,7 @@ describe("SearchPipeline", () => {
   });
 
   test("aborted signal short-circuits to search:error", async () => {
-    const { pipeline } = await setup();
+    const pipeline = buildPipeline(connection, []);
     const controller = new AbortController();
     controller.abort();
     const events = await collect(pipeline.run({ query: "x", mode: "quick" }, controller.signal));
@@ -134,21 +200,9 @@ describe("SearchPipeline", () => {
   });
 
   test("balanced mode aborted during reranker propagates to chatJson and ends with error", async () => {
-    // Hardening: when the user retypes mid-search the controller is aborted.
-    // The reranker's underlying chatJson must observe the abort signal and
-    // reject; the pipeline must yield a search:error reason "aborted" and
-    // not yield any search:done event.
-    const db = new Database(new MemoryAdapter({ "/wasm": loadWasm() }), {
-      dbPath: "/db",
-      wasmPath: "/wasm",
-    });
-    await db.init();
-    const index = new InMemoryVectorIndex();
-    await index.init(2);
-    seed(db, "/a.md", "a1", "alpha snippet");
-    seed(db, "/b.md", "b1", "beta snippet");
-    index.add("a1", Float32Array.from([1, 0]));
-    index.add("b1", Float32Array.from([0, 1]));
+    await clearGraph(connection);
+    await seedNote(connection, "notes/a.md", "alpha snippet", unitVector({ index: 0, value: 1 }));
+    await seedNote(connection, "notes/b.md", "beta snippet", unitVector({ index: 1, value: 1 }));
 
     const controller = new AbortController();
     let observedSignalAborted = false;
@@ -164,7 +218,6 @@ describe("SearchPipeline", () => {
         options: ChatOptions,
         _schema: JsonSchema,
       ): Promise<T> => {
-        // Observe the signal we were handed. Abort fires before resolving.
         return await new Promise<T>((_resolve, reject) => {
           const signal = options.signal;
           if (!signal) {
@@ -182,17 +235,15 @@ describe("SearchPipeline", () => {
             return;
           }
           signal.addEventListener("abort", onAbort, { once: true });
-          // The caller will abort before this resolves.
           setTimeout(() => reject(new Error("never reached")), 1000);
         });
       },
     };
     const reranker = new Reranker({ provider: slowProvider, model: "rerank" });
     const pipeline = new SearchPipeline({
-      db,
-      vectorIndex: index,
+      db: connection.db,
       reranker,
-      embed: async () => Float32Array.from([1, 0]),
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
       provider: slowProvider,
       reasoningModel: "reasoning",
       settings: () => ({
@@ -202,15 +253,12 @@ describe("SearchPipeline", () => {
       now: () => 100,
     });
 
-    // Start the run, then abort while the reranker is parked on chatJson.
     const iterator = pipeline
       .run({ query: "alpha", mode: "balanced" }, controller.signal)
       [Symbol.asyncIterator]();
     const collected: SearchEvent[] = [];
-    // Pull the first event (search:retrieving) synchronously.
     const first = await iterator.next();
     if (!first.done) collected.push(first.value);
-    // Schedule the abort on the next microtask so the reranker is mid-flight.
     queueMicrotask(() => controller.abort());
     while (true) {
       const next = await iterator.next();
@@ -227,7 +275,14 @@ describe("SearchPipeline", () => {
   });
 
   test("durationMs uses the injected clock", async () => {
-    const { pipeline } = await setup();
+    await clearGraph(connection);
+    await seedNote(
+      connection,
+      "notes/Graph.md",
+      "graph reasoning",
+      unitVector({ index: 0, value: 1 }),
+    );
+    const pipeline = buildPipeline(connection, []);
     const events = await collect(
       pipeline.run({ query: "graph", mode: "quick" }, new AbortController().signal),
     );

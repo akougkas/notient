@@ -1,5 +1,4 @@
-import type { Database } from "../db/database";
-import type { VectorIndex } from "../indexer/vectorIndex";
+import type { Surreal } from "surrealdb";
 import type { LLMProvider } from "../llm/provider";
 import type { Reranker } from "./reranker";
 import { balancedSearch } from "./strategies/balanced";
@@ -13,8 +12,7 @@ export interface SearchPipelineSettings {
 }
 
 export interface SearchPipelineDependencies {
-  db: Database;
-  vectorIndex: VectorIndex;
+  db: Surreal;
   reranker: Reranker;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
   provider: LLMProvider;
@@ -28,6 +26,12 @@ export interface SearchPipelineDependencies {
  * `AsyncIterable<SearchEvent>` so streaming Deep mode can emit retrieval,
  * expansion, and synthesis progress separately. Quick and Balanced both
  * yield a single `search:hits` event followed by `search:done`.
+ *
+ * Phase 4 Task 11 reads everything through SurrealDB: kNN over `chunk.vector`
+ * via the HNSW index, BM25 over `chunk.text` via the `chunk_text` full-text
+ * index, and graph expansion via the `wikilink` relation. The legacy SQLite
+ * `chunks`/`notes`/`graph_edges` reads and the in-process HNSW vector index
+ * are gone.
  */
 export class SearchPipeline {
   constructor(private readonly deps: SearchPipelineDependencies) {}
@@ -79,7 +83,6 @@ export class SearchPipeline {
     const settings = this.deps.settings();
     return balancedSearch({
       db: this.deps.db,
-      vectorIndex: this.deps.vectorIndex,
       embed: this.deps.embed,
       reranker: this.deps.reranker,
       query: query.query,
@@ -106,7 +109,6 @@ export class SearchPipeline {
       const events = deepSearch({
         db: this.deps.db,
         provider: this.deps.provider,
-        vectorIndex: this.deps.vectorIndex,
         embed: this.deps.embed,
         reranker: this.deps.reranker,
         reasoningModel: this.deps.reasoningModel,

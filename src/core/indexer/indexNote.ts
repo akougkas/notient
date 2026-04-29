@@ -36,8 +36,13 @@ export interface IndexNoteArgs {
   database: Database;
   /** Legacy graph store. Phase 3 does not write to it from this entry point. */
   graph: GraphStore;
-  /** Legacy in-process vector index. Phase 3 does not write to it from here. */
-  vectorIndex: VectorIndex;
+  /**
+   * Legacy in-process vector index. Phase 4 Task 11 removed every reader, so
+   * this slot is unused; tests still pass an instance via the kept-for-test
+   * `InMemoryVectorIndex` symbol but the indexer never touches it. Optional
+   * to let production callers omit the argument entirely.
+   */
+  vectorIndex?: VectorIndex;
   embedder: Embedder;
   extractor: Extractor;
   bus: EventBus;

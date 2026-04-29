@@ -1,39 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import { applyPostFilters, buildPathFilter } from "./filters";
+import { applyPostFilters, buildChunkNoteFilter } from "./filters";
 
 const thresholds = { sparse: 1, connected: 4, hub: 12 };
 
-describe("buildPathFilter", () => {
+describe("buildChunkNoteFilter", () => {
   test("empty filters yield empty fragment", () => {
-    const fragment = buildPathFilter(undefined);
+    const fragment = buildChunkNoteFilter(undefined);
     expect(fragment.where).toBe("");
-    expect(fragment.params).toEqual([]);
+    expect(fragment.bindings).toEqual({});
   });
 
   test("emits folder + date range + maturity clauses with parameters", () => {
-    const fragment = buildPathFilter({
+    const fragment = buildChunkNoteFilter({
       folders: ["Projects", "Notes/"],
       maturity: ["draft", "review"],
       fromDate: 1_000,
       toDate: 2_000,
     });
-    expect(fragment.where).toContain("(notes.path LIKE ? OR notes.path LIKE ?)");
-    expect(fragment.where).toContain("notes.maturity IN (?,?)");
-    expect(fragment.where).toContain("notes.updated_at >= ?");
-    expect(fragment.where).toContain("notes.updated_at <= ?");
+    expect(fragment.where).toContain("string::starts_with(note.path, $f_folder_0)");
+    expect(fragment.where).toContain("string::starts_with(note.path, $f_folder_1)");
+    expect(fragment.where).toContain("note.maturity INSIDE $f_maturity");
+    expect(fragment.where).toContain("note.last_user_edit_at >= $f_from");
+    expect(fragment.where).toContain("note.last_user_edit_at <= $f_to");
     expect(fragment.where.startsWith(" AND ")).toBe(true);
-    expect(fragment.params).toEqual(["Projects/%", "Notes/%", "draft", "review", 1_000, 2_000]);
+    expect(fragment.bindings.f_folder_0).toBe("Projects/");
+    expect(fragment.bindings.f_folder_1).toBe("Notes/");
+    expect(fragment.bindings.f_maturity).toEqual(["draft", "review"]);
+    expect(fragment.bindings.f_from).toBeInstanceOf(Date);
+    expect(fragment.bindings.f_to).toBeInstanceOf(Date);
+    expect((fragment.bindings.f_from as Date).getTime()).toBe(1_000);
+    expect((fragment.bindings.f_to as Date).getTime()).toBe(2_000);
   });
 
   test("ignores unrelated filter keys", () => {
-    const fragment = buildPathFilter({
+    const fragment = buildChunkNoteFilter({
       connectivityTiers: ["hub"],
       hasPendingProposals: true,
       minConfidence: 0.7,
       agents: ["linker"],
     });
     expect(fragment.where).toBe("");
-    expect(fragment.params).toEqual([]);
+    expect(fragment.bindings).toEqual({});
   });
 });
 

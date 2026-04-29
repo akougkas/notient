@@ -333,6 +333,203 @@ export async function searchVector(db: Surreal, input: SearchVectorInput): Promi
   });
 }
 
+/**
+ * Search-side projection of a chunk row. Carries the parent note's path so the
+ * search strategies can produce SearchHit objects without a second round-trip
+ * to look up `note.path`. The four readers (quick, balanced, deep, smoke
+ * harness) all consume this shape.
+ */
+export interface SearchChunkRow {
+  chunkId: RecordId<"chunk">;
+  noteId: RecordId<"note">;
+  notePath: string;
+  text: string;
+  /** Vector distance from the kNN query, or null if the row came from BM25 only. */
+  distance: number | null;
+  /** BM25 score from the full-text query, or null if the row came from kNN only. */
+  bm25Score: number | null;
+}
+
+interface ChunkSearchVectorRow {
+  id: RecordId<"chunk">;
+  note: { id: RecordId<"note">; path: string };
+  text: string;
+  d: number;
+}
+
+interface ChunkSearchBm25Row {
+  id: RecordId<"chunk">;
+  note: { id: RecordId<"note">; path: string };
+  text: string;
+  score: number;
+}
+
+export interface SearchVectorWithPathInput {
+  vector: number[];
+  k: number;
+  /**
+   * SurrealDB 3.x rejects the bare `<|k|>` operator with the error
+   * "KNN operators nested in OR/NOT expressions or mixed with unsupported
+   * KNN variants are not supported" when the SELECT projection materialises
+   * the parent record (`note.{ id, path }` or `FETCH note`). The two-arg
+   * form `<|k,ef|>` always parses, so the helper requires an `ef` value
+   * and defaults it to {@link DEFAULT_SEARCH_EF} when callers omit it.
+   */
+  ef?: number;
+  /**
+   * Optional SurrealQL WHERE fragment composed by the caller (e.g. note path
+   * prefix, maturity, date range filters). Must begin with ` AND` so the
+   * call site can append it after the kNN predicate. Bindings live in
+   * `extraBindings`.
+   */
+  extraWhere?: string;
+  extraBindings?: Record<string, unknown>;
+}
+
+/**
+ * Default ef value for the search-side HNSW operator. Larger than the
+ * linker's 40 because search expects a wider candidate pool fed into the
+ * reranker; small enough that the HNSW traversal stays bounded.
+ */
+export const DEFAULT_SEARCH_EF = 100;
+
+/**
+ * Vector kNN search over the `chunk` table that materialises the parent note's
+ * `path` field. Used by the balanced and deep strategies; result rows are
+ * sorted by distance ascending.
+ */
+export async function searchVectorWithPath(
+  db: Surreal,
+  input: SearchVectorWithPathInput,
+): Promise<SearchChunkRow[]> {
+  if (!Number.isInteger(input.k) || input.k <= 0) {
+    throw new Error("searchVectorWithPath: k must be a positive integer");
+  }
+  const ef = input.ef ?? DEFAULT_SEARCH_EF;
+  const extraWhere = input.extraWhere ?? "";
+  const sql = `SELECT id, note.{ id, path } AS note, text, vector::distance::knn() AS d FROM chunk WHERE vector <|${input.k},${ef}|> $q${extraWhere} ORDER BY d LIMIT $k;`;
+  const bindings: Record<string, unknown> = {
+    q: input.vector,
+    k: input.k,
+    ...(input.extraBindings ?? {}),
+  };
+  const [rows] = await db
+    .query<[ChunkSearchVectorRow[]]>(sql, bindings)
+    .collect<[ChunkSearchVectorRow[]]>();
+  return rows.map((row) => ({
+    chunkId: row.id,
+    noteId: row.note.id,
+    notePath: row.note.path,
+    text: row.text,
+    distance: row.d,
+    bm25Score: null,
+  }));
+}
+
+export interface SearchBm25Input {
+  query: string;
+  limit: number;
+  extraWhere?: string;
+  extraBindings?: Record<string, unknown>;
+}
+
+/**
+ * BM25 full-text search over the `chunk.text` field. The `chunk_text` index
+ * defined in `schema.surql` powers the `@0@` operator and `search::score(0)`.
+ * Returns rows ordered by descending score.
+ */
+export async function searchBm25(db: Surreal, input: SearchBm25Input): Promise<SearchChunkRow[]> {
+  if (!Number.isInteger(input.limit) || input.limit <= 0) {
+    throw new Error("searchBm25: limit must be a positive integer");
+  }
+  const trimmed = input.query.trim();
+  if (trimmed.length === 0) return [];
+  const extraWhere = input.extraWhere ?? "";
+  const sql = `SELECT id, note.{ id, path } AS note, text, search::score(0) AS score FROM chunk WHERE text @0@ $q${extraWhere} ORDER BY score DESC LIMIT $k;`;
+  const bindings: Record<string, unknown> = {
+    q: trimmed,
+    k: input.limit,
+    ...(input.extraBindings ?? {}),
+  };
+  const [rows] = await db
+    .query<[ChunkSearchBm25Row[]]>(sql, bindings)
+    .collect<[ChunkSearchBm25Row[]]>();
+  return rows.map((row) => ({
+    chunkId: row.id,
+    noteId: row.note.id,
+    notePath: row.note.path,
+    text: row.text,
+    distance: null,
+    bm25Score: row.score,
+  }));
+}
+
+export interface ExpandWikilinkInput {
+  startNoteIds: RecordId<"note">[];
+  /**
+   * Hop depth. `0` is a no-op. Phase 4 only exercises depth 1 (matching the
+   * legacy SQLite-CTE behaviour); values >1 are accepted but reduce to the
+   * one-hop neighbourhood because the graph expansion call site filters
+   * everything except direct neighbours of the base hits.
+   */
+  depth: number;
+  /**
+   * When true (the default) the traversal restricts to edges that are both
+   * `approved = true` and `applied = true`, matching the search-consumer
+   * contract documented in `edgeTables.ts::provenanceFields`. Tests that
+   * write rows with `approved = false` rely on this flag to keep
+   * unapproved edges out of the result set.
+   */
+  requireApprovedAndApplied?: boolean;
+}
+
+export interface WikilinkNeighbor {
+  fromPath: string;
+  toPath: string;
+  /** Edge type label used for snippet rendering. Always `"wikilink"` here. */
+  edgeType: string;
+  /** Agent that authored the edge, or `null` when stored as NONE. */
+  agent: string | null;
+}
+
+interface WikilinkEdgeRow {
+  fromPath: string;
+  toPath: string;
+  agent: string | null;
+}
+
+/**
+ * Walks wikilink edges outwards from each start note up to the given depth and
+ * returns one row per (from, to) pair. Phase 4 only exercises depth 1 (the
+ * legacy SQLite recursive-CTE matched the same one-hop behaviour). The query
+ * is one SurrealQL statement against the `wikilink` relation, so adding deeper
+ * hops later is a matter of widening the `IN` predicate to a recursive idiom.
+ *
+ * The default `approved = true AND applied = true` filter matches the
+ * search-consumer contract: linker proposals that have been approved but whose
+ * writeback has not landed yet are filtered out so graph expansion never
+ * surfaces a path the user has not yet seen.
+ */
+export async function expandWikilinkNeighbors(
+  db: Surreal,
+  input: ExpandWikilinkInput,
+): Promise<WikilinkNeighbor[]> {
+  if (input.depth <= 0) return [];
+  if (input.startNoteIds.length === 0) return [];
+  const requireApprovedAndApplied = input.requireApprovedAndApplied !== false;
+  const approvalClause = requireApprovedAndApplied ? "approved = true AND applied = true AND " : "";
+  const sql = `SELECT in.path AS fromPath, out.path AS toPath, agent FROM wikilink WHERE ${approvalClause}(in IN $starts OR out IN $starts);`;
+  const [rows] = await db
+    .query<[WikilinkEdgeRow[]]>(sql, { starts: input.startNoteIds })
+    .collect<[WikilinkEdgeRow[]]>();
+  return rows.map((row) => ({
+    fromPath: row.fromPath,
+    toPath: row.toPath,
+    edgeType: "wikilink",
+    agent: row.agent,
+  }));
+}
+
 export interface ChunkInsertInput {
   ord: number;
   text: string;

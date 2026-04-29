@@ -20,7 +20,6 @@ import type { HistoryService } from "./history/historyService";
 import type { Embedder } from "./indexer/embedder";
 import type { Extractor } from "./indexer/extractor";
 import type { IndexerQueue } from "./indexer/indexerQueue";
-import type { VectorIndex } from "./indexer/vectorIndex";
 import type { LLMProvider } from "./llm/provider";
 import type { SavedQueries } from "./search/savedQueries";
 import type { SearchHistory } from "./search/searchHistory";
@@ -51,7 +50,6 @@ export interface ServiceRegistry {
   agentEventStore: AgentEventStore;
   sessionGrants: SessionGrants;
   indexer: IndexerQueue;
-  vectorIndex: VectorIndex;
   embedder: Embedder;
   extractor: Extractor;
   coordinator: Coordinator;
@@ -128,7 +126,6 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "agentEventStore",
   "sessionGrants",
   "indexer",
-  "vectorIndex",
   "embedder",
   "extractor",
   "reasoningMutex",
@@ -172,7 +169,6 @@ const PHASE_A_KEYS: ServiceKey[] = [
 const PHASE_B_KEYS: ServiceKey[] = [
   ...PHASE_A_KEYS,
   "indexer",
-  "vectorIndex",
   "embedder",
   "extractor",
   "vaultBootstrap",
