@@ -28,7 +28,6 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "streamService",
   "vitalsService",
   "nativeGraphBridge",
-  "canvasFromResults",
   "searchPipeline",
   "savedQueries",
   "searchHistory",

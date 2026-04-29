@@ -1,6 +1,5 @@
 import type { VaultAdapter } from "../adapters/vaultAdapter";
 import type { ApprovalService } from "./approvals/approvalService";
-import type { CanvasFromResults } from "./canvas/canvasFromResults";
 import type { ApprovalGate } from "./chat/approvalGate";
 import type { ChatService } from "./chat/chatService";
 import type { ContextManager } from "./chat/contextManager";
@@ -67,7 +66,6 @@ export interface ServiceRegistry {
   streamService: StreamService;
   vitalsService: VitalsService;
   nativeGraphBridge: NativeGraphBridge;
-  canvasFromResults: CanvasFromResults;
   searchPipeline: SearchPipeline;
   savedQueries: SavedQueries;
   searchHistory: SearchHistory;
@@ -136,7 +134,6 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "streamService",
   "vitalsService",
   "nativeGraphBridge",
-  "canvasFromResults",
   "searchPipeline",
   "savedQueries",
   "searchHistory",

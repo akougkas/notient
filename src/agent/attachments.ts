@@ -3,7 +3,6 @@ import type { VaultAdapter } from "../adapters/vaultAdapter";
 const MENTION_PATTERN = /(?<![\w@.])@(?:"([^"]+)"|(\S+))/g;
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 const PDF_EXT = ".pdf";
-const CANVAS_EXT = ".canvas";
 const TEXT_EXT = new Set([
   ".md",
   ".txt",
@@ -75,7 +74,6 @@ async function resolveOne(path: string, options: ResolveAttachmentsOptions): Pro
   const extension = pathExtension(path);
   if (IMAGE_EXT.has(extension)) return resolveImage(path, extension, options);
   if (extension === PDF_EXT) return resolvePdf(path, options);
-  if (extension === CANVAS_EXT) return resolveCanvas(path, options);
   if (TEXT_EXT.has(extension) || extension === "") return resolveText(path, options);
   return {
     line: `[attachment: ${path}] (unsupported extension ${extension})`,
@@ -104,24 +102,6 @@ async function resolvePdf(path: string, options: ResolveAttachmentsOptions): Pro
   const text = await extractPdfText(bytes);
   return {
     line: `[attachment: ${path}]\n${truncateForBudget(text, options.maxTokens)}`,
-    image: null,
-  };
-}
-
-async function resolveCanvas(
-  path: string,
-  options: ResolveAttachmentsOptions,
-): Promise<ResolvedOne> {
-  const raw = await options.vault.read(path);
-  let parsed: unknown = raw;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = raw;
-  }
-  const summary = JSON.stringify(parsed, null, 2);
-  return {
-    line: `[attachment: ${path}]\n${truncateForBudget(summary, options.maxTokens)}`,
     image: null,
   };
 }
