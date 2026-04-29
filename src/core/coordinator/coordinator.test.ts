@@ -1,14 +1,60 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../db/database";
-import { MemoryAdapter, loadWasm } from "../db/database.test";
+/**
+ * Phase 5 Task 3 Coordinator smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/coordinator/`.
+ *
+ * Boots a real SurrealDB, applies the Phase 1 schema (which includes the
+ * `agent_run` table added in Phase 4 Task 12), and exercises the
+ * Coordinator dispatch loop end-to-end against the live database. Each
+ * test truncates `agent_run` in `afterEach` so seq counters and ordering
+ * assertions stay independent.
+ *
+ * Migrated from the SQLite-backed in-memory fixture: the wire-shape
+ * `runId` returned to agents is now the `seq` integer assigned at row
+ * CREATE time. Tests assert on `agent_run` rather than the retired
+ * `agent_runs` table.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { applySchema } from "../db/schemaApplier";
+import { type SurrealConnection, connect } from "../db/surreal";
 import { EventBus } from "../events/eventBus";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { Coordinator } from "./coordinator";
 import { ReasoningMutex } from "./reasoningMutex";
 import type { Agent, AgentRunContext } from "./types";
 
-function makeDb() {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  return { adapter, config: { dbPath: "/db", wasmPath: "/wasm" } };
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+interface AgentRunRow {
+  agent: string;
+  ok: boolean | null;
+  error: string | null;
+  proposals_count: number;
+}
+
+async function clearAgentRuns(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE agent_run;").collect();
+}
+
+async function selectAgentRuns(connection: SurrealConnection): Promise<AgentRunRow[]> {
+  // SurrealDB 3.0.5 requires every ORDER BY field to appear in the
+  // projection; `seq` is selected and discarded by the caller.
+  const [rows] = await connection.db
+    .query<[Array<AgentRunRow & { seq: number }>]>(
+      "SELECT agent, ok, error, proposals_count, seq FROM agent_run ORDER BY seq ASC;",
+    )
+    .collect<[Array<AgentRunRow & { seq: number }>]>();
+  return rows.map((row) => ({
+    agent: row.agent,
+    ok: row.ok,
+    error: row.error,
+    proposals_count: row.proposals_count,
+  }));
 }
 
 function fakeAgent(name: Agent["name"], proposals = 1, fail = false): Agent {
@@ -22,11 +68,48 @@ function fakeAgent(name: Agent["name"], proposals = 1, fail = false): Agent {
   };
 }
 
-describe("Coordinator", () => {
-  test("vault-save triggers Linker on the saved note", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+describe.skipIf(!SMOKE_ENABLED)("[smoke] Coordinator", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-coordinator-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-coordinator-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearAgentRuns(connection);
+  });
+
+  test("[smoke] vault-save triggers Linker on the saved note", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const linker: Agent = {
@@ -39,7 +122,7 @@ describe("Coordinator", () => {
     };
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker,
@@ -53,16 +136,14 @@ describe("Coordinator", () => {
     await coord.idle();
     coord.stop();
     expect(calls).toEqual(["linker:vault-save:/a.md"]);
-    const rows = db.query<{ agent: string; ok: number; proposals_count: number }>(
-      "SELECT agent, ok, proposals_count FROM agent_runs;",
-    );
-    expect(rows).toEqual([{ agent: "linker", ok: 1, proposals_count: 1 }]);
+    const rows = await selectAgentRuns(connection);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].agent).toBe("linker");
+    expect(rows[0].ok).toBe(true);
+    expect(rows[0].proposals_count).toBe(1);
   });
 
-  test("idle-30s also runs Linker on the active note", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] idle-30s also runs Linker on the active note", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const linker: Agent = {
@@ -75,7 +156,7 @@ describe("Coordinator", () => {
     };
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker,
@@ -92,10 +173,7 @@ describe("Coordinator", () => {
     expect(calls).toEqual(["linker:idle-30s:/a.md"]);
   });
 
-  test("idle-5m fans out to Synthesizer + ContradictionHunter", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] idle-5m fans out to Synthesizer + ContradictionHunter", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const make = (name: Agent["name"]): Agent => ({
@@ -108,7 +186,7 @@ describe("Coordinator", () => {
     });
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker: fakeAgent("linker", 0),
@@ -124,13 +202,10 @@ describe("Coordinator", () => {
     expect(calls.sort()).toEqual(["contradictionHunter:idle-5m", "synthesizer:idle-5m"]);
   });
 
-  test("idle-30m runs Maturity Advancer (no mutex slot needed)", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] idle-30m runs Maturity Advancer (no mutex slot needed)", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
-    const ma: Agent = {
+    const advancer: Agent = {
       name: "maturityAdvancer",
       usesReasoningModel: false,
       async run(context) {
@@ -140,13 +215,13 @@ describe("Coordinator", () => {
     };
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker: fakeAgent("linker", 0),
         synthesizer: fakeAgent("synthesizer", 0),
         contradictionHunter: fakeAgent("contradictionHunter", 0),
-        maturityAdvancer: ma,
+        maturityAdvancer: advancer,
       },
     });
     coord.start();
@@ -156,10 +231,7 @@ describe("Coordinator", () => {
     expect(calls).toEqual(["ma:idle-30m"]);
   });
 
-  test("user-action 'deepen' fires all four sequentially on a single note", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] user-action 'deepen' fires all four sequentially on a single note", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const make = (name: Agent["name"], usesReasoning: boolean): Agent => ({
@@ -172,7 +244,7 @@ describe("Coordinator", () => {
     });
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker: make("linker", true),
@@ -193,14 +265,11 @@ describe("Coordinator", () => {
     ]);
   });
 
-  test("agent failure is recorded and does not crash the coordinator", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] agent failure is recorded and does not crash the coordinator", async () => {
     const bus = new EventBus();
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker: fakeAgent("linker", 0, true),
@@ -213,18 +282,14 @@ describe("Coordinator", () => {
     bus.emit({ type: "vault:note-saved", path: "/a.md", sha: "x" });
     await coord.idle();
     coord.stop();
-    const rows = db.query<{ agent: string; ok: number; error: string | null }>(
-      "SELECT agent, ok, error FROM agent_runs;",
-    );
+    const rows = await selectAgentRuns(connection);
+    expect(rows).toHaveLength(1);
     expect(rows[0].agent).toBe("linker");
-    expect(rows[0].ok).toBe(0);
-    expect(rows[0].error).toContain("boom");
+    expect(rows[0].ok).toBe(false);
+    expect(rows[0].error ?? "").toContain("boom");
   });
 
-  test("active typing suppresses idle dispatch", async () => {
-    const { adapter, config } = makeDb();
-    const db = new Database(adapter, config);
-    await db.init();
+  test("[smoke] active typing suppresses idle dispatch", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const linker: Agent = {
@@ -237,7 +302,7 @@ describe("Coordinator", () => {
     };
     const coord = new Coordinator({
       bus,
-      db,
+      db: connection.db,
       mutex: new ReasoningMutex(),
       agents: {
         linker,
@@ -254,5 +319,38 @@ describe("Coordinator", () => {
     await coord.idle();
     coord.stop();
     expect(calls).toEqual([]);
+  });
+
+  test("[smoke] runId is the seq integer, allocated monotonically per run", async () => {
+    const bus = new EventBus();
+    const observed: number[] = [];
+    const linker: Agent = {
+      name: "linker",
+      usesReasoningModel: true,
+      async run(context) {
+        observed.push(context.runId);
+        return { proposals: 0 };
+      },
+    };
+    const coord = new Coordinator({
+      bus,
+      db: connection.db,
+      mutex: new ReasoningMutex(),
+      agents: {
+        linker,
+        synthesizer: fakeAgent("synthesizer", 0),
+        contradictionHunter: fakeAgent("contradictionHunter", 0),
+        maturityAdvancer: fakeAgent("maturityAdvancer", 0),
+      },
+    });
+    coord.start();
+    bus.emit({ type: "vault:note-saved", path: "/a.md", sha: "x" });
+    await coord.idle();
+    bus.emit({ type: "vault:note-saved", path: "/b.md", sha: "y" });
+    await coord.idle();
+    coord.stop();
+    expect(observed).toHaveLength(2);
+    expect(Number.isInteger(observed[0])).toBe(true);
+    expect(observed[1]).toBe(observed[0] + 1);
   });
 });

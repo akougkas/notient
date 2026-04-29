@@ -14,7 +14,14 @@ export interface AgentRunContext {
   trigger: AgentTrigger;
   notePath: string | null;
   signal: AbortSignal;
-  /** Identifier of the agent_runs row; agents stamp swarm:* events with it. */
+  /**
+   * Identifier of the `agent_run` row; agents stamp swarm:* events with it.
+   * This is the `seq` integer assigned by the SurrealDB `agent_run` row at
+   * CREATE time, not the SurrealDB record id (which is a string like
+   * `agent_run:abc123`). The wire-shape numeric contract from the SQLite
+   * era is preserved by the `seq` allocation pattern Phase 4 Task 12
+   * established for `agent_event` and `agent_session`.
+   */
   runId: number;
   /** Event bus the agent emits swarm:* discovery events on. */
   bus: EventBus;

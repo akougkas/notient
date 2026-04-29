@@ -446,7 +446,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const coordinator = new Coordinator({
     bus,
-    db: database,
+    db: surrealConnection.db,
     mutex: reasoningMutex,
     agents: {
       linker,

@@ -1,4 +1,4 @@
-import type { Database } from "../db/database";
+import type { Surreal } from "surrealdb";
 import type { EventBus } from "../events/eventBus";
 import type { ReasoningMutex } from "./reasoningMutex";
 import type { Agent, AgentName, AgentRunContext, AgentTrigger } from "./types";
@@ -12,9 +12,18 @@ export interface CoordinatorAgents {
 
 export interface CoordinatorOptions {
   bus: EventBus;
-  db: Database;
+  /**
+   * SurrealDB connection. Phase 5 Task 3 migrated `agent_run` writes off the
+   * SQLite mirror; the wire-shape numeric `runId` is preserved by the `seq`
+   * pattern Phase 4 Task 12 established for `agent_event` and `agent_session`.
+   */
+  db: Surreal;
   mutex: ReasoningMutex;
   agents: CoordinatorAgents;
+}
+
+interface CreatedRunRow {
+  seq: number;
 }
 
 export class Coordinator {
@@ -106,12 +115,7 @@ export class Coordinator {
     notePath: string | null,
   ): Promise<void> {
     const startedAt = Date.now();
-    this.opts.db.run(
-      "INSERT INTO agent_runs (agent, trigger, note_path, started_at) VALUES (?,?,?,?);",
-      [agent.name, trigger, notePath, startedAt],
-    );
-    const idRow = this.opts.db.query<{ id: number }>("SELECT last_insert_rowid() AS id;")[0];
-    const runId = idRow?.id ?? -1;
+    const runId = await this.createRun(agent.name, trigger, notePath, startedAt);
     this.opts.bus.emit({
       type: "agent:run-started",
       agent: agent.name,
@@ -130,10 +134,7 @@ export class Coordinator {
       errorMessage = (error as Error).message ?? String(error);
     }
     const finishedAt = Date.now();
-    this.opts.db.run(
-      "UPDATE agent_runs SET finished_at = ?, ok = ?, error = ?, proposals_count = ? WHERE id = ?;",
-      [finishedAt, ok ? 1 : 0, errorMessage ?? null, proposals, runId],
-    );
+    await this.finalizeRun(runId, finishedAt, ok, errorMessage, proposals);
     this.opts.bus.emit({
       type: "agent:run-finished",
       agent: agent.name,
@@ -143,6 +144,86 @@ export class Coordinator {
       error: errorMessage,
       runId,
     });
+  }
+
+  /**
+   * Allocate a fresh `seq` and CREATE the `agent_run` row inside a single
+   * SurrealQL transaction. The `BEGIN; LET $next = ...; CREATE; COMMIT;`
+   * pattern matches Phase 4 Task 12's `agent_event` and `agent_session`
+   * producers; the post-commit SELECT reads the freshly assigned `seq` so
+   * the caller sees the wire-shape integer without a second roundtrip.
+   *
+   * `note_path` is omitted from CONTENT when null because the SurrealDB
+   * `option<string>` field rejects an explicit `null`.
+   */
+  private async createRun(
+    agent: AgentName,
+    trigger: AgentTrigger,
+    notePath: string | null,
+    startedAt: number,
+  ): Promise<number> {
+    const setClauses: string[] = [
+      "seq: ($next ?? 0) + 1",
+      "agent: $agent",
+      "trigger: $trigger",
+      "started_at: $startedAt",
+    ];
+    const bindings: Record<string, unknown> = {
+      agent,
+      trigger,
+      startedAt,
+    };
+    if (notePath !== null) {
+      setClauses.push("note_path: $notePath");
+      bindings.notePath = notePath;
+    }
+    const sql = [
+      "BEGIN;",
+      "LET $next = (SELECT VALUE seq FROM agent_run ORDER BY seq DESC LIMIT 1)[0];",
+      `LET $row = CREATE ONLY agent_run CONTENT { ${setClauses.join(", ")} };`,
+      "COMMIT;",
+      "SELECT seq FROM agent_run WHERE started_at = $startedAt AND agent = $agent AND trigger = $trigger ORDER BY seq DESC LIMIT 1;",
+    ].join("\n");
+    const results = await this.opts.db.query(sql, bindings).collect<unknown[]>();
+    const lastSlice = results[results.length - 1];
+    const rows = (Array.isArray(lastSlice) ? (lastSlice as CreatedRunRow[]) : []) as CreatedRunRow[];
+    const created = rows[0];
+    if (created === undefined) {
+      throw new Error("Coordinator.createRun: SurrealDB returned no row");
+    }
+    return created.seq;
+  }
+
+  /**
+   * Update the `agent_run` row identified by `seq` with the run outcome.
+   * `error` is omitted from the SET clause when undefined so the
+   * `option<string>` field stays NONE on success rather than being
+   * written as a literal null.
+   */
+  private async finalizeRun(
+    seq: number,
+    finishedAt: number,
+    ok: boolean,
+    errorMessage: string | undefined,
+    proposals: number,
+  ): Promise<void> {
+    const setClauses: string[] = [
+      "finished_at = $finishedAt",
+      "ok = $ok",
+      "proposals_count = $proposals",
+    ];
+    const bindings: Record<string, unknown> = {
+      seq,
+      finishedAt,
+      ok,
+      proposals,
+    };
+    if (errorMessage !== undefined) {
+      setClauses.push("error = $error");
+      bindings.error = errorMessage;
+    }
+    const sql = `UPDATE agent_run SET ${setClauses.join(", ")} WHERE seq = $seq;`;
+    await this.opts.db.query(sql, bindings).collect();
   }
 
   private async executeAgent(agent: Agent, base: Omit<AgentRunContext, "signal" | "bus">) {
