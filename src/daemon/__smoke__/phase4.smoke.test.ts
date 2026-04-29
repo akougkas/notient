@@ -52,8 +52,6 @@ import {
 } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
 import { runTier1 } from "../../core/indexer/tier1";
-import { extract } from "../../core/markdown/extractor";
-import { processAst } from "../../core/markdown/pipeline";
 import { type SurrealServerHandle, startSurreal } from "../surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -70,17 +68,6 @@ async function sha256Hex(input: string): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-}
-
-/**
- * Computes the SHA Tier 1 will compute for the same file. Tier 1's
- * `extraction.bodySha` is the hash of the joined block text (post-AST,
- * frontmatter and structural noise stripped); the `daemon_write.sha`
- * column must use the identical hash so Task 2's cross-reference matches.
- * Production wires this same hash function into `ApprovalService.hash`.
- */
-function tier1BodySha(source: string, notePath: string): string {
-  return extract(processAst(source), notePath).bodySha;
 }
 
 const realFs = {
@@ -327,17 +314,17 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     bus.on("approval:decided", (event) => {
       decisions.push(`${event.kind}:${event.decision}`);
     });
-    // Wire the approval service's hash function to Tier 1's bodySha so
-    // the daemon_write row records the exact SHA Tier 1 will compute on
-    // re-save. Production binds the same Tier 1 hash here; the smoke
-    // harness mirrors that wiring so step 7's cross-reference can fire.
+    // ApprovalService defaults its hash to a SHA-256 over the file body's
+    // UTF-8 bytes. Tier 1's `extractor.ts` now hashes the same raw file
+    // body, so the `daemon_write.sha` row matches Tier 1's
+    // `findRecentDaemonWrite` lookup on re-save without any test-only
+    // hash shim.
     const service = new ApprovalService({
       db: connection.db,
       bus,
       vaultRoot,
       fs: realFs,
       readFile: (filePath) => readFile(filePath, "utf8"),
-      hash: async (input) => tier1BodySha(input, "alpha.md"),
     });
     await service.approveEdge({ id: seedEdge.id, table: "related_to" });
 
@@ -363,9 +350,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     expect(edgeRows[0]?.applied).toBe(true);
 
     // Step 6: a single `daemon_write` row exists for the source note
-    // with the post-write body's bodySha (the Tier 1 cross-reference key),
+    // with the post-write body's SHA (the Tier 1 cross-reference key),
     // agent='linker', and targets including the target note id.
-    const expectedSha = tier1BodySha(afterBody, "alpha.md");
+    const expectedSha = await sha256Hex(afterBody);
     interface DaemonRow {
       sha: string;
       agent: string;

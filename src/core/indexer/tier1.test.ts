@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,6 +15,10 @@ import {
 } from "../db/surreal";
 import { EventBus } from "../events/eventBus";
 import { runTier1 } from "./tier1";
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -90,6 +95,20 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     expect(blocks.length).toBeGreaterThan(0);
     const explicit = blocks.find((row) => row.block_id === "para-1");
     expect(explicit).toBeDefined();
+  });
+
+  test("note.sha equals sha-256 of the raw file body (frontmatter included)", async () => {
+    // The body-SHA contract is shared with `daemon/watcher.ts#sha256Body`
+    // and `ApprovalService.hash`. All three producers hash the same bytes
+    // so Tier 1's `findRecentDaemonWrite` cross-reference can attribute
+    // approved writes to the originating agent.
+    const [rows] = await connection.db
+      .query<[Array<{ sha: string }>]>("SELECT sha FROM note WHERE path = $path;", {
+        path: activePath,
+      })
+      .collect<[Array<{ sha: string }>]>();
+    expect(rows.length).toBe(1);
+    expect(rows[0].sha).toBe(sha256Hex(fixtureNote));
   });
 
   test("creates a wikilink edge from the active note (or block) to other.md", async () => {

@@ -210,7 +210,7 @@ function countWords(text: string): number {
   return trimmed.split(/\s+/).length;
 }
 
-export function extract(ast: Root, _notePath: string): MarkdownExtraction {
+export function extract(ast: Root, _notePath: string, source: string): MarkdownExtraction {
   const blocks: BlockSpec[] = [];
   const wikilinks: WikilinkSpec[] = [];
   const tags: TagSpec[] = [];
@@ -347,8 +347,12 @@ export function extract(ast: Root, _notePath: string): MarkdownExtraction {
 
   closeBlock(openHeadingBlock);
 
+  // bodySha hashes the raw file body (frontmatter included) so the SHA
+  // contract agrees with `daemon/watcher.ts#sha256Body` and
+  // `ApprovalService.hash`. Tier 1's `findRecentDaemonWrite` lookup only
+  // matches when both producers compute the SHA over the same bytes.
+  const bodySha = createHash("sha256").update(source).digest("hex");
   const joinedText = blocks.map((block) => block.text).join("\n");
-  const bodySha = createHash("sha256").update(joinedText).digest("hex");
   const wordCount = countWords(joinedText);
 
   return {

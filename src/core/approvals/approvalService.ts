@@ -87,11 +87,23 @@ export interface ApprovalServiceOptions {
    */
   readFile: (path: string) => Promise<string>;
   /**
-   * Computes a SHA hash of the post-write body. Wired to the same
-   * crypto.subtle SHA-256 path as the rest of the daemon.
+   * Computes a SHA hash of the post-write body. Optional. When omitted
+   * the service uses an internal default that hashes the UTF-8 bytes of
+   * the post-write body via `crypto.subtle.digest("SHA-256", ...)`. The
+   * default agrees with `daemon/watcher.ts#sha256Body` and Tier 1's
+   * `extractor.ts` body-SHA contract; production wiring relies on that
+   * agreement so `findRecentDaemonWrite` matches on re-index.
    */
-  hash: (content: string) => Promise<string>;
+  hash?: (content: string) => Promise<string>;
   internalHooks?: ApprovalServiceHooks;
+}
+
+async function defaultHash(content: string): Promise<string> {
+  const buffer = new TextEncoder().encode(content);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export interface ListedEdge {
@@ -286,7 +298,8 @@ export class ApprovalService {
     }
 
     // Step E.
-    const newSha = await this.options.hash(afterBody);
+    const hash = this.options.hash ?? defaultHash;
+    const newSha = await hash(afterBody);
     const agentName = edge.agent ?? edge.source;
     const existing = await findRecentDaemonWrite(this.options.db, {
       noteId: sourceNote.id,

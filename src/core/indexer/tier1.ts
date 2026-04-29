@@ -350,7 +350,7 @@ function buildTier1Transaction(
 
 export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Output> {
   const ast = processAst(input.source);
-  const extraction = extract(ast, input.notePath);
+  const extraction = extract(ast, input.notePath, input.source);
 
   const wikilinkResolutions = resolveTargets(
     input.notePath,

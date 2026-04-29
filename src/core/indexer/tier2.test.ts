@@ -134,7 +134,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier2", () => {
   });
 
   test("[smoke] inserts chunk rows, advances tier2_at, returns chunkCount", async () => {
-    const extraction = extract(processAst(noteSource), notePath);
+    const extraction = extract(processAst(noteSource), notePath, noteSource);
     const { embedder, calls } = makeEmbedder();
 
     const result = await runTier2(connection.db, {
@@ -194,7 +194,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier2", () => {
   });
 
   test("[smoke] re-running runTier2 replaces (does not duplicate) chunks", async () => {
-    const extraction = extract(processAst(noteSource), notePath);
+    const extraction = extract(processAst(noteSource), notePath, noteSource);
     const { embedder } = makeEmbedder();
 
     const firstResult = await runTier2(connection.db, {

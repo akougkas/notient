@@ -7,7 +7,7 @@ import { processAst } from "./pipeline";
 const fixturePath = join(import.meta.dir, "__fixtures__", "edge-cases.md");
 const fixtureSource = readFileSync(fixturePath, "utf8");
 const tree = processAst(fixtureSource);
-const extraction = extract(tree, "notes/edge-cases.md");
+const extraction = extract(tree, "notes/edge-cases.md", fixtureSource);
 
 describe("markdown extractor", () => {
   test("only H1/H2/H3 produce heading blocks", () => {
