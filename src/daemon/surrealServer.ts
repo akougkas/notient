@@ -76,6 +76,12 @@ export interface SurrealServerOptions {
   pidFile: string;
   logLevel?: "trace" | "debug" | "info" | "warn" | "error" | "none";
   onUnexpectedExit?: (code: number | null) => void;
+  /**
+   * HNSW vector-index cache size in MiB, forwarded to the surreal child as
+   * `SURREAL_HNSW_CACHE_SIZE`. Phase 4 Task 10 sources this from the
+   * per-vault TOML config; bootstrap defaults it to 512 when omitted.
+   */
+  hnswCacheMib?: number;
 }
 
 export interface SurrealServerHandle {
@@ -170,6 +176,11 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
 
   const port = await reserveLocalPort();
 
+  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+  if (options.hnswCacheMib !== undefined) {
+    childEnv.SURREAL_HNSW_CACHE_SIZE = String(options.hnswCacheMib);
+  }
+
   const child = Bun.spawn(
     [
       "surreal",
@@ -184,7 +195,7 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
       options.logLevel ?? "warn",
       `rocksdb://${options.dataDir}`,
     ],
-    { stdout: "pipe", stderr: "pipe" },
+    { stdout: "pipe", stderr: "pipe", env: childEnv },
   );
 
   const stdoutStream = child.stdout as ReadableStream<Uint8Array>;

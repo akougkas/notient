@@ -3,6 +3,7 @@ import type { Database } from "../db/database";
 import { type SurrealConnection, fetchChunksForTier3 } from "../db/surreal";
 import type { EventBus } from "../events/eventBus";
 import type { GraphStore } from "../graph/graphStore";
+import type { ChunkBlockSizes } from "./chunker";
 import type { Embedder } from "./embedder";
 import type { Extractor } from "./extractor";
 import { runTier1 } from "./tier1";
@@ -53,12 +54,28 @@ export interface IndexNoteArgs {
    * provided; absent in test paths that exercise only Tiers 1 and 2.
    */
   linker?: Linker;
+  /**
+   * Optional chunk size overrides forwarded to Tier 2. Defaults to the
+   * in-process `CHUNK` constants when omitted; bootstrap forwards values
+   * loaded from `<vault>/.notient/config.toml`.
+   */
+  chunkSizes?: ChunkBlockSizes;
 }
 
 export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const start = Date.now();
-  const { notePath, noteBody, database, embedder, extractor, bus, signal, surrealDb, linker } =
-    args;
+  const {
+    notePath,
+    noteBody,
+    database,
+    embedder,
+    extractor,
+    bus,
+    signal,
+    surrealDb,
+    linker,
+    chunkSizes,
+  } = args;
   const sha = await sha256(noteBody);
 
   if (surrealDb === undefined) {
@@ -107,6 +124,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
       notePath,
       blocks: tier1Output.extraction.blocks,
       embedder,
+      ...(chunkSizes !== undefined ? { chunkSizes } : {}),
     });
     chunkCount = tier2Output.chunkCount;
     bus.emit({ type: "indexer:tier2-done", path: notePath, chunkCount });

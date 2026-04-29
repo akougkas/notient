@@ -8,6 +8,7 @@ import type { ConversationStore } from "./chat/conversationStore";
 import type { ToolModeCache } from "./chat/toolModeProbe";
 import type { ToolRegistry } from "./chat/tools/registry";
 import type { CoAuthorService } from "./coAuthor/chatStream";
+import type { VaultConfig } from "./config/configFile";
 import type { Coordinator } from "./coordinator/coordinator";
 import type { ReasoningMutex } from "./coordinator/reasoningMutex";
 import type { Database } from "./db/database";
@@ -90,6 +91,15 @@ export interface ServiceRegistry {
    * `kernel.has("surrealDb")` before calling `kernel.get("surrealDb")`.
    */
   surrealDb: SurrealConnection;
+
+  /**
+   * Per-vault TOML config loaded once at boot from
+   * `<vault>/.notient/config.toml`. Bootstrap writes it before the indexer
+   * queue, embedder, extractor, and surreal start are configured; every
+   * consumer of indexer concurrency / chunk sizes / awaken defaults reads
+   * from this slot rather than re-parsing the TOML file. Phase 4 Task 10.
+   */
+  vaultConfig: VaultConfig;
 }
 
 /**

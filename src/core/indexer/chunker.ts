@@ -238,12 +238,19 @@ function hardSplitBySpaces(sentence: string, maxTokens: number): string[] {
   return out;
 }
 
-function packSection(text: string): string[] {
+export interface ChunkBlockSizes {
+  /** Soft cap; sections under this size are emitted as a single chunk. */
+  targetTokens: number;
+  /** Hard cap; sentences over this size are split by spaces. */
+  maxTokens: number;
+}
+
+function packSection(text: string, sizes: ChunkBlockSizes): string[] {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
     return [];
   }
-  if (tokenEstimate(trimmed) <= CHUNK.targetTokens) {
+  if (tokenEstimate(trimmed) <= sizes.targetTokens) {
     return [trimmed];
   }
 
@@ -259,15 +266,15 @@ function packSection(text: string): string[] {
   };
 
   for (const sentence of sentences) {
-    if (tokenEstimate(sentence) > CHUNK.maxTokens) {
+    if (tokenEstimate(sentence) > sizes.maxTokens) {
       flush();
-      for (const piece of hardSplitBySpaces(sentence, CHUNK.maxTokens)) {
+      for (const piece of hardSplitBySpaces(sentence, sizes.maxTokens)) {
         out.push(piece);
       }
       continue;
     }
     const candidate = buffer.length === 0 ? sentence : `${buffer} ${sentence}`;
-    if (tokenEstimate(candidate) <= CHUNK.targetTokens) {
+    if (tokenEstimate(candidate) <= sizes.targetTokens) {
       buffer = candidate;
     } else {
       flush();
@@ -278,15 +285,19 @@ function packSection(text: string): string[] {
   return out;
 }
 
-export function chunkBlocks(blocks: BlockSpec[]): ChunkSpec[] {
+export function chunkBlocks(blocks: BlockSpec[], sizes?: ChunkBlockSizes): ChunkSpec[] {
   if (blocks.length === 0) {
     return [];
   }
+  const resolvedSizes: ChunkBlockSizes = {
+    targetTokens: sizes?.targetTokens ?? CHUNK.targetTokens,
+    maxTokens: sizes?.maxTokens ?? CHUNK.maxTokens,
+  };
   const sections = buildSections(blocks);
   const specs: ChunkSpec[] = [];
   let ord = 0;
   for (const section of sections) {
-    const pieces = packSection(section.text);
+    const pieces = packSection(section.text, resolvedSizes);
     for (const piece of pieces) {
       specs.push({
         ord,

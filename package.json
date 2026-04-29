@@ -53,6 +53,7 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
+    "smol-toml": "^1.6.1",
     "sql.js": "^1.13.0",
     "surrealdb": "^2.0.3",
     "unified": "^11.0.5",

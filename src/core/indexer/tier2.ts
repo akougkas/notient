@@ -1,7 +1,7 @@
 import type { RecordId, Surreal } from "surrealdb";
 import { lookupNoteByPath } from "../db/surreal";
 import type { BlockSpec } from "../markdown/types";
-import { type ChunkSpec, chunkBlocks } from "./chunker";
+import { type ChunkBlockSizes, type ChunkSpec, chunkBlocks } from "./chunker";
 import type { Embedder } from "./embedder";
 
 /**
@@ -28,6 +28,12 @@ export interface Tier2Input {
   notePath: string;
   blocks: BlockSpec[];
   embedder: Embedder;
+  /**
+   * Optional chunk size overrides. Defaults to the in-process `CHUNK`
+   * constants when omitted; bootstrap forwards values loaded from
+   * `<vault>/.notient/config.toml` via `loadVaultConfig`.
+   */
+  chunkSizes?: ChunkBlockSizes;
 }
 
 export interface Tier2Output {
@@ -75,7 +81,7 @@ export async function runTier2(db: Surreal, input: Tier2Input): Promise<Tier2Out
     throw new Error(`runTier2: note not found by path '${input.notePath}'; Tier 1 must run first`);
   }
 
-  const chunks = chunkBlocks(input.blocks);
+  const chunks = chunkBlocks(input.blocks, input.chunkSizes);
 
   if (chunks.length === 0) {
     await db.query("UPDATE $note SET tier2_at = time::now();", { note: noteId }).collect();

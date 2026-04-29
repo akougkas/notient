@@ -5,11 +5,19 @@ export interface EmbedderOptions {
   model: string;
   batchSize?: number;
   retryDelayMs?: number;
+  /**
+   * Per-note fan-out cap for `embedAll`. Defaults to `CONCURRENCY.embed`
+   * when omitted so existing tests and ad-hoc constructions keep their
+   * historical behavior; bootstrap threads the value loaded from
+   * `<vault>/.notient/config.toml` via `loadVaultConfig`.
+   */
+  concurrency?: number;
 }
 
 export class Embedder {
   private readonly batchSize: number;
   private readonly retryDelayMs: number;
+  private readonly concurrency: number;
 
   constructor(
     private readonly provider: LLMProvider,
@@ -17,6 +25,12 @@ export class Embedder {
   ) {
     this.batchSize = opts.batchSize ?? 16;
     this.retryDelayMs = opts.retryDelayMs ?? 250;
+    this.concurrency = Math.max(1, opts.concurrency ?? CONCURRENCY.embed);
+  }
+
+  /** Maximum number of in-flight per-chunk embedding calls inside `embedAll`. */
+  getConcurrency(): number {
+    return this.concurrency;
   }
 
   async embed(inputs: string[], signal?: AbortSignal): Promise<number[][]> {
@@ -42,7 +56,7 @@ export class Embedder {
     if (texts.length === 0) return [];
     const out: number[][] = new Array(texts.length);
     let cursor = 0;
-    const workerCount = Math.min(CONCURRENCY.embed, texts.length);
+    const workerCount = Math.min(this.concurrency, texts.length);
 
     const runWorker = async (): Promise<void> => {
       while (true) {

@@ -15,6 +15,7 @@ import { ConversationStore } from "../core/chat/conversationStore";
 import type { ToolMode, ToolModeCache } from "../core/chat/toolModeProbe";
 import { InMemoryClusterCache } from "../core/chat/tools/graph";
 import type { ToolCall } from "../core/chat/types";
+import { loadVaultConfig } from "../core/config/configFile";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import type { Agent, AgentRunResult } from "../core/coordinator/types";
@@ -176,6 +177,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const vault = new FsVault(options.vaultPath);
   const bus = new EventBus();
 
+  // Read the per-vault TOML config once. Missing file falls back to the
+  // built-in defaults silently; malformed TOML logs a warning and falls back.
+  // No live reload; daemon restart picks up changes (Phase 4 Task 10).
+  const vaultConfig = await loadVaultConfig(options.vaultPath);
+
   const configStore: ConfigStore = {
     load: async () => {
       const raw = await vault.read(CONFIG_PATH).catch(() => null);
@@ -252,6 +258,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("agentEventStore", new AgentEventStore({ database, bus }));
   const sessionGrants = new SessionGrants({ database });
   kernel.register("sessionGrants", sessionGrants);
+  kernel.register("vaultConfig", vaultConfig);
 
   if (phaseA) {
     kernel.seal({ phase: "A" });
@@ -274,8 +281,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const vectorIndex: VectorIndex = new EmptyVectorIndex();
   await vectorIndex.init(768);
 
-  const embedder = new Embedder(embeddingLLM, { model: current.embedding.model });
-  const extractor = new Extractor(deepLLM, { model: current.deep.reasoningModel });
+  const embedder = new Embedder(embeddingLLM, {
+    model: current.embedding.model,
+    concurrency: vaultConfig.indexer.concurrency.embed,
+  });
+  const extractor = new Extractor(deepLLM, {
+    model: current.deep.reasoningModel,
+    concurrency: vaultConfig.indexer.concurrency.extract,
+  });
 
   const vaultBootstrap = new VaultBootstrap({
     facade: {
@@ -365,7 +378,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       secret: surrealSecret,
       portFile: vaultPortPath(options.vaultPath),
       pidFile: vaultPidPath(options.vaultPath),
-      logLevel: "warn",
+      logLevel: vaultConfig.surrealdb.logLevel,
+      hnswCacheMib: vaultConfig.surrealdb.hnswCacheMib,
       onUnexpectedExit: (code) => {
         // The AppEvent union does not include a SurrealDB failure variant in
         // Phase 1. Mirror the `daemon:vector_persist_failed` pattern from
@@ -406,6 +420,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const indexer = new IndexerQueue({
     bus,
+    debounceMs: vaultConfig.indexer.debounceMs,
     indexNote: async (path) => {
       const body = await vault.read(path);
       return await indexNote({
@@ -417,6 +432,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         embedder,
         extractor,
         bus,
+        chunkSizes: vaultConfig.indexer.chunk,
         ...(surrealConnection !== null ? { surrealDb: surrealConnection } : {}),
         ...(concreteLinker !== null ? { linker: concreteLinker } : {}),
       });
