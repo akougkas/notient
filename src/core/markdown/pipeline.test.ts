@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getMarkdownPipeline, parse, stringify } from "./pipeline";
+import { visit } from "unist-util-visit";
+import { getMarkdownPipeline, parse, processAst, stringify } from "./pipeline";
 
 const goldenPath = join(import.meta.dir, "__fixtures__", "golden.md");
 
@@ -31,6 +32,32 @@ describe("markdown pipeline", () => {
     const ast = parse("# Hello\n\nworld\n");
     expect(ast.type).toBe("root");
     expect(Array.isArray(ast.children)).toBe(true);
+  });
+
+  test("processAst applies the three custom plugins to the golden fixture", () => {
+    const source = readFileSync(goldenPath, "utf8");
+    const tree = processAst(source);
+    const counts: Record<string, number> = {
+      wikiLink: 0,
+      wikiEmbed: 0,
+      tagRef: 0,
+      blockIdNode: 0,
+    };
+    visit(tree, (node) => {
+      if (node.type === "wikiLink") counts.wikiLink += 1;
+      if (node.type === "wikiEmbed") counts.wikiEmbed += 1;
+      if (node.type === "tagRef") counts.tagRef += 1;
+      if (
+        (node.type === "paragraph" || node.type === "listItem") &&
+        (node as { blockId?: string }).blockId !== undefined
+      ) {
+        counts.blockIdNode += 1;
+      }
+    });
+    expect(counts.wikiLink).toBeGreaterThan(0);
+    expect(counts.wikiEmbed).toBeGreaterThan(0);
+    expect(counts.tagRef).toBeGreaterThan(0);
+    expect(counts.blockIdNode).toBeGreaterThan(0);
   });
 
   test("parse → stringify → parse is byte-deterministic on the golden fixture", () => {

@@ -5,6 +5,9 @@ import remarkStringify from "remark-stringify";
 import type { Root } from "mdast";
 import type { Processor } from "unified";
 import { unified } from "unified";
+import remarkBlockId from "./plugins/remarkBlockId";
+import remarkTag from "./plugins/remarkTag";
+import remarkWikilink from "./plugins/remarkWikilink";
 
 /**
  * Memoised unified processor for Notient's markdown pipeline.
@@ -23,6 +26,9 @@ export function getMarkdownPipeline(): MarkdownProcessor {
       .use(remarkParse)
       .use(remarkFrontmatter, ["yaml"])
       .use(remarkGfm)
+      .use(remarkWikilink)
+      .use(remarkBlockId)
+      .use(remarkTag)
       .use(remarkStringify, {
         bullet: "-",
         emphasis: "_",
@@ -43,4 +49,15 @@ export function parse(source: string): Root {
 
 export function stringify(ast: Root): string {
   return getMarkdownPipeline().stringify(ast) as string;
+}
+
+/**
+ * Parse and run all transformer plugins. Returns the enriched mdast tree
+ * containing wikiLink, wikiEmbed, tagRef nodes and blockId-annotated
+ * paragraphs/list-items. Used by the Tier 1 extractor (Task 9).
+ */
+export function processAst(source: string): Root {
+  const processor = getMarkdownPipeline();
+  const tree = processor.parse(source) as Root;
+  return processor.runSync(tree) as Root;
 }
