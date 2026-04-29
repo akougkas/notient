@@ -2,20 +2,27 @@
 
 Date: 2026-04-29. Branch: `beta-spec`. Plan: `docs/superpowers/plans/2026-04-29-vault-enrichment-phase-2.md`. Spec: `docs/superpowers/specs/2026-04-29-vault-enrichment-data-model-design.md`.
 
+## Closeout
+
+Four defects from the initial Phase 2 ship were corrected before Phase 3 started:
+
+- `e36514e` replaces the `note:unresolved` sentinel record with dedicated `wikilink_unresolved` and `embed_unresolved` tables (TYPE NORMAL, SCHEMAFULL). The `wikilink` and `embed` relation traversals are now sentinel-free; Phase 5's `links audit` reads the new tables directly. Spec §3.4 and §8.3 document the new shape. Phase 1's INFO FOR DB count went from 24 to 26.
+- `77f68b0` makes Tier 1 transactional. `runTier1` builds one SurrealQL script bracketed by `BEGIN TRANSACTION` and `COMMIT TRANSACTION` and submits it as a single `db.query` call. Pre-resolution work runs outside the transaction; only writes run inside. Phase 2 plan §Task 12 acceptance test 8 (rollback on partial failure) is now covered. CREATE rather than UPSERT WHERE is used for new rows because UPSERT WHERE silently no-ops on field-assertion violations in 3.x; CREATE raises and the transaction aborts.
+- `74e9c8c` adds the `indexer:warn` event type and emits one warn per dropped frontmatter ref whose target does not resolve. `runTier1` accepts an optional `bus`; `indexNote` forwards its own through. Phase 2 plan locked decision 7's "drop and log via `indexer:warn`" wording is satisfied.
+- `38f3a27` moves the watcher rename window from setTimeout-only enforcement to a server-side `tombstoned_at > $threshold` filter. The cascade timer still cleans up but no longer carries the sole correctness burden; a stale tombstone can no longer resurrect a fresh file with a matching SHA after a daemon restart or an event-loop hiccup.
+
+Test posture after closeout: 933 pass / 30 skip / 0 fail across 128 files. Smoke 10/10. The Tier 1 smoke harness gained the rollback acceptance test at test 8 and the frontmatter-warn test at test 9; the watcher smoke gained the threshold-filter test.
+
 ## What shipped
 
-- Unified pipeline at `src/core/markdown/pipeline.ts` (`getMarkdownPipeline`, `parse`, `stringify`, `processAst`). Memoised processor wires `remark-parse`, `remark-frontmatter` (yaml), `remark-gfm`, plus the three custom plugins, plus `remark-stringify`. Round-trip golden test on `__fixtures__/golden.md` verifies AST equality and string idempotency.
-- Three in-repo plugins under `src/core/markdown/plugins/`: `remarkWikilink` (parses `[[t]]`, `[[t|a]]`, `[[t#h]]`, `[[t#^b]]`, `![[t]]`), `remarkBlockId` (trailing `\s\^id\s*$` on paragraph or listItem; attaches `blockId`), `remarkTag` (`#tag/sub` outside code spans/blocks/headings).
-- Heading slugifier at `src/core/markdown/slug.ts`; lowercase + dashes + Unicode letter preservation.
-- Pure walker at `src/core/markdown/extractor.ts` producing `MarkdownExtraction` (`src/core/markdown/types.ts`). H1-H3 produce blocks; H4-H6 roll into the nearest H3 ancestor's `headingPath` and text. Paragraphs and list items with `^block-id` become standalone blocks. Frontmatter walks via the `yaml` package; nested keys produce dotted `FrontmatterRefSpec.key` strings (`notient.contradicts`, `notient.notes.primary`).
-- Wikilink resolver at `src/core/markdown/resolver.ts`: exact path with or without `.md` first, then basename match with folder-edit-distance disambiguation. Returns `targetPath = null` for unresolved.
-- Tier 1 DAL extensions in `src/core/db/surreal.ts`: `lookupNoteByPath`, `lookupBlockByHeading`, `lookupBlockByExplicitId`, `upsertNoteByPath`, `upsertTag`, `replaceBlocks`, `clearTier1Edges`, `relateEdge` (typed `EdgeTable` enum), `markTier1Done`. Schema gains `target_unresolved option<string>` on `wikilink` and `embed`, plus the `note:unresolved` sentinel record (`UPSERT note:unresolved ...`) created at apply time.
-- Tier 1 indexer at `src/core/indexer/tier1.ts` (`runTier1`). Pure parse → extract → resolve outside the database, then writes inside an indexer-driven sequence: upsert note, replace blocks, clear Tier 1 edges, RELATE structural (`contained_in`, `under_heading`), wikilink/embed, frontmatter_ref, upsert tags + `tagged`. Tag edges always `source = 'structure'`. Wikilink embeds `source = 'embed'`. Resolved wikilinks `source = 'wikilink'`. Frontmatter refs `source = 'frontmatter'`.
-- Wired into `src/core/indexer/indexNote.ts` ahead of the SHA-change guard. Failures emit `indexer:error` with `phase = 'tier1'` and never block the SQLite path. New event types: `indexer:tier1-done`, `indexer:tombstoned`, `indexer:renamed`.
-- Watcher at `src/daemon/watcher.ts` gains `unlink` and rename handling when an optional `surrealDb` is provided. Unlink writes `tombstoned_at = time::now()` and schedules a 60-second cascade-delete (`setTimeout(...).unref()`); cascade only fires if the row is still tombstoned at fire-time. On `add`, the watcher hashes the file body and looks up tombstoned notes with the same SHA; if found at a different path, it updates the path, clears the tombstone, cancels the cascade timer, emits `indexer:renamed`, and re-enqueues the path.
-- Smoke harness at `src/daemon/__smoke__/tier1.smoke.test.ts` validates LD7 (unresolved wikilink via sentinel) and LD8 (`tagged.source === 'structure'`) end to end.
-
-Test posture at end of phase: 933 pass / 27 skip / 0 fail across 128 files. Smoke 10/10 across both phases.
+- Unified pipeline at `src/core/markdown/pipeline.ts` (`getMarkdownPipeline`, `parse`, `stringify`, `processAst`). Memoised processor wires `remark-parse`, `remark-frontmatter` (yaml), `remark-gfm`, plus the three custom plugins, plus `remark-stringify`. Round-trip golden test verifies AST equality and string idempotency.
+- Three in-repo plugins under `src/core/markdown/plugins/`: `remarkWikilink` (parses `[[t]]`, `[[t|a]]`, `[[t#h]]`, `[[t#^b]]`, `![[t]]`), `remarkBlockId` (trailing `\s\^id\s*$` on paragraph or listItem), `remarkTag` (`#tag/sub` outside code spans/blocks/headings).
+- Heading slugifier at `src/core/markdown/slug.ts`. Pure walker at `src/core/markdown/extractor.ts` produces `MarkdownExtraction`. H1-H3 emit blocks; H4-H6 roll into the nearest H3 ancestor. Paragraphs and list items with `^block-id` emit standalone blocks. Frontmatter walks via the `yaml` package; nested keys produce dotted `FrontmatterRefSpec.key`.
+- Wikilink resolver at `src/core/markdown/resolver.ts`: exact path with or without `.md`, then basename match with folder-edit-distance disambiguation.
+- Tier 1 indexer at `src/core/indexer/tier1.ts`. Pure parse → extract → resolve → existence checks outside the database, then a single `BEGIN/COMMIT` SurrealQL script handles upsert + replace + relate + mark in one shot. Tag edges always `source = 'structure'`. Wikilink embeds `source = 'embed'`. Resolved wikilinks `source = 'wikilink'`. Frontmatter refs `source = 'frontmatter'`.
+- Wired into `src/core/indexer/indexNote.ts` ahead of the SHA-change guard. Tier 1 errors emit `indexer:error` with `phase = 'tier1'` and never block the SQLite path. New event types: `indexer:tier1-done`, `indexer:tombstoned`, `indexer:renamed`, `indexer:warn`.
+- Watcher at `src/daemon/watcher.ts` handles `unlink` (tombstone + scheduled cascade-delete) and `add` (60s SHA-match rename detection enforced via server-side `tombstoned_at > $threshold`). The cascade also clears `wikilink_unresolved` and `embed_unresolved` rows.
+- Phase 2 smoke harness at `src/daemon/__smoke__/tier1.smoke.test.ts` validates LD7 (unresolved wikilink stored in `wikilink_unresolved`) and LD8 (`tagged.source === 'structure'`) end to end.
 
 ## What is deliberately NOT done
 
@@ -33,12 +40,5 @@ Phase 3 ships the priority queue (min-heap keyed by `(priority, enqueuedAt)`), r
 
 - HNSW is in-memory and rebuilt on startup; cap is `SURREAL_HNSW_CACHE_SIZE` (default 256 MiB). Bump for vaults beyond ~50k chunks.
 - `<|k,ef|>` operator form is required for kNN against a cosine HNSW index; bare `<|k|>` errors.
-- DAL writes that touch `option<string>` fields must omit them when undefined; `relateEdge` and `replaceBlocks` follow the pattern.
+- DAL writes that touch `option<string>` fields must omit them when undefined; `replaceBlocks` follows the pattern.
 - SurrealDB 3.0.5 SCHEMAFULL hard-rejects unknown fields; only schema-declared keys may be written.
-
-## Phase 2 footguns (new)
-
-- LD7 deviation: SurrealDB 3.x `TYPE RELATION` rejects an `option<record>` on the implicit `out` field. Tier 1 routes unresolved wikilink and embed targets through the `note:unresolved` sentinel record with `target_unresolved` holding the raw string. Phase 5's `links audit` query becomes `SELECT in, target_unresolved FROM wikilink WHERE out = note:unresolved`. Both LD7 (unresolved persistence) and LD8 (`tagged.source === 'structure'`) are exercised by the Phase 2 smoke harness; do not regress them.
-- The `surrealdb` JS SDK opens a fresh implicit transaction per `db.query` call. A session-level `BEGIN TRANSACTION; ... COMMIT TRANSACTION;` pair via separate calls is not honored. Phase 2 plan invariant 5 (transactional Tier 1) is satisfied operationally rather than literally: `markTier1Done` is the last step and `replaceBlocks` plus `clearTier1Edges` are delete-then-insert idempotent, so a partial failure self-heals on the next `runTier1` for the same note. Phase 4 may revisit this with a single-string transaction builder if write-back demands stronger guarantees.
-- The watcher enforces the 60-second rename window client-side via the cascade timer rather than via a SurrealQL `time::now() - $window` filter; passing `"60000ms"` as a session parameter does not type-coerce to a duration in the SDK's binding context.
-- `frontmatter_ref` is `TYPE RELATION FROM note TO note`; unresolved frontmatter targets are dropped silently (no sentinel routing) because the locked decisions did not require persisting them. Phase 5's audit will surface frontmatter unresolveds via `links audit` once that verb lands.
