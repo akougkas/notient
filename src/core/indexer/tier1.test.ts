@@ -3,10 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
-import { connect, type SurrealConnection, upsertNoteByPath } from "../db/surreal";
+import {
+  type SurrealConnection,
+  connect,
+  lookupNoteByPath,
+  recordDaemonWrite,
+  upsertNoteByPath,
+} from "../db/surreal";
 import { EventBus } from "../events/eventBus";
-import { startSurreal, type SurrealServerHandle } from "../../daemon/surrealServer";
 import { runTier1 } from "./tier1";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -243,5 +249,188 @@ Body.
       )
       .collect<[Array<{ in: RecordId<"note">; out: RecordId<"note"> }>]>();
     expect(refs.length).toBe(1);
+  });
+});
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 daemon_write source override", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "tier1-daemon-override-secret";
+  const activePath = "notes/source/active.md";
+  const targetPath = "notes/source/target.md";
+  const otherTargetPath = "notes/source/other.md";
+  const vaultPaths = [activePath, targetPath, otherTargetPath];
+
+  // The fixture body has a single body wikilink to `target` so the test can
+  // assert exactly one wikilink edge per run. The frontmatter is omitted to
+  // avoid frontmatter_ref noise.
+  const sourceWithTargetLink = `# Heading
+
+A paragraph that links to [[target]] and nothing else.
+`;
+  const sourceWithDifferentBody = `# Heading
+
+A paragraph that links to [[target]] but the body has more text now.
+`;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-tier1-daemon-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+    await upsertNoteByPath(connection.db, {
+      path: targetPath,
+      sha: "target-sha",
+      wordCount: 1,
+    });
+    await upsertNoteByPath(connection.db, {
+      path: otherTargetPath,
+      sha: "other-sha",
+      wordCount: 1,
+    });
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  async function fetchSingleWikilinkSource(noteId: RecordId<"note">): Promise<string> {
+    const [rows] = await connection.db
+      .query<[Array<{ source: string }>]>("SELECT source FROM wikilink WHERE in.note = $note;", {
+        note: noteId,
+      })
+      .collect<[Array<{ source: string }>]>();
+    expect(rows.length).toBe(1);
+    return rows[0].source;
+  }
+
+  async function fetchActiveNoteSha(noteId: RecordId<"note">): Promise<string> {
+    const [rows] = await connection.db
+      .query<[Array<{ sha: string }>]>("SELECT sha FROM note WHERE id = $id;", { id: noteId })
+      .collect<[Array<{ sha: string }>]>();
+    expect(rows.length).toBe(1);
+    return rows[0].sha;
+  }
+
+  test("wikilink edge has source='wikilink' when no daemon_write row matches", async () => {
+    const result = await runTier1(connection.db, {
+      notePath: activePath,
+      source: sourceWithTargetLink,
+      vaultPaths,
+    });
+    const source = await fetchSingleWikilinkSource(result.noteId);
+    expect(source).toBe("wikilink");
+  });
+
+  test("wikilink edge gets source=<agent> when daemon_write matches noteId+sha+target", async () => {
+    const noteId = await lookupNoteByPath(connection.db, activePath);
+    expect(noteId).not.toBeNull();
+    if (noteId === null) return;
+    const targetId = await lookupNoteByPath(connection.db, targetPath);
+    expect(targetId).not.toBeNull();
+    if (targetId === null) return;
+    const currentSha = await fetchActiveNoteSha(noteId);
+
+    await recordDaemonWrite(connection.db, {
+      noteId,
+      sha: currentSha,
+      agent: "linker",
+      targets: [targetId],
+    });
+
+    await runTier1(connection.db, {
+      notePath: activePath,
+      source: sourceWithTargetLink,
+      vaultPaths,
+    });
+
+    const source = await fetchSingleWikilinkSource(noteId);
+    expect(source).toBe("linker");
+  });
+
+  test("wikilink keeps source='wikilink' when daemon_write targets do not include the link target (sha collision alone is insufficient)", async () => {
+    const noteId = await lookupNoteByPath(connection.db, activePath);
+    expect(noteId).not.toBeNull();
+    if (noteId === null) return;
+    const otherTargetId = await lookupNoteByPath(connection.db, otherTargetPath);
+    expect(otherTargetId).not.toBeNull();
+    if (otherTargetId === null) return;
+    const currentSha = await fetchActiveNoteSha(noteId);
+
+    // Wipe any prior daemon_write rows for this note so the test stands alone.
+    await connection.db
+      .query("DELETE daemon_write WHERE note = $note;", { note: noteId })
+      .collect();
+
+    await recordDaemonWrite(connection.db, {
+      noteId,
+      sha: currentSha,
+      agent: "linker",
+      targets: [otherTargetId],
+    });
+
+    await runTier1(connection.db, {
+      notePath: activePath,
+      source: sourceWithTargetLink,
+      vaultPaths,
+    });
+
+    const source = await fetchSingleWikilinkSource(noteId);
+    expect(source).toBe("wikilink");
+  });
+
+  test("wikilink keeps source='wikilink' when daemon_write sha differs from the current body sha", async () => {
+    const noteId = await lookupNoteByPath(connection.db, activePath);
+    expect(noteId).not.toBeNull();
+    if (noteId === null) return;
+    const targetId = await lookupNoteByPath(connection.db, targetPath);
+    expect(targetId).not.toBeNull();
+    if (targetId === null) return;
+
+    await connection.db
+      .query("DELETE daemon_write WHERE note = $note;", { note: noteId })
+      .collect();
+
+    // Insert a daemon_write tagged at the previous body sha. Then re-index
+    // the note with a different body so the current sha changes.
+    const previousSha = await fetchActiveNoteSha(noteId);
+    await recordDaemonWrite(connection.db, {
+      noteId,
+      sha: previousSha,
+      agent: "linker",
+      targets: [targetId],
+    });
+
+    await runTier1(connection.db, {
+      notePath: activePath,
+      source: sourceWithDifferentBody,
+      vaultPaths,
+    });
+    const newSha = await fetchActiveNoteSha(noteId);
+    expect(newSha).not.toBe(previousSha);
+
+    const source = await fetchSingleWikilinkSource(noteId);
+    expect(source).toBe("wikilink");
   });
 });

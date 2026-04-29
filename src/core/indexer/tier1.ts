@@ -1,16 +1,17 @@
 import type { RecordId, Surreal } from "surrealdb";
+import type { EdgeTable } from "../db/edgeTables";
+import {
+  findRecentDaemonWrite,
+  lookupBlockByExplicitId,
+  lookupBlockByHeading,
+  lookupNoteByPath,
+} from "../db/surreal";
+import type { EventBus } from "../events/eventBus";
 import { extract } from "../markdown/extractor";
 import { processAst } from "../markdown/pipeline";
 import { resolveTargets } from "../markdown/resolver";
 import { headingSlug } from "../markdown/slug";
 import type { FrontmatterRefSpec, MarkdownExtraction, WikilinkSpec } from "../markdown/types";
-import {
-  lookupBlockByExplicitId,
-  lookupBlockByHeading,
-  lookupNoteByPath,
-} from "../db/surreal";
-import type { EdgeTable } from "../db/edgeTables";
-import type { EventBus } from "../events/eventBus";
 
 /**
  * Tier 1 indexer: turns a saved note into deterministic SurrealDB edges.
@@ -58,7 +59,12 @@ const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
   "contained_in",
   "under_heading",
 ];
-const TIER1_EDGE_SOURCES = ["wikilink", "embed", "frontmatter", "structure"];
+// Tier 1 cleanup filters by `class = 'EXTRACTED'` (Tier 1's invariant) rather
+// than by `source` because the daemon_write override may rewrite `source` to
+// the agent's name (e.g. `'linker'`). Filtering by class keeps Tier 3 edges
+// (which use `class = 'INFERRED'`) safe even though they live in different
+// tables today.
+const TIER1_EDGE_CLASS = "EXTRACTED";
 
 type WikilinkTarget =
   | { kind: "unresolved" }
@@ -164,6 +170,26 @@ function fromExpression(fromBlockOrd: number | null, blockCount: number): string
   return "$noteId";
 }
 
+interface DaemonWriteOverride {
+  agent: string;
+  targets: Set<string>;
+}
+
+function resolveWikilinkSourceLabel(
+  defaultSourceLabel: string,
+  resolvedTargetKey: string | null,
+  daemonOverride: DaemonWriteOverride | null,
+): string {
+  if (
+    daemonOverride !== null &&
+    resolvedTargetKey !== null &&
+    daemonOverride.targets.has(resolvedTargetKey)
+  ) {
+    return daemonOverride.agent;
+  }
+  return defaultSourceLabel;
+}
+
 function buildTier1Transaction(
   notePath: string,
   extraction: MarkdownExtraction,
@@ -171,13 +197,14 @@ function buildTier1Transaction(
   existingTagIds: Array<RecordId<"tag"> | null>,
   wikilinkTargets: WikilinkTarget[],
   frontmatterTargets: FrontmatterTarget[],
+  daemonOverride: DaemonWriteOverride | null,
 ): TransactionScript {
   const statements: string[] = [];
   const bindings: Record<string, unknown> = {
     notePath,
     sha: extraction.bodySha,
     wordCount: extraction.wordCount,
-    tier1Sources: TIER1_EDGE_SOURCES,
+    tier1Class: TIER1_EDGE_CLASS,
   };
 
   statements.push("BEGIN TRANSACTION;");
@@ -193,16 +220,14 @@ function buildTier1Transaction(
   }
 
   for (const table of TIER1_EDGE_TABLES) {
+    // Walk the edge's `in` record to its host note. For block-rooted edges
+    // `in.note` resolves; for note-rooted edges `in` is the note itself.
     statements.push(
-      `DELETE ${table} WHERE source IN $tier1Sources AND (in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId));`,
+      `DELETE ${table} WHERE class = $tier1Class AND (in = $noteId OR in.note = $noteId);`,
     );
   }
-  statements.push(
-    "DELETE wikilink_unresolved WHERE in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId);",
-  );
-  statements.push(
-    "DELETE embed_unresolved WHERE in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId);",
-  );
+  statements.push("DELETE wikilink_unresolved WHERE in = $noteId OR in.note = $noteId;");
+  statements.push("DELETE embed_unresolved WHERE in = $noteId OR in.note = $noteId;");
   statements.push("DELETE block WHERE note = $noteId;");
 
   const blocks = extraction.blocks;
@@ -260,12 +285,12 @@ function buildTier1Transaction(
     const target = wikilinkTargets[index];
     const fromExpr = fromExpression(link.fromBlockOrd, blocks.length);
     const isEmbed = link.isEmbed;
-    const sourceLabel = isEmbed ? "embed" : "wikilink";
+    const defaultSourceLabel = isEmbed ? "embed" : "wikilink";
 
     if (target.kind === "unresolved") {
       const unresolvedTable = isEmbed ? "embed_unresolved" : "wikilink_unresolved";
       bindings[`wl${index}_rawTarget`] = link.rawTarget;
-      bindings[`wl${index}_source`] = sourceLabel;
+      bindings[`wl${index}_source`] = defaultSourceLabel;
       statements.push(
         `CREATE ${unresolvedTable} CONTENT { in: ${fromExpr}, raw_target: $wl${index}_rawTarget, source: $wl${index}_source };`,
       );
@@ -273,14 +298,25 @@ function buildTier1Transaction(
     }
 
     let toExpr: string;
+    let resolvedTargetKey: string | null;
     if (target.kind === "selfNote") {
       toExpr = "$noteId";
+      // Self-note edges (resolved back to the active note) do not have a
+      // pre-known record-id string to match against `daemon_write.targets`,
+      // so we leave them with the default source. Phase 4 writebacks never
+      // record the active note as a self-target.
+      resolvedTargetKey = null;
     } else {
       bindings[`wl${index}_target`] = target.recordId;
       toExpr = `$wl${index}_target`;
+      resolvedTargetKey = target.recordId.toString();
     }
     const edgeTable = isEmbed ? "embed" : "wikilink";
-    bindings[`wl${index}_source`] = sourceLabel;
+    bindings[`wl${index}_source`] = resolveWikilinkSourceLabel(
+      defaultSourceLabel,
+      resolvedTargetKey,
+      daemonOverride,
+    );
     statements.push(
       `RELATE ${fromExpr} -> ${edgeTable} -> ${toExpr} SET source = $wl${index}_source, class = 'EXTRACTED', confidence = 1;`,
     );
@@ -365,6 +401,25 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     Promise.all(extraction.tags.map((tag) => lookupTagId(db, tag.path))),
   ]);
 
+  // The daemon_write audit row lives in SurrealDB and references the note
+  // by record id. Only an existing note can have one, so we skip the lookup
+  // for first-time-seen notes. The lookup runs exactly once per `runTier1`
+  // invocation; the resulting target set is consulted for each wikilink
+  // and embed edge that resolves to a record id.
+  let daemonOverride: DaemonWriteOverride | null = null;
+  if (existingNoteId !== null) {
+    const match = await findRecentDaemonWrite(db, {
+      noteId: existingNoteId,
+      sha: extraction.bodySha,
+    });
+    if (match !== null) {
+      daemonOverride = {
+        agent: match.agent,
+        targets: new Set(match.targets.map((target) => target.toString())),
+      };
+    }
+  }
+
   const { sql, bindings } = buildTier1Transaction(
     input.notePath,
     extraction,
@@ -372,11 +427,17 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     existingTagIds,
     wikilinkTargets,
     frontmatterTargets,
+    daemonOverride,
   );
 
   await db.query(sql, bindings).collect();
 
-  emitFrontmatterWarnings(input.bus, input.notePath, extraction.frontmatterRefs, frontmatterTargets);
+  emitFrontmatterWarnings(
+    input.bus,
+    input.notePath,
+    extraction.frontmatterRefs,
+    frontmatterTargets,
+  );
 
   const noteId = await lookupNoteByPath(db, input.notePath);
   if (noteId === null) {

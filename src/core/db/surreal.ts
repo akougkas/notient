@@ -1,4 +1,4 @@
-import { RecordId, type Surreal, Surreal as SurrealClass, Table } from "surrealdb";
+import { DateTime, RecordId, type Surreal, Surreal as SurrealClass, Table } from "surrealdb";
 import type { BlockSpec } from "../markdown/types";
 import { EDGE_TABLES, type EdgeTable } from "./edgeTables";
 
@@ -257,24 +257,24 @@ const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
   "contained_in",
   "under_heading",
 ];
-const TIER1_SOURCES = ["wikilink", "embed", "frontmatter", "structure"];
+// Tier 1 cleanup filters by `class = 'EXTRACTED'` so the daemon_write source
+// override (which rewrites `source` to the agent's name) does not strand
+// edges across re-indexes.
+const TIER1_EDGE_CLASS = "EXTRACTED";
 const TIER1_UNRESOLVED_TABLES = ["wikilink_unresolved", "embed_unresolved"] as const;
 
 export async function clearTier1Edges(db: Surreal, noteId: RecordId<"note">): Promise<void> {
   for (const table of TIER1_EDGE_TABLES) {
     await db
-      .query(
-        `DELETE ${table} WHERE source IN $sources AND (in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note));`,
-        { sources: TIER1_SOURCES, note: noteId },
-      )
+      .query(`DELETE ${table} WHERE class = $cls AND (in = $note OR in.note = $note);`, {
+        cls: TIER1_EDGE_CLASS,
+        note: noteId,
+      })
       .collect();
   }
   for (const table of TIER1_UNRESOLVED_TABLES) {
     await db
-      .query(
-        `DELETE ${table} WHERE in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note);`,
-        { note: noteId },
-      )
+      .query(`DELETE ${table} WHERE in = $note OR in.note = $note;`, { note: noteId })
       .collect();
   }
 }
@@ -579,6 +579,98 @@ export async function upsertClaim(db: Surreal, text: string): Promise<RecordId<"
     throw new Error("upsertClaim: SurrealDB returned no record");
   }
   return record.id;
+}
+
+/**
+ * Daemon-write audit row: a tamper-evident record that an agent wrote to a
+ * note's body for a specific body sha. Tier 1 reads the most recent matching
+ * row to attribute wikilink/embed edges back to the agent that introduced
+ * them, distinguishing them from edges authored by the human.
+ *
+ * Spec: §3.5, Phase 4 plan §Task 2. Rows are immutable once inserted.
+ */
+export interface RecordDaemonWriteInput {
+  noteId: RecordId<"note">;
+  sha: string;
+  agent: string;
+  /**
+   * The records this write touched. Schema is `array<record>`; in practice
+   * these are usually `RecordId<"note">` (wikilink / frontmatter targets) but
+   * the schema deliberately accepts any record id.
+   */
+  targets: RecordId[];
+}
+
+export async function recordDaemonWrite(
+  db: Surreal,
+  input: RecordDaemonWriteInput,
+): Promise<RecordId<"daemon_write">> {
+  // `written_at` has a DEFAULT of `time::now()` in the schema; we omit it
+  // from the content to let SurrealDB stamp the server-side wallclock.
+  const result = await db
+    .create<{ id: RecordId<"daemon_write"> }>(new Table("daemon_write"))
+    .content({
+      note: input.noteId,
+      sha: input.sha,
+      agent: input.agent,
+      targets: input.targets,
+    });
+  const record = Array.isArray(result) ? result[0] : result;
+  if (record === undefined) {
+    throw new Error("recordDaemonWrite: SurrealDB returned no record");
+  }
+  return record.id;
+}
+
+export interface FindRecentDaemonWriteInput {
+  noteId: RecordId<"note">;
+  sha: string;
+  /**
+   * Tolerance window in seconds. Defaults to 5s, which absorbs the race
+   * between an agent's atomic file write and the filesystem watcher firing
+   * a re-index for the same body.
+   */
+  withinSeconds?: number;
+}
+
+export interface DaemonWriteMatch {
+  agent: string;
+  targets: RecordId[];
+}
+
+const DEFAULT_DAEMON_WRITE_WINDOW_SECONDS = 5;
+
+export async function findRecentDaemonWrite(
+  db: Surreal,
+  input: FindRecentDaemonWriteInput,
+): Promise<DaemonWriteMatch | null> {
+  const withinSeconds = input.withinSeconds ?? DEFAULT_DAEMON_WRITE_WINDOW_SECONDS;
+  if (!Number.isFinite(withinSeconds) || withinSeconds < 0) {
+    throw new Error("findRecentDaemonWrite: withinSeconds must be a non-negative number");
+  }
+  // The cutoff is computed in JS and shipped as a `DateTime` value so the
+  // binding lands as a native datetime on the server. Building the duration
+  // arithmetic on the SurrealQL side would require either string templating
+  // (a `${seconds}s` literal in the query) or a `Duration` parameter; the
+  // datetime-cutoff approach keeps both query and binding shape boring.
+  const cutoffDate = new Date(Date.now() - Math.floor(withinSeconds * 1000));
+  const cutoff = new DateTime(cutoffDate);
+  // SurrealDB 3.0.5 requires every `ORDER BY` field to appear in the
+  // projection, so `written_at` is selected and discarded by the caller.
+  const sql =
+    "SELECT agent, targets, written_at FROM daemon_write WHERE note = $note AND sha = $sha AND written_at > $cutoff ORDER BY written_at DESC LIMIT 1;";
+  const [rows] = await db
+    .query<[Array<{ agent: string; targets: RecordId[] }>]>(sql, {
+      note: input.noteId,
+      sha: input.sha,
+      cutoff,
+    })
+    .collect<[Array<{ agent: string; targets: RecordId[] }>]>();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return { agent: row.agent, targets: row.targets };
 }
 
 export async function upsertQuestion(db: Surreal, text: string): Promise<RecordId<"question">> {
