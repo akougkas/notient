@@ -27,7 +27,7 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
     echoGuard: { mark: () => {} },
     hash: async () => "00",
     approvalMode: () => "yolo",
-    recordHistory: async () => 0,
+    recordHistory: async () => "history:fake-0",
     generateCallId: () => "call-1",
     contradictionHunter: {} as ContradictionHunter,
     synthesizer: {} as Synthesizer,

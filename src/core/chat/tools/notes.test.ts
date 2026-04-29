@@ -84,7 +84,7 @@ function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
     approvalMode: () => mode,
     recordHistory: async (record) => {
       history.push(record);
-      return history.length;
+      return `history:fake-${history.length}`;
     },
     generateCallId: () => {
       callIdCounter += 1;

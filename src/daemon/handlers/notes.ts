@@ -45,11 +45,11 @@ export function makeNotesHandlers(deps: NotesHandlerDeps): NotesHandlers {
   return {
     history: async (params) => {
       const limit = typeof params.limit === "number" ? params.limit : 10;
-      const entries = deps.historyService.getRecent(limit);
+      const entries = await deps.historyService.getRecent(limit);
       return { ok: true, entries };
     },
     undo: async () => {
-      const recent = deps.historyService.getRecent(1);
+      const recent = await deps.historyService.getRecent(1);
       const target = recent[0];
       const result = await deps.historyService.undoLast();
       if (!result.ok) {

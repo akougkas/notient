@@ -26,7 +26,13 @@ export type HistoryKind =
   | "notes.update_frontmatter";
 
 export interface HistoryRow {
-  id: number;
+  /**
+   * SurrealDB record-id string (e.g. `history:abc123`). Phase 4 Task 4
+   * migrated the storage backend from SQLite (numeric AUTOINCREMENT) to
+   * SurrealDB (`RecordId<"history">`); the public id type is the
+   * `RecordId.toString()` form so consumers stay backend-agnostic.
+   */
+  id: string;
   kind: HistoryKind;
   target: string;
   before: unknown | null;

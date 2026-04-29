@@ -519,16 +519,31 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     exists: (path: string) => vault.exists(path),
   };
 
+  // Phase 4 Task 4: HistoryService is SurrealDB-backed. The bootstrap
+  // requires a live SurrealDB connection; the only path that produces a
+  // null connection is the test-only `skipSurreal` opt-out, which exits
+  // earlier in the production fast path because it has no consumers.
+  if (surrealConnection === null) {
+    throw new Error(
+      "bootstrap: HistoryService requires a SurrealDB connection (Phase 4 Task 4); skipSurreal is incompatible with Phase C wiring",
+    );
+  }
+  const surrealDbConnection = surrealConnection;
+  const updateNoteSha = async (notePath: string, sha: string): Promise<void> => {
+    await surrealDbConnection.db
+      .query("UPDATE note SET sha = $sha WHERE path = $path;", { path: notePath, sha })
+      .collect();
+  };
   const inverters = buildHistoryInverters({
-    database,
     writeNote: notesFacade.writeNote,
     removeNote: (path) => vault.remove(path),
     noteExists: notesFacade.exists,
     markEcho: (path, sha) => echoGuard.mark(path, sha),
     hash: simpleHash,
+    updateNoteSha,
   });
   const historyService = new HistoryService({
-    db: database,
+    db: surrealDbConnection.db,
     inverters,
     retention: {
       max: current.chat.history.maxEntries,
@@ -740,12 +755,18 @@ export function buildRecordHistoryAutoApprove(
 }
 
 export interface BuildHistoryInvertersOptions {
-  database: Database;
   writeNote: (path: string, content: string) => Promise<void>;
   removeNote: (path: string) => Promise<void>;
   noteExists: (path: string) => Promise<boolean>;
   markEcho: (path: string, sha: string) => void;
   hash: (content: string) => Promise<string>;
+  /**
+   * Refreshes the SurrealDB `note.sha` field after a body-restoring
+   * inverter writes the prior body back to disk. Phase 4 Task 4
+   * replaced the SQLite `notes` table write with this closure; the
+   * production wiring issues `UPDATE note SET sha = $sha WHERE path = $path;`.
+   */
+  updateNoteSha: (path: string, sha: string) => Promise<void>;
 }
 
 /**
@@ -753,7 +774,10 @@ export interface BuildHistoryInvertersOptions {
  * the body-edit kinds and the maturity advancer's body+column write. Phase 4
  * Task 3 retired the `edge.*` and `node.*` inverters because the staging
  * tables they reverted no longer exist; rejections in the new SurrealDB
- * approval flow are total deletes with no `history` row.
+ * approval flow are total deletes with no `history` row. Task 4 swapped the
+ * SQLite-backed sha update on `noteMaturity`/`noteAppendSection`/
+ * `noteFrontmatter` for the injected `updateNoteSha` closure that hits
+ * SurrealDB.
  *
  * The body-edit kinds (`note.append_section`, `note.frontmatter`) reuse the
  * chat-side append/frontmatter inverters because they share the same payload
@@ -768,11 +792,13 @@ export function buildHistoryInverters(options: BuildHistoryInvertersOptions): In
     facade: writeFacade,
     echoGuard,
     hash: options.hash,
+    updateNoteSha: options.updateNoteSha,
   });
   const noteFrontmatterInverter = makeNoteFrontmatterInverter({
     facade: writeFacade,
     echoGuard,
     hash: options.hash,
+    updateNoteSha: options.updateNoteSha,
   });
   return {
     "notes.create": makeNoteCreateInverter({
@@ -786,10 +812,10 @@ export function buildHistoryInverters(options: BuildHistoryInvertersOptions): In
     "note.append_section": noteAppendInverter,
     "note.frontmatter": noteFrontmatterInverter,
     "note.maturity": makeNoteMaturityInverter({
-      db: options.database,
       facade: writeFacade,
       echoGuard,
       hash: options.hash,
+      updateNoteSha: options.updateNoteSha,
     }),
   };
 }

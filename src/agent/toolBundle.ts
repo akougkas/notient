@@ -49,7 +49,7 @@ export interface AgentToolDeps {
   echoGuard: { mark: (path: string, sha: string) => void };
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
-  recordHistory: (record: NotesHistoryRecord) => Promise<number>;
+  recordHistory: (record: NotesHistoryRecord) => Promise<string>;
   generateCallId: () => string;
   contradictionHunter: ContradictionHunter;
   synthesizer: Synthesizer;

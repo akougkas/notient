@@ -2,10 +2,15 @@
  * Inverter for frontmatter writes that store the full prior body in
  * `before`. Restores the note body verbatim, which carries the prior
  * frontmatter back into place. EchoGuard is marked first so the
- * indexer skips the self-write.
+ * indexer skips the self-write, then the SurrealDB `note.sha` field is
+ * refreshed so consumers see the post-undo content hash.
  *
  * Handles `notes.update_frontmatter` (chat tool) and `note.frontmatter`
- * (graph bridge writeback for typed relations).
+ * (approval-service writeback for typed relations).
+ *
+ * Phase 4 Task 4 replaced the SQLite `notes` write with the injected
+ * `updateNoteSha` callback; production wires a closure that issues
+ * `UPDATE note SET sha = $sha WHERE path = $path;` against SurrealDB.
  */
 
 import type { Inverter } from "../types";
@@ -22,6 +27,11 @@ export interface NoteFrontmatterInverterOptions {
   facade: NoteFrontmatterInverterFacade;
   echoGuard: NoteFrontmatterInverterEchoGuard;
   hash: (content: string) => Promise<string>;
+  /**
+   * Updates the SurrealDB `note.sha` field for the given path. Tests
+   * inject a fake; bootstrap wires a SurrealDB-backed closure.
+   */
+  updateNoteSha: (path: string, sha: string) => Promise<void>;
 }
 
 export function makeNoteFrontmatterInverter(options: NoteFrontmatterInverterOptions): Inverter {
@@ -32,5 +42,6 @@ export function makeNoteFrontmatterInverter(options: NoteFrontmatterInverterOpti
     const sha = await options.hash(before);
     options.echoGuard.mark(target, sha);
     await options.facade.writeNote(target, before);
+    await options.updateNoteSha(target, sha);
   };
 }

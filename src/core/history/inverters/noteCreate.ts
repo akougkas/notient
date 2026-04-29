@@ -2,6 +2,11 @@
  * Inverter for `notes.create`. Deletes the note that was created.
  * EchoGuard is marked with a sha of the prior body (empty since the
  * note did not exist before) so the indexer ignores the deletion echo.
+ *
+ * Phase 4 Task 4: removing the note leaves the SurrealDB `note` record
+ * to the watcher pipeline, which deletes the row on the file-removed
+ * event. The inverter does not touch SurrealDB directly because the
+ * post-undo state has no body whose `sha` could be recorded.
  */
 
 import type { Inverter } from "../types";

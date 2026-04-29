@@ -3,7 +3,7 @@ import type { HistoryRow } from "../../core/history/types";
 import { makeNotesHandlers } from "./notes";
 
 const sampleRow: HistoryRow = {
-  id: 42,
+  id: "history:fake1",
   kind: "notes.create",
   target: "notes/x.md",
   before: null,
@@ -16,21 +16,21 @@ describe("notes.history + notes.undo + notes.read", () => {
   test("history returns the rows from getRecent", async () => {
     const handlers = makeNotesHandlers({
       historyService: {
-        getRecent: () => [sampleRow],
+        getRecent: async () => [sampleRow],
         undoLast: async () => ({ ok: true }),
       },
       vault: { read: async () => "body" },
     });
     const result = await handlers.history({ limit: 10 }, () => undefined, "envelope-1");
     expect(result.entries.length).toBe(1);
-    expect(result.entries[0].id).toBe(42);
+    expect(result.entries[0].id).toBe("history:fake1");
   });
 
   test("undo calls undoLast and returns the reversed row metadata", async () => {
     let called = false;
     const handlers = makeNotesHandlers({
       historyService: {
-        getRecent: () => [sampleRow],
+        getRecent: async () => [sampleRow],
         undoLast: async () => {
           called = true;
           return { ok: true };
@@ -41,13 +41,13 @@ describe("notes.history + notes.undo + notes.read", () => {
     const result = await handlers.undo({}, () => undefined, "envelope-2");
     expect(called).toBe(true);
     expect(result.ok).toBe(true);
-    expect(result.reversed?.id).toBe(42);
+    expect(result.reversed?.id).toBe("history:fake1");
   });
 
   test("undo surfaces the inverter error when undoLast returns ok:false", async () => {
     const handlers = makeNotesHandlers({
       historyService: {
-        getRecent: () => [],
+        getRecent: async () => [],
         undoLast: async () => ({ ok: false, error: "no history" }),
       },
       vault: { read: async () => "body" },
@@ -59,7 +59,10 @@ describe("notes.history + notes.undo + notes.read", () => {
 
   test("read returns the file body from vault.read", async () => {
     const handlers = makeNotesHandlers({
-      historyService: { getRecent: () => [], undoLast: async () => ({ ok: false, error: "x" }) },
+      historyService: {
+        getRecent: async () => [],
+        undoLast: async () => ({ ok: false, error: "x" }),
+      },
       vault: { read: async (path: string) => `# ${path}\n\nbody` },
     });
     const result = await handlers.read({ path: "notes/x.md" }, () => undefined, "envelope-4");
@@ -69,7 +72,10 @@ describe("notes.history + notes.undo + notes.read", () => {
 
   test("read rejects without a path", async () => {
     const handlers = makeNotesHandlers({
-      historyService: { getRecent: () => [], undoLast: async () => ({ ok: false, error: "x" }) },
+      historyService: {
+        getRecent: async () => [],
+        undoLast: async () => ({ ok: false, error: "x" }),
+      },
       vault: { read: async () => "" },
     });
     await expect(handlers.read({}, () => undefined, "env-5")).rejects.toThrow(/INVALID_PARAMS/);

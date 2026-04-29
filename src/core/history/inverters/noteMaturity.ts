@@ -1,7 +1,14 @@
 /**
- * Inverter for `note.maturity`. Restores the prior maturity column on
- * the `notes` row and the prior body via the facade. The MaturityAdvancer
- * writes both on promotion, so undoing both is required to fully revert.
+ * Inverter for `note.maturity`. Restores the prior body via the facade
+ * and refreshes the SurrealDB `note.sha` field. The MaturityAdvancer
+ * writes a body change on promotion; undoing the body is sufficient to
+ * revert the user-visible state.
+ *
+ * Phase 4 Task 4 dropped the SQLite `notes.maturity` column update
+ * because the SurrealDB `note` schema has no `maturity` field; the
+ * concept lives in the markdown frontmatter and is restored by the
+ * facade write of the prior body. The `sha` refresh keeps the SurrealDB
+ * row in step with the post-undo body.
  *
  * Recorded payload (Task 16 wires the producer):
  *   target = note path
@@ -9,7 +16,6 @@
  *   after  = { maturity, body }
  */
 
-import type { Database } from "../../db/database";
 import type { Inverter } from "../types";
 
 export interface NoteMaturityPayload {
@@ -26,10 +32,14 @@ export interface NoteMaturityInverterEchoGuard {
 }
 
 export interface NoteMaturityInverterOptions {
-  db: Database;
   facade: NoteMaturityInverterFacade;
   echoGuard: NoteMaturityInverterEchoGuard;
   hash: (content: string) => Promise<string>;
+  /**
+   * Updates the SurrealDB `note.sha` field for the given path. Tests
+   * inject a fake; bootstrap wires a SurrealDB-backed closure.
+   */
+  updateNoteSha: (path: string, sha: string) => Promise<void>;
 }
 
 function isNoteMaturityPayload(value: unknown): value is NoteMaturityPayload {
@@ -46,7 +56,6 @@ export function makeNoteMaturityInverter(options: NoteMaturityInverterOptions): 
     const sha = await options.hash(before.body);
     options.echoGuard.mark(target, sha);
     await options.facade.writeNote(target, before.body);
-    options.db.run("UPDATE notes SET maturity = ? WHERE path = ?;", [before.maturity, target]);
-    await options.db.persist();
+    await options.updateNoteSha(target, sha);
   };
 }

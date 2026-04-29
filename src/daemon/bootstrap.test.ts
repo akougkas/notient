@@ -1,42 +1,87 @@
 /**
- * Substrate test that proves the wiring contract Task 9 introduces:
- * the `recordHistory` closure that bootstrap installs into the chat
- * tool registry must call HistoryService.record so that
- * historyService.getRecent(1) returns the row a chat write produced.
+ * Phase 4 Task 4 bootstrap-wiring smoke harness for HistoryService.
  *
+ * The substrate test proves the closure contract Task 9 introduced: the
+ * `recordHistory` closure that bootstrap installs into the chat tool
+ * registry must call HistoryService.record so that
+ * `historyService.getRecent(1)` returns the row a chat write produced.
  * The full bootstrap path requires LM Studio plus the live FsVault, so
- * this test reproduces the same closure shape against an in-memory
- * Database. If the closure ever drifts from the service the row count
- * will not advance and the assertion fails.
+ * these tests reproduce just the closure shape against a real SurrealDB
+ * fixture (Task 4 migrated HistoryService off the in-memory SQLite
+ * mirror to SurrealDB).
+ *
+ * Skipped by default; run with `bun run test:smoke` (sets
+ * NOTIENT_SMOKE=1) or `NOTIENT_SMOKE=1 bun test src/daemon/`.
+ *
+ * The third describe block (`buildHistoryInverters`) does not touch
+ * SurrealDB and runs unconditionally.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { NotesHistoryRecord } from "../core/chat/tools/notes";
 import type { ToolCall } from "../core/chat/types";
-import { Database } from "../core/db/database";
-import { MemoryAdapter, loadWasm } from "../core/db/database.test";
+import { applySchema } from "../core/db/schemaApplier";
+import { type SurrealConnection, connect } from "../core/db/surreal";
 import { HistoryService } from "../core/history/historyService";
 import type { HistoryKind } from "../core/history/types";
 import { buildHistoryInverters, buildRecordHistoryAutoApprove } from "./bootstrap";
+import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 
-async function newDb(): Promise<Database> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const database = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await database.init();
-  return database;
-}
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
-describe("bootstrap recordHistory wiring", () => {
-  test("chat-driven notes.create write lands in history.getRecent", async () => {
-    const database = await newDb();
+describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap recordHistory wiring", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-bootstrap-history-smoke";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-history-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await connection.db.query("DELETE history;").collect();
+  });
+
+  test("[smoke] chat-driven notes.create write lands in history.getRecent", async () => {
     const historyService = new HistoryService({
-      db: database,
+      db: connection.db,
       inverters: {},
       retention: { max: 200, maxPerTarget: 20 },
     });
 
     // Mirror the closure bootstrap installs at `recordHistory`.
-    const recordHistory = async (record: NotesHistoryRecord): Promise<number> =>
+    const recordHistory = async (record: NotesHistoryRecord): Promise<string> =>
       historyService.record(record);
 
     const id = await recordHistory({
@@ -46,8 +91,8 @@ describe("bootstrap recordHistory wiring", () => {
       after: "hello world",
     });
 
-    expect(id).toBeGreaterThan(0);
-    const recent = historyService.getRecent(1);
+    expect(id.startsWith("history:")).toBe(true);
+    const recent = await historyService.getRecent(1);
     expect(recent).toHaveLength(1);
     expect(recent[0].kind).toBe("notes.create");
     expect(recent[0].target).toBe("scratch.md");
@@ -56,13 +101,54 @@ describe("bootstrap recordHistory wiring", () => {
   });
 });
 
-describe("bootstrap buildRecordHistoryAutoApprove", () => {
-  test("yolo-mode auto-approval records a chat.auto_approve audit row", async () => {
-    const database = await newDb();
+describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap buildRecordHistoryAutoApprove", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase4-bootstrap-autoapprove-smoke";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-autoapprove-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await connection.db.query("DELETE history;").collect();
+  });
+
+  test("[smoke] yolo-mode auto-approval records a chat.auto_approve audit row", async () => {
+    let counter = 0;
     const historyService = new HistoryService({
-      db: database,
+      db: connection.db,
       inverters: {},
       retention: { max: 200, maxPerTarget: 20 },
+      now: () => 1700000000000 + counter++,
     });
     const recordHistoryAutoApprove = buildRecordHistoryAutoApprove(historyService);
     const call: ToolCall = {
@@ -71,7 +157,7 @@ describe("bootstrap buildRecordHistoryAutoApprove", () => {
       args: { path: "/scratch.md", content: "hi" },
     };
     await recordHistoryAutoApprove(call);
-    const recent = historyService.getRecent(5);
+    const recent = await historyService.getRecent(5);
     expect(recent).toHaveLength(1);
     expect(recent[0].kind).toBe("chat.auto_approve");
     expect(recent[0].target).toBe("/scratch.md");
@@ -80,12 +166,13 @@ describe("bootstrap buildRecordHistoryAutoApprove", () => {
     expect(after.args.path).toBe("/scratch.md");
   });
 
-  test("auto-approval rows precede the tool's own write row in history order", async () => {
-    const database = await newDb();
+  test("[smoke] auto-approval rows precede the tool's own write row in history order", async () => {
+    let counter = 0;
     const historyService = new HistoryService({
-      db: database,
+      db: connection.db,
       inverters: {},
       retention: { max: 200, maxPerTarget: 20 },
+      now: () => 1700000000000 + counter++,
     });
     const recordHistoryAutoApprove = buildRecordHistoryAutoApprove(historyService);
     await recordHistoryAutoApprove({
@@ -99,21 +186,20 @@ describe("bootstrap buildRecordHistoryAutoApprove", () => {
       before: null,
       after: "body",
     });
-    const recent = historyService.getRecent(5);
+    const recent = await historyService.getRecent(5);
     expect(recent.map((row) => row.kind)).toEqual(["notes.create", "chat.auto_approve"]);
   });
 });
 
 describe("bootstrap buildHistoryInverters", () => {
   test("registers an inverter for every body-edit HistoryKind", async () => {
-    const database = await newDb();
     const inverters = buildHistoryInverters({
-      database,
       writeNote: async () => {},
       removeNote: async () => {},
       noteExists: async () => false,
       markEcho: () => {},
       hash: async () => "sha",
+      updateNoteSha: async () => {},
     });
     // Phase 4 Task 3 retired edge.* and node.* inverters; rejections under
     // the SurrealDB approval flow are total deletes that record no history

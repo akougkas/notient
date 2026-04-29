@@ -53,7 +53,7 @@ export interface NotesToolsContext {
   echoGuard: NotesEchoGuardHook;
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
-  recordHistory: (record: NotesHistoryRecord) => Promise<number>;
+  recordHistory: (record: NotesHistoryRecord) => Promise<string>;
   generateCallId: () => string;
 }
 
@@ -61,7 +61,12 @@ export interface NotesWriteSuccess {
   applied: true;
   path: string;
   sha: string;
-  historyId?: number;
+  /**
+   * SurrealDB record-id string from `HistoryService.record`. Phase 4
+   * Task 4 swapped the SQLite numeric autoincrement id for the
+   * `RecordId<"history">.toString()` form.
+   */
+  historyId?: string;
 }
 
 export interface NotesWriteSkipped {
