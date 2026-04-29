@@ -3,6 +3,7 @@ import type { ContradictionHunter } from "../core/agents/contradictionHunter";
 import type { Synthesizer } from "../core/agents/synthesizer";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import type { Database } from "../core/db/database";
+import { EventBus } from "../core/events/eventBus";
 import type { SearchPipeline } from "../core/search/searchPipeline";
 import type { VitalsService } from "../core/vitals/vitalsService";
 import { buildAgentToolRegistry } from "./toolBundle";
@@ -30,6 +31,7 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
     contradictionHunter: {} as ContradictionHunter,
     synthesizer: {} as Synthesizer,
     clusterCache: null,
+    bus: new EventBus(),
   };
 }
 

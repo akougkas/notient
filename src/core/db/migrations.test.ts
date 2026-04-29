@@ -5,6 +5,7 @@ import { MemoryAdapter, loadWasm } from "./database.test";
 import { applySchema } from "./migrations";
 
 const EXPECTED_TABLES = [
+  "agent_events",
   "agent_runs",
   "chunks",
   "embeddings",

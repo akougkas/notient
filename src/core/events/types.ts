@@ -56,6 +56,37 @@ export type AppEvent =
     }
   | { type: "bridge:up"; version?: string }
   | { type: "bridge:down"; error?: string }
+  | {
+      type: "swarm:contradiction_discovered";
+      pair: [string, string];
+      severity: number;
+      notePaths: [string, string];
+      runId: number;
+    }
+  | {
+      type: "swarm:cluster_emerged";
+      clusterId: string;
+      memberNodeIds: string[];
+      centroidLabel: string;
+      runId: number;
+    }
+  | {
+      type: "swarm:claim_advanced";
+      claimId: string;
+      notePath: string;
+      fromMaturity: string;
+      toMaturity: string;
+      runId: number;
+    }
+  | {
+      type: "swarm:link_proposed";
+      edgeId: string;
+      sourceId: string;
+      targetId: string;
+      edgeType: string;
+      confidence: number;
+      runId: number;
+    }
   | ({ type: "loop:context_summarized" } & ContextSummarizedEvent)
   | ({ type: "loop:context_overflow_warning" } & ContextOverflowWarningEvent)
   | ({ type: "loop:tool_mode_probed" } & ToolModeProbedEvent)

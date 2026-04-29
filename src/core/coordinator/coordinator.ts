@@ -123,7 +123,7 @@ export class Coordinator {
     let ok = false;
     let errorMessage: string | undefined;
     try {
-      const result = await this.executeAgent(agent, { trigger, notePath });
+      const result = await this.executeAgent(agent, { trigger, notePath, runId });
       proposals = result.proposals;
       ok = true;
     } catch (error) {
@@ -145,13 +145,14 @@ export class Coordinator {
     });
   }
 
-  private async executeAgent(agent: Agent, base: Omit<AgentRunContext, "signal">) {
+  private async executeAgent(agent: Agent, base: Omit<AgentRunContext, "signal" | "bus">) {
+    const bus = this.opts.bus;
     if (agent.usesReasoningModel) {
       return this.opts.mutex.run(`agent:${agent.name}`, async (signal) => {
-        return agent.run({ ...base, signal });
+        return agent.run({ ...base, signal, bus });
       });
     }
     const controller = new AbortController();
-    return agent.run({ ...base, signal: controller.signal });
+    return agent.run({ ...base, signal: controller.signal, bus });
   }
 }

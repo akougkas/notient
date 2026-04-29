@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
+import { EventBus } from "../events/eventBus";
 import { ChatJsonParseError, type JsonSchema, type LLMProvider } from "../llm/provider";
 import { ContradictionHunter } from "./contradictionHunter";
 
@@ -61,6 +62,8 @@ describe("ContradictionHunter", () => {
       trigger: "new-claim",
       notePath: "/a.md",
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const rows = db.query<{
@@ -123,6 +126,8 @@ describe("ContradictionHunter", () => {
       trigger: "new-claim",
       notePath: "/a.md",
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });
@@ -147,6 +152,8 @@ describe("ContradictionHunter", () => {
       trigger: "new-claim",
       notePath: "/a.md",
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });
@@ -166,6 +173,8 @@ describe("ContradictionHunter", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });

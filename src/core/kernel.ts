@@ -23,6 +23,7 @@ import type { LLMProvider } from "./llm/provider";
 import type { SavedQueries } from "./search/savedQueries";
 import type { SearchHistory } from "./search/searchHistory";
 import type { SearchPipeline } from "./search/searchPipeline";
+import type { AgentEventStore } from "./services/agentEventStore";
 import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
 import type { IdleDetector } from "./services/idleDetector";
@@ -46,6 +47,7 @@ export interface ServiceRegistry {
   lock: VaultLockHandle;
   echoGuard: EchoGuard;
   probeCache: ProbeCache;
+  agentEventStore: AgentEventStore;
   indexer: IndexerQueue;
   vectorIndex: VectorIndex;
   embedder: Embedder;
@@ -104,6 +106,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "lock",
   "echoGuard",
   "probeCache",
+  "agentEventStore",
   "indexer",
   "vectorIndex",
   "embedder",
@@ -143,6 +146,7 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "lock",
   "echoGuard",
   "probeCache",
+  "agentEventStore",
 ];
 
 const PHASE_B_KEYS: ServiceKey[] = [

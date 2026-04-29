@@ -2,6 +2,7 @@ import type { ContradictionHunter } from "../../agents/contradictionHunter";
 import type { Synthesizer } from "../../agents/synthesizer";
 import type { AgentTrigger } from "../../coordinator/types";
 import type { Database } from "../../db/database";
+import type { EventBus } from "../../events/eventBus";
 import { type ToolDefinition, isObject, optionalStringArray, requireString } from "./registry";
 
 export interface AgentsContradictionCheckArgs {
@@ -41,6 +42,7 @@ interface StagingEdgeRow {
 export function makeContradictionCheckTool(deps: {
   db: Database;
   hunter: ContradictionHunter;
+  bus: EventBus;
   trigger?: AgentTrigger;
 }): ToolDefinition<AgentsContradictionCheckArgs, AgentsContradictionCheckResult> {
   return {
@@ -65,6 +67,8 @@ export function makeContradictionCheckTool(deps: {
         trigger: deps.trigger ?? "user-action",
         notePath: args.notePath,
         signal,
+        runId: 0,
+        bus: deps.bus,
       });
       const newProposals = readNewProposals(deps.db, "contradictionHunter", before);
       return { proposalsCount: result.proposals, newProposals };
@@ -109,6 +113,7 @@ interface StagingNodeRow {
 export function makeSynthesizeTool(deps: {
   db: Database;
   synthesizer: Synthesizer;
+  bus: EventBus;
   trigger?: AgentTrigger;
 }): ToolDefinition<AgentsSynthesizeArgs, AgentsSynthesizeResult> {
   return {
@@ -138,6 +143,8 @@ export function makeSynthesizeTool(deps: {
         trigger: deps.trigger ?? "user-action",
         notePath: null,
         signal,
+        runId: 0,
+        bus: deps.bus,
       });
       const newProposals = readNewSynthesisNodes(deps.db, "synthesizer", before);
       return { proposalsCount: result.proposals, newProposals };

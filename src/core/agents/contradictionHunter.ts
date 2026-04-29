@@ -155,7 +155,31 @@ export class ContradictionHunter implements Agent {
       ...recentClaims.map((c) => c.id),
       ...neighborClaims.map((c) => c.id),
     ]);
+    const notePathById = this.collectNotePaths(
+      [...recentClaims, ...neighborClaims].map((c) => c.id),
+    );
+    return { proposals: this.stagePairs(pairs, validIds, notePathById, context) };
+  }
 
+  private collectNotePaths(claimIds: string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const claimId of claimIds) {
+      const rows = this.opts.db.query<{ note_path: string | null }>(
+        "SELECT note_path FROM graph_nodes WHERE id = ? LIMIT 1;",
+        [claimId],
+      );
+      const found = rows[0]?.note_path ?? null;
+      if (found !== null) out.set(claimId, found);
+    }
+    return out;
+  }
+
+  private stagePairs(
+    pairs: PairsResponse["pairs"],
+    validIds: Set<string>,
+    notePathById: Map<string, string>,
+    context: AgentRunContext,
+  ): number {
     let staged = 0;
     for (const pair of pairs.slice(0, this.opts.maxPairs)) {
       if (pair.confidence < 0.6) continue;
@@ -176,9 +200,16 @@ export class ContradictionHunter implements Agent {
           Date.now(),
         ],
       );
+      context.bus.emit({
+        type: "swarm:contradiction_discovered",
+        pair: [pair.claimAId, pair.claimBId],
+        severity: pair.confidence,
+        notePaths: [notePathById.get(pair.claimAId) ?? "", notePathById.get(pair.claimBId) ?? ""],
+        runId: context.runId,
+      });
       staged++;
     }
-    return { proposals: staged };
+    return staged;
   }
 }
 

@@ -93,6 +93,13 @@ export class Synthesizer implements Agent {
           Date.now(),
         ],
       );
+      context.bus.emit({
+        type: "swarm:cluster_emerged",
+        clusterId: id,
+        memberNodeIds: response.memberPaths,
+        centroidLabel: response.title,
+        runId: context.runId,
+      });
       staged++;
     }
     return { proposals: staged };

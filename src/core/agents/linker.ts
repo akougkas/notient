@@ -133,6 +133,15 @@ export class Linker implements Agent {
           Date.now(),
         ],
       );
+      context.bus.emit({
+        type: "swarm:link_proposed",
+        edgeId: id,
+        sourceId,
+        targetId,
+        edgeType: edge.type,
+        confidence: edge.confidence,
+        runId: context.runId,
+      });
       staged++;
     }
     return { proposals: staged };

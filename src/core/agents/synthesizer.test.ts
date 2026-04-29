@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
+import { EventBus } from "../events/eventBus";
 import { ChatJsonParseError, type JsonSchema, type LLMProvider } from "../llm/provider";
 import { Synthesizer } from "./synthesizer";
 
@@ -96,6 +97,8 @@ describe("Synthesizer", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const rows = db.query<{ type: string; agent: string; payload: string; label: string }>(
@@ -140,6 +143,8 @@ describe("Synthesizer", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const rows = db.query<{ label: string; payload: string; confidence: number }>(
@@ -175,6 +180,8 @@ describe("Synthesizer", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const rows = db.query<{ label: string; payload: string; confidence: number }>(
@@ -207,6 +214,8 @@ describe("Synthesizer", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
     const staged = db.query<{ id: string }>("SELECT id FROM staging_nodes;");
@@ -229,6 +238,8 @@ describe("Synthesizer", () => {
       trigger: "idle-5m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });

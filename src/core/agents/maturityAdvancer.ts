@@ -29,7 +29,7 @@ export class MaturityAdvancer implements Agent {
 
   constructor(private readonly options: MaturityAdvancerOptions) {}
 
-  async run(_context: AgentRunContext): Promise<AgentRunResult> {
+  async run(context: AgentRunContext): Promise<AgentRunResult> {
     const rows = this.options.db.query<NoteRow>(
       "SELECT path, word_count, maturity, updated_at FROM notes;",
     );
@@ -38,6 +38,14 @@ export class MaturityAdvancer implements Agent {
       const next = this.evaluate(row);
       if (next === row.maturity) continue;
       await this.applyPromotion(row.path, next);
+      context.bus.emit({
+        type: "swarm:claim_advanced",
+        claimId: `note:${row.path}`,
+        notePath: row.path,
+        fromMaturity: row.maturity,
+        toMaturity: next,
+        runId: context.runId,
+      });
       promotions++;
     }
     return { proposals: promotions };

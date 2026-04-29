@@ -35,6 +35,7 @@ import {
 } from "../core/chat/tools/vault";
 import type { ApprovalMode } from "../core/chat/types";
 import type { Database } from "../core/db/database";
+import type { EventBus } from "../core/events/eventBus";
 import type { SearchPipeline } from "../core/search/searchPipeline";
 import type { VitalsService } from "../core/vitals/vitalsService";
 
@@ -53,6 +54,7 @@ export interface AgentToolDeps {
   contradictionHunter: ContradictionHunter;
   synthesizer: Synthesizer;
   clusterCache: ClusterCache | null;
+  bus: EventBus;
 }
 
 export function buildAgentToolRegistry(deps: AgentToolDeps): ToolRegistry {
@@ -92,12 +94,14 @@ export function buildAgentToolRegistry(deps: AgentToolDeps): ToolRegistry {
     makeContradictionCheckTool({
       db: deps.database,
       hunter: deps.contradictionHunter,
+      bus: deps.bus,
     }),
   );
   registry.register(
     makeSynthesizeTool({
       db: deps.database,
       synthesizer: deps.synthesizer,
+      bus: deps.bus,
     }),
   );
 

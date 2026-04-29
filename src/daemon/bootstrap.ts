@@ -41,6 +41,7 @@ import { Reranker } from "../core/search/reranker";
 import { SavedQueries } from "../core/search/savedQueries";
 import { SearchHistory } from "../core/search/searchHistory";
 import { SearchPipeline } from "../core/search/searchPipeline";
+import { AgentEventStore } from "../core/services/agentEventStore";
 import { EchoGuard } from "../core/services/echoGuard";
 import { HealthMonitor } from "../core/services/healthMonitor";
 import { IdleDetector } from "../core/services/idleDetector";
@@ -209,6 +210,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("lock", lockHandle);
   kernel.register("echoGuard", echoGuard);
   kernel.register("probeCache", new ProbeCache(bus));
+  kernel.register("agentEventStore", new AgentEventStore({ database, bus }));
 
   if (phaseA) {
     kernel.seal({ phase: "A" });
@@ -527,6 +529,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     contradictionHunter,
     synthesizer,
     clusterCache,
+    bus,
   });
 
   const embedSingle = async (text: string, signal: AbortSignal): Promise<Float32Array | null> => {

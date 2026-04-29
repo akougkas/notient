@@ -107,4 +107,13 @@ export const SCHEMA: string[] = [
   );`,
   "CREATE INDEX IF NOT EXISTS agent_runs_started ON agent_runs(started_at);",
   "CREATE INDEX IF NOT EXISTS agent_runs_agent ON agent_runs(agent);",
+  // agent_events: append-only ledger of swarm discoveries the daemon publishes
+  // to external clients via `notient events --since <cursor>` (Phase D1 T6).
+  `CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL
+  );`,
+  "CREATE INDEX IF NOT EXISTS idx_agent_events_id_desc ON agent_events(id DESC);",
 ];

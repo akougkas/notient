@@ -4,6 +4,7 @@ import type { Synthesizer } from "../../agents/synthesizer";
 import type { AgentRunContext, AgentRunResult } from "../../coordinator/types";
 import { Database } from "../../db/database";
 import { MemoryAdapter, loadWasm } from "../../db/database.test";
+import { EventBus } from "../../events/eventBus";
 import { makeContradictionCheckTool, makeSynthesizeTool } from "./agents";
 
 async function newDb(): Promise<Database> {
@@ -103,7 +104,7 @@ describe("agents.contradiction_check", () => {
         { id: "staging:contradictionHunter:abc", sourceId: "claim:a", targetId: "claim:b" },
       ],
     });
-    const tool = makeContradictionCheckTool({ db, hunter });
+    const tool = makeContradictionCheckTool({ db, hunter, bus: new EventBus() });
     const result = await tool.invoke({ notePath: "/a.md" }, new AbortController().signal);
     expect(result.proposalsCount).toBe(1);
     expect(result.newProposals).toHaveLength(1);
@@ -142,7 +143,7 @@ describe("agents.contradiction_check", () => {
         { id: "staging:contradictionHunter:new", sourceId: "claim:p", targetId: "claim:q" },
       ],
     });
-    const tool = makeContradictionCheckTool({ db, hunter });
+    const tool = makeContradictionCheckTool({ db, hunter, bus: new EventBus() });
     const result = await tool.invoke({ notePath: "/a.md" }, new AbortController().signal);
     expect(result.newProposals.map((p) => p.id)).toEqual(["staging:contradictionHunter:new"]);
   });
@@ -152,14 +153,18 @@ describe("agents.contradiction_check", () => {
     const capture: CapturedRun[] = [];
     const hunter = fakeHunter({ db, capture });
     const controller = new AbortController();
-    const tool = makeContradictionCheckTool({ db, hunter });
+    const tool = makeContradictionCheckTool({ db, hunter, bus: new EventBus() });
     await tool.invoke({ notePath: "/a.md" }, controller.signal);
     expect(capture[0].context.signal).toBe(controller.signal);
   });
 
   test("rejects an empty notePath", async () => {
     const db = await newDb();
-    const tool = makeContradictionCheckTool({ db, hunter: fakeHunter({ db, capture: [] }) });
+    const tool = makeContradictionCheckTool({
+      db,
+      hunter: fakeHunter({ db, capture: [] }),
+      bus: new EventBus(),
+    });
     expect(() => tool.validate({ notePath: "" })).toThrow();
   });
 });
@@ -181,7 +186,7 @@ describe("agents.synthesize", () => {
         },
       ],
     });
-    const tool = makeSynthesizeTool({ db, synthesizer });
+    const tool = makeSynthesizeTool({ db, synthesizer, bus: new EventBus() });
     const result = await tool.invoke(
       { notePaths: ["/a.md", "/b.md"] },
       new AbortController().signal,
@@ -201,7 +206,7 @@ describe("agents.synthesize", () => {
     const db = await newDb();
     const capture: CapturedRun[] = [];
     const synthesizer = fakeSynthesizer({ db, capture });
-    const tool = makeSynthesizeTool({ db, synthesizer });
+    const tool = makeSynthesizeTool({ db, synthesizer, bus: new EventBus() });
     const result = await tool.invoke({}, new AbortController().signal);
     expect(result.proposalsCount).toBe(0);
     expect(result.newProposals).toEqual([]);
@@ -212,6 +217,7 @@ describe("agents.synthesize", () => {
     const tool = makeSynthesizeTool({
       db,
       synthesizer: fakeSynthesizer({ db, capture: [] }),
+      bus: new EventBus(),
     });
     expect(() => tool.validate({ notePaths: [1, 2] })).toThrow();
   });
@@ -241,7 +247,7 @@ describe("agents.synthesize", () => {
         return { proposals: 1 };
       },
     } as unknown as Synthesizer;
-    const tool = makeSynthesizeTool({ db, synthesizer });
+    const tool = makeSynthesizeTool({ db, synthesizer, bus: new EventBus() });
     const result = await tool.invoke({}, new AbortController().signal);
     expect(result.newProposals).toHaveLength(1);
     expect(result.newProposals[0]).toMatchObject({

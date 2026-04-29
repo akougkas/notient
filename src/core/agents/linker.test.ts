@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
+import { EventBus } from "../events/eventBus";
 import type { JsonSchema, LLMProvider } from "../llm/provider";
 import { Linker } from "./linker";
 
@@ -77,6 +78,8 @@ describe("Linker", () => {
       trigger: "vault-save",
       notePath: "/active.md",
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const rows = db.query<{ type: string; agent: string; confidence: number; evidence: string }>(
@@ -103,6 +106,8 @@ describe("Linker", () => {
       trigger: "idle-30s",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });
@@ -153,6 +158,8 @@ describe("Linker", () => {
       trigger: "vault-save",
       notePath: "/active.md",
       signal: ctrl.signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(saw).toBe(ctrl.signal);
   });
@@ -198,6 +205,8 @@ describe("Linker", () => {
       trigger: "vault-save",
       notePath: "/active.md",
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(maxTokens).toBeGreaterThanOrEqual(1600);
   });

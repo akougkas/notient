@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
+import { EventBus } from "../events/eventBus";
 import { EchoGuard } from "../services/echoGuard";
 import { MaturityAdvancer } from "./maturityAdvancer";
 
@@ -42,6 +43,8 @@ describe("MaturityAdvancer", () => {
       trigger: "idle-30m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
     const row = db.query<{ maturity: string }>("SELECT maturity FROM notes WHERE path = ?;", [
@@ -69,6 +72,8 @@ describe("MaturityAdvancer", () => {
       trigger: "idle-30m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     const written = facade.files.get("/a.md") as string;
     const writtenSha = await sha(written);
@@ -96,6 +101,8 @@ describe("MaturityAdvancer", () => {
       trigger: "idle-30m",
       notePath: null,
       signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
   });
