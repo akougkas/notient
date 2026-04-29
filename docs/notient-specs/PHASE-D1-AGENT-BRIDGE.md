@@ -666,3 +666,78 @@ Phase D1 is complete when:
 6. A summary commit on `phase-d1` documents the bridge surface for the operator.
 
 The branch stays local. No PR, no push. The user merges to `beta-spec` (or whatever the next integration branch is) when satisfied.
+
+---
+
+## Implementation status (shipped on `beta-spec`)
+
+Phase D1 shipped on `beta-spec` rather than a `phase-d1` branch. The user authorized the simpler topology mid-flight: stay on the current branch, no migrations, schema rewritten from first principles. The seven verbs and the skill are live.
+
+### Commit log (chronological)
+
+| # | SHA | Subject |
+|---|-----|---------|
+| 0 | `36605f7` | refactor(db): collapse schema into single SCHEMA constant |
+| 1 | `60068e4` | feat(identity): per-invocation clientIdentity plumbed through RPC |
+| 2 | `200b295` | feat(events): agent_events store + bus subscription for swarm discoveries |
+| 3 | `27671d8` | docs(skill): claude code notient skill at docs/skills/notient.md |
+| 4 | `cbb4478` | fix(client): raise daemon spawn timeout to 30s |
+| 5 | `36d3b48` | feat(agent): agent.ask RPC + notient ask CLI |
+| 6 | `aaae5b3` | feat(agent): agent.brief RPC + notient brief CLI |
+| 7 | `d54801d` | feat(agent): agent.distill RPC + notient distill CLI |
+| 8 | `893e124` | feat(agent): agent.events long-poll RPC + notient events CLI |
+| 9 | `a50514c` | feat(session): grants service + RPC verbs + notient session CLI |
+| 10 | `7b77083` | feat(approval): consult session grants before per-tool policy |
+| 11 | `1f43fcc` | test(smoke): phase D1 end-to-end harness for the seven new verbs |
+
+### Wire surface for the operator
+
+External agentic clients (Claude Code first) shell out to the `notient` binary. Every invocation passes `--as <agent-id>` so writes get attributed and session grants apply. The seven verbs:
+
+| Verb | Wire | Use case |
+|------|------|----------|
+| `notient ask "<intent>"` | `agent.ask` | Single-shot natural-language intent, structured JSON answer with citations + open questions + confidence. Read-only. |
+| `notient brief <topic>` / `--file <path>` | `agent.brief` | Topic or file-driven structured brief: relevant notes, recent decisions, open questions, open contradictions, plus a 2-3 sentence LLM summary. |
+| `notient distill --from <transcript>` | `agent.distill` | Ingests an external transcript (markdown / JSONL / JSON) and produces proposal files under `<vault>/Notient/proposals/`. `--dry-run` previews without writing. |
+| `notient events --since <cursor>` | `agent.events` | Long-polling NDJSON stream of swarm discoveries (contradictions, clusters, claim advances, link proposals). |
+| `notient session grant --client <id> --folders <list>` | `session.grant` | User-authorized scoped trust grant for unattended writes. |
+| `notient session list` | `session.list` | Lists active grants. |
+| `notient session revoke <id>` | `session.revoke` | Revokes a grant immediately. |
+
+Plus the global `--as <agent-id>` flag the T1 plumbing added to every existing verb.
+
+### Schema additions
+
+`SCHEMA` in `src/core/db/schema.ts` gained:
+
+- `client_identity TEXT` column on the `history` table (T1).
+- `agent_events` table + `idx_agent_events_id_desc` index (T2).
+- `agent_sessions` table + `idx_agent_sessions_client_active` index (T7).
+
+ConversationStore is markdown-based; identity is persisted in the per-conversation YAML frontmatter rather than a SQL column.
+
+### EventBus additions
+
+Four new `swarm:*` event types in `src/core/events/types.ts`:
+
+- `swarm:contradiction_discovered`
+- `swarm:cluster_emerged`
+- `swarm:claim_advanced`
+- `swarm:link_proposed`
+
+Each is fired by the corresponding swarm agent at its discovery-commit moment. `AgentEventStore` self-subscribes and persists rows for `agent.events` consumers.
+
+### ApprovalGate behavior
+
+`ApprovalGate.request` now consults `SessionGrants.find` before falling back to per-tool policy. Active grants covering `(client, tool, folder)` produce an `auto` decision with `reason: "session-grant#<id>"` and `sessionId` attribution. `usedWrites` increments atomically once per approved call. Expired, revoked, and exhausted grants degrade silently to the existing per-tool policy.
+
+### Verification at the close
+
+- `bun run typecheck` — clean.
+- `bun run lint` — clean (276 files).
+- `bun test` — 872 pass / 0 fail.
+- `bun run smoke:cli:phaseA|B|C|D|D1` — all end with `smoke:complete`. The D1 smoke validates identity, ask, brief topic, brief file, session grant + list + revoke, distill dry + live, and skip-tolerates the substrate-flaky `events` step (per the spec's flaky-test guidance).
+
+### Operator copy step
+
+Operator copies `docs/skills/notient.md` to `~/.claude/skills/notient.md` to activate the skill in Claude Code. There is no installer in this phase by design (LD-7).
