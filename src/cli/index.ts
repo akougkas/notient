@@ -3,6 +3,7 @@ import { runAwakenCommand } from "./commands/awaken";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
+import { runDbSqlCommand } from "./commands/dbSql";
 import { parseDistillFormat, runDistillCommand } from "./commands/distill";
 import {
   parseEventsLongPollMs,
@@ -70,6 +71,7 @@ function selectMode(parsed: ParsedArgs): EmitterMode {
   return (modeFlag as EmitterMode) ?? defaultMode(process.stdout.isTTY === true);
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat command routing table is clearer than indirection
 async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
     emitter.emit({
@@ -77,6 +79,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
       commands: [
         "init",
         "daemon",
+        "db sql",
         "awaken",
         "reindex",
         "search",
@@ -98,6 +101,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
 
   if (parsed.command === "init") return await dispatchInit(parsed, emitter);
   if (parsed.command === "daemon") return await dispatchDaemon(parsed, emitter, clientIdentity);
+  if (parsed.command === "db") return await dispatchDbSql(parsed, emitter);
   if (parsed.command === "awaken") return await dispatchAwaken(parsed, emitter, clientIdentity);
   if (parsed.command === "reindex") return await dispatchReindex(parsed, emitter, clientIdentity);
   if (parsed.command === "search") return await dispatchSearch(parsed, emitter, clientIdentity);
@@ -147,6 +151,20 @@ async function dispatchDaemon(
   const vaultPath = await resolveVaultForDaemon(parsed);
   await runDaemonCommand({ verb, vaultPath, emitter, clientIdentity });
   return 0;
+}
+
+async function dispatchDbSql(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+  const sub = parsed.positional[0];
+  if (sub !== "sql") {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_PARAMS",
+      message: "usage: notient db sql",
+    });
+    return 2;
+  }
+  const vaultPath = await requireVault(parsed);
+  return await runDbSqlCommand({ vaultPath });
 }
 
 async function dispatchAwaken(
