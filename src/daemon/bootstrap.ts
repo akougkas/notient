@@ -4,10 +4,10 @@ import { TIER_1_IDENTITY } from "../agent/identity";
 import { buildNotientAgent } from "../agent/notientAgent";
 import { buildAgentToolRegistry } from "../agent/toolBundle";
 import { probeVisionRoute } from "../agent/visionProbe";
-import { ContradictionHunter } from "../core/agents/contradictionHunter";
+import type { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
-import { Synthesizer } from "../core/agents/synthesizer";
+import type { Synthesizer } from "../core/agents/synthesizer";
 import { ApprovalService } from "../core/approvals/approvalService";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
@@ -415,27 +415,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   });
 
-  const synthesizer = new Synthesizer({
-    db: database,
-    provider: deepLLM,
-    reasoningModel: current.deep.reasoningModel,
-    epsilon: 0.35,
-    minClusterSize: 3,
-    sinceMs: 7 * 24 * 60 * 60 * 1000,
-  });
-  const contradictionHunter = new ContradictionHunter({
-    db: database,
-    provider: deepLLM,
-    reasoningModel: current.deep.reasoningModel,
-    // Phase 3 Task 10 left ContradictionHunter without a kNN source after the
-    // vector index became a no-op stub. Phase 4 Task 11 deletes that stub but
-    // does not re-wire ContradictionHunter onto SurrealDB; the neighbor
-    // closure stays empty so the agent proposes zero contradiction edges per
-    // cycle. Task 12 documents the behavior; restoration depends on a future
-    // ContradictionHunter migration onto the SurrealDB kNN reader.
-    neighbors: async () => [],
-    maxPairs: 5,
-  });
+  // Phase 5 Locked Decision 11: Synthesizer and ContradictionHunter are
+  // stripped from production wiring rather than migrated. Both have read
+  // frozen/empty SQLite state since Phase 3 (Synthesizer clusters embeddings
+  // via SQL against tables Phase 3 stopped writing to; ContradictionHunter
+  // already runs with an empty `neighbors` closure since Phase 3 Task 10).
+  // Migrating them onto SurrealDB is feature work, not a Phase 5 cutover
+  // obligation. The agent .ts files stay on disk so a future feature task
+  // can re-introduce SurrealDB-backed implementations. The Coordinator's
+  // agents map keeps both keys with the same no-op fallback shape Linker
+  // uses when SurrealDB is absent, so the swarm dispatch loop still records
+  // four agent_run rows per cycle (each with proposals_count=0).
+  const synthesizer: Agent = {
+    name: "synthesizer" as const,
+    usesReasoningModel: false,
+    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+  };
+  const contradictionHunter: Agent = {
+    name: "contradictionHunter" as const,
+    usesReasoningModel: false,
+    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+  };
   const maturityAdvancer = new MaturityAdvancer({
     db: surrealConnection.db,
     facade: {
@@ -582,8 +582,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     recordHistory: async (record) => historyService.record(record),
     generateCallId: () =>
       `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    contradictionHunter,
-    synthesizer,
+    // Phase 5 Locked Decision 11: the production agents are no-op Agent shells
+    // (see above). The chat-tool factories `agents.contradiction_check` and
+    // `agents.synthesize` only invoke `.run()`, which the no-op satisfies; the
+    // typed `Synthesizer`/`ContradictionHunter` parameters are a vestige Task 7
+    // will retire when it migrates the chat-tool surface off the SQLite-bound
+    // factories. Cast through `unknown` to bridge the type gap until then.
+    contradictionHunter: contradictionHunter as unknown as ContradictionHunter,
+    synthesizer: synthesizer as unknown as Synthesizer,
     clusterCache,
     bus,
   });

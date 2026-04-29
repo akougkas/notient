@@ -24,6 +24,9 @@ import * as path from "node:path";
 import { ApprovalService } from "../core/approvals/approvalService";
 import type { NotesHistoryRecord } from "../core/chat/tools/notes";
 import type { ToolCall } from "../core/chat/types";
+import { Coordinator } from "../core/coordinator/coordinator";
+import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
+import type { Agent, AgentRunResult } from "../core/coordinator/types";
 import { applySchema } from "../core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../core/db/surreal";
 import { EventBus } from "../core/events/eventBus";
@@ -327,6 +330,99 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
     expect(parsed.type).toBe("daemon:reconcile_summary");
     expect(parsed.replayed).toBe(0);
     expect(parsed.failed).toBe(0);
+  });
+});
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap swarm dispatch with no-op agents", () => {
+  /**
+   * Phase 5 Task 6 / Locked Decision 11: Synthesizer and ContradictionHunter
+   * are stripped from production wiring. The bootstrap assigns the same no-op
+   * Agent shape Linker uses when SurrealDB is absent. This smoke proves the
+   * Coordinator dispatches with all four agent slots filled and writes four
+   * agent_run rows on a single user-action deepen cycle, each with
+   * proposals_count=0 and ok=true.
+   */
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-bootstrap-swarm-noop-smoke";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-swarm-noop-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await connection.db.query("DELETE agent_run;").collect();
+  });
+
+  test("[smoke] user-action deepen records four agent_run rows with no-op Synthesizer + ContradictionHunter", async () => {
+    const bus = new EventBus();
+    const noopAgent = (name: Agent["name"]): Agent => ({
+      name,
+      usesReasoningModel: false,
+      run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+    });
+    const coord = new Coordinator({
+      bus,
+      db: connection.db,
+      mutex: new ReasoningMutex(),
+      agents: {
+        linker: noopAgent("linker"),
+        synthesizer: noopAgent("synthesizer"),
+        contradictionHunter: noopAgent("contradictionHunter"),
+        maturityAdvancer: noopAgent("maturityAdvancer"),
+      },
+    });
+    coord.start();
+    bus.emit({ type: "user:action", kind: "deepen", notePath: "/x.md" });
+    await coord.idle();
+    coord.stop();
+
+    const [rows] = await connection.db
+      .query<[Array<{ agent: string; ok: boolean | null; proposals_count: number; seq: number }>]>(
+        "SELECT agent, ok, proposals_count, seq FROM agent_run ORDER BY seq ASC;",
+      )
+      .collect<
+        [Array<{ agent: string; ok: boolean | null; proposals_count: number; seq: number }>]
+      >();
+    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => row.agent)).toEqual([
+      "linker",
+      "synthesizer",
+      "contradictionHunter",
+      "maturityAdvancer",
+    ]);
+    for (const row of rows) {
+      expect(row.ok).toBe(true);
+      expect(row.proposals_count).toBe(0);
+    }
   });
 });
 
