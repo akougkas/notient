@@ -231,7 +231,9 @@ async function runSingleCall(context: RoundContext, call: ToolCall): Promise<Cal
   }
   try {
     const start = now();
-    const data = await options.toolRegistry.invoke(call.name, call.args, input.signal);
+    const data = await options.toolRegistry.invoke(call.name, call.args, input.signal, {
+      clientIdentity: input.conversation.clientIdentity,
+    });
     return {
       result: {
         callId: call.id,

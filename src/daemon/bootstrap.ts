@@ -213,7 +213,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("echoGuard", echoGuard);
   kernel.register("probeCache", new ProbeCache(bus));
   kernel.register("agentEventStore", new AgentEventStore({ database, bus }));
-  kernel.register("sessionGrants", new SessionGrants({ database }));
+  const sessionGrants = new SessionGrants({ database });
+  kernel.register("sessionGrants", sessionGrants);
 
   if (phaseA) {
     kernel.seal({ phase: "A" });
@@ -512,6 +513,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
     recordHistoryAutoApprove: buildRecordHistoryAutoApprove(historyService),
     perToolPolicy: current.chat.perTool,
+    sessionGrants,
   });
 
   const clusterCache = new InMemoryClusterCache();

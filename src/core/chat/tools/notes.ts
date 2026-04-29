@@ -16,7 +16,13 @@ import type { Database } from "../../db/database";
 import type { HistoryKind } from "../../history/types";
 import type { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
-import { type ToolDefinition, type ToolJsonSchema, isObject, requireString } from "./registry";
+import {
+  type ToolDefinition,
+  type ToolInvokeContext,
+  type ToolJsonSchema,
+  isObject,
+  requireString,
+} from "./registry";
 
 export interface NotesFacade {
   readNote(path: string): Promise<string>;
@@ -33,6 +39,12 @@ export interface NotesHistoryRecord {
   target: string;
   before: string | null;
   after: string;
+  /**
+   * Per-invocation client identity that produced the record (Phase D1 LD-5).
+   * Undefined falls back to `human` inside HistoryService.record so older
+   * call sites that don't yet plumb identity behave unchanged.
+   */
+  clientIdentity?: string;
 }
 
 export interface NotesToolsContext {
@@ -111,7 +123,7 @@ export function makeCreateNoteTool(
       if (body === null) throw new Error("body must be a string");
       return { notePath, body };
     },
-    invoke: async (args, signal) => {
+    invoke: async (args, signal, invokeContext) => {
       if (await context.facade.exists(args.notePath)) {
         return { applied: false, reason: `path already exists: ${args.notePath}` };
       }
@@ -120,6 +132,7 @@ export function makeCreateNoteTool(
         context.approvalMode(),
         previewCreate(args.notePath, args.body),
         signal,
+        invokeContext,
       );
       if (!decision.approved) {
         return { applied: false, reason: decision.reason ?? "rejected by user" };
@@ -132,6 +145,7 @@ export function makeCreateNoteTool(
         target: args.notePath,
         before: null,
         after: args.body,
+        clientIdentity: invokeContext?.clientIdentity,
       });
       return { applied: true, path: args.notePath, sha, historyId };
     },
@@ -168,7 +182,7 @@ export function makeAppendNoteTool(
       if (text.length === 0) throw new Error("text must not be empty");
       return { notePath, text };
     },
-    invoke: async (args, signal) => {
+    invoke: async (args, signal, invokeContext) => {
       if (!(await context.facade.exists(args.notePath))) {
         return { applied: false, reason: `path does not exist: ${args.notePath}` };
       }
@@ -179,6 +193,7 @@ export function makeAppendNoteTool(
         context.approvalMode(),
         previewAppend(args.notePath, before, args.text),
         signal,
+        invokeContext,
       );
       if (!decision.approved) {
         return { applied: false, reason: decision.reason ?? "rejected by user" };
@@ -191,6 +206,7 @@ export function makeAppendNoteTool(
         target: args.notePath,
         before,
         after,
+        clientIdentity: invokeContext?.clientIdentity,
       });
       return { applied: true, path: args.notePath, sha, historyId };
     },
@@ -236,7 +252,7 @@ export function makeReplaceSectionTool(
       if (body === null) throw new Error("body must be a string");
       return { notePath, heading, body };
     },
-    invoke: async (args, signal) => {
+    invoke: async (args, signal, invokeContext) => {
       if (!(await context.facade.exists(args.notePath))) {
         return { applied: false, reason: `path does not exist: ${args.notePath}` };
       }
@@ -253,6 +269,7 @@ export function makeReplaceSectionTool(
         context.approvalMode(),
         previewReplaceSection(args.notePath, args.heading, args.body),
         signal,
+        invokeContext,
       );
       if (!decision.approved) {
         return { applied: false, reason: decision.reason ?? "rejected by user" };
@@ -265,6 +282,7 @@ export function makeReplaceSectionTool(
         target: args.notePath,
         before,
         after: replaced,
+        clientIdentity: invokeContext?.clientIdentity,
       });
       return { applied: true, path: args.notePath, sha, historyId };
     },
@@ -303,7 +321,7 @@ export function makeUpdateFrontmatterTool(
       if (!isObject(raw.patch)) throw new Error("patch must be an object");
       return { notePath, patch: raw.patch };
     },
-    invoke: async (args, signal) => {
+    invoke: async (args, signal, invokeContext) => {
       if (!(await context.facade.exists(args.notePath))) {
         return { applied: false, reason: `path does not exist: ${args.notePath}` };
       }
@@ -314,6 +332,7 @@ export function makeUpdateFrontmatterTool(
         context.approvalMode(),
         previewFrontmatter(args.notePath, args.patch),
         signal,
+        invokeContext,
       );
       if (!decision.approved) {
         return { applied: false, reason: decision.reason ?? "rejected by user" };
@@ -326,6 +345,7 @@ export function makeUpdateFrontmatterTool(
         target: args.notePath,
         before,
         after: next,
+        clientIdentity: invokeContext?.clientIdentity,
       });
       return { applied: true, path: args.notePath, sha, historyId };
     },

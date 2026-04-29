@@ -129,6 +129,7 @@ function makeNoopGate(): ApprovalGate {
   return new ApprovalGate({
     events: { onPending: () => {}, onResolved: () => {} },
     recordHistoryAutoApprove: async () => {},
+    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
   });
 }
 

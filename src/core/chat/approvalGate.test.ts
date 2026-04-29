@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { ApprovalGate, type ApprovalGateEvents, type PendingApproval } from "./approvalGate";
+import type { SessionGrant, SessionGrantFindQuery } from "../services/sessionGrants";
+import {
+  ApprovalGate,
+  type ApprovalGateEvents,
+  type PendingApproval,
+  type SessionGrantLookup,
+  extractFolder,
+} from "./approvalGate";
 import type { ToolCall } from "./types";
 
 function makeCall(id = "call-1", name = "notes.create"): ToolCall {
@@ -8,15 +15,64 @@ function makeCall(id = "call-1", name = "notes.create"): ToolCall {
 
 interface Recorder {
   pending: PendingApproval[];
-  resolved: { callId: string; approved: boolean; reason?: string }[];
+  resolved: { callId: string; approved: boolean; reason?: string; sessionId?: number }[];
   autoApproved: ToolCall[];
 }
 
-function makeGate(recorder: Recorder, autoFails = false): ApprovalGate {
+function nullGrants(): SessionGrantLookup {
+  return { find: () => null, incrementWriteCount: () => {} };
+}
+
+interface RecordingGrants extends SessionGrantLookup {
+  findQueries: SessionGrantFindQuery[];
+  incrementCalls: number[];
+}
+
+function recordingGrants(grant: SessionGrant | null): RecordingGrants {
+  const findQueries: SessionGrantFindQuery[] = [];
+  const incrementCalls: number[] = [];
+  return {
+    findQueries,
+    incrementCalls,
+    find: (query) => {
+      findQueries.push(query);
+      return grant;
+    },
+    incrementWriteCount: (id) => {
+      incrementCalls.push(id);
+    },
+  };
+}
+
+function makeStubGrant(overrides: Partial<SessionGrant> = {}): SessionGrant {
+  return {
+    id: 7,
+    client: "claude-code",
+    grantedAt: 1_000,
+    expiresAt: 99_999_999_999_999,
+    allowedFolders: ["Inbox/"],
+    allowedTools: [],
+    maxWrites: null,
+    usedWrites: 0,
+    revokedAt: null,
+    ...overrides,
+  };
+}
+
+function makeGate(
+  recorder: Recorder,
+  autoFails = false,
+  grants: SessionGrantLookup = nullGrants(),
+): ApprovalGate {
   const events: ApprovalGateEvents = {
     onPending: (p) => recorder.pending.push(p),
     onResolved: (callId, decision) =>
-      recorder.resolved.push({ callId, approved: decision.approved, reason: decision.reason }),
+      recorder.resolved.push({
+        callId,
+        approved: decision.approved,
+        reason: decision.reason,
+        sessionId: decision.sessionId,
+      }),
   };
   return new ApprovalGate({
     events,
@@ -24,6 +80,7 @@ function makeGate(recorder: Recorder, autoFails = false): ApprovalGate {
       if (autoFails) throw new Error("history write failed");
       recorder.autoApproved.push(call);
     },
+    sessionGrants: grants,
   });
 }
 
@@ -41,7 +98,9 @@ describe("ApprovalGate", () => {
     gate.resolve("call-1", { approved: true });
     const decision = await promise;
     expect(decision.approved).toBe(true);
-    expect(recorder.resolved).toEqual([{ callId: "call-1", approved: true, reason: undefined }]);
+    expect(recorder.resolved).toEqual([
+      { callId: "call-1", approved: true, reason: undefined, sessionId: undefined },
+    ]);
     expect(gate.hasPending()).toBe(false);
   });
 
@@ -68,7 +127,9 @@ describe("ApprovalGate", () => {
     expect(recorder.pending).toHaveLength(0);
     expect(recorder.autoApproved).toHaveLength(1);
     expect(recorder.autoApproved[0].id).toBe("call-1");
-    expect(recorder.resolved).toEqual([{ callId: "call-1", approved: true, reason: undefined }]);
+    expect(recorder.resolved).toEqual([
+      { callId: "call-1", approved: true, reason: undefined, sessionId: undefined },
+    ]);
     expect(gate.hasPending()).toBe(false);
   });
 
@@ -173,7 +234,12 @@ describe("ApprovalGate", () => {
     const events: ApprovalGateEvents = {
       onPending: (p) => recorder.pending.push(p),
       onResolved: (callId, decision) =>
-        recorder.resolved.push({ callId, approved: decision.approved, reason: decision.reason }),
+        recorder.resolved.push({
+          callId,
+          approved: decision.approved,
+          reason: decision.reason,
+          sessionId: decision.sessionId,
+        }),
     };
     const gate = new ApprovalGate({
       events,
@@ -181,6 +247,7 @@ describe("ApprovalGate", () => {
         recorder.autoApproved.push(call);
       },
       perToolPolicy: { "vault.read_note": "auto" },
+      sessionGrants: nullGrants(),
     });
     const controller = new AbortController();
     const decision = await gate.request(
@@ -199,12 +266,18 @@ describe("ApprovalGate", () => {
     const events: ApprovalGateEvents = {
       onPending: (p) => recorder.pending.push(p),
       onResolved: (callId, decision) =>
-        recorder.resolved.push({ callId, approved: decision.approved, reason: decision.reason }),
+        recorder.resolved.push({
+          callId,
+          approved: decision.approved,
+          reason: decision.reason,
+          sessionId: decision.sessionId,
+        }),
     };
     const gate = new ApprovalGate({
       events,
       recordHistoryAutoApprove: async () => {},
       perToolPolicy: { "obsidian.eval": "ask" },
+      sessionGrants: nullGrants(),
     });
     const controller = new AbortController();
     const promise = gate.request(
@@ -225,5 +298,211 @@ describe("ApprovalGate", () => {
     const gate = makeGate(recorder);
     expect(gate.policyFor("notes.create", "safe")).toBe("ask");
     expect(gate.policyFor("notes.create", "yolo")).toBe("auto");
+  });
+});
+
+describe("ApprovalGate session grants", () => {
+  test("active grant yields auto decision with session-grant reason and sessionId", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(makeStubGrant({ id: 42 }));
+    const gate = makeGate(recorder, false, grants);
+    const decision = await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/today.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(decision.approved).toBe(true);
+    expect(decision.reason).toBe("session-grant#42");
+    expect(decision.sessionId).toBe(42);
+    expect(grants.findQueries).toHaveLength(1);
+    expect(grants.findQueries[0]).toMatchObject({
+      client: "claude-code",
+      tool: "notes.create",
+      folder: "Inbox/",
+    });
+    expect(grants.incrementCalls).toEqual([42]);
+    // Session-grant approvals do NOT invoke recordHistoryAutoApprove; that
+    // hook is reserved for yolo-mode auto decisions so /history can show the
+    // distinct kinds.
+    expect(recorder.autoApproved).toHaveLength(0);
+    expect(recorder.pending).toHaveLength(0);
+    expect(recorder.resolved).toEqual([
+      { callId: "c1", approved: true, reason: "session-grant#42", sessionId: 42 },
+    ]);
+  });
+
+  test("missing clientIdentity in context defaults to 'human' for the grant lookup", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    // No context arg at all.
+    const promise = gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/today.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+    );
+    // Resolve so we don't leak the pending entry; the assertion below is on
+    // the find query the gate already submitted.
+    gate.resolve("c1", { approved: true });
+    await promise;
+    expect(grants.findQueries[0].client).toBe("human");
+  });
+
+  test("grant excludes call.name via allowedTools -> falls through to per-tool policy", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    // `find` returns null because the SessionGrants service filters allowedTools
+    // server-side; that's the same reality we model here.
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    const decision = await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/x.md" } },
+      "yolo",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(decision.approved).toBe(true);
+    // Falls through to yolo-mode auto, which records via recordHistoryAutoApprove.
+    expect(recorder.autoApproved).toHaveLength(1);
+    expect(grants.incrementCalls).toEqual([]);
+    expect(decision.sessionId).toBeUndefined();
+  });
+
+  test("exhausted grant -> find returns null -> falls through", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    const decision = await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/x.md" } },
+      "yolo",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(decision.approved).toBe(true);
+    expect(decision.sessionId).toBeUndefined();
+    expect(grants.incrementCalls).toEqual([]);
+    expect(recorder.autoApproved).toHaveLength(1);
+  });
+
+  test("expired grant -> find returns null -> falls through", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    const decision = await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/x.md" } },
+      "yolo",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(decision.approved).toBe(true);
+    expect(decision.sessionId).toBeUndefined();
+    expect(grants.incrementCalls).toEqual([]);
+  });
+
+  test("revoked grant -> find returns null -> falls through", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    const decision = await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/x.md" } },
+      "yolo",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(decision.approved).toBe(true);
+    expect(decision.sessionId).toBeUndefined();
+    expect(grants.incrementCalls).toEqual([]);
+  });
+
+  test("no grant for client -> existing per-tool behavior unchanged", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+    // Safe mode + no policy override = still asks.
+    const promise = gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/x.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(gate.hasPending()).toBe(true);
+    gate.resolve("c1", { approved: true });
+    const decision = await promise;
+    expect(decision.approved).toBe(true);
+    expect(decision.sessionId).toBeUndefined();
+    expect(grants.incrementCalls).toEqual([]);
+  });
+
+  test("incrementWriteCount fires exactly once per auto-approved call", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(makeStubGrant({ id: 99 }));
+    const gate = makeGate(recorder, false, grants);
+    await gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/a.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    expect(grants.incrementCalls).toEqual([99]);
+  });
+
+  test("uses options.now for grant expiry checks when provided", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(null);
+    const events: ApprovalGateEvents = {
+      onPending: (p) => recorder.pending.push(p),
+      onResolved: (callId, decision) =>
+        recorder.resolved.push({
+          callId,
+          approved: decision.approved,
+          reason: decision.reason,
+          sessionId: decision.sessionId,
+        }),
+    };
+    const gate = new ApprovalGate({
+      events,
+      recordHistoryAutoApprove: async () => {},
+      sessionGrants: grants,
+      now: () => 1_234_567,
+    });
+    const promise = gate.request(
+      { id: "c1", name: "notes.create", args: { notePath: "Inbox/a.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "claude-code" },
+    );
+    gate.resolve("c1", { approved: true });
+    await promise;
+    expect(grants.findQueries[0].now).toBe(1_234_567);
+  });
+});
+
+describe("extractFolder", () => {
+  test("returns leading folder segment with trailing slash for nested paths", () => {
+    expect(extractFolder("Inbox/today.md")).toBe("Inbox/");
+    expect(extractFolder("Notient/agent-asks/auth.md")).toBe("Notient/");
+  });
+
+  test("returns empty string for files at the vault root", () => {
+    expect(extractFolder("top.md")).toBe("");
+  });
+
+  test("returns empty string for undefined, empty, or non-string input", () => {
+    expect(extractFolder(undefined)).toBe("");
+    expect(extractFolder("")).toBe("");
+    expect(extractFolder("   ")).toBe("");
+  });
+
+  test("trims surrounding whitespace before splitting", () => {
+    expect(extractFolder("  Inbox/today.md  ")).toBe("Inbox/");
   });
 });

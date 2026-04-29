@@ -1,16 +1,39 @@
 /**
  * Per-call approval gate for chat write tools.
  *
- * Every write-gated tool routes through `request(call, mode, preview, signal)`
- * before touching the vault. In `safe` mode the promise blocks until the UI
- * calls `resolve(callId, decision)`; in `yolo` mode it auto-approves and
- * records to the history table for one-click undo.
+ * Every write-gated tool routes through `request(call, mode, preview, signal,
+ * context?)` before touching the vault. The gate evaluates three layers in
+ * order:
+ *
+ *   1. Active session grants. When `SessionGrants.find` returns a row matching
+ *      the call's `(client, tool, folder)`, the gate auto-approves, increments
+ *      `usedWrites`, and stamps the decision with `sessionId` plus a
+ *      `session-grant#<id>` reason so history can attribute the approval.
+ *   2. Per-tool policy overrides (`auto` / `ask`).
+ *   3. Conversation-level mode default (`safe` -> ask, `yolo` -> auto).
+ *
+ * Expired, revoked, or exhausted grants degrade to layers 2 and 3 unchanged.
+ * In `safe` mode (after layers 1 and 2 fall through) the promise blocks until
+ * the UI calls `resolve(callId, decision)`; in `yolo` mode it auto-approves
+ * and records to the history table for one-click undo.
  *
  * Aborting the per-call signal rejects the pending promise with an AbortError
  * and removes the entry from the pending map so the UI does not leak a card.
  */
 
+import type { SessionGrant, SessionGrantFindQuery } from "../services/sessionGrants";
 import type { ApprovalMode, ToolCall } from "./types";
+
+/**
+ * Structural slice of `SessionGrants` covering only what the gate calls.
+ * Carrying the slice (rather than the class) keeps tests cheap: harnesses can
+ * assemble a stub literal without standing up a real database, and the live
+ * `SessionGrants` instance from bootstrap satisfies it via duck typing.
+ */
+export interface SessionGrantLookup {
+  find(query: SessionGrantFindQuery): SessionGrant | null;
+  incrementWriteCount(id: number): void;
+}
 
 export interface PendingApproval {
   callId: string;
@@ -23,11 +46,27 @@ export interface PendingApproval {
 export interface ApprovalDecision {
   approved: boolean;
   reason?: string;
+  /**
+   * Set only when a session grant covered the call. Carries the grant row id
+   * so callers (history, audit log, smoke harnesses) can attribute the
+   * auto-approval to a specific grant. Absent on user-prompt and per-tool
+   * policy approvals.
+   */
+  sessionId?: number;
 }
 
 export interface ApprovalGateEvents {
   onPending: (pending: PendingApproval) => void;
   onResolved: (callId: string, decision: ApprovalDecision) => void;
+}
+
+/**
+ * Per-invocation context the caller threads alongside the tool call. The gate
+ * uses `clientIdentity` to look up active session grants; an absent value
+ * defaults to `human` to match the T1 RPC envelope default.
+ */
+export interface ApprovalContext {
+  clientIdentity?: string;
 }
 
 export interface ApprovalGateOptions {
@@ -46,6 +85,62 @@ export interface ApprovalGateOptions {
    * `chat.perTool` settings.
    */
   perToolPolicy?: Record<string, "auto" | "ask">;
+  /**
+   * Session grant lookup service. The gate consults this before falling back
+   * to per-tool policy or mode default. T7 ships the storage layer; T8 wires
+   * it in here. Required so callers wanting to disable the layer must
+   * intentionally pass a stub (e.g. one whose `find` always returns null)
+   * rather than silently dropping the check.
+   */
+  sessionGrants: SessionGrantLookup;
+  /**
+   * Wall-clock source for grant expiry checks. Defaults to `Date.now`. Tests
+   * inject a fixed value to make grant-expiry transitions deterministic.
+   */
+  now?: () => number;
+}
+
+/**
+ * Returns the leading folder segment of a vault-relative path, with a
+ * trailing slash, so it can be matched against `SessionGrants.find`'s prefix
+ * test. The grant table normalizes `allowed_folders` entries to end in `/` at
+ * insert time, so the comparison is a straight `String#startsWith` against
+ * the value returned here.
+ *
+ * Examples:
+ *   - "Inbox/today.md"             -> "Inbox/"
+ *   - "Notient/agent-asks/auth.md" -> "Notient/"
+ *   - "top.md" (file at root)      -> "" (only matches an "all folders" grant)
+ *   - undefined / empty / non-str  -> ""
+ *
+ * Only the leading segment is returned. Grants therefore have to be issued
+ * at top-folder granularity (e.g. `Notient/`) for the gate's lookup to find
+ * them; finer grants like `Notient/agent-asks/` are intentionally narrower
+ * than this one-segment lookup window. This keeps the gate's surface small
+ * and predictable, and matches LD-6's "scope grants at the workspace folder"
+ * intent.
+ */
+export function extractFolder(path?: string): string {
+  if (typeof path !== "string") return "";
+  const trimmed = path.trim();
+  if (trimmed.length === 0) return "";
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex < 0) return "";
+  return trimmed.slice(0, slashIndex + 1);
+}
+
+/**
+ * Reads a vault-relative path string from a tool call's args. Notient's
+ * write-gated tools all expose the target path under `notePath`; the
+ * `path` fallback exists for parity with external tool authors who may use
+ * the shorter key. Anything that isn't a non-empty string returns undefined.
+ */
+function readPathArg(args: Record<string, unknown>): string | undefined {
+  const notePath = args.notePath;
+  if (typeof notePath === "string" && notePath.length > 0) return notePath;
+  const path = args.path;
+  if (typeof path === "string" && path.length > 0) return path;
+  return undefined;
 }
 
 function asAbortError(): Error {
@@ -60,8 +155,13 @@ function asAbortError(): Error {
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
   private readonly extraListeners = new Set<ApprovalGateEvents>();
+  private readonly sessionGrants: SessionGrantLookup;
+  private readonly now: () => number;
 
-  constructor(private readonly options: ApprovalGateOptions) {}
+  constructor(private readonly options: ApprovalGateOptions) {
+    this.sessionGrants = options.sessionGrants;
+    this.now = options.now ?? Date.now;
+  }
 
   /**
    * Register an additional listener for the duration of a chat turn. Returns
@@ -98,9 +198,26 @@ export class ApprovalGate {
     mode: ApprovalMode,
     preview: string,
     signal: AbortSignal,
+    context?: ApprovalContext,
   ): Promise<ApprovalDecision> {
     if (signal.aborted) {
       throw asAbortError();
+    }
+    const grant = this.sessionGrants.find({
+      client: context?.clientIdentity ?? "human",
+      tool: call.name,
+      folder: extractFolder(readPathArg(call.args)),
+      now: this.now(),
+    });
+    if (grant !== null) {
+      this.sessionGrants.incrementWriteCount(grant.id);
+      const decision: ApprovalDecision = {
+        approved: true,
+        reason: `session-grant#${grant.id}`,
+        sessionId: grant.id,
+      };
+      this.emitResolved(call.id, decision);
+      return decision;
     }
     if (this.policyFor(call.name, mode) === "auto") {
       await this.options.recordHistoryAutoApprove(call);

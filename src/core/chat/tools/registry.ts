@@ -12,12 +12,24 @@ export interface ToolJsonSchema {
   additionalProperties?: boolean;
 }
 
+/**
+ * Per-invocation context the registry threads to a tool's `invoke`. Today
+ * carries only `clientIdentity` so write-gated tools can attribute the call
+ * to the originating RPC peer (T1) and so the approval gate can look up
+ * matching session grants (T8). Tools that don't need any of these fields
+ * declare a two-arg `invoke` and the extra parameter is ignored at the call
+ * site.
+ */
+export interface ToolInvokeContext {
+  clientIdentity?: string;
+}
+
 export interface ToolDefinition<Args, Result> {
   name: string;
   description: string;
   schema: ToolJsonSchema;
   validate: (args: unknown) => Args;
-  invoke: (args: Args, signal: AbortSignal) => Promise<Result>;
+  invoke: (args: Args, signal: AbortSignal, context?: ToolInvokeContext) => Promise<Result>;
   writeGated: boolean;
 }
 
@@ -109,7 +121,12 @@ export class ToolRegistry {
     return this.tools.get(name)?.writeGated ?? false;
   }
 
-  async invoke(name: string, args: unknown, signal: AbortSignal): Promise<unknown> {
+  async invoke(
+    name: string,
+    args: unknown,
+    signal: AbortSignal,
+    context?: ToolInvokeContext,
+  ): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) throw new UnknownToolError(name);
     let validated: unknown;
@@ -119,7 +136,7 @@ export class ToolRegistry {
       const message = error instanceof Error ? error.message : String(error);
       throw new ToolValidationError(name, message);
     }
-    return tool.invoke(validated, signal);
+    return tool.invoke(validated, signal, context);
   }
 }
 

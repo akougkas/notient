@@ -197,6 +197,7 @@ function makeService(
   const approvalGate = new ApprovalGate({
     events: { onPending: () => undefined, onResolved: () => undefined },
     recordHistoryAutoApprove: async () => undefined,
+    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
   });
   const mutex = new ReasoningMutex();
   const toolModeCache =
@@ -374,6 +375,7 @@ describe("ChatService", () => {
     const approvalGate = new ApprovalGate({
       events: { onPending: () => undefined, onResolved: () => undefined },
       recordHistoryAutoApprove: async () => undefined,
+      sessionGrants: { find: () => null, incrementWriteCount: () => {} },
     });
     const mutex = new ReasoningMutex();
     const toolModeCache = makeToolModeCache({

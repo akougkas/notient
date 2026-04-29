@@ -71,6 +71,7 @@ function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
     recordHistoryAutoApprove: async () => {
       autoYolo += 1;
     },
+    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
   });
   let callIdCounter = 0;
   const context: NotesToolsContext = {

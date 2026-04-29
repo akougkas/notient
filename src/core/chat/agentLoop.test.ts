@@ -141,6 +141,7 @@ function makeApprovalGate(): {
         // unused in tests
       },
     },
+    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
     recordHistoryAutoApprove: async () => {
       // unused in tests
     },

@@ -22,6 +22,7 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
     approvalGate: new ApprovalGate({
       events: { onPending: () => {}, onResolved: () => {} },
       recordHistoryAutoApprove: async () => {},
+      sessionGrants: { find: () => null, incrementWriteCount: () => {} },
     }),
     echoGuard: { mark: () => {} },
     hash: async () => "00",
