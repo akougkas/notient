@@ -1,5 +1,5 @@
 import type { RecordId, Surreal } from "surrealdb";
-import type { EdgeTable } from "../db/edgeTables";
+import { TIER1_EDGE_CLASS, TIER1_EDGE_TABLES } from "../db/edgeTables";
 import {
   findRecentDaemonWrite,
   lookupBlockByExplicitId,
@@ -50,21 +50,6 @@ export interface Tier1Output {
   noteId: RecordId<"note">;
   extraction: MarkdownExtraction;
 }
-
-const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
-  "wikilink",
-  "embed",
-  "frontmatter_ref",
-  "tagged",
-  "contained_in",
-  "under_heading",
-];
-// Tier 1 cleanup filters by `class = 'EXTRACTED'` (Tier 1's invariant) rather
-// than by `source` because the daemon_write override may rewrite `source` to
-// the agent's name (e.g. `'linker'`). Filtering by class keeps Tier 3 edges
-// (which use `class = 'INFERRED'`) safe even though they live in different
-// tables today.
-const TIER1_EDGE_CLASS = "EXTRACTED";
 
 type WikilinkTarget =
   | { kind: "unresolved" }

@@ -249,36 +249,6 @@ export async function replaceBlocks(
   return inserted;
 }
 
-const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
-  "wikilink",
-  "embed",
-  "frontmatter_ref",
-  "tagged",
-  "contained_in",
-  "under_heading",
-];
-// Tier 1 cleanup filters by `class = 'EXTRACTED'` so the daemon_write source
-// override (which rewrites `source` to the agent's name) does not strand
-// edges across re-indexes.
-const TIER1_EDGE_CLASS = "EXTRACTED";
-const TIER1_UNRESOLVED_TABLES = ["wikilink_unresolved", "embed_unresolved"] as const;
-
-export async function clearTier1Edges(db: Surreal, noteId: RecordId<"note">): Promise<void> {
-  for (const table of TIER1_EDGE_TABLES) {
-    await db
-      .query(`DELETE ${table} WHERE class = $cls AND (in = $note OR in.note = $note);`, {
-        cls: TIER1_EDGE_CLASS,
-        note: noteId,
-      })
-      .collect();
-  }
-  for (const table of TIER1_UNRESOLVED_TABLES) {
-    await db
-      .query(`DELETE ${table} WHERE in = $note OR in.note = $note;`, { note: noteId })
-      .collect();
-  }
-}
-
 export interface RelateEdgeInput {
   table: EdgeTable;
   from: RecordId;
@@ -653,6 +623,13 @@ export async function findRecentDaemonWrite(
   // arithmetic on the SurrealQL side would require either string templating
   // (a `${seconds}s` literal in the query) or a `Duration` parameter; the
   // datetime-cutoff approach keeps both query and binding shape boring.
+  //
+  // Clock-skew trade-off: the cutoff is computed client-side via Date.now()
+  // while `written_at` is stamped server-side via time::now(). On a single
+  // host with sub-second skew the 5s default tolerates the file-write /
+  // watcher race. Cross-host SurrealDB deployments with multi-second skew
+  // may need a wider window or a server-side cutoff via `time::now() -
+  // <duration>`.
   const cutoffDate = new Date(Date.now() - Math.floor(withinSeconds * 1000));
   const cutoff = new DateTime(cutoffDate);
   // SurrealDB 3.0.5 requires every `ORDER BY` field to appear in the

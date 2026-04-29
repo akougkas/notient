@@ -34,6 +34,29 @@ export const EDGE_TABLES = [
 export type EdgeTable = (typeof EDGE_TABLES)[number];
 
 /**
+ * Tier 1 owns the deterministic-extraction subset of edge tables. These names
+ * are referenced from both the cleanup path in the surreal DAL and the
+ * transaction script in `runTier1`; hoisting them here keeps the two sites in
+ * lockstep so a future addition to Tier 1 can not silently desync.
+ */
+export const TIER1_EDGE_TABLES = [
+  "wikilink",
+  "embed",
+  "frontmatter_ref",
+  "tagged",
+  "contained_in",
+  "under_heading",
+] as const satisfies readonly EdgeTable[];
+
+/**
+ * Tier 1 cleanup filters by `class = 'EXTRACTED'` rather than by `source`
+ * because the daemon_write override may rewrite `source` to the agent's
+ * name (e.g. `'linker'`). Filtering by class keeps Tier 3 edges (which use
+ * `class = 'INFERRED'`) safe even though they live in different tables today.
+ */
+export const TIER1_EDGE_CLASS = "EXTRACTED" as const;
+
+/**
  * Returns the SurrealQL DDL block that defines the seven provenance fields
  * and two indexes for a single edge table. Every `DEFINE FIELD` and
  * `DEFINE INDEX` uses `OVERWRITE` so re-applying the block is a no-op.
