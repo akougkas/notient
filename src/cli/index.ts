@@ -1,5 +1,6 @@
 import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
 import { type AwakenControlMode, runAwakenCommand } from "./commands/awaken";
+import { runBackupCommand } from "./commands/backup";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
@@ -22,7 +23,10 @@ import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
 import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit";
 import { runLinksSyncCommand } from "./commands/linksSync";
+import { runMigrateVaultCommand } from "./commands/migrateVault";
+import { runNukeCommand } from "./commands/nuke";
 import { runReindexCommand } from "./commands/reindex";
+import { runRestoreCommand } from "./commands/restore";
 import { runSearchCommand } from "./commands/search";
 import {
   type SessionSubcommand,
@@ -102,8 +106,12 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "session",
         "graph",
         "links",
+        "backup",
+        "restore",
+        "nuke",
+        "migrate-vault",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants and Phase 5 graph/links operator verbs; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants and Phase 5 graph/links/backup/restore/nuke/migrate-vault operator verbs; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -126,6 +134,12 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "session") return await dispatchSession(parsed, emitter, clientIdentity);
   if (parsed.command === "graph") return await dispatchGraph(parsed, emitter, clientIdentity);
   if (parsed.command === "links") return await dispatchLinks(parsed, emitter, clientIdentity);
+  if (parsed.command === "backup") return await dispatchBackup(parsed, emitter, clientIdentity);
+  if (parsed.command === "restore") return await dispatchRestore(parsed, emitter, clientIdentity);
+  if (parsed.command === "nuke") return await dispatchNuke(parsed, emitter, clientIdentity);
+  if (parsed.command === "migrate-vault") {
+    return await dispatchMigrateVault(parsed, emitter, clientIdentity);
+  }
 
   emitter.emit({
     type: "error",
@@ -497,6 +511,60 @@ function selectLinksAuditMode(parsed: ParsedArgs): LinksAuditMode {
   if (parsed.flags.pretty === true) return "pretty";
   if (parsed.flags.ndjson === true) return "ndjson";
   return process.stdout.isTTY === true ? "pretty" : "ndjson";
+}
+
+async function dispatchBackup(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const outFlag = parsed.flags.out;
+  const outPath = typeof outFlag === "string" && outFlag.length > 0 ? outFlag : undefined;
+  return await runBackupCommand({ vaultPath, outPath, emitter, clientIdentity });
+}
+
+async function dispatchRestore(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const inputPath = parsed.positional[0];
+  if (typeof inputPath !== "string" || inputPath.length === 0) {
+    throw new Error("INVALID_PARAMS: restore requires a positional path to a .surql file");
+  }
+  return await runRestoreCommand({ vaultPath, inputPath, emitter, clientIdentity });
+}
+
+async function dispatchNuke(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const yes = parsed.flags.yes === true;
+  return await runNukeCommand({ vaultPath, yes, emitter, clientIdentity });
+}
+
+async function dispatchMigrateVault(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const sourceVaultPath = await requireVault(parsed);
+  const targetVaultPath = parsed.positional[0];
+  if (typeof targetVaultPath !== "string" || targetVaultPath.length === 0) {
+    throw new Error(
+      "INVALID_PARAMS: migrate-vault requires a positional new-absolute-path argument",
+    );
+  }
+  return await runMigrateVaultCommand({
+    sourceVaultPath,
+    targetVaultPath,
+    emitter,
+    clientIdentity,
+  });
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {
