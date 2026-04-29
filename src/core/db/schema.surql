@@ -86,7 +86,11 @@ DEFINE INDEX OVERWRITE question_sha ON question FIELDS sha UNIQUE;
 
 -- Deterministic (Tier 1; class = 'EXTRACTED')
 DEFINE TABLE OVERWRITE wikilink TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
+DEFINE FIELD OVERWRITE out ON wikilink TYPE option<record<note|block>>;
+DEFINE FIELD OVERWRITE target_unresolved ON wikilink TYPE option<string>;
 DEFINE TABLE OVERWRITE embed TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
+DEFINE FIELD OVERWRITE out ON embed TYPE option<record<note|block>>;
+DEFINE FIELD OVERWRITE target_unresolved ON embed TYPE option<string>;
 DEFINE TABLE OVERWRITE frontmatter_ref TYPE RELATION FROM note TO note SCHEMAFULL;
 DEFINE TABLE OVERWRITE tagged TYPE RELATION FROM note|block TO tag SCHEMAFULL;
 DEFINE TABLE OVERWRITE contained_in TYPE RELATION FROM block TO note SCHEMAFULL;
