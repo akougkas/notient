@@ -47,6 +47,7 @@ import { EchoGuard } from "../core/services/echoGuard";
 import { HealthMonitor } from "../core/services/healthMonitor";
 import { IdleDetector } from "../core/services/idleDetector";
 import { ProbeCache } from "../core/services/probeCache";
+import { SessionGrants } from "../core/services/sessionGrants";
 import { runStartupProbe } from "../core/services/startupProbe";
 import { VaultBootstrap } from "../core/services/vaultBootstrap";
 import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
@@ -212,6 +213,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("echoGuard", echoGuard);
   kernel.register("probeCache", new ProbeCache(bus));
   kernel.register("agentEventStore", new AgentEventStore({ database, bus }));
+  kernel.register("sessionGrants", new SessionGrants({ database }));
 
   if (phaseA) {
     kernel.seal({ phase: "A" });

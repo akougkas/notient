@@ -116,4 +116,20 @@ export const SCHEMA: string[] = [
     payload TEXT NOT NULL
   );`,
   "CREATE INDEX IF NOT EXISTS idx_agent_events_id_desc ON agent_events(id DESC);",
+  // agent_sessions: scoped trust grants that authorize an unattended client to
+  // perform writes that match (folders, tools, maxWrites) without per-tool
+  // approval prompts (Phase D1 T7). ApprovalGate consults this table in T8;
+  // T7 ships the storage and RPC surface only.
+  `CREATE TABLE IF NOT EXISTS agent_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    allowed_folders TEXT NOT NULL,
+    allowed_tools TEXT NOT NULL,
+    max_writes INTEGER,
+    used_writes INTEGER NOT NULL DEFAULT 0,
+    revoked_at INTEGER
+  );`,
+  "CREATE INDEX IF NOT EXISTS idx_agent_sessions_client_active ON agent_sessions(client, expires_at, revoked_at);",
 ];

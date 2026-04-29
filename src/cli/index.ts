@@ -14,6 +14,15 @@ import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
 import { runReindexCommand } from "./commands/reindex";
 import { runSearchCommand } from "./commands/search";
+import {
+  type SessionSubcommand,
+  parseSessionFolders,
+  parseSessionId,
+  parseSessionOptionalPositiveInt,
+  parseSessionPositiveInt,
+  parseSessionTools,
+  runSessionCommand,
+} from "./commands/session";
 import { runVitalsCommand } from "./commands/vitals";
 import { defaultStateLoader, resolveVault } from "./env";
 import { normalizeAgentId } from "./identity";
@@ -78,8 +87,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "brief",
         "distill",
         "events",
+        "session",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -98,6 +108,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "brief") return await dispatchBrief(parsed, emitter, clientIdentity);
   if (parsed.command === "distill") return await dispatchDistill(parsed, emitter, clientIdentity);
   if (parsed.command === "events") return await dispatchEvents(parsed, emitter, clientIdentity);
+  if (parsed.command === "session") return await dispatchSession(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -317,6 +328,59 @@ async function dispatchEvents(
     emitter,
     clientIdentity,
   });
+}
+
+async function dispatchSession(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const subcommand = parseSessionSubcommand(parsed.positional[0]);
+  if (subcommand === "grant") {
+    const client = typeof parsed.flags.client === "string" ? parsed.flags.client : undefined;
+    const folders = parseSessionFolders(parsed.flags.folders);
+    const tools = parseSessionTools(parsed.flags.tools);
+    const ttlMinutes = parseSessionPositiveInt(parsed.flags.ttl, "ttl");
+    const maxWrites = parseSessionOptionalPositiveInt(parsed.flags["max-writes"], "max-writes");
+    return await runSessionCommand({
+      vaultPath,
+      subcommand: "grant",
+      client,
+      folders,
+      tools,
+      maxWrites,
+      ttlMinutes,
+      emitter,
+      clientIdentity,
+    });
+  }
+  if (subcommand === "revoke") {
+    const sessionIdRaw = parsed.positional[1] ?? parsed.flags["session-id"];
+    const sessionId = parseSessionId(sessionIdRaw);
+    return await runSessionCommand({
+      vaultPath,
+      subcommand: "revoke",
+      sessionId,
+      emitter,
+      clientIdentity,
+    });
+  }
+  const client = typeof parsed.flags.client === "string" ? parsed.flags.client : undefined;
+  const includeExpired = parsed.flags["include-expired"] === true;
+  return await runSessionCommand({
+    vaultPath,
+    subcommand: "list",
+    client,
+    includeExpired,
+    emitter,
+    clientIdentity,
+  });
+}
+
+function parseSessionSubcommand(raw: string | undefined): SessionSubcommand {
+  if (raw === "grant" || raw === "list" || raw === "revoke") return raw;
+  throw new Error("INVALID_PARAMS: session requires a subcommand: grant | list | revoke");
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {

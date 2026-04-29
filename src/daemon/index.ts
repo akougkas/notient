@@ -12,6 +12,9 @@ import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
 import { makeNotesHandlers } from "./handlers/notes";
 import { makeSearchHandler } from "./handlers/search";
+import { makeSessionGrantHandler } from "./handlers/sessionGrant";
+import { makeSessionListHandler } from "./handlers/sessionList";
+import { makeSessionRevokeHandler } from "./handlers/sessionRevoke";
 import { makeVaultHandlers } from "./handlers/vault";
 import { makeVitalsHandler } from "./handlers/vitals";
 import { IdleExitTimer, removePidFile, writePidFile } from "./lifecycle";
@@ -205,6 +208,11 @@ async function main(argv: string[]): Promise<void> {
     bus: kernel.get("bus"),
   });
   dispatcher.register("agent.events", agentEventsHandler);
+
+  const sessionGrants = kernel.get("sessionGrants");
+  dispatcher.register("session.grant", makeSessionGrantHandler({ sessionGrants }));
+  dispatcher.register("session.revoke", makeSessionRevokeHandler({ sessionGrants }));
+  dispatcher.register("session.list", makeSessionListHandler({ sessionGrants }));
 
   const vaultHandlers = makeVaultHandlers({ vault: kernel.get("vault") });
   const notesHandlers = makeNotesHandlers({

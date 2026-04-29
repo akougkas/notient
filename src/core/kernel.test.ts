@@ -15,6 +15,7 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "echoGuard",
   "probeCache",
   "agentEventStore",
+  "sessionGrants",
   "indexer",
   "vectorIndex",
   "embedder",

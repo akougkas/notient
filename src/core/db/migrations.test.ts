@@ -7,6 +7,7 @@ import { applySchema } from "./migrations";
 const EXPECTED_TABLES = [
   "agent_events",
   "agent_runs",
+  "agent_sessions",
   "chunks",
   "embeddings",
   "graph_edges",

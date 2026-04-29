@@ -30,6 +30,7 @@ import type { EchoGuard } from "./services/echoGuard";
 import type { HealthMonitor } from "./services/healthMonitor";
 import type { IdleDetector } from "./services/idleDetector";
 import type { ProbeCache } from "./services/probeCache";
+import type { SessionGrants } from "./services/sessionGrants";
 import type { VaultBootstrap } from "./services/vaultBootstrap";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
@@ -50,6 +51,7 @@ export interface ServiceRegistry {
   echoGuard: EchoGuard;
   probeCache: ProbeCache;
   agentEventStore: AgentEventStore;
+  sessionGrants: SessionGrants;
   indexer: IndexerQueue;
   vectorIndex: VectorIndex;
   embedder: Embedder;
@@ -111,6 +113,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "echoGuard",
   "probeCache",
   "agentEventStore",
+  "sessionGrants",
   "indexer",
   "vectorIndex",
   "embedder",
@@ -153,6 +156,7 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "echoGuard",
   "probeCache",
   "agentEventStore",
+  "sessionGrants",
 ];
 
 const PHASE_B_KEYS: ServiceKey[] = [
