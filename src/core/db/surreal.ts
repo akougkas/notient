@@ -1,6 +1,6 @@
 import { RecordId, type Surreal, Surreal as SurrealClass, Table } from "surrealdb";
-import { EDGE_TABLES, type EdgeTable } from "./edgeTables";
 import type { BlockSpec } from "../markdown/types";
+import { EDGE_TABLES, type EdgeTable } from "./edgeTables";
 
 export interface SurrealConnection {
   db: Surreal;
@@ -287,6 +287,7 @@ export interface RelateEdgeInput {
   confidenceClass: string;
   confidence: number;
   agent?: string;
+  approved?: boolean;
 }
 
 export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<void> {
@@ -304,6 +305,10 @@ export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<v
   if (input.agent !== undefined) {
     setClauses.push("agent = $agent");
     bindings.agent = input.agent;
+  }
+  if (input.approved !== undefined) {
+    setClauses.push("approved = $approved");
+    bindings.approved = input.approved;
   }
   await db
     .query(`RELATE $from->${input.table}->$to SET ${setClauses.join(", ")};`, bindings)
@@ -356,4 +361,216 @@ export async function searchVector(db: Surreal, input: SearchVectorInput): Promi
       text: row.text,
     };
   });
+}
+
+export interface ChunkInsertInput {
+  ord: number;
+  text: string;
+  tokenEstimate: number;
+  vector: number[];
+  embedModel: string;
+}
+
+export async function replaceChunks(
+  db: Surreal,
+  noteId: RecordId<"note">,
+  chunks: ChunkInsertInput[],
+): Promise<RecordId<"chunk">[]> {
+  await db.query("DELETE chunk WHERE note = $note;", { note: noteId }).collect();
+  if (chunks.length === 0) {
+    return [];
+  }
+  const inserted: RecordId<"chunk">[] = [];
+  // embedded_at is set via SurrealQL time::now() so the value lands as a
+  // native datetime; passing a JS Date through .content() would be coerced
+  // to a string and fail the option<datetime> field assertion.
+  const sql =
+    "CREATE ONLY chunk CONTENT { note: $note, ord: $ord, text: $text, token_estimate: $tokenEstimate, vector: $vector, embed_model: $embedModel, embedded_at: time::now() } RETURN id;";
+  for (const chunk of chunks) {
+    // CREATE ONLY returns a single record (not an array) per SurrealDB 3.x.
+    const [row] = await db
+      .query<[{ id: RecordId<"chunk"> } | null]>(sql, {
+        note: noteId,
+        ord: chunk.ord,
+        text: chunk.text,
+        tokenEstimate: chunk.tokenEstimate,
+        vector: chunk.vector,
+        embedModel: chunk.embedModel,
+      })
+      .collect<[{ id: RecordId<"chunk"> } | null]>();
+    if (row === null) {
+      throw new Error("replaceChunks: SurrealDB returned no chunk record");
+    }
+    inserted.push(row.id);
+  }
+  return inserted;
+}
+
+export async function markTier2Done(db: Surreal, noteId: RecordId<"note">): Promise<void> {
+  await db.query("UPDATE $id SET tier2_at = time::now();", { id: noteId }).collect();
+}
+
+export async function markTier3Done(db: Surreal, noteId: RecordId<"note">): Promise<void> {
+  await db.query("UPDATE $id SET tier3_at = time::now();", { id: noteId }).collect();
+}
+
+export interface LinkerNeighborsInput {
+  activeNoteId: RecordId<"note">;
+  activeChunkVectors: number[][];
+  k: number;
+  ef?: number;
+}
+
+export interface NeighborCandidate {
+  noteId: RecordId<"note">;
+  notePath: string;
+  bestDistance: number;
+  evidenceChunkIds: RecordId<"chunk">[];
+}
+
+interface NeighborRow {
+  id: RecordId<"chunk">;
+  note: RecordId<"note"> | { id: RecordId<"note">; path: string; tier3_at?: string };
+  d: number;
+}
+
+const MAX_EVIDENCE_PER_NOTE = 4;
+const DEFAULT_LINKER_EF = 40;
+
+export async function linkerNeighbors(
+  db: Surreal,
+  input: LinkerNeighborsInput,
+): Promise<NeighborCandidate[]> {
+  if (!Number.isInteger(input.k) || input.k <= 0) {
+    throw new Error("linkerNeighbors: k must be a positive integer");
+  }
+  if (input.activeChunkVectors.length === 0) {
+    return [];
+  }
+  const queryVector = input.activeChunkVectors[0];
+  const ef = input.ef ?? DEFAULT_LINKER_EF;
+  const operator = `<|${input.k},${ef}|>`;
+  // Multi-statement query: SurrealDB returns one result slice per statement.
+  // We only care about the final SELECT, so we read the last slice.
+  const sql = [
+    "LET $excluded = (SELECT VALUE ->wikilink->note FROM ONLY $active);",
+    "LET $excludedBack = (SELECT VALUE <-wikilink<-note FROM ONLY $active);",
+    `SELECT id, note, vector::distance::knn() AS d FROM chunk WHERE vector ${operator} $q AND note != $active AND note NOT IN $excluded AND note NOT IN $excludedBack AND note.tier3_at != NONE ORDER BY d FETCH note;`,
+  ].join("\n");
+  const results = await db
+    .query(sql, { active: input.activeNoteId, q: queryVector })
+    .collect<unknown[]>();
+  const lastSlice = results[results.length - 1];
+  const rows = (Array.isArray(lastSlice) ? (lastSlice as NeighborRow[]) : []) as NeighborRow[];
+  const grouped = new Map<
+    string,
+    { noteId: RecordId<"note">; notePath: string; rows: NeighborRow[] }
+  >();
+  for (const row of rows) {
+    const note = row.note;
+    let noteId: RecordId<"note">;
+    let notePath: string;
+    if (note instanceof RecordId) {
+      noteId = note as RecordId<"note">;
+      notePath = "";
+    } else {
+      noteId = note.id;
+      notePath = note.path;
+    }
+    const key = noteId.toString();
+    const existing = grouped.get(key);
+    if (existing === undefined) {
+      grouped.set(key, { noteId, notePath, rows: [row] });
+    } else {
+      existing.rows.push(row);
+    }
+  }
+  const candidates: NeighborCandidate[] = [];
+  for (const entry of grouped.values()) {
+    const sortedRows = entry.rows.slice().sort((a, b) => a.d - b.d);
+    const evidenceChunkIds = sortedRows.slice(0, MAX_EVIDENCE_PER_NOTE).map((row) => row.id);
+    const bestDistance = sortedRows[0].d;
+    candidates.push({
+      noteId: entry.noteId,
+      notePath: entry.notePath,
+      bestDistance,
+      evidenceChunkIds,
+    });
+  }
+  candidates.sort((a, b) => a.bestDistance - b.bestDistance);
+  return candidates;
+}
+
+function normalizeLabel(label: string): string {
+  return label.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim();
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const buffer = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function upsertConcept(db: Surreal, label: string): Promise<RecordId<"concept">> {
+  const normalized = normalizeLabel(label);
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"concept"> }>]>(
+      "SELECT id FROM concept WHERE norm_label = $norm LIMIT 1;",
+      { norm: normalized },
+    )
+    .collect<[Array<{ id: RecordId<"concept"> }>]>();
+  if (rows[0] !== undefined) {
+    return rows[0].id;
+  }
+  const result = await db
+    .create<{ id: RecordId<"concept">; label: string; norm_label: string }>(new Table("concept"))
+    .content({ label, norm_label: normalized });
+  const record = Array.isArray(result) ? result[0] : result;
+  if (record === undefined) {
+    throw new Error("upsertConcept: SurrealDB returned no record");
+  }
+  return record.id;
+}
+
+export async function upsertClaim(db: Surreal, text: string): Promise<RecordId<"claim">> {
+  const sha = await sha256Hex(text);
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"claim"> }>]>("SELECT id FROM claim WHERE sha = $sha LIMIT 1;", {
+      sha,
+    })
+    .collect<[Array<{ id: RecordId<"claim"> }>]>();
+  if (rows[0] !== undefined) {
+    return rows[0].id;
+  }
+  const result = await db
+    .create<{ id: RecordId<"claim">; text: string; sha: string }>(new Table("claim"))
+    .content({ text, sha });
+  const record = Array.isArray(result) ? result[0] : result;
+  if (record === undefined) {
+    throw new Error("upsertClaim: SurrealDB returned no record");
+  }
+  return record.id;
+}
+
+export async function upsertQuestion(db: Surreal, text: string): Promise<RecordId<"question">> {
+  const sha = await sha256Hex(text);
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"question"> }>]>(
+      "SELECT id FROM question WHERE sha = $sha LIMIT 1;",
+      { sha },
+    )
+    .collect<[Array<{ id: RecordId<"question"> }>]>();
+  if (rows[0] !== undefined) {
+    return rows[0].id;
+  }
+  const result = await db
+    .create<{ id: RecordId<"question">; text: string; sha: string }>(new Table("question"))
+    .content({ text, sha });
+  const record = Array.isArray(result) ? result[0] : result;
+  if (record === undefined) {
+    throw new Error("upsertQuestion: SurrealDB returned no record");
+  }
+  return record.id;
 }
