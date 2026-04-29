@@ -4,9 +4,9 @@
  * dispatches to the inverter registered for that kind, executes the
  * inverse mutation, and hard-deletes the row on success.
  *
- * The schema (`history` table from SCHEMA_V1) has no `undone_at` column,
- * so idempotency is achieved by hard delete: a second undo of the same
- * id returns `{ ok: false, error: "history row not found" }`.
+ * The `history` table has no `undone_at` column, so idempotency is achieved
+ * by hard delete. A second undo of the same id returns
+ * `{ ok: false, error: "history row not found" }`.
  */
 
 import type { Database } from "../db/database";

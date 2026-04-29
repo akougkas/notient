@@ -1,5 +1,5 @@
 import initSqlJs, { type Database as SqlDatabase } from "sql.js";
-import { CURRENT_VERSION, applyMigrations } from "./migrations";
+import { applySchema } from "./migrations";
 
 export interface DatabaseAdapter {
   readBinary(path: string): Promise<ArrayBuffer | null>;
@@ -28,7 +28,7 @@ export class Database {
     const SQL = await initSqlJs({ wasmBinary });
     const existing = await this.adapter.readBinary(this.config.dbPath);
     this.db = existing ? new SQL.Database(new Uint8Array(existing)) : new SQL.Database();
-    applyMigrations(this.db);
+    applySchema(this.db);
     if (!existing) {
       await this.persist();
     }
@@ -91,15 +91,6 @@ export class Database {
     }
     this.db?.close();
     this.db = null;
-  }
-
-  version(): number {
-    const rows = this.query<{ version: number }>("SELECT version FROM schema_version;");
-    return rows[0]?.version ?? 0;
-  }
-
-  static get currentSchemaVersion(): number {
-    return CURRENT_VERSION;
   }
 
   private requireDb(): SqlDatabase {

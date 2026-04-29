@@ -1,4 +1,4 @@
-export const SCHEMA_V1 = [
+export const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS notes (
     path TEXT PRIMARY KEY,
     sha TEXT NOT NULL,
@@ -58,12 +58,6 @@ export const SCHEMA_V1 = [
     after TEXT,
     created_at INTEGER NOT NULL
   );`,
-  `CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY
-  );`,
-];
-
-export const SCHEMA_V2 = [
   // staging_edges: agent proposals before user approval. Promoted to graph_edges
   // by ApprovalService. Rejected rows are deleted.
   `CREATE TABLE IF NOT EXISTS staging_edges (
@@ -98,7 +92,7 @@ export const SCHEMA_V2 = [
     decision TEXT
   );`,
   "CREATE INDEX IF NOT EXISTS staging_nodes_agent ON staging_nodes(agent);",
-  // agent_runs: provenance / status footer / debug trail.
+  // agent_runs: provenance, status footer, debug trail.
   `CREATE TABLE IF NOT EXISTS agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent TEXT NOT NULL,

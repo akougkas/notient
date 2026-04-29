@@ -25,11 +25,14 @@ export function loadWasm(): ArrayBuffer {
 }
 
 describe("Database", () => {
-  test("init creates schema and sets version", async () => {
+  test("init creates schema and persists", async () => {
     const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
     await db.init();
-    expect(db.version()).toBe(Database.currentSchemaVersion);
+    const tables = db.query<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;",
+    );
+    expect(tables.map((t) => t.name)).toContain("notes");
     expect(adapter.files.has("/db")).toBe(true);
   });
 
