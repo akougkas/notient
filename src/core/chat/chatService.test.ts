@@ -110,14 +110,23 @@ class FakeIndexFacade implements ConversationIndexFacade {
   }
 }
 
-interface FakeDatabase {
-  query<T>(sql: string): T[];
+/**
+ * Phase 5 Task 7: ContextManager reads from SurrealDB. The chat-service
+ * tests do not exercise the snapshot counts (`includeVaultSnapshot` is
+ * either false or the assertions ignore the count line), so the fake
+ * implements only the `query(sql).collect()` shape ContextManager calls
+ * with empty results.
+ */
+interface FakeSurreal {
+  query<T>(sql: string): { collect: <R = T>() => Promise<R> };
 }
 
-function makeDatabase(): FakeDatabase {
+function makeSurreal(): FakeSurreal {
   return {
-    query<T>(_sql: string): T[] {
-      return [{ count: 0 } as unknown as T];
+    query<T>(_sql: string): { collect: <R = T>() => Promise<R> } {
+      return {
+        collect: async <R = T>(): Promise<R> => [[{ count: 0 }]] as unknown as R,
+      };
     },
   };
 }
@@ -206,9 +215,7 @@ function makeService(
       "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M": "native",
     });
   const contextManager = new ContextManager({
-    database: makeDatabase() as unknown as ConstructorParameters<
-      typeof ContextManager
-    >[0]["database"],
+    db: makeSurreal() as unknown as ConstructorParameters<typeof ContextManager>[0]["db"],
     provider,
     conversationIndex,
     embed: options.embed ?? (async () => null),
@@ -382,9 +389,7 @@ describe("ChatService", () => {
       "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M": "native",
     });
     const contextManager = new ContextManager({
-      database: makeDatabase() as unknown as ConstructorParameters<
-        typeof ContextManager
-      >[0]["database"],
+      db: makeSurreal() as unknown as ConstructorParameters<typeof ContextManager>[0]["db"],
       provider,
       conversationIndex,
       embed: async () => sharedVector,

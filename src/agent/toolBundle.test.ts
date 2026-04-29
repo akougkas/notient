@@ -1,16 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import type { ContradictionHunter } from "../core/agents/contradictionHunter";
-import type { Synthesizer } from "../core/agents/synthesizer";
+import type { Surreal } from "surrealdb";
 import { ApprovalGate } from "../core/chat/approvalGate";
-import type { Database } from "../core/db/database";
+import type { Agent, AgentRunResult } from "../core/coordinator/types";
 import { EventBus } from "../core/events/eventBus";
 import type { SearchPipeline } from "../core/search/searchPipeline";
 import type { VitalsService } from "../core/vitals/vitalsService";
 import { buildAgentToolRegistry } from "./toolBundle";
 
+function noopAgent(name: Agent["name"]): Agent {
+  return {
+    name,
+    usesReasoningModel: false,
+    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+  };
+}
+
 function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
   return {
-    database: {} as Database,
+    db: {} as Surreal,
     searchPipeline: {} as SearchPipeline,
     vitalsService: {} as VitalsService,
     vaultFacade: { readNote: async () => "" },
@@ -28,8 +35,8 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
     approvalMode: () => "yolo",
     recordHistory: async () => "history:fake-0",
     generateCallId: () => "call-1",
-    contradictionHunter: {} as ContradictionHunter,
-    synthesizer: {} as Synthesizer,
+    contradictionHunter: noopAgent("contradictionHunter"),
+    synthesizer: noopAgent("synthesizer"),
     clusterCache: null,
     bus: new EventBus(),
   };
@@ -64,5 +71,20 @@ describe("buildAgentToolRegistry", () => {
     expect(registry.isWriteGated("vault.search_notes")).toBe(false);
     expect(registry.isWriteGated("vault.read_note")).toBe(false);
     expect(registry.isWriteGated("graph.find_path")).toBe(false);
+  });
+
+  test("agents.* chat tools return Locked Decision 11 no-op result shapes", async () => {
+    const registry = buildAgentToolRegistry(makeDeps());
+    const contradictionTool = registry.get("agents.contradiction_check");
+    if (!contradictionTool) throw new Error("missing agents.contradiction_check");
+    const contradictionResult = await contradictionTool.invoke(
+      { notePath: "a.md" },
+      new AbortController().signal,
+    );
+    expect(contradictionResult).toEqual({ proposalsCount: 0, newProposals: [] });
+    const synthesizeTool = registry.get("agents.synthesize");
+    if (!synthesizeTool) throw new Error("missing agents.synthesize");
+    const synthesizeResult = await synthesizeTool.invoke({}, new AbortController().signal);
+    expect(synthesizeResult).toEqual({ proposalsCount: 0, newProposals: [] });
   });
 });

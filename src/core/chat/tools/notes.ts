@@ -13,7 +13,6 @@
  *   - notes.update_frontmatter   (merges shallow patch into YAML frontmatter)
  */
 
-import type { Database } from "../../db/database";
 import type { HistoryKind } from "../../history/types";
 import type { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
@@ -350,8 +349,10 @@ export function makeUpdateFrontmatterTool(
 }
 
 /**
- * History record shape persisted by the default recorder. Task 15 reads from
- * the same table to power one-click undo.
+ * History record shape persisted by `HistoryService.record`. Phase 5 Task 7
+ * removed the SQLite-backed `makeHistoryRecorder` factory because production
+ * has wired `HistoryService` (SurrealDB) since Phase 4 Task 4 and the
+ * factory has no remaining call site.
  */
 export interface NotesHistoryColumns {
   kind: string;
@@ -359,29 +360,6 @@ export interface NotesHistoryColumns {
   before: string | null;
   after: string;
   createdAt: number;
-}
-
-/**
- * Default history recorder. Writes to the `history` table created in V1
- * schema. The `before/after` payloads are stored as raw markdown strings so
- * the inverter (Task 15) can replay them verbatim.
- */
-export function makeHistoryRecorder(
-  db: Database,
-  now: () => number = () => Date.now(),
-): (record: NotesHistoryRecord) => Promise<number> {
-  return async (record) => {
-    const beforeJson = record.before === null ? null : JSON.stringify(record.before);
-    const afterJson = JSON.stringify(record.after);
-    db.run(
-      `INSERT INTO history (kind, target, before, after, created_at)
-       VALUES (?, ?, ?, ?, ?);`,
-      [record.kind, record.target, beforeJson, afterJson, now()],
-    );
-    const idRow = db.query<{ id: number }>("SELECT last_insert_rowid() AS id;")[0];
-    await db.persist();
-    return idRow.id;
-  };
 }
 
 function appendBody(before: string, addition: string): string {

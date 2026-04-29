@@ -4,10 +4,8 @@ import { TIER_1_IDENTITY } from "../agent/identity";
 import { buildNotientAgent } from "../agent/notientAgent";
 import { buildAgentToolRegistry } from "../agent/toolBundle";
 import { probeVisionRoute } from "../agent/visionProbe";
-import type { ContradictionHunter } from "../core/agents/contradictionHunter";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
-import type { Synthesizer } from "../core/agents/synthesizer";
 import { ApprovalService } from "../core/approvals/approvalService";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
@@ -571,7 +569,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const clusterCache = new InMemoryClusterCache();
 
   const toolRegistry = buildAgentToolRegistry({
-    database,
+    db: surrealDbConnection.db,
     searchPipeline,
     vitalsService,
     vaultFacade: { readNote: (path) => vault.read(path) },
@@ -582,14 +580,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     recordHistory: async (record) => historyService.record(record),
     generateCallId: () =>
       `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    // Phase 5 Locked Decision 11: the production agents are no-op Agent shells
-    // (see above). The chat-tool factories `agents.contradiction_check` and
-    // `agents.synthesize` only invoke `.run()`, which the no-op satisfies; the
-    // typed `Synthesizer`/`ContradictionHunter` parameters are a vestige Task 7
-    // will retire when it migrates the chat-tool surface off the SQLite-bound
-    // factories. Cast through `unknown` to bridge the type gap until then.
-    contradictionHunter: contradictionHunter as unknown as ContradictionHunter,
-    synthesizer: synthesizer as unknown as Synthesizer,
+    // Phase 5 Locked Decision 11: the production agents are no-op `Agent`
+    // shells. Task 7 migrated the chat-tool factories onto SurrealDB and
+    // converted `agents.contradiction_check` / `agents.synthesize` into
+    // explicit no-ops, so the toolbundle accepts the `Agent`-typed
+    // placeholders directly without the transitional cast.
+    contradictionHunter,
+    synthesizer,
     clusterCache,
     bus,
   });
@@ -600,7 +597,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   };
 
   const contextManager = new ContextManager({
-    database,
+    db: surrealDbConnection.db,
     provider: primaryLLM,
     conversationIndex,
     embed: embedSingle,

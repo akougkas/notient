@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Database } from "../db/database";
+import type { Surreal } from "surrealdb";
 import { EventBus } from "../events/eventBus";
 import type { ContextOverflowWarningEvent, ContextSummarizedEvent } from "../events/types";
 import type {
@@ -24,20 +24,52 @@ interface CountRow {
   count: number;
 }
 
-class FakeDatabase {
+/**
+ * Phase 5 Task 7: minimal SurrealDB shim used by the unit tests. ContextManager
+ * issues `SELECT count() FROM <table> [WHERE ...] GROUP ALL;` queries; the
+ * fake matches each query string against a canned result set so the snapshot
+ * line ("N notes. M approved edges. K pending proposals.") can be asserted
+ * against without a live SurrealDB. The smoke surface owns the live-DB
+ * coverage.
+ */
+class FakeSurreal {
+  // Defaults: 42 notes, 7 approved edges across all writeback tables (set on
+  // `supports`), 3 pending edges (set on `contradicts`). Other tables return 0.
   constructor(
-    private readonly results: Record<string, CountRow[]> = {
-      "SELECT COUNT(*) AS count FROM notes;": [{ count: 42 }],
-      "SELECT COUNT(*) AS count FROM graph_edges WHERE approved = 1;": [{ count: 7 }],
-      "SELECT COUNT(*) AS count FROM staging_edges WHERE decision IS NULL;": [{ count: 3 }],
-      "SELECT COUNT(*) AS count FROM staging_nodes WHERE decision IS NULL;": [{ count: 2 }],
+    private readonly counts: {
+      note: number;
+      approvedByTable: Partial<Record<string, number>>;
+      pendingByTable: Partial<Record<string, number>>;
+    } = {
+      note: 42,
+      approvedByTable: { supports: 7 },
+      pendingByTable: { contradicts: 3 },
     },
   ) {}
 
-  query<T>(sql: string): T[] {
-    const rows = this.results[sql];
-    if (!rows) return [];
-    return rows as unknown as T[];
+  query<T>(sql: string): { collect: <R = T>() => Promise<R> } {
+    return {
+      collect: async <R = T>(): Promise<R> => {
+        if (sql === "SELECT count() FROM note GROUP ALL;") {
+          return [[{ count: this.counts.note }]] as unknown as R;
+        }
+        const approvedMatch = sql.match(
+          /^SELECT count\(\) FROM (\w+) WHERE approved = true AND applied = true GROUP ALL;$/,
+        );
+        if (approvedMatch) {
+          const value = this.counts.approvedByTable[approvedMatch[1]] ?? 0;
+          return [[{ count: value }]] as unknown as R;
+        }
+        const pendingMatch = sql.match(
+          /^SELECT count\(\) FROM (\w+) WHERE approved = false GROUP ALL;$/,
+        );
+        if (pendingMatch) {
+          const value = this.counts.pendingByTable[pendingMatch[1]] ?? 0;
+          return [[{ count: value }]] as unknown as R;
+        }
+        return [[]] as unknown as R;
+      },
+    };
   }
 }
 
@@ -141,7 +173,7 @@ function makeManager(options: Partial<ContextManagerOptions> = {}): {
       indexPath: "Notient/.index.json",
     });
   const manager = new ContextManager({
-    database: (options.database ?? (new FakeDatabase() as unknown)) as Database,
+    db: (options.db ?? (new FakeSurreal() as unknown)) as Surreal,
     provider: provider as LLMProvider,
     conversationIndex,
     embed: options.embed ?? (async () => null),

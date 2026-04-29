@@ -1,4 +1,5 @@
-import type { Database } from "../../db/database";
+import { type RecordId, StringRecordId, type Surreal } from "surrealdb";
+import { WRITEBACK_EDGE_TABLES, type WritebackEdgeTable } from "../../approvals/approvalService";
 import { type ToolDefinition, isObject, optionalPositiveInt, optionalString } from "./registry";
 
 export interface ProposalEdge {
@@ -16,6 +17,13 @@ export interface ProposalEdge {
   createdAt: number;
 }
 
+/**
+ * Phase 5 Task 7: the staging-node concept retired in Phase 4. Surrealdb
+ * proposals are exclusively edge rows in the writeback-capable tables. The
+ * `ProposalNode` shape is preserved as a type alias so the tool result
+ * union still matches the SQLite-era LLM contract; production callers will
+ * never see a `kind: "node"` entry.
+ */
 export interface ProposalNode {
   kind: "node";
   id: string;
@@ -42,42 +50,36 @@ export interface ProposalsListResult {
   proposals: ProposalEntry[];
 }
 
-interface StagingEdgeRow {
-  id: string;
-  type: string;
-  source_id: string;
-  target_id: string;
+interface EdgeRow {
+  id: RecordId;
+  fromPath: string | null;
+  toPath: string | null;
+  fromId: RecordId<"note">;
+  toId: RecordId<"note">;
+  agent: string | null;
   confidence: number;
-  agent: string;
-  evidence: string;
-  rationale: string | null;
-  created_at: number;
-}
-
-interface StagingNodeRow {
-  id: string;
-  type: string;
-  label: string;
-  note_path: string | null;
-  payload: string | null;
-  agent: string;
-  confidence: number;
-  created_at: number;
+  /** SurrealDB datetime; SDK delivers it as `Date` or an ISO string. */
+  created_at: Date | string;
 }
 
 /**
- * Read-only proposal listing. Joins staging_edges + staging_nodes against
- * graph_nodes so the chat agent gets a path-resolved view of pending work.
- * Filters by the focal note (matches on either side of an edge or the
- * staging node's note_path/memberPaths) and by agent.
+ * Read-only proposal listing. After Phase 4 the staging tables are gone;
+ * proposals are rows in the six writeback-capable edge tables with
+ * `approved = false`. Filters by the focal note (matches on either side of
+ * an edge's resolved `note.path`) and by the linker `agent` field.
+ *
+ * Drift note: the SQLite version ordered by autoincrement `id`. SurrealDB
+ * ordering uses `created_at` (the closest monotonic equivalent). The chat
+ * agent reads only `proposals[*].id` and `proposals[*].createdAt`, so the
+ * wire shape is unchanged.
  */
 export function makeListProposalsTool(
-  db: Database,
+  db: Surreal,
 ): ToolDefinition<ProposalsListArgs, ProposalsListResult> {
   return {
     name: "proposals.list_pending",
     description:
-      "List pending agent proposals (edges + nodes) awaiting approval. Optionally filter by notePath or agent.",
+      "List pending agent proposals (edges) awaiting approval. Optionally filter by notePath or agent.",
     schema: {
       type: "object",
       properties: {
@@ -96,11 +98,9 @@ export function makeListProposalsTool(
       return { notePath, agent, limit };
     },
     invoke: async (args) => {
-      const edges = collectEdges(db, args);
-      const nodes = collectNodes(db, args);
-      const all: ProposalEntry[] = [...edges, ...nodes];
-      all.sort((a, b) => b.createdAt - a.createdAt);
-      const limited = args.limit ? all.slice(0, args.limit) : all;
+      const edges = await collectEdges(db, args);
+      edges.sort((a, b) => b.createdAt - a.createdAt);
+      const limited = args.limit ? edges.slice(0, args.limit) : edges;
       return { proposals: limited };
     },
     writeGated: false,
@@ -115,17 +115,23 @@ export interface ProposalsGetResult {
   proposal: ProposalEntry | null;
 }
 
-/** Read-only single-proposal lookup. Returns null when missing or already decided. */
+/**
+ * Read-only single-proposal lookup. Returns null when the row is missing or
+ * has already been approved. The id may be a SurrealDB record id string
+ * (e.g. `supports:abc123`) — the lookup walks the six writeback tables and
+ * returns the first match. The chat surface never receives a node-kind id
+ * post-Phase 4.
+ */
 export function makeGetProposalTool(
-  db: Database,
+  db: Surreal,
 ): ToolDefinition<ProposalsGetArgs, ProposalsGetResult> {
   return {
     name: "proposals.get",
-    description: "Fetch a single pending proposal (edge or node) by id.",
+    description: "Fetch a single pending proposal (edge) by id.",
     schema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Staging row id." },
+        id: { type: "string", description: "SurrealDB edge record id." },
       },
       required: ["id"],
     },
@@ -136,21 +142,11 @@ export function makeGetProposalTool(
       return { id };
     },
     invoke: async (args) => {
-      const edge = db.query<StagingEdgeRow>(
-        `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-         FROM staging_edges WHERE id = ? AND decision IS NULL;`,
-        [args.id],
-      )[0];
-      if (edge) {
-        return { proposal: toProposalEdge(db, edge) };
-      }
-      const node = db.query<StagingNodeRow>(
-        `SELECT id, type, label, note_path, payload, agent, confidence, created_at
-         FROM staging_nodes WHERE id = ? AND decision IS NULL;`,
-        [args.id],
-      )[0];
-      if (node) {
-        return { proposal: toProposalNode(node) };
+      for (const table of WRITEBACK_EDGE_TABLES) {
+        const row = await selectEdgeById(db, table, args.id);
+        if (row !== null) {
+          return { proposal: toProposalEdge(table, row) };
+        }
       }
       return { proposal: null };
     },
@@ -158,113 +154,80 @@ export function makeGetProposalTool(
   };
 }
 
-function collectEdges(db: Database, args: ProposalsListArgs): ProposalEdge[] {
-  const conditions: string[] = ["decision IS NULL"];
-  const params: unknown[] = [];
-  if (args.agent) {
-    conditions.push("agent = ?");
-    params.push(args.agent);
+async function collectEdges(db: Surreal, args: ProposalsListArgs): Promise<ProposalEdge[]> {
+  const proposals: ProposalEdge[] = [];
+  for (const table of WRITEBACK_EDGE_TABLES) {
+    const conditions: string[] = ["approved = false"];
+    const bindings: Record<string, unknown> = {};
+    if (args.agent !== undefined) {
+      conditions.push("agent = $agent");
+      bindings.agent = args.agent;
+    }
+    if (args.notePath !== undefined) {
+      conditions.push("(in.path = $path OR out.path = $path)");
+      bindings.path = args.notePath;
+    }
+    // SurrealDB 3.x requires every ORDER BY field to appear in the projection.
+    const sql = `SELECT id, in AS fromId, out AS toId, in.path AS fromPath, out.path AS toPath, agent, confidence, created_at FROM ${table} WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`;
+    const [rows] = await db.query<[EdgeRow[]]>(sql, bindings).collect<[EdgeRow[]]>();
+    for (const row of rows) {
+      proposals.push(toProposalEdge(table, row));
+    }
   }
-  const rows = db.query<StagingEdgeRow>(
-    `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-     FROM staging_edges WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`,
-    params,
-  );
-  const proposals = rows.map((row) => toProposalEdge(db, row));
-  if (!args.notePath) return proposals;
-  const target = args.notePath;
-  return proposals.filter(
-    (proposal) => proposal.sourceNotePath === target || proposal.targetNotePath === target,
-  );
+  return proposals;
 }
 
-function collectNodes(db: Database, args: ProposalsListArgs): ProposalNode[] {
-  const conditions: string[] = ["decision IS NULL"];
-  const params: unknown[] = [];
-  if (args.agent) {
-    conditions.push("agent = ?");
-    params.push(args.agent);
+async function selectEdgeById(
+  db: Surreal,
+  table: WritebackEdgeTable,
+  id: string,
+): Promise<EdgeRow | null> {
+  // The chat agent passes a stringified SurrealDB record id (e.g.
+  // `supports:⟨abc-uuid⟩`). Reject ids that target a different table; for
+  // the matching table we hand the SDK a `StringRecordId` so the WHERE
+  // clause does an indexed exact match.
+  if (!id.startsWith(`${table}:`)) return null;
+  let recordId: StringRecordId;
+  try {
+    recordId = new StringRecordId(id);
+  } catch {
+    return null;
   }
-  const rows = db.query<StagingNodeRow>(
-    `SELECT id, type, label, note_path, payload, agent, confidence, created_at
-     FROM staging_nodes WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`,
-    params,
-  );
-  const proposals = rows.map(toProposalNode);
-  if (!args.notePath) return proposals;
-  const target = args.notePath;
-  return proposals.filter(
-    (proposal) => proposal.notePath === target || proposal.memberPaths.includes(target),
-  );
+  try {
+    const sql = `SELECT id, in AS fromId, out AS toId, in.path AS fromPath, out.path AS toPath, agent, confidence, created_at FROM ${table} WHERE id = $id AND approved = false LIMIT 1;`;
+    const [rows] = await db.query<[EdgeRow[]]>(sql, { id: recordId }).collect<[EdgeRow[]]>();
+    return rows[0] ?? null;
+  } catch {
+    // Malformed record-id strings are not the caller's mistake; treat as a
+    // miss and let the next table try.
+    return null;
+  }
 }
 
-function toProposalEdge(db: Database, row: StagingEdgeRow): ProposalEdge {
+function toProposalEdge(table: WritebackEdgeTable, row: EdgeRow): ProposalEdge {
   return {
     kind: "edge",
-    id: row.id,
-    type: row.type,
-    sourceId: row.source_id,
-    targetId: row.target_id,
-    sourceNotePath: resolveNotePath(db, row.source_id),
-    targetNotePath: resolveNotePath(db, row.target_id),
+    id: row.id.toString(),
+    type: table,
+    sourceId: row.fromId.toString(),
+    targetId: row.toId.toString(),
+    sourceNotePath: row.fromPath,
+    targetNotePath: row.toPath,
     confidence: row.confidence,
-    agent: row.agent,
-    evidence: parseEvidence(row.evidence),
-    rationale: row.rationale,
-    createdAt: row.created_at,
+    agent: row.agent ?? "unknown",
+    // The Phase 4 schema stores evidence as `option<array<record<chunk>>>`;
+    // chat tools surface it as a string array (chunk record ids stringified)
+    // so the LLM contract is untouched. Today the linker writes no evidence;
+    // the field is reserved for future extractor-emitted edges.
+    evidence: [],
+    rationale: null,
+    createdAt: parseDateTime(row.created_at),
   };
 }
 
-function toProposalNode(row: StagingNodeRow): ProposalNode {
-  const parsed = parsePayload(row.payload);
-  return {
-    kind: "node",
-    id: row.id,
-    type: row.type,
-    label: row.label,
-    notePath: row.note_path,
-    agent: row.agent,
-    confidence: row.confidence,
-    body: typeof parsed.body === "string" ? parsed.body : null,
-    memberPaths: Array.isArray(parsed.memberPaths)
-      ? parsed.memberPaths.filter((entry): entry is string => typeof entry === "string")
-      : [],
-    targetPath: typeof parsed.targetPath === "string" ? parsed.targetPath : null,
-    createdAt: row.created_at,
-  };
-}
-
-function resolveNotePath(db: Database, nodeId: string): string | null {
-  if (nodeId.startsWith("note:")) return nodeId.slice("note:".length);
-  const row = db.query<{ note_path: string | null }>(
-    "SELECT note_path FROM graph_nodes WHERE id = ?;",
-    [nodeId],
-  )[0];
-  return row?.note_path ?? null;
-}
-
-function parseEvidence(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) {
-      return parsed.filter((entry): entry is string => typeof entry === "string");
-    }
-  } catch {
-    // ignore parse failures; treat as empty evidence
-  }
-  return [];
-}
-
-function parsePayload(raw: string | null): {
-  body?: unknown;
-  memberPaths?: unknown;
-  targetPath?: unknown;
-} {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return isObject(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+function parseDateTime(value: Date | string | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  if (value instanceof Date) return value.getTime();
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }

@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { Database } from "../../db/database";
-import { MemoryAdapter, loadWasm } from "../../db/database.test";
 import { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
 import {
@@ -9,7 +7,6 @@ import {
   type NotesToolsContext,
   makeAppendNoteTool,
   makeCreateNoteTool,
-  makeHistoryRecorder,
   makeReplaceSectionTool,
   makeUpdateFrontmatterTool,
   mergeFrontmatter,
@@ -316,34 +313,7 @@ describe("notes.update_frontmatter", () => {
   });
 });
 
-describe("makeHistoryRecorder", () => {
-  test("inserts a row into the history table", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    const recorder = makeHistoryRecorder(db, () => 999);
-    const id = await recorder({
-      kind: "notes.create",
-      target: "/n.md",
-      before: null,
-      after: "body",
-    });
-    expect(id).toBe(1);
-    const rows = db.query<{
-      kind: string;
-      target: string;
-      before: string | null;
-      after: string;
-      created_at: number;
-    }>("SELECT kind, target, before, after, created_at FROM history;");
-    expect(rows).toEqual([
-      {
-        kind: "notes.create",
-        target: "/n.md",
-        before: null,
-        after: JSON.stringify("body"),
-        created_at: 999,
-      },
-    ]);
-  });
-});
+// Phase 5 Task 7: the SQLite-backed `makeHistoryRecorder` helper was
+// retired alongside the rest of the chat-tool SQLite surface. Production
+// has wired SurrealDB-backed `HistoryService.record` since Phase 4 Task 4;
+// the smoke coverage for that path lives next to HistoryService.

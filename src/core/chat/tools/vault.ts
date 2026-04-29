@@ -1,4 +1,5 @@
-import type { Database } from "../../db/database";
+import type { Surreal } from "surrealdb";
+import { WRITEBACK_EDGE_TABLES } from "../../approvals/approvalService";
 import type { SearchPipeline } from "../../search/searchPipeline";
 import type { SearchFilters, SearchHit, SearchResult } from "../../search/types";
 import type { VitalsSnapshot } from "../../vitals/types";
@@ -171,20 +172,24 @@ export interface VaultListNeighborsResult {
 }
 
 interface NeighborRow {
-  source_id: string;
-  target_id: string;
-  type: string;
-  agent: string;
-  confidence: number;
+  fromPath: string | null;
+  toPath: string | null;
+  agent: string | null;
+  confidence: number | null;
 }
 
 /**
- * Lists notes that share an approved graph edge with the given note. Reads
- * `graph_edges` directly because edges are pre-resolved to `note:` ids by
- * the indexer/approval pipeline.
+ * Lists notes that share an approved-and-applied edge with the given note.
+ * Phase 5 Task 7: SurrealDB substrate. The query unions the writeback edge
+ * tables (supports, contradicts, extends, exemplifies, synthesizes,
+ * related_to) plus the deterministic `wikilink` table so the chat agent
+ * sees both Tier-1 wikilinks and the approved-and-applied semantic
+ * relations. Each table is filtered server-side by `approved = true AND
+ * applied = true` so unapproved linker proposals never surface as
+ * neighbours. The result shape is unchanged from the SQLite era.
  */
 export function makeListNeighborsTool(
-  db: Database,
+  db: Surreal,
 ): ToolDefinition<VaultListNeighborsArgs, VaultListNeighborsResult> {
   return {
     name: "vault.list_neighbors",
@@ -202,28 +207,46 @@ export function makeListNeighborsTool(
       return { notePath };
     },
     invoke: async (args) => {
-      const nodeId = `note:${args.notePath}`;
-      const rows = db.query<NeighborRow>(
-        `SELECT source_id, target_id, type, agent, confidence FROM graph_edges
-         WHERE approved = 1 AND (source_id = ? OR target_id = ?);`,
-        [nodeId, nodeId],
-      );
+      const tables = ["wikilink", ...WRITEBACK_EDGE_TABLES] as const;
       const neighbors: VaultNeighbor[] = [];
-      for (const row of rows) {
-        const outgoing = row.source_id === nodeId;
-        const otherId = outgoing ? row.target_id : row.source_id;
-        if (!otherId.startsWith("note:")) continue;
-        neighbors.push({
-          notePath: otherId.slice("note:".length),
-          type: row.type,
-          agent: row.agent,
-          confidence: row.confidence,
-          direction: outgoing ? "outgoing" : "incoming",
-        });
+      for (const table of tables) {
+        const rows = await fetchNeighborRows(db, table, args.notePath);
+        for (const row of rows) {
+          const neighbor = projectNeighbor(row, table, args.notePath);
+          if (neighbor !== null) neighbors.push(neighbor);
+        }
       }
       return { notePath: args.notePath, neighbors };
     },
     writeGated: false,
+  };
+}
+
+async function fetchNeighborRows(
+  db: Surreal,
+  table: string,
+  notePath: string,
+): Promise<NeighborRow[]> {
+  const sql = `SELECT in.path AS fromPath, out.path AS toPath, agent, confidence FROM ${table} WHERE approved = true AND applied = true AND (in.path = $path OR out.path = $path);`;
+  const [rows] = await db
+    .query<[NeighborRow[]]>(sql, { path: notePath })
+    .collect<[NeighborRow[]]>();
+  return rows;
+}
+
+function projectNeighbor(row: NeighborRow, table: string, notePath: string): VaultNeighbor | null {
+  const fromPath = row.fromPath;
+  const toPath = row.toPath;
+  if (fromPath === null || toPath === null) return null;
+  const outgoing = fromPath === notePath;
+  const otherPath = outgoing ? toPath : fromPath;
+  if (otherPath === notePath) return null;
+  return {
+    notePath: otherPath,
+    type: table,
+    agent: row.agent ?? "unknown",
+    confidence: row.confidence ?? 0,
+    direction: outgoing ? "outgoing" : "incoming",
   };
 }
 

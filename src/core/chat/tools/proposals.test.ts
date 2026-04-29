@@ -1,335 +1,308 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../../db/database";
-import { MemoryAdapter, loadWasm } from "../../db/database.test";
+/**
+ * Phase 5 Task 7 proposals chat-tool smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/chat/tools/`.
+ *
+ * Boots a real SurrealDB, applies the Phase 1 schema, seeds the
+ * writeback-capable edge tables with `approved = false` linker proposals,
+ * and exercises the listing + lookup tools end-to-end. The wire-shape
+ * (`kind: "edge"`, sourceNotePath, targetNotePath, agent, confidence,
+ * createdAt) round-trips unchanged from the SQLite-mirror harness.
+ *
+ * Drift note: the SQLite version ordered by autoincrement `id`. SurrealDB
+ * orders by `created_at`, the closest monotonic equivalent in the entity
+ * tables. The test seeds with explicit `created_at` values so the order is
+ * deterministic.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DateTime, type RecordId } from "surrealdb";
+import { type SurrealServerHandle, startSurreal } from "../../../daemon/surrealServer";
+import type { WritebackEdgeTable } from "../../approvals/approvalService";
+import { applySchema } from "../../db/schemaApplier";
+import { type SurrealConnection, connect, upsertNoteByPath } from "../../db/surreal";
 import { makeGetProposalTool, makeListProposalsTool } from "./proposals";
 
-async function newDb(): Promise<Database> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await db.init();
-  return db;
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+interface SeedEdgeInput {
+  table: WritebackEdgeTable;
+  fromPath: string;
+  toPath: string;
+  agent: string;
+  confidence?: number;
+  createdAtSec: number;
+  approved?: boolean;
 }
 
-function insertEdge(
-  db: Database,
-  fields: {
-    id: string;
-    type: string;
-    source: string;
-    target: string;
-    agent: string;
-    evidence?: string;
-    decision?: string;
-    rationale?: string | null;
-    createdAt?: number;
-  },
-): void {
-  if (fields.decision) {
-    db.run(
-      `INSERT INTO staging_edges (id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at, decided_at, decision)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?);`,
-      [
-        fields.id,
-        fields.type,
-        fields.source,
-        fields.target,
-        0.85,
-        fields.agent,
-        fields.evidence ?? JSON.stringify(["chunk-x"]),
-        fields.rationale ?? null,
-        fields.createdAt ?? 1,
-        2,
-        fields.decision,
-      ],
-    );
-    return;
+async function seedEdge(connection: SurrealConnection, input: SeedEdgeInput): Promise<RecordId> {
+  const fromId = await upsertNoteByPath(connection.db, {
+    path: input.fromPath,
+    sha: `sha-${input.fromPath}`,
+    wordCount: 10,
+  });
+  const toId = await upsertNoteByPath(connection.db, {
+    path: input.toPath,
+    sha: `sha-${input.toPath}`,
+    wordCount: 10,
+  });
+  const sql = `RELATE $from->${input.table}->$to SET source = 'linker', class = 'INFERRED', confidence = $confidence, agent = $agent, approved = $approved, created_at = $createdAt RETURN id;`;
+  const [rows] = await connection.db
+    .query<[Array<{ id: RecordId }>]>(sql, {
+      from: fromId,
+      to: toId,
+      confidence: input.confidence ?? 0.85,
+      agent: input.agent,
+      approved: input.approved ?? false,
+      createdAt: new DateTime(new Date(input.createdAtSec * 1000)),
+    })
+    .collect<[Array<{ id: RecordId }>]>();
+  const created = rows[0];
+  if (created === undefined) {
+    throw new Error(`seedEdge: no edge created for ${input.table}`);
   }
-  db.run(
-    `INSERT INTO staging_edges (id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?);`,
-    [
-      fields.id,
-      fields.type,
-      fields.source,
-      fields.target,
-      0.85,
-      fields.agent,
-      fields.evidence ?? JSON.stringify(["chunk-x"]),
-      fields.rationale ?? null,
-      fields.createdAt ?? 1,
-    ],
-  );
+  return created.id;
 }
 
-function insertNode(
-  db: Database,
-  fields: {
-    id: string;
-    type: string;
-    label: string;
-    agent: string;
-    payload?: string | null;
-    notePath?: string | null;
-    createdAt?: number;
-  },
-): void {
-  db.run(
-    `INSERT INTO staging_nodes (id, type, label, note_path, payload, agent, confidence, created_at)
-     VALUES (?,?,?,?,?,?,?,?);`,
-    [
-      fields.id,
-      fields.type,
-      fields.label,
-      fields.notePath ?? null,
-      fields.payload ?? null,
-      fields.agent,
-      0.7,
-      fields.createdAt ?? 1,
-    ],
-  );
+async function clearVault(connection: SurrealConnection): Promise<void> {
+  for (const table of [
+    "supports",
+    "contradicts",
+    "extends",
+    "exemplifies",
+    "synthesizes",
+    "related_to",
+    "wikilink",
+    "note",
+  ]) {
+    await connection.db.query(`DELETE ${table};`).collect();
+  }
 }
 
-describe("proposals.list_pending", () => {
-  test("returns pending edges and nodes ordered by createdAt desc", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
-      agent: "linker",
-      createdAt: 10,
+describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-proposals-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-proposals-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
     });
-    insertEdge(db, {
-      id: "e2",
-      type: "supports",
-      source: "note:/x.md",
-      target: "note:/y.md",
-      agent: "linker",
-      createdAt: 5,
-      decision: "accepted",
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
     });
-    insertNode(db, {
-      id: "n1",
-      type: "synthesis",
-      label: "POSIX",
-      agent: "synthesizer",
-      payload: JSON.stringify({
-        body: "## Themes",
-        memberPaths: ["/a.md", "/c.md"],
-        targetPath: "0-inbox/synth.md",
-      }),
-      createdAt: 20,
-    });
-    const tool = makeListProposalsTool(db);
-    const result = await tool.invoke({}, new AbortController().signal);
-    expect(result.proposals.map((p) => p.id)).toEqual(["n1", "e1"]);
-    const node = result.proposals[0];
-    expect(node.kind).toBe("node");
-    if (node.kind === "node") {
-      expect(node.memberPaths).toEqual(["/a.md", "/c.md"]);
-      expect(node.body).toBe("## Themes");
-      expect(node.targetPath).toBe("0-inbox/synth.md");
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
     }
-    const edge = result.proposals[1];
-    expect(edge.kind).toBe("edge");
-    if (edge.kind === "edge") {
-      expect(edge.sourceNotePath).toBe("/a.md");
-      expect(edge.targetNotePath).toBe("/b.md");
-      expect(edge.evidence).toEqual(["chunk-x"]);
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  test("filters by notePath across edges and node memberPaths", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
-      agent: "linker",
-      createdAt: 1,
-    });
-    insertEdge(db, {
-      id: "e2",
-      type: "supports",
-      source: "note:/c.md",
-      target: "note:/d.md",
-      agent: "linker",
-      createdAt: 2,
-    });
-    insertNode(db, {
-      id: "n1",
-      type: "synthesis",
-      label: "Match",
-      agent: "synthesizer",
-      payload: JSON.stringify({ body: "x", memberPaths: ["/a.md"], targetPath: "p" }),
-      createdAt: 3,
-    });
-    insertNode(db, {
-      id: "n2",
-      type: "synthesis",
-      label: "Other",
-      agent: "synthesizer",
-      payload: JSON.stringify({ body: "y", memberPaths: ["/z.md"], targetPath: "q" }),
-      createdAt: 4,
-    });
-    const tool = makeListProposalsTool(db);
-    const result = await tool.invoke({ notePath: "/a.md" }, new AbortController().signal);
-    expect(result.proposals.map((p) => p.id).sort()).toEqual(["e1", "n1"]);
+  afterEach(async () => {
+    await clearVault(connection);
   });
 
-  test("filters by agent name", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
+  test("returns pending edges across writeback tables ordered by created_at desc", async () => {
+    const earlier = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
       agent: "linker",
+      createdAtSec: 1_700_000_500,
     });
-    insertEdge(db, {
-      id: "e2",
-      type: "contradicts",
-      source: "note:/c.md",
-      target: "note:/d.md",
-      agent: "contradictionHunter",
-    });
-    const tool = makeListProposalsTool(db);
-    const result = await tool.invoke(
-      { agent: "contradictionHunter" },
-      new AbortController().signal,
-    );
-    expect(result.proposals.map((p) => p.id)).toEqual(["e2"]);
-  });
-
-  test("resolves note_path for non-note source ids via graph_nodes", async () => {
-    const db = await newDb();
-    db.run(
-      "INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at) VALUES (?,?,?,?,?,?);",
-      ["claim:abc", "claim", "claim a", "/a.md", null, 1],
-    );
-    insertEdge(db, {
-      id: "e1",
-      type: "contradicts",
-      source: "claim:abc",
-      target: "note:/b.md",
-      agent: "contradictionHunter",
-    });
-    const tool = makeListProposalsTool(db);
-    const result = await tool.invoke({}, new AbortController().signal);
-    expect(result.proposals).toHaveLength(1);
-    if (result.proposals[0].kind === "edge") {
-      expect(result.proposals[0].sourceNotePath).toBe("/a.md");
-      expect(result.proposals[0].targetNotePath).toBe("/b.md");
-    }
-  });
-
-  test("tolerates malformed evidence and payload JSON", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
+    const later = await seedEdge(connection, {
+      table: "contradicts",
+      fromPath: "c.md",
+      toPath: "d.md",
       agent: "linker",
-      evidence: "{not json",
+      createdAtSec: 1_700_001_000,
     });
-    insertNode(db, {
-      id: "n1",
-      type: "synthesis",
-      label: "broken",
-      agent: "synthesizer",
-      payload: "[not valid",
-    });
-    const tool = makeListProposalsTool(db);
+    const tool = makeListProposalsTool(connection.db);
     const result = await tool.invoke({}, new AbortController().signal);
     expect(result.proposals).toHaveLength(2);
-    for (const proposal of result.proposals) {
-      if (proposal.kind === "edge") {
-        expect(proposal.evidence).toEqual([]);
-      } else {
-        expect(proposal.memberPaths).toEqual([]);
-        expect(proposal.body).toBeNull();
-      }
+    expect(result.proposals[0].id).toBe(later.toString());
+    expect(result.proposals[1].id).toBe(earlier.toString());
+    expect(result.proposals[0].kind).toBe("edge");
+    if (result.proposals[0].kind === "edge") {
+      expect(result.proposals[0].sourceNotePath).toBe("c.md");
+      expect(result.proposals[0].targetNotePath).toBe("d.md");
+      expect(result.proposals[0].type).toBe("contradicts");
+      expect(result.proposals[0].agent).toBe("linker");
     }
   });
 
-  test("excludes already-decided rows", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
+  test("excludes already-approved rows", async () => {
+    await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
       agent: "linker",
-      decision: "rejected",
+      createdAtSec: 1_700_000_500,
+      approved: true,
     });
-    const tool = makeListProposalsTool(db);
+    const tool = makeListProposalsTool(connection.db);
     const result = await tool.invoke({}, new AbortController().signal);
     expect(result.proposals).toEqual([]);
   });
 
-  test("validates argument shape", async () => {
-    const db = await newDb();
-    const tool = makeListProposalsTool(db);
+  test("filters by notePath across in/out positions", async () => {
+    await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
+      agent: "linker",
+      createdAtSec: 1,
+    });
+    await seedEdge(connection, {
+      table: "contradicts",
+      fromPath: "c.md",
+      toPath: "a.md",
+      agent: "linker",
+      createdAtSec: 2,
+    });
+    await seedEdge(connection, {
+      table: "extends",
+      fromPath: "x.md",
+      toPath: "y.md",
+      agent: "linker",
+      createdAtSec: 3,
+    });
+    const tool = makeListProposalsTool(connection.db);
+    const result = await tool.invoke({ notePath: "a.md" }, new AbortController().signal);
+    expect(result.proposals).toHaveLength(2);
+    const targets = result.proposals.map((entry) => (entry.kind === "edge" ? entry.type : null));
+    expect(targets.sort()).toEqual(["contradicts", "supports"]);
+  });
+
+  test("filters by agent name", async () => {
+    await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
+      agent: "linker",
+      createdAtSec: 1,
+    });
+    await seedEdge(connection, {
+      table: "contradicts",
+      fromPath: "c.md",
+      toPath: "d.md",
+      agent: "contradictionHunter",
+      createdAtSec: 2,
+    });
+    const tool = makeListProposalsTool(connection.db);
+    const result = await tool.invoke(
+      { agent: "contradictionHunter" },
+      new AbortController().signal,
+    );
+    expect(result.proposals).toHaveLength(1);
+    if (result.proposals[0].kind === "edge") {
+      expect(result.proposals[0].type).toBe("contradicts");
+    }
+  });
+
+  test("validates argument shape", () => {
+    const tool = makeListProposalsTool(connection.db);
     expect(() => tool.validate("nope")).toThrow();
     expect(() => tool.validate({ limit: 0 })).toThrow();
     expect(tool.validate(undefined)).toEqual({});
   });
 });
 
-describe("proposals.get", () => {
+describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-proposals-get-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-proposals-get-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearVault(connection);
+  });
+
   test("returns a pending edge by id", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
+    const id = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
       agent: "linker",
+      createdAtSec: 1,
     });
-    const tool = makeGetProposalTool(db);
-    const result = await tool.invoke({ id: "e1" }, new AbortController().signal);
+    const tool = makeGetProposalTool(connection.db);
+    const result = await tool.invoke({ id: id.toString() }, new AbortController().signal);
     expect(result.proposal?.kind).toBe("edge");
-    expect(result.proposal?.id).toBe("e1");
+    expect(result.proposal?.id).toBe(id.toString());
   });
 
-  test("returns a pending node by id", async () => {
-    const db = await newDb();
-    insertNode(db, {
-      id: "n1",
-      type: "synthesis",
-      label: "x",
-      agent: "synthesizer",
-      payload: JSON.stringify({ body: "b", memberPaths: ["/a.md"], targetPath: "p" }),
-    });
-    const tool = makeGetProposalTool(db);
-    const result = await tool.invoke({ id: "n1" }, new AbortController().signal);
-    expect(result.proposal?.kind).toBe("node");
-    expect(result.proposal?.id).toBe("n1");
-  });
-
-  test("returns null when missing or decided", async () => {
-    const db = await newDb();
-    insertEdge(db, {
-      id: "e1",
-      type: "supports",
-      source: "note:/a.md",
-      target: "note:/b.md",
+  test("returns null when missing or already approved", async () => {
+    const approved = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "a.md",
+      toPath: "b.md",
       agent: "linker",
-      decision: "accepted",
+      createdAtSec: 1,
+      approved: true,
     });
-    const tool = makeGetProposalTool(db);
-    const missing = await tool.invoke({ id: "nope" }, new AbortController().signal);
-    const decided = await tool.invoke({ id: "e1" }, new AbortController().signal);
+    const tool = makeGetProposalTool(connection.db);
+    const missing = await tool.invoke({ id: "supports:not-real" }, new AbortController().signal);
+    const decided = await tool.invoke({ id: approved.toString() }, new AbortController().signal);
     expect(missing.proposal).toBeNull();
     expect(decided.proposal).toBeNull();
   });
 
-  test("rejects empty id", async () => {
-    const db = await newDb();
-    const tool = makeGetProposalTool(db);
+  test("rejects empty id", () => {
+    const tool = makeGetProposalTool(connection.db);
     expect(() => tool.validate({ id: "" })).toThrow();
     expect(() => tool.validate({})).toThrow();
   });

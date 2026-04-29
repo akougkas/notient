@@ -1,4 +1,5 @@
-import type { Database } from "../../db/database";
+import type { Surreal } from "surrealdb";
+import { WRITEBACK_EDGE_TABLES } from "../../approvals/approvalService";
 import { type ToolDefinition, isObject, optionalPositiveInt, requireString } from "./registry";
 
 export interface GraphFindPathArgs {
@@ -13,21 +14,29 @@ export interface GraphFindPathResult {
 }
 
 interface EdgeRow {
-  source_id: string;
-  target_id: string;
+  fromPath: string | null;
+  toPath: string | null;
 }
 
 const DEFAULT_MAX_HOPS = 4;
 const HARD_MAX_HOPS = 8;
 
 /**
- * BFS over approved graph edges. Treats edges as undirected for path-finding
- * because relations like 'supports' and 'extends' are useful in either
- * direction when answering "how are these notes connected?". Returns an empty
- * `path` when no route exists within `maxHops`.
+ * BFS over approved-and-applied graph edges. Treats edges as undirected for
+ * path-finding because relations like 'supports' and 'extends' are useful in
+ * either direction when answering "how are these notes connected?". Returns
+ * an empty `path` when no route exists within `maxHops`.
+ *
+ * Phase 5 Task 7: the SQLite `graph_edges` table is gone; the SurrealDB
+ * substrate scatters edges across `wikilink` (deterministic) and the six
+ * writeback-capable semantic relations. The BFS unions all of them. The
+ * server-side `approved = true AND applied = true` filter matches the
+ * search-consumer contract: linker proposals approved but not yet written
+ * back to disk are filtered out so path-finding never surfaces a path the
+ * user has not yet seen.
  */
 export function makeFindPathTool(
-  db: Database,
+  db: Surreal,
 ): ToolDefinition<GraphFindPathArgs, GraphFindPathResult> {
   return {
     name: "graph.find_path",
@@ -52,75 +61,101 @@ export function makeFindPathTool(
       return { fromNotePath, toNotePath, maxHops };
     },
     invoke: async (args) => {
-      const fromId = `note:${args.fromNotePath}`;
-      const toId = `note:${args.toNotePath}`;
-      if (fromId === toId) {
+      if (args.fromNotePath === args.toNotePath) {
         return { path: [args.fromNotePath], hops: 0 };
       }
       const maxHops = args.maxHops ?? DEFAULT_MAX_HOPS;
-      const parents = bfsApprovedEdges(db, fromId, toId, maxHops);
+      const parents = await bfsApprovedEdges(db, args.fromNotePath, args.toNotePath, maxHops);
       if (!parents) return { path: [], hops: 0 };
-      const ordered = reconstructPath(parents, fromId, toId);
+      const ordered = reconstructPath(parents, args.fromNotePath, args.toNotePath);
       return { path: ordered, hops: ordered.length - 1 };
     },
     writeGated: false,
   };
 }
 
-function bfsApprovedEdges(
-  db: Database,
-  fromId: string,
-  toId: string,
+const TRAVERSED_TABLES = ["wikilink", ...WRITEBACK_EDGE_TABLES] as const;
+
+async function bfsApprovedEdges(
+  db: Surreal,
+  fromPath: string,
+  toPath: string,
   maxHops: number,
-): Map<string, string> | null {
-  const queue: { id: string; depth: number }[] = [{ id: fromId, depth: 0 }];
+): Promise<Map<string, string> | null> {
+  const queue: { path: string; depth: number }[] = [{ path: fromPath, depth: 0 }];
   const parents = new Map<string, string>();
-  const visited = new Set<string>([fromId]);
+  const visited = new Set<string>([fromPath]);
   while (queue.length > 0) {
     const next = queue.shift();
     if (!next) break;
     if (next.depth >= maxHops) continue;
-    const reached = expandFrontier(db, next, parents, visited, toId, queue);
+    const reached = await expandFrontier(db, next, parents, visited, toPath, queue);
     if (reached) return parents;
   }
   return null;
 }
 
-function expandFrontier(
-  db: Database,
-  next: { id: string; depth: number },
+async function expandFrontier(
+  db: Surreal,
+  next: { path: string; depth: number },
   parents: Map<string, string>,
   visited: Set<string>,
-  toId: string,
-  queue: { id: string; depth: number }[],
-): boolean {
-  const rows = db.query<EdgeRow>(
-    `SELECT source_id, target_id FROM graph_edges
-     WHERE approved = 1 AND (source_id = ? OR target_id = ?);`,
-    [next.id, next.id],
-  );
-  for (const row of rows) {
-    const otherId = row.source_id === next.id ? row.target_id : row.source_id;
-    if (!otherId.startsWith("note:")) continue;
-    if (visited.has(otherId)) continue;
-    visited.add(otherId);
-    parents.set(otherId, next.id);
-    if (otherId === toId) return true;
-    queue.push({ id: otherId, depth: next.depth + 1 });
+  toPath: string,
+  queue: { path: string; depth: number }[],
+): Promise<boolean> {
+  for (const table of TRAVERSED_TABLES) {
+    const rows = await fetchAdjacentEdges(db, table, next.path);
+    if (recordEdges(rows, next, parents, visited, toPath, queue)) return true;
   }
   return false;
 }
 
-function reconstructPath(parents: Map<string, string>, fromId: string, toId: string): string[] {
-  const reverse: string[] = [toId];
-  let cursor: string | undefined = toId;
-  while (cursor && cursor !== fromId) {
+async function fetchAdjacentEdges(
+  db: Surreal,
+  table: string,
+  notePath: string,
+): Promise<EdgeRow[]> {
+  const sql = `SELECT in.path AS fromPath, out.path AS toPath FROM ${table} WHERE approved = true AND applied = true AND (in.path = $path OR out.path = $path);`;
+  const [rows] = await db.query<[EdgeRow[]]>(sql, { path: notePath }).collect<[EdgeRow[]]>();
+  return rows;
+}
+
+function recordEdges(
+  rows: EdgeRow[],
+  next: { path: string; depth: number },
+  parents: Map<string, string>,
+  visited: Set<string>,
+  toPath: string,
+  queue: { path: string; depth: number }[],
+): boolean {
+  for (const row of rows) {
+    const otherPath = pickOtherPath(row, next.path);
+    if (otherPath === null || visited.has(otherPath)) continue;
+    visited.add(otherPath);
+    parents.set(otherPath, next.path);
+    if (otherPath === toPath) return true;
+    queue.push({ path: otherPath, depth: next.depth + 1 });
+  }
+  return false;
+}
+
+function pickOtherPath(row: EdgeRow, currentPath: string): string | null {
+  const fromPath = row.fromPath;
+  const toPath = row.toPath;
+  if (fromPath === null || toPath === null) return null;
+  return fromPath === currentPath ? toPath : fromPath;
+}
+
+function reconstructPath(parents: Map<string, string>, fromPath: string, toPath: string): string[] {
+  const reverse: string[] = [toPath];
+  let cursor: string | undefined = toPath;
+  while (cursor && cursor !== fromPath) {
     const parent = parents.get(cursor);
     if (!parent) break;
     reverse.push(parent);
     cursor = parent;
   }
-  return reverse.reverse().map((id) => id.slice("note:".length));
+  return reverse.reverse();
 }
 
 export interface ClusterEntry {
@@ -164,7 +199,10 @@ export interface GraphListClustersResult {
 /**
  * Returns the latest synthesizer cluster snapshot. The cache is populated by
  * the Synthesizer (or a future ClusterIndex). When no cache is wired in, the
- * tool returns an empty list.
+ * tool returns an empty list. Phase 5 Task 6 stripped the Synthesizer's
+ * production wiring (Locked Decision 11); the cache remains injected so a
+ * future task can re-introduce SurrealDB-backed cluster computation without
+ * a chat-surface breaking change.
  */
 export function makeListClustersTool(
   cache: ClusterCache | null,

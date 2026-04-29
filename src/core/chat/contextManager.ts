@@ -14,7 +14,8 @@
  * and lets the caller wire any backing store at construction time.
  */
 
-import type { Database } from "../db/database";
+import type { Surreal } from "surrealdb";
+import { WRITEBACK_EDGE_TABLES } from "../approvals/approvalService";
 import type { EventBus } from "../events/eventBus";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../llm/provider";
 import type { ConversationIndex } from "./conversationIndex";
@@ -46,7 +47,13 @@ export interface ContextNotesFacade {
 }
 
 export interface ContextManagerOptions {
-  database: Database;
+  /**
+   * SurrealDB connection used for the vault snapshot count queries. Phase 5
+   * Task 7 retired the legacy SQLite `notes`/`graph_edges`/`staging_*` reads
+   * onto SurrealDB `SELECT count() ... GROUP ALL` queries against the
+   * entity table (`note`) and the writeback edge tables.
+   */
+  db: Surreal;
   provider: LLMProvider;
   conversationIndex: ConversationIndex;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
@@ -78,7 +85,7 @@ export class ContextManager {
   ): Promise<ComposedContext> {
     const settings = this.options.contextSettings();
     const userProfile = settings.includeUserProfile ? this.options.voiceProfile() : "";
-    const vaultSnapshot = settings.includeVaultSnapshot ? this.buildVaultSnapshot() : "";
+    const vaultSnapshot = settings.includeVaultSnapshot ? await this.buildVaultSnapshot() : "";
     const workspaceState = settings.includeWorkspaceState ? this.buildWorkspaceState() : "";
     const pinnedContext = await this.buildPinnedContext(conversation, settings.pinnedNoteMaxTokens);
     const crossSessionMemory = settings.includeCrossSessionMemory
@@ -109,22 +116,28 @@ export class ContextManager {
     return { systemPrompt, messages, summarized: budgeted.summarized };
   }
 
-  private buildVaultSnapshot(): string {
-    const noteCount = readCountSafe(this.options.database, "SELECT COUNT(*) AS count FROM notes;");
-    const approvedEdges = readCountSafe(
-      this.options.database,
-      "SELECT COUNT(*) AS count FROM graph_edges WHERE approved = 1;",
-    );
-    const pendingEdges = readCountSafe(
-      this.options.database,
-      "SELECT COUNT(*) AS count FROM staging_edges WHERE decision IS NULL;",
-    );
-    const pendingNodes = readCountSafe(
-      this.options.database,
-      "SELECT COUNT(*) AS count FROM staging_nodes WHERE decision IS NULL;",
-    );
-    const pending = pendingEdges + pendingNodes;
-    return `${noteCount} notes. ${approvedEdges} approved edges. ${pending} pending proposals.`;
+  private async buildVaultSnapshot(): Promise<string> {
+    // Phase 5 Task 7: counts read from SurrealDB. The wire-shape is
+    // unchanged from the SQLite era ("N notes. M approved edges. K pending
+    // proposals."). Approved-edge and pending-edge counts sum across the
+    // six writeback-capable edge tables (see WRITEBACK_EDGE_TABLES); the
+    // legacy `staging_nodes` query has no SurrealDB equivalent because
+    // Phase 4 retired the staging-node concept. The pending count
+    // therefore tracks edge proposals only.
+    const noteCount = await readCountSafe(this.options.db, "SELECT count() FROM note GROUP ALL;");
+    let approvedEdges = 0;
+    let pendingEdges = 0;
+    for (const table of WRITEBACK_EDGE_TABLES) {
+      approvedEdges += await readCountSafe(
+        this.options.db,
+        `SELECT count() FROM ${table} WHERE approved = true AND applied = true GROUP ALL;`,
+      );
+      pendingEdges += await readCountSafe(
+        this.options.db,
+        `SELECT count() FROM ${table} WHERE approved = false GROUP ALL;`,
+      );
+    }
+    return `${noteCount} notes. ${approvedEdges} approved edges. ${pendingEdges} pending proposals.`;
   }
 
   private buildWorkspaceState(): string {
@@ -279,9 +292,11 @@ function toProviderMessage(message: ChatMessage): ProviderChatMessage {
   return { role: message.role, content: message.content };
 }
 
-function readCountSafe(database: Database, sql: string): number {
+async function readCountSafe(db: Surreal, sql: string): Promise<number> {
   try {
-    const rows = database.query<{ count: number }>(sql);
+    const [rows] = await db
+      .query<[Array<{ count: number }>]>(sql)
+      .collect<[Array<{ count: number }>]>();
     const first = rows[0];
     if (!first) return 0;
     const value = first.count;
