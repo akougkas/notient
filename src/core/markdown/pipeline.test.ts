@@ -69,4 +69,52 @@ describe("markdown pipeline", () => {
     expect(secondString).toBe(firstString);
     expect(stripPositions(secondAst)).toEqual(stripPositions(firstAst));
   });
+
+  test("stringify emits Obsidian wikilink syntax for wikiLink and wikiEmbed nodes", () => {
+    const source = [
+      "Plain link to [[Note]] and aliased [[Note|Display]].",
+      "",
+      "Heading qualifier [[Note#Section]] and block qualifier [[Note#^block-1]].",
+      "",
+      "Aliased qualifier [[Note#Section|Display]] and aliased block [[Note#^block-1|Display]].",
+      "",
+      "An embed: ![[asset.png]] and aliased embed ![[asset.png|caption]].",
+      "",
+    ].join("\n");
+    const ast = processAst(source);
+    const out = stringify(ast);
+    expect(out).toContain("[[Note]]");
+    expect(out).toContain("[[Note|Display]]");
+    expect(out).toContain("[[Note#Section]]");
+    expect(out).toContain("[[Note#^block-1]]");
+    expect(out).toContain("[[Note#Section|Display]]");
+    expect(out).toContain("[[Note#^block-1|Display]]");
+    expect(out).toContain("![[asset.png]]");
+    expect(out).toContain("![[asset.png|caption]]");
+    // No remark unsafe escaping should leak through for our handler output.
+    expect(out).not.toContain("\\[\\[");
+  });
+
+  test("processAst → stringify → processAst is semantically stable for wikilink-only input", () => {
+    // Scoped to wikilink/wikiEmbed nodes (the round-trip surface for Phase 4
+    // writeback). Block-id and tag node round-trip is tracked separately.
+    const source = [
+      "Plain [[Note]] and aliased [[Note|Display]] in body.",
+      "",
+      "## Related",
+      "",
+      "- [[A]]",
+      "- [[B#Heading]]",
+      "- [[C#^block-7]]",
+      "",
+      "An embed: ![[asset.png]] and aliased embed ![[asset.png|caption]].",
+      "",
+    ].join("\n");
+    const firstTree = processAst(source);
+    const firstString = stringify(firstTree);
+    const secondTree = processAst(firstString);
+    expect(stripPositions(secondTree)).toEqual(stripPositions(firstTree));
+    // Same string twice means the stringify is a fixpoint at the AST level.
+    expect(stringify(secondTree)).toBe(firstString);
+  });
 });
