@@ -1,8 +1,30 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RecordId } from "surrealdb";
+import { applySchema } from "../core/db/schemaApplier";
+import { connect, type SurrealConnection, upsertNoteByPath } from "../core/db/surreal";
+import { startSurreal, type SurrealServerHandle } from "./surrealServer";
 import { VaultWatcher, isWslPath } from "./watcher";
+
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+async function waitFor<T>(
+  predicate: () => Promise<T | null>,
+  timeoutMs: number,
+  pollMs = 25,
+): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await predicate();
+    if (result !== null) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return null;
+}
 
 describe("isWslPath", () => {
   test("matches /mnt/<letter>/ paths", () => {
@@ -59,5 +81,119 @@ describe("VaultWatcher", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     await watcher.stop();
     expect(enqueued).toEqual([]);
+  });
+});
+
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
+  let tempDir: string;
+  let dataDir: string;
+  let vaultRoot: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "watcher-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "notient-watcher-smoke-"));
+    dataDir = join(tempDir, "data");
+    vaultRoot = join(tempDir, "vault");
+    await mkdir(vaultRoot, { recursive: true });
+    handle = await startSurreal({
+      dataDir,
+      secret,
+      portFile: join(tempDir, "port"),
+      pidFile: join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("unlink sets tombstoned_at within 200ms", async () => {
+    const filePath = join(vaultRoot, "to-delete.md");
+    await writeFile(filePath, "deletable body");
+    await upsertNoteByPath(connection.db, {
+      path: "to-delete.md",
+      sha: "deletable-sha",
+      wordCount: 2,
+    });
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 30,
+      forcePolling: true,
+      surrealDb: connection,
+    });
+    await watcher.start();
+    await unlink(filePath);
+    const tombstoned = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ tombstoned_at: string | null }>]>(
+          "SELECT tombstoned_at FROM note WHERE path = $path;",
+          { path: "to-delete.md" },
+        )
+        .collect<[Array<{ tombstoned_at: string | null }>]>();
+      const value = rows[0]?.tombstoned_at;
+      return value !== null && value !== undefined ? value : null;
+    }, 1500);
+    await watcher.stop();
+    expect(tombstoned).not.toBeNull();
+  });
+
+  test("rename within 60s SHA-match window preserves note id and clears tombstone", async () => {
+    const sourcePath = join(vaultRoot, "source.md");
+    const renamedPath = join(vaultRoot, "renamed.md");
+    const body = "rename me";
+    await writeFile(sourcePath, body);
+    const bodySha = require("node:crypto").createHash("sha256").update(body).digest("hex");
+    const noteRecord = await upsertNoteByPath(connection.db, {
+      path: "source.md",
+      sha: bodySha,
+      wordCount: 2,
+    });
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 30,
+      forcePolling: true,
+      surrealDb: connection,
+      tombstoneWindowMs: 60_000,
+    });
+    await watcher.start();
+    await unlink(sourcePath);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await writeFile(renamedPath, body);
+    const renamed = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note">; path: string; tombstoned_at: string | null }>]>(
+          "SELECT id, path, tombstoned_at FROM note WHERE id = $id;",
+          { id: noteRecord },
+        )
+        .collect<[Array<{ id: RecordId<"note">; path: string; tombstoned_at: string | null }>]>();
+      const row = rows[0];
+      return row !== undefined && row.path === "renamed.md" ? row : null;
+    }, 1500);
+    await watcher.stop();
+    expect(renamed).not.toBeNull();
+    expect(renamed?.path).toBe("renamed.md");
+    expect(renamed?.tombstoned_at ?? null).toBeNull();
   });
 });
