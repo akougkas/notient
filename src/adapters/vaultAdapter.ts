@@ -31,8 +31,8 @@ export interface VaultAdapter {
 
   /**
    * Read-modify-atomic-write of YAML frontmatter. Implementations must
-   * use the same mergeFrontmatter semantics so VitalsService and
-   * NativeGraphBridge produce identical bytes regardless of adapter.
+   * use the same mergeFrontmatter semantics so VitalsService produces
+   * identical bytes regardless of adapter.
    */
   updateFrontmatter(path: string, patch: Record<string, unknown>): Promise<void>;
 

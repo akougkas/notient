@@ -15,7 +15,6 @@ import type { SurrealConnection } from "./db/surreal";
 import type { TranscriptDistiller } from "./distill/transcriptDistiller";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
-import type { NativeGraphBridge } from "./graph/nativeGraphBridge";
 import type { HistoryService } from "./history/historyService";
 import type { Embedder } from "./indexer/embedder";
 import type { Extractor } from "./indexer/extractor";
@@ -65,7 +64,6 @@ export interface ServiceRegistry {
   // Phase 4 services. Each registers in main.ts before kernel.seal().
   streamService: StreamService;
   vitalsService: VitalsService;
-  nativeGraphBridge: NativeGraphBridge;
   searchPipeline: SearchPipeline;
   savedQueries: SavedQueries;
   searchHistory: SearchHistory;
@@ -133,7 +131,6 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "coAuthor",
   "streamService",
   "vitalsService",
-  "nativeGraphBridge",
   "searchPipeline",
   "savedQueries",
   "searchHistory",
