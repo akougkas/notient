@@ -12,7 +12,6 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "embeddingLLM",
   "health",
   "lock",
-  "echoGuard",
   "probeCache",
   "agentEventStore",
   "sessionGrants",

@@ -2,7 +2,6 @@ import YAML from "yaml";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import type { Agent, AgentRunContext, AgentRunResult } from "../coordinator/types";
 import type { Database } from "../db/database";
-import type { EchoGuard } from "../services/echoGuard";
 
 type Maturity = "raw" | "adolescent" | "mature" | "synthesis-ready";
 
@@ -15,8 +14,6 @@ interface VitalsBlock {
 export interface MaturityAdvancerOptions {
   db: Database;
   facade: Pick<VaultAdapter, "read" | "write">;
-  echoGuard: EchoGuard;
-  hash: (input: string) => Promise<string>;
   freshnessHalfLifeMs?: number;
 }
 
@@ -94,8 +91,6 @@ export class MaturityAdvancer implements Agent {
       updatedAt: new Date().toISOString(),
     });
     if (updated === before) return;
-    const sha = await this.options.hash(updated);
-    this.options.echoGuard.mark(path, sha);
     await this.options.facade.write(path, updated);
     this.options.db.run("UPDATE notes SET maturity = ? WHERE path = ?;", [next, path]);
   }

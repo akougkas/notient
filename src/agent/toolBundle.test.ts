@@ -24,7 +24,6 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
       recordHistoryAutoApprove: async () => {},
       sessionGrants: { find: () => null, incrementWriteCount: () => {} },
     }),
-    echoGuard: { mark: () => {} },
     hash: async () => "00",
     approvalMode: () => "yolo",
     recordHistory: async () => "history:fake-0",

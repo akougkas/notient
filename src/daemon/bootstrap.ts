@@ -42,7 +42,6 @@ import { SavedQueries } from "../core/search/savedQueries";
 import { SearchHistory } from "../core/search/searchHistory";
 import { SearchPipeline } from "../core/search/searchPipeline";
 import { AgentEventStore } from "../core/services/agentEventStore";
-import { EchoGuard } from "../core/services/echoGuard";
 import { HealthMonitor } from "../core/services/healthMonitor";
 import { IdleDetector } from "../core/services/idleDetector";
 import { ProbeCache } from "../core/services/probeCache";
@@ -176,7 +175,6 @@ async function readEnvSource(vault: FsVault, processEnv: NodeJS.ProcessEnv): Pro
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
   const vault = new FsVault(options.vaultPath);
   const bus = new EventBus();
-  const echoGuard = new EchoGuard();
 
   const configStore: ConfigStore = {
     load: async () => {
@@ -250,7 +248,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("embeddingLLM", embeddingLLM);
   kernel.register("health", health);
   kernel.register("lock", lockHandle);
-  kernel.register("echoGuard", echoGuard);
   kernel.register("probeCache", new ProbeCache(bus));
   kernel.register("agentEventStore", new AgentEventStore({ database, bus }));
   const sessionGrants = new SessionGrants({ database });
@@ -348,10 +345,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     settings: () => current.vitals,
     facade: {
       updateFrontmatter: (path, patch) => vault.updateFrontmatter(path, patch),
-      readNote: (path) => vault.read(path),
-      writeNote: (path, content) => vault.write(path, content),
     },
-    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
   });
 
   // SurrealDB bootstrap: read-or-generate the per-vault secret, spawn the
@@ -454,14 +448,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       read: (path) => vault.read(path),
       write: (path, content) => vault.write(path, content),
     },
-    echoGuard,
-    hash: async (input) => {
-      const buffer = new TextEncoder().encode(input);
-      const digest = await crypto.subtle.digest("SHA-256", buffer);
-      return Array.from(new Uint8Array(digest))
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-    },
   });
 
   const coordinator = new Coordinator({
@@ -499,8 +485,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       delete: (path) => vault.remove(path),
     },
     folder: CONVERSATIONS_FOLDER,
-    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
-    hash: syncHash,
     now: () => Date.now(),
   });
 
@@ -538,7 +522,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     writeNote: notesFacade.writeNote,
     removeNote: (path) => vault.remove(path),
     noteExists: notesFacade.exists,
-    markEcho: (path, sha) => echoGuard.mark(path, sha),
     hash: simpleHash,
     updateNoteSha,
   });
@@ -576,7 +559,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     vaultFacade: { readNote: (path) => vault.read(path) },
     notesFacade,
     approvalGate,
-    echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
     hash: simpleHash,
     approvalMode: () => current.chat.approvalMode,
     recordHistory: async (record) => historyService.record(record),
@@ -758,7 +740,6 @@ export interface BuildHistoryInvertersOptions {
   writeNote: (path: string, content: string) => Promise<void>;
   removeNote: (path: string) => Promise<void>;
   noteExists: (path: string) => Promise<boolean>;
-  markEcho: (path: string, sha: string) => void;
   hash: (content: string) => Promise<string>;
   /**
    * Refreshes the SurrealDB `note.sha` field after a body-restoring
@@ -777,34 +758,29 @@ export interface BuildHistoryInvertersOptions {
  * approval flow are total deletes with no `history` row. Task 4 swapped the
  * SQLite-backed sha update on `noteMaturity`/`noteAppendSection`/
  * `noteFrontmatter` for the injected `updateNoteSha` closure that hits
- * SurrealDB.
+ * SurrealDB. Task 6 dropped the self-write mark; the indexer now
+ * cross-references the SurrealDB `daemon_write` table to skip daemon writes.
  *
  * The body-edit kinds (`note.append_section`, `note.frontmatter`) reuse the
  * chat-side append/frontmatter inverters because they share the same payload
- * shape: prior body in `before`, EchoGuard-marked self-write back through the
- * vault facade.
+ * shape: prior body in `before`, written back through the vault facade.
  */
 export function buildHistoryInverters(options: BuildHistoryInvertersOptions): InverterRegistry {
-  const echoGuard = { mark: options.markEcho };
   const writeFacade = { writeNote: options.writeNote };
   const removeFacade = { exists: options.noteExists, remove: options.removeNote };
   const noteAppendInverter = makeNoteAppendSectionInverter({
     facade: writeFacade,
-    echoGuard,
     hash: options.hash,
     updateNoteSha: options.updateNoteSha,
   });
   const noteFrontmatterInverter = makeNoteFrontmatterInverter({
     facade: writeFacade,
-    echoGuard,
     hash: options.hash,
     updateNoteSha: options.updateNoteSha,
   });
   return {
     "notes.create": makeNoteCreateInverter({
       facade: removeFacade,
-      echoGuard,
-      hash: options.hash,
     }),
     "notes.append": noteAppendInverter,
     "notes.replace_section": noteAppendInverter,
@@ -813,26 +789,10 @@ export function buildHistoryInverters(options: BuildHistoryInvertersOptions): In
     "note.frontmatter": noteFrontmatterInverter,
     "note.maturity": makeNoteMaturityInverter({
       facade: writeFacade,
-      echoGuard,
       hash: options.hash,
       updateNoteSha: options.updateNoteSha,
     }),
   };
-}
-
-/**
- * Synchronous fallback hash for the ConversationStore's EchoGuard mark. The
- * indexer uses cryptographic SHA-256 elsewhere, but the conversation store's
- * hash hook needs to run inline with the write call. djb2 is good enough for
- * echo-guard de-duplication: any collision just means the indexer
- * re-processes a self-write (worst case wasted work, never wrong content).
- */
-function syncHash(content: string): string {
-  let hash = 5381;
-  for (let index = 0; index < content.length; index++) {
-    hash = ((hash << 5) + hash + content.charCodeAt(index)) | 0;
-  }
-  return (hash >>> 0).toString(16);
 }
 
 interface CloseDeps {

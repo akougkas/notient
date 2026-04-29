@@ -53,7 +53,6 @@ interface Harness {
   context: NotesToolsContext;
   facade: InMemoryFacade;
   approvalGate: ApprovalGate;
-  echoMarks: { path: string; sha: string }[];
   history: NotesHistoryRecord[];
   approvalsAutoYolo: number;
   setMode: (mode: ApprovalMode) => void;
@@ -62,7 +61,6 @@ interface Harness {
 
 function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
   const facade = new InMemoryFacade();
-  const echoMarks: { path: string; sha: string }[] = [];
   const history: NotesHistoryRecord[] = [];
   let mode: ApprovalMode = initialMode;
   let autoYolo = 0;
@@ -77,9 +75,6 @@ function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
   const context: NotesToolsContext = {
     facade,
     approvalGate,
-    echoGuard: {
-      mark: (path, sha) => echoMarks.push({ path, sha }),
-    },
     hash: async (content) => `sha-${content.length}`,
     approvalMode: () => mode,
     recordHistory: async (record) => {
@@ -95,7 +90,6 @@ function newHarness(initialMode: ApprovalMode = "yolo"): Harness {
     context,
     facade,
     approvalGate,
-    echoMarks,
     history,
     get approvalsAutoYolo() {
       return autoYolo;
@@ -121,7 +115,6 @@ describe("notes.create", () => {
       expect(result.sha).toBe("sha-7");
     }
     expect(harness.facade.files.get("/note.md")).toBe("# Hello");
-    expect(harness.echoMarks).toEqual([{ path: "/note.md", sha: "sha-7" }]);
     expect(harness.history).toEqual([
       { kind: "notes.create", target: "/note.md", before: null, after: "# Hello" },
     ]);

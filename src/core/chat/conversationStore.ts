@@ -8,11 +8,10 @@ import type { Conversation } from "./types";
  * Obsidian's vault adapter in main.ts (Task 16) and tests use an in-memory
  * fake. Path layout: `${folder}/${YYYY-MM-DD} ${slug(topic)}.md`.
  *
- * EchoGuard hook: when configured, the store calls `mark` immediately before
- * every write so the indexer can skip the self-write even if the user later
- * re-enables indexing on the conversations folder. The indexer is already
- * configured to exclude this folder by default in Phase 4 Task 0; the guard
- * is belt-and-braces.
+ * Phase 4 Task 6 removed the legacy self-write hook. Conversation files live
+ * under the indexer's exclusion list, and daemon-authored writes are now
+ * cross-referenced through the SurrealDB `daemon_write` table (Task 2)
+ * rather than a per-write mark.
  */
 
 export interface ConversationStoreFacade {
@@ -22,16 +21,10 @@ export interface ConversationStoreFacade {
   delete(path: string): Promise<void>;
 }
 
-export interface ConversationEchoGuardHook {
-  mark(path: string, sha: string): void;
-}
-
 export interface ConversationStoreOptions {
   facade: ConversationStoreFacade;
   folder: string;
   now: () => number;
-  echoGuard?: ConversationEchoGuardHook;
-  hash?: (content: string) => string;
 }
 
 export class ConversationStore {
@@ -69,9 +62,6 @@ export class ConversationStore {
       messageCount: conversation.messages.length,
     };
     const content = serializeConversation(next);
-    if (this.options.echoGuard && this.options.hash) {
-      this.options.echoGuard.mark(next.notePath, this.options.hash(content));
-    }
     await this.options.facade.write(next.notePath, content);
     return next;
   }
@@ -110,9 +100,6 @@ export class ConversationStore {
       messages: [],
     };
     const content = serializeConversation(conversation);
-    if (this.options.echoGuard && this.options.hash) {
-      this.options.echoGuard.mark(path, this.options.hash(content));
-    }
     await this.options.facade.write(path, content);
     return conversation;
   }

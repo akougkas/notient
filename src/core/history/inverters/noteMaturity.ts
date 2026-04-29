@@ -10,6 +10,10 @@
  * facade write of the prior body. The `sha` refresh keeps the SurrealDB
  * row in step with the post-undo body.
  *
+ * Phase 4 Task 6 removed the legacy self-write suppression mark; the
+ * indexer now cross-references the SurrealDB `daemon_write` table
+ * (Task 2) to skip daemon-authored writes without a per-call hook.
+ *
  * Recorded payload (Task 16 wires the producer):
  *   target = note path
  *   before = { maturity, body }
@@ -27,13 +31,8 @@ export interface NoteMaturityInverterFacade {
   writeNote(path: string, content: string): Promise<void>;
 }
 
-export interface NoteMaturityInverterEchoGuard {
-  mark(path: string, sha: string): void;
-}
-
 export interface NoteMaturityInverterOptions {
   facade: NoteMaturityInverterFacade;
-  echoGuard: NoteMaturityInverterEchoGuard;
   hash: (content: string) => Promise<string>;
   /**
    * Updates the SurrealDB `note.sha` field for the given path. Tests
@@ -54,7 +53,6 @@ export function makeNoteMaturityInverter(options: NoteMaturityInverterOptions): 
       throw new Error("note.maturity inverter: invalid `before` payload");
     }
     const sha = await options.hash(before.body);
-    options.echoGuard.mark(target, sha);
     await options.facade.writeNote(target, before.body);
     await options.updateNoteSha(target, sha);
   };

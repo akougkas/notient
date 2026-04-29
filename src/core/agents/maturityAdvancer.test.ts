@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
 import { EventBus } from "../events/eventBus";
-import { EchoGuard } from "../services/echoGuard";
 import { MaturityAdvancer } from "./maturityAdvancer";
 
 class FakeFacade {
@@ -17,22 +16,13 @@ class FakeFacade {
   }
 }
 
-async function sha(s: string): Promise<string> {
-  const buf = new TextEncoder().encode(s);
-  const hash = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 describe("MaturityAdvancer", () => {
   test("promotes raw -> adolescent on first edit", async () => {
     const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
     await db.init();
     const facade = new FakeFacade();
-    const echo = new EchoGuard();
-    const ma = new MaturityAdvancer({ db, facade, echoGuard: echo, hash: sha });
+    const ma = new MaturityAdvancer({ db, facade });
     const now = Date.now();
     db.run(
       "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?)",
@@ -55,45 +45,12 @@ describe("MaturityAdvancer", () => {
     expect(facade.files.get("/a.md")).toContain("maturity: adolescent");
   });
 
-  test("EchoGuard is marked before write so indexer skips the self-write", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    const facade = new FakeFacade();
-    const echo = new EchoGuard();
-    const ma = new MaturityAdvancer({ db, facade, echoGuard: echo, hash: sha });
-    const now = Date.now();
-    db.run(
-      "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?)",
-      ["/a.md", "x", 50, "raw", now, now],
-    );
-    facade.files.set("/a.md", "# A\nx\n");
-    await ma.run({
-      trigger: "idle-30m",
-      notePath: null,
-      signal: new AbortController().signal,
-      runId: 1,
-      bus: new EventBus(),
-    });
-    const written = facade.files.get("/a.md") as string;
-    const writtenSha = await sha(written);
-    // PHASE-1-SHIM: EchoGuard is now a no-op shim, so take() always returns
-    // false. Phase 4 restores real provenance via the SurrealDB daemon_write
-    // table; this assertion will flip back to .toBe(true) at that point.
-    expect(echo.take("/a.md", writtenSha)).toBe(false);
-  });
-
   test("does not promote a note that does not meet criteria", async () => {
     const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
     const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
     await db.init();
     const facade = new FakeFacade();
-    const ma = new MaturityAdvancer({
-      db,
-      facade,
-      echoGuard: new EchoGuard(),
-      hash: sha,
-    });
+    const ma = new MaturityAdvancer({ db, facade });
     const now = Date.now();
     db.run(
       "INSERT INTO notes (path, sha, word_count, maturity, indexed_at, updated_at) VALUES (?,?,?,?,?,?)",

@@ -42,17 +42,12 @@ function makeStore(initialNow = 1745625600000) {
   const advance = (ms: number) => {
     current += ms;
   };
-  const echoMarks: { path: string; sha: string }[] = [];
   const store = new ConversationStore({
     facade,
     folder: "Notient/conversations",
     now: () => current,
-    echoGuard: {
-      mark: (path, sha) => echoMarks.push({ path, sha }),
-    },
-    hash: (content) => `sha-${content.length}`,
   });
-  return { store, facade, advance, echoMarks, getNow: () => current };
+  return { store, facade, advance, getNow: () => current };
 }
 
 describe("conversationStore", () => {
@@ -111,8 +106,8 @@ describe("conversationStore", () => {
     expect(list[0].updatedAt).toBeGreaterThan(second.updatedAt);
   });
 
-  test("save updates updatedAt + message_count and marks the EchoGuard", async () => {
-    const { store, facade, echoMarks, advance, getNow } = makeStore(2000);
+  test("save updates updatedAt + message_count", async () => {
+    const { store, facade, advance, getNow } = makeStore(2000);
     const created = await store.create({
       id: "c",
       model: "m",
@@ -120,7 +115,6 @@ describe("conversationStore", () => {
       approvalMode: "safe",
       topic: "Save",
     });
-    expect(echoMarks.length).toBe(1);
     advance(120);
     const saved = await store.save({
       ...created,
@@ -133,8 +127,6 @@ describe("conversationStore", () => {
     expect(saved.updatedAt).toBeGreaterThan(created.updatedAt);
     const raw = facade.raw(created.notePath);
     expect(raw).toContain("message_count: 2");
-    expect(echoMarks.length).toBe(2);
-    expect(echoMarks[1].path).toBe(created.notePath);
   });
 
   test("delete removes the file", async () => {
@@ -150,66 +142,6 @@ describe("conversationStore", () => {
     expect(facade.raw(created.notePath)).toBeUndefined();
     const list = await store.list();
     expect(list.length).toBe(0);
-  });
-
-  test("EchoGuard mark fires BEFORE the facade.write so the indexer can suppress the self-write", async () => {
-    const order: string[] = [];
-    const facade: ConversationStoreFacade = {
-      list: async () => [],
-      read: async () => "",
-      write: async (_path, _content) => {
-        order.push("write");
-      },
-      delete: async () => {},
-    };
-    const store = new ConversationStore({
-      facade,
-      folder: "Notient/conversations",
-      now: () => 1000,
-      echoGuard: {
-        mark: () => {
-          order.push("mark");
-        },
-      },
-      hash: (content) => `sha-${content.length}`,
-    });
-    const created = await store.create({
-      id: "ord-1",
-      model: "m",
-      pinnedContext: [],
-      approvalMode: "safe",
-      topic: "Order",
-    });
-    expect(order).toEqual(["mark", "write"]);
-    order.length = 0;
-    await store.save({ ...created, messages: [] });
-    expect(order).toEqual(["mark", "write"]);
-  });
-
-  test("EchoGuard hook is skipped when echoGuard or hash is missing", async () => {
-    const writes: string[] = [];
-    const facade: ConversationStoreFacade = {
-      list: async () => [],
-      read: async () => "",
-      write: async (path) => {
-        writes.push(path);
-      },
-      delete: async () => {},
-    };
-    const store = new ConversationStore({
-      facade,
-      folder: "Notient/conversations",
-      now: () => 1000,
-      // no echoGuard, no hash
-    });
-    await store.create({
-      id: "no-hook",
-      model: "m",
-      pinnedContext: [],
-      approvalMode: "safe",
-      topic: "NoHook",
-    });
-    expect(writes).toHaveLength(1);
   });
 
   test("list skips malformed files instead of throwing", async () => {

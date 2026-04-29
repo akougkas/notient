@@ -2,8 +2,9 @@
  * Write-gated note tools. Every invocation routes through `ApprovalGate`;
  * only an approved decision results in a vault write. Each successful write
  * also records a row in the `history` table so Task 15 can offer one-click
- * undo. Before every write we mark the EchoGuard so the indexer skips the
- * self-write on the next vault event.
+ * undo. Phase 4 Task 6 removed the legacy self-write mark; the indexer
+ * cross-references the SurrealDB `daemon_write` table (Task 2) to skip
+ * daemon-authored writes without a per-call hook.
  *
  * Tools provided:
  *   - notes.create               (fails if path already exists)
@@ -30,10 +31,6 @@ export interface NotesFacade {
   exists(path: string): Promise<boolean>;
 }
 
-export interface NotesEchoGuardHook {
-  mark(path: string, sha: string): void;
-}
-
 export interface NotesHistoryRecord {
   kind: HistoryKind;
   target: string;
@@ -50,7 +47,6 @@ export interface NotesHistoryRecord {
 export interface NotesToolsContext {
   facade: NotesFacade;
   approvalGate: ApprovalGate;
-  echoGuard: NotesEchoGuardHook;
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
   recordHistory: (record: NotesHistoryRecord) => Promise<string>;
@@ -143,7 +139,6 @@ export function makeCreateNoteTool(
         return { applied: false, reason: decision.reason ?? "rejected by user" };
       }
       const sha = await context.hash(args.body);
-      context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, args.body);
       const historyId = await context.recordHistory({
         kind: "notes.create",
@@ -204,7 +199,6 @@ export function makeAppendNoteTool(
         return { applied: false, reason: decision.reason ?? "rejected by user" };
       }
       const sha = await context.hash(after);
-      context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, after);
       const historyId = await context.recordHistory({
         kind: "notes.append",
@@ -280,7 +274,6 @@ export function makeReplaceSectionTool(
         return { applied: false, reason: decision.reason ?? "rejected by user" };
       }
       const sha = await context.hash(replaced);
-      context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, replaced);
       const historyId = await context.recordHistory({
         kind: "notes.replace_section",
@@ -343,7 +336,6 @@ export function makeUpdateFrontmatterTool(
         return { applied: false, reason: decision.reason ?? "rejected by user" };
       }
       const sha = await context.hash(next);
-      context.echoGuard.mark(args.notePath, sha);
       await context.facade.writeNote(args.notePath, next);
       const historyId = await context.recordHistory({
         kind: "notes.update_frontmatter",

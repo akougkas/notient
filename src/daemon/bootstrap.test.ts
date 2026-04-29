@@ -197,7 +197,6 @@ describe("bootstrap buildHistoryInverters", () => {
       writeNote: async () => {},
       removeNote: async () => {},
       noteExists: async () => false,
-      markEcho: () => {},
       hash: async () => "sha",
       updateNoteSha: async () => {},
     });

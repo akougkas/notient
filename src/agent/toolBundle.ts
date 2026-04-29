@@ -46,7 +46,6 @@ export interface AgentToolDeps {
   vaultFacade: VaultFacade;
   notesFacade: NotesFacade;
   approvalGate: ApprovalGate;
-  echoGuard: { mark: (path: string, sha: string) => void };
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
   recordHistory: (record: NotesHistoryRecord) => Promise<string>;
@@ -70,7 +69,6 @@ export function buildAgentToolRegistry(deps: AgentToolDeps): ToolRegistry {
   const notesContext = {
     facade: deps.notesFacade,
     approvalGate: deps.approvalGate,
-    echoGuard: deps.echoGuard,
     hash: deps.hash,
     approvalMode: deps.approvalMode,
     recordHistory: deps.recordHistory,
