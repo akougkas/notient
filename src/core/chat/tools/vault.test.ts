@@ -197,7 +197,7 @@ describe("vault.get_vitals", () => {
     };
     const calls: string[] = [];
     const fake: VitalsService = {
-      computeSnapshot(path: string): VitalsSnapshot | null {
+      async computeSnapshot(path: string): Promise<VitalsSnapshot | null> {
         calls.push(path);
         return snapshot;
       },
@@ -210,7 +210,7 @@ describe("vault.get_vitals", () => {
 
   test("returns null snapshot when the note is unindexed", async () => {
     const fake: VitalsService = {
-      computeSnapshot(): VitalsSnapshot | null {
+      async computeSnapshot(): Promise<VitalsSnapshot | null> {
         return null;
       },
     } as unknown as VitalsService;

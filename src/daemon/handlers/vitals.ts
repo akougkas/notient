@@ -15,7 +15,7 @@ export function makeVitalsHandler(deps: VitalsHandlerDeps) {
     if (path.trim().length === 0) {
       throw new Error("INVALID_PARAMS: path is required");
     }
-    const snapshot = deps.vitalsService.computeSnapshot(path);
+    const snapshot = await deps.vitalsService.computeSnapshot(path);
     if (!snapshot) {
       throw new Error(`INVALID_PARAMS: note not indexed: ${path}`);
     }

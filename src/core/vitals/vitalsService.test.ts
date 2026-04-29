@@ -1,14 +1,32 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../db/database";
-import { MemoryAdapter, loadWasm } from "../db/database.test";
+/**
+ * Phase 5 Task 5 VitalsService smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/vitals/`.
+ *
+ * Boots a real SurrealDB, applies the Phase 1 schema (which now includes the
+ * `note.health` and `note.freshness` fields added in Phase 5 Task 5), and
+ * exercises VitalsService end-to-end against the live database. Each test
+ * truncates the entity tables in `afterEach` so seeded rows do not leak
+ * between cases.
+ *
+ * Migrated from the SQLite-backed in-memory fixture: `notes`, `chunks`, and
+ * `graph_edges` reads are now SurrealDB queries against `note`, `chunk`, and
+ * `wikilink`. Edge counts filter on `approved AND applied` per the Phase 4
+ * PENDING-STATE contract.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DateTime, type RecordId } from "surrealdb";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
+import { applySchema } from "../db/schemaApplier";
+import { type SurrealConnection, connect, relateWikilink, upsertNoteByPath } from "../db/surreal";
 import { VitalsService } from "./vitalsService";
 
-async function freshDb(): Promise<Database> {
-  const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-  const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-  await db.init();
-  return db;
-}
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const settings = {
   freshnessHalfLifeDays: 14,
@@ -17,58 +35,87 @@ const settings = {
   writeToFrontmatter: false,
 };
 
-function seedNote(
-  db: Database,
-  options: { path: string; words: number; maturity?: string; updatedAt?: number },
-): void {
-  db.run(
-    `INSERT INTO notes (path, sha, word_count, maturity, health, freshness, indexed_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?);`,
-    [
-      options.path,
-      "sha",
-      options.words,
-      options.maturity ?? "raw",
-      0,
-      1,
-      1,
-      options.updatedAt ?? 1,
-    ],
-  );
+interface SeedNoteInput {
+  path: string;
+  words: number;
+  maturity?: string;
+  lastUserEditAtMs?: number;
 }
 
-function seedChunk(db: Database, path: string, ord: number): void {
-  db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-    `${path}#${ord}`,
-    path,
-    ord,
-    "body",
-    "sha",
-  ]);
+async function seedNote(
+  connection: SurrealConnection,
+  input: SeedNoteInput,
+): Promise<RecordId<"note">> {
+  const id = await upsertNoteByPath(connection.db, {
+    path: input.path,
+    sha: "sha",
+    wordCount: input.words,
+  });
+  const setClauses: string[] = [];
+  const bindings: Record<string, unknown> = { id };
+  if (input.maturity !== undefined) {
+    setClauses.push("maturity = $maturity");
+    bindings.maturity = input.maturity;
+  }
+  if (input.lastUserEditAtMs !== undefined) {
+    setClauses.push("last_user_edit_at = $when");
+    bindings.when = new DateTime(new Date(input.lastUserEditAtMs));
+  }
+  if (setClauses.length > 0) {
+    await connection.db.query(`UPDATE $id SET ${setClauses.join(", ")};`, bindings).collect();
+  }
+  return id;
 }
 
-function seedNodeAndEdges(db: Database, path: string, edgeCount: number): void {
-  const nodeId = `note:${path}`;
-  db.run(
-    "INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at) VALUES (?,?,?,?,?,?);",
-    [nodeId, "note", path, path, null, 1],
-  );
-  for (let index = 0; index < edgeCount; index++) {
-    db.run(
-      `INSERT INTO graph_edges (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?);`,
-      [
-        `edge:${path}:${index}`,
-        "supports",
-        nodeId,
-        `note:other-${index}.md`,
-        0.9,
-        "linker",
-        null,
-        1,
-        1,
-      ],
-    );
+async function seedChunk(
+  connection: SurrealConnection,
+  noteId: RecordId<"note">,
+  ord: number,
+): Promise<void> {
+  await connection.db
+    .query("CREATE chunk CONTENT { note: $note, ord: $ord, text: $text, token_estimate: 1 };", {
+      note: noteId,
+      ord,
+      text: "body",
+    })
+    .collect();
+}
+
+// Monotonic suffix so successive seedWikilinkOutbound calls within a single
+// test produce distinct target notes. Without this, two calls with the same
+// `count` would collide on `other-<fromId>-<index>.md` and the second
+// UPDATE would overwrite the first call's approval flags.
+let wikilinkSeedCounter = 0;
+
+async function seedWikilinkOutbound(
+  connection: SurrealConnection,
+  fromNoteId: RecordId<"note">,
+  count: number,
+  options: { approved?: boolean; applied?: boolean } = {},
+): Promise<void> {
+  const approved = options.approved !== false;
+  const applied = options.applied !== false;
+  for (let index = 0; index < count; index += 1) {
+    wikilinkSeedCounter += 1;
+    const targetId = await upsertNoteByPath(connection.db, {
+      path: `other-${fromNoteId.id.toString()}-${wikilinkSeedCounter}.md`,
+      sha: "sha",
+      wordCount: 1,
+    });
+    await relateWikilink(connection.db, {
+      from: fromNoteId,
+      to: targetId,
+      source: "wikilink",
+      confidenceClass: "EXTRACTED",
+      confidence: 1,
+      agent: "linker",
+    });
+    await connection.db
+      .query(
+        "UPDATE wikilink SET approved = $approved, applied = $applied WHERE in = $from AND out = $to;",
+        { approved, applied, from: fromNoteId, to: targetId },
+      )
+      .collect();
   }
 }
 
@@ -79,26 +126,76 @@ function stubFacade(): {
   const updates: { path: string; patch: Record<string, unknown> }[] = [];
   return {
     frontmatterUpdates: updates,
-    updateFrontmatter: async (path: string, patch: Record<string, unknown>) => {
-      updates.push({ path, patch });
+    updateFrontmatter: async (notePath: string, patch: Record<string, unknown>) => {
+      updates.push({ path: notePath, patch });
     },
   };
 }
 
-describe("VitalsService", () => {
-  test("computeSnapshot reflects word count, chunks, and approved edges", async () => {
-    const db = await freshDb();
-    seedNote(db, { path: "/a.md", words: 600, maturity: "draft" });
-    seedChunk(db, "/a.md", 0);
-    seedNodeAndEdges(db, "/a.md", 3);
+async function clearVault(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE wikilink;").collect();
+  await connection.db.query("DELETE chunk;").collect();
+  await connection.db.query("DELETE block;").collect();
+  await connection.db.query("DELETE note;").collect();
+}
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-vitals-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-vitals-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearVault(connection);
+  });
+
+  test("[smoke] computeSnapshot reflects word count, chunks, and approved edges", async () => {
+    const noteId = await seedNote(connection, {
+      path: "a.md",
+      words: 600,
+      maturity: "draft",
+    });
+    await seedChunk(connection, noteId, 0);
+    await seedWikilinkOutbound(connection, noteId, 3);
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => 1,
       settings: () => settings,
       facade: stubFacade(),
     });
-    const snapshot = service.computeSnapshot("/a.md");
-    if (!snapshot) throw new Error("expected snapshot for /a.md");
+    const snapshot = await service.computeSnapshot("a.md");
+    if (snapshot === null) throw new Error("expected snapshot for /a.md");
     expect(snapshot.maturity).toBe("draft");
     expect(snapshot.wordCount).toBe(600);
     expect(snapshot.connectivityCount).toBe(3);
@@ -106,78 +203,94 @@ describe("VitalsService", () => {
     expect(snapshot.health).toBeGreaterThan(0.6);
   });
 
-  test("returns null when the note is not indexed", async () => {
-    const db = await freshDb();
+  test("[smoke] returns null when the note is not indexed", async () => {
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => 1,
       settings: () => settings,
       facade: stubFacade(),
     });
-    expect(service.computeSnapshot("/missing.md")).toBeNull();
+    expect(await service.computeSnapshot("missing.md")).toBeNull();
   });
 
-  test("freshness reflects time since updatedAt", async () => {
-    const db = await freshDb();
-    seedNote(db, { path: "/a.md", words: 100, updatedAt: 0 });
+  test("[smoke] freshness reflects time since last_user_edit_at", async () => {
+    await seedNote(connection, { path: "a.md", words: 100, lastUserEditAtMs: 0 });
     const fourteenDaysMs = 14 * 86_400_000;
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => fourteenDaysMs,
       settings: () => settings,
       facade: stubFacade(),
     });
-    const snapshot = service.computeSnapshot("/a.md");
-    if (!snapshot) throw new Error("expected snapshot for /a.md");
+    const snapshot = await service.computeSnapshot("a.md");
+    if (snapshot === null) throw new Error("expected snapshot for /a.md");
     expect(snapshot.freshness).toBeCloseTo(Math.exp(-1), 4);
   });
 
-  test("connectivity tier maps thresholds correctly", async () => {
-    const db = await freshDb();
-    seedNote(db, { path: "/a.md", words: 100 });
-    seedNodeAndEdges(db, "/a.md", 12);
+  test("[smoke] connectivity tier maps thresholds correctly", async () => {
+    const noteId = await seedNote(connection, { path: "a.md", words: 100 });
+    await seedWikilinkOutbound(connection, noteId, 12);
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => 1,
       settings: () => settings,
       facade: stubFacade(),
     });
-    const snapshot = service.computeSnapshot("/a.md");
-    if (!snapshot) throw new Error("expected snapshot for /a.md");
+    const snapshot = await service.computeSnapshot("a.md");
+    if (snapshot === null) throw new Error("expected snapshot for /a.md");
     expect(snapshot.connectivityTier).toBe("hub");
   });
 
-  test("persistSnapshot writes back to notes table", async () => {
-    const db = await freshDb();
-    seedNote(db, { path: "/a.md", words: 100 });
+  test("[smoke] persistSnapshot writes back to note row", async () => {
+    await seedNote(connection, { path: "a.md", words: 100 });
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => 1,
       settings: () => settings,
       facade: stubFacade(),
     });
-    await service.persistSnapshot("/a.md");
-    const rows = db.query<{ health: number; freshness: number }>(
-      "SELECT health, freshness FROM notes WHERE path = ?;",
-      ["/a.md"],
-    );
-    expect(rows[0].freshness).toBeGreaterThan(0);
+    await service.persistSnapshot("a.md");
+    interface VitalsRow {
+      health: number | null;
+      freshness: number | null;
+    }
+    const [rows] = await connection.db
+      .query<[VitalsRow[]]>("SELECT health, freshness FROM note WHERE path = $path LIMIT 1;", {
+        path: "a.md",
+      })
+      .collect<[VitalsRow[]]>();
+    expect(rows[0].freshness).not.toBeNull();
+    expect(rows[0].freshness ?? 0).toBeGreaterThan(0);
+    expect(rows[0].health).not.toBeNull();
   });
 
-  test("persistSnapshot also writes frontmatter when setting is enabled", async () => {
-    const db = await freshDb();
-    seedNote(db, { path: "/a.md", words: 100 });
+  test("[smoke] persistSnapshot also writes frontmatter when setting is enabled", async () => {
+    await seedNote(connection, { path: "a.md", words: 100 });
     const facade = stubFacade();
     const service = new VitalsService({
-      db,
+      db: connection.db,
       now: () => 1,
       settings: () => ({ ...settings, writeToFrontmatter: true }),
       facade,
     });
-    await service.persistSnapshot("/a.md");
+    await service.persistSnapshot("a.md");
     expect(facade.frontmatterUpdates).toHaveLength(1);
-    expect(facade.frontmatterUpdates[0].path).toBe("/a.md");
+    expect(facade.frontmatterUpdates[0].path).toBe("a.md");
     expect(facade.frontmatterUpdates[0].patch).toMatchObject({ notient: expect.any(Object) });
   });
 
+  test("[smoke] edge count excludes pending-state writeback (approved=true, applied=false)", async () => {
+    const noteId = await seedNote(connection, { path: "a.md", words: 100 });
+    await seedWikilinkOutbound(connection, noteId, 2, { approved: true, applied: true });
+    await seedWikilinkOutbound(connection, noteId, 3, { approved: true, applied: false });
+    const service = new VitalsService({
+      db: connection.db,
+      now: () => 1,
+      settings: () => settings,
+      facade: stubFacade(),
+    });
+    const snapshot = await service.computeSnapshot("a.md");
+    if (snapshot === null) throw new Error("expected snapshot for /a.md");
+    expect(snapshot.connectivityCount).toBe(2);
+  });
 });

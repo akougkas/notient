@@ -346,7 +346,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
 
   const vitalsService = new VitalsService({
-    db: database,
+    db: surrealConnection.db,
     now: () => Date.now(),
     settings: () => current.vitals,
     facade: {
@@ -437,7 +437,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     maxPairs: 5,
   });
   const maturityAdvancer = new MaturityAdvancer({
-    db: database,
+    db: surrealConnection.db,
     facade: {
       read: (path) => vault.read(path),
       write: (path, content) => vault.write(path, content),

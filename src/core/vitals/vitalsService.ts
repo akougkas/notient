@@ -1,4 +1,4 @@
-import type { Database } from "../db/database";
+import type { Surreal } from "surrealdb";
 import { freshness } from "./freshness";
 import type {
   ConnectivityTier,
@@ -13,7 +13,7 @@ export interface VitalsFacade {
 }
 
 export interface VitalsServiceOptions {
-  db: Database;
+  db: Surreal;
   now: () => number;
   settings: () => VitalsSettings;
   facade: VitalsFacade;
@@ -21,12 +21,8 @@ export interface VitalsServiceOptions {
 
 interface NoteRow {
   word_count: number;
-  maturity: Maturity;
-  updated_at: number;
-}
-
-interface CountRow {
-  count: number;
+  maturity: Maturity | null;
+  updated_at: number | null;
 }
 
 // Health is a weighted average: sum(signal * weight) / sum(weights). With the default
@@ -34,31 +30,21 @@ interface CountRow {
 export class VitalsService {
   constructor(private readonly options: VitalsServiceOptions) {}
 
-  computeSnapshot(notePath: string): VitalsSnapshot | null {
-    const row = this.options.db.query<NoteRow>(
-      "SELECT word_count, maturity, updated_at FROM notes WHERE path = ?;",
-      [notePath],
-    )[0];
-    if (!row) return null;
+  async computeSnapshot(notePath: string): Promise<VitalsSnapshot | null> {
+    const row = await this.fetchNoteRow(notePath);
+    if (row === null) return null;
     const settings = this.options.settings();
     const now = this.options.now();
     const fresh = freshness({
-      updatedAt: row.updated_at,
+      updatedAt: row.updated_at ?? now,
       now,
       halfLifeDays: settings.freshnessHalfLifeDays,
     });
-    const chunkRow = this.options.db.query<CountRow>(
-      "SELECT COUNT(*) as count FROM chunks WHERE note_path = ?;",
-      [notePath],
-    )[0];
-    const edgeRow = this.options.db.query<CountRow>(
-      `SELECT COUNT(*) as count FROM graph_edges
-       WHERE approved = 1 AND (source_id = ? OR target_id = ?);`,
-      [`note:${notePath}`, `note:${notePath}`],
-    )[0];
+    const chunkCount = await this.fetchChunkCount(notePath);
+    const edgeCount = await this.fetchEdgeCount(notePath);
     const wordBand = saturating(row.word_count, 600);
-    const chunkCoverage = chunkRow.count > 0 ? 1 : 0;
-    const hasApprovedEdges = edgeRow.count > 0 ? 1 : 0;
+    const chunkCoverage = chunkCount > 0 ? 1 : 0;
+    const hasApprovedEdges = edgeCount > 0 ? 1 : 0;
     const totalWeight =
       settings.healthWeights.wordBand +
       settings.healthWeights.chunkCoverage +
@@ -68,28 +54,29 @@ export class VitalsService {
         chunkCoverage * settings.healthWeights.chunkCoverage +
         hasApprovedEdges * settings.healthWeights.hasApprovedEdges) /
       Math.max(1, totalWeight);
-    const tier = bucket(edgeRow.count, settings.connectivityThresholds);
+    const tier = bucket(edgeCount, settings.connectivityThresholds);
     return {
       notePath,
       freshness: fresh,
       health,
-      connectivityCount: edgeRow.count,
+      connectivityCount: edgeCount,
       connectivityTier: tier,
-      maturity: row.maturity,
+      maturity: row.maturity ?? "raw",
       wordCount: row.word_count,
       computedAt: now,
     };
   }
 
   async persistSnapshot(notePath: string): Promise<void> {
-    const snapshot = this.computeSnapshot(notePath);
-    if (!snapshot) return;
-    this.options.db.run("UPDATE notes SET health = ?, freshness = ? WHERE path = ?;", [
-      snapshot.health,
-      snapshot.freshness,
-      notePath,
-    ]);
-    await this.options.db.persist();
+    const snapshot = await this.computeSnapshot(notePath);
+    if (snapshot === null) return;
+    await this.options.db
+      .query("UPDATE note SET health = $health, freshness = $freshness WHERE path = $path;", {
+        health: snapshot.health,
+        freshness: snapshot.freshness,
+        path: notePath,
+      })
+      .collect();
     if (this.options.settings().writeToFrontmatter) {
       await this.options.facade.updateFrontmatter(notePath, {
         notient: {
@@ -102,6 +89,72 @@ export class VitalsService {
       });
     }
   }
+
+  private async fetchNoteRow(notePath: string): Promise<NoteRow | null> {
+    interface Row {
+      word_count: number;
+      maturity: Maturity | null;
+      last_user_edit_at: { toDate?: () => Date } | string | null;
+    }
+    const [rows] = await this.options.db
+      .query<[Row[]]>(
+        "SELECT word_count, maturity, last_user_edit_at FROM note WHERE path = $path LIMIT 1;",
+        { path: notePath },
+      )
+      .collect<[Row[]]>();
+    const row = rows[0];
+    if (row === undefined) return null;
+    return {
+      word_count: row.word_count,
+      maturity: row.maturity,
+      updated_at: extractEpochMs(row.last_user_edit_at),
+    };
+  }
+
+  private async fetchChunkCount(notePath: string): Promise<number> {
+    interface CountRow {
+      count: number;
+    }
+    const [rows] = await this.options.db
+      .query<[CountRow[]]>("SELECT count() FROM chunk WHERE note.path = $path GROUP ALL;", {
+        path: notePath,
+      })
+      .collect<[CountRow[]]>();
+    return rows[0]?.count ?? 0;
+  }
+
+  private async fetchEdgeCount(notePath: string): Promise<number> {
+    // Edges anchor on `note|block` records via `in` and `out`. Block-anchored
+    // rows expose the host note as `.note`, so the WHERE union covers both
+    // forms. Filter on `approved AND applied` per the Phase 4 PENDING-STATE
+    // contract: edges in the writeback-in-flight state are excluded.
+    interface CountRow {
+      count: number;
+    }
+    const [rows] = await this.options.db
+      .query<[CountRow[]]>(
+        `SELECT count() FROM wikilink
+         WHERE approved = true AND applied = true
+           AND (in.path = $path OR in.note.path = $path
+                OR out.path = $path OR out.note.path = $path)
+         GROUP ALL;`,
+        { path: notePath },
+      )
+      .collect<[CountRow[]]>();
+    return rows[0]?.count ?? 0;
+  }
+}
+
+function extractEpochMs(value: { toDate?: () => Date } | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (typeof value.toDate === "function") {
+    return value.toDate().getTime();
+  }
+  return null;
 }
 
 // Smooth saturation curve: returns 0 at zero words, approaches 1 as words grow,

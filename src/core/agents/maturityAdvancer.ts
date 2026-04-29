@@ -1,7 +1,7 @@
+import type { Surreal } from "surrealdb";
 import YAML from "yaml";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import type { Agent, AgentRunContext, AgentRunResult } from "../coordinator/types";
-import type { Database } from "../db/database";
 
 type Maturity = "raw" | "adolescent" | "mature" | "synthesis-ready";
 
@@ -12,7 +12,7 @@ interface VitalsBlock {
 }
 
 export interface MaturityAdvancerOptions {
-  db: Database;
+  db: Surreal;
   facade: Pick<VaultAdapter, "read" | "write">;
   freshnessHalfLifeMs?: number;
 }
@@ -20,8 +20,8 @@ export interface MaturityAdvancerOptions {
 interface NoteRow {
   path: string;
   word_count: number;
-  maturity: string;
-  updated_at: number;
+  maturity: string | null;
+  updated_at_ms: number | null;
 }
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -33,19 +33,18 @@ export class MaturityAdvancer implements Agent {
   constructor(private readonly options: MaturityAdvancerOptions) {}
 
   async run(context: AgentRunContext): Promise<AgentRunResult> {
-    const rows = this.options.db.query<NoteRow>(
-      "SELECT path, word_count, maturity, updated_at FROM notes;",
-    );
+    const rows = await this.fetchNotes();
     let promotions = 0;
     for (const row of rows) {
-      const next = this.evaluate(row);
-      if (next === row.maturity) continue;
+      const next = await this.evaluate(row);
+      const current = row.maturity ?? "raw";
+      if (next === current) continue;
       await this.applyPromotion(row.path, next);
       context.bus.emit({
         type: "swarm:claim_advanced",
         claimId: `note:${row.path}`,
         notePath: row.path,
-        fromMaturity: row.maturity,
+        fromMaturity: current,
         toMaturity: next,
         runId: context.runId,
       });
@@ -54,46 +53,87 @@ export class MaturityAdvancer implements Agent {
     return { proposals: promotions };
   }
 
-  private evaluate(row: NoteRow): Maturity {
-    const inbound = this.countEdges(row.path, "target");
-    const outbound = this.countEdges(row.path, "source");
-    const ageMs = Date.now() - row.updated_at;
-    if (row.maturity === "raw" && row.word_count > 0) return "adolescent";
+  private async fetchNotes(): Promise<NoteRow[]> {
+    interface Row {
+      path: string;
+      word_count: number;
+      maturity: string | null;
+      last_user_edit_at: { toDate?: () => Date } | string | null;
+    }
+    const [rows] = await this.options.db
+      .query<[Row[]]>("SELECT path, word_count, maturity, last_user_edit_at FROM note;")
+      .collect<[Row[]]>();
+    return rows.map((row) => ({
+      path: row.path,
+      word_count: row.word_count,
+      maturity: row.maturity,
+      updated_at_ms: extractEpochMs(row.last_user_edit_at),
+    }));
+  }
+
+  private async evaluate(row: NoteRow): Promise<Maturity> {
+    const inbound = await this.countEdges(row.path, "target");
+    const outbound = await this.countEdges(row.path, "source");
+    const updatedAt = row.updated_at_ms ?? Date.now();
+    const ageMs = Date.now() - updatedAt;
+    const current = row.maturity ?? "raw";
+    if (current === "raw" && row.word_count > 0) return "adolescent";
     if (
-      row.maturity === "adolescent" &&
+      current === "adolescent" &&
       row.word_count >= 200 &&
       inbound + outbound >= 5 &&
       ageMs >= SEVEN_DAYS_MS
     ) {
       return "mature";
     }
-    if (row.maturity === "mature" && outbound >= 10 && inbound >= 3) {
+    if (current === "mature" && outbound >= 10 && inbound >= 3) {
       return "synthesis-ready";
     }
-    return row.maturity as Maturity;
+    return current as Maturity;
   }
 
-  private countEdges(path: string, side: "source" | "target"): number {
-    const id = `note:${path}`;
-    const column = side === "source" ? "source_id" : "target_id";
-    const rows = this.options.db.query<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM graph_edges WHERE ${column} = ? AND approved = 1;`,
-      [id],
-    );
-    return rows[0]?.n ?? 0;
+  private async countEdges(path: string, side: "source" | "target"): Promise<number> {
+    // wikilink.in is the source endpoint, wikilink.out is the target. Block-
+    // anchored edges expose the host note as `.note`, so the union covers
+    // both forms. The PENDING-STATE filter (approved AND applied) keeps the
+    // count consistent with the search-consumer contract.
+    const subjectField = side === "source" ? "in" : "out";
+    interface CountRow {
+      count: number;
+    }
+    const sql = `SELECT count() FROM wikilink WHERE approved = true AND applied = true AND (${subjectField}.path = $path OR ${subjectField}.note.path = $path) GROUP ALL;`;
+    const [rows] = await this.options.db.query<[CountRow[]]>(sql, { path }).collect<[CountRow[]]>();
+    return rows[0]?.count ?? 0;
   }
 
   private async applyPromotion(path: string, next: Maturity): Promise<void> {
     const before = await this.options.facade.read(path);
-    const freshness = computeFreshness(Date.now());
+    const fresh = computeFreshness(Date.now());
     const updated = upsertMaturityFrontmatter(before, {
-      vitals: { health: 0, maturity: next, freshness },
+      vitals: { health: 0, maturity: next, freshness: fresh },
       updatedAt: new Date().toISOString(),
     });
     if (updated === before) return;
     await this.options.facade.write(path, updated);
-    this.options.db.run("UPDATE notes SET maturity = ? WHERE path = ?;", [next, path]);
+    await this.options.db
+      .query("UPDATE note SET maturity = $maturity WHERE path = $path;", {
+        maturity: next,
+        path,
+      })
+      .collect();
   }
+}
+
+function extractEpochMs(value: { toDate?: () => Date } | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (typeof value.toDate === "function") {
+    return value.toDate().getTime();
+  }
+  return null;
 }
 
 function computeFreshness(_now: number): number {

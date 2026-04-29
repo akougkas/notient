@@ -24,6 +24,10 @@ DEFINE FIELD OVERWRITE tier2_at ON note TYPE option<datetime>;
 DEFINE FIELD OVERWRITE tier3_at ON note TYPE option<datetime>;
 DEFINE FIELD OVERWRITE tombstoned_at ON note TYPE option<datetime>;
 DEFINE FIELD OVERWRITE last_user_edit_at ON note TYPE option<datetime>;
+DEFINE FIELD OVERWRITE maturity ON note TYPE option<string>
+  ASSERT $value = NONE OR $value INSIDE ['raw','adolescent','draft','review','mature','synthesis-ready'];
+DEFINE FIELD OVERWRITE health ON note TYPE option<float>;
+DEFINE FIELD OVERWRITE freshness ON note TYPE option<float>;
 DEFINE INDEX OVERWRITE note_path ON note FIELDS path UNIQUE;
 DEFINE INDEX OVERWRITE note_sha ON note FIELDS sha;
 DEFINE INDEX OVERWRITE note_tombstone ON note FIELDS tombstoned_at;

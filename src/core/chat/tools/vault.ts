@@ -258,7 +258,7 @@ export function makeGetVitalsTool(
       return { notePath };
     },
     invoke: async (args) => {
-      const snapshot = vitals.computeSnapshot(args.notePath);
+      const snapshot = await vitals.computeSnapshot(args.notePath);
       return { snapshot };
     },
     writeGated: false,

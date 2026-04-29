@@ -14,7 +14,7 @@ const FIXTURE_SNAPSHOT: VitalsSnapshot = {
 describe("vitals handler", () => {
   test("returns the snapshot and emits an event", async () => {
     const service = {
-      computeSnapshot: () => FIXTURE_SNAPSHOT,
+      computeSnapshot: async () => FIXTURE_SNAPSHOT,
     } as unknown as VitalsService;
     const handler = makeVitalsHandler({ vitalsService: service });
     const lines: string[] = [];
@@ -25,7 +25,7 @@ describe("vitals handler", () => {
   });
 
   test("rejects empty path", async () => {
-    const service = { computeSnapshot: () => FIXTURE_SNAPSHOT } as unknown as VitalsService;
+    const service = { computeSnapshot: async () => FIXTURE_SNAPSHOT } as unknown as VitalsService;
     const handler = makeVitalsHandler({ vitalsService: service });
     let thrown: unknown = null;
     try {
@@ -37,7 +37,7 @@ describe("vitals handler", () => {
   });
 
   test("returns INVALID_PARAMS when the note is not indexed", async () => {
-    const service = { computeSnapshot: () => null } as unknown as VitalsService;
+    const service = { computeSnapshot: async () => null } as unknown as VitalsService;
     const handler = makeVitalsHandler({ vitalsService: service });
     let thrown: unknown = null;
     try {
