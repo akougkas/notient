@@ -1,197 +1,353 @@
-import type { Database } from "../db/database";
+/**
+ * SurrealDB-backed approval-and-write service.
+ *
+ * Failure-semantics contract: PENDING-STATE. The contract is named in the
+ * top-level comment of `src/core/markdown/writeback.ts`; this service is
+ * its sole producer.
+ *
+ * `approveEdge` flips an unapproved edge row through three stable states:
+ *   1. `approved = false, applied = true`   (initial linker proposal)
+ *   2. `approved = true,  applied = false`  (writeback in flight)
+ *   3. `approved = true,  applied = true`   (writeback committed)
+ *
+ * Crashes between states are recovered by `reconcilePendingApplications`,
+ * which selects rows in state 2 and replays the writeback from step 2 of
+ * the flow described in `writeback.ts`. The writeback is idempotent
+ * (Locked Decision 2); duplicate `daemon_write` inserts are guarded by
+ * `findRecentDaemonWrite`; the closing `applied = true` flip is the
+ * end-of-flow commit signal that consumers (Phase 4 Task 11) filter on.
+ *
+ * `rejectEdge` is total: deleting an already-deleted edge is not an error.
+ * Rejected edges leave no `history` row; Phase 4 simplifies the staging
+ * story by treating "rejected" as "never happened".
+ *
+ * Phase 4 Task 4 will migrate `historyService` and the rest of the undo
+ * surface; this service writes `history` rows directly via
+ * `CREATE history` so the row format is consistent with that migration.
+ */
+
+import type { RecordId, Surreal } from "surrealdb";
+import { findRecentDaemonWrite, recordDaemonWrite } from "../db/surreal";
 import type { EventBus } from "../events/eventBus";
-import type {
-  ApprovedLink,
-  NativeGraphBridge,
-  RelatedRelation,
-  RelationKind,
-} from "../graph/nativeGraphBridge";
-import type { RecordHistoryInput } from "../history/types";
+import { applyApprovedLink, applyApprovedRelation } from "../markdown/writeback";
+import { type AtomicFs, atomicWrite } from "../utils/atomicWrite";
 
-export interface ApprovalServiceOptions {
-  db: Database;
-  bus: EventBus;
-  bridge?: NativeGraphBridge;
-  recordHistory?: (input: RecordHistoryInput) => Promise<number>;
-}
+/**
+ * The six edge tables whose rows are emitted by the linker as proposals
+ * (`approved = false`). Approving any of these triggers a body writeback.
+ * `related_to` writes the `## Related` section; the other five write a
+ * frontmatter `notient.<key>` array entry.
+ */
+export type WritebackEdgeTable =
+  | "supports"
+  | "contradicts"
+  | "extends"
+  | "exemplifies"
+  | "synthesizes"
+  | "related_to";
 
-export interface PendingEdge {
-  id: string;
-  type: string;
-  sourceId: string;
-  targetId: string;
-  confidence: number;
-  agent: string;
-  evidence: string[];
-  rationale: string | null;
-  createdAt: number;
-}
-
-const TYPED_RELATIONS: ReadonlyArray<RelationKind> = [
-  "contradicts",
+export const WRITEBACK_EDGE_TABLES: ReadonlyArray<WritebackEdgeTable> = [
   "supports",
+  "contradicts",
   "extends",
-  "synthesizes_from",
+  "exemplifies",
+  "synthesizes",
+  "related_to",
 ];
 
-function isTypedRelation(type: string): type is RelationKind {
-  return (TYPED_RELATIONS as ReadonlyArray<string>).includes(type);
+/**
+ * Hooks fired at named milestones inside `approveEdge`. Production code
+ * never wires these; tests inject a hook that throws to simulate a crash
+ * between two side-effects so the recovery path can be exercised.
+ *
+ * `afterApprovedFlip`     state 1 -> state 2 transition committed.
+ * `afterDaemonWriteInsert` `daemon_write` row committed.
+ * `afterFileWrite`        atomic file write returned.
+ * `afterHistoryCommit`    closing transaction committed (state 2 -> state 3).
+ */
+export interface ApprovalServiceHooks {
+  afterApprovedFlip?: () => void | Promise<void>;
+  afterDaemonWriteInsert?: () => void | Promise<void>;
+  afterFileWrite?: () => void | Promise<void>;
+  afterHistoryCommit?: () => void | Promise<void>;
+}
+
+export interface ApprovalServiceOptions {
+  db: Surreal;
+  bus: EventBus;
+  vaultRoot: string;
+  /**
+   * Filesystem implementation used for the atomic write. Tests inject a
+   * fake; production wires a real fs adapter.
+   */
+  fs: AtomicFs;
+  /**
+   * Reads a note's current body from disk. Tests inject a fake; production
+   * wires `Bun.file(path).text()` or the equivalent.
+   */
+  readFile: (path: string) => Promise<string>;
+  /**
+   * Computes a SHA hash of the post-write body. Wired to the same
+   * crypto.subtle SHA-256 path as the rest of the daemon.
+   */
+  hash: (content: string) => Promise<string>;
+  internalHooks?: ApprovalServiceHooks;
+}
+
+export interface ListedEdge {
+  id: RecordId;
+  table: WritebackEdgeTable;
+  source: RecordId<"note">;
+  target: RecordId<"note">;
+  agent: string | null;
+  confidence: number;
+}
+
+export interface ApproveEdgeInput {
+  id: RecordId;
+  table: WritebackEdgeTable;
+}
+
+export interface ReconcileResult {
+  replayed: number;
+  failed: number;
+}
+
+interface EdgeRow {
+  id: RecordId;
+  in: RecordId<"note">;
+  out: RecordId<"note">;
+  source: string;
+  agent: string | null;
+  confidence: number;
+}
+
+interface NoteRow {
+  id: RecordId<"note">;
+  path: string;
+}
+
+const FRONTMATTER_RELATIONS: ReadonlyArray<WritebackEdgeTable> = [
+  "supports",
+  "contradicts",
+  "extends",
+  "exemplifies",
+  "synthesizes",
+];
+
+function isFrontmatterRelation(table: WritebackEdgeTable): boolean {
+  return FRONTMATTER_RELATIONS.includes(table);
+}
+
+function basenameWithoutExtension(path: string): string {
+  const last = path.split("/").pop() ?? path;
+  return last.replace(/\.md$/i, "");
+}
+
+function joinPath(root: string, relative: string): string {
+  if (root.length === 0) return relative;
+  if (root.endsWith("/")) return `${root}${relative}`;
+  return `${root}/${relative}`;
 }
 
 export class ApprovalService {
-  constructor(private readonly opts: ApprovalServiceOptions) {}
+  constructor(private readonly options: ApprovalServiceOptions) {}
 
-  listPendingEdges(): PendingEdge[] {
-    const rows = this.opts.db.query<{
-      id: string;
-      type: string;
-      source_id: string;
-      target_id: string;
-      confidence: number;
-      agent: string;
-      evidence: string;
-      rationale: string | null;
-      created_at: number;
-    }>(
-      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-       FROM staging_edges WHERE decision IS NULL ORDER BY created_at DESC;`,
-    );
-    return rows.map((r) => ({
-      id: r.id,
-      type: r.type,
-      sourceId: r.source_id,
-      targetId: r.target_id,
-      confidence: r.confidence,
-      agent: r.agent,
-      evidence: JSON.parse(r.evidence) as string[],
-      rationale: r.rationale,
-      createdAt: r.created_at,
-    }));
+  /**
+   * Lists every edge in a writeback-capable table whose `approved` flag is
+   * still `false`. Result is sorted newest first by `created_at` so the
+   * /links inbox UI shows the latest proposals first.
+   */
+  async listPendingEdges(): Promise<ListedEdge[]> {
+    const edges: ListedEdge[] = [];
+    for (const table of WRITEBACK_EDGE_TABLES) {
+      // SurrealDB 3.0.5 requires every ORDER BY field to appear in the
+      // projection. `created_at` is selected and discarded.
+      const sql = `SELECT id, in, out, source, agent, confidence, created_at FROM ${table} WHERE approved = false ORDER BY created_at DESC;`;
+      const [rows] = await this.options.db.query<[Array<EdgeRow>]>(sql).collect<[Array<EdgeRow>]>();
+      for (const row of rows) {
+        edges.push({
+          id: row.id,
+          table,
+          source: row.in,
+          target: row.out,
+          agent: row.agent,
+          confidence: row.confidence,
+        });
+      }
+    }
+    return edges;
   }
 
-  async acceptEdge(id: string): Promise<void> {
-    const row = this.opts.db.query<{
-      id: string;
-      type: string;
-      source_id: string;
-      target_id: string;
-      confidence: number;
-      agent: string;
-      evidence: string;
-      rationale: string | null;
-      created_at: number;
-    }>(
-      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-       FROM staging_edges WHERE id = ? AND decision IS NULL;`,
-      [id],
-    )[0];
-    if (!row) return;
-    const liveId = row.id.replace(/^staging:/, "edge:");
-    this.opts.db.transaction(() => {
-      this.opts.db.run(
-        `INSERT INTO graph_edges (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?);`,
-        [
-          liveId,
-          row.type,
-          row.source_id,
-          row.target_id,
-          row.confidence,
-          row.agent,
-          row.evidence,
-          1,
-          Date.now(),
-        ],
-      );
-      this.opts.db.run(
-        "UPDATE staging_edges SET decision = 'accepted', decided_at = ? WHERE id = ?;",
-        [Date.now(), id],
-      );
+  /**
+   * Promotes a linker proposal through the pending-state contract. Steps:
+   *
+   *   A. Stamp `approved = true, applied = false` (state 1 -> state 2).
+   *   B. Resolve source/target paths.
+   *   C. Read body, run writeback in memory.
+   *   D. Idempotent no-op fast path: if writeback returned the input
+   *      unchanged, flip `applied = true` and return.
+   *   E. Insert `daemon_write` (skipped when an identical row landed within
+   *      the lookup window).
+   *   F. Atomic file write.
+   *   G. Closing transaction: `CREATE history` and flip `applied = true`.
+   */
+  async approveEdge(input: ApproveEdgeInput): Promise<void> {
+    const edge = await this.selectEdge(input);
+    if (edge === null) return;
+    if (!isWritebackTable(input.table)) {
+      throw new Error(`approveEdge: table '${input.table}' is not writeback-capable`);
+    }
+
+    // Step A.
+    await this.options.db
+      .query("UPDATE $id SET approved = true, applied = false;", { id: input.id })
+      .collect();
+    await this.runHook(this.options.internalHooks?.afterApprovedFlip);
+
+    await this.runWriteback(input, edge);
+
+    this.options.bus.emit({
+      type: "approval:decided",
+      kind: "edge",
+      id: input.id.toString(),
+      decision: "accepted",
     });
-    await this.opts.db.persist();
-    await this.opts.recordHistory?.({
-      kind: "edge.approve",
-      target: id,
-      before: {
-        id: row.id,
-        type: row.type,
-        source_id: row.source_id,
-        target_id: row.target_id,
-        confidence: row.confidence,
-        agent: row.agent,
-        evidence: row.evidence,
-        rationale: row.rationale,
-        created_at: row.created_at,
-      },
-      after: { id: liveId },
+  }
+
+  /**
+   * Total reject: deletes the row regardless of its current state. No
+   * `history` row is recorded; the linker can re-propose the same edge on
+   * the next pass if the underlying signal still holds.
+   */
+  async rejectEdge(input: ApproveEdgeInput): Promise<void> {
+    if (!isWritebackTable(input.table)) {
+      throw new Error(`rejectEdge: table '${input.table}' is not writeback-capable`);
+    }
+    await this.options.db.query("DELETE $id;", { id: input.id }).collect();
+    this.options.bus.emit({
+      type: "approval:decided",
+      kind: "edge",
+      id: input.id.toString(),
+      decision: "rejected",
     });
-    if (this.opts.bridge) {
-      const sourcePath = this.resolveNotePath(row.source_id);
-      const targetPath = this.resolveNotePath(row.target_id);
-      if (sourcePath && targetPath) {
-        if (row.type === "links_to") {
-          const link: ApprovedLink = { sourcePath, targetPath, agent: row.agent };
-          await this.opts.bridge.applyApprovedLink(link);
-        } else if (isTypedRelation(row.type)) {
-          const relation: RelatedRelation = {
-            sourcePath,
-            targetPath,
-            relation: row.type,
-            agent: row.agent,
-          };
-          await this.opts.bridge.applyApprovedRelation(relation);
+  }
+
+  /**
+   * Daemon-bootstrap entry point. Selects every row in state 2
+   * (`approved = true AND applied = false`) across the six writeback
+   * tables and replays the writeback from step C. Returns counters; the
+   * daemon supervisor logs the summary.
+   */
+  async reconcilePendingApplications(): Promise<ReconcileResult> {
+    let replayed = 0;
+    let failed = 0;
+    for (const table of WRITEBACK_EDGE_TABLES) {
+      const sql = `SELECT id, in, out, source, agent, confidence FROM ${table} WHERE approved = true AND applied = false;`;
+      const [rows] = await this.options.db.query<[Array<EdgeRow>]>(sql).collect<[Array<EdgeRow>]>();
+      for (const row of rows) {
+        try {
+          await this.runWriteback({ id: row.id, table }, row);
+          replayed += 1;
+        } catch {
+          // Reconciliation is best-effort; a row that fails this pass will
+          // be picked up on the next daemon start. The supervisor's audit
+          // log is the authoritative record of failures.
+          failed += 1;
         }
       }
     }
-    this.opts.bus.emit({ type: "approval:decided", kind: "edge", id, decision: "accepted" });
+    return { replayed, failed };
   }
 
-  async rejectEdge(id: string): Promise<void> {
-    const row = this.opts.db.query<{
-      id: string;
-      type: string;
-      source_id: string;
-      target_id: string;
-      confidence: number;
-      agent: string;
-      evidence: string;
-      rationale: string | null;
-      created_at: number;
-    }>(
-      `SELECT id, type, source_id, target_id, confidence, agent, evidence, rationale, created_at
-       FROM staging_edges WHERE id = ? AND decision IS NULL;`,
-      [id],
-    )[0];
-    if (!row) return;
-    this.opts.db.run("DELETE FROM staging_edges WHERE id = ?;", [id]);
-    await this.opts.db.persist();
-    await this.opts.recordHistory?.({
-      kind: "edge.reject",
-      target: id,
-      before: {
-        id: row.id,
-        type: row.type,
-        source_id: row.source_id,
-        target_id: row.target_id,
-        confidence: row.confidence,
-        agent: row.agent,
-        evidence: row.evidence,
-        rationale: row.rationale,
-        created_at: row.created_at,
-      },
-      after: null,
-    });
-    this.opts.bus.emit({ type: "approval:decided", kind: "edge", id, decision: "rejected" });
-  }
-
-  private resolveNotePath(nodeId: string): string | null {
-    if (nodeId.startsWith("note:")) {
-      return nodeId.slice("note:".length);
+  private async runWriteback(input: ApproveEdgeInput, edge: EdgeRow): Promise<void> {
+    // Step B.
+    const sourceNote = await this.selectNote(edge.in);
+    const targetNote = await this.selectNote(edge.out);
+    if (sourceNote === null || targetNote === null) {
+      throw new Error(
+        `approveEdge: source or target note record missing for edge ${input.id.toString()}`,
+      );
     }
-    const rows = this.opts.db.query<{ note_path: string | null }>(
-      "SELECT note_path FROM graph_nodes WHERE id = ?;",
-      [nodeId],
-    );
-    return rows[0]?.note_path ?? null;
+    const sourcePath = joinPath(this.options.vaultRoot, sourceNote.path);
+    const wikilinkTarget = basenameWithoutExtension(targetNote.path);
+
+    // Step C.
+    const beforeBody = await this.options.readFile(sourcePath);
+    const afterBody = isFrontmatterRelation(input.table)
+      ? applyApprovedRelation(beforeBody, { key: input.table, target: wikilinkTarget })
+      : applyApprovedLink(beforeBody, { target: wikilinkTarget });
+
+    // Step D.
+    if (afterBody === beforeBody) {
+      await this.options.db.query("UPDATE $id SET applied = true;", { id: input.id }).collect();
+      await this.runHook(this.options.internalHooks?.afterHistoryCommit);
+      return;
+    }
+
+    // Step E.
+    const newSha = await this.options.hash(afterBody);
+    const agentName = edge.agent ?? edge.source;
+    const existing = await findRecentDaemonWrite(this.options.db, {
+      noteId: sourceNote.id,
+      sha: newSha,
+    });
+    if (existing === null) {
+      await recordDaemonWrite(this.options.db, {
+        noteId: sourceNote.id,
+        sha: newSha,
+        agent: agentName,
+        targets: [targetNote.id],
+      });
+    }
+    await this.runHook(this.options.internalHooks?.afterDaemonWriteInsert);
+
+    // Step F.
+    await atomicWrite(this.options.fs, sourcePath, afterBody);
+    await this.runHook(this.options.internalHooks?.afterFileWrite);
+
+    // Step G.
+    const kind = isFrontmatterRelation(input.table) ? "note.frontmatter" : "note.append_section";
+    await this.options.db
+      .query(
+        `BEGIN;
+         CREATE history CONTENT { kind: $kind, target: $target, before: $before, after: $after, client_identity: $clientIdentity };
+         UPDATE $id SET applied = true;
+         COMMIT;`,
+        {
+          kind,
+          target: sourcePath,
+          before: JSON.stringify(beforeBody),
+          after: JSON.stringify(afterBody),
+          clientIdentity: agentName,
+          id: input.id,
+        },
+      )
+      .collect();
+    await this.runHook(this.options.internalHooks?.afterHistoryCommit);
   }
+
+  private async selectEdge(input: ApproveEdgeInput): Promise<EdgeRow | null> {
+    const sql = `SELECT id, in, out, source, agent, confidence FROM ${input.table} WHERE id = $id LIMIT 1;`;
+    const [rows] = await this.options.db
+      .query<[Array<EdgeRow>]>(sql, { id: input.id })
+      .collect<[Array<EdgeRow>]>();
+    return rows[0] ?? null;
+  }
+
+  private async selectNote(noteId: RecordId<"note">): Promise<NoteRow | null> {
+    const [rows] = await this.options.db
+      .query<[Array<NoteRow>]>("SELECT id, path FROM note WHERE id = $id LIMIT 1;", { id: noteId })
+      .collect<[Array<NoteRow>]>();
+    return rows[0] ?? null;
+  }
+
+  private async runHook(hook: (() => void | Promise<void>) | undefined): Promise<void> {
+    if (hook === undefined) return;
+    await hook();
+  }
+}
+
+function isWritebackTable(value: string): value is WritebackEdgeTable {
+  return (WRITEBACK_EDGE_TABLES as ReadonlyArray<string>).includes(value);
 }

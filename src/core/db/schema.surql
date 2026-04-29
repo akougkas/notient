@@ -140,6 +140,22 @@ DEFINE FIELD OVERWRITE written_at ON daemon_write TYPE datetime DEFAULT time::no
 DEFINE INDEX OVERWRITE daemon_write_sha ON daemon_write FIELDS sha;
 DEFINE INDEX OVERWRITE daemon_write_note ON daemon_write FIELDS note, written_at;
 
+-- Universal undo log. Phase 4 Task 3 records `note.append_section` and
+-- `note.frontmatter` rows directly here from `ApprovalService`; Task 4
+-- migrates the remaining producers off the SQLite mirror. `before` and
+-- `after` are JSON-stringified at insert time because SurrealDB 3.x does
+-- not accept `option<any>` for arbitrary nested payloads; the producer
+-- and consumer agree on `JSON.parse` at read time.
+DEFINE TABLE OVERWRITE history SCHEMAFULL;
+DEFINE FIELD OVERWRITE kind ON history TYPE string;
+DEFINE FIELD OVERWRITE target ON history TYPE string;
+DEFINE FIELD OVERWRITE before ON history TYPE option<string>;
+DEFINE FIELD OVERWRITE after ON history TYPE option<string>;
+DEFINE FIELD OVERWRITE client_identity ON history TYPE string DEFAULT 'human';
+DEFINE FIELD OVERWRITE created_at ON history TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE history_kind ON history FIELDS kind;
+DEFINE INDEX OVERWRITE history_target ON history FIELDS target;
+
 DEFINE TABLE OVERWRITE awaken_run SCHEMAFULL;
 DEFINE FIELD OVERWRITE status ON awaken_run TYPE string
   ASSERT $value INSIDE ['running','paused','cancelled','completed','failed'];

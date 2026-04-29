@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
-import { makeEdgeApproveInverter } from "./inverters/edgeApprove";
-import { makeEdgeRejectInverter } from "./inverters/edgeReject";
-import { makeNodeApproveInverter } from "./inverters/nodeApprove";
-import { makeNodeRejectInverter } from "./inverters/nodeReject";
 import { makeNoteAppendSectionInverter } from "./inverters/noteAppendSection";
 import { makeNoteCreateInverter } from "./inverters/noteCreate";
 import { makeNoteFrontmatterInverter } from "./inverters/noteFrontmatter";
@@ -44,160 +40,6 @@ async function fakeHash(input: string): Promise<string> {
 }
 
 describe("inverters", () => {
-  test("edgeApprove restores staging row and removes live edge", async () => {
-    const database = await newDb();
-    database.run(
-      `INSERT INTO graph_edges
-        (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?);`,
-      ["edge:live", "supports", "note:/a.md", "note:/b.md", 0.9, "linker", "[]", 1, 100],
-    );
-    const inverter = makeEdgeApproveInverter({ db: database });
-    await inverter(
-      "staging:edge",
-      {
-        id: "staging:edge",
-        type: "supports",
-        source_id: "note:/a.md",
-        target_id: "note:/b.md",
-        confidence: 0.9,
-        agent: "linker",
-        evidence: JSON.stringify(["c1"]),
-        rationale: "rationale",
-        created_at: 50,
-      },
-      { id: "edge:live" },
-    );
-    const live = database.query<{ id: string }>("SELECT id FROM graph_edges;");
-    expect(live).toHaveLength(0);
-    const staged = database.query<{ id: string; decision: string | null }>(
-      "SELECT id, decision FROM staging_edges;",
-    );
-    expect(staged).toHaveLength(1);
-    expect(staged[0].id).toBe("staging:edge");
-    expect(staged[0].decision).toBeNull();
-  });
-
-  test("edgeReject re-inserts the staging row", async () => {
-    const database = await newDb();
-    const inverter = makeEdgeRejectInverter({ db: database });
-    await inverter(
-      "staging:edge",
-      {
-        id: "staging:edge",
-        type: "extends",
-        source_id: "note:/a.md",
-        target_id: "note:/b.md",
-        confidence: 0.7,
-        agent: "linker",
-        evidence: "[]",
-        rationale: null,
-        created_at: 10,
-      },
-      null,
-    );
-    const rows = database.query<{ id: string; decision: string | null }>(
-      "SELECT id, decision FROM staging_edges;",
-    );
-    expect(rows).toEqual([{ id: "staging:edge", decision: null }]);
-  });
-
-  test("nodeApprove restores staging node, removes live node, and deletes the created note", async () => {
-    const database = await newDb();
-    database.run(
-      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
-       VALUES (?,?,?,?,?,?);`,
-      ["node:live", "concept", "Cohesion", "/synth/cohesion.md", null, 200],
-    );
-    const facade = new FakeFacade();
-    facade.files.set("/synth/cohesion.md", "# Cohesion\n");
-    const echoGuard = new FakeEchoGuard();
-    const inverter = makeNodeApproveInverter({
-      db: database,
-      facade,
-      echoGuard,
-      hash: fakeHash,
-    });
-    await inverter(
-      "staging:node",
-      {
-        id: "staging:node",
-        type: "concept",
-        label: "Cohesion",
-        note_path: null,
-        payload: null,
-        agent: "synthesizer",
-        confidence: 0.8,
-        created_at: 100,
-      },
-      { id: "node:live", createdNotePath: "/synth/cohesion.md" },
-    );
-    expect(database.query<{ id: string }>("SELECT id FROM graph_nodes;")).toHaveLength(0);
-    const staged = database.query<{ id: string; decision: string | null }>(
-      "SELECT id, decision FROM staging_nodes;",
-    );
-    expect(staged).toEqual([{ id: "staging:node", decision: null }]);
-    expect(facade.removed).toEqual(["/synth/cohesion.md"]);
-    expect(echoGuard.marks).toHaveLength(1);
-    expect(echoGuard.marks[0].path).toBe("/synth/cohesion.md");
-  });
-
-  test("nodeApprove without a created note path leaves vault untouched", async () => {
-    const database = await newDb();
-    database.run(
-      `INSERT INTO graph_nodes (id, type, label, note_path, payload, created_at)
-       VALUES (?,?,?,?,?,?);`,
-      ["node:live", "concept", "X", null, null, 1],
-    );
-    const facade = new FakeFacade();
-    const echoGuard = new FakeEchoGuard();
-    const inverter = makeNodeApproveInverter({
-      db: database,
-      facade,
-      echoGuard,
-      hash: fakeHash,
-    });
-    await inverter(
-      "staging:node",
-      {
-        id: "staging:node",
-        type: "concept",
-        label: "X",
-        note_path: null,
-        payload: null,
-        agent: "synthesizer",
-        confidence: 0.5,
-        created_at: 1,
-      },
-      { id: "node:live" },
-    );
-    expect(facade.removed).toEqual([]);
-    expect(echoGuard.marks).toHaveLength(0);
-  });
-
-  test("nodeReject re-inserts the staging row", async () => {
-    const database = await newDb();
-    const inverter = makeNodeRejectInverter({ db: database });
-    await inverter(
-      "staging:node",
-      {
-        id: "staging:node",
-        type: "claim",
-        label: "Claim text",
-        note_path: null,
-        payload: JSON.stringify({ confidence: 0.6 }),
-        agent: "contradictionHunter",
-        confidence: 0.6,
-        created_at: 1,
-      },
-      null,
-    );
-    const rows = database.query<{ id: string; label: string }>(
-      "SELECT id, label FROM staging_nodes;",
-    );
-    expect(rows).toEqual([{ id: "staging:node", label: "Claim text" }]);
-  });
-
   test("noteAppendSection writes prior body and marks EchoGuard", async () => {
     const facade = new FakeFacade();
     facade.files.set("/note.md", "# After\nappended line\n");
@@ -291,8 +133,6 @@ describe("inverters", () => {
     const database = await newDb();
     const facade = new FakeFacade();
     const echoGuard = new FakeEchoGuard();
-    const edgeApprove = makeEdgeApproveInverter({ db: database });
-    await expect(edgeApprove("t", { bogus: true }, { id: "x" })).rejects.toThrow();
     const noteAppend = makeNoteAppendSectionInverter({
       facade,
       echoGuard,

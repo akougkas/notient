@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "../db/database";
 import { MemoryAdapter, loadWasm } from "../db/database.test";
 import { HistoryService } from "./historyService";
-import { makeEdgeApproveInverter } from "./inverters/edgeApprove";
 import type { Inverter } from "./types";
 
 async function newDb(): Promise<Database> {
@@ -233,51 +232,6 @@ describe("HistoryService", () => {
     expect(captured).toEqual(["/second.md"]);
     const remaining = service.getRecent(10);
     expect(remaining.map((row) => row.target)).toEqual(["/first.md"]);
-  });
-
-  test("undoLast for edge.approve whose target was manually deleted fails open and keeps the row", async () => {
-    const database = await newDb();
-    // Seed a live edge so the original approve "happened".
-    database.run(
-      `INSERT INTO graph_edges
-        (id, type, source_id, target_id, confidence, agent, evidence, approved, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?);`,
-      ["edge:live", "supports", "note:/a.md", "note:/b.md", 0.9, "linker", "[]", 1, 100],
-    );
-    const service = new HistoryService({
-      db: database,
-      inverters: { "edge.approve": makeEdgeApproveInverter({ db: database }) },
-      retention: { max: 100, maxPerTarget: 50 },
-    });
-    const id = await service.record({
-      kind: "edge.approve",
-      target: "staging:edge",
-      before: {
-        id: "staging:edge",
-        type: "supports",
-        source_id: "note:/a.md",
-        target_id: "note:/b.md",
-        confidence: 0.9,
-        agent: "linker",
-        evidence: "[]",
-        rationale: null,
-        created_at: 50,
-      },
-      after: { id: "edge:live" },
-    });
-    // External actor (or another sync path) deletes the live edge before undo runs.
-    database.run("DELETE FROM graph_edges WHERE id = ?;", ["edge:live"]);
-
-    const result = await service.undoLast();
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("no longer exists");
-
-    // History row MUST remain so the failure is auditable.
-    const remaining = database.query<{ id: number }>("SELECT id FROM history WHERE id = ?;", [id]);
-    expect(remaining).toHaveLength(1);
-    // staging row was NOT silently re-inserted.
-    const stagedRows = database.query<{ id: string }>("SELECT id FROM staging_edges;");
-    expect(stagedRows).toHaveLength(0);
   });
 
   test("undoLast on empty history returns an error", async () => {

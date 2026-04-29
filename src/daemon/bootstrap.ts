@@ -25,10 +25,6 @@ import { createTranscriptDistiller } from "../core/distill/transcriptDistiller";
 import { EventBus } from "../core/events/eventBus";
 import { GraphStore } from "../core/graph/graphStore";
 import { HistoryService } from "../core/history/historyService";
-import { makeEdgeApproveInverter } from "../core/history/inverters/edgeApprove";
-import { makeEdgeRejectInverter } from "../core/history/inverters/edgeReject";
-import { makeNodeApproveInverter } from "../core/history/inverters/nodeApprove";
-import { makeNodeRejectInverter } from "../core/history/inverters/nodeReject";
 import { makeNoteAppendSectionInverter } from "../core/history/inverters/noteAppendSection";
 import { makeNoteCreateInverter } from "../core/history/inverters/noteCreate";
 import { makeNoteFrontmatterInverter } from "../core/history/inverters/noteFrontmatter";
@@ -754,8 +750,10 @@ export interface BuildHistoryInvertersOptions {
 
 /**
  * Build the InverterRegistry the daemon installs into HistoryService. Covers
- * every kind in `HistoryKind`: chat-side `notes.*` writes, graph-side
- * `edge.*`/`node.*` proposals, and the maturity advancer's body+column write.
+ * the body-edit kinds and the maturity advancer's body+column write. Phase 4
+ * Task 3 retired the `edge.*` and `node.*` inverters because the staging
+ * tables they reverted no longer exist; rejections in the new SurrealDB
+ * approval flow are total deletes with no `history` row.
  *
  * The body-edit kinds (`note.append_section`, `note.frontmatter`) reuse the
  * chat-side append/frontmatter inverters because they share the same payload
@@ -793,15 +791,6 @@ export function buildHistoryInverters(options: BuildHistoryInvertersOptions): In
       echoGuard,
       hash: options.hash,
     }),
-    "edge.approve": makeEdgeApproveInverter({ db: options.database }),
-    "edge.reject": makeEdgeRejectInverter({ db: options.database }),
-    "node.approve": makeNodeApproveInverter({
-      db: options.database,
-      facade: removeFacade,
-      echoGuard,
-      hash: options.hash,
-    }),
-    "node.reject": makeNodeRejectInverter({ db: options.database }),
   };
 }
 

@@ -105,7 +105,7 @@ describe("bootstrap buildRecordHistoryAutoApprove", () => {
 });
 
 describe("bootstrap buildHistoryInverters", () => {
-  test("registers an inverter for every HistoryKind", async () => {
+  test("registers an inverter for every body-edit HistoryKind", async () => {
     const database = await newDb();
     const inverters = buildHistoryInverters({
       database,
@@ -115,11 +115,12 @@ describe("bootstrap buildHistoryInverters", () => {
       markEcho: () => {},
       hash: async () => "sha",
     });
+    // Phase 4 Task 3 retired edge.* and node.* inverters; rejections under
+    // the SurrealDB approval flow are total deletes that record no history
+    // row, and approvals route through ApprovalService directly. The
+    // body-edit kinds remain because /undo of a body mutation is still a
+    // file-restore operation against the vault.
     const expected: HistoryKind[] = [
-      "edge.approve",
-      "edge.reject",
-      "node.approve",
-      "node.reject",
       "note.append_section",
       "note.frontmatter",
       "note.maturity",
@@ -131,5 +132,9 @@ describe("bootstrap buildHistoryInverters", () => {
     for (const kind of expected) {
       expect(typeof inverters[kind]).toBe("function");
     }
+    expect(inverters["edge.approve"]).toBeUndefined();
+    expect(inverters["edge.reject"]).toBeUndefined();
+    expect(inverters["node.approve"]).toBeUndefined();
+    expect(inverters["node.reject"]).toBeUndefined();
   });
 });

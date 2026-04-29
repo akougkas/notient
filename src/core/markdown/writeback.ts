@@ -40,8 +40,24 @@ import type { WikiLinkNode } from "./plugins/remarkWikilink";
  * This module supersedes the legacy `nativeGraphBridge` / `relatedSection` /
  * `frontmatterWriter` helpers; Task 5 deletes those.
  *
- * TODO(Task 3): name the chosen failure-semantics contract (pending-state
- * OR inverted-order) here.
+ * Failure-semantics contract: PENDING-STATE.
+ *
+ * Approve-and-write flow owned by `ApprovalService.approveEdge`:
+ *   1. UPDATE edge SET approved = true, applied = false.
+ *   2. Run `applyApprovedLink` / `applyApprovedRelation` in memory.
+ *   3. If output equals input, flip `applied = true` and finish (idempotent
+ *      no-op).
+ *   4. Otherwise: insert a `daemon_write` row, perform the atomic file
+ *      write, then a single SurrealDB transaction inserts the `history`
+ *      row and flips `applied = true`.
+ *
+ * On crash anywhere between steps 1 and 4, daemon start runs
+ * `ApprovalService.reconcilePendingApplications`, which selects rows with
+ * `approved = true AND applied = false` and replays the flow from step 2.
+ * The writeback itself is idempotent (Locked Decision 2); duplicate
+ * `daemon_write` inserts are guarded by `findRecentDaemonWrite`; the
+ * `applied` flip is the end-of-flow commit signal that consumers (Task 11)
+ * filter on via `WHERE approved = true AND applied = true`.
  */
 
 export interface ApplyApprovedLinkInput {

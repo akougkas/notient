@@ -57,12 +57,23 @@ export const TIER1_EDGE_TABLES = [
 export const TIER1_EDGE_CLASS = "EXTRACTED" as const;
 
 /**
- * Returns the SurrealQL DDL block that defines the seven provenance fields
- * and two indexes for a single edge table. Every `DEFINE FIELD` and
+ * Returns the SurrealQL DDL block that defines the eight provenance fields
+ * and three indexes for a single edge table. Every `DEFINE FIELD` and
  * `DEFINE INDEX` uses `OVERWRITE` so re-applying the block is a no-op.
  *
  * Mirrors the representative block in spec §3.4 (lines 159-175), substituting
  * the table name for `wikilink`.
+ *
+ * `applied` is the second half of the pending-state contract owned by
+ * `ApprovalService` (Phase 4 plan §Task 3). The default of `true` keeps
+ * extractor and Tier 1 edges untouched: those edges have no writeback to run
+ * and therefore land in the terminal applied state at creation time. Linker
+ * proposals (`approved = false`) inherit `applied = true` as well; the
+ * approve flow flips `applied` to `false` while it runs the writeback and
+ * back to `true` when the `history` row is committed. Search consumers that
+ * adopt the `approved AND applied` filter (Task 11) see no behaviour change
+ * for the extractor/Tier 1 case, while linker rows become visible only
+ * after the writeback finishes.
  */
 export function provenanceFields(table: EdgeTable): string {
   return [
@@ -72,8 +83,10 @@ export function provenanceFields(table: EdgeTable): string {
     `DEFINE FIELD OVERWRITE evidence ON ${table} TYPE option<array<record<chunk>>>;`,
     `DEFINE FIELD OVERWRITE agent ON ${table} TYPE option<string>;`,
     `DEFINE FIELD OVERWRITE approved ON ${table} TYPE bool DEFAULT true;`,
+    `DEFINE FIELD OVERWRITE applied ON ${table} TYPE bool DEFAULT true;`,
     `DEFINE FIELD OVERWRITE created_at ON ${table} TYPE datetime DEFAULT time::now();`,
     `DEFINE INDEX OVERWRITE ${table}_approved ON ${table} FIELDS approved;`,
+    `DEFINE INDEX OVERWRITE ${table}_applied ON ${table} FIELDS applied;`,
     `DEFINE INDEX OVERWRITE ${table}_source ON ${table} FIELDS source;`,
   ].join("\n");
 }
