@@ -96,4 +96,98 @@ describe("IndexerQueue", () => {
     expect(calls).toEqual(["notes/keep.md"]);
     queue.dispose();
   });
+
+  test("higher-priority enqueue drains before earlier lower-priority entries", async () => {
+    const calls: string[] = [];
+    const release: (() => void)[] = [];
+    const gate = new Promise<void>((resolve) => {
+      release.push(resolve);
+    });
+    let first = true;
+    const fn: IndexNoteFn = async (path) => {
+      if (first) {
+        first = false;
+        calls.push(path);
+        await gate;
+        return;
+      }
+      calls.push(path);
+    };
+    const bus = new EventBus();
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus });
+    queue.enqueue("/blocker.md", 2);
+    await tick(20);
+    queue.enqueue("/low.md", 1);
+    queue.enqueue("/high.md", 0);
+    await tick(20);
+    expect(calls).toEqual(["/blocker.md"]);
+    release[0]();
+    await tick(40);
+    expect(calls).toEqual(["/blocker.md", "/high.md", "/low.md"]);
+    queue.dispose();
+  });
+
+  test("pendingCount(priority) reports per-tier backlog across debounce and ready", async () => {
+    const release: (() => void)[] = [];
+    const gate = new Promise<void>((resolve) => {
+      release.push(resolve);
+    });
+    let first = true;
+    const fn: IndexNoteFn = async () => {
+      if (first) {
+        first = false;
+        await gate;
+      }
+    };
+    const bus = new EventBus();
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus });
+    queue.enqueue("/blocker.md", 0);
+    await tick(50);
+    queue.enqueue("/ready-low.md", 1);
+    queue.enqueue("/ready-high.md", 0);
+    await tick(50);
+    queue.enqueue("/pending-low.md", 1);
+    queue.enqueue("/pending-high.md", 0);
+    expect(queue.pendingCount(0)).toBe(2);
+    expect(queue.pendingCount(1)).toBe(2);
+    expect(queue.pendingCount(2)).toBe(0);
+    expect(queue.pendingCount()).toBe(4);
+    release[0]();
+    await tick(120);
+    queue.dispose();
+  });
+
+  test("re-enqueue while debouncing updates priority to the latest value", async () => {
+    const calls: string[] = [];
+    const release: (() => void)[] = [];
+    const gate = new Promise<void>((resolve) => {
+      release.push(resolve);
+    });
+    let first = true;
+    const fn: IndexNoteFn = async (path) => {
+      if (first) {
+        first = false;
+        calls.push(path);
+        await gate;
+        return;
+      }
+      calls.push(path);
+    };
+    const bus = new EventBus();
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus });
+    queue.enqueue("/blocker.md", 2);
+    await tick(50);
+    queue.enqueue("/sibling.md", 1);
+    queue.enqueue("/upgrade.md", 2);
+    await tick(10);
+    queue.enqueue("/upgrade.md", 0);
+    expect(queue.pendingCount(0)).toBe(1);
+    expect(queue.pendingCount(2)).toBe(0);
+    await tick(50);
+    expect(calls).toEqual(["/blocker.md"]);
+    release[0]();
+    await tick(60);
+    expect(calls).toEqual(["/blocker.md", "/upgrade.md", "/sibling.md"]);
+    queue.dispose();
+  });
 });
