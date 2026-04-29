@@ -1,3 +1,4 @@
+import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
 import { runAwakenCommand } from "./commands/awaken";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
@@ -56,8 +57,18 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
     emitter.emit({
       type: "help",
-      commands: ["init", "daemon", "awaken", "reindex", "search", "vitals", "health", "chat"],
-      note: "Phase C surface; richer surface lands in Phases D-E.",
+      commands: [
+        "init",
+        "daemon",
+        "awaken",
+        "reindex",
+        "search",
+        "vitals",
+        "health",
+        "chat",
+        "ask",
+      ],
+      note: "Phase C surface plus Phase D1 agent.ask; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -72,6 +83,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "vitals") return await dispatchVitals(parsed, emitter, clientIdentity);
   if (parsed.command === "health") return await dispatchHealth(parsed, emitter, clientIdentity);
   if (parsed.command === "chat") return await dispatchChat(parsed, emitter, clientIdentity);
+  if (parsed.command === "ask") return await dispatchAsk(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -193,6 +205,28 @@ async function dispatchChat(
   }
   await runChatSingleShot({ vaultPath, prompt, approve, emitter, clientIdentity });
   return 0;
+}
+
+async function dispatchAsk(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const intent = parsed.positional.join(" ").trim();
+  if (intent.length === 0) {
+    throw new Error('INVALID_PARAMS: ask requires a positional intent (e.g. notient ask "...")');
+  }
+  const format = parseAskFormat(parsed.flags.format);
+  const maxRoundsPerTurn = parseAskMaxRounds(parsed.flags["max-rounds"]);
+  return await runAskCommand({
+    vaultPath,
+    intent,
+    format,
+    maxRoundsPerTurn,
+    emitter,
+    clientIdentity,
+  });
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {

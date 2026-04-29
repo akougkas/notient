@@ -34,6 +34,7 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "conversationStore",
   "conversationIndex",
   "toolRegistry",
+  "toolModeCache",
   "approvalGate",
   "contextManager",
   "chatService",

@@ -612,6 +612,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("conversationIndex", conversationIndex);
   kernel.register("approvalGate", approvalGate);
   kernel.register("toolRegistry", toolRegistry);
+  kernel.register("toolModeCache", toolModeCache);
   kernel.register("contextManager", contextManager);
   kernel.register("chatService", chatService);
   kernel.register("historyService", historyService);

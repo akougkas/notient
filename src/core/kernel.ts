@@ -6,6 +6,7 @@ import type { ChatService } from "./chat/chatService";
 import type { ContextManager } from "./chat/contextManager";
 import type { ConversationIndex } from "./chat/conversationIndex";
 import type { ConversationStore } from "./chat/conversationStore";
+import type { ToolModeCache } from "./chat/toolModeProbe";
 import type { ToolRegistry } from "./chat/tools/registry";
 import type { CoAuthorService } from "./coAuthor/chatStream";
 import type { Coordinator } from "./coordinator/coordinator";
@@ -69,6 +70,7 @@ export interface ServiceRegistry {
   conversationStore: ConversationStore;
   conversationIndex: ConversationIndex;
   toolRegistry: ToolRegistry;
+  toolModeCache: ToolModeCache;
   approvalGate: ApprovalGate;
   contextManager: ContextManager;
   chatService: ChatService;
@@ -126,6 +128,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "conversationStore",
   "conversationIndex",
   "toolRegistry",
+  "toolModeCache",
   "approvalGate",
   "contextManager",
   "chatService",
@@ -171,6 +174,7 @@ const PHASE_C_KEYS: ServiceKey[] = [
   "conversationIndex",
   "approvalGate",
   "toolRegistry",
+  "toolModeCache",
   "contextManager",
   "chatService",
 ];

@@ -3,6 +3,7 @@ import { type Socket, createServer } from "node:net";
 import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
 import { CoordinatorRunner } from "./coordinatorRunner";
+import { makeAgentAskHandler } from "./handlers/agentAsk";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
@@ -161,6 +162,22 @@ async function main(argv: string[]): Promise<void> {
   dispatcher.register("chat.list", chatHandlers.list);
   dispatcher.register("chat.load", chatHandlers.load);
   dispatcher.register("chat.approve", chatHandlers.approve);
+
+  const agentAskHandler = makeAgentAskHandler({
+    provider: kernel.get("primaryLLM"),
+    toolRegistry: kernel.get("toolRegistry"),
+    approvalGate: kernel.get("approvalGate"),
+    toolModeCache: kernel.get("toolModeCache"),
+    bus: kernel.get("bus"),
+    settings: () => {
+      const live = settings.get();
+      return {
+        model: live.primary.reasoningModel,
+        defaultMaxRoundsPerTurn: live.chat.maxRoundsPerTurn,
+      };
+    },
+  });
+  dispatcher.register("agent.ask", agentAskHandler);
 
   const vaultHandlers = makeVaultHandlers({ vault: kernel.get("vault") });
   const notesHandlers = makeNotesHandlers({

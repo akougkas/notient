@@ -82,6 +82,18 @@ export class ToolRegistry {
     }));
   }
 
+  /**
+   * Returns a new ToolRegistry containing only tools whose names satisfy the
+   * predicate. Used by `agent.ask` to build a read-only allowlist subset.
+   */
+  withFilter(predicate: (toolName: string) => boolean): ToolRegistry {
+    const next = new ToolRegistry();
+    for (const [name, tool] of this.tools) {
+      if (predicate(name)) next.tools.set(name, tool);
+    }
+    return next;
+  }
+
   exportToolsForOpenAI(): OpenAIToolEntry[] {
     return Array.from(this.tools.values()).map((tool) => ({
       type: "function",
