@@ -5,26 +5,31 @@ import { resolveTargets } from "../markdown/resolver";
 import { headingSlug } from "../markdown/slug";
 import type { MarkdownExtraction, WikilinkSpec } from "../markdown/types";
 import {
-  clearTier1Edges,
-  insertUnresolvedEdge,
   lookupBlockByExplicitId,
   lookupBlockByHeading,
   lookupNoteByPath,
-  markTier1Done,
-  relateEdge,
-  replaceBlocks,
-  upsertNoteByPath,
-  upsertTag,
 } from "../db/surreal";
+import type { EdgeTable } from "../db/edgeTables";
 
 /**
  * Tier 1 indexer: turns a saved note into deterministic SurrealDB edges.
  *
  * Spec: §5.2, Phase 2 plan §Task 12.
  *
- * Atomicity is delivered via a session-level BEGIN TRANSACTION ... COMMIT
- * pair. If any step throws, the transaction is cancelled and `tier1_at`
- * does not advance.
+ * Atomicity is delivered via a single SurrealQL script that begins with
+ * `BEGIN TRANSACTION;` and ends with `COMMIT TRANSACTION;`. SurrealDB
+ * rolls the entire script back when any statement inside the script
+ * fails, so the note's `tier1_at` does not advance and no partial blocks
+ * or edges remain on disk. Pre-resolution work (parse, extract, resolver,
+ * existence checks for the active note and every tag, target lookups
+ * for cross-note wikilinks and frontmatter refs) runs BEFORE the
+ * transaction; the transaction only writes.
+ *
+ * Pre-existence checks let us emit `CREATE ONLY` for new rows. SurrealDB
+ * 3.x silently no-ops `UPSERT ... WHERE ...` when an assertion would
+ * reject the implied insert; `CREATE` raises the error and the
+ * transaction rolls back. Notes that already exist take an `UPDATE` path
+ * via the resolved record id.
  */
 
 export interface Tier1Input {
@@ -38,39 +43,259 @@ export interface Tier1Output {
   extraction: MarkdownExtraction;
 }
 
-interface ResolvedWikilink extends WikilinkSpec {
-  resolvedTargetPath: string | null;
-}
+const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
+  "wikilink",
+  "embed",
+  "frontmatter_ref",
+  "tagged",
+  "contained_in",
+  "under_heading",
+];
+const TIER1_EDGE_SOURCES = ["wikilink", "embed", "frontmatter", "structure"];
+
+type WikilinkTarget =
+  | { kind: "unresolved" }
+  | { kind: "selfNote" }
+  | { kind: "other"; recordId: RecordId<"note"> | RecordId<"block"> };
+
+type FrontmatterTarget =
+  | { kind: "unresolved" }
+  | { kind: "selfNote" }
+  | { kind: "other"; recordId: RecordId<"note"> };
 
 async function resolveWikilinkTarget(
   db: Surreal,
-  link: ResolvedWikilink,
-): Promise<RecordId<"note"> | RecordId<"block"> | null> {
-  if (link.resolvedTargetPath === null) {
-    return null;
+  link: WikilinkSpec,
+  resolvedTargetPath: string | null,
+  activeNotePath: string,
+): Promise<WikilinkTarget> {
+  if (resolvedTargetPath === null) {
+    return { kind: "unresolved" };
   }
-  const noteId = await lookupNoteByPath(db, link.resolvedTargetPath);
+  if (resolvedTargetPath === activeNotePath) {
+    return { kind: "selfNote" };
+  }
+  const noteId = await lookupNoteByPath(db, resolvedTargetPath);
   if (noteId === null) {
-    return null;
+    return { kind: "unresolved" };
   }
   if (link.targetBlockId !== null) {
     const blockId = await lookupBlockByExplicitId(db, noteId, link.targetBlockId);
-    if (blockId !== null) {
-      return blockId;
-    }
-    return noteId;
+    return { kind: "other", recordId: blockId ?? noteId };
   }
   if (link.targetHeading !== null) {
     const slug = headingSlug(link.targetHeading);
     if (slug.length > 0) {
       const blockId = await lookupBlockByHeading(db, noteId, slug);
       if (blockId !== null) {
-        return blockId;
+        return { kind: "other", recordId: blockId };
       }
     }
-    return noteId;
+    return { kind: "other", recordId: noteId };
   }
-  return noteId;
+  return { kind: "other", recordId: noteId };
+}
+
+async function resolveFrontmatterTarget(
+  db: Surreal,
+  resolvedTargetPath: string | null,
+  activeNotePath: string,
+): Promise<FrontmatterTarget> {
+  if (resolvedTargetPath === null) {
+    return { kind: "unresolved" };
+  }
+  if (resolvedTargetPath === activeNotePath) {
+    return { kind: "selfNote" };
+  }
+  const noteId = await lookupNoteByPath(db, resolvedTargetPath);
+  if (noteId === null) {
+    return { kind: "unresolved" };
+  }
+  return { kind: "other", recordId: noteId };
+}
+
+async function lookupTagId(db: Surreal, tagPath: string): Promise<RecordId<"tag"> | null> {
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"tag"> }>]>("SELECT id FROM tag WHERE path = $path LIMIT 1;", {
+      path: tagPath,
+    })
+    .collect<[Array<{ id: RecordId<"tag"> }>]>();
+  return rows[0]?.id ?? null;
+}
+
+interface TransactionScript {
+  sql: string;
+  bindings: Record<string, unknown>;
+}
+
+function fromExpression(fromBlockOrd: number | null, blockCount: number): string {
+  if (fromBlockOrd !== null && fromBlockOrd >= 0 && fromBlockOrd < blockCount) {
+    return `$block${fromBlockOrd}`;
+  }
+  return "$noteId";
+}
+
+function buildTier1Transaction(
+  notePath: string,
+  extraction: MarkdownExtraction,
+  existingNoteId: RecordId<"note"> | null,
+  existingTagIds: Array<RecordId<"tag"> | null>,
+  wikilinkTargets: WikilinkTarget[],
+  frontmatterTargets: FrontmatterTarget[],
+): TransactionScript {
+  const statements: string[] = [];
+  const bindings: Record<string, unknown> = {
+    notePath,
+    sha: extraction.bodySha,
+    wordCount: extraction.wordCount,
+    tier1Sources: TIER1_EDGE_SOURCES,
+  };
+
+  statements.push("BEGIN TRANSACTION;");
+
+  if (existingNoteId !== null) {
+    bindings.existingNoteId = existingNoteId;
+    statements.push("UPDATE $existingNoteId SET sha = $sha, word_count = $wordCount;");
+    statements.push("LET $noteId = $existingNoteId;");
+  } else {
+    statements.push(
+      "LET $noteId = (CREATE ONLY note CONTENT { path: $notePath, sha: $sha, word_count: $wordCount }).id;",
+    );
+  }
+
+  for (const table of TIER1_EDGE_TABLES) {
+    statements.push(
+      `DELETE ${table} WHERE source IN $tier1Sources AND (in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId));`,
+    );
+  }
+  statements.push(
+    "DELETE wikilink_unresolved WHERE in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId);",
+  );
+  statements.push(
+    "DELETE embed_unresolved WHERE in = $noteId OR in IN (SELECT VALUE id FROM block WHERE note = $noteId);",
+  );
+  statements.push("DELETE block WHERE note = $noteId;");
+
+  const blocks = extraction.blocks;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    const fields: string[] = [
+      "note: $noteId",
+      `ord: $block${index}_ord`,
+      `start_line: $block${index}_startLine`,
+      `end_line: $block${index}_endLine`,
+      `text: $block${index}_text`,
+      `heading_path: $block${index}_headingPath`,
+    ];
+    bindings[`block${index}_ord`] = block.ord;
+    bindings[`block${index}_startLine`] = block.startLine;
+    bindings[`block${index}_endLine`] = block.endLine;
+    bindings[`block${index}_text`] = block.text;
+    bindings[`block${index}_headingPath`] = block.headingPath;
+    if (block.blockId !== null) {
+      fields.push(`block_id: $block${index}_blockId`);
+      bindings[`block${index}_blockId`] = block.blockId;
+    }
+    if (block.headingSlug !== null) {
+      fields.push(`heading_slug: $block${index}_headingSlug`);
+      bindings[`block${index}_headingSlug`] = block.headingSlug;
+    }
+    if (block.headingLevel !== null) {
+      fields.push(`heading_level: $block${index}_headingLevel`);
+      bindings[`block${index}_headingLevel`] = block.headingLevel;
+    }
+    statements.push(
+      `LET $block${index} = (CREATE ONLY block CONTENT { ${fields.join(", ")} }).id;`,
+    );
+  }
+
+  let currentHeadingIndex: number | null = null;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    statements.push(
+      `RELATE $block${index} -> contained_in -> $noteId SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
+    );
+    if (block.headingLevel !== null) {
+      currentHeadingIndex = index;
+      continue;
+    }
+    if (currentHeadingIndex !== null) {
+      statements.push(
+        `RELATE $block${index} -> under_heading -> $block${currentHeadingIndex} SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
+      );
+    }
+  }
+
+  for (let index = 0; index < extraction.wikilinks.length; index += 1) {
+    const link = extraction.wikilinks[index];
+    const target = wikilinkTargets[index];
+    const fromExpr = fromExpression(link.fromBlockOrd, blocks.length);
+    const isEmbed = link.isEmbed;
+    const sourceLabel = isEmbed ? "embed" : "wikilink";
+
+    if (target.kind === "unresolved") {
+      const unresolvedTable = isEmbed ? "embed_unresolved" : "wikilink_unresolved";
+      bindings[`wl${index}_rawTarget`] = link.rawTarget;
+      bindings[`wl${index}_source`] = sourceLabel;
+      statements.push(
+        `CREATE ${unresolvedTable} CONTENT { in: ${fromExpr}, raw_target: $wl${index}_rawTarget, source: $wl${index}_source };`,
+      );
+      continue;
+    }
+
+    let toExpr: string;
+    if (target.kind === "selfNote") {
+      toExpr = "$noteId";
+    } else {
+      bindings[`wl${index}_target`] = target.recordId;
+      toExpr = `$wl${index}_target`;
+    }
+    const edgeTable = isEmbed ? "embed" : "wikilink";
+    bindings[`wl${index}_source`] = sourceLabel;
+    statements.push(
+      `RELATE ${fromExpr} -> ${edgeTable} -> ${toExpr} SET source = $wl${index}_source, class = 'EXTRACTED', confidence = 1;`,
+    );
+  }
+
+  for (let index = 0; index < extraction.frontmatterRefs.length; index += 1) {
+    const target = frontmatterTargets[index];
+    if (target.kind === "unresolved") {
+      continue;
+    }
+    let toExpr: string;
+    if (target.kind === "selfNote") {
+      toExpr = "$noteId";
+    } else {
+      bindings[`fm${index}_target`] = target.recordId;
+      toExpr = `$fm${index}_target`;
+    }
+    statements.push(
+      `RELATE $noteId -> frontmatter_ref -> ${toExpr} SET source = 'frontmatter', class = 'EXTRACTED', confidence = 1;`,
+    );
+  }
+
+  for (let index = 0; index < extraction.tags.length; index += 1) {
+    const tag = extraction.tags[index];
+    const existingTagId = existingTagIds[index];
+    if (existingTagId !== null) {
+      bindings[`tag${index}_existingId`] = existingTagId;
+      statements.push(`LET $tag${index} = $tag${index}_existingId;`);
+    } else {
+      bindings[`tag${index}_path`] = tag.path;
+      statements.push(
+        `LET $tag${index} = (CREATE ONLY tag CONTENT { path: $tag${index}_path }).id;`,
+      );
+    }
+    const fromExpr = fromExpression(tag.fromBlockOrd, blocks.length);
+    statements.push(
+      `RELATE ${fromExpr} -> tagged -> $tag${index} SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
+    );
+  }
+
+  statements.push("UPDATE $noteId SET tier1_at = time::now();");
+  statements.push("COMMIT TRANSACTION;");
+
+  return { sql: statements.join("\n"), bindings };
 }
 
 export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Output> {
@@ -96,121 +321,35 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     input.vaultPaths,
   );
 
-  // Per-operation atomicity only: surrealdb-js opens a fresh implicit
-  // transaction per query, so a session-level BEGIN/COMMIT pair via
-  // separate db.query() calls is not honored. markTier1Done is the last
-  // step; on partial failure, the next runTier1 retry self-heals because
-  // replaceBlocks and clearTier1Edges are delete-then-insert idempotent.
-  try {
-    const noteId = await upsertNoteByPath(db, {
-      path: input.notePath,
-      sha: extraction.bodySha,
-      wordCount: extraction.wordCount,
-    });
+  const [existingNoteId, wikilinkTargets, frontmatterTargets, existingTagIds] = await Promise.all([
+    lookupNoteByPath(db, input.notePath),
+    Promise.all(
+      extraction.wikilinks.map((link, index) =>
+        resolveWikilinkTarget(db, link, wikilinkResolutions[index].targetPath, input.notePath),
+      ),
+    ),
+    Promise.all(
+      frontmatterResolutions.map((resolution) =>
+        resolveFrontmatterTarget(db, resolution.targetPath, input.notePath),
+      ),
+    ),
+    Promise.all(extraction.tags.map((tag) => lookupTagId(db, tag.path))),
+  ]);
 
-    await clearTier1Edges(db, noteId);
-    const blockIds = await replaceBlocks(db, noteId, extraction.blocks);
+  const { sql, bindings } = buildTier1Transaction(
+    input.notePath,
+    extraction,
+    existingNoteId,
+    existingTagIds,
+    wikilinkTargets,
+    frontmatterTargets,
+  );
 
-    let currentHeadingBlock: RecordId<"block"> | null = null;
-    for (let index = 0; index < extraction.blocks.length; index += 1) {
-      const block = extraction.blocks[index];
-      const blockId = blockIds[index];
-      await relateEdge(db, {
-        table: "contained_in",
-        from: blockId,
-        to: noteId,
-        source: "structure",
-        confidenceClass: "EXTRACTED",
-        confidence: 1,
-      });
-      if (block.headingLevel !== null) {
-        currentHeadingBlock = blockId;
-        continue;
-      }
-      if (currentHeadingBlock !== null) {
-        await relateEdge(db, {
-          table: "under_heading",
-          from: blockId,
-          to: currentHeadingBlock,
-          source: "structure",
-          confidenceClass: "EXTRACTED",
-          confidence: 1,
-        });
-      }
-    }
+  await db.query(sql, bindings).collect();
 
-    for (let index = 0; index < extraction.wikilinks.length; index += 1) {
-      const link = extraction.wikilinks[index];
-      const resolution = wikilinkResolutions[index];
-      const fromBlockOrd = link.fromBlockOrd;
-      const fromId =
-        fromBlockOrd !== null && fromBlockOrd >= 0 && fromBlockOrd < blockIds.length
-          ? blockIds[fromBlockOrd]
-          : noteId;
-      const enriched: ResolvedWikilink = { ...link, resolvedTargetPath: resolution.targetPath };
-      const toId = await resolveWikilinkTarget(db, enriched);
-      const isEmbed = link.isEmbed;
-      const edgeKind = isEmbed ? "embed" : "wikilink";
-      if (toId === null) {
-        await insertUnresolvedEdge(db, {
-          kind: edgeKind,
-          from: fromId,
-          rawTarget: link.rawTarget,
-          source: edgeKind,
-        });
-        continue;
-      }
-      await relateEdge(db, {
-        table: edgeKind,
-        from: fromId,
-        to: toId,
-        source: edgeKind,
-        confidenceClass: "EXTRACTED",
-        confidence: 1,
-      });
-    }
-
-    for (let index = 0; index < extraction.frontmatterRefs.length; index += 1) {
-      const ref = extraction.frontmatterRefs[index];
-      const resolution = frontmatterResolutions[index];
-      if (resolution.targetPath === null) {
-        continue;
-      }
-      const targetNote = await lookupNoteByPath(db, resolution.targetPath);
-      if (targetNote === null) {
-        continue;
-      }
-      await relateEdge(db, {
-        table: "frontmatter_ref",
-        from: noteId,
-        to: targetNote,
-        source: "frontmatter",
-        confidenceClass: "EXTRACTED",
-        confidence: 1,
-      });
-    }
-
-    for (const tag of extraction.tags) {
-      const tagId = await upsertTag(db, tag.path);
-      const fromId =
-        tag.fromBlockOrd !== null &&
-        tag.fromBlockOrd >= 0 &&
-        tag.fromBlockOrd < blockIds.length
-          ? blockIds[tag.fromBlockOrd]
-          : noteId;
-      await relateEdge(db, {
-        table: "tagged",
-        from: fromId,
-        to: tagId,
-        source: "structure",
-        confidenceClass: "EXTRACTED",
-        confidence: 1,
-      });
-    }
-
-    await markTier1Done(db, noteId);
-    return { noteId, extraction };
-  } catch (error) {
-    throw error;
+  const noteId = await lookupNoteByPath(db, input.notePath);
+  if (noteId === null) {
+    throw new Error(`runTier1: note not found by path '${input.notePath}' after commit.`);
   }
+  return { noteId, extraction };
 }

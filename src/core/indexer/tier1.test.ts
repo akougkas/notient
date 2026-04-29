@@ -158,4 +158,52 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     const after = afterCount[0]?.count ?? 0;
     expect(after).toBe(before);
   });
+
+  test("rolls back the entire transaction when a tag CREATE violates the schema regex", async () => {
+    const badNotePath = "notes/rollback.md";
+    const badFixture = `# Rollback Heading
+
+A paragraph with [[rollback-only-missing-target]] and a #rollbackonlytag and an #_badtag tag.
+`;
+    let threwError = false;
+    try {
+      await runTier1(connection.db, {
+        notePath: badNotePath,
+        source: badFixture,
+        vaultPaths: [...vaultPaths, badNotePath],
+      });
+    } catch {
+      threwError = true;
+    }
+    expect(threwError).toBe(true);
+
+    const [noteRows] = await connection.db
+      .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE path = $path;", {
+        path: badNotePath,
+      })
+      .collect<[Array<{ id: RecordId<"note"> }>]>();
+    expect(noteRows.length).toBe(0);
+
+    const [blockRows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM block WHERE note IN (SELECT VALUE id FROM note WHERE path = $path) GROUP ALL;",
+        { path: badNotePath },
+      )
+      .collect<[Array<{ count: number }>]>();
+    expect(blockRows[0]?.count ?? 0).toBe(0);
+
+    const [unresolvedRows] = await connection.db
+      .query<[Array<{ raw_target: string }>]>(
+        "SELECT raw_target FROM wikilink_unresolved WHERE raw_target = 'rollback-only-missing-target';",
+      )
+      .collect<[Array<{ raw_target: string }>]>();
+    expect(unresolvedRows.length).toBe(0);
+
+    const [tagRows] = await connection.db
+      .query<[Array<{ path: string }>]>(
+        "SELECT path FROM tag WHERE path IN ['rollbackonlytag', '_badtag'];",
+      )
+      .collect<[Array<{ path: string }>]>();
+    expect(tagRows.length).toBe(0);
+  });
 });
