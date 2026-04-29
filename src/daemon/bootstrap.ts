@@ -258,23 +258,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const embedder = new Embedder(embeddingLLM, { model: current.embedding.model });
   const extractor = new Extractor(deepLLM, { model: current.deep.reasoningModel });
 
-  const indexer = new IndexerQueue({
-    bus,
-    indexNote: async (path) => {
-      const body = await vault.read(path);
-      return await indexNote({
-        notePath: path,
-        noteBody: body,
-        database,
-        graph,
-        vectorIndex,
-        embedder,
-        extractor,
-        bus,
-      });
-    },
-  });
-
   const vaultBootstrap = new VaultBootstrap({
     facade: {
       exists: (path) => vault.exists(path),
@@ -391,18 +374,38 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // it, fall back to a no-op linker so the Coordinator's agents map stays
   // populated and the swarm dispatch loop runs unchanged for the other
   // three agents.
-  const linker: Agent =
+  const concreteLinker: Linker | null =
     surrealConnection !== null
       ? new Linker({
           db: surrealConnection.db,
           provider: deepLLM,
           reasoningModel: current.deep.reasoningModel,
         })
-      : {
-          name: "linker" as const,
-          usesReasoningModel: false,
-          run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
-        };
+      : null;
+  const linker: Agent = concreteLinker ?? {
+    name: "linker" as const,
+    usesReasoningModel: false,
+    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+  };
+
+  const indexer = new IndexerQueue({
+    bus,
+    indexNote: async (path) => {
+      const body = await vault.read(path);
+      return await indexNote({
+        notePath: path,
+        noteBody: body,
+        database,
+        graph,
+        vectorIndex,
+        embedder,
+        extractor,
+        bus,
+        ...(surrealConnection !== null ? { surrealDb: surrealConnection } : {}),
+        ...(concreteLinker !== null ? { linker: concreteLinker } : {}),
+      });
+    },
+  });
 
   const synthesizer = new Synthesizer({
     db: database,

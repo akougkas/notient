@@ -1,85 +1,67 @@
+import type { Linker } from "../agents/linker";
 import type { Database } from "../db/database";
-import type { SurrealConnection } from "../db/surreal";
+import { type SurrealConnection, fetchChunksForTier3 } from "../db/surreal";
 import type { EventBus } from "../events/eventBus";
 import type { GraphStore } from "../graph/graphStore";
-import type { GraphEdge, GraphNode } from "../graph/types";
-import { runTier1 } from "./tier1";
-import { chunkNote } from "./chunker";
 import type { Embedder } from "./embedder";
 import type { Extractor } from "./extractor";
-import type { Chunk, Extraction, IndexResult } from "./types";
+import { runTier1 } from "./tier1";
+import { runTier2 } from "./tier2";
+import { runTier3 } from "./tier3";
+import type { IndexResult } from "./types";
 import type { VectorIndex } from "./vectorIndex";
+
+/**
+ * Phase 3 indexer entry point: runs Tier 1 → Tier 2 → Tier 3 sequentially
+ * against SurrealDB. Each tier is wrapped in its own try/catch; a failure in
+ * one tier short-circuits the remaining tiers for that note and emits an
+ * `indexer:error` event with the appropriate `phase` field.
+ *
+ * Spec: Phase 3 plan §Task 9. Search-side READS against the SQLite
+ * `embeddings` table are untouched (locked decision 7); the legacy
+ * SQLite-bound chunk/embedding/graph WRITE path that previously lived here
+ * has been removed.
+ *
+ * The `IndexResult` shape is preserved for callers that still inspect its
+ * fields. `chunkCount`/`embedCount` reflect Tier 2's chunk count (1:1 in
+ * Phase 3 because each chunk gets exactly one embedding). `nodeCount` and
+ * `edgeCount` are no longer populated and are reported as zero.
+ */
 
 export interface IndexNoteArgs {
   notePath: string;
   noteBody: string;
+  /** Legacy SQLite handle. Kept so search-side reads continue to function. */
   database: Database;
+  /** Legacy graph store. Phase 3 does not write to it from this entry point. */
   graph: GraphStore;
+  /** Legacy in-process vector index. Phase 3 does not write to it from here. */
   vectorIndex: VectorIndex;
   embedder: Embedder;
   extractor: Extractor;
   bus: EventBus;
-  /** Optional cancellation for embedding calls. */
+  /** Optional cancellation signal threaded into Tier 3's linker. */
   signal?: AbortSignal;
   /**
-   * Optional SurrealDB connection. When present, Tier 1 (markdown AST →
-   * deterministic edges) runs before the existing SQLite-backed flow.
-   * Tier 1 errors emit indexer:error with phase='tier1' and do not block
-   * the SQLite path.
+   * Optional SurrealDB connection. When present, Tiers 1–3 run; when
+   * undefined (legacy/test paths) the function emits no tier events and
+   * returns a minimal IndexResult.
    */
   surrealDb?: SurrealConnection;
+  /**
+   * Linker required by Tier 3. Must be provided whenever `surrealDb` is
+   * provided; absent in test paths that exercise only Tiers 1 and 2.
+   */
+  linker?: Linker;
 }
-
-const FENCE = "---";
 
 export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const start = Date.now();
-  const {
-    notePath,
-    noteBody,
-    database,
-    graph,
-    vectorIndex,
-    embedder,
-    extractor,
-    bus,
-    signal,
-    surrealDb,
-  } = args;
+  const { notePath, noteBody, database, embedder, extractor, bus, signal, surrealDb, linker } =
+    args;
   const sha = await sha256(noteBody);
 
-  if (surrealDb !== undefined) {
-    try {
-      const vaultPaths = database
-        .query<{ path: string }>("SELECT path FROM notes;", [])
-        .map((row) => row.path);
-      if (!vaultPaths.includes(notePath)) {
-        vaultPaths.push(notePath);
-      }
-      const tier1Result = await runTier1(surrealDb.db, {
-        notePath,
-        source: noteBody,
-        vaultPaths,
-        bus,
-      });
-      bus.emit({
-        type: "indexer:tier1-done",
-        path: notePath,
-        bodySha: tier1Result.extraction.bodySha,
-      });
-    } catch (error) {
-      bus.emit({
-        type: "indexer:error",
-        message: error instanceof Error ? error.message : String(error),
-        phase: "tier1",
-      });
-    }
-  }
-
-  const existing = database.query<{ sha: string }>("SELECT sha FROM notes WHERE path = ?;", [
-    notePath,
-  ]);
-  if (existing[0]?.sha === sha) {
+  if (surrealDb === undefined) {
     return {
       notePath,
       noteSha: sha,
@@ -91,116 +73,81 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
     };
   }
 
-  const body = stripFrontmatter(noteBody);
-  const chunks: Chunk[] = await chunkNote(notePath, body);
-  // Embed and extract in parallel: distinct LM Studio models (embedding vs reasoning)
-  // share no resources, so both calls flight simultaneously and keep both models hot.
-  // Extractor runs its own internal 4-way concurrency over chunk extractions.
-  const [vectors, extraction]: [number[][], Extraction] =
-    chunks.length > 0
-      ? await Promise.all([
-          embedder.embed(
-            chunks.map((c) => c.text),
-            signal,
-          ),
-          extractor.extract(chunks),
-        ])
-      : [[] as number[][], { entities: [], claims: [], questions: [] } as Extraction];
-
-  const nowMs = Date.now();
-  const noteNode: GraphNode = {
-    id: `note:${notePath}`,
-    type: "note",
-    label: notePath,
-    notePath,
-    payload: null,
-    createdAt: nowMs,
-  };
-
-  const conceptNodes = extraction.entities.map((label) => buildConceptNode(label, nowMs));
-  const claimNodes = extraction.claims.map((text) => buildClaimNode(notePath, text, nowMs));
-  const questionNodes = extraction.questions.map((text) =>
-    buildQuestionNode(notePath, text, nowMs),
-  );
-
-  const allNodes: GraphNode[] = [noteNode, ...conceptNodes, ...claimNodes, ...questionNodes];
-  const edgeAgent = "extractor";
-  const edges: GraphEdge[] = [
-    ...conceptNodes.map((c) => buildEdge("mentions", noteNode.id, c.id, edgeAgent, [], nowMs)),
-    ...claimNodes.map((c) => buildEdge("asserts", noteNode.id, c.id, edgeAgent, [], nowMs)),
-    ...questionNodes.map((q) => buildEdge("asks", noteNode.id, q.id, edgeAgent, [], nowMs)),
-  ];
-
-  database.transaction(() => {
-    database.run("DELETE FROM chunks WHERE note_path = ?;", [notePath]);
-    // Embeddings cascade via chunks ON DELETE CASCADE.
-    database.run("DELETE FROM graph_edges WHERE source_id = ?;", [noteNode.id]);
-    database.run(
-      `INSERT INTO notes (path, sha, word_count, indexed_at, updated_at)
-       VALUES (?,?,?,?,?)
-       ON CONFLICT(path) DO UPDATE SET sha = excluded.sha,
-         word_count = excluded.word_count,
-         updated_at = excluded.updated_at,
-         indexed_at = excluded.indexed_at;`,
-      [notePath, sha, countWords(body), nowMs, nowMs],
-    );
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      database.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-        chunk.id,
-        chunk.notePath,
-        chunk.ord,
-        chunk.text,
-        chunk.sha,
-      ]);
-      const vector = vectors[i];
-      if (vector) {
-        database.run("INSERT INTO embeddings (chunk_id, model, dim, vector) VALUES (?,?,?,?);", [
-          chunk.id,
-          "primary-embed",
-          vector.length,
-          new Uint8Array(Float32Array.from(vector).buffer),
-        ]);
-      }
+  let tier1Output: Awaited<ReturnType<typeof runTier1>> | null = null;
+  try {
+    const vaultPaths = database
+      .query<{ path: string }>("SELECT path FROM notes;", [])
+      .map((row) => row.path);
+    if (!vaultPaths.includes(notePath)) {
+      vaultPaths.push(notePath);
     }
-    for (const node of allNodes) graph.upsertNode(node);
-    for (const edge of edges) graph.insertEdge(edge);
-  });
-
-  for (let i = 0; i < chunks.length; i++) {
-    const v = vectors[i];
-    if (!v) continue;
-    vectorIndex.add(chunks[i].id, Float32Array.from(v));
-  }
-
-  for (const node of allNodes) {
-    bus.emit({
-      type: "indexer:node-added",
-      nodeId: node.id,
-      nodeType: node.type,
-      label: node.label,
-      notePath: node.notePath,
+    tier1Output = await runTier1(surrealDb.db, {
+      notePath,
+      source: noteBody,
+      vaultPaths,
+      bus,
     });
-  }
-  for (const edge of edges) {
     bus.emit({
-      type: "indexer:edge-added",
-      edgeId: edge.id,
-      edgeType: edge.type,
-      sourceId: edge.sourceId,
-      targetId: edge.targetId,
+      type: "indexer:tier1-done",
+      path: notePath,
+      bodySha: tier1Output.extraction.bodySha,
     });
+  } catch (error) {
+    bus.emit({
+      type: "indexer:error",
+      message: error instanceof Error ? error.message : String(error),
+      phase: "tier1",
+    });
+    return buildResult(notePath, sha, 0, start);
   }
 
-  const result: IndexResult = {
-    notePath,
-    noteSha: sha,
-    chunkCount: chunks.length,
-    embedCount: vectors.length,
-    nodeCount: allNodes.length,
-    edgeCount: edges.length,
-    durationMs: Date.now() - start,
-  };
+  let chunkCount = 0;
+  try {
+    const tier2Output = await runTier2(surrealDb.db, {
+      notePath,
+      blocks: tier1Output.extraction.blocks,
+      embedder,
+    });
+    chunkCount = tier2Output.chunkCount;
+    bus.emit({ type: "indexer:tier2-done", path: notePath, chunkCount });
+  } catch (error) {
+    bus.emit({
+      type: "indexer:error",
+      message: error instanceof Error ? error.message : String(error),
+      phase: "tier2",
+    });
+    return buildResult(notePath, sha, 0, start);
+  }
+
+  if (linker !== undefined) {
+    try {
+      const chunks = await fetchChunksForTier3(surrealDb.db, tier1Output.noteId);
+      await runTier3(surrealDb.db, {
+        notePath,
+        chunks,
+        extractor,
+        linker,
+        signal,
+      });
+      bus.emit({ type: "indexer:tier3-done", path: notePath });
+    } catch (error) {
+      bus.emit({
+        type: "indexer:error",
+        message: error instanceof Error ? error.message : String(error),
+        phase: "tier3",
+      });
+      const partial = buildResult(notePath, sha, chunkCount, start);
+      emitNoteIndexed(bus, notePath, partial);
+      return partial;
+    }
+  }
+
+  const result = buildResult(notePath, sha, chunkCount, start);
+  emitNoteIndexed(bus, notePath, result);
+  return result;
+}
+
+function emitNoteIndexed(bus: EventBus, notePath: string, result: IndexResult): void {
   bus.emit({
     type: "indexer:note-indexed",
     path: notePath,
@@ -212,93 +159,23 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
       durationMs: result.durationMs,
     },
   });
-  return result;
 }
 
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith(FENCE)) return content;
-  const closeIdx = content.indexOf(`\n${FENCE}`, FENCE.length);
-  if (closeIdx === -1) return content;
-  const after = closeIdx + 1 + FENCE.length;
-  return content.slice(after).replace(/^\r?\n/, "");
-}
-
-function countWords(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function slugify(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function buildConceptNode(label: string, nowMs: number): GraphNode {
+function buildResult(
+  notePath: string,
+  noteSha: string,
+  chunkCount: number,
+  startMs: number,
+): IndexResult {
   return {
-    id: `concept:${slugify(label)}`,
-    type: "concept",
-    label,
-    notePath: null,
-    payload: null,
-    createdAt: nowMs,
-  };
-}
-
-function buildClaimNode(notePath: string, text: string, nowMs: number): GraphNode {
-  const id = `claim:${shortHash(`${notePath}|${text}`)}`;
-  return {
-    id,
-    type: "claim",
-    label: text,
     notePath,
-    payload: { text },
-    createdAt: nowMs,
+    noteSha,
+    chunkCount,
+    embedCount: chunkCount,
+    nodeCount: 0,
+    edgeCount: 0,
+    durationMs: Date.now() - startMs,
   };
-}
-
-function buildQuestionNode(notePath: string, text: string, nowMs: number): GraphNode {
-  const id = `question:${shortHash(`${notePath}|${text}`)}`;
-  return {
-    id,
-    type: "question",
-    label: text,
-    notePath,
-    payload: { text },
-    createdAt: nowMs,
-  };
-}
-
-function buildEdge(
-  type: GraphEdge["type"],
-  sourceId: string,
-  targetId: string,
-  agent: string,
-  evidence: string[],
-  nowMs: number,
-): GraphEdge {
-  return {
-    id: `edge:${shortHash(`${type}|${sourceId}|${targetId}|${nowMs}`)}`,
-    type,
-    sourceId,
-    targetId,
-    confidence: 1,
-    agent,
-    evidence,
-    approved: true,
-    createdAt: nowMs,
-  };
-}
-
-function shortHash(input: string): string {
-  // Sync FNV-1a 32-bit, hex; deterministic and fast.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
 }
 
 async function sha256(input: string): Promise<string> {

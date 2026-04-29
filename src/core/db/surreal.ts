@@ -410,6 +410,33 @@ export async function markTier2Done(db: Surreal, noteId: RecordId<"note">): Prom
   await db.query("UPDATE $id SET tier2_at = time::now();", { id: noteId }).collect();
 }
 
+interface Tier3ChunkRow {
+  ord: number;
+  text: string;
+  vector: number[];
+}
+
+/**
+ * Fetch the chunks Tier 3 needs for a note, ordered by `ord` ascending.
+ * Rows whose `vector` is `NONE` (e.g. an in-flight Tier 2 that has not yet
+ * embedded a particular chunk) are excluded server-side via `vector != NONE`.
+ *
+ * Spec: Phase 3 plan §Task 9. Output is shaped to match
+ * `Tier3Chunk` so `runTier3` can consume it directly.
+ */
+export async function fetchChunksForTier3(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<Array<{ ord: number; text: string; vector: number[] }>> {
+  const [rows] = await db
+    .query<[Tier3ChunkRow[]]>(
+      "SELECT ord, text, vector FROM chunk WHERE note = $note AND vector != NONE ORDER BY ord;",
+      { note: noteId },
+    )
+    .collect<[Tier3ChunkRow[]]>();
+  return rows.map((row) => ({ ord: row.ord, text: row.text, vector: row.vector }));
+}
+
 export async function markTier3Done(db: Surreal, noteId: RecordId<"note">): Promise<void> {
   await db.query("UPDATE $id SET tier3_at = time::now();", { id: noteId }).collect();
 }

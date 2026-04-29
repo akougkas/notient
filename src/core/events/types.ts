@@ -7,6 +7,8 @@ export type AppEvent =
   | { type: "indexer:error"; message: string; phase?: string }
   | { type: "indexer:warn"; message: string; phase?: string }
   | { type: "indexer:tier1-done"; path: string; bodySha: string }
+  | { type: "indexer:tier2-done"; path: string; chunkCount: number }
+  | { type: "indexer:tier3-done"; path: string }
   | { type: "indexer:tombstoned"; path: string }
   | { type: "indexer:renamed"; fromPath: string; toPath: string }
   | {
