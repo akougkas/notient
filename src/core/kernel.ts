@@ -12,6 +12,7 @@ import type { CoAuthorService } from "./coAuthor/chatStream";
 import type { Coordinator } from "./coordinator/coordinator";
 import type { ReasoningMutex } from "./coordinator/reasoningMutex";
 import type { Database } from "./db/database";
+import type { SurrealConnection } from "./db/surreal";
 import type { TranscriptDistiller } from "./distill/transcriptDistiller";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
@@ -86,6 +87,15 @@ export interface ServiceRegistry {
   // and the configured fallback baseUrl probes successfully. Bootstrap omits
   // this key when neither path is viable; chat handlers must guard with has().
   visionLLM: VisionRouterLike;
+
+  /**
+   * Optional SurrealDB connection slot. Registered by bootstrap after the
+   * embedded `surreal start` server is spawned, the SDK connects, and the
+   * schema is applied. Intentionally absent from REQUIRED_KEYS and every
+   * PHASE_*_KEYS list during Phase 1; consumers must guard with
+   * `kernel.has("surrealDb")` before calling `kernel.get("surrealDb")`.
+   */
+  surrealDb: SurrealConnection;
 }
 
 /**

@@ -18,6 +18,8 @@ import type { ToolCall } from "../core/chat/types";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import { Database } from "../core/db/database";
+import { applySchema } from "../core/db/schemaApplier";
+import { type SurrealConnection, connect as connectSurreal } from "../core/db/surreal";
 import { createTranscriptDistiller } from "../core/distill/transcriptDistiller";
 import { EventBus } from "../core/events/eventBus";
 import { GraphStore } from "../core/graph/graphStore";
@@ -54,7 +56,10 @@ import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
 import { parseEnvFile } from "../core/settings/envFile";
 import type { EnvSource } from "../core/settings/envOverrides";
 import { type ConfigStore, SettingsService } from "../core/settings/settingsService";
+import { vaultDataDir, vaultPidPath, vaultPortPath, vaultSecretPath } from "../core/vault/identity";
+import { readOrGenerateSecret } from "../core/vault/secret";
 import { VitalsService } from "../core/vitals/vitalsService";
+import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 
 export interface BootstrapOptions {
   vaultPath: string;
@@ -62,6 +67,13 @@ export interface BootstrapOptions {
   baseUrlOverride?: string;
   /** When true, seal kernel with phase: "A" (probe-only, no DB or indexer). */
   phaseA?: boolean;
+  /**
+   * When true, skip the SurrealDB child-process bootstrap (start, connect,
+   * applySchema, register). Tests that exercise the full Phase C bootstrap
+   * without a `surreal` binary on PATH set this. The Phase A early-exit path
+   * already skips the SurrealDB block; this flag covers Phase C tests.
+   */
+  skipSurreal?: boolean;
 }
 
 export interface BootstrapResult {
@@ -628,6 +640,43 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("historyService", historyService);
   kernel.register("transcriptDistiller", transcriptDistiller);
 
+  // SurrealDB bootstrap: read-or-generate the per-vault secret, spawn the
+  // embedded `surreal start` child, connect the SDK, apply the schema, and
+  // register the connection in the kernel as the optional `surrealDb` slot.
+  // Bootstrap order is fixed: secret -> start server -> SDK connect ->
+  // applySchema -> kernel.register. The same secret is reused as the JWT key
+  // bound by the schema applier so `DEFINE ACCESS agent_jwt` resolves.
+  // Skipped when `options.skipSurreal` is true so tests without a `surreal`
+  // binary on PATH can still exercise the full Phase C path.
+  let surrealHandle: SurrealServerHandle | null = null;
+  let surrealConnection: SurrealConnection | null = null;
+  if (!options.skipSurreal) {
+    const surrealSecret = await readOrGenerateSecret(vaultSecretPath(options.vaultPath));
+    surrealHandle = await startSurreal({
+      dataDir: vaultDataDir(options.vaultPath),
+      secret: surrealSecret,
+      portFile: vaultPortPath(options.vaultPath),
+      pidFile: vaultPidPath(options.vaultPath),
+      logLevel: "warn",
+      onUnexpectedExit: (code) => {
+        // The AppEvent union does not include a SurrealDB failure variant in
+        // Phase 1. Mirror the `daemon:vector_persist_failed` pattern from
+        // makeClose and surface the failure as a structured stderr line so
+        // the daemon supervisor can detect it without widening the union.
+        process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
+      },
+    });
+    surrealConnection = await connectSurreal({
+      url: surrealHandle.url,
+      user: "root",
+      pass: surrealSecret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(surrealConnection.db, surrealSecret);
+    kernel.register("surrealDb", surrealConnection);
+  }
+
   // Optional vision routing: probe primary first; fall back to
   // chat.vision when configured. Bootstrap omits the slot when neither
   // path is viable; chat.send refuses image attachments with
@@ -663,7 +712,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   return {
     kernel,
-    close: makeClose({ database, lockHandle, health, vectorIndex, vault, vectorPath: VECTOR_PATH }),
+    close: makeClose({
+      database,
+      lockHandle,
+      health,
+      vectorIndex,
+      vault,
+      vectorPath: VECTOR_PATH,
+      surrealConnection,
+      surrealHandle,
+    }),
   };
 }
 
@@ -781,11 +839,32 @@ interface CloseDeps {
   vectorIndex: HnswVectorIndex | null;
   vault: FsVault;
   vectorPath: string;
+  /**
+   * Optional SurrealDB SDK connection. Closed first during shutdown so the
+   * server sees a clean client disconnect before its child process is asked
+   * to stop.
+   */
+  surrealConnection?: { close(): Promise<void> } | null;
+  /**
+   * Optional SurrealDB child-process handle. Stopped after the SDK has been
+   * closed. Order is fixed: SDK close, then child stop, never the reverse.
+   */
+  surrealHandle?: { stop(): Promise<void> } | null;
 }
 
 function makeClose(deps: CloseDeps): () => Promise<void> {
   return async (): Promise<void> => {
     deps.health.stop();
+    if (deps.surrealConnection) {
+      await deps.surrealConnection.close().catch(() => {
+        // SDK close errors are swallowed so subsequent shutdown steps run.
+      });
+    }
+    if (deps.surrealHandle) {
+      await deps.surrealHandle.stop().catch(() => {
+        // Child stop errors are swallowed so subsequent shutdown steps run.
+      });
+    }
     if (deps.vectorIndex) {
       try {
         const bytes = await deps.vectorIndex.persist();
