@@ -30,7 +30,11 @@ export interface ClientHandle {
   close(): Promise<void>;
 }
 
-const SPAWN_DEFAULT_MS = 5000;
+// Cold-start cost on the daemon side is dominated by sql.js IDBFS sync, which
+// regularly clears 20 seconds on WSL/IDBFS-backed hosts. The 30-second default
+// is comfortably above observed worst-case while still failing fast when the
+// daemon is genuinely broken. Callers that need a tighter bound pass spawnTimeoutMs.
+const SPAWN_DEFAULT_MS = 30_000;
 
 export async function connectClient(options: ClientOptions): Promise<ClientHandle> {
   const socket = await connectOrSpawn(options);
