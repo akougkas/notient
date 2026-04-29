@@ -56,13 +56,6 @@ export interface NotientSettings {
     minWordsToDecorate: number;
   };
 
-  // Phase 4 — Native graph bridge
-  nativeGraph: {
-    writeRelatedSection: boolean;
-    writeFrontmatterRelations: boolean;
-    relatedSectionHeading: string;
-  };
-
   // Phase 4 — Search
   search: {
     defaultMode: "quick" | "balanced" | "deep";
@@ -188,11 +181,6 @@ export const DEFAULT_SETTINGS: NotientSettings = {
     maxPerViewport: 5,
     debounceMs: 200,
     minWordsToDecorate: 100,
-  },
-  nativeGraph: {
-    writeRelatedSection: true,
-    writeFrontmatterRelations: true,
-    relatedSectionHeading: "Related",
   },
   search: {
     defaultMode: "quick",

@@ -37,8 +37,8 @@ import type { WikiLinkNode } from "./plugins/remarkWikilink";
  * `yaml` package, mutate, and re-serialise back into `value`. The mdast
  * stringifier then emits the surrounding `---` fences.
  *
- * This module supersedes the legacy `nativeGraphBridge` / `relatedSection` /
- * `frontmatterWriter` helpers; Task 5 deletes those.
+ * This module supersedes the legacy native-graph-bridge / related-section /
+ * frontmatter-writer helpers; Task 5 deletes those.
  *
  * Failure-semantics contract: PENDING-STATE.
  *

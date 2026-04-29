@@ -63,7 +63,6 @@ function mergeSettings(base: NotientSettings, patch: Partial<NotientSettings>): 
     stream: { ...base.stream, ...(patch.stream ?? {}) },
     vitals: mergeVitals(base.vitals, patch.vitals),
     decorations: { ...base.decorations, ...(patch.decorations ?? {}) },
-    nativeGraph: { ...base.nativeGraph, ...(patch.nativeGraph ?? {}) },
     search: mergeSearch(base.search, patch.search),
     chat: mergeChat(base.chat, patch.chat),
     history: { ...base.history, ...(patch.history ?? {}) },
