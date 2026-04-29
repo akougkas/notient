@@ -60,6 +60,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
         notePath,
         source: noteBody,
         vaultPaths,
+        bus,
       });
       bus.emit({
         type: "indexer:tier1-done",

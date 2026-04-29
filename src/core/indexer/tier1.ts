@@ -3,13 +3,14 @@ import { extract } from "../markdown/extractor";
 import { processAst } from "../markdown/pipeline";
 import { resolveTargets } from "../markdown/resolver";
 import { headingSlug } from "../markdown/slug";
-import type { MarkdownExtraction, WikilinkSpec } from "../markdown/types";
+import type { FrontmatterRefSpec, MarkdownExtraction, WikilinkSpec } from "../markdown/types";
 import {
   lookupBlockByExplicitId,
   lookupBlockByHeading,
   lookupNoteByPath,
 } from "../db/surreal";
 import type { EdgeTable } from "../db/edgeTables";
+import type { EventBus } from "../events/eventBus";
 
 /**
  * Tier 1 indexer: turns a saved note into deterministic SurrealDB edges.
@@ -36,6 +37,12 @@ export interface Tier1Input {
   notePath: string;
   source: string;
   vaultPaths: string[];
+  /**
+   * Optional event bus for diagnostic notifications. Tier 1 emits
+   * `indexer:warn` once per dropped frontmatter ref whose target does
+   * not resolve (Phase 2 plan locked decision 7).
+   */
+  bus?: EventBus;
 }
 
 export interface Tier1Output {
@@ -112,6 +119,28 @@ async function resolveFrontmatterTarget(
     return { kind: "unresolved" };
   }
   return { kind: "other", recordId: noteId };
+}
+
+function emitFrontmatterWarnings(
+  bus: EventBus | undefined,
+  notePath: string,
+  refs: FrontmatterRefSpec[],
+  targets: FrontmatterTarget[],
+): void {
+  if (bus === undefined) {
+    return;
+  }
+  for (let index = 0; index < refs.length; index += 1) {
+    if (targets[index].kind !== "unresolved") {
+      continue;
+    }
+    const ref = refs[index];
+    bus.emit({
+      type: "indexer:warn",
+      phase: "tier1",
+      message: `frontmatter ref dropped: key='${ref.key}' raw='${ref.rawTarget}' note='${notePath}'`,
+    });
+  }
 }
 
 async function lookupTagId(db: Surreal, tagPath: string): Promise<RecordId<"tag"> | null> {
@@ -346,6 +375,8 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
   );
 
   await db.query(sql, bindings).collect();
+
+  emitFrontmatterWarnings(input.bus, input.notePath, extraction.frontmatterRefs, frontmatterTargets);
 
   const noteId = await lookupNoteByPath(db, input.notePath);
   if (noteId === null) {

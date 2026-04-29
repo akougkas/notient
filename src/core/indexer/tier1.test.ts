@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { applySchema } from "../db/schemaApplier";
 import { connect, type SurrealConnection, upsertNoteByPath } from "../db/surreal";
+import { EventBus } from "../events/eventBus";
 import { startSurreal, type SurrealServerHandle } from "../../daemon/surrealServer";
 import { runTier1 } from "./tier1";
 
@@ -205,5 +206,42 @@ A paragraph with [[rollback-only-missing-target]] and a #rollbackonlytag and an 
       )
       .collect<[Array<{ path: string }>]>();
     expect(tagRows.length).toBe(0);
+  });
+
+  test("emits indexer:warn for each frontmatter ref whose target does not resolve", async () => {
+    const warnEvents: Array<{ type: "indexer:warn"; phase?: string; message: string }> = [];
+    const bus = new EventBus();
+    bus.on("indexer:warn", (event) => warnEvents.push(event));
+
+    const warningPath = "notes/warning-emitter.md";
+    const fixture = `---
+related: "[[other]]"
+unrelated: "[[totally-missing-target]]"
+---
+
+# Heading
+
+Body.
+`;
+    await runTier1(connection.db, {
+      notePath: warningPath,
+      source: fixture,
+      vaultPaths: [...vaultPaths, warningPath],
+      bus,
+    });
+
+    expect(warnEvents.length).toBe(1);
+    expect(warnEvents[0].phase).toBe("tier1");
+    expect(warnEvents[0].message).toContain("totally-missing-target");
+    expect(warnEvents[0].message).toContain(warningPath);
+    expect(warnEvents[0].message).toContain("unrelated");
+
+    const [refs] = await connection.db
+      .query<[Array<{ in: RecordId<"note">; out: RecordId<"note"> }>]>(
+        "SELECT in, out FROM frontmatter_ref WHERE in IN (SELECT VALUE id FROM note WHERE path = $path);",
+        { path: warningPath },
+      )
+      .collect<[Array<{ in: RecordId<"note">; out: RecordId<"note"> }>]>();
+    expect(refs.length).toBe(1);
   });
 });
