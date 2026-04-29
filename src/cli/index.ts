@@ -163,8 +163,7 @@ function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
 async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   const vaultPathArg = parsed.positional[0];
   if (!vaultPathArg) throw new Error("init requires a vault path argument");
-  const sqlWasmSource = await resolveSqlWasmSource();
-  await runInit({ vaultPathArg, cwd: process.cwd(), emitter, sqlWasmSource });
+  await runInit({ vaultPathArg, cwd: process.cwd(), emitter });
   return 0;
 }
 
@@ -606,11 +605,6 @@ async function resolveVaultForDaemon(parsed: ParsedArgs): Promise<string | null>
   } catch {
     return null;
   }
-}
-
-async function resolveSqlWasmSource(): Promise<string> {
-  const candidate = new URL("../../node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
-  return candidate.pathname;
 }
 
 void main(process.argv.slice(2)).then((code) => {

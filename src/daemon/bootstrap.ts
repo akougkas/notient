@@ -19,12 +19,10 @@ import { loadVaultConfig } from "../core/config/configFile";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import type { Agent, AgentRunResult } from "../core/coordinator/types";
-import { Database } from "../core/db/database";
 import { applySchema } from "../core/db/schemaApplier";
 import { type SurrealConnection, connect as connectSurreal } from "../core/db/surreal";
 import { createTranscriptDistiller } from "../core/distill/transcriptDistiller";
 import { EventBus } from "../core/events/eventBus";
-import { GraphStore } from "../core/graph/graphStore";
 import { HistoryService } from "../core/history/historyService";
 import { makeNoteAppendSectionInverter } from "../core/history/inverters/noteAppendSection";
 import { makeNoteCreateInverter } from "../core/history/inverters/noteCreate";
@@ -78,8 +76,6 @@ export interface BootstrapResult {
 }
 
 const NOTIENT_DIR = ".notient";
-const DB_PATH = `${NOTIENT_DIR}/notient.db`;
-const WASM_PATH = `${NOTIENT_DIR}/sql-wasm.wasm`;
 const LOCK_PATH = `${NOTIENT_DIR}/notient.lock`;
 const CONFIG_PATH = `${NOTIENT_DIR}/config.json`;
 
@@ -182,16 +178,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   );
   const lockHandle: VaultLockHandle = await lock.acquire();
 
-  const database = new Database(
-    {
-      readBinary: (path) => vault.readBinary(path),
-      writeBinary: (path, data) => vault.writeBinary(path, data),
-    },
-    { dbPath: DB_PATH, wasmPath: WASM_PATH },
-  );
-  await database.init();
-  const graph = new GraphStore(database);
-
   const baseUrl = options.baseUrlOverride ?? current.primary.baseUrl;
   const primaryLLM = new LMStudioProvider({ baseUrl });
   const deepLLM = new LMStudioProvider({ baseUrl: current.deep.baseUrl });
@@ -257,8 +243,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("bus", bus);
   kernel.register("settings", settings);
   kernel.register("vault", vault);
-  kernel.register("database", database);
-  kernel.register("graph", graph);
   kernel.register("primaryLLM", primaryLLM);
   kernel.register("deepLLM", deepLLM);
   kernel.register("embeddingLLM", embeddingLLM);
@@ -277,7 +261,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     return {
       kernel,
       close: makeClose({
-        database,
         lockHandle,
         health,
       }),
@@ -401,8 +384,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       return await indexNote({
         notePath: path,
         noteBody: body,
-        database,
-        graph,
         embedder,
         extractor,
         bus,
@@ -742,7 +723,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   return {
     kernel,
     close: makeClose({
-      database,
       lockHandle,
       health,
       surrealConnection,
@@ -841,7 +821,6 @@ export function buildHistoryInverters(options: BuildHistoryInvertersOptions): In
 }
 
 interface CloseDeps {
-  database: Database;
   lockHandle: VaultLockHandle;
   health: HealthMonitor;
   /**
@@ -870,8 +849,6 @@ function makeClose(deps: CloseDeps): () => Promise<void> {
         // Child stop errors are swallowed so subsequent shutdown steps run.
       });
     }
-    await deps.database.persist();
-    await deps.database.close();
     await deps.lockHandle.release();
   };
 }

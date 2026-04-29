@@ -1,9 +1,12 @@
 import type { RecordId } from "surrealdb";
 import type { Linker } from "../agents/linker";
-import type { Database } from "../db/database";
-import { type SurrealConnection, fetchChunksForTier3, lookupNoteByPath } from "../db/surreal";
+import {
+  type SurrealConnection,
+  fetchChunksForTier3,
+  listNotePaths,
+  lookupNoteByPath,
+} from "../db/surreal";
 import type { EventBus } from "../events/eventBus";
-import type { GraphStore } from "../graph/graphStore";
 import { extract } from "../markdown/extractor";
 import { processAst } from "../markdown/pipeline";
 import type { BlockSpec } from "../markdown/types";
@@ -14,7 +17,6 @@ import { runTier1 } from "./tier1";
 import { runTier2 } from "./tier2";
 import { runTier3 } from "./tier3";
 import type { IndexResult } from "./types";
-import type { VectorIndex } from "./vectorIndex";
 
 /**
  * Phase 3 indexer entry point: runs Tier 1 → Tier 2 → Tier 3 sequentially
@@ -22,10 +24,9 @@ import type { VectorIndex } from "./vectorIndex";
  * one tier short-circuits the remaining tiers for that note and emits an
  * `indexer:error` event with the appropriate `phase` field.
  *
- * Spec: Phase 3 plan §Task 9. Search-side READS against the SQLite
- * `embeddings` table are untouched (locked decision 7); the legacy
- * SQLite-bound chunk/embedding/graph WRITE path that previously lived here
- * has been removed.
+ * Spec: Phase 3 plan §Task 9. Phase 5 Task 13 deleted the SQLite substrate;
+ * the previous `database`/`graph` parameters and `vectorIndex` slot are gone.
+ * Tier 1's vault-path universe now reads from SurrealDB via `listNotePaths`.
  *
  * The `IndexResult` shape is preserved for callers that still inspect its
  * fields. `chunkCount`/`embedCount` reflect Tier 2's chunk count (1:1 in
@@ -36,17 +37,6 @@ import type { VectorIndex } from "./vectorIndex";
 export interface IndexNoteArgs {
   notePath: string;
   noteBody: string;
-  /** Legacy SQLite handle. Kept so search-side reads continue to function. */
-  database: Database;
-  /** Legacy graph store. Phase 3 does not write to it from this entry point. */
-  graph: GraphStore;
-  /**
-   * Legacy in-process vector index. Phase 4 Task 11 removed every reader, so
-   * this slot is unused; tests still pass an instance via the kept-for-test
-   * `InMemoryVectorIndex` symbol but the indexer never touches it. Optional
-   * to let production callers omit the argument entirely.
-   */
-  vectorIndex?: VectorIndex;
   embedder: Embedder;
   extractor: Extractor;
   bus: EventBus;
@@ -99,7 +89,6 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const {
     notePath,
     noteBody,
-    database,
     embedder,
     extractor,
     bus,
@@ -138,9 +127,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
 
   if (runTier1Wanted) {
     try {
-      const vaultPaths = database
-        .query<{ path: string }>("SELECT path FROM notes;", [])
-        .map((row) => row.path);
+      const vaultPaths = await listNotePaths(surrealDb.db);
       if (!vaultPaths.includes(notePath)) {
         vaultPaths.push(notePath);
       }

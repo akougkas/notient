@@ -121,6 +121,20 @@ export async function lookupNoteByPath(
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Returns every existing `note.path` row from SurrealDB. The Tier 1 wikilink
+ * resolver consumes this as the vault-wide path universe so wikilinks like
+ * `[[Other Note]]` can resolve against an existing on-disk path. Phase 5
+ * Task 13 replaces the legacy SQLite `SELECT path FROM notes;` query the
+ * indexer used to issue against the deleted `Database` class.
+ */
+export async function listNotePaths(db: Surreal): Promise<string[]> {
+  const [rows] = await db
+    .query<[Array<{ path: string }>]>("SELECT path FROM note;")
+    .collect<[Array<{ path: string }>]>();
+  return rows.map((row) => row.path);
+}
+
 export async function lookupBlockByHeading(
   db: Surreal,
   noteId: RecordId<"note">,

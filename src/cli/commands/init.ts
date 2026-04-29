@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { writeDefaultConfigIfAbsent } from "../../core/config/configFile";
@@ -9,8 +9,6 @@ export interface InitOptions {
   vaultPathArg: string;
   cwd: string;
   emitter: Emitter;
-  /** Absolute path to the bundled sql-wasm.wasm. Phase A: a known fixture under node_modules/sql.js/dist/. */
-  sqlWasmSource: string;
   stateFilePath?: string;
 }
 
@@ -20,7 +18,6 @@ export async function runInit(options: InitOptions): Promise<void> {
     : resolve(options.cwd, options.vaultPathArg);
   const notientDir = join(vaultPath, ".notient");
   await mkdir(notientDir, { recursive: true });
-  await copyFile(options.sqlWasmSource, join(notientDir, "sql-wasm.wasm"));
   await writeFile(
     join(notientDir, "config.json"),
     JSON.stringify(DEFAULT_SETTINGS, null, 2),

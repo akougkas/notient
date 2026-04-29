@@ -7,15 +7,12 @@ import type { ConversationIndex } from "./chat/conversationIndex";
 import type { ConversationStore } from "./chat/conversationStore";
 import type { ToolModeCache } from "./chat/toolModeProbe";
 import type { ToolRegistry } from "./chat/tools/registry";
-import type { CoAuthorService } from "./coAuthor/chatStream";
 import type { VaultConfig } from "./config/configFile";
 import type { Coordinator } from "./coordinator/coordinator";
 import type { ReasoningMutex } from "./coordinator/reasoningMutex";
-import type { Database } from "./db/database";
 import type { SurrealConnection } from "./db/surreal";
 import type { TranscriptDistiller } from "./distill/transcriptDistiller";
 import type { EventBus } from "./events/eventBus";
-import type { GraphStore } from "./graph/graphStore";
 import type { HistoryService } from "./history/historyService";
 import type { Embedder } from "./indexer/embedder";
 import type { Extractor } from "./indexer/extractor";
@@ -32,15 +29,12 @@ import type { SessionGrants } from "./services/sessionGrants";
 import type { VaultBootstrap } from "./services/vaultBootstrap";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
-import type { StreamService } from "./stream/streamService";
 import type { VitalsService } from "./vitals/vitalsService";
 
 export interface ServiceRegistry {
   bus: EventBus;
   settings: SettingsService;
   vault: VaultAdapter;
-  database: Database;
-  graph: GraphStore;
   primaryLLM: LLMProvider;
   deepLLM: LLMProvider;
   embeddingLLM: LLMProvider;
@@ -55,10 +49,8 @@ export interface ServiceRegistry {
   coordinator: Coordinator;
   idleDetector: IdleDetector;
   reasoningMutex: ReasoningMutex;
-  coAuthor: CoAuthorService;
 
   // Phase 4 services. Each registers in main.ts before kernel.seal().
-  streamService: StreamService;
   vitalsService: VitalsService;
   searchPipeline: SearchPipeline;
   savedQueries: SavedQueries;
@@ -115,8 +107,6 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "bus",
   "settings",
   "vault",
-  "database",
-  "graph",
   "primaryLLM",
   "deepLLM",
   "embeddingLLM",
@@ -132,8 +122,6 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "idleDetector",
   "coordinator",
   "approvalService",
-  "coAuthor",
-  "streamService",
   "vitalsService",
   "searchPipeline",
   "savedQueries",
@@ -154,8 +142,6 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "bus",
   "settings",
   "vault",
-  "database",
-  "graph",
   "primaryLLM",
   "deepLLM",
   "embeddingLLM",
