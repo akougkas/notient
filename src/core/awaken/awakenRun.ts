@@ -124,6 +124,24 @@ export async function findLatestResumable(db: Surreal): Promise<AwakenRunRow | n
   return row === undefined ? null : mapRow(row);
 }
 
+export async function findById(
+  db: Surreal,
+  runId: RecordId<"awaken_run">,
+): Promise<AwakenRunRow | null> {
+  // Phase 4 task 9 (`notient awaken --status`) locks onto a runId after the
+  // first DAL search and polls that specific row even after it transitions
+  // to a terminal status. `findCurrent` and `findLatestResumable` filter by
+  // status, so they would hide the row in exactly the state the caller
+  // wants to surface (`completed` / `cancelled` / `failed`).
+  const sql =
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error FROM awaken_run WHERE id = $id;";
+  const [rows] = await db
+    .query<[AwakenRunRecordRow[]]>(sql, { id: runId })
+    .collect<[AwakenRunRecordRow[]]>();
+  const row = rows[0];
+  return row === undefined ? null : mapRow(row);
+}
+
 export async function updateStatus(
   db: Surreal,
   runId: RecordId<"awaken_run">,

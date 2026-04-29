@@ -1,5 +1,5 @@
 import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
-import { runAwakenCommand } from "./commands/awaken";
+import { type AwakenControlMode, runAwakenCommand } from "./commands/awaken";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
@@ -173,10 +173,26 @@ async function dispatchAwaken(
   clientIdentity: string | undefined,
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
+  const mode = selectAwakenMode(parsed);
+  if (mode !== undefined) {
+    return await runAwakenCommand({ vaultPath, mode, emitter, clientIdentity });
+  }
   const batch = typeof parsed.flags.batch === "string" ? Number(parsed.flags.batch) : undefined;
   const since = typeof parsed.flags.since === "string" ? Date.parse(parsed.flags.since) : undefined;
-  await runAwakenCommand({ vaultPath, batch, since, emitter, clientIdentity });
-  return 0;
+  return await runAwakenCommand({ vaultPath, batch, since, emitter, clientIdentity });
+}
+
+function selectAwakenMode(parsed: ParsedArgs): AwakenControlMode | undefined {
+  // Mutually exclusive control flags. When more than one is set the first
+  // match in this priority order wins; the alternatives are silently
+  // ignored. The CLI does not validate combinations because control flags
+  // and the default fresh-run flags (`--batch`, `--since`) are themselves
+  // disjoint and the daemon would reject an unknown combination upstream.
+  if (parsed.flags.pause === true) return "pause";
+  if (parsed.flags.resume === true) return "resume";
+  if (parsed.flags.cancel === true) return "cancel";
+  if (parsed.flags.status === true) return "status";
+  return undefined;
 }
 
 async function dispatchReindex(
