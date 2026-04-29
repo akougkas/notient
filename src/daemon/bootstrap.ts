@@ -36,9 +36,9 @@ import { makeNoteMaturityInverter } from "../core/history/inverters/noteMaturity
 import type { InverterRegistry } from "../core/history/types";
 import { Embedder } from "../core/indexer/embedder";
 import { Extractor } from "../core/indexer/extractor";
-import { HnswVectorIndex } from "../core/indexer/hnswVectorIndex";
 import { indexNote } from "../core/indexer/indexNote";
 import { IndexerQueue } from "../core/indexer/indexerQueue";
+import type { VectorIndex, VectorSearchResult } from "../core/indexer/vectorIndex";
 import { Kernel } from "../core/kernel";
 import { LMStudioProvider } from "../core/llm/lmStudioProvider";
 import { Reranker } from "../core/search/reranker";
@@ -86,8 +86,39 @@ const NOTIENT_DIR = ".notient";
 const DB_PATH = `${NOTIENT_DIR}/notient.db`;
 const WASM_PATH = `${NOTIENT_DIR}/sql-wasm.wasm`;
 const LOCK_PATH = `${NOTIENT_DIR}/notient.lock`;
-const VECTOR_PATH = `${NOTIENT_DIR}/vectors.bin`;
 const CONFIG_PATH = `${NOTIENT_DIR}/config.json`;
+
+/**
+ * No-op VectorIndex used while Phase 3 transitions kNN reads onto Surreal-backed
+ * embeddings. Satisfies the VectorIndex contract so SearchPipeline,
+ * balancedSearch, and deepSearch keep their typed dependency wiring, but every
+ * search returns an empty result set. Phase 3 §locked-decision-7 keeps
+ * SearchPipeline on SQLite reads, so callers degrade to BM25/text-match hits
+ * for now. Task 12 documents this behavior in the handoff.
+ */
+class EmptyVectorIndex implements VectorIndex {
+  async init(_dim: number): Promise<void> {
+    /* no-op */
+  }
+  add(_id: string, _vector: Float32Array): void {
+    /* no-op */
+  }
+  remove(_id: string): void {
+    /* no-op */
+  }
+  search(_query: Float32Array, _k: number): VectorSearchResult[] {
+    return [];
+  }
+  size(): number {
+    return 0;
+  }
+  async persist(): Promise<ArrayBuffer> {
+    return new ArrayBuffer(0);
+  }
+  async load(_blob: ArrayBuffer): Promise<void> {
+    /* no-op */
+  }
+}
 
 const NOTIENT_FOLDER = "Notient";
 const CONVERSATIONS_FOLDER = `${NOTIENT_FOLDER}/conversations`;
@@ -238,22 +269,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         database,
         lockHandle,
         health,
-        vectorIndex: null,
-        vault,
-        vectorPath: VECTOR_PATH,
       }),
     };
   }
 
   // Phase B additions.
-  const vectorIndex = new HnswVectorIndex({});
-  const existingVectorBytes = await vault.readBinary(VECTOR_PATH);
-  if (existingVectorBytes) {
-    await vectorIndex.load(existingVectorBytes);
-  } else {
-    // 768 matches the locked embedding model (text-embedding-nomic-embed-text-v2-moe).
-    await vectorIndex.init(768);
-  }
+  // 768 matches the locked embedding model (text-embedding-nomic-embed-text-v2-moe).
+  // The vector index is currently a no-op stub (Phase 3 Task 10): SearchPipeline,
+  // ContradictionHunter, and Synthesizer all see empty kNN results until kNN is
+  // re-implemented on top of Surreal-backed embeddings.
+  const vectorIndex: VectorIndex = new EmptyVectorIndex();
+  await vectorIndex.init(768);
 
   const embedder = new Embedder(embeddingLLM, { model: current.embedding.model });
   const extractor = new Extractor(deepLLM, { model: current.deep.reasoningModel });
@@ -419,36 +445,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     db: database,
     provider: deepLLM,
     reasoningModel: current.deep.reasoningModel,
-    neighbors: async (recentClaimIds, queryOptions) => {
-      if (recentClaimIds.length === 0) return [];
-      const probe = database.query<{ vector: Uint8Array; dim: number; chunk_id: string }>(
-        `SELECT e.vector AS vector, e.dim AS dim, e.chunk_id AS chunk_id
-         FROM graph_nodes n JOIN chunks c ON c.note_path = n.note_path
-         JOIN embeddings e ON e.chunk_id = c.id
-         WHERE n.id = ? LIMIT 1;`,
-        [recentClaimIds[0]],
-      );
-      if (probe.length === 0) return [];
-      const view = new Float32Array(
-        probe[0].vector.buffer,
-        probe[0].vector.byteOffset,
-        probe[0].dim,
-      );
-      const hits = vectorIndex.search(view, queryOptions.topK);
-      const out: Array<{ id: string; score: number; chunkIds: string[] }> = [];
-      for (const hit of hits) {
-        const claim = database.query<{ id: string }>(
-          `SELECT id FROM graph_nodes WHERE type = 'claim' AND note_path = (
-              SELECT note_path FROM chunks WHERE id = ?
-           ) LIMIT 1;`,
-          [hit.id],
-        );
-        if (claim.length === 0) continue;
-        if (recentClaimIds.includes(claim[0].id)) continue;
-        out.push({ id: claim[0].id, score: hit.score, chunkIds: [hit.id] });
-      }
-      return out;
-    },
+    // Phase 3 Task 10: kNN over claims is offline while the vector index is a
+    // no-op stub. ContradictionHunter receives an empty neighbor list and
+    // therefore proposes zero contradiction edges per cycle. Task 12 documents
+    // the behavior; restoration depends on the Surreal-backed kNN replacement.
+    neighbors: async () => [],
     maxPairs: 5,
   });
   const maturityAdvancer = new MaturityAdvancer({
@@ -706,9 +707,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       database,
       lockHandle,
       health,
-      vectorIndex,
-      vault,
-      vectorPath: VECTOR_PATH,
       surrealConnection,
       surrealHandle,
     }),
@@ -826,9 +824,6 @@ interface CloseDeps {
   database: Database;
   lockHandle: VaultLockHandle;
   health: HealthMonitor;
-  vectorIndex: HnswVectorIndex | null;
-  vault: FsVault;
-  vectorPath: string;
   /**
    * Optional SurrealDB SDK connection. Closed first during shutdown so the
    * server sees a clean client disconnect before its child process is asked
@@ -854,19 +849,6 @@ function makeClose(deps: CloseDeps): () => Promise<void> {
       await deps.surrealHandle.stop().catch(() => {
         // Child stop errors are swallowed so subsequent shutdown steps run.
       });
-    }
-    if (deps.vectorIndex) {
-      try {
-        const bytes = await deps.vectorIndex.persist();
-        await deps.vault.writeBinary(deps.vectorPath, bytes);
-      } catch (error) {
-        // Vector persistence is best-effort: a failure here must not block the
-        // database flush or the lock release. Surface to the daemon's stderr
-        // emitter via a thrown re-attempt in Phase E if we want to escalate.
-        process.stderr.write(
-          `${JSON.stringify({ type: "daemon:vector_persist_failed", message: error instanceof Error ? error.message : String(error) })}\n`,
-        );
-      }
     }
     await deps.database.persist();
     await deps.database.close();

@@ -46,7 +46,6 @@
     "@opentui/core": "0.1.105",
     "@opentui/react": "0.1.105",
     "chokidar": "^4.0.0",
-    "hnswlib-wasm": "^0.8.2",
     "kysely": "^0.28.9",
     "mdast-util-to-string": "^4.0.0",
     "ollama": "^0.6.3",
