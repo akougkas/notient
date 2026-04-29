@@ -168,13 +168,18 @@ export class VaultWatcher {
       return false;
     }
     try {
-      // Tombstone window enforcement happens client-side via the cascade
-      // timer: rows older than the window are deleted before this query
-      // can see them, so a `tombstoned_at != NONE` filter is sufficient.
+      // Tombstone window is enforced server-side by comparing
+      // tombstoned_at against a JS-computed threshold (now - windowMs).
+      // The cascade timer is still the cleanup mechanism but is no longer
+      // the sole window enforcer; a stale tombstone the cascade missed
+      // (daemon restart, overloaded event loop) cannot resurrect a fresh
+      // file with a matching SHA.
+      const window = this.options.tombstoneWindowMs ?? DEFAULT_TOMBSTONE_WINDOW_MS;
+      const threshold = new Date(Date.now() - window);
       const [rows] = await surrealDb.db
         .query<[Array<{ id: RecordId<"note">; path: string }>]>(
-          "SELECT id, path FROM note WHERE sha = $sha AND tombstoned_at != NONE LIMIT 1;",
-          { sha: bodySha },
+          "SELECT id, path FROM note WHERE sha = $sha AND tombstoned_at != NONE AND tombstoned_at > $threshold LIMIT 1;",
+          { sha: bodySha, threshold },
         )
         .collect<[Array<{ id: RecordId<"note">; path: string }>]>();
       const match = rows[0];

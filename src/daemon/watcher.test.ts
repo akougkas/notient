@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RecordId } from "surrealdb";
+import { createHash } from "node:crypto";
 import { applySchema } from "../core/db/schemaApplier";
 import { connect, type SurrealConnection, upsertNoteByPath } from "../core/db/surreal";
+import { EventBus } from "../core/events/eventBus";
 import { startSurreal, type SurrealServerHandle } from "./surrealServer";
 import { VaultWatcher, isWslPath } from "./watcher";
 
@@ -163,7 +165,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
     const renamedPath = join(vaultRoot, "renamed.md");
     const body = "rename me";
     await writeFile(sourcePath, body);
-    const bodySha = require("node:crypto").createHash("sha256").update(body).digest("hex");
+    const bodySha = createHash("sha256").update(body).digest("hex");
     const noteRecord = await upsertNoteByPath(connection.db, {
       path: "source.md",
       sha: bodySha,
@@ -195,5 +197,60 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
     expect(renamed).not.toBeNull();
     expect(renamed?.path).toBe("renamed.md");
     expect(renamed?.tombstoned_at ?? null).toBeNull();
+  });
+
+  test("rename window enforced server-side: stale tombstone rejected by threshold filter", async () => {
+    const body = "stale-tombstone-body";
+    const bodySha = createHash("sha256").update(body).digest("hex");
+    await upsertNoteByPath(connection.db, {
+      path: "stale.md",
+      sha: bodySha,
+      wordCount: 2,
+    });
+    await connection.db
+      .query("UPDATE note SET tombstoned_at = d'2000-01-01T00:00:00Z' WHERE path = $path;", {
+        path: "stale.md",
+      })
+      .collect();
+
+    const enqueued: string[] = [];
+    const renameEvents: Array<{ from: string; to: string }> = [];
+    const bus = new EventBus();
+    bus.on("indexer:renamed", (event) => {
+      renameEvents.push({ from: event.fromPath, to: event.toPath });
+    });
+
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (vaultPath) => {
+        enqueued.push(vaultPath);
+      },
+      pollingInterval: 30,
+      forcePolling: true,
+      surrealDb: connection,
+      tombstoneWindowMs: 60_000,
+      bus,
+    });
+    await watcher.start();
+    await writeFile(join(vaultRoot, "renamed-stale.md"), body);
+    const observed = await waitFor(async () => {
+      if (enqueued.includes("renamed-stale.md") || renameEvents.length > 0) {
+        return true;
+      }
+      return null;
+    }, 1500);
+    await watcher.stop();
+
+    expect(observed).toBe(true);
+    expect(renameEvents).toEqual([]);
+    expect(enqueued).toContain("renamed-stale.md");
+
+    const [rows] = await connection.db
+      .query<[Array<{ path: string; tombstoned_at: string | null }>]>(
+        "SELECT path, tombstoned_at FROM note WHERE path = 'stale.md';",
+      )
+      .collect<[Array<{ path: string; tombstoned_at: string | null }>]>();
+    expect(rows.length).toBe(1);
+    expect(rows[0].tombstoned_at).not.toBeNull();
   });
 });
