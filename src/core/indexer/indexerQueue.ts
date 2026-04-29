@@ -1,7 +1,18 @@
 import type { EventBus } from "../events/eventBus";
 import { PriorityQueue } from "./priorityQueue";
 
-export type IndexNoteFn = (path: string) => Promise<unknown>;
+/**
+ * Per-note runtime context the queue forwards to the `indexNote` callback
+ * when it dequeues. Phase 5 Task 11 introduces `tierFilter` so the
+ * `awaken --tier` and `reindex --tier` flags can scope which tiers run
+ * for a given path. Other callers (the watcher, ad-hoc enqueues) omit
+ * the filter and the indexer runs every tier.
+ */
+export interface IndexNoteContext {
+  tierFilter?: ReadonlyArray<number>;
+}
+
+export type IndexNoteFn = (path: string, context: IndexNoteContext) => Promise<unknown>;
 
 export interface IndexerQueueOptions {
   indexNote: IndexNoteFn;
@@ -22,6 +33,11 @@ const DEFAULT_PRIORITY = 2;
 interface PendingEntry {
   timer: ReturnType<typeof setTimeout>;
   priority: number;
+  tierFilter?: ReadonlyArray<number>;
+}
+
+interface ReadyEntry {
+  tierFilter?: ReadonlyArray<number>;
 }
 
 export class IndexerQueue {
@@ -31,6 +47,7 @@ export class IndexerQueue {
   private readonly isExcluded: (path: string) => boolean;
   private readonly pending = new Map<string, PendingEntry>();
   private readonly readyHeap = new PriorityQueue<string>();
+  private readonly readyContext = new Map<string, ReadyEntry>();
   private readonly readySet = new Set<string>();
   private enqueueCounter = 0;
   private worker: Promise<void> | null = null;
@@ -43,7 +60,11 @@ export class IndexerQueue {
     this.isExcluded = opts.isExcluded ?? (() => false);
   }
 
-  enqueue(path: string, priority: number = DEFAULT_PRIORITY): void {
+  enqueue(
+    path: string,
+    priority: number = DEFAULT_PRIORITY,
+    tierFilter?: ReadonlyArray<number>,
+  ): void {
     if (this.disposed) return;
     if (this.isExcluded(path)) return;
     const existing = this.pending.get(path);
@@ -52,14 +73,20 @@ export class IndexerQueue {
       const entry = this.pending.get(path);
       this.pending.delete(path);
       const finalPriority = entry ? entry.priority : priority;
+      const finalFilter = entry ? entry.tierFilter : tierFilter;
       if (!this.readySet.has(path)) {
         const sequence = ++this.enqueueCounter;
         this.readyHeap.enqueue(path, finalPriority, sequence);
         this.readySet.add(path);
+        this.readyContext.set(path, finalFilter === undefined ? {} : { tierFilter: finalFilter });
       }
       this.kickWorker();
     }, this.debounceMs);
-    this.pending.set(path, { timer, priority });
+    const next: PendingEntry = { timer, priority };
+    if (tierFilter !== undefined) {
+      next.tierFilter = tierFilter;
+    }
+    this.pending.set(path, next);
   }
 
   dispose(): void {
@@ -68,6 +95,7 @@ export class IndexerQueue {
     this.pending.clear();
     this.readyHeap.remove(() => true);
     this.readySet.clear();
+    this.readyContext.clear();
   }
 
   async drain(): Promise<void> {
@@ -100,8 +128,10 @@ export class IndexerQueue {
       const path = this.readyHeap.dequeue();
       if (!path) break;
       this.readySet.delete(path);
+      const context = this.readyContext.get(path) ?? {};
+      this.readyContext.delete(path);
       try {
-        await this.indexNote(path);
+        await this.indexNote(path, context);
       } catch (error) {
         this.bus.emit({
           type: "indexer:error",

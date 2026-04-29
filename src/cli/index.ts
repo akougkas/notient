@@ -1,5 +1,5 @@
 import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
-import { type AwakenControlMode, runAwakenCommand } from "./commands/awaken";
+import { type AwakenControlMode, parseTierCsv, runAwakenCommand } from "./commands/awaken";
 import { runBackupCommand } from "./commands/backup";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
@@ -206,7 +206,8 @@ async function dispatchAwaken(
   }
   const batch = typeof parsed.flags.batch === "string" ? Number(parsed.flags.batch) : undefined;
   const since = typeof parsed.flags.since === "string" ? Date.parse(parsed.flags.since) : undefined;
-  return await runAwakenCommand({ vaultPath, batch, since, emitter, clientIdentity });
+  const tier = parsed.flags.tier === undefined ? undefined : parseTierCsv(parsed.flags.tier);
+  return await runAwakenCommand({ vaultPath, batch, since, tier, emitter, clientIdentity });
 }
 
 function selectAwakenMode(parsed: ParsedArgs): AwakenControlMode | undefined {
@@ -229,7 +230,8 @@ async function dispatchReindex(
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const pattern = parsed.positional[0] ?? "**/*.md";
-  await runReindexCommand({ vaultPath, pattern, emitter, clientIdentity });
+  const tier = parsed.flags.tier === undefined ? undefined : parseTierCsv(parsed.flags.tier);
+  await runReindexCommand({ vaultPath, pattern, tier, emitter, clientIdentity });
   return 0;
 }
 

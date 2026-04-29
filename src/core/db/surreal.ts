@@ -608,6 +608,87 @@ export async function markTier3Done(db: Surreal, noteId: RecordId<"note">): Prom
   await db.query("UPDATE $id SET tier3_at = time::now();", { id: noteId }).collect();
 }
 
+/**
+ * Per-tier completion state for a note. `true` means the note's
+ * `tier{N}_at` is set (the tier has run); `false` means it is `NONE`
+ * or the note row does not yet exist. Used by `indexNote` to skip
+ * tiers that are already up to date when running under a tier filter.
+ *
+ * Spec: Phase 5 Task 11.
+ */
+export interface NoteTierState {
+  tier1Done: boolean;
+  tier2Done: boolean;
+  tier3Done: boolean;
+}
+
+/**
+ * Read the per-tier completion state for the note at `path`. Missing
+ * notes (no row in `note`) return all-false so a fresh note runs every
+ * tier the caller's filter allows.
+ *
+ * Spec: Phase 5 Task 11. The query selects the raw tier columns; a
+ * `null`/`undefined` value (option<datetime> not yet set) collapses to
+ * `false`.
+ */
+export async function fetchNoteTierState(db: Surreal, path: string): Promise<NoteTierState> {
+  const [rows] = await db
+    .query<
+      [
+        Array<{
+          tier1_at: string | Date | null | undefined;
+          tier2_at: string | Date | null | undefined;
+          tier3_at: string | Date | null | undefined;
+        }>,
+      ]
+    >("SELECT tier1_at, tier2_at, tier3_at FROM note WHERE path = $path LIMIT 1;", { path })
+    .collect<
+      [
+        Array<{
+          tier1_at: string | Date | null | undefined;
+          tier2_at: string | Date | null | undefined;
+          tier3_at: string | Date | null | undefined;
+        }>,
+      ]
+    >();
+  const row = rows[0];
+  if (row === undefined) {
+    return { tier1Done: false, tier2Done: false, tier3Done: false };
+  }
+  return {
+    tier1Done: row.tier1_at !== null && row.tier1_at !== undefined,
+    tier2Done: row.tier2_at !== null && row.tier2_at !== undefined,
+    tier3Done: row.tier3_at !== null && row.tier3_at !== undefined,
+  };
+}
+
+/**
+ * Clear the `tier{N}_at` columns listed in `tiers` for the note matching
+ * `path`. The note row stays put; only the tier-completion timestamps
+ * are reset to NONE so a subsequent indexer pass treats the cleared
+ * tiers as un-run. Tiers outside `[1, 2, 3]` are silently ignored.
+ *
+ * Spec: Phase 5 Task 11 (`reindex --tier`). SurrealDB's option<datetime>
+ * fields reject `null` bindings, so the SET clause emits the literal
+ * `NONE` token instead of binding a value.
+ *
+ * The query uses `UPDATE note WHERE path = $path` so a path that never
+ * reached Tier 1 (no `note` row exists) is a no-op rather than an error;
+ * callers may issue a clear before enqueueing without first asserting
+ * the row exists.
+ */
+export async function clearTierAtByPath(
+  db: Surreal,
+  path: string,
+  tiers: ReadonlyArray<number>,
+): Promise<void> {
+  const valid = tiers.filter((tier) => tier === 1 || tier === 2 || tier === 3);
+  if (valid.length === 0) return;
+  const setClauses = valid.map((tier) => `tier${tier}_at = NONE`);
+  const sql = `UPDATE note SET ${setClauses.join(", ")} WHERE path = $path;`;
+  await db.query(sql, { path }).collect();
+}
+
 export interface LinkerNeighborsInput {
   activeNoteId: RecordId<"note">;
   activeChunkVectors: number[][];

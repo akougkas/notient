@@ -396,7 +396,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const indexer = new IndexerQueue({
     bus,
     debounceMs: vaultConfig.indexer.debounceMs,
-    indexNote: async (path) => {
+    indexNote: async (path, context) => {
       const body = await vault.read(path);
       return await indexNote({
         notePath: path,
@@ -409,6 +409,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         chunkSizes: vaultConfig.indexer.chunk,
         ...(surrealConnection !== null ? { surrealDb: surrealConnection } : {}),
         ...(concreteLinker !== null ? { linker: concreteLinker } : {}),
+        ...(context.tierFilter !== undefined ? { tierFilter: context.tierFilter } : {}),
       });
     },
   });

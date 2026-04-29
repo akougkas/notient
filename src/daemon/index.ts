@@ -136,13 +136,24 @@ async function main(argv: string[]): Promise<void> {
   const vitalsService = kernel.get("vitalsService");
   let bridgeUp = false;
 
+  const surrealForHandlers = kernel.has("surrealDb") ? kernel.get("surrealDb") : undefined;
   dispatcher.register(
     "awaken.run",
-    makeAwakenHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }),
+    makeAwakenHandler({
+      bus: kernel.get("bus"),
+      indexer,
+      vault: kernel.get("vault"),
+      ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
+    }),
   );
   dispatcher.register(
     "reindex.glob",
-    makeReindexHandler({ bus: kernel.get("bus"), indexer, vault: kernel.get("vault") }),
+    makeReindexHandler({
+      bus: kernel.get("bus"),
+      indexer,
+      vault: kernel.get("vault"),
+      ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
+    }),
   );
   dispatcher.register(
     "search.run",

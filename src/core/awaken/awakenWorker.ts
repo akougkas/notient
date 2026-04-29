@@ -36,13 +36,18 @@ import {
 
 const CHECKPOINT_EVERY = 10;
 const AWAKEN_PRIORITY = 2;
+const FULL_TIER_FILTER_LENGTH = 3;
+
+function isFullTierFilter(filter: ReadonlyArray<number>): boolean {
+  return filter.length === FULL_TIER_FILTER_LENGTH;
+}
 
 export interface AwakenWorkerVaultFacade {
   listMarkdownPaths(): Promise<string[]>;
 }
 
 export interface AwakenWorkerIndexerQueue {
-  enqueue(path: string, priority?: number): void;
+  enqueue(path: string, priority?: number, tierFilter?: ReadonlyArray<number>): void;
 }
 
 export interface AwakenWorkerOptions {
@@ -80,6 +85,7 @@ interface ResolvedStart {
   resumeCursor: string | null;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: status-aware run loop with checkpointing reads cleaner inline than split into helpers; complexity comes from interleaving live-query status checks with the per-note enqueue/wait cycle.
 export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<AwakenWorkerResult> {
   const allPaths = await options.vaultFacade.listMarkdownPaths();
   const orderedPaths = sortByPriorityGlobs(allPaths, options.priorityGlobs);
@@ -113,7 +119,12 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
 
       const waitForDone = waitForNoteIndexed(options, notePath);
       try {
-        options.indexerQueue.enqueue(notePath, AWAKEN_PRIORITY);
+        // Forward the run's tier filter so per-note Tier 1/2/3 execution
+        // honours the operator's `--tier` scope. A full filter (`[1, 2, 3]`)
+        // is forwarded as `undefined` so the indexer's default
+        // (run every tier) code path is preserved for default runs.
+        const enqueueFilter = isFullTierFilter(options.tierFilter) ? undefined : options.tierFilter;
+        options.indexerQueue.enqueue(notePath, AWAKEN_PRIORITY, enqueueFilter);
         await waitForDone;
         processed += 1;
       } catch {

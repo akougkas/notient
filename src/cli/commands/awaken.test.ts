@@ -18,6 +18,7 @@ import { applySchema } from "../../core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
+import { DEFAULT_TIER_FILTER, parseTierCsv } from "./awaken";
 import { runAwakenCancel } from "./awakenCancel";
 import { runAwakenPause } from "./awakenPause";
 import { runAwakenResume } from "./awakenResume";
@@ -275,5 +276,54 @@ describe("awaken control-plane module shape", () => {
     expect(typeof runAwakenCancel).toBe("function");
     expect(typeof runAwakenResume).toBe("function");
     expect(typeof runAwakenStatus).toBe("function");
+  });
+});
+
+// Phase 5 Task 11: `--tier <csv>` flag parsing. The CLI should strip
+// invalid tokens, accept whitespace around tokens, and fall back to the
+// default `[1, 2, 3]` when the result is empty.
+describe("parseTierCsv", () => {
+  test("returns the default filter for undefined or boolean inputs", () => {
+    expect(parseTierCsv(undefined)).toEqual([...DEFAULT_TIER_FILTER]);
+    expect(parseTierCsv(true)).toEqual([...DEFAULT_TIER_FILTER]);
+  });
+
+  test("returns the default filter for an empty string", () => {
+    expect(parseTierCsv("")).toEqual([...DEFAULT_TIER_FILTER]);
+  });
+
+  test("parses a single tier", () => {
+    expect(parseTierCsv("1")).toEqual([1]);
+    expect(parseTierCsv("2")).toEqual([2]);
+    expect(parseTierCsv("3")).toEqual([3]);
+  });
+
+  test("parses a two-tier subset", () => {
+    expect(parseTierCsv("2,3")).toEqual([2, 3]);
+  });
+
+  test("parses the full `[1, 2, 3]` filter", () => {
+    expect(parseTierCsv("1,2,3")).toEqual([1, 2, 3]);
+  });
+
+  test("trims whitespace around tokens", () => {
+    expect(parseTierCsv("1, 2, 3")).toEqual([1, 2, 3]);
+    expect(parseTierCsv("  2 , 3  ")).toEqual([2, 3]);
+  });
+
+  test("de-duplicates and sorts the result", () => {
+    expect(parseTierCsv("3,1,2,1")).toEqual([1, 2, 3]);
+    expect(parseTierCsv("2,2")).toEqual([2]);
+  });
+
+  test("falls back to the default filter when input has only invalid tokens", () => {
+    expect(parseTierCsv("abc")).toEqual([...DEFAULT_TIER_FILTER]);
+    expect(parseTierCsv("0,5")).toEqual([...DEFAULT_TIER_FILTER]);
+    expect(parseTierCsv("99")).toEqual([...DEFAULT_TIER_FILTER]);
+  });
+
+  test("drops invalid tokens but keeps valid ones", () => {
+    expect(parseTierCsv("0,2,5")).toEqual([2]);
+    expect(parseTierCsv("abc,1,xyz")).toEqual([1]);
   });
 });
