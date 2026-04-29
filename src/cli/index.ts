@@ -11,8 +11,17 @@ import {
   parseEventsSince,
   runEventsCommand,
 } from "./commands/events";
+import {
+  type DumpFormat,
+  parseDumpFormat,
+  parseDumpTier,
+  runGraphDumpCommand,
+} from "./commands/graphDump";
+import { runGraphStatsCommand } from "./commands/graphStats";
 import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
+import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit";
+import { runLinksSyncCommand } from "./commands/linksSync";
 import { runReindexCommand } from "./commands/reindex";
 import { runSearchCommand } from "./commands/search";
 import {
@@ -91,8 +100,10 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "distill",
         "events",
         "session",
+        "graph",
+        "links",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants and Phase 5 graph/links operator verbs; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -113,6 +124,8 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "distill") return await dispatchDistill(parsed, emitter, clientIdentity);
   if (parsed.command === "events") return await dispatchEvents(parsed, emitter, clientIdentity);
   if (parsed.command === "session") return await dispatchSession(parsed, emitter, clientIdentity);
+  if (parsed.command === "graph") return await dispatchGraph(parsed, emitter, clientIdentity);
+  if (parsed.command === "links") return await dispatchLinks(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -415,6 +428,75 @@ async function dispatchSession(
 function parseSessionSubcommand(raw: string | undefined): SessionSubcommand {
   if (raw === "grant" || raw === "list" || raw === "revoke") return raw;
   throw new Error("INVALID_PARAMS: session requires a subcommand: grant | list | revoke");
+}
+
+async function dispatchGraph(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const subcommand = parsed.positional[0];
+  if (subcommand === "dump") {
+    const vaultPath = await requireVault(parsed);
+    const tier = parseDumpTier(parsed.flags.tier);
+    const format: DumpFormat = parseDumpFormat(parsed.flags.format);
+    const outFlag = parsed.flags.out;
+    const outPath = typeof outFlag === "string" && outFlag.length > 0 ? outFlag : undefined;
+    return await runGraphDumpCommand({
+      vaultPath,
+      tier,
+      format,
+      outPath,
+      emitter,
+      clientIdentity,
+    });
+  }
+  if (subcommand === "stats") {
+    const vaultPath = await requireVault(parsed);
+    const asJson = parsed.flags.json === true;
+    return await runGraphStatsCommand({ vaultPath, asJson, emitter, clientIdentity });
+  }
+  emitter.emit({
+    type: "error",
+    code: "INVALID_PARAMS",
+    message: "usage: notient graph dump|stats",
+  });
+  return 2;
+}
+
+async function dispatchLinks(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const subcommand = parsed.positional[0];
+  if (subcommand === "sync") {
+    const vaultPath = await requireVault(parsed);
+    return await runLinksSyncCommand({
+      vaultPath,
+      vaultRoot: vaultPath,
+      emitter,
+      clientIdentity,
+    });
+  }
+  if (subcommand === "audit") {
+    const vaultPath = await requireVault(parsed);
+    const mode = selectLinksAuditMode(parsed);
+    return await runLinksAuditCommand({ vaultPath, mode, emitter, clientIdentity });
+  }
+  emitter.emit({
+    type: "error",
+    code: "INVALID_PARAMS",
+    message: "usage: notient links sync|audit",
+  });
+  return 2;
+}
+
+function selectLinksAuditMode(parsed: ParsedArgs): LinksAuditMode {
+  if (parsed.flags.json === true) return "json";
+  if (parsed.flags.pretty === true) return "pretty";
+  if (parsed.flags.ndjson === true) return "ndjson";
+  return process.stdout.isTTY === true ? "pretty" : "ndjson";
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {
