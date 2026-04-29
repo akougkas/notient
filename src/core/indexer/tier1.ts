@@ -6,6 +6,7 @@ import { headingSlug } from "../markdown/slug";
 import type { MarkdownExtraction, WikilinkSpec } from "../markdown/types";
 import {
   clearTier1Edges,
+  insertUnresolvedEdge,
   lookupBlockByExplicitId,
   lookupBlockByHeading,
   lookupNoteByPath,
@@ -149,14 +150,23 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
       const enriched: ResolvedWikilink = { ...link, resolvedTargetPath: resolution.targetPath };
       const toId = await resolveWikilinkTarget(db, enriched);
       const isEmbed = link.isEmbed;
+      const edgeKind = isEmbed ? "embed" : "wikilink";
+      if (toId === null) {
+        await insertUnresolvedEdge(db, {
+          kind: edgeKind,
+          from: fromId,
+          rawTarget: link.rawTarget,
+          source: edgeKind,
+        });
+        continue;
+      }
       await relateEdge(db, {
-        table: isEmbed ? "embed" : "wikilink",
+        table: edgeKind,
         from: fromId,
         to: toId,
-        source: isEmbed ? "embed" : "wikilink",
+        source: edgeKind,
         confidenceClass: "EXTRACTED",
         confidence: 1,
-        targetUnresolved: toId === null ? link.rawTarget : null,
       });
     }
 

@@ -71,7 +71,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
     }
   });
 
-  test("[smoke] INFO FOR DB reports all 24 expected tables", async () => {
+  test("[smoke] INFO FOR DB reports all 26 expected tables", async () => {
     const [info] = await connection.db
       .query<[{ tables: Record<string, string> }]>("INFO FOR DB;")
       .collect<[{ tables: Record<string, string> }]>();
@@ -80,12 +80,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
 
     const entityTables = ["note", "block", "chunk", "tag", "concept", "claim", "question"];
     const opsTables = ["daemon_write", "awaken_run"];
-    const expected = [...entityTables, ...EDGE_TABLES, ...opsTables];
+    const unresolvedTables = ["wikilink_unresolved", "embed_unresolved"];
+    const expected = [...entityTables, ...EDGE_TABLES, ...unresolvedTables, ...opsTables];
 
     for (const name of expected) {
       expect(present.has(name)).toBe(true);
     }
-    expect(expected.length).toBe(24);
+    expect(expected.length).toBe(26);
   });
 
   test("[smoke] createNote round-trips path/sha/word_count", async () => {

@@ -5,8 +5,9 @@
  *
  * Validates the two locked-decision invariants Phase 5's `links audit`
  * planner depends on:
- *   - LD7: unresolved wikilinks persist with `target_unresolved` set,
- *          routed through the `note:unresolved` sentinel record.
+ *   - LD7: unresolved wikilinks persist in the `wikilink_unresolved`
+ *          table with `raw_target` set, keeping the wikilink relation
+ *          traversal-clean.
  *   - LD8: every `tagged` edge written by Tier 1 has `source = 'structure'`.
  */
 
@@ -88,21 +89,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 2 Tier 1 end-to-end", () => {
   test("[smoke] resolved wikilink alpha -> beta exists", async () => {
     const [rows] = await connection.db
       .query<[Array<{ in: RecordId; out: RecordId<"note"> }>]>(
-        "SELECT in, out FROM wikilink WHERE source = 'wikilink' AND target_unresolved = NONE;",
+        "SELECT in, out FROM wikilink WHERE source = 'wikilink';",
       )
       .collect<[Array<{ in: RecordId; out: RecordId<"note"> }>]>();
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  test("[smoke] LD7: unresolved wikilink persists via note:unresolved sentinel", async () => {
+  test("[smoke] LD7: unresolved wikilink persists in wikilink_unresolved table", async () => {
     const [rows] = await connection.db
-      .query<[Array<{ target_unresolved: string; out: RecordId<"note"> }>]>(
-        "SELECT target_unresolved, out FROM wikilink WHERE target_unresolved = 'unknown-target';",
+      .query<[Array<{ raw_target: string; in: RecordId; source: string }>]>(
+        "SELECT raw_target, in, source FROM wikilink_unresolved WHERE raw_target = 'unknown-target';",
       )
-      .collect<[Array<{ target_unresolved: string; out: RecordId<"note"> }>]>();
+      .collect<[Array<{ raw_target: string; in: RecordId; source: string }>]>();
     expect(rows.length).toBe(1);
-    expect(rows[0].target_unresolved).toBe("unknown-target");
-    expect(String(rows[0].out)).toBe("note:unresolved");
+    expect(rows[0].raw_target).toBe("unknown-target");
+    expect(rows[0].source).toBe("wikilink");
   });
 
   test("[smoke] LD8: every tagged edge has source = 'structure'", async () => {

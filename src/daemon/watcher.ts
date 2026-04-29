@@ -146,7 +146,7 @@ export class VaultWatcher {
       }
       await surrealDb.db
         .query(
-          "DELETE block WHERE note = $note; DELETE wikilink, embed, frontmatter_ref, tagged, contained_in, under_heading WHERE in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note);",
+          "DELETE wikilink, embed, frontmatter_ref, tagged, contained_in, under_heading, wikilink_unresolved, embed_unresolved WHERE in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note); DELETE block WHERE note = $note;",
           { note: noteId },
         )
         .collect();

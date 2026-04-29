@@ -258,6 +258,7 @@ const TIER1_EDGE_TABLES: readonly EdgeTable[] = [
   "under_heading",
 ];
 const TIER1_SOURCES = ["wikilink", "embed", "frontmatter", "structure"];
+const TIER1_UNRESOLVED_TABLES = ["wikilink_unresolved", "embed_unresolved"] as const;
 
 export async function clearTier1Edges(db: Surreal, noteId: RecordId<"note">): Promise<void> {
   for (const table of TIER1_EDGE_TABLES) {
@@ -268,17 +269,24 @@ export async function clearTier1Edges(db: Surreal, noteId: RecordId<"note">): Pr
       )
       .collect();
   }
+  for (const table of TIER1_UNRESOLVED_TABLES) {
+    await db
+      .query(
+        `DELETE ${table} WHERE in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note);`,
+        { note: noteId },
+      )
+      .collect();
+  }
 }
 
 export interface RelateEdgeInput {
   table: EdgeTable;
   from: RecordId;
-  to: RecordId | null;
+  to: RecordId;
   source: string;
   confidenceClass: string;
   confidence: number;
   agent?: string;
-  targetUnresolved?: string | null;
 }
 
 export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<void> {
@@ -288,6 +296,7 @@ export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<v
   const setClauses: string[] = ["source = $source", "class = $cls", "confidence = $confidence"];
   const bindings: Record<string, unknown> = {
     from: input.from,
+    to: input.to,
     source: input.source,
     cls: input.confidenceClass,
     confidence: input.confidence,
@@ -296,19 +305,33 @@ export async function relateEdge(db: Surreal, input: RelateEdgeInput): Promise<v
     setClauses.push("agent = $agent");
     bindings.agent = input.agent;
   }
-  const hasTargetUnresolved =
-    input.targetUnresolved !== undefined && input.targetUnresolved !== null;
-  if (hasTargetUnresolved) {
-    setClauses.push("target_unresolved = $targetUnresolved");
-    bindings.targetUnresolved = input.targetUnresolved;
-  }
-  bindings.to = input.to ?? UNRESOLVED_NOTE_ID;
   await db
     .query(`RELATE $from->${input.table}->$to SET ${setClauses.join(", ")};`, bindings)
     .collect();
 }
 
-const UNRESOLVED_NOTE_ID = new RecordId("note", "unresolved");
+export type UnresolvedEdgeKind = "wikilink" | "embed";
+
+export interface InsertUnresolvedEdgeInput {
+  kind: UnresolvedEdgeKind;
+  from: RecordId;
+  rawTarget: string;
+  source: string;
+}
+
+export async function insertUnresolvedEdge(
+  db: Surreal,
+  input: InsertUnresolvedEdgeInput,
+): Promise<void> {
+  const table = input.kind === "wikilink" ? "wikilink_unresolved" : "embed_unresolved";
+  await db
+    .query(`CREATE ${table} CONTENT { in: $from, raw_target: $rawTarget, source: $source };`, {
+      from: input.from,
+      rawTarget: input.rawTarget,
+      source: input.source,
+    })
+    .collect();
+}
 
 export async function markTier1Done(db: Surreal, noteId: RecordId<"note">): Promise<void> {
   await db.query("UPDATE $id SET tier1_at = time::now();", { id: noteId }).collect();

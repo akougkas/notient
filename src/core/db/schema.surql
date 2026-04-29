@@ -85,19 +85,37 @@ DEFINE INDEX OVERWRITE question_sha ON question FIELDS sha UNIQUE;
 -- by the schema applier via src/core/db/edgeTables.ts::provenanceFields().
 
 -- Deterministic (Tier 1; class = 'EXTRACTED').
--- TYPE RELATION enforces `out` as a non-null record. Tier 1 routes
--- unresolved wikilink/embed targets through the `note:unresolved`
--- sentinel record (created below) and stores the raw target string in
--- `target_unresolved`; spec §locked-decision-7 is satisfied at the
--- audit layer rather than via a NONE `out` field.
+-- TYPE RELATION enforces `out` as a non-null record, so unresolved
+-- wikilink and embed targets persist in the dedicated
+-- `wikilink_unresolved` and `embed_unresolved` tables defined below
+-- (TYPE NORMAL). The `links audit` CLI verb in Phase 5 reads those
+-- tables directly and the wikilink/embed traversals stay clean.
 DEFINE TABLE OVERWRITE wikilink TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
-DEFINE FIELD OVERWRITE target_unresolved ON wikilink TYPE option<string>;
 DEFINE TABLE OVERWRITE embed TYPE RELATION FROM note|block TO note|block SCHEMAFULL;
-DEFINE FIELD OVERWRITE target_unresolved ON embed TYPE option<string>;
 DEFINE TABLE OVERWRITE frontmatter_ref TYPE RELATION FROM note TO note SCHEMAFULL;
 DEFINE TABLE OVERWRITE tagged TYPE RELATION FROM note|block TO tag SCHEMAFULL;
 DEFINE TABLE OVERWRITE contained_in TYPE RELATION FROM block TO note SCHEMAFULL;
 DEFINE TABLE OVERWRITE under_heading TYPE RELATION FROM block TO block SCHEMAFULL;
+
+-- Unresolved deterministic ancillary tables. TYPE NORMAL because
+-- SurrealDB 3.x TYPE RELATION rejects an option<record> on the
+-- implicit `out` field. Each row records the originating note or
+-- block plus the raw `[[target]]` text the resolver could not match.
+-- Phase 5's `links audit` reads these tables directly. They are NOT
+-- in EDGE_TABLES and do not receive the provenance-fields block.
+DEFINE TABLE OVERWRITE wikilink_unresolved SCHEMAFULL;
+DEFINE FIELD OVERWRITE in ON wikilink_unresolved TYPE record<note|block>;
+DEFINE FIELD OVERWRITE raw_target ON wikilink_unresolved TYPE string;
+DEFINE FIELD OVERWRITE source ON wikilink_unresolved TYPE string;
+DEFINE FIELD OVERWRITE created_at ON wikilink_unresolved TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE wikilink_unresolved_in ON wikilink_unresolved FIELDS in;
+
+DEFINE TABLE OVERWRITE embed_unresolved SCHEMAFULL;
+DEFINE FIELD OVERWRITE in ON embed_unresolved TYPE record<note|block>;
+DEFINE FIELD OVERWRITE raw_target ON embed_unresolved TYPE string;
+DEFINE FIELD OVERWRITE source ON embed_unresolved TYPE string;
+DEFINE FIELD OVERWRITE created_at ON embed_unresolved TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE embed_unresolved_in ON embed_unresolved FIELDS in;
 
 -- Extracted semantic (Tier 3 extractor; class = 'INFERRED')
 DEFINE TABLE OVERWRITE mentions TYPE RELATION FROM note|block TO concept SCHEMAFULL;
@@ -134,15 +152,6 @@ DEFINE FIELD OVERWRITE tier_filter ON awaken_run TYPE array<int> DEFAULT [1,2,3]
 DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
-
--- Sentinel note for unresolved wikilink/embed targets. RELATE requires a
--- non-null `out` on TYPE RELATION tables; routing unresolved edges to this
--- record lets Phase 5's `links audit` query the wikilink table directly.
-UPSERT note:unresolved CONTENT {
-  path: "_notient_unresolved",
-  sha: "_notient_unresolved",
-  word_count: 0
-};
 
 -- §3.6 Agent identity
 DEFINE ACCESS OVERWRITE agent_jwt ON DATABASE TYPE JWT

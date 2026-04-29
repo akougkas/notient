@@ -136,7 +136,7 @@ Path values are vault-relative POSIX, no leading slash, no Windows backslashes. 
 
 ### 3.4 Edge tables
 
-Sixteen edge tables, partitioned by provenance class:
+Fifteen edge tables, partitioned by provenance class:
 
 **Deterministic (Tier 1 emits these; `class = 'EXTRACTED'`):**
 - `wikilink`: `RELATION FROM note|block TO note|block`
@@ -154,7 +154,13 @@ Sixteen edge tables, partitioned by provenance class:
 **Proposed semantic (Tier 3 linker emits these via staging; `class = 'INFERRED'`):**
 - `supports`, `contradicts`, `extends`, `exemplifies`, `synthesizes`, `related_to`, all `RELATION FROM note TO note`
 
-Provenance fields, applied uniformly:
+**Ancillary unresolved-target tables (TYPE NORMAL, not edge tables):**
+- `wikilink_unresolved`: `{ in: record<note|block>, raw_target: string, source: string, created_at: datetime }`
+- `embed_unresolved`: same shape, partitioned by edge kind
+
+SurrealDB 3.x `TYPE RELATION` rejects an `option<record>` on the implicit `out` field, so unresolved `[[target]]` references cannot live in `wikilink` or `embed` themselves without polluting graph traversals with a sentinel record. Tier 1 instead inserts one row per unresolved reference into the matching `*_unresolved` table; Phase 5's `links audit` reads those tables directly. These two tables are NOT in `EDGE_TABLES` and do not receive the provenance-fields block; their `source` field is a plain string.
+
+Provenance fields, applied uniformly to the fifteen edge tables:
 
 ```surql
 -- Provenance fields applied to every edge table; the runner loops over the
@@ -412,7 +418,7 @@ Resolution proceeds in two passes per note:
 1. Same-vault target lookup. `target` is matched first against `note.path` exact-match (modulo `.md` extension), then against the basename if no folder is given. Ambiguous basename matches resolve to the closest by edit distance to the active note's folder.
 2. Block lookup if `#heading` or `#^id` is present.
 
-Unresolved wikilinks are still inserted with `target = NONE` and a `target_unresolved: string` annotation. The `links audit` CLI verb surfaces unresolved links.
+Unresolved wikilinks insert into the dedicated `wikilink_unresolved` table (and `embed_unresolved` for embeds; see §3.4), keyed on the originating note or block plus the raw `[[target]]` text. The `links audit` CLI verb reads those tables directly so the `wikilink` and `embed` relation traversals stay free of sentinel pollution.
 
 ### 8.4 Write-back via AST stringify
 

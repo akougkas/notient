@@ -95,15 +95,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     expect(otherEdge).toBeDefined();
   });
 
-  test("persists unresolved wikilink routed via note:unresolved sentinel", async () => {
+  test("persists unresolved wikilink in wikilink_unresolved table", async () => {
     const [rows] = await connection.db
-      .query<[Array<{ in: RecordId; out: RecordId<"note">; target_unresolved?: string }>]>(
-        "SELECT in, out, target_unresolved FROM wikilink WHERE target_unresolved = 'non-existent-target';",
+      .query<[Array<{ in: RecordId; raw_target: string; source: string }>]>(
+        "SELECT in, raw_target, source FROM wikilink_unresolved WHERE raw_target = 'non-existent-target';",
       )
-      .collect<[Array<{ in: RecordId; out: RecordId<"note">; target_unresolved?: string }>]>();
+      .collect<[Array<{ in: RecordId; raw_target: string; source: string }>]>();
     expect(rows.length).toBe(1);
-    expect(rows[0].target_unresolved).toBe("non-existent-target");
-    expect(String(rows[0].out)).toBe("note:unresolved");
+    expect(rows[0].raw_target).toBe("non-existent-target");
+    expect(rows[0].source).toBe("wikilink");
   });
 
   test("tagged edge has source = 'structure' (literal-string equality)", async () => {
