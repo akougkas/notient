@@ -1,5 +1,6 @@
 import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
 import { runAwakenCommand } from "./commands/awaken";
+import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
 import { runHealthCommand } from "./commands/health";
@@ -67,8 +68,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "health",
         "chat",
         "ask",
+        "brief",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -84,6 +86,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "health") return await dispatchHealth(parsed, emitter, clientIdentity);
   if (parsed.command === "chat") return await dispatchChat(parsed, emitter, clientIdentity);
   if (parsed.command === "ask") return await dispatchAsk(parsed, emitter, clientIdentity);
+  if (parsed.command === "brief") return await dispatchBrief(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -224,6 +227,37 @@ async function dispatchAsk(
     intent,
     format,
     maxRoundsPerTurn,
+    emitter,
+    clientIdentity,
+  });
+}
+
+async function dispatchBrief(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const fileFlag = parsed.flags.file;
+  const filePath = typeof fileFlag === "string" ? fileFlag : undefined;
+  const positionalTopic = parsed.positional.join(" ").trim();
+  const topic = positionalTopic.length > 0 ? positionalTopic : undefined;
+  if (topic !== undefined && filePath !== undefined) {
+    throw new Error("INVALID_PARAMS: brief accepts a topic OR --file, not both");
+  }
+  if (topic === undefined && filePath === undefined) {
+    throw new Error('INVALID_PARAMS: brief requires a topic or --file (e.g. notient brief "auth")');
+  }
+  const maxNotes = parseBriefMaxField(parsed.flags["max-notes"], "max-notes");
+  const maxQuestions = parseBriefMaxField(parsed.flags["max-questions"], "max-questions");
+  const maxDecisions = parseBriefMaxField(parsed.flags["max-decisions"], "max-decisions");
+  return await runBriefCommand({
+    vaultPath,
+    topic,
+    filePath,
+    maxNotes,
+    maxQuestions,
+    maxDecisions,
     emitter,
     clientIdentity,
   });

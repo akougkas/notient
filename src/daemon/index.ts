@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { bootstrap } from "./bootstrap";
 import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAgentAskHandler } from "./handlers/agentAsk";
+import { makeAgentBriefHandler } from "./handlers/agentBrief";
 import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
@@ -178,6 +179,18 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   dispatcher.register("agent.ask", agentAskHandler);
+
+  const agentBriefHandler = makeAgentBriefHandler({
+    database: kernel.get("database"),
+    searchPipeline,
+    vault: kernel.get("vault"),
+    provider: kernel.get("primaryLLM"),
+    settings: () => {
+      const live = settings.get();
+      return { model: live.primary.reasoningModel };
+    },
+  });
+  dispatcher.register("agent.brief", agentBriefHandler);
 
   const vaultHandlers = makeVaultHandlers({ vault: kernel.get("vault") });
   const notesHandlers = makeNotesHandlers({
