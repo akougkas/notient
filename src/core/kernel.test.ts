@@ -39,6 +39,7 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "contextManager",
   "chatService",
   "historyService",
+  "transcriptDistiller",
   "vaultBootstrap",
 ];
 

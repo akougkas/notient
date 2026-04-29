@@ -18,6 +18,7 @@ import type { ToolCall } from "../core/chat/types";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
 import { Database } from "../core/db/database";
+import { createTranscriptDistiller } from "../core/distill/transcriptDistiller";
 import { EventBus } from "../core/events/eventBus";
 import { GraphStore } from "../core/graph/graphStore";
 import { HistoryService } from "../core/history/historyService";
@@ -608,6 +609,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }),
   });
 
+  const transcriptDistiller = createTranscriptDistiller({
+    provider: primaryLLM,
+    model: current.primary.reasoningModel,
+  });
+
   kernel.register("conversationStore", conversationStore);
   kernel.register("conversationIndex", conversationIndex);
   kernel.register("approvalGate", approvalGate);
@@ -616,6 +622,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("contextManager", contextManager);
   kernel.register("chatService", chatService);
   kernel.register("historyService", historyService);
+  kernel.register("transcriptDistiller", transcriptDistiller);
 
   // Optional vision routing: probe primary first; fall back to
   // chat.vision when configured. Bootstrap omits the slot when neither

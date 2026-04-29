@@ -12,6 +12,7 @@ import type { CoAuthorService } from "./coAuthor/chatStream";
 import type { Coordinator } from "./coordinator/coordinator";
 import type { ReasoningMutex } from "./coordinator/reasoningMutex";
 import type { Database } from "./db/database";
+import type { TranscriptDistiller } from "./distill/transcriptDistiller";
 import type { EventBus } from "./events/eventBus";
 import type { GraphStore } from "./graph/graphStore";
 import type { NativeGraphBridge } from "./graph/nativeGraphBridge";
@@ -75,6 +76,7 @@ export interface ServiceRegistry {
   contextManager: ContextManager;
   chatService: ChatService;
   historyService: HistoryService;
+  transcriptDistiller: TranscriptDistiller;
   vaultBootstrap: VaultBootstrap;
 
   // Phase C — optional vision routing slot. Registered only when the primary
@@ -133,6 +135,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "contextManager",
   "chatService",
   "historyService",
+  "transcriptDistiller",
   "vaultBootstrap",
 ];
 
@@ -177,6 +180,7 @@ const PHASE_C_KEYS: ServiceKey[] = [
   "toolModeCache",
   "contextManager",
   "chatService",
+  "transcriptDistiller",
 ];
 
 export class Kernel {

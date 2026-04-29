@@ -3,6 +3,7 @@ import { runAwakenCommand } from "./commands/awaken";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
+import { parseDistillFormat, runDistillCommand } from "./commands/distill";
 import { runHealthCommand } from "./commands/health";
 import { runInit } from "./commands/init";
 import { runReindexCommand } from "./commands/reindex";
@@ -69,8 +70,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "chat",
         "ask",
         "brief",
+        "distill",
       ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief; richer surface lands in Phases D-E.",
+      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill; richer surface lands in Phases D-E.",
     });
     return 0;
   }
@@ -87,6 +89,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "chat") return await dispatchChat(parsed, emitter, clientIdentity);
   if (parsed.command === "ask") return await dispatchAsk(parsed, emitter, clientIdentity);
   if (parsed.command === "brief") return await dispatchBrief(parsed, emitter, clientIdentity);
+  if (parsed.command === "distill") return await dispatchDistill(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -258,6 +261,30 @@ async function dispatchBrief(
     maxNotes,
     maxQuestions,
     maxDecisions,
+    emitter,
+    clientIdentity,
+  });
+}
+
+async function dispatchDistill(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const fromFlag = parsed.flags.from;
+  if (typeof fromFlag !== "string" || fromFlag.length === 0) {
+    throw new Error(
+      "INVALID_PARAMS: distill requires --from <path> (e.g. notient distill --from session.md)",
+    );
+  }
+  const format = parseDistillFormat(parsed.flags.format);
+  const dryRun = parsed.flags["dry-run"] === true;
+  return await runDistillCommand({
+    vaultPath,
+    transcriptPath: fromFlag,
+    format,
+    dryRun,
     emitter,
     clientIdentity,
   });
