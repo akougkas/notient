@@ -84,6 +84,45 @@ export function applyApprovedLink(source: string, input: ApplyApprovedLinkInput)
   return stringify(tree);
 }
 
+function isWikiLinkNode(node: { type: string }): node is WikiLinkNode {
+  return node.type === "wikiLink";
+}
+
+// Walk every descendant of the listItem looking for a `wikiLink` whose
+// target / heading / block match the approval input. Embeds (`wikiEmbed`,
+// e.g. `- ![[Note]]`) are deliberately treated as a distinct edge kind: an
+// embed is transclusion, a link is a reference, so an existing embed does
+// not block a new approved link with the same target.
+function findMatchingWikilinkInListItem(
+  listItem: ListItem,
+  target: string,
+  heading: string | null,
+  block: string | null,
+): WikiLinkNode | null {
+  const stack: Array<{ children?: unknown }> = [listItem];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) {
+      continue;
+    }
+    const children = (current as { children?: unknown }).children;
+    if (!Array.isArray(children)) {
+      continue;
+    }
+    for (const child of children) {
+      const node = child as { type: string };
+      if (isWikiLinkNode(node)) {
+        if (node.target === target && node.heading === heading && node.block === block) {
+          return node;
+        }
+        continue;
+      }
+      stack.push(child as { children?: unknown });
+    }
+  }
+  return null;
+}
+
 export function applyApprovedRelation(source: string, input: ApplyApprovedRelationInput): string {
   const tree = processAst(source);
   const yamlNode = findYamlNode(tree);
@@ -99,6 +138,11 @@ export function applyApprovedRelation(source: string, input: ApplyApprovedRelati
   const parsed = parseYamlAsObject(yamlNode.value);
   const notient = ensureMapping(parsed, "notient");
   const list = ensureStringArray(notient, input.key);
+  // Exact-string match against the canonical `[[target]]` form. Pre-existing
+  // entries in non-wikilink or aliased shape (e.g. plain strings, or
+  // `[[Note|Display]]`) are left alone and may produce a duplicate-looking
+  // append. Resolving aliases requires Obsidian's link cache, which the
+  // pure-string writeback intentionally does not depend on.
   if (list.includes(wikilink)) {
     return source;
   }
@@ -110,6 +154,10 @@ export function applyApprovedRelation(source: string, input: ApplyApprovedRelati
   return stringify(tree);
 }
 
+// Contract: the first `## Related` H2 wins; subsequent occurrences are
+// ignored. Documents with multiple `## Related` sections are pathological in
+// Obsidian; the writeback declines to disambiguate and leaves the latter
+// sections byte-identical to the input.
 function findRelatedHeadingIndex(tree: Root): number {
   for (let index = 0; index < tree.children.length; index += 1) {
     const child = tree.children[index];
@@ -150,29 +198,11 @@ function listContainsLink(
   block: string | null,
 ): boolean {
   for (const item of list.children) {
-    const link = firstWikilinkInListItem(item);
-    if (link === null) {
-      continue;
-    }
-    if (link.target === target && link.heading === heading && link.block === block) {
+    if (findMatchingWikilinkInListItem(item, target, heading, block) !== null) {
       return true;
     }
   }
   return false;
-}
-
-function firstWikilinkInListItem(item: ListItem): WikiLinkNode | null {
-  for (const child of item.children) {
-    if (child.type !== "paragraph") {
-      continue;
-    }
-    for (const grand of child.children) {
-      if (grand.type === "wikiLink") {
-        return grand;
-      }
-    }
-  }
-  return null;
 }
 
 function buildWikilinkNode(
@@ -242,10 +272,14 @@ function insertListAfterHeading(
   tree.children.splice(headingIndex + 1, 0, list);
 }
 
+// `remark-frontmatter` always emits the YAML node at the top of the tree
+// before any block content, but we scan defensively to tolerate any future
+// sibling nodes (e.g. comments) that might land ahead of it.
 function findYamlNode(tree: Root): Yaml | null {
-  const first = tree.children[0];
-  if (first !== undefined && first.type === "yaml") {
-    return first;
+  for (const child of tree.children) {
+    if (child.type === "yaml") {
+      return child;
+    }
   }
   return null;
 }

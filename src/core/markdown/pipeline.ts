@@ -1,5 +1,5 @@
-import type { Root } from "mdast";
-import type { Handle } from "mdast-util-to-markdown";
+import type { ListItem, Paragraph, Root } from "mdast";
+import { type Handle, defaultHandlers } from "mdast-util-to-markdown";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -7,7 +7,7 @@ import remarkStringify from "remark-stringify";
 import type { Processor } from "unified";
 import { unified } from "unified";
 import remarkBlockId from "./plugins/remarkBlockId";
-import remarkTag from "./plugins/remarkTag";
+import remarkTag, { type TagRefNode } from "./plugins/remarkTag";
 import remarkWikilink from "./plugins/remarkWikilink";
 import type { WikiEmbedNode, WikiLinkNode } from "./plugins/remarkWikilink";
 
@@ -15,19 +15,14 @@ import type { WikiEmbedNode, WikiLinkNode } from "./plugins/remarkWikilink";
  * Memoised unified processor for Notient's markdown pipeline.
  *
  * Spec: §8.1. The pipeline registers Notient's three custom Obsidian parser
- * plugins (wikilink, blockId, tag) and matching stringify handlers for the
- * node types those plugins produce that are otherwise unknown to
- * `mdast-util-to-markdown`: `wikiLink` and `wikiEmbed`. With the handlers in
- * place a tree containing those nodes round-trips back to the literal
- * `[[target]]` / `![[target]]` Obsidian syntax.
- *
- * `blockId` and `tagRef`: blockId is stored as a property on
- * `paragraph`/`listItem` nodes (the marker is stripped from text), and
- * `tagRef` is a phrasing-content node introduced by `remarkTag`. Neither has
- * a stringify handler yet; consumers that need a full processAst →
- * stringify round-trip on tagged or block-id-anchored notes must add those
- * handlers separately. The Phase 4 writeback only inserts wikilinks and is
- * unaffected by that gap on the existing fixtures.
+ * plugins (wikilink, blockId, tag) and matching stringify handlers for every
+ * node type those plugins produce that `mdast-util-to-markdown` does not
+ * already know about: `wikiLink`, `wikiEmbed`, and `tagRef`. The `paragraph`
+ * and `listItem` default handlers are also wrapped so that any `blockId`
+ * property attached by `remarkBlockId` is re-emitted as a trailing
+ * `^block-id` Obsidian marker. With those handlers in place a tree produced
+ * by `processAst` round-trips back to its original Obsidian syntax for
+ * wikilinks, embeds, tags, and block-id anchors.
  */
 
 type MarkdownProcessor = Processor<Root, Root, Root, Root, string>;
@@ -52,14 +47,48 @@ function formatWikilinkBody(node: WikiLinkNode | WikiEmbedNode): string {
 
 // `Handle` accepts a heterogeneous `node: any` because mdast-util-to-markdown
 // dispatches by string type and cannot statically narrow the shape. We assert
-// the concrete WikiLinkNode / WikiEmbedNode shape inside our handlers; the
-// dispatcher will only invoke them for those types.
+// the concrete WikiLinkNode / WikiEmbedNode / TagRefNode shape inside our
+// handlers; the dispatcher will only invoke them for those types.
 const handleWikiLink: Handle = (node) => {
   return `[[${formatWikilinkBody(node as WikiLinkNode)}]]`;
 };
 
 const handleWikiEmbed: Handle = (node) => {
   return `![[${formatWikilinkBody(node as WikiEmbedNode)}]]`;
+};
+
+const handleTagRef: Handle = (node) => {
+  return `#${(node as TagRefNode).path}`;
+};
+
+// Wrap the default `paragraph` handler so that a `blockId` property attached
+// by `remarkBlockId` is re-emitted as a trailing ` ^<id>` marker. When the
+// paragraph is empty we emit `^<id>` alone on the line (no leading space)
+// per Obsidian's syntax for an anchor placed on its own line.
+const handleParagraph: Handle = (node, parent, state, info) => {
+  const paragraph = node as Paragraph;
+  const body = defaultHandlers.paragraph(paragraph, parent, state, info);
+  if (paragraph.blockId === undefined) {
+    return body;
+  }
+  if (body.length === 0) {
+    return `^${paragraph.blockId}`;
+  }
+  return `${body} ^${paragraph.blockId}`;
+};
+
+// Wrap the default `listItem` handler so that a listItem-level `blockId` is
+// re-emitted at the end of the bullet's content. Obsidian places `^id` after
+// the last paragraph of a multi-paragraph bullet; appending to the default
+// listItem output is equivalent because the default ends with the last
+// paragraph's stringified content.
+const handleListItem: Handle = (node, parent, state, info) => {
+  const item = node as ListItem;
+  const body = defaultHandlers.listItem(item, parent, state, info);
+  if (item.blockId === undefined) {
+    return body;
+  }
+  return `${body} ^${item.blockId}`;
 };
 
 export function getMarkdownPipeline(): MarkdownProcessor {
@@ -88,6 +117,9 @@ export function getMarkdownPipeline(): MarkdownProcessor {
           // text content elsewhere in the document.
           wikiLink: handleWikiLink,
           wikiEmbed: handleWikiEmbed,
+          tagRef: handleTagRef,
+          paragraph: handleParagraph,
+          listItem: handleListItem,
         },
       })
       .freeze() as unknown as MarkdownProcessor;

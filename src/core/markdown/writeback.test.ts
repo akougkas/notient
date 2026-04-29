@@ -89,6 +89,71 @@ describe("applyApprovedLink", () => {
     const twice = applyApprovedLink(once, { target: "Determinism" });
     expect(twice).toBe(once);
   });
+
+  test("an existing embed bullet does not block a new wikilink for the same target", () => {
+    // wikiEmbed and wikiLink are distinct edge kinds (embed = transclusion,
+    // link = reference). An embed already in the section must not block a
+    // newly approved link.
+    const source = "## Related\n\n- ![[Note]]\n";
+    const result = applyApprovedLink(source, { target: "Note" });
+    expect(result).not.toBe(source);
+    expect(result).toContain("- ![[Note]]");
+    expect(result).toContain("- [[Note]]");
+  });
+
+  test("applyApprovedLink only emits wikiLink, never wikiEmbed", () => {
+    // applyApprovedLink takes no embed flag; an existing plain link is the
+    // idempotent block, but the writeback never emits an embed itself.
+    const source = "## Related\n\n- [[Note]]\n";
+    const result = applyApprovedLink(source, { target: "Note" });
+    expect(result).toBe(source);
+    // And from a clean slate the appended row is a link, not an embed.
+    const empty = "## Related\n";
+    const appended = applyApprovedLink(empty, { target: "Note" });
+    expect(appended).toContain("- [[Note]]");
+    expect(appended).not.toContain("- ![[Note]]");
+  });
+
+  test("idempotency walks every wikilink in a list item, not just the first", () => {
+    // A bullet that already mentions the target as a non-first wikilink must
+    // still be recognised; otherwise we duplicate the row.
+    const source = "## Related\n\n- See [[Existing]] also [[Other]]\n";
+    const result = applyApprovedLink(source, { target: "Other" });
+    expect(result).toBe(source);
+  });
+
+  test("first ## Related wins; subsequent ## Related sections are byte-identical", () => {
+    const source = [
+      "# Doc",
+      "",
+      "## Related",
+      "",
+      "- [[First]]",
+      "",
+      "## Notes",
+      "",
+      "Body.",
+      "",
+      "## Related",
+      "",
+      "- [[Second]]",
+      "",
+    ].join("\n");
+    const result = applyApprovedLink(source, { target: "Fresh" });
+    expect(result).not.toBe(source);
+    // First section: the new bullet appears.
+    const firstRelatedStart = result.indexOf("## Related");
+    const notesStart = result.indexOf("## Notes");
+    const firstSection = result.slice(firstRelatedStart, notesStart);
+    expect(firstSection).toContain("- [[First]]");
+    expect(firstSection).toContain("- [[Fresh]]");
+    // Second section: byte-identical to the input's second section.
+    const secondSourceStart = source.lastIndexOf("## Related");
+    const secondSourceTail = source.slice(secondSourceStart);
+    const secondResultStart = result.lastIndexOf("## Related");
+    const secondResultTail = result.slice(secondResultStart);
+    expect(secondResultTail).toBe(secondSourceTail);
+  });
 });
 
 describe("applyApprovedRelation", () => {

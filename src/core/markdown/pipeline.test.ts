@@ -117,4 +117,46 @@ describe("markdown pipeline", () => {
     // Same string twice means the stringify is a fixpoint at the AST level.
     expect(stringify(secondTree)).toBe(firstString);
   });
+
+  test("processAst → stringify preserves a paragraph block-id marker", () => {
+    const source = "Paragraph with anchor. ^anchor-1\n\nNext one.\n";
+    expect(stringify(processAst(source))).toBe(source);
+    // parse → stringify (without running plugins) is also stable; the
+    // marker is plain text in that path.
+    expect(stringify(parse(source))).toBe(source);
+  });
+
+  test("processAst → stringify preserves block-id markers on list items", () => {
+    const source = "- item one ^id-1\n- item two\n";
+    expect(stringify(processAst(source))).toBe(source);
+  });
+
+  test("processAst → stringify preserves block-id on a multi-paragraph list item", () => {
+    const source = "- first paragraph\n\n  second paragraph ^id-multi\n";
+    expect(stringify(processAst(source))).toBe(source);
+  });
+
+  test("processAst → stringify preserves block-id on a stand-alone anchor line", () => {
+    const source = "^solo-anchor\n";
+    expect(stringify(processAst(source))).toBe(source);
+  });
+
+  test("processAst → stringify preserves multiple #tag references in a paragraph", () => {
+    const source = "Mentions #project/oauth and #other tag.\n";
+    expect(stringify(processAst(source))).toBe(source);
+  });
+
+  test("processAst → stringify matches parse → stringify on block-id and tag fixtures", () => {
+    // For these inputs the plugin transformations should not perturb
+    // round-trip output: processAst is semantically equivalent to parse for
+    // stringify purposes.
+    const cases = [
+      "Paragraph with anchor. ^anchor-1\n\nNext one.\n",
+      "- item one ^id-1\n- item two\n",
+      "Mentions #project/oauth and #other tag.\n",
+    ];
+    for (const source of cases) {
+      expect(stringify(processAst(source))).toBe(stringify(parse(source)));
+    }
+  });
 });
