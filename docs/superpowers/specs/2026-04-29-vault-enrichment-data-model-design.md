@@ -628,17 +628,17 @@ The following surfaces continue to work end to end. Their internals query Surrea
 
 ---
 
-## 15. Sprint plan
+## 15. Phase plan
 
-Five phases, sequential, each reviewable as one PR-sized chunk against `beta-spec`. Total: 16 to 23 days of focused work. Each phase ends with a green smoke pass. No backwards-compatibility shims between phases; the branch is a working tree until the final merge.
+Five phases, sequential, each reviewable as one PR-sized chunk against `beta-spec`. Each phase ends with a green smoke pass. No backwards-compatibility shims between phases; the branch is a working tree until the final merge. The phases are dependency-ordered, not effort-estimated.
 
-| # | Phase | Days | Done when |
-|---|---|---|---|
-| 1 | Storage substrate swap | 4-6 | `surrealServer.ts` supervises `surreal start`, `schema.surql` applies, `src/core/db/surreal.ts` exposes the typed DAL, all files in §12.1-12.5 deleted, `package.json` deps reconciled per §12.7-12.8, daemon boots clean, smoke: insert a `note`, RELATE a `wikilink`, kNN query returns. The DAL rewrites in §13 land in subsequent phases. |
-| 2 | Markdown parser + Tier 1 | 4-6 | unified/remark pipeline lands, three custom plugins shipped, AST round-trip golden test green, Tier 1 indexer commits deterministic edges, watcher handles `unlink` + 60s rename window, smoke: save a note with `[[link]]` and `^block-id` and see edges in the DB. |
-| 3 | Tier 2 + Tier 3 + priority queue | 3-4 | `IndexerQueue` is min-heap by priority, Tier 2 chunks/embeds via Ollama into SurrealDB native HNSW, Tier 3 retargeted at new schema, linker uses recursive SurrealQL with skip-already-linked filter, smoke: end-to-end indexing on the fixture vault produces correct concept/claim/question + linker proposals. |
-| 4 | Awaken control plane + AST write-back | 3-4 | `awaken --pause/--resume/--cancel/--status` all functional, `awaken_run` state survives daemon restart, `nativeGraphBridge` replaced by `markdown/writeback.ts` (AST round-trip), `daemon_write` provenance table replaces `echoGuard`, smoke: pause an awaken, restart daemon, resume; approve a linker proposal and see the wikilink land in the note via AST. |
-| 5 | New CLI verbs + cleanup | 2-3 | `graph dump`, `graph stats`, `links sync`, `links audit`, `backup`, `restore`, `nuke`, `db sql`, `migrate-vault` all work; `awaken --tier` and `reindex --tier` plumbed; Phase D1 verbs all green against new schema; final dead-code sweep ensures no `sql.js` / `hnswlib-wasm` / canvas references remain anywhere. |
+| # | Phase | Done when |
+|---|---|---|
+| 1 | Storage substrate swap | `surrealServer.ts` supervises `surreal start`, `schema.surql` applies, `src/core/db/surreal.ts` exposes the typed DAL, all files in §12.1-12.5 deleted, `package.json` deps reconciled per §12.7-12.8, daemon boots clean, smoke: insert a `note`, RELATE a `wikilink`, kNN query returns. The DAL rewrites in §13 land in subsequent phases. |
+| 2 | Markdown parser + Tier 1 | unified/remark pipeline lands, three custom plugins shipped, AST round-trip golden test green, Tier 1 indexer commits deterministic edges, watcher handles `unlink` + 60s rename window, smoke: save a note with `[[link]]` and `^block-id` and see edges in the DB. |
+| 3 | Tier 2 + Tier 3 + priority queue | `IndexerQueue` is min-heap by priority, Tier 2 chunks/embeds via Ollama into SurrealDB native HNSW, Tier 3 retargeted at new schema, linker uses recursive SurrealQL with skip-already-linked filter, smoke: end-to-end indexing on the fixture vault produces correct concept/claim/question + linker proposals. |
+| 4 | Awaken control plane + AST write-back | `awaken --pause/--resume/--cancel/--status` all functional, `awaken_run` state survives daemon restart, `nativeGraphBridge` replaced by `markdown/writeback.ts` (AST round-trip), `daemon_write` provenance table replaces `echoGuard`, smoke: pause an awaken, restart daemon, resume; approve a linker proposal and see the wikilink land in the note via AST. |
+| 5 | New CLI verbs + cleanup | `graph dump`, `graph stats`, `links sync`, `links audit`, `backup`, `restore`, `nuke`, `db sql`, `migrate-vault` all work; `awaken --tier` and `reindex --tier` plumbed; Phase D1 verbs all green against new schema; final dead-code sweep ensures no `sql.js` / `hnswlib-wasm` / canvas references remain anywhere. |
 
 The implementation plan in `docs/superpowers/plans/2026-04-29-vault-enrichment-data-model-plan.md` decomposes each phase into per-task checklist items with acceptance criteria.
 
