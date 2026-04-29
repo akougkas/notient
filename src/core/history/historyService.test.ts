@@ -43,6 +43,39 @@ describe("HistoryService", () => {
     expect(rows[0].created_at).toBe(1700000000000);
   });
 
+  test("record stamps the supplied clientIdentity on the row", async () => {
+    const database = await newDb();
+    const service = new HistoryService({
+      db: database,
+      inverters: {},
+      retention: { max: 100, maxPerTarget: 50 },
+    });
+    const claudeId = await service.record({
+      kind: "notes.create",
+      target: "/from-claude.md",
+      before: null,
+      after: "body",
+      clientIdentity: "claude-code",
+    });
+    const humanId = await service.record({
+      kind: "notes.create",
+      target: "/from-human.md",
+      before: null,
+      after: "body",
+    });
+    const rows = database.query<{ id: number; client_identity: string | null }>(
+      "SELECT id, client_identity FROM history ORDER BY id ASC;",
+    );
+    const claudeRow = rows.find((row) => row.id === claudeId);
+    const humanRow = rows.find((row) => row.id === humanId);
+    expect(claudeRow?.client_identity).toBe("claude-code");
+    expect(humanRow?.client_identity).toBe("human");
+
+    const recent = service.getRecent(10);
+    expect(recent.find((row) => row.id === claudeId)?.clientIdentity).toBe("claude-code");
+    expect(recent.find((row) => row.id === humanId)?.clientIdentity).toBe("human");
+  });
+
   test("getRecent returns rows in descending id order with parsed payloads", async () => {
     const database = await newDb();
     const service = new HistoryService({

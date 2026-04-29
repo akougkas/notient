@@ -29,6 +29,29 @@ describe("envelope codec", () => {
     expect(parseEnvelope(JSON.stringify({ id: "x" })).ok).toBe(false);
   });
 
+  test("parseEnvelope carries clientIdentity through when present", () => {
+    const line = JSON.stringify({
+      id: "req-1",
+      method: "chat.start",
+      params: {},
+      clientIdentity: "claude-code",
+    });
+    const result = parseEnvelope(line);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.envelope.clientIdentity).toBe("claude-code");
+  });
+
+  test("parseEnvelope omits clientIdentity when absent or empty", () => {
+    const absent = parseEnvelope(JSON.stringify({ id: "r", method: "m", params: {} }));
+    expect(absent.ok).toBe(true);
+    if (absent.ok) expect(absent.envelope.clientIdentity).toBeUndefined();
+    const empty = parseEnvelope(
+      JSON.stringify({ id: "r", method: "m", params: {}, clientIdentity: "" }),
+    );
+    expect(empty.ok).toBe(true);
+    if (empty.ok) expect(empty.envelope.clientIdentity).toBeUndefined();
+  });
+
   test("encodeAck/event/result/error produce stable shapes", () => {
     expect(JSON.parse(encodeAck("req-1", "daemon.status"))).toEqual({
       id: "req-1",
@@ -72,6 +95,29 @@ describe("MethodDispatcher", () => {
       type: "result",
       pid: 42,
     });
+  });
+
+  test("dispatcher passes clientIdentity to the handler with human as the default", async () => {
+    const dispatcher = new MethodDispatcher();
+    const captured: string[] = [];
+    dispatcher.register("agent.identity", async (_params, _emit, _id, clientIdentity) => {
+      captured.push(clientIdentity);
+      return { ok: true };
+    });
+    await dispatcher.dispatch(
+      { id: "req-default", method: "agent.identity", params: {} },
+      () => {},
+    );
+    await dispatcher.dispatch(
+      {
+        id: "req-claude",
+        method: "agent.identity",
+        params: {},
+        clientIdentity: "claude-code",
+      },
+      () => {},
+    );
+    expect(captured).toEqual(["human", "claude-code"]);
   });
 
   test("returns INVALID_PARAMS for unregistered method", async () => {

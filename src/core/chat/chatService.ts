@@ -75,6 +75,7 @@ export class ChatService {
   async startConversation(input: {
     topic: string;
     pinnedContext?: string[];
+    clientIdentity?: string;
   }): Promise<Conversation> {
     const settings = this.options.settings();
     const generateId = this.options.generateId ?? defaultGenerateId;
@@ -84,6 +85,7 @@ export class ChatService {
       pinnedContext: input.pinnedContext ?? [],
       approvalMode: settings.approvalMode,
       topic: input.topic,
+      clientIdentity: input.clientIdentity,
     });
   }
 

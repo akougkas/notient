@@ -58,6 +58,14 @@ export interface Conversation {
    * string verbatim and never computes it.
    */
   summaryEmbeddingB64: string | null;
+  /**
+   * Per-invocation client identity that started the conversation (Phase D1
+   * LD-5). Persists in the markdown frontmatter as `client_identity`. Older
+   * conversation files written before this field existed parse as `human`
+   * via the parser's default frontmatter; new write paths plumb it from the
+   * RPC envelope.
+   */
+  clientIdentity: string;
   messageCount: number;
   createdAt: number;
   updatedAt: number;

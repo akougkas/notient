@@ -8,11 +8,16 @@ export interface SearchCommandOptions {
   mode: "quick" | "balanced" | "deep";
   limit?: number;
   emitter: Emitter;
+  clientIdentity?: string;
 }
 
 export async function runSearchCommand(options: SearchCommandOptions): Promise<void> {
   const socketPath = resolveSocketPath(options.vaultPath, currentPlatform());
-  const client = await connectClient({ socketPath, vaultPath: options.vaultPath });
+  const client = await connectClient({
+    socketPath,
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
   const params: Record<string, unknown> = {
     query: options.query,
     mode: options.mode,

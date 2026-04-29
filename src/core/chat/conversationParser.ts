@@ -35,6 +35,7 @@ interface ConversationFrontmatter {
   topic: string;
   summary: string;
   summary_embedding_b64: string | null;
+  client_identity: string;
   created_at: number;
   updated_at: number;
   message_count: number;
@@ -56,6 +57,7 @@ export function serializeConversation(conv: Conversation): string {
     topic: conv.topic,
     summary: conv.summary,
     summary_embedding_b64: conv.summaryEmbeddingB64,
+    client_identity: conv.clientIdentity,
     created_at: conv.createdAt,
     updated_at: conv.updatedAt,
     message_count: conv.messageCount,
@@ -80,6 +82,7 @@ export function parseConversation(raw: string, notePath: string): Conversation {
     topic: frontmatter.topic,
     summary: frontmatter.summary,
     summaryEmbeddingB64: frontmatter.summary_embedding_b64,
+    clientIdentity: frontmatter.client_identity,
     messageCount: messages.length,
     createdAt: frontmatter.created_at,
     updatedAt: frontmatter.updated_at,
@@ -97,6 +100,7 @@ function renderFrontmatter(values: ConversationFrontmatter): string {
     `topic: ${JSON.stringify(values.topic)}`,
     `summary: ${JSON.stringify(values.summary)}`,
     `summary_embedding_b64: ${values.summary_embedding_b64 === null ? "null" : JSON.stringify(values.summary_embedding_b64)}`,
+    `client_identity: ${JSON.stringify(values.client_identity)}`,
     `created_at: ${values.created_at}`,
     `updated_at: ${values.updated_at}`,
     `message_count: ${values.message_count}`,
@@ -136,6 +140,7 @@ function parseFrontmatter(yaml: string): ConversationFrontmatter {
     topic: stripJsonString(fields.topic ?? fallback.topic),
     summary: stripJsonString(fields.summary ?? fallback.summary),
     summary_embedding_b64: summaryEmbeddingB64,
+    client_identity: stripJsonString(fields.client_identity ?? fallback.client_identity),
     created_at: numericField(fields.created_at, fallback.created_at),
     updated_at: numericField(fields.updated_at, fallback.updated_at),
     message_count: numericField(fields.message_count, fallback.message_count),
@@ -151,6 +156,7 @@ function defaultFrontmatter(): ConversationFrontmatter {
     topic: "Conversation",
     summary: "",
     summary_embedding_b64: null,
+    client_identity: "human",
     created_at: 0,
     updated_at: 0,
     message_count: 0,

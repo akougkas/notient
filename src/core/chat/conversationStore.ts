@@ -88,6 +88,7 @@ export class ConversationStore {
     pinnedContext: string[];
     approvalMode: Conversation["approvalMode"];
     topic: string;
+    clientIdentity?: string;
     summary?: string;
     summaryEmbeddingB64?: string | null;
   }): Promise<Conversation> {
@@ -102,6 +103,7 @@ export class ConversationStore {
       topic: input.topic,
       summary: input.summary ?? "",
       summaryEmbeddingB64: input.summaryEmbeddingB64 ?? null,
+      clientIdentity: input.clientIdentity ?? "human",
       messageCount: 0,
       createdAt: now,
       updatedAt: now,

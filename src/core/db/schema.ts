@@ -56,7 +56,8 @@ export const SCHEMA: string[] = [
     target TEXT NOT NULL,
     before TEXT,
     after TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    client_identity TEXT
   );`,
   // staging_edges: agent proposals before user approval. Promoted to graph_edges
   // by ApprovalService. Rejected rows are deleted.

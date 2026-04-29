@@ -7,6 +7,7 @@ export interface DaemonCommandOptions {
   verb: "start" | "stop" | "status" | "list";
   vaultPath: string | null;
   emitter: Emitter;
+  clientIdentity?: string;
 }
 
 export async function runDaemonCommand(options: DaemonCommandOptions): Promise<void> {
@@ -44,7 +45,11 @@ async function runStart(options: DaemonCommandOptions): Promise<void> {
 async function runStop(options: DaemonCommandOptions): Promise<void> {
   if (!options.vaultPath) throw new Error("daemon stop requires --vault");
   const socketPath = resolveSocketPath(options.vaultPath, currentPlatform());
-  const client = await connectClient({ socketPath, vaultPath: options.vaultPath });
+  const client = await connectClient({
+    socketPath,
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
   for await (const frame of client.call("daemon.shutdown", {})) {
     options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
     if (frame.type === "result" || frame.type === "error") break;
@@ -55,7 +60,11 @@ async function runStop(options: DaemonCommandOptions): Promise<void> {
 async function runStatus(options: DaemonCommandOptions): Promise<void> {
   if (!options.vaultPath) throw new Error("daemon status requires --vault");
   const socketPath = resolveSocketPath(options.vaultPath, currentPlatform());
-  const client = await connectClient({ socketPath, vaultPath: options.vaultPath });
+  const client = await connectClient({
+    socketPath,
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
   for await (const frame of client.call("daemon.status", {})) {
     options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
     if (frame.type === "result" || frame.type === "error") break;

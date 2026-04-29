@@ -9,6 +9,7 @@ const sampleRow: HistoryRow = {
   before: null,
   after: "hello",
   createdAt: 1700000000000,
+  clientIdentity: "human",
 };
 
 describe("notes.history + notes.undo + notes.read", () => {

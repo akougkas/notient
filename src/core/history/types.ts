@@ -32,6 +32,11 @@ export interface HistoryRow {
   before: unknown | null;
   after: unknown | null;
   createdAt: number;
+  /**
+   * Per-invocation client identity that produced the row (Phase D1 LD-5).
+   * Defaults to `human` when the originating RPC frame omits the field.
+   */
+  clientIdentity: string;
 }
 
 export interface RecordHistoryInput {
@@ -39,6 +44,11 @@ export interface RecordHistoryInput {
   target: string;
   before: unknown | null;
   after: unknown | null;
+  /**
+   * Per-invocation client identity recorded with the row (Phase D1 LD-5).
+   * Optional at the call site; HistoryService falls back to `human`.
+   */
+  clientIdentity?: string;
 }
 
 export type Inverter = (target: string, before: unknown, after: unknown) => Promise<void>;

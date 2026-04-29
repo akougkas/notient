@@ -8,6 +8,7 @@ export interface ChatCommandOptions {
   conversationId?: string;
   approve: "auto" | "ask";
   emitter: Emitter;
+  clientIdentity?: string;
 }
 
 export async function runChatSingleShot(options: ChatCommandOptions): Promise<void> {
@@ -15,6 +16,7 @@ export async function runChatSingleShot(options: ChatCommandOptions): Promise<vo
   const client = await connectClient({
     socketPath,
     vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
   });
 
   const conversationId = options.conversationId ?? (await ensureConversation(client, options));
@@ -25,7 +27,11 @@ export async function runChatSingleShot(options: ChatCommandOptions): Promise<vo
 
   const approvalClient =
     options.approve === "ask"
-      ? await connectClient({ socketPath, vaultPath: options.vaultPath })
+      ? await connectClient({
+          socketPath,
+          vaultPath: options.vaultPath,
+          clientIdentity: options.clientIdentity,
+        })
       : null;
 
   try {
@@ -82,6 +88,7 @@ function isApprovalPending(frame: { type: string; event?: string }): boolean {
 export async function runChatTui(options: {
   vaultPath: string;
   emitter: Emitter;
+  clientIdentity?: string;
 }): Promise<void> {
   // Lazy-loaded so the OpenTUI + React reconciler chunk only spins up when
   // the TUI is actually launched (single-shot CLI sessions skip it). The
@@ -90,6 +97,7 @@ export async function runChatTui(options: {
   await startTuiRuntime({
     vaultPath: options.vaultPath,
     emitter: options.emitter,
+    clientIdentity: options.clientIdentity,
   });
 }
 

@@ -7,6 +7,7 @@ import { runReindexCommand } from "./commands/reindex";
 import { runSearchCommand } from "./commands/search";
 import { runVitalsCommand } from "./commands/vitals";
 import { defaultStateLoader, resolveVault } from "./env";
+import { normalizeAgentId } from "./identity";
 import { type Emitter, type EmitterMode, defaultMode, makeEmitter } from "./output";
 
 interface ParsedArgs {
@@ -61,14 +62,16 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
     return 0;
   }
 
+  const clientIdentity = resolveClientIdentity(parsed);
+
   if (parsed.command === "init") return await dispatchInit(parsed, emitter);
-  if (parsed.command === "daemon") return await dispatchDaemon(parsed, emitter);
-  if (parsed.command === "awaken") return await dispatchAwaken(parsed, emitter);
-  if (parsed.command === "reindex") return await dispatchReindex(parsed, emitter);
-  if (parsed.command === "search") return await dispatchSearch(parsed, emitter);
-  if (parsed.command === "vitals") return await dispatchVitals(parsed, emitter);
-  if (parsed.command === "health") return await dispatchHealth(parsed, emitter);
-  if (parsed.command === "chat") return await dispatchChat(parsed, emitter);
+  if (parsed.command === "daemon") return await dispatchDaemon(parsed, emitter, clientIdentity);
+  if (parsed.command === "awaken") return await dispatchAwaken(parsed, emitter, clientIdentity);
+  if (parsed.command === "reindex") return await dispatchReindex(parsed, emitter, clientIdentity);
+  if (parsed.command === "search") return await dispatchSearch(parsed, emitter, clientIdentity);
+  if (parsed.command === "vitals") return await dispatchVitals(parsed, emitter, clientIdentity);
+  if (parsed.command === "health") return await dispatchHealth(parsed, emitter, clientIdentity);
+  if (parsed.command === "chat") return await dispatchChat(parsed, emitter, clientIdentity);
 
   emitter.emit({
     type: "error",
@@ -76,6 +79,17 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
     message: `Unknown command: ${parsed.command}`,
   });
   return 2;
+}
+
+/**
+ * Resolves the per-invocation client identity from the global `--as` flag.
+ * Returns undefined when the flag is absent so the client omits the field
+ * on the wire and the daemon applies its own `human` default.
+ */
+function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
+  const raw = parsed.flags.as;
+  if (typeof raw !== "string") return undefined;
+  return normalizeAgentId(raw);
 }
 
 async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
@@ -86,55 +100,83 @@ async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<numbe
   return 0;
 }
 
-async function dispatchDaemon(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchDaemon(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const verb = parsed.positional[0] as "start" | "stop" | "status" | "list" | undefined;
   if (!verb) throw new Error("daemon requires a verb: start | stop | status | list");
   const vaultPath = await resolveVaultForDaemon(parsed);
-  await runDaemonCommand({ verb, vaultPath, emitter });
+  await runDaemonCommand({ verb, vaultPath, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchAwaken(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchAwaken(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const batch = typeof parsed.flags.batch === "string" ? Number(parsed.flags.batch) : undefined;
   const since = typeof parsed.flags.since === "string" ? Date.parse(parsed.flags.since) : undefined;
-  await runAwakenCommand({ vaultPath, batch, since, emitter });
+  await runAwakenCommand({ vaultPath, batch, since, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchReindex(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchReindex(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const pattern = parsed.positional[0] ?? "**/*.md";
-  await runReindexCommand({ vaultPath, pattern, emitter });
+  await runReindexCommand({ vaultPath, pattern, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchSearch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchSearch(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const query =
     parsed.positional[0] ?? (typeof parsed.flags.query === "string" ? parsed.flags.query : "");
   if (!query) throw new Error("search requires a query positional or --query flag");
   const mode = (parsed.flags.mode as "quick" | "balanced" | "deep") ?? "balanced";
   const limit = typeof parsed.flags.limit === "string" ? Number(parsed.flags.limit) : undefined;
-  await runSearchCommand({ vaultPath, query, mode, limit, emitter });
+  await runSearchCommand({ vaultPath, query, mode, limit, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchVitals(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchVitals(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const notePath = parsed.positional[0];
   if (!notePath) throw new Error("vitals requires a note path positional");
-  await runVitalsCommand({ vaultPath, notePath, emitter });
+  await runVitalsCommand({ vaultPath, notePath, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchHealth(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchHealth(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
-  await runHealthCommand({ vaultPath, emitter });
+  await runHealthCommand({ vaultPath, emitter, clientIdentity });
   return 0;
 }
 
-async function dispatchChat(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+async function dispatchChat(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const prompt =
     parsed.positional[0] ?? (typeof parsed.flags.prompt === "string" ? parsed.flags.prompt : "");
@@ -146,10 +188,10 @@ async function dispatchChat(parsed: ParsedArgs, emitter: Emitter): Promise<numbe
         "INVALID_PARAMS: chat without a prompt requires a TTY (or pass a positional prompt)",
       );
     }
-    await runChatTui({ vaultPath, emitter });
+    await runChatTui({ vaultPath, emitter, clientIdentity });
     return 0;
   }
-  await runChatSingleShot({ vaultPath, prompt, approve, emitter });
+  await runChatSingleShot({ vaultPath, prompt, approve, emitter, clientIdentity });
   return 0;
 }
 

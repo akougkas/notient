@@ -2,6 +2,12 @@ export interface RpcEnvelope {
   id: string;
   method: string;
   params: Record<string, unknown>;
+  /**
+   * Per-invocation client identity (Phase D1 LD-5). Absent on the wire is
+   * equivalent to the daemon-side default `human`. The daemon trusts the
+   * field as set by the CLI; there is no authentication.
+   */
+  clientIdentity?: string;
 }
 
 export type ParseResult = { ok: true; envelope: RpcEnvelope } | { ok: false; reason: string };
@@ -23,7 +29,11 @@ export function parseEnvelope(line: string): ParseResult {
     candidate.params && typeof candidate.params === "object" && !Array.isArray(candidate.params)
       ? (candidate.params as Record<string, unknown>)
       : {};
-  return { ok: true, envelope: { id: candidate.id, method: candidate.method, params } };
+  const envelope: RpcEnvelope = { id: candidate.id, method: candidate.method, params };
+  if (typeof candidate.clientIdentity === "string" && candidate.clientIdentity.length > 0) {
+    envelope.clientIdentity = candidate.clientIdentity;
+  }
+  return { ok: true, envelope };
 }
 
 export function encodeAck(id: string, method: string): string {
@@ -57,6 +67,13 @@ export type MethodHandler = (
   params: Record<string, unknown>,
   emit: (line: string) => void,
   envelopeId: string,
+  /**
+   * Caller identity from the RPC envelope (Phase D1 LD-5). Falls back to
+   * `human` when the frame omits the field. Handlers that persist rows
+   * tag them with this value so the audit trail records who initiated
+   * the work.
+   */
+  clientIdentity: string,
 ) => Promise<Record<string, unknown>>;
 
 export class MethodDispatcher {
@@ -77,8 +94,9 @@ export class MethodDispatcher {
       );
       return;
     }
+    const clientIdentity = envelope.clientIdentity ?? "human";
     try {
-      const payload = await handler(envelope.params, emit, envelope.id);
+      const payload = await handler(envelope.params, emit, envelope.id, clientIdentity);
       emit(encodeResult(envelope.id, payload));
     } catch (error) {
       emit(

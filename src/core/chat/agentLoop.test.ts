@@ -158,6 +158,7 @@ function makeConversation(approvalMode: Conversation["approvalMode"] = "yolo"): 
     topic: "T",
     summary: "",
     summaryEmbeddingB64: null,
+    clientIdentity: "human",
     messageCount: 0,
     createdAt: 0,
     updatedAt: 0,

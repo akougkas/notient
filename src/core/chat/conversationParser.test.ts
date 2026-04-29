@@ -12,6 +12,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
     topic: "Hello world",
     summary: "Greeting exchange",
     summaryEmbeddingB64: null,
+    clientIdentity: "human",
     messageCount: 0,
     createdAt: 1745625600000,
     updatedAt: 1745625600000,

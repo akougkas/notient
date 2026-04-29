@@ -292,6 +292,7 @@ describe("ChatService", () => {
     const fixture = makeService([{ finalContent: "ok" }]);
     const conversation = await fixture.service.startConversation({
       topic: "Daily review",
+      clientIdentity: "human",
     });
     expect(conversation.notePath).toContain("Notient/conversations/");
     expect(fixture.storeFacade.files.has(conversation.notePath)).toBe(true);
@@ -302,7 +303,10 @@ describe("ChatService", () => {
 
   test("sendMessage runs the loop and persists the conversation", async () => {
     const fixture = makeService([{ finalContent: "Hello back." }]);
-    const conversation = await fixture.service.startConversation({ topic: "Smoke" });
+    const conversation = await fixture.service.startConversation({
+      topic: "Smoke",
+      clientIdentity: "human",
+    });
     const events = await collect(
       fixture.service.sendMessage({ conversation, userMessage: "Hi there" }),
     );
@@ -328,8 +332,8 @@ describe("ChatService", () => {
 
   test("listConversations delegates to the store", async () => {
     const fixture = makeService([{ finalContent: "ok" }]);
-    await fixture.service.startConversation({ topic: "First" });
-    await fixture.service.startConversation({ topic: "Second" });
+    await fixture.service.startConversation({ topic: "First", clientIdentity: "human" });
+    await fixture.service.startConversation({ topic: "Second", clientIdentity: "human" });
     const conversations = await fixture.service.listConversations();
     expect(conversations.length).toBe(2);
     expect(conversations.map((entry) => entry.topic).sort()).toEqual(["First", "Second"]);
@@ -351,6 +355,7 @@ describe("ChatService", () => {
       topic: "Project planning",
       summary: "discussed Q2 goals",
       summaryEmbeddingB64: encodeBase64Float32(sharedVector),
+      clientIdentity: "human",
       messageCount: 0,
       createdAt: 0,
       updatedAt: 1,
@@ -422,7 +427,10 @@ describe("ChatService", () => {
       })(),
       now: () => 1745625600000,
     });
-    const conversation = await service.startConversation({ topic: "Followup" });
+    const conversation = await service.startConversation({
+      topic: "Followup",
+      clientIdentity: "human",
+    });
     await collect(service.sendMessage({ conversation, userMessage: "what was decided?" }));
     const sentSystem = provider.toolRequests[0].messages[0];
     expect(sentSystem.role).toBe("system");
@@ -445,7 +453,10 @@ describe("ChatService", () => {
       await summaryGate.promise;
       return originalChatJson<T>(messages, options, schema);
     }) as typeof fixture.provider.chatJson;
-    const conversation = await fixture.service.startConversation({ topic: "Race" });
+    const conversation = await fixture.service.startConversation({
+      topic: "Race",
+      clientIdentity: "human",
+    });
     const generator = fixture.service.sendMessage({ conversation, userMessage: "Hi" });
     let sawTurnComplete = false;
     const drain = (async () => {
@@ -470,7 +481,10 @@ describe("ChatService", () => {
       { finalContent: "Turn 1 reply." },
       { finalContent: "Turn 2 reply, building on prior." },
     ]);
-    const conversation = await fixture.service.startConversation({ topic: "Multi-turn" });
+    const conversation = await fixture.service.startConversation({
+      topic: "Multi-turn",
+      clientIdentity: "human",
+    });
     const eventsTurn1 = await collect(
       fixture.service.sendMessage({ conversation, userMessage: "First" }),
     );

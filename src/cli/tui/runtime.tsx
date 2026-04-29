@@ -28,6 +28,7 @@ const HISTORY_MAX = 100;
 export interface TuiRuntimeOptions {
   vaultPath: string;
   emitter: Emitter;
+  clientIdentity?: string;
 }
 
 export async function startTuiRuntime(options: TuiRuntimeOptions): Promise<void> {
@@ -35,6 +36,7 @@ export async function startTuiRuntime(options: TuiRuntimeOptions): Promise<void>
   const client = await connectClient({
     socketPath,
     vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
   });
 
   const session = await startConversation(client);

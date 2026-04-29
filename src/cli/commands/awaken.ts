@@ -7,11 +7,16 @@ export interface AwakenCommandOptions {
   batch?: number;
   since?: number;
   emitter: Emitter;
+  clientIdentity?: string;
 }
 
 export async function runAwakenCommand(options: AwakenCommandOptions): Promise<void> {
   const socketPath = resolveSocketPath(options.vaultPath, currentPlatform());
-  const client = await connectClient({ socketPath, vaultPath: options.vaultPath });
+  const client = await connectClient({
+    socketPath,
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
   const params: Record<string, unknown> = {};
   if (options.batch !== undefined) params.batch = options.batch;
   if (options.since !== undefined) params.since = options.since;

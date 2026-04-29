@@ -37,6 +37,7 @@ export type ChatHandler = (
   params: Record<string, unknown>,
   emit: (line: string) => void,
   envelopeId: string,
+  clientIdentity: string,
 ) => Promise<Record<string, unknown>>;
 
 export interface ChatHandlers {
@@ -66,7 +67,7 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
   };
 
   return {
-    start: async (params) => {
+    start: async (params, _emit, _envelopeId, clientIdentity) => {
       const topic = typeof params.topic === "string" ? params.topic : "Untitled";
       const pinnedContext = Array.isArray(params.pinnedContext)
         ? (params.pinnedContext as string[])
@@ -74,6 +75,7 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       const conversation = await deps.chatService.startConversation({
         topic,
         pinnedContext,
+        clientIdentity,
       });
       cacheConversation(conversation);
       return { ok: true, conversation };

@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { ApprovalGate } from "../../core/chat/approvalGate";
 import type { ChatService } from "../../core/chat/chatService";
+import { ConversationStore, type ConversationStoreFacade } from "../../core/chat/conversationStore";
 import type { Conversation } from "../../core/chat/types";
 import { EventBus } from "../../core/events/eventBus";
 import { makeChatHandlers } from "./chat";
 
-function makeConversation(id = "conv-1"): Conversation {
+function makeConversation(id = "conv-1", clientIdentity = "human"): Conversation {
   return {
     id,
     notePath: `Notient/conversations/${id}.md`,
@@ -16,6 +17,7 @@ function makeConversation(id = "conv-1"): Conversation {
     topic: "test",
     summary: "",
     summaryEmbeddingB64: null,
+    clientIdentity,
     messageCount: 0,
     createdAt: 0,
     updatedAt: 0,
@@ -93,6 +95,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
     const events = lines.map((line) => JSON.parse(line));
     const types = events.map((event) => event.event);
@@ -132,6 +135,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
     const events = lines.map((line) => JSON.parse(line));
     expect(events.some((event) => event.event === "loop:tool_call_error")).toBe(true);
@@ -159,6 +163,7 @@ describe("chat.send handler", () => {
         { conversationId: conversation.id, userMessage: "describe @cat.png" },
         () => {},
         "req-1",
+        "human",
       );
     } catch (error) {
       thrown = error;
@@ -209,6 +214,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
 
     // Let the handler subscribe before firing the gate.
@@ -270,6 +276,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -338,6 +345,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -406,6 +414,7 @@ describe("chat.send handler", () => {
       { conversationId: conversation.id, userMessage: "hi" },
       (line) => lines.push(line),
       "req-1",
+      "human",
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -424,5 +433,89 @@ describe("chat.send handler", () => {
     expect(probed[0].model).toBe("test-model");
     expect(probed[0].mode).toBe("native");
     expect(probed[0].attempts).toBe(1);
+  });
+});
+
+describe("chat.start handler identity plumbing", () => {
+  test("forwards clientIdentity from the envelope into ChatService.startConversation", async () => {
+    const captured: Array<{ topic: string; clientIdentity: string | undefined }> = [];
+    const conversation = makeConversation("conv-id-1", "claude-code");
+    const service: ChatService = {
+      startConversation: async (input: {
+        topic: string;
+        pinnedContext?: string[];
+        clientIdentity?: string;
+      }) => {
+        captured.push({ topic: input.topic, clientIdentity: input.clientIdentity });
+        return { ...conversation, topic: input.topic };
+      },
+      listConversations: async () => [],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        // Unused in this test; chat.start does not stream.
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    await handlers.start({ topic: "agent-bridge" }, () => {}, "req-claude", "claude-code");
+    await handlers.start({ topic: "human-direct" }, () => {}, "req-human", "human");
+    expect(captured).toEqual([
+      { topic: "agent-bridge", clientIdentity: "claude-code" },
+      { topic: "human-direct", clientIdentity: "human" },
+    ]);
+  });
+
+  test("conversation persisted via ConversationStore stamps client_identity in frontmatter", async () => {
+    const facade = new (class implements ConversationStoreFacade {
+      readonly files = new Map<string, string>();
+      async list(): Promise<string[]> {
+        return Array.from(this.files.keys());
+      }
+      async read(path: string): Promise<string> {
+        const value = this.files.get(path);
+        if (value === undefined) throw new Error(`not found: ${path}`);
+        return value;
+      }
+      async write(path: string, content: string): Promise<void> {
+        this.files.set(path, content);
+      }
+      async delete(path: string): Promise<void> {
+        this.files.delete(path);
+      }
+    })();
+    const store = new ConversationStore({
+      facade,
+      folder: "Notient/conversations",
+      now: () => 1745625600000,
+    });
+    const created = await store.create({
+      id: "conv-claude",
+      model: "test-model",
+      pinnedContext: [],
+      approvalMode: "yolo",
+      topic: "from claude",
+      clientIdentity: "claude-code",
+    });
+    const raw = facade.files.get(created.notePath) ?? "";
+    expect(raw).toContain('client_identity: "claude-code"');
+    const reloaded = await store.load(created.notePath);
+    expect(reloaded.clientIdentity).toBe("claude-code");
+
+    const defaultCreated = await store.create({
+      id: "conv-human",
+      model: "test-model",
+      pinnedContext: [],
+      approvalMode: "yolo",
+      topic: "from human",
+    });
+    const defaultRaw = facade.files.get(defaultCreated.notePath) ?? "";
+    expect(defaultRaw).toContain('client_identity: "human"');
   });
 });

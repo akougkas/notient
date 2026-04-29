@@ -42,9 +42,10 @@ export class HistoryService {
   async record(input: RecordHistoryInput): Promise<number> {
     const beforeJson = input.before === null ? null : JSON.stringify(input.before);
     const afterJson = input.after === null ? null : JSON.stringify(input.after);
+    const clientIdentity = input.clientIdentity ?? "human";
     this.db.run(
-      "INSERT INTO history (kind, target, before, after, created_at) VALUES (?, ?, ?, ?, ?);",
-      [input.kind, input.target, beforeJson, afterJson, this.now()],
+      "INSERT INTO history (kind, target, before, after, created_at, client_identity) VALUES (?, ?, ?, ?, ?, ?);",
+      [input.kind, input.target, beforeJson, afterJson, this.now(), clientIdentity],
     );
     const idRow = this.db.query<{ id: number }>("SELECT last_insert_rowid() AS id;")[0];
     await this.db.persist();
@@ -59,8 +60,9 @@ export class HistoryService {
       before: string | null;
       after: string | null;
       created_at: number;
+      client_identity: string | null;
     }>(
-      "SELECT id, kind, target, before, after, created_at FROM history ORDER BY id DESC LIMIT ?;",
+      "SELECT id, kind, target, before, after, created_at, client_identity FROM history ORDER BY id DESC LIMIT ?;",
       [limit],
     );
     return rows.map((row) => ({
@@ -70,6 +72,7 @@ export class HistoryService {
       before: parseHistoryPayload(row.before),
       after: parseHistoryPayload(row.after),
       createdAt: row.created_at,
+      clientIdentity: row.client_identity ?? "human",
     }));
   }
 

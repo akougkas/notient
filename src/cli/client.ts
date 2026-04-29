@@ -10,6 +10,13 @@ export interface ClientOptions {
   daemonCommand?: string;
   daemonArgs?: string[];
   spawnTimeoutMs?: number;
+  /**
+   * Per-invocation client identity (Phase D1 LD-5). When set, every outgoing
+   * RPC frame stamps `clientIdentity` so the daemon can record who initiated
+   * the work. When unset, frames omit the field and the daemon defaults to
+   * `human` server-side.
+   */
+  clientIdentity?: string;
 }
 
 export interface RpcResponseFrame {
@@ -68,11 +75,15 @@ export async function connectClient(options: ClientOptions): Promise<ClientHandl
     params: Record<string, unknown>,
   ): AsyncIterable<RpcResponseFrame> {
     const id = `req-${nextId++}`;
-    socket.write(`${JSON.stringify({ id, method, params })}\n`);
+    const frame: Record<string, unknown> = { id, method, params };
+    if (options.clientIdentity !== undefined) {
+      frame.clientIdentity = options.clientIdentity;
+    }
+    socket.write(`${JSON.stringify(frame)}\n`);
     while (true) {
-      const frame = await nextFrame(id);
-      yield frame;
-      if (frame.type === "result" || frame.type === "error") return;
+      const responseFrame = await nextFrame(id);
+      yield responseFrame;
+      if (responseFrame.type === "result" || responseFrame.type === "error") return;
     }
   }
 
