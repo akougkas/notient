@@ -4,7 +4,10 @@ export type AppEvent =
   | { type: "vault:note-saved"; path: string; sha: string }
   | { type: "indexer:progress"; processed: number; total: number }
   | { type: "indexer:complete"; total: number; durationMs?: number }
-  | { type: "indexer:error"; message: string }
+  | { type: "indexer:error"; message: string; phase?: string }
+  | { type: "indexer:tier1-done"; path: string; bodySha: string }
+  | { type: "indexer:tombstoned"; path: string }
+  | { type: "indexer:renamed"; fromPath: string; toPath: string }
   | {
       type: "indexer:node-added";
       nodeId: string;

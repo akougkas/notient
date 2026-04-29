@@ -1,7 +1,9 @@
 import type { Database } from "../db/database";
+import type { SurrealConnection } from "../db/surreal";
 import type { EventBus } from "../events/eventBus";
 import type { GraphStore } from "../graph/graphStore";
 import type { GraphEdge, GraphNode } from "../graph/types";
+import { runTier1 } from "./tier1";
 import { chunkNote } from "./chunker";
 import type { Embedder } from "./embedder";
 import type { Extractor } from "./extractor";
@@ -19,15 +21,59 @@ export interface IndexNoteArgs {
   bus: EventBus;
   /** Optional cancellation for embedding calls. */
   signal?: AbortSignal;
+  /**
+   * Optional SurrealDB connection. When present, Tier 1 (markdown AST →
+   * deterministic edges) runs before the existing SQLite-backed flow.
+   * Tier 1 errors emit indexer:error with phase='tier1' and do not block
+   * the SQLite path.
+   */
+  surrealDb?: SurrealConnection;
 }
 
 const FENCE = "---";
 
 export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const start = Date.now();
-  const { notePath, noteBody, database, graph, vectorIndex, embedder, extractor, bus, signal } =
-    args;
+  const {
+    notePath,
+    noteBody,
+    database,
+    graph,
+    vectorIndex,
+    embedder,
+    extractor,
+    bus,
+    signal,
+    surrealDb,
+  } = args;
   const sha = await sha256(noteBody);
+
+  if (surrealDb !== undefined) {
+    try {
+      const vaultPaths = database
+        .query<{ path: string }>("SELECT path FROM notes;", [])
+        .map((row) => row.path);
+      if (!vaultPaths.includes(notePath)) {
+        vaultPaths.push(notePath);
+      }
+      const tier1Result = await runTier1(surrealDb.db, {
+        notePath,
+        source: noteBody,
+        vaultPaths,
+      });
+      bus.emit({
+        type: "indexer:tier1-done",
+        path: notePath,
+        bodySha: tier1Result.extraction.bodySha,
+      });
+    } catch (error) {
+      bus.emit({
+        type: "indexer:error",
+        message: error instanceof Error ? error.message : String(error),
+        phase: "tier1",
+      });
+    }
+  }
 
   const existing = database.query<{ sha: string }>("SELECT sha FROM notes WHERE path = ?;", [
     notePath,
