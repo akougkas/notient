@@ -1,3 +1,5 @@
+import type { RecordId, Surreal } from "surrealdb";
+import { relateEdge, upsertClaim, upsertConcept, upsertQuestion } from "../db/surreal";
 import type { ChatMessage, JsonSchema, LLMProvider } from "../llm/provider";
 import type { Chunk, Extraction } from "./types";
 
@@ -114,4 +116,60 @@ function dedupeCaseInsensitive(values: string[]): string[] {
 
 function dedupe(values: string[]): string[] {
   return Array.from(new Set(values));
+}
+
+/**
+ * Persist an Extraction to SurrealDB by upserting concepts/claims/questions
+ * and relating each one back to the originating note via the
+ * `mentions`, `asserts`, and `asks` edge tables.
+ *
+ * Spec: Phase 3 plan §Task 8. Extractor edges land with
+ * `class = 'INFERRED'`, `confidence = 0.7`, `agent = 'extractor'`,
+ * `approved = true` (extractor outputs are auto-approved per the plan
+ * invariant).
+ */
+export async function writeExtractionToSurreal(
+  db: Surreal,
+  noteId: RecordId<"note">,
+  extraction: Extraction,
+): Promise<void> {
+  for (const entity of extraction.entities) {
+    const conceptId = await upsertConcept(db, entity);
+    await relateEdge(db, {
+      table: "mentions",
+      from: noteId,
+      to: conceptId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+  }
+  for (const claim of extraction.claims) {
+    const claimId = await upsertClaim(db, claim);
+    await relateEdge(db, {
+      table: "asserts",
+      from: noteId,
+      to: claimId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+  }
+  for (const question of extraction.questions) {
+    const questionId = await upsertQuestion(db, question);
+    await relateEdge(db, {
+      table: "asks",
+      from: noteId,
+      to: questionId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+  }
 }

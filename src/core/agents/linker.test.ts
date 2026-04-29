@@ -1,110 +1,155 @@
-import { describe, expect, test } from "bun:test";
-import { Database } from "../db/database";
-import { MemoryAdapter, loadWasm } from "../db/database.test";
+/**
+ * Phase 3 Linker smoke harness.
+ *
+ * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
+ * or directly via `NOTIENT_SMOKE=1 bun test src/core/agents/linker.test.ts`.
+ *
+ * Boots a real SurrealDB, applies the Phase 1 schema, seeds two notes
+ * (active + neighbour) plus their chunk vectors via the DAL, then exercises
+ * the new Linker against a mocked LLM provider. The smoke asserts the
+ * acceptance contract from Phase 3 plan §Task 8: zero-neighbour short
+ * circuit, one-neighbour proposal-write path, type allowlist filter,
+ * unresolvable target path filter.
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { RecordId } from "surrealdb";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
+import { applySchema } from "../db/schemaApplier";
+import {
+  type SurrealConnection,
+  connect,
+  lookupNoteByPath,
+  markTier3Done,
+  relateEdge,
+  replaceChunks,
+  upsertNoteByPath,
+} from "../db/surreal";
 import { EventBus } from "../events/eventBus";
-import type { JsonSchema, LLMProvider } from "../llm/provider";
+import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../llm/provider";
 import { Linker } from "./linker";
 
-function fakeProvider(json: unknown): LLMProvider {
+const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+const VECTOR_DIM = 768;
+const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+
+function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
     isAvailable: async () => true,
     chat: async () => "",
     chatStream: async function* () {
       yield "";
     },
-    chatJson: async <T>(_messages: unknown, _options: unknown, _schema: JsonSchema) => json as T,
+    chatJson: async <T>() => ({}) as T,
     embed: async () => [],
+    ...impl,
   };
 }
 
-describe("Linker", () => {
-  test("stages typed edges to staging_edges with evidence + confidence", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-      "/active.md",
-      "sha",
-      100,
-      1,
-      1,
-    ]);
-    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-      "/neighbor.md",
-      "sha",
-      100,
-      1,
-      1,
-    ]);
-    db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-      "c1",
-      "/active.md",
-      0,
-      "POSIX is leaky in HPC.",
-      "s1",
-    ]);
-    db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-      "c2",
-      "/neighbor.md",
-      0,
-      "Distributed file systems break POSIX assumptions.",
-      "s2",
-    ]);
-    const provider = fakeProvider({
-      edges: [
-        {
-          targetNotePath: "/neighbor.md",
-          type: "supports",
-          confidence: 0.84,
-          rationale: "Both note POSIX limits.",
-          evidenceChunkIds: ["c1", "c2"],
-        },
-      ],
+function vectorOf(seed: number): number[] {
+  const vector = new Array<number>(VECTOR_DIM);
+  vector[0] = seed;
+  for (let index = 1; index < VECTOR_DIM; index += 1) {
+    vector[index] = 0.1;
+  }
+  return vector;
+}
+
+async function seedNote(
+  connection: SurrealConnection,
+  notePath: string,
+  vectorSeed: number,
+  options: { tier3Done: boolean },
+): Promise<RecordId<"note">> {
+  const noteId = await upsertNoteByPath(connection.db, {
+    path: notePath,
+    sha: `sha-${notePath}`,
+    wordCount: 10,
+  });
+  await replaceChunks(connection.db, noteId, [
+    {
+      ord: 0,
+      text: `body of ${notePath}`,
+      tokenEstimate: 4,
+      vector: vectorOf(vectorSeed),
+      embedModel: EMBED_MODEL,
+    },
+  ]);
+  if (options.tier3Done) {
+    await markTier3Done(connection.db, noteId);
+  }
+  return noteId;
+}
+
+async function clearTier3Edges(connection: SurrealConnection): Promise<void> {
+  for (const table of [
+    "supports",
+    "contradicts",
+    "extends",
+    "exemplifies",
+    "synthesizes",
+    "related_to",
+  ]) {
+    await connection.db.query(`DELETE ${table};`).collect();
+  }
+}
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase3-linker-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-linker-smoke-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
     });
-    const linker = new Linker({
-      db,
-      provider,
-      reasoningModel: "test-model",
-      neighborhood: async () => [
-        {
-          notePath: "/neighbor.md",
-          chunkId: "c2",
-          text: "Distributed file systems break POSIX assumptions.",
-          score: 0.91,
-        },
-      ],
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
     });
-    const result = await linker.run({
-      trigger: "vault-save",
-      notePath: "/active.md",
-      signal: new AbortController().signal,
-      runId: 1,
-      bus: new EventBus(),
-    });
-    expect(result.proposals).toBe(1);
-    const rows = db.query<{ type: string; agent: string; confidence: number; evidence: string }>(
-      "SELECT type, agent, confidence, evidence FROM staging_edges;",
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].type).toBe("supports");
-    expect(rows[0].agent).toBe("linker");
-    expect(rows[0].confidence).toBeCloseTo(0.84);
-    expect(JSON.parse(rows[0].evidence)).toEqual(["c1", "c2"]);
+    await applySchema(connection.db, secret);
   });
 
-  test("returns 0 proposals when notePath is null", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    const linker = new Linker({
-      db,
-      provider: fakeProvider({ edges: [] }),
-      reasoningModel: "test-model",
-      neighborhood: async () => [],
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await clearTier3Edges(connection);
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+  });
+
+  test("[smoke] returns 0 proposals when no neighbours have tier3_at set", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+
+    const provider = fakeProvider({
+      chatJson: async <T>() => ({ edges: [] }) as T,
     });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
     const result = await linker.run({
-      trigger: "idle-30s",
-      notePath: null,
+      trigger: "vault-save",
+      notePath: "active.md",
       signal: new AbortController().signal,
       runId: 1,
       bus: new EventBus(),
@@ -112,102 +157,186 @@ describe("Linker", () => {
     expect(result.proposals).toBe(0);
   });
 
-  test("respects abort signal mid-run", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-      "/active.md",
-      "sha",
-      100,
-      1,
-      1,
-    ]);
-    db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-      "c1",
-      "/active.md",
-      0,
-      "x",
-      "s",
-    ]);
-    let saw: AbortSignal | undefined;
-    const provider: LLMProvider = {
-      isAvailable: async () => true,
-      chat: async () => "",
-      chatStream: async function* () {
-        yield "";
-      },
-      chatJson: async <T>(
-        _messages: unknown,
-        options: { signal?: AbortSignal },
-        _schema: JsonSchema,
-      ) => {
-        saw = options.signal;
-        return { edges: [] } as T;
-      },
-      embed: async () => [],
-    };
-    const linker = new Linker({
-      db,
-      provider,
-      reasoningModel: "test-model",
-      neighborhood: async () => [{ notePath: "/n.md", chunkId: "c2", text: "x", score: 0.5 }],
-    });
-    const ctrl = new AbortController();
-    await linker.run({
-      trigger: "vault-save",
-      notePath: "/active.md",
-      signal: ctrl.signal,
-      runId: 1,
-      bus: new EventBus(),
-    });
-    expect(saw).toBe(ctrl.signal);
-  });
+  test("[smoke] writes one supports edge with approved=false when LLM proposes a valid edge", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
 
-  test("requests enough tokens for multi-edge JSON responses", async () => {
-    const adapter = new MemoryAdapter({ "/wasm": loadWasm() });
-    const db = new Database(adapter, { dbPath: "/db", wasmPath: "/wasm" });
-    await db.init();
-    db.run("INSERT INTO notes (path, sha, word_count, indexed_at, updated_at) VALUES (?,?,?,?,?)", [
-      "/active.md",
-      "sha",
-      100,
-      1,
-      1,
-    ]);
-    db.run("INSERT INTO chunks (id, note_path, ord, text, sha) VALUES (?,?,?,?,?);", [
-      "c1",
-      "/active.md",
-      0,
-      "x",
-      "s",
-    ]);
-    let maxTokens = 0;
-    const provider: LLMProvider = {
-      isAvailable: async () => true,
-      chat: async () => "",
-      chatStream: async function* () {
-        yield "";
-      },
-      chatJson: async <T>(_messages: unknown, options: { maxTokens?: number }) => {
-        maxTokens = options.maxTokens ?? 0;
-        return { edges: [] } as T;
-      },
-      embed: async () => [],
-    };
-    const linker = new Linker({
-      db,
-      provider,
-      reasoningModel: "qwen",
-      neighborhood: async () => [{ notePath: "/n.md", chunkId: "c2", text: "x", score: 0.5 }],
+    const provider = fakeProvider({
+      chatJson: async <T>() =>
+        ({
+          edges: [
+            {
+              targetNotePath: "neighbor.md",
+              type: "supports",
+              confidence: 0.85,
+              rationale: "Both notes discuss the same topic.",
+              evidenceChunkIds: ["chunk-0"],
+            },
+          ],
+        }) as T,
     });
-    await linker.run({
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    const result = await linker.run({
       trigger: "vault-save",
-      notePath: "/active.md",
+      notePath: "active.md",
       signal: new AbortController().signal,
       runId: 1,
       bus: new EventBus(),
     });
-    expect(maxTokens).toBeGreaterThanOrEqual(1600);
+    expect(result.proposals).toBe(1);
+
+    const [rows] = await connection.db
+      .query<
+        [
+          Array<{
+            agent: string;
+            source: string;
+            confidence: number;
+            approved: boolean;
+            class: string;
+          }>,
+        ]
+      >("SELECT agent, source, confidence, approved, class FROM supports;")
+      .collect<
+        [
+          Array<{
+            agent: string;
+            source: string;
+            confidence: number;
+            approved: boolean;
+            class: string;
+          }>,
+        ]
+      >();
+    expect(rows.length).toBe(1);
+    expect(rows[0].agent).toBe("linker");
+    expect(rows[0].source).toBe("linker");
+    expect(rows[0].class).toBe("INFERRED");
+    expect(rows[0].approved).toBe(false);
+    expect(rows[0].confidence).toBeCloseTo(0.85);
+  });
+
+  test("[smoke] silently skips proposals with unknown edge types", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
+
+    const provider = fakeProvider({
+      chatJson: async <T>() =>
+        ({
+          edges: [
+            {
+              targetNotePath: "neighbor.md",
+              type: "definitely-not-allowed",
+              confidence: 0.95,
+              rationale: "ignored",
+              evidenceChunkIds: [],
+            },
+          ],
+        }) as T,
+    });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    const result = await linker.run({
+      trigger: "vault-save",
+      notePath: "active.md",
+      signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
+    });
+    expect(result.proposals).toBe(0);
+
+    const [rows] = await connection.db
+      .query<[Array<{ count: number }>]>("SELECT count() AS count FROM supports GROUP ALL;")
+      .collect<[Array<{ count: number }>]>();
+    expect(rows[0]?.count ?? 0).toBe(0);
+  });
+
+  test("[smoke] silently skips proposals whose targetNotePath does not resolve", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
+
+    const provider = fakeProvider({
+      chatJson: async <T>() =>
+        ({
+          edges: [
+            {
+              targetNotePath: "ghost.md",
+              type: "supports",
+              confidence: 0.9,
+              rationale: "ghost target",
+              evidenceChunkIds: [],
+            },
+          ],
+        }) as T,
+    });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    const result = await linker.run({
+      trigger: "vault-save",
+      notePath: "active.md",
+      signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
+    });
+    expect(result.proposals).toBe(0);
+
+    const [rows] = await connection.db
+      .query<[Array<{ count: number }>]>("SELECT count() AS count FROM supports GROUP ALL;")
+      .collect<[Array<{ count: number }>]>();
+    expect(rows[0]?.count ?? 0).toBe(0);
+  });
+
+  test("[smoke] wikilinked neighbours are excluded by linkerNeighbors so no proposal lands", async () => {
+    const activeId = await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    const neighborId = await seedNote(connection, "wikilinked.md", 0.42, { tier3Done: true });
+    await relateEdge(connection.db, {
+      table: "wikilink",
+      from: activeId,
+      to: neighborId,
+      source: "wikilink",
+      confidenceClass: "EXTRACTED",
+      confidence: 1,
+    });
+
+    let chatJsonCalled = false;
+    const provider = fakeProvider({
+      chatJson: async <T>(_messages: ChatMessage[], _opts: ChatOptions, _schema: JsonSchema) => {
+        chatJsonCalled = true;
+        return { edges: [] } as T;
+      },
+    });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    const result = await linker.run({
+      trigger: "vault-save",
+      notePath: "active.md",
+      signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
+    });
+    expect(result.proposals).toBe(0);
+    // The pre-LLM neighbour query returns empty, so the LLM should never be
+    // asked. lookupNoteByPath ran for the active note only.
+    expect(chatJsonCalled).toBe(false);
+  });
+
+  test("[smoke] passes the active note signal through to chatJson", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
+
+    let observed: AbortSignal | undefined;
+    const provider = fakeProvider({
+      chatJson: async <T>(_messages: ChatMessage[], opts: ChatOptions, _schema: JsonSchema) => {
+        observed = opts.signal;
+        return { edges: [] } as T;
+      },
+    });
+    const controller = new AbortController();
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    await linker.run({
+      trigger: "vault-save",
+      notePath: "active.md",
+      signal: controller.signal,
+      runId: 1,
+      bus: new EventBus(),
+    });
+    expect(observed).toBe(controller.signal);
   });
 });

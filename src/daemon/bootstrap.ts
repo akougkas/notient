@@ -17,6 +17,7 @@ import { InMemoryClusterCache } from "../core/chat/tools/graph";
 import type { ToolCall } from "../core/chat/types";
 import { Coordinator } from "../core/coordinator/coordinator";
 import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
+import type { Agent, AgentRunResult } from "../core/coordinator/types";
 import { Database } from "../core/db/database";
 import { applySchema } from "../core/db/schemaApplier";
 import { type SurrealConnection, connect as connectSurreal } from "../core/db/surreal";
@@ -348,38 +349,61 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     echoGuard: { mark: (path, sha) => echoGuard.mark(path, sha) },
   });
 
-  const linker = new Linker({
-    db: database,
-    provider: deepLLM,
-    reasoningModel: current.deep.reasoningModel,
-    neighborhood: async (notePath, queryOptions) => {
-      const head = database.query<{ id: string; vector: Uint8Array; dim: number }>(
-        `SELECT e.chunk_id AS id, e.vector AS vector, e.dim AS dim
-         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
-         WHERE c.note_path = ? ORDER BY c.ord LIMIT 1;`,
-        [notePath],
-      );
-      if (head.length === 0) return [];
-      const view = new Float32Array(head[0].vector.buffer, head[0].vector.byteOffset, head[0].dim);
-      const hits = vectorIndex.search(view, queryOptions.topK);
-      const out: Array<{ notePath: string; chunkId: string; text: string; score: number }> = [];
-      for (const hit of hits) {
-        const meta = database.query<{ note_path: string; text: string }>(
-          "SELECT note_path, text FROM chunks WHERE id = ?;",
-          [hit.id],
-        );
-        if (meta.length === 0) continue;
-        if (meta[0].note_path === notePath) continue;
-        out.push({
-          notePath: meta[0].note_path,
-          chunkId: hit.id,
-          text: meta[0].text,
-          score: hit.score,
-        });
-      }
-      return out;
-    },
-  });
+  // SurrealDB bootstrap: read-or-generate the per-vault secret, spawn the
+  // embedded `surreal start` child, connect the SDK, apply the schema, and
+  // register the connection in the kernel as the optional `surrealDb` slot.
+  // Bootstrap order is fixed: secret -> start server -> SDK connect ->
+  // applySchema -> kernel.register. The same secret is reused as the JWT key
+  // bound by the schema applier so `DEFINE ACCESS agent_jwt` resolves.
+  // Skipped when `options.skipSurreal` is true so tests without a `surreal`
+  // binary on PATH can still exercise the full Phase C path.
+  let surrealHandle: SurrealServerHandle | null = null;
+  let surrealConnection: SurrealConnection | null = null;
+  if (!options.skipSurreal) {
+    const surrealSecret = await readOrGenerateSecret(vaultSecretPath(options.vaultPath));
+    surrealHandle = await startSurreal({
+      dataDir: vaultDataDir(options.vaultPath),
+      secret: surrealSecret,
+      portFile: vaultPortPath(options.vaultPath),
+      pidFile: vaultPidPath(options.vaultPath),
+      logLevel: "warn",
+      onUnexpectedExit: (code) => {
+        // The AppEvent union does not include a SurrealDB failure variant in
+        // Phase 1. Mirror the `daemon:vector_persist_failed` pattern from
+        // makeClose and surface the failure as a structured stderr line so
+        // the daemon supervisor can detect it without widening the union.
+        process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
+      },
+    });
+    surrealConnection = await connectSurreal({
+      url: surrealHandle.url,
+      user: "root",
+      pass: surrealSecret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(surrealConnection.db, surrealSecret);
+    kernel.register("surrealDb", surrealConnection);
+  }
+
+  // The Linker (Phase 3) requires a live SurrealDB connection. When the
+  // operator skipped SurrealDB or a Phase 3 deploy has not yet provisioned
+  // it, fall back to a no-op linker so the Coordinator's agents map stays
+  // populated and the swarm dispatch loop runs unchanged for the other
+  // three agents.
+  const linker: Agent =
+    surrealConnection !== null
+      ? new Linker({
+          db: surrealConnection.db,
+          provider: deepLLM,
+          reasoningModel: current.deep.reasoningModel,
+        })
+      : {
+          name: "linker" as const,
+          usesReasoningModel: false,
+          run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
+        };
+
   const synthesizer = new Synthesizer({
     db: database,
     provider: deepLLM,
@@ -639,43 +663,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("chatService", chatService);
   kernel.register("historyService", historyService);
   kernel.register("transcriptDistiller", transcriptDistiller);
-
-  // SurrealDB bootstrap: read-or-generate the per-vault secret, spawn the
-  // embedded `surreal start` child, connect the SDK, apply the schema, and
-  // register the connection in the kernel as the optional `surrealDb` slot.
-  // Bootstrap order is fixed: secret -> start server -> SDK connect ->
-  // applySchema -> kernel.register. The same secret is reused as the JWT key
-  // bound by the schema applier so `DEFINE ACCESS agent_jwt` resolves.
-  // Skipped when `options.skipSurreal` is true so tests without a `surreal`
-  // binary on PATH can still exercise the full Phase C path.
-  let surrealHandle: SurrealServerHandle | null = null;
-  let surrealConnection: SurrealConnection | null = null;
-  if (!options.skipSurreal) {
-    const surrealSecret = await readOrGenerateSecret(vaultSecretPath(options.vaultPath));
-    surrealHandle = await startSurreal({
-      dataDir: vaultDataDir(options.vaultPath),
-      secret: surrealSecret,
-      portFile: vaultPortPath(options.vaultPath),
-      pidFile: vaultPidPath(options.vaultPath),
-      logLevel: "warn",
-      onUnexpectedExit: (code) => {
-        // The AppEvent union does not include a SurrealDB failure variant in
-        // Phase 1. Mirror the `daemon:vector_persist_failed` pattern from
-        // makeClose and surface the failure as a structured stderr line so
-        // the daemon supervisor can detect it without widening the union.
-        process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
-      },
-    });
-    surrealConnection = await connectSurreal({
-      url: surrealHandle.url,
-      user: "root",
-      pass: surrealSecret,
-      namespace: "notient",
-      database: "vault",
-    });
-    await applySchema(surrealConnection.db, surrealSecret);
-    kernel.register("surrealDb", surrealConnection);
-  }
 
   // Optional vision routing: probe primary first; fall back to
   // chat.vision when configured. Bootstrap omits the slot when neither
