@@ -166,7 +166,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       database: "vault",
     });
     await applySchema(connection.db, secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

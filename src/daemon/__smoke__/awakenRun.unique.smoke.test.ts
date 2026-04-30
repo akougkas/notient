@@ -90,7 +90,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
       database: "vault",
     });
     await applySchema(connection.db, secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

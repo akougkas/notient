@@ -10,13 +10,15 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { type Server, type Socket, createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRun, updateStatus } from "../../core/awaken/awakenRun";
 import { applySchema } from "../../core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../core/vault/identity";
+import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { DEFAULT_TIER_FILTER, parseTierCsv } from "./awaken";
 import { runAwakenCancel } from "./awakenCancel";
@@ -44,6 +46,73 @@ function makeStdoutWriter(captured: Captured): (line: string) => void {
 function makeStderrWriter(captured: Captured): (line: string) => void {
   return (line) => {
     captured.stderr.push(line);
+  };
+}
+
+interface FakeDaemonResponse {
+  type: "result" | "error";
+  payload: Record<string, unknown>;
+}
+
+interface FakeDaemon {
+  server: Server;
+  close: () => Promise<void>;
+}
+
+/**
+ * Minimal Unix-socket daemon stub for the `awaken --resume` CLI tests.
+ *
+ * `awaken --resume` is a thin client over the daemon's `awaken.resume` RPC,
+ * so this fixture lets the smoke tests assert what the CLI does with a
+ * canned daemon reply without standing up a real daemon (and a second
+ * SurrealDB child) inside an in-process test. The fixture mirrors the
+ * shape of the helper in `src/cli/client.test.ts` but is duplicated here
+ * to keep each test file self-contained.
+ */
+async function startFakeDaemon(
+  socketPath: string,
+  respond: (frame: Record<string, unknown>) => FakeDaemonResponse,
+): Promise<FakeDaemon> {
+  await mkdir(path.dirname(socketPath), { recursive: true });
+  // A previous run may have left an orphan socket file behind. `listen`
+  // would otherwise fail with EADDRINUSE; unlink first and ignore ENOENT.
+  await unlink(socketPath).catch(() => {});
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf-8");
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          const frame = JSON.parse(line) as Record<string, unknown>;
+          const id = typeof frame.id === "string" ? frame.id : "unknown";
+          const reply = respond(frame);
+          socket.write(`${JSON.stringify({ id, type: reply.type, ...reply.payload })}\n`);
+        }
+        newlineIndex = buffer.indexOf("\n");
+      }
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+
+  return {
+    server,
+    close: async () => {
+      for (const socket of sockets) socket.end();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await unlink(socketPath).catch(() => {});
+    },
   };
 }
 
@@ -129,16 +198,38 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
     expect(captured.stderr[0]).toContain("nothing to cancel");
   });
 
-  test("[smoke] --resume with no resumable run writes stderr message and exits 1", async () => {
-    const captured = makeCaptured();
-    const exitCode = await runAwakenResume({
-      vaultPath,
-      stdout: makeStdoutWriter(captured),
-      stderr: makeStderrWriter(captured),
+  test("[smoke] --resume forwards an error frame from the daemon to stderr and exits 1", async () => {
+    // The daemon owns the awaken_run flip and worker spawn (see cf9d490),
+    // so the CLI is a thin client over `awaken.resume`. The fake daemon
+    // here replies with the same INVALID_PARAMS frame the real handler
+    // emits when no `paused`/`failed` row exists, and the test asserts
+    // the CLI surfaces that message verbatim.
+    const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+    const fake = await startFakeDaemon(socketPath, (frame) => {
+      expect(frame.method).toBe("awaken.resume");
+      return {
+        type: "error",
+        payload: {
+          code: "INVALID_PARAMS",
+          message: "no resumable awaken run found",
+          detail: {},
+        },
+      };
     });
-    expect(exitCode).toBe(1);
-    expect(captured.stderr.length).toBeGreaterThan(0);
-    expect(captured.stderr[0]).toContain("no resumable awaken run");
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenResume({
+        vaultPath,
+        stdout: makeStdoutWriter(captured),
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(1);
+      expect(captured.stdout.length).toBe(0);
+      expect(captured.stderr.length).toBeGreaterThan(0);
+      expect(captured.stderr[0]).toContain("no resumable awaken run");
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --status with no run emits a single none frame and exits 0", async () => {
@@ -200,33 +291,47 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
     expect(rows[0]?.finished_at).not.toBeNull();
   });
 
-  test("[smoke] --resume flips a paused row back to running and emits a frame", async () => {
-    const runId = await createRun(connection.db, {
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      total: 10,
+  test("[smoke] --resume emits an awaken:resumed frame on a successful daemon response", async () => {
+    // Daemon-side row flip plus worker spawn live in
+    // src/daemon/__smoke__/phase4.smoke.test.ts (resume scenario) and the
+    // unique-active index test in awakenRun.unique.smoke.test.ts. This
+    // test's only job is to verify the CLI translates the
+    // `awaken.resume` `result` frame into the right NDJSON shape on stdout.
+    const fakeRunId = "awaken_run:abc";
+    const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+    const fake = await startFakeDaemon(socketPath, (frame) => {
+      expect(frame.method).toBe("awaken.resume");
+      return {
+        type: "result",
+        payload: {
+          ok: true,
+          runId: fakeRunId,
+          processed: 3,
+          failed: 0,
+          total: 10,
+          status: "running",
+        },
+      };
     });
-    await updateStatus(connection.db, runId, "paused", { processed: 3 });
-
-    const captured = makeCaptured();
-    const exitCode = await runAwakenResume({
-      vaultPath,
-      stdout: makeStdoutWriter(captured),
-      stderr: makeStderrWriter(captured),
-    });
-    expect(exitCode).toBe(0);
-    expect(captured.stdout.length).toBe(1);
-    const frame = JSON.parse(captured.stdout[0] ?? "") as Record<string, unknown>;
-    expect(frame.type).toBe("awaken:resumed");
-    expect(frame.runId).toBe(runId.toString());
-    expect(frame.processed).toBe(3);
-
-    const [rows] = await connection.db
-      .query<[Array<{ status: string }>]>("SELECT status FROM awaken_run WHERE id = $id;", {
-        id: runId,
-      })
-      .collect<[Array<{ status: string }>]>();
-    expect(rows[0]?.status).toBe("running");
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenResume({
+        vaultPath,
+        stdout: makeStdoutWriter(captured),
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(0);
+      expect(captured.stdout.length).toBe(1);
+      const frame = JSON.parse(captured.stdout[0] ?? "") as Record<string, unknown>;
+      expect(frame.type).toBe("awaken:resumed");
+      expect(frame.runId).toBe(fakeRunId);
+      expect(frame.processed).toBe(3);
+      expect(frame.failed).toBe(0);
+      expect(frame.total).toBe(10);
+      expect(frame.status).toBe("running");
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --status emits running frame then completed and exits 0", async () => {

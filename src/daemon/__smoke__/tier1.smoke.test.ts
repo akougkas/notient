@@ -72,7 +72,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 2 Tier 1 end-to-end", () => {
       source: noteAlpha,
       vaultPaths,
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

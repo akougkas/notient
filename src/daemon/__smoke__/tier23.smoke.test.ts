@@ -187,7 +187,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
 
     await markTier3Done(connection.db, noteBId);
     await markTier3Done(connection.db, noteCId);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

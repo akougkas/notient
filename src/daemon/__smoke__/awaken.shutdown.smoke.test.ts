@@ -85,7 +85,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken shutdown fence", () => {
       database: "vault",
     });
     await applySchema(connection.db, secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

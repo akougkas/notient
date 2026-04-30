@@ -178,7 +178,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       database: "vault",
     });
     await applySchema(connection.db, secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

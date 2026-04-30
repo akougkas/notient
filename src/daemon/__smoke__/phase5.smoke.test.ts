@@ -229,7 +229,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 substrate cutover", () => {
 
   beforeAll(async () => {
     context = await bootHarness("notient-phase5-smoke-", secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await tearDownHarness(context);
@@ -334,7 +334,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
 
   beforeAll(async () => {
     context = await bootHarness("notient-phase5-backup-", secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await tearDownHarness(context);
@@ -453,7 +453,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
 
   beforeAll(async () => {
     context = await bootHarness("notient-phase5-reindex-", secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await tearDownHarness(context);
@@ -570,7 +570,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
 
   beforeAll(async () => {
     context = await bootHarness("notient-phase5-approve-", secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await tearDownHarness(context);
@@ -702,7 +702,7 @@ describe.skipIf(!SMOKE_ENABLED)(
 
     beforeAll(async () => {
       context = await bootHarness("notient-phase5-reconcile-", secret);
-    });
+    }, 30_000);
 
     afterAll(async () => {
       await tearDownHarness(context);

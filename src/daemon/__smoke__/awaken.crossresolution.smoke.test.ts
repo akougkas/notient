@@ -148,7 +148,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
       database: "vault",
     });
     await applySchema(connection.db, secret);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {

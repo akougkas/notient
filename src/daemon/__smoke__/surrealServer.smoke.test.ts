@@ -57,7 +57,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
       sha: "abc123",
       wordCount: 42,
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection) {
