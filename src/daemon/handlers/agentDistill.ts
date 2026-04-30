@@ -27,7 +27,7 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import type { Candidate, TranscriptDistiller } from "../../core/distill/transcriptDistiller";
 import {
   type TranscriptFormat,
@@ -35,6 +35,7 @@ import {
   detectFormat,
   parseTranscript,
 } from "../../core/distill/transcriptParser";
+import { encodeEvent } from "../rpc";
 
 export interface AgentDistillHandlerDeps {
   vaultRoot: string;
@@ -64,14 +65,36 @@ interface ParsedDistillParams {
 }
 
 export function makeAgentDistillHandler(deps: AgentDistillHandlerDeps): AgentDistillHandler {
-  return async (params, _emit, _envelopeId, clientIdentity) => {
+  return async (params, emit, envelopeId, clientIdentity) => {
     const startedAt = Date.now();
     const parsed = parseDistillParams(params);
     const absolutePath = resolveTranscriptPath(parsed.transcriptPath, deps.vaultRoot);
     const content = await readTranscriptFile(absolutePath, parsed.transcriptPath);
     const format = parsed.format === "auto" ? detectFormat(content, absolutePath) : parsed.format;
     const messages = parseTranscript(content, format);
-    const candidates = await deps.distiller.distill(messages);
+    // Path B fallback. `parseTranscript` returns an empty array when the
+    // input lacks transcript markers (e.g., a plain vault note). The
+    // distiller would then short-circuit to `[]` and the CLI would return
+    // an empty result with no signal. Treat the file body as a single
+    // synthetic user message so the LLM still runs, and emit a
+    // `distill:fallback` event so the caller knows the path was taken.
+    let inputMessages = messages;
+    if (inputMessages.length === 0) {
+      emit(
+        encodeEvent(envelopeId, "distill:fallback", {
+          reason: "non-transcript",
+          transcriptPath: parsed.transcriptPath,
+        }),
+      );
+      inputMessages = [
+        {
+          sourceMessageId: `vault-note:${basename(absolutePath)}`,
+          role: "user",
+          content,
+        },
+      ];
+    }
+    const candidates = await deps.distiller.distill(inputMessages);
     const proposalsCreated = parsed.dryRun
       ? 0
       : await writeProposalFiles({

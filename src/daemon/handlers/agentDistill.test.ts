@@ -247,6 +247,80 @@ describe("agent.distill handler", () => {
     });
   });
 
+  test("non-transcript vault note: falls back to single synthetic user message and emits distill:fallback", async () => {
+    await withTempVault(async (vaultRoot) => {
+      const transcriptPath = join(vaultRoot, "01-introduction.md");
+      const noteBody = [
+        "# Introduction",
+        "",
+        "This vault note has no transcript markers. It is a plain markdown body.",
+        "We expect the handler to fall back to a synthetic user message.",
+      ].join("\n");
+      await writeFile(transcriptPath, noteBody, "utf-8");
+      const { distiller, invocations } = stubDistiller((messages) => [
+        {
+          kind: "note",
+          text: "Plain vault note distilled.",
+          sourceMessageIds: [messages[0]?.sourceMessageId ?? ""],
+        },
+      ]);
+      const handler = makeAgentDistillHandler({ vaultRoot, distiller });
+      const emitted: string[] = [];
+      const result = await handler(
+        { transcriptPath: "01-introduction.md" },
+        (line) => {
+          emitted.push(line);
+        },
+        "req-fallback",
+        "claude-code",
+      );
+      const candidates = result.candidates as Candidate[];
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(typeof result.proposalsCreated).toBe("number");
+      expect(result.proposalsCreated as number).toBeGreaterThan(0);
+      // Distiller saw the synthetic user message, not an empty list.
+      expect(invocations).toHaveLength(1);
+      expect(invocations[0]).toHaveLength(1);
+      expect(invocations[0][0].role).toBe("user");
+      expect(invocations[0][0].content).toBe(noteBody);
+      expect(invocations[0][0].sourceMessageId).toBe("vault-note:01-introduction.md");
+      // A `distill:fallback` event was streamed before the result frame.
+      const fallbackLine = emitted.find((line) => line.includes('"event":"distill:fallback"'));
+      expect(fallbackLine).toBeDefined();
+      const parsedEvent = JSON.parse(fallbackLine ?? "{}") as Record<string, unknown>;
+      expect(parsedEvent.id).toBe("req-fallback");
+      expect(parsedEvent.type).toBe("event");
+      expect(parsedEvent.event).toBe("distill:fallback");
+      expect(parsedEvent.reason).toBe("non-transcript");
+      expect(parsedEvent.transcriptPath).toBe("01-introduction.md");
+    });
+  });
+
+  test("non-transcript vault note with dryRun: true skips proposal write but still distills", async () => {
+    await withTempVault(async (vaultRoot) => {
+      const transcriptPath = join(vaultRoot, "plain.md");
+      await writeFile(transcriptPath, "# Plain note\n\nNo markers here.\n", "utf-8");
+      const { distiller, invocations } = stubDistiller([
+        { kind: "note", text: "Synthetic distillation result.", sourceMessageIds: [] },
+      ]);
+      const handler = makeAgentDistillHandler({ vaultRoot, distiller });
+      const emitted: string[] = [];
+      const result = await handler(
+        { transcriptPath: "plain.md", dryRun: true },
+        (line) => {
+          emitted.push(line);
+        },
+        "req-fallback-dry",
+        "claude-code",
+      );
+      expect(result.proposalsCreated).toBe(0);
+      const candidates = result.candidates as Candidate[];
+      expect(candidates).toHaveLength(1);
+      expect(invocations[0]).toHaveLength(1);
+      expect(emitted.some((line) => line.includes('"event":"distill:fallback"'))).toBe(true);
+    });
+  });
+
   test("frontmatter includes kind, sourceTranscript, sourceMessageIds, createdAt", async () => {
     await withTempVault(async (vaultRoot) => {
       const transcriptPath = join(vaultRoot, "transcript.md");
