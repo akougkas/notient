@@ -1,4 +1,4 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 
 export interface SurrealVersion {
@@ -94,6 +94,7 @@ export interface SurrealServerHandle {
 export const STARTUP_TIMEOUT_MS = 5000;
 export const STOP_TIMEOUT_MS = 10000;
 export const RESTART_BUDGET = { maxRestarts: 3, windowMs: 60_000 } as const;
+const STALE_PROCESS_POLL_MS = 100;
 
 /**
  * Reserve a free TCP port on 127.0.0.1 by binding a temporary listener to
@@ -173,6 +174,7 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
 export async function startSurreal(options: SurrealServerOptions): Promise<SurrealServerHandle> {
   await checkSurrealBinary();
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
+  await stopStaleSurrealProcess(options);
 
   const port = await reserveLocalPort();
 
@@ -302,4 +304,56 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
     pid: child.pid as number,
     stop,
   };
+}
+
+export async function stopStaleSurrealProcess(
+  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
+): Promise<void> {
+  const pid = await readPositiveInt(options.pidFile);
+  if (pid !== null && processIsAlive(pid)) {
+    await terminateProcess(pid);
+  }
+  await unlink(options.portFile).catch(() => {});
+  await unlink(options.pidFile).catch(() => {});
+}
+
+async function readPositiveInt(path: string): Promise<number | null> {
+  const raw = await readFile(path, "utf8").catch(() => null);
+  if (raw === null) return null;
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value) || value <= 0) return null;
+  return value;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function terminateProcess(pid: number): Promise<void> {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  if (await waitForProcessExit(pid, STOP_TIMEOUT_MS)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return;
+  }
+  await waitForProcessExit(pid, STOP_TIMEOUT_MS);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processIsAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, STALE_PROCESS_POLL_MS));
+  }
+  return !processIsAlive(pid);
 }

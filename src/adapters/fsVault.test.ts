@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsVault } from "./fsVault";
@@ -30,6 +30,18 @@ describe("FsVault", () => {
     );
     expect(dirEntries.some((entry) => entry.endsWith(".md"))).toBe(true);
     expect(dirEntries.some((entry) => entry.includes("notient-tmp"))).toBe(false);
+  });
+
+  test("write preserves existing file mode bits", async () => {
+    if (process.platform === "win32") return;
+    await vault.write("notes/script.md", "old");
+    const absolute = join(root, "notes", "script.md");
+    await chmod(absolute, 0o755);
+
+    await vault.write("notes/script.md", "new");
+
+    expect(await readFile(absolute, "utf8")).toBe("new");
+    expect((await stat(absolute)).mode & 0o777).toBe(0o755);
   });
 
   test("listMarkdown skips dot-prefixed folders", async () => {

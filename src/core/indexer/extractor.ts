@@ -315,6 +315,7 @@ export async function writeExtractionToSurreal(
   noteId: RecordId<"note">,
   extraction: Extraction,
 ): Promise<void> {
+  const priorTargets = await collectPriorExtractorTargets(db, noteId);
   await deletePriorExtractorRelations(db, noteId);
   for (const entity of extraction.entities) {
     const conceptId = await upsertConcept(db, entity, {
@@ -360,6 +361,42 @@ export async function writeExtractionToSurreal(
       approved: true,
     });
   }
+  await pruneUnreferencedExtractorTargets(db, priorTargets);
+}
+
+interface ExtractorTargetSnapshot {
+  concepts: Array<RecordId<"concept">>;
+  claims: Array<RecordId<"claim">>;
+  questions: Array<RecordId<"question">>;
+}
+
+async function collectPriorExtractorTargets(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<ExtractorTargetSnapshot> {
+  const [conceptRows] = await db
+    .query<[Array<{ out: RecordId<"concept"> }>]>(
+      "SELECT out FROM mentions WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+      { note: noteId },
+    )
+    .collect<[Array<{ out: RecordId<"concept"> }>]>();
+  const [claimRows] = await db
+    .query<[Array<{ out: RecordId<"claim"> }>]>(
+      "SELECT out FROM asserts WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+      { note: noteId },
+    )
+    .collect<[Array<{ out: RecordId<"claim"> }>]>();
+  const [questionRows] = await db
+    .query<[Array<{ out: RecordId<"question"> }>]>(
+      "SELECT out FROM asks WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+      { note: noteId },
+    )
+    .collect<[Array<{ out: RecordId<"question"> }>]>();
+  return {
+    concepts: conceptRows.map((row) => row.out),
+    claims: claimRows.map((row) => row.out),
+    questions: questionRows.map((row) => row.out),
+  };
 }
 
 async function deletePriorExtractorRelations(db: Surreal, noteId: RecordId<"note">): Promise<void> {
@@ -371,4 +408,36 @@ async function deletePriorExtractorRelations(db: Surreal, noteId: RecordId<"note
       )
       .collect();
   }
+}
+
+async function pruneUnreferencedExtractorTargets(
+  db: Surreal,
+  snapshot: ExtractorTargetSnapshot,
+): Promise<void> {
+  for (const conceptId of snapshot.concepts) {
+    if (!(await hasIncomingRelation(db, "mentions", conceptId))) {
+      await db.query("DELETE $id;", { id: conceptId }).collect();
+    }
+  }
+  for (const claimId of snapshot.claims) {
+    if (!(await hasIncomingRelation(db, "asserts", claimId))) {
+      await db.query("DELETE $id;", { id: claimId }).collect();
+    }
+  }
+  for (const questionId of snapshot.questions) {
+    if (!(await hasIncomingRelation(db, "asks", questionId))) {
+      await db.query("DELETE $id;", { id: questionId }).collect();
+    }
+  }
+}
+
+async function hasIncomingRelation(
+  db: Surreal,
+  table: "mentions" | "asserts" | "asks",
+  id: RecordId,
+): Promise<boolean> {
+  const [rows] = await db
+    .query<[Array<{ id: RecordId }>]>(`SELECT id FROM ${table} WHERE out = $id LIMIT 1;`, { id })
+    .collect<[Array<{ id: RecordId }>]>();
+  return rows.length > 0;
 }

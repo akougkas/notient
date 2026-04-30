@@ -200,6 +200,60 @@ describe("reconcileCountersFromTierState", () => {
     expect(counters).toEqual({ processed: 2, failed: 1 });
   });
 
+  test("counts a note as failed when the requested upper tier is missing", async () => {
+    const byPath = new Map<
+      string,
+      {
+        tier1_at: string | null;
+        tier2_at: string | null;
+        tier3_at: string | null;
+      }
+    >([
+      [
+        "done.md",
+        {
+          tier1_at: "2026-04-30T00:00:00Z",
+          tier2_at: "2026-04-30T00:00:01Z",
+          tier3_at: "2026-04-30T00:00:02Z",
+        },
+      ],
+      [
+        "tier2-failed.md",
+        {
+          tier1_at: "2026-04-30T00:00:00Z",
+          tier2_at: null,
+          tier3_at: null,
+        },
+      ],
+      [
+        "tier3-failed.md",
+        {
+          tier1_at: "2026-04-30T00:00:00Z",
+          tier2_at: "2026-04-30T00:00:01Z",
+          tier3_at: null,
+        },
+      ],
+    ]);
+    const db = {
+      query: (_sql: string, bindings: { path?: string }) => ({
+        collect: async () => {
+          const row = bindings.path === undefined ? undefined : byPath.get(bindings.path);
+          if (row === undefined) return [[]];
+          return [[row]];
+        },
+      }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+
+    const counters = await reconcileCountersFromTierState(
+      db,
+      ["done.md", "tier2-failed.md", "tier3-failed.md"],
+      { processed: 0, failed: 3 },
+      3,
+    );
+
+    expect(counters).toEqual({ processed: 1, failed: 2 });
+  });
+
   test("falls back to existing counters if the tier-state query fails", async () => {
     const db = {
       query: () => ({

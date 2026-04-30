@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RecordId } from "surrealdb";
+import { RecordId } from "surrealdb";
 import { FsVault } from "../../adapters/fsVault";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
@@ -347,7 +347,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] ApprovalService", () => {
       })
       .collect<[Array<{ id: RecordId }>]>();
     expect(rows.length).toBe(0);
-    expect(events).toEqual(["edge:rejected", "edge:rejected"]);
+    expect(events).toEqual(["edge:rejected"]);
   });
 
   test("[smoke] listPendingEdges returns rows with approved=false across writeback tables", async () => {
@@ -592,5 +592,35 @@ describe("ApprovalService module shape", () => {
     // Avoid lint warning for unused import when SMOKE is off.
     void lookupNoteByPath;
     expect(typeof ApprovalService).toBe("function");
+  });
+
+  test("rejectEdge does not delete or emit for rows that are not pending", async () => {
+    const queries: string[] = [];
+    const db = {
+      query: (sql: string) => ({
+        collect: async () => {
+          queries.push(sql);
+          return [[]];
+        },
+      }),
+    } as unknown as ConstructorParameters<typeof ApprovalService>[0]["db"];
+    const bus = new EventBus();
+    const events: string[] = [];
+    bus.on("approval:decided", (event) => events.push(event.decision));
+    const service = new ApprovalService({
+      db,
+      bus,
+      vaultRoot: "",
+      fs: realFs,
+      readFile: async () => "",
+    });
+
+    await service.rejectEdge({
+      id: new RecordId("related_to", "already-approved"),
+      table: "related_to",
+    });
+
+    expect(queries.some((sql) => sql.startsWith("DELETE"))).toBe(false);
+    expect(events).toEqual([]);
   });
 });

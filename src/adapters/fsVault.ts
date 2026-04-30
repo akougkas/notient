@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative, sep } from "node:path";
 import { mergeFrontmatter } from "../core/chat/tools/notes";
 import { type AtomicFs, atomicWrite } from "../core/utils/atomicWrite";
@@ -15,6 +15,10 @@ export class FsVault implements VaultAdapter {
       writeBinary: (path, data) => this.writeBinary(path, data),
       rename: (from, to) => this.rename(from, to),
       remove: (path) => this.remove(path),
+      statMode: async (path) => (await stat(this.toAbsolute(path))).mode,
+      chmod: async (path, mode) => {
+        await chmod(this.toAbsolute(path), mode);
+      },
     };
   }
 

@@ -88,6 +88,21 @@ describe("parseSynthesis", () => {
     expect(card.bullets).toEqual([]);
     expect(card.error).toBe("no-citations");
   });
+
+  test("drops bullets whose citations are outside the retrieved-source allowlist", () => {
+    const card = parseSynthesis(
+      "- Real claim [[Graph]]\n- Hallucinated claim [[Ghost]]",
+      new Set(["[[Graph]]"]),
+    );
+    expect(card.bullets).toHaveLength(1);
+    expect(card.bullets[0].citations).toEqual(["[[Graph]]"]);
+  });
+
+  test("ignores bullets inside fenced JSON/code blocks", () => {
+    const card = parseSynthesis('```json\n{"answer":"- fake [[Ghost]]"}\n```\n- real [[Graph]]');
+    expect(card.bullets).toHaveLength(1);
+    expect(card.bullets[0].citations).toEqual(["[[Graph]]"]);
+  });
 });
 
 describe("synthesize", () => {
@@ -107,7 +122,7 @@ describe("synthesize", () => {
       provider,
       model: "reasoning",
       query: "why graphs",
-      hits: baseHits,
+      hits: [...baseHits, makeHit("/Notes/Vector.md", "vector search")],
       signal: new AbortController().signal,
       onToken: (token) => {
         seen.push(token);
@@ -117,6 +132,21 @@ describe("synthesize", () => {
     expect(card.bullets).toHaveLength(2);
     expect(card.bullets[0].citations).toEqual(["[[Graph]]"]);
     expect(card.error).toBeUndefined();
+  });
+
+  test("drops streamed bullets with hallucinated citations", async () => {
+    const provider = fakeProvider({
+      tokens: ["- unsupported [[Ghost]]\n", "- grounded [[Graph]]\n"],
+    });
+    const card = await synthesize({
+      provider,
+      model: "reasoning",
+      query: "why graphs",
+      hits: baseHits,
+      signal: new AbortController().signal,
+    });
+    expect(card.bullets).toHaveLength(1);
+    expect(card.bullets[0].citations).toEqual(["[[Graph]]"]);
   });
 
   test("returns no-hits stub when called with an empty hit list", async () => {
@@ -214,7 +244,7 @@ describe("synthesize", () => {
   test("forwards model and signal into the provider call", async () => {
     const captured: { options: ChatOptions | null } = { options: null };
     const provider = fakeProvider({
-      tokens: ["- ok [[Note]]\n"],
+      tokens: ["- ok [[Graph]]\n"],
       onStream: (_messages, options) => {
         captured.options = options;
       },

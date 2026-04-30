@@ -367,6 +367,8 @@ async function main(argv: string[]): Promise<void> {
     enqueue: (path) => {
       indexer.enqueue(path);
     },
+    ...(surrealForHandlers !== undefined ? { surrealDb: surrealForHandlers } : {}),
+    bus: kernel.get("bus"),
   });
   await watcher.start();
 

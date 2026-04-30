@@ -1,7 +1,9 @@
 import type { RecordId, Surreal } from "surrealdb";
 import { TIER1_EDGE_CLASS, TIER1_EDGE_TABLES } from "../db/edgeTables";
 import {
+  clearTierAtByPath,
   createNote,
+  fetchNoteShaByPath,
   findRecentDaemonWrite,
   lookupBlockByExplicitId,
   lookupBlockByHeading,
@@ -450,6 +452,10 @@ export interface PrepareNoteRowInput {
 export async function prepareNoteRow(db: Surreal, input: PrepareNoteRowInput): Promise<void> {
   const existing = await lookupNoteByPath(db, input.path);
   if (existing !== null) {
+    const storedSha = await fetchNoteShaByPath(db, input.path);
+    if (storedSha !== input.sha) {
+      await clearTierAtByPath(db, input.path, [1, 2, 3]);
+    }
     await db
       .query("UPDATE $id SET sha = $sha, word_count = $wordCount;", {
         id: existing,

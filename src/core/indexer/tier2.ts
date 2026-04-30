@@ -46,27 +46,66 @@ interface TransactionScript {
   bindings: Record<string, unknown>;
 }
 
+async function listChunkIdsForNote(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<Array<RecordId<"chunk">>> {
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"chunk">; ord: number }>]>(
+      "SELECT id, ord FROM chunk WHERE note = $note ORDER BY ord;",
+      { note: noteId },
+    )
+    .collect<[Array<{ id: RecordId<"chunk">; ord: number }>]>();
+  return rows.map((row) => row.id);
+}
+
+async function listBlockIdsByOrd(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<Map<number, RecordId<"block">>> {
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"block">; ord: number }>]>(
+      "SELECT id, ord FROM block WHERE note = $note ORDER BY ord;",
+      { note: noteId },
+    )
+    .collect<[Array<{ id: RecordId<"block">; ord: number }>]>();
+  return new Map(rows.map((row) => [row.ord, row.id]));
+}
+
 function buildTier2Transaction(
   noteId: RecordId<"note">,
   chunks: ChunkSpec[],
   vectors: number[][],
+  existingChunkIds: Array<RecordId<"chunk">>,
+  blockIdsByOrd: ReadonlyMap<number, RecordId<"block">>,
 ): TransactionScript {
   const statements: string[] = [];
   const bindings: Record<string, unknown> = { note: noteId };
 
   statements.push("BEGIN TRANSACTION;");
-  statements.push("DELETE chunk WHERE note = $note;");
 
+  const reuseCount = Math.min(chunks.length, existingChunkIds.length);
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
     bindings[`c${index}_ord`] = chunk.ord;
+    bindings[`c${index}_block`] =
+      chunk.blockOrd === null ? undefined : (blockIdsByOrd.get(chunk.blockOrd) ?? undefined);
     bindings[`c${index}_text`] = chunk.text;
     bindings[`c${index}_tokenEstimate`] = chunk.tokenEstimate;
     bindings[`c${index}_vector`] = vectors[index];
     bindings[`c${index}_model`] = EMBED_MODEL;
-    statements.push(
-      `CREATE ONLY chunk CONTENT { note: $note, ord: $c${index}_ord, text: $c${index}_text, token_estimate: $c${index}_tokenEstimate, vector: $c${index}_vector, embed_model: $c${index}_model, embedded_at: time::now() };`,
-    );
+    const content = `{ note: $note, block: $c${index}_block, ord: $c${index}_ord, text: $c${index}_text, token_estimate: $c${index}_tokenEstimate, vector: $c${index}_vector, embed_model: $c${index}_model, embedded_at: time::now() }`;
+    if (index < reuseCount) {
+      bindings[`c${index}_existingId`] = existingChunkIds[index];
+      statements.push(`UPDATE $c${index}_existingId CONTENT ${content};`);
+    } else {
+      statements.push(`CREATE ONLY chunk CONTENT ${content};`);
+    }
+  }
+
+  if (existingChunkIds.length > chunks.length) {
+    bindings.surplusChunkIds = existingChunkIds.slice(chunks.length);
+    statements.push("DELETE chunk WHERE id IN $surplusChunkIds;");
   }
 
   statements.push("UPDATE $note SET tier2_at = time::now();");
@@ -84,7 +123,12 @@ export async function runTier2(db: Surreal, input: Tier2Input): Promise<Tier2Out
   const chunks = chunkBlocks(input.blocks, input.chunkSizes);
 
   if (chunks.length === 0) {
-    await db.query("UPDATE $note SET tier2_at = time::now();", { note: noteId }).collect();
+    await db
+      .query(
+        "BEGIN TRANSACTION;\nDELETE chunk WHERE note = $note;\nUPDATE $note SET tier2_at = time::now();\nCOMMIT TRANSACTION;",
+        { note: noteId },
+      )
+      .collect();
     return { noteId, chunkCount: 0 };
   }
 
@@ -95,7 +139,17 @@ export async function runTier2(db: Surreal, input: Tier2Input): Promise<Tier2Out
     );
   }
 
-  const { sql, bindings } = buildTier2Transaction(noteId, chunks, vectors);
+  const [existingChunkIds, blockIdsByOrd] = await Promise.all([
+    listChunkIdsForNote(db, noteId),
+    listBlockIdsByOrd(db, noteId),
+  ]);
+  const { sql, bindings } = buildTier2Transaction(
+    noteId,
+    chunks,
+    vectors,
+    existingChunkIds,
+    blockIdsByOrd,
+  );
   await db.query(sql, bindings).collect();
 
   return { noteId, chunkCount: chunks.length };

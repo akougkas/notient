@@ -17,9 +17,10 @@
  * `findRecentDaemonWrite`; the closing `applied = true` flip is the
  * end-of-flow commit signal that consumers (Phase 4 Task 11) filter on.
  *
- * `rejectEdge` is total: deleting an already-deleted edge is not an error.
- * Rejected edges leave no `history` row; Phase 4 simplifies the staging
- * story by treating "rejected" as "never happened".
+ * `rejectEdge` is pending-only and idempotent: missing, already-approved,
+ * or already-applied rows are ignored. Rejected pending edges leave no
+ * `history` row; Phase 4 simplifies the staging story by treating
+ * "rejected" as "never happened".
  *
  * Phase 4 Task 4 will migrate `historyService` and the rest of the undo
  * surface; this service writes `history` rows directly via
@@ -205,11 +206,11 @@ export class ApprovalService {
    *   G. Closing transaction: `CREATE history` and flip `applied = true`.
    */
   async approveEdge(input: ApproveEdgeInput): Promise<void> {
-    const edge = await this.selectEdge(input);
-    if (edge === null) return;
     if (!isWritebackTable(input.table)) {
       throw new Error(`approveEdge: table '${input.table}' is not writeback-capable`);
     }
+    const edge = await this.selectPendingEdge(input);
+    if (edge === null) return;
 
     // Step A.
     await this.options.db
@@ -228,15 +229,19 @@ export class ApprovalService {
   }
 
   /**
-   * Total reject: deletes the row regardless of its current state. No
-   * `history` row is recorded; the linker can re-propose the same edge on
-   * the next pass if the underlying signal still holds.
+   * Pending-only reject: deletes a state-1 proposal. Rows that have already
+   * been approved or applied are live graph history and are not removed by
+   * the rejection path.
    */
   async rejectEdge(input: ApproveEdgeInput): Promise<void> {
     if (!isWritebackTable(input.table)) {
       throw new Error(`rejectEdge: table '${input.table}' is not writeback-capable`);
     }
-    await this.options.db.query("DELETE $id;", { id: input.id }).collect();
+    const edge = await this.selectPendingEdge(input);
+    if (edge === null) return;
+    await this.options.db
+      .query(`DELETE ${input.table} WHERE id = $id AND approved = false;`, { id: input.id })
+      .collect();
     this.options.bus.emit({
       type: "approval:decided",
       kind: "edge",
@@ -340,8 +345,8 @@ export class ApprovalService {
     await this.runHook(this.options.internalHooks?.afterHistoryCommit);
   }
 
-  private async selectEdge(input: ApproveEdgeInput): Promise<EdgeRow | null> {
-    const sql = `SELECT id, in, out, source, agent, confidence FROM ${input.table} WHERE id = $id LIMIT 1;`;
+  private async selectPendingEdge(input: ApproveEdgeInput): Promise<EdgeRow | null> {
+    const sql = `SELECT id, in, out, source, agent, confidence FROM ${input.table} WHERE id = $id AND approved = false LIMIT 1;`;
     const [rows] = await this.options.db
       .query<[Array<EdgeRow>]>(sql, { id: input.id })
       .collect<[Array<EdgeRow>]>();

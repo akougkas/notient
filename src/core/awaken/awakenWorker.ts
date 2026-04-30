@@ -39,9 +39,16 @@ import {
 const CHECKPOINT_EVERY = 10;
 const AWAKEN_PRIORITY = 2;
 const FULL_TIER_FILTER_LENGTH = 3;
+const MAX_TIER = 3;
 
 function isFullTierFilter(filter: ReadonlyArray<number>): boolean {
   return filter.length === FULL_TIER_FILTER_LENGTH;
+}
+
+function maxRequestedTier(filter: ReadonlyArray<number>): 1 | 2 | 3 {
+  const valid = filter.filter((tier) => tier === 1 || tier === 2 || tier === 3);
+  if (valid.length === 0) return MAX_TIER;
+  return Math.max(...valid) as 1 | 2 | 3;
 }
 
 export interface AwakenWorkerVaultFacade {
@@ -142,12 +149,18 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
         await waitForDone;
         processed += 1;
       } catch {
+        const requiredTier = maxRequestedTier(options.tierFilter);
         const counters =
           options.onNoteIndexed === undefined
-            ? await reconcileCountersFromTierState(options.db, attemptedPaths, {
-                processed,
-                failed: failed + 1,
-              })
+            ? await reconcileCountersFromTierState(
+                options.db,
+                attemptedPaths,
+                {
+                  processed,
+                  failed: failed + 1,
+                },
+                requiredTier,
+              )
             : { processed, failed: failed + 1 };
         processed = counters.processed;
         failed = counters.failed;
@@ -172,11 +185,17 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   }
 
   const finalStatus = statusRef.current;
+  const requiredTier = maxRequestedTier(options.tierFilter);
   if (options.onNoteIndexed === undefined) {
-    const finalCounters = await reconcileCountersFromTierState(options.db, attemptedPaths, {
-      processed,
-      failed,
-    });
+    const finalCounters = await reconcileCountersFromTierState(
+      options.db,
+      attemptedPaths,
+      {
+        processed,
+        failed,
+      },
+      requiredTier,
+    );
     processed = finalCounters.processed;
     failed = finalCounters.failed;
   }
@@ -299,12 +318,15 @@ interface AwakenCounters {
 interface AwakenTier1State {
   rowExists: boolean;
   tier1Done: boolean;
+  tier2Done: boolean;
+  tier3Done: boolean;
 }
 
 export async function reconcileCountersFromTierState(
   db: Surreal,
   attemptedPaths: ReadonlyArray<string>,
   fallback: AwakenCounters,
+  requiredTier: 1 | 2 | 3 = 1,
 ): Promise<AwakenCounters> {
   if (attemptedPaths.length === 0) return fallback;
   try {
@@ -313,7 +335,7 @@ export async function reconcileCountersFromTierState(
     for (const notePath of attemptedPaths) {
       const tierState = await fetchAwakenTier1State(db, notePath);
       if (tierState.rowExists) observedRows += 1;
-      if (!tierState.tier1Done) failed += 1;
+      if (!isRequiredTierDone(tierState, requiredTier)) failed += 1;
     }
     if (observedRows === 0 && fallback.failed === 0) {
       return fallback;
@@ -329,19 +351,40 @@ export async function reconcileCountersFromTierState(
 
 async function fetchAwakenTier1State(db: Surreal, path: string): Promise<AwakenTier1State> {
   const [rows] = await db
-    .query<[Array<{ tier1_at: string | Date | null | undefined }>]>(
-      "SELECT tier1_at FROM note WHERE path = $path LIMIT 1;",
-      { path },
-    )
-    .collect<[Array<{ tier1_at: string | Date | null | undefined }>]>();
+    .query<
+      [
+        Array<{
+          tier1_at: string | Date | null | undefined;
+          tier2_at: string | Date | null | undefined;
+          tier3_at: string | Date | null | undefined;
+        }>,
+      ]
+    >("SELECT tier1_at, tier2_at, tier3_at FROM note WHERE path = $path LIMIT 1;", { path })
+    .collect<
+      [
+        Array<{
+          tier1_at: string | Date | null | undefined;
+          tier2_at: string | Date | null | undefined;
+          tier3_at: string | Date | null | undefined;
+        }>,
+      ]
+    >();
   const row = rows[0];
   if (row === undefined) {
-    return { rowExists: false, tier1Done: false };
+    return { rowExists: false, tier1Done: false, tier2Done: false, tier3Done: false };
   }
   return {
     rowExists: true,
     tier1Done: row.tier1_at !== null && row.tier1_at !== undefined,
+    tier2Done: row.tier2_at !== null && row.tier2_at !== undefined,
+    tier3Done: row.tier3_at !== null && row.tier3_at !== undefined,
   };
+}
+
+function isRequiredTierDone(state: AwakenTier1State, requiredTier: 1 | 2 | 3): boolean {
+  if (requiredTier === 1) return state.tier1Done;
+  if (requiredTier === 2) return state.tier1Done && state.tier2Done;
+  return state.tier1Done && state.tier2Done && state.tier3Done;
 }
 
 export async function waitForNoteIndexed(

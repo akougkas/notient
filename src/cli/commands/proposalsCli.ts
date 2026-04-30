@@ -366,7 +366,7 @@ async function edgeRowExists(
   table: WritebackEdgeTable,
   id: StringRecordId,
 ): Promise<boolean> {
-  const sql = `SELECT id FROM ${table} WHERE id = $id LIMIT 1;`;
+  const sql = `SELECT id FROM ${table} WHERE id = $id AND approved = false LIMIT 1;`;
   const [rows] = await db
     .query<[Array<{ id: RecordId }>]>(sql, { id })
     .collect<[Array<{ id: RecordId }>]>();

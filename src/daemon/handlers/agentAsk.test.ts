@@ -19,7 +19,12 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../core/llm/provider";
-import { AGENT_ASK_RESPONSE_SCHEMA, AGENT_ASK_ROUND_CAP, makeAgentAskHandler } from "./agentAsk";
+import {
+  AGENT_ASK_RESPONSE_SCHEMA,
+  AGENT_ASK_ROUND_CAP,
+  UNGROUNDED_ANSWER,
+  makeAgentAskHandler,
+} from "./agentAsk";
 
 interface ScriptedTurn {
   toolCalls?: ChatWithToolsToolCall[];
@@ -183,6 +188,7 @@ describe("agent.ask handler", () => {
     expect(result.citations).toEqual([{ path: "a.md", score: 0.9, snippet: "auth body" }]);
     expect(result.openQuestions).toEqual([]);
     expect(result.confidence).toBe(0);
+    expect(provider.requests[0]?.responseSchema).toBeUndefined();
     expect(provider.requests[1]?.responseSchema).toEqual(AGENT_ASK_RESPONSE_SCHEMA);
     const toolCalls = result.toolCalls as Array<{ name: string; durationMs: number }>;
     expect(toolCalls).toHaveLength(1);
@@ -227,7 +233,7 @@ describe("agent.ask handler", () => {
     expect(result.confidence).toBe(0);
   });
 
-  test("citations dropped when no tools were called", async () => {
+  test("citation-free final answers are replaced with an ungrounded fallback", async () => {
     const structured = {
       answer: "Pure hallucination, no tools were ever run.",
       citations: [{ path: "anything.md", score: 0.99, snippet: "..." }],
@@ -245,7 +251,36 @@ describe("agent.ask handler", () => {
 
     const result = await handler({ intent: "anything" }, () => {}, "req-no-tool", "claude-code");
     expect(result.citations).toEqual([]);
-    expect(result.answer).toBe(structured.answer);
+    expect(result.answer).toBe(UNGROUNDED_ANSWER);
+    expect(result.toolCalls).toEqual([]);
+  });
+
+  test("all-fabricated citations after search produce an ungrounded fallback", async () => {
+    const structured = {
+      answer: "A made-up answer with only made-up sources.",
+      citations: [{ path: "fake/never_searched.md", score: 0.99, snippet: "..." }],
+    };
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [{ id: "tc1", name: "vault.search_notes", args: { query: "anything" } }],
+      },
+      { finalContent: JSON.stringify(structured) },
+    ]);
+
+    const handler = makeAgentAskHandler({
+      provider,
+      toolRegistry: buildRegistry(async () => ({
+        hits: [{ notePath: "real/found.md", score: 0.7, snippet: "..." }],
+      })),
+      approvalGate: makeNoopGate(),
+      toolModeCache: makeNativeCache(),
+      bus: new EventBus(),
+      settings: SETTINGS,
+    });
+
+    const result = await handler({ intent: "anything" }, () => {}, "req-fake-only", "claude-code");
+    expect(result.citations).toEqual([]);
+    expect(result.answer).toBe(UNGROUNDED_ANSWER);
   });
 
   test("read-only enforcement rejects out-of-band write tool calls", async () => {
@@ -279,7 +314,7 @@ describe("agent.ask handler", () => {
     expect((thrown as Error).message).toContain("not available to agent.ask");
   });
 
-  test("schema failure rejects instead of wrapping raw markdown as an answer", async () => {
+  test("schema failure before any tool call returns an ungrounded fallback", async () => {
     const provider = new ScriptedProvider([{ finalContent: "I do not know." }]);
 
     const handler = makeAgentAskHandler({
@@ -291,13 +326,38 @@ describe("agent.ask handler", () => {
       settings: SETTINGS,
     });
 
-    await expect(handler({ intent: "anything" }, () => {}, "req-3", "claude-code")).rejects.toThrow(
-      "INVALID_LLM_OUTPUT",
-    );
+    const result = await handler({ intent: "anything" }, () => {}, "req-3", "claude-code");
+    expect(result.answer).toBe(UNGROUNDED_ANSWER);
+    expect(result.citations).toEqual([]);
+  });
+
+  test("schema failure after a tool call still rejects instead of trusting prose", async () => {
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [{ id: "tc1", name: "vault.search_notes", args: { query: "auth" } }],
+      },
+      { finalContent: "I do not know." },
+    ]);
+
+    const handler = makeAgentAskHandler({
+      provider,
+      toolRegistry: buildRegistry(),
+      approvalGate: makeNoopGate(),
+      toolModeCache: makeNativeCache(),
+      bus: new EventBus(),
+      settings: SETTINGS,
+    });
+
+    await expect(
+      handler({ intent: "anything" }, () => {}, "req-3b", "claude-code"),
+    ).rejects.toThrow("INVALID_LLM_OUTPUT");
   });
 
   test("fenced JSON final content is rejected", async () => {
     const provider = new ScriptedProvider([
+      {
+        toolCalls: [{ id: "tc1", name: "vault.search_notes", args: { query: "anything" } }],
+      },
       {
         finalContent:
           '```json\n{"answer":"wrapped","citations":[{"path":"a.md","score":0.9,"snippet":"x"}]}\n```',

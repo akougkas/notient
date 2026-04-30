@@ -33,6 +33,13 @@ export interface AgentLoopOptions {
   maxRoundsPerTurn: number;
   toolMode: () => "native" | "json-fallback" | "disabled";
   responseSchema?: JsonSchema;
+  /**
+   * Controls when response_format/json_schema is sent alongside tools.
+   * Some local OpenAI-compatible servers prioritize response_format over
+   * tool_calls when both are present, so retrieval-first callers can defer the
+   * final schema until a tool result is already in the prompt.
+   */
+  responseSchemaMode?: "always" | "after-tool-call";
   generateId?: () => string;
   now?: () => number;
 }
@@ -165,7 +172,7 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
     messages: context.messages,
     tools: context.tools,
     signal: input.signal,
-    responseSchema: options.responseSchema,
+    responseSchema: selectResponseSchema(context),
   });
 
   const buffers = { content: "", reasoning: "" };
@@ -220,6 +227,15 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
 
   appendRoundToHistory(context, buffers, toolCalls, toolResults);
   return { kind: "continue" };
+}
+
+function selectResponseSchema(context: RoundContext): JsonSchema | undefined {
+  const schema = context.options.responseSchema;
+  if (schema === undefined) return undefined;
+  if (context.options.responseSchemaMode !== "after-tool-call") return schema;
+  if (context.tools.length === 0) return schema;
+  const hasToolResult = context.accumulatedTurnMessages.some((message) => message.role === "tool");
+  return hasToolResult ? schema : undefined;
 }
 
 interface CallDispatch {

@@ -36,6 +36,7 @@ import {
   MAX_PROPOSALS_PER_NOTE,
   RANK_TO_CONFIDENCE,
   filterProposals,
+  filterProposalsForCandidates,
 } from "./linker";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -191,6 +192,19 @@ describe("Linker rank-to-confidence mapping", () => {
     const proposals = filterProposals(response);
     expect(proposals.length).toBe(1);
     expect(proposals[0].targetNotePath).toBe("ok.md");
+  });
+
+  test("drops model paths outside the candidate set without consuming a rank slot", () => {
+    const response: LinkerJsonResponse = {
+      edges: [
+        { targetNotePath: "invented-but-existing.md", type: "supports", rationale: "skip" },
+        { targetNotePath: "candidate.md", type: "extends", rationale: "keep" },
+      ],
+    };
+    const proposals = filterProposalsForCandidates(response, new Set(["candidate.md"]));
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].targetNotePath).toBe("candidate.md");
+    expect(proposals[0].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[0]);
   });
 });
 
@@ -351,7 +365,41 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
     expect(rows[0].source).toBe("linker");
     expect(rows[0].class).toBe("INFERRED");
     expect(rows[0].approved).toBe(false);
-    expect(rows[0].confidence).toBeCloseTo(0.85);
+    expect(rows[0].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[0]);
+  });
+
+  test("[smoke] re-running linker replaces stale pending proposals instead of duplicating them", async () => {
+    await seedNote(connection, "active.md", 0.42, { tier3Done: false });
+    await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
+
+    const provider = fakeProvider({
+      chatJson: async <T>() =>
+        ({
+          edges: [
+            {
+              targetNotePath: "neighbor.md",
+              type: "supports",
+              rationale: "Both notes discuss the same topic.",
+            },
+          ],
+        }) as T,
+    });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    const context = {
+      trigger: "vault-save" as const,
+      notePath: "active.md",
+      signal: new AbortController().signal,
+      runId: 1,
+      bus: new EventBus(),
+    };
+
+    expect((await linker.run(context)).proposals).toBe(1);
+    expect((await linker.run(context)).proposals).toBe(1);
+
+    const [rows] = await connection.db
+      .query<[Array<{ count: number }>]>("SELECT count() AS count FROM supports GROUP ALL;")
+      .collect<[Array<{ count: number }>]>();
+    expect(rows[0]?.count ?? 0).toBe(1);
   });
 
   test("[smoke] silently skips proposals with unknown edge types", async () => {

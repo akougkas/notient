@@ -83,6 +83,8 @@ const READ_ONLY_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
 const ASK_SYSTEM_PROMPT = [
   "You are Notient, a local-first knowledge agent. Answer the operator's intent using the read-only tools available.",
+  "Your first step for any factual vault question MUST be to call vault.search_notes with a concise query derived from the operator's intent. Do not answer from memory.",
+  "If the tool results do not contain evidence for the answer, say you do not have enough cited vault evidence and return an empty citations array.",
   "",
   "Your final message MUST be a single JSON object with this exact shape:",
   "{",
@@ -92,6 +94,8 @@ const ASK_SYSTEM_PROMPT = [
   "",
   "Do not wrap the JSON in code fences. Do not include any prose before or after the JSON. Do not include tool-call narration in your final message.",
 ].join("\n");
+
+export const UNGROUNDED_ANSWER = "I do not have enough cited vault evidence to answer.";
 
 export const AGENT_ASK_RESPONSE_SCHEMA: JsonSchema = {
   name: "agent_ask_response",
@@ -155,6 +159,7 @@ export function makeAgentAskHandler(deps: AgentAskHandlerDeps): AgentAskHandler 
         maxRoundsPerTurn,
         toolMode: () => toolMode,
         responseSchema: AGENT_ASK_RESPONSE_SCHEMA,
+        responseSchemaMode: "after-tool-call",
       },
       {
         conversation: makeEphemeralConversation(clientIdentity, settings.model),
@@ -303,12 +308,18 @@ function buildAskResponse(drained: DrainedTurn, startedAt: number): Record<strin
   const durationMs = Date.now() - startedAt;
   const parsedShape = tryParseAskShape(drained.finalContent);
   if (parsedShape === null) {
+    if (drained.toolCalls.length === 0) {
+      return ungroundedAskResponse(drained.toolCalls, durationMs);
+    }
     throw new Error("INVALID_LLM_OUTPUT: agent.ask final response must be schema-conformant JSON");
   }
   const validatedCitations = parsedShape.citations.flatMap((citation) => {
     const source = drained.citationSources.get(citation.path);
     return source === undefined ? [] : [source];
   });
+  if (validatedCitations.length === 0) {
+    return ungroundedAskResponse(drained.toolCalls, durationMs);
+  }
   return {
     ok: true,
     answer: parsedShape.answer,
@@ -316,6 +327,21 @@ function buildAskResponse(drained: DrainedTurn, startedAt: number): Record<strin
     openQuestions: parsedShape.openQuestions ?? [],
     confidence: parsedShape.confidence ?? 0,
     toolCalls: drained.toolCalls,
+    durationMs,
+  };
+}
+
+function ungroundedAskResponse(
+  toolCalls: AgentAskToolCallSummary[],
+  durationMs: number,
+): Record<string, unknown> {
+  return {
+    ok: true,
+    answer: UNGROUNDED_ANSWER,
+    citations: [],
+    openQuestions: [],
+    confidence: 0,
+    toolCalls,
     durationMs,
   };
 }

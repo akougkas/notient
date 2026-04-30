@@ -245,4 +245,37 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier2", () => {
     expect(noteRows.length).toBe(1);
     expect(noteRows[0].tier2_at).not.toBeNull();
   });
+
+  test("[smoke] empty block list clears stale chunks from an earlier non-empty pass", async () => {
+    const extraction = extract(processAst(noteSource), notePath, noteSource);
+    const { embedder } = makeEmbedder();
+
+    const seeded = await runTier2(connection.db, {
+      notePath,
+      blocks: extraction.blocks,
+      embedder,
+    });
+    const [beforeRows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM chunk WHERE note = $note GROUP ALL;",
+        { note: seeded.noteId },
+      )
+      .collect<[Array<{ count: number }>]>();
+    expect(beforeRows[0]?.count ?? 0).toBeGreaterThan(0);
+
+    const result = await runTier2(connection.db, {
+      notePath,
+      blocks: [],
+      embedder,
+    });
+    expect(result.chunkCount).toBe(0);
+
+    const [afterRows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM chunk WHERE note = $note GROUP ALL;",
+        { note: seeded.noteId },
+      )
+      .collect<[Array<{ count: number }>]>();
+    expect(afterRows[0]?.count ?? 0).toBe(0);
+  });
 });

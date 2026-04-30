@@ -144,16 +144,123 @@ export class VaultWatcher {
       if (noteId === undefined) {
         return;
       }
+      const blockIds = await this.listBlockIds(noteId);
+      const extractorTargets = await this.collectExtractorTargets(noteId, blockIds);
       await surrealDb.db
         .query(
-          "DELETE wikilink, embed, frontmatter_ref, tagged, contained_in, under_heading, wikilink_unresolved, embed_unresolved WHERE in = $note OR in IN (SELECT VALUE id FROM block WHERE note = $note); DELETE block WHERE note = $note;",
-          { note: noteId },
+          [
+            "DELETE wikilink, embed, frontmatter_ref, tagged, contained_in, under_heading WHERE in = $note OR out = $note OR in IN $blocks OR out IN $blocks;",
+            "DELETE wikilink_unresolved, embed_unresolved WHERE in = $note OR in IN $blocks;",
+            "DELETE mentions, asserts, asks WHERE in = $note OR in IN $blocks;",
+            "DELETE supports, contradicts, extends, exemplifies, synthesizes, related_to WHERE in = $note OR out = $note;",
+            "DELETE daemon_write WHERE note = $note;",
+            "DELETE chunk WHERE note = $note;",
+            "DELETE block WHERE id IN $blocks;",
+          ].join("\n"),
+          { note: noteId, blocks: blockIds },
         )
         .collect();
       await surrealDb.db.query("DELETE $note;", { note: noteId }).collect();
+      await this.pruneExtractorTargets(extractorTargets);
     } catch {
       // Cascade failures are best-effort; next add cycle compensates.
     }
+  }
+
+  private async listBlockIds(noteId: RecordId<"note">): Promise<RecordId[]> {
+    const surrealDb = this.options.surrealDb;
+    if (surrealDb === undefined) {
+      return [];
+    }
+    const [rows] = await surrealDb.db
+      .query<[Array<{ id: RecordId }>]>("SELECT id FROM block WHERE note = $note;", {
+        note: noteId,
+      })
+      .collect<[Array<{ id: RecordId }>]>();
+    return rows.map((row) => row.id);
+  }
+
+  private async collectExtractorTargets(
+    noteId: RecordId<"note">,
+    blockIds: RecordId[],
+  ): Promise<{
+    concepts: RecordId[];
+    claims: RecordId[];
+    questions: RecordId[];
+  }> {
+    const surrealDb = this.options.surrealDb;
+    if (surrealDb === undefined) {
+      return { concepts: [], claims: [], questions: [] };
+    }
+    const [conceptRows] = await surrealDb.db
+      .query<[Array<{ out: RecordId }>]>(
+        "SELECT out FROM mentions WHERE in = $note OR in IN $blocks;",
+        { note: noteId, blocks: blockIds },
+      )
+      .collect<[Array<{ out: RecordId }>]>();
+    const [claimRows] = await surrealDb.db
+      .query<[Array<{ out: RecordId }>]>(
+        "SELECT out FROM asserts WHERE in = $note OR in IN $blocks;",
+        {
+          note: noteId,
+          blocks: blockIds,
+        },
+      )
+      .collect<[Array<{ out: RecordId }>]>();
+    const [questionRows] = await surrealDb.db
+      .query<[Array<{ out: RecordId }>]>(
+        "SELECT out FROM asks WHERE in = $note OR in IN $blocks;",
+        {
+          note: noteId,
+          blocks: blockIds,
+        },
+      )
+      .collect<[Array<{ out: RecordId }>]>();
+    return {
+      concepts: conceptRows.map((row) => row.out),
+      claims: claimRows.map((row) => row.out),
+      questions: questionRows.map((row) => row.out),
+    };
+  }
+
+  private async pruneExtractorTargets(snapshot: {
+    concepts: RecordId[];
+    claims: RecordId[];
+    questions: RecordId[];
+  }): Promise<void> {
+    const surrealDb = this.options.surrealDb;
+    if (surrealDb === undefined) {
+      return;
+    }
+    for (const conceptId of snapshot.concepts) {
+      if (!(await this.hasIncomingRelation("mentions", conceptId))) {
+        await surrealDb.db.query("DELETE $id;", { id: conceptId }).collect();
+      }
+    }
+    for (const claimId of snapshot.claims) {
+      if (!(await this.hasIncomingRelation("asserts", claimId))) {
+        await surrealDb.db.query("DELETE $id;", { id: claimId }).collect();
+      }
+    }
+    for (const questionId of snapshot.questions) {
+      if (!(await this.hasIncomingRelation("asks", questionId))) {
+        await surrealDb.db.query("DELETE $id;", { id: questionId }).collect();
+      }
+    }
+  }
+
+  private async hasIncomingRelation(
+    table: "mentions" | "asserts" | "asks",
+    id: RecordId,
+  ): Promise<boolean> {
+    const surrealDb = this.options.surrealDb;
+    if (surrealDb === undefined) {
+      return false;
+    }
+    const [rows] = await surrealDb.db
+      .query<[Array<{ id: RecordId }>]>(`SELECT id FROM ${table} WHERE out = $id LIMIT 1;`, { id })
+      .collect<[Array<{ id: RecordId }>]>();
+    return rows.length > 0;
   }
 
   private async tryDetectRename(vaultPath: string, absolutePath: string): Promise<boolean> {

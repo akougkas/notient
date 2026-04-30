@@ -134,23 +134,58 @@ interface ChunkRow {
  * position via RANK_TO_CONFIDENCE.
  */
 export function filterProposals(response: LinkerJsonResponse): LinkerProposal[] {
+  return filterProposalsForCandidates(response);
+}
+
+export function filterProposalsForCandidates(
+  response: LinkerJsonResponse,
+  allowedTargetPaths?: ReadonlySet<string>,
+): LinkerProposal[] {
   if (response === null || response === undefined) return [];
   const edges = Array.isArray(response.edges) ? response.edges : [];
   const accepted: LinkerProposal[] = [];
   for (const edge of edges) {
     if (accepted.length >= MAX_PROPOSALS_PER_NOTE) break;
-    if (edge === null || typeof edge !== "object") continue;
-    if (typeof edge.targetNotePath !== "string" || edge.targetNotePath.length === 0) continue;
-    if (typeof edge.type !== "string" || !isAllowedEdgeType(edge.type)) continue;
+    const normalized = normalizeModelEdge(edge, allowedTargetPaths);
+    if (normalized === null) continue;
     const rank = accepted.length;
     accepted.push({
-      targetNotePath: edge.targetNotePath,
-      type: edge.type,
+      targetNotePath: normalized.targetNotePath,
+      type: normalized.type,
       confidence: RANK_TO_CONFIDENCE[rank],
-      rationale: typeof edge.rationale === "string" ? edge.rationale : "",
+      rationale: normalized.rationale,
     });
   }
   return accepted;
+}
+
+function normalizeModelEdge(
+  edge: LinkerJsonResponse["edges"][number],
+  allowedTargetPaths: ReadonlySet<string> | undefined,
+): Omit<LinkerProposal, "confidence"> | null {
+  if (edge === null || typeof edge !== "object") return null;
+  if (typeof edge.targetNotePath !== "string" || edge.targetNotePath.length === 0) return null;
+  if (allowedTargetPaths !== undefined && !allowedTargetPaths.has(edge.targetNotePath)) return null;
+  if (typeof edge.type !== "string" || !isAllowedEdgeType(edge.type)) return null;
+  return {
+    targetNotePath: edge.targetNotePath,
+    type: edge.type,
+    rationale: typeof edge.rationale === "string" ? edge.rationale : "",
+  };
+}
+
+export async function deletePendingLinkerProposals(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<void> {
+  for (const table of ALLOWED_EDGE_TYPES) {
+    await db
+      .query(
+        `DELETE ${table} WHERE approved = false AND (agent = 'linker' OR source = 'linker') AND (in = $note OR out = $note);`,
+        { note: noteId },
+      )
+      .collect();
+  }
 }
 
 export class Linker implements Agent {
@@ -164,6 +199,8 @@ export class Linker implements Agent {
 
     const activeNoteId = await lookupNoteByPath(this.opts.db, context.notePath);
     if (activeNoteId === null) return { proposals: 0 };
+
+    await deletePendingLinkerProposals(this.opts.db, activeNoteId);
 
     const activeChunks = await this.fetchActiveChunks(activeNoteId);
     if (activeChunks.length === 0) return { proposals: 0 };
@@ -214,7 +251,8 @@ export class Linker implements Agent {
       SCHEMA,
     );
 
-    const proposals = filterProposals(response);
+    const allowedTargetPaths = new Set(neighbors.map((candidate) => candidate.notePath));
+    const proposals = filterProposalsForCandidates(response, allowedTargetPaths);
 
     let written = 0;
     for (const proposal of proposals) {

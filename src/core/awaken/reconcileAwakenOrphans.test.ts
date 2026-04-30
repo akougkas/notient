@@ -3,7 +3,7 @@ import type { Surreal } from "surrealdb";
 import { DAEMON_RESTART_ORPHAN_REASON, reconcileAwakenOrphans } from "./reconcileAwakenOrphans";
 
 describe("reconcileAwakenOrphans", () => {
-  test("marks running and paused awaken rows failed with the restart orphan reason", async () => {
+  test("marks running awaken rows failed with the restart orphan reason", async () => {
     const calls: Array<{ sql: string; bindings: Record<string, unknown> }> = [];
     const db = {
       query: (sql: string, bindings: Record<string, unknown>) => {
@@ -22,10 +22,10 @@ describe("reconcileAwakenOrphans", () => {
     expect(calls[0]?.sql).toContain("status = 'failed'");
     expect(calls[0]?.sql).toContain("failure_reason = $reason");
     expect(calls[0]?.sql).toContain("finished_at = time::now()");
-    expect(calls[0]?.sql).toContain("WHERE status INSIDE $activeStatuses");
+    expect(calls[0]?.sql).toContain("WHERE status = $running");
     expect(calls[0]?.bindings).toEqual({
       reason: DAEMON_RESTART_ORPHAN_REASON,
-      activeStatuses: ["running", "paused"],
+      running: "running",
     });
   });
 });

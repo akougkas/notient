@@ -5,12 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RecordId } from "surrealdb";
 import { applySchema } from "../core/db/schemaApplier";
-import { type SurrealConnection, connect, upsertNoteByPath } from "../core/db/surreal";
+import {
+  type SurrealConnection,
+  connect,
+  relateEdge,
+  replaceChunks,
+  upsertClaim,
+  upsertConcept,
+  upsertNoteByPath,
+  upsertQuestion,
+} from "../core/db/surreal";
 import { EventBus } from "../core/events/eventBus";
 import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 import { VaultWatcher, isWslPath } from "./watcher";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const VECTOR_DIM = 768;
 
 async function waitFor<T>(
   predicate: () => Promise<T | null>,
@@ -251,5 +261,130 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       .collect<[Array<{ path: string; tombstoned_at: string | null }>]>();
     expect(rows.length).toBe(1);
     expect(rows[0].tombstoned_at).not.toBeNull();
+  });
+
+  test("unlink cascade removes chunks and graph rows after the tombstone window", async () => {
+    const filePath = join(vaultRoot, "cascade.md");
+    await writeFile(filePath, "cascade body");
+    const sourceId = await upsertNoteByPath(connection.db, {
+      path: "cascade.md",
+      sha: "cascade-sha",
+      wordCount: 2,
+    });
+    const targetId = await upsertNoteByPath(connection.db, {
+      path: "cascade-target.md",
+      sha: "target-sha",
+      wordCount: 1,
+    });
+    await replaceChunks(connection.db, sourceId, [
+      {
+        ord: 0,
+        text: "cascade body",
+        tokenEstimate: 3,
+        vector: new Array<number>(VECTOR_DIM).fill(0.1),
+        embedModel: "text-embedding-nomic-embed-text-v2-moe",
+      },
+    ]);
+    const conceptId = await upsertConcept(connection.db, "Cascade Concept");
+    const claimId = await upsertClaim(connection.db, "Cascade claim.");
+    const questionId = await upsertQuestion(connection.db, "Cascade question?");
+    await relateEdge(connection.db, {
+      table: "mentions",
+      from: sourceId,
+      to: conceptId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+    await relateEdge(connection.db, {
+      table: "asserts",
+      from: sourceId,
+      to: claimId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+    await relateEdge(connection.db, {
+      table: "asks",
+      from: sourceId,
+      to: questionId,
+      source: "extractor",
+      confidenceClass: "INFERRED",
+      confidence: 0.7,
+      agent: "extractor",
+      approved: true,
+    });
+    await relateEdge(connection.db, {
+      table: "supports",
+      from: sourceId,
+      to: targetId,
+      source: "linker",
+      confidenceClass: "INFERRED",
+      confidence: 0.8,
+      agent: "linker",
+      approved: false,
+    });
+    await relateEdge(connection.db, {
+      table: "wikilink",
+      from: targetId,
+      to: sourceId,
+      source: "wikilink",
+      confidenceClass: "EXTRACTED",
+      confidence: 1,
+      approved: true,
+    });
+
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 30,
+      forcePolling: true,
+      surrealDb: connection,
+      tombstoneWindowMs: 50,
+    });
+    await watcher.start();
+    await unlink(filePath);
+    const deleted = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE id = $id;", {
+          id: sourceId,
+        })
+        .collect<[Array<{ id: RecordId<"note"> }>]>();
+      return rows.length === 0 ? true : null;
+    }, 1500);
+    await watcher.stop();
+    expect(deleted).toBe(true);
+
+    for (const table of ["chunk", "mentions", "asserts", "asks", "supports", "wikilink"]) {
+      const where = table === "chunk" ? "note = $note" : "in = $note OR out = $note";
+      const [rows] = await connection.db
+        .query<[Array<{ count: number }>]>(
+          `SELECT count() AS count FROM ${table} WHERE ${where} GROUP ALL;`,
+          { note: sourceId },
+        )
+        .collect<[Array<{ count: number }>]>();
+      expect(rows[0]?.count ?? 0).toBe(0);
+    }
+
+    const [conceptRows] = await connection.db
+      .query<[Array<{ id: RecordId }>]>("SELECT id FROM concept WHERE id = $id;", {
+        id: conceptId,
+      })
+      .collect<[Array<{ id: RecordId }>]>();
+    expect(conceptRows).toHaveLength(0);
+    const [claimRows] = await connection.db
+      .query<[Array<{ id: RecordId }>]>("SELECT id FROM claim WHERE id = $id;", { id: claimId })
+      .collect<[Array<{ id: RecordId }>]>();
+    expect(claimRows).toHaveLength(0);
+    const [questionRows] = await connection.db
+      .query<[Array<{ id: RecordId }>]>("SELECT id FROM question WHERE id = $id;", {
+        id: questionId,
+      })
+      .collect<[Array<{ id: RecordId }>]>();
+    expect(questionRows).toHaveLength(0);
   });
 });

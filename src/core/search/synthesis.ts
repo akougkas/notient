@@ -17,6 +17,7 @@ export interface SynthesizerOptions {
 }
 
 const CITATION_PATTERN = /\[\[[^\]]+\]\]/g;
+const FENCED_BLOCK_PATTERN = /```[\s\S]*?```/g;
 
 /**
  * Streams a grounded synthesis from the LLM and parses bullets out of the
@@ -56,31 +57,73 @@ export async function synthesize(options: SynthesizerOptions): Promise<Synthesis
   if (buffer.trim().length === 0) {
     return { bullets: [], rawText: buffer, error: "empty-response" };
   }
-  return parseSynthesis(buffer);
+  return parseSynthesis(buffer, allowedCitationsForHits(options.hits));
 }
 
 /**
  * Extracts cited bullets from the model's markdown response. Bullets without
- * a `[[wikilink]]` citation are dropped per the "cite or skip" contract.
- * Tolerates trailing prose by ignoring lines that do not match the bullet
- * regex.
+ * a `[[wikilink]]` citation are dropped per the "cite or skip" contract. When
+ * an allowlist is supplied, every citation in a kept bullet must point at one
+ * of the retrieved source notes. Fenced blocks are removed before parsing so
+ * malformed JSON/code does not accidentally count as grounded prose.
  */
-export function parseSynthesis(text: string): SynthesisCard {
+export function parseSynthesis(
+  text: string,
+  allowedCitations?: ReadonlySet<string>,
+): SynthesisCard {
   const bulletPattern = /^[\s>]*[-*]\s+(.*)$/gm;
   const bullets: SynthesisBullet[] = [];
-  let match: RegExpExecArray | null = bulletPattern.exec(text);
+  const parseableText = text.replace(FENCED_BLOCK_PATTERN, "");
+  let match: RegExpExecArray | null = bulletPattern.exec(parseableText);
   while (match !== null) {
     const line = match[1].trim();
     const citations = Array.from(line.matchAll(CITATION_PATTERN)).map((entry) => entry[0]);
-    if (citations.length > 0) {
+    if (citations.length > 0 && citationsAllowed(citations, allowedCitations)) {
       bullets.push({ text: line, citations });
     }
-    match = bulletPattern.exec(text);
+    match = bulletPattern.exec(parseableText);
   }
   if (bullets.length === 0) {
     return { bullets: [], rawText: text, error: "no-citations" };
   }
   return { bullets, rawText: text };
+}
+
+function citationsAllowed(
+  citations: string[],
+  allowedCitations: ReadonlySet<string> | undefined,
+): boolean {
+  if (allowedCitations === undefined) return true;
+  return citations.every((citation) => allowedCitations.has(citation));
+}
+
+function allowedCitationsForHits(hits: SearchHit[]): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const hit of hits) {
+    const sourcePath = resolveSourcePath(hit);
+    if (sourcePath.length === 0) continue;
+    const cleanPath = sourcePath.replace(/^\/+/, "");
+    const withoutExtension = cleanPath.replace(/\.md$/i, "");
+    const title = wikiTitleFor(cleanPath);
+    out.add(`[[${title}]]`);
+    out.add(`[[${withoutExtension}]]`);
+    out.add(`[[${cleanPath}]]`);
+  }
+  return out;
+}
+
+function wikiTitleFor(notePath: string): string {
+  if (notePath.length === 0) return "unknown";
+  const fileName = notePath.split("/").pop() ?? notePath;
+  return fileName.replace(/\.md$/i, "");
+}
+
+function resolveSourcePath(hit: SearchHit): string {
+  const candidate = (hit as { notePath?: string; viaPath?: string }).notePath;
+  if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  const fallback = (hit as { viaPath?: string }).viaPath;
+  if (typeof fallback === "string" && fallback.length > 0) return fallback;
+  return "";
 }
 
 function isAbortError(error: unknown): boolean {

@@ -279,12 +279,13 @@ describe("writeExtractionToSurreal", () => {
       questions: ["Why is POSIX leaky?"],
     });
 
-    expect(queries.slice(0, 3).map((query) => query.sql)).toEqual([
+    const deleteQueries = queries.filter((query) => query.sql.startsWith("DELETE "));
+    expect(deleteQueries.slice(0, 3).map((query) => query.sql)).toEqual([
       "DELETE mentions WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
       "DELETE asserts WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
       "DELETE asks WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
     ]);
-    for (const query of queries.slice(0, 3)) {
+    for (const query of deleteQueries.slice(0, 3)) {
       expect(query.bindings).toEqual({ note: noteId });
     }
   });
@@ -409,5 +410,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] writeExtractionToSurreal", () => {
       })
       .collect<[Array<{ out: unknown }>]>();
     expect(replacedMentionsRows).toHaveLength(1);
+
+    const [remainingConceptRows] = await connection.db
+      .query<[Array<{ label: string }>]>("SELECT label FROM concept ORDER BY label;")
+      .collect<[Array<{ label: string }>]>();
+    expect(remainingConceptRows.map((row) => row.label)).toEqual(["RAG"]);
   });
 });
