@@ -30,6 +30,8 @@ import type {
  */
 
 const FRONTMATTER_WIKILINK_PATTERN = /\[\[([^\]\n]+?)\]\]/g;
+const FRONTMATTER_TAG_PATH_PATTERN = /^[a-z0-9][a-z0-9/_-]*$/;
+const FRONTMATTER_TAG_KEYS = ["tags", "tag"] as const;
 
 interface HeadingFrame {
   level: 1 | 2 | 3 | 4 | 5 | 6;
@@ -154,11 +156,30 @@ function walkFrontmatterValue(
   }
 }
 
+function collectFrontmatterTagValues(value: unknown, output: string[]): void {
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const element of value) {
+      if (typeof element === "string") {
+        output.push(element);
+      }
+    }
+  }
+}
+
 function parseFrontmatter(node: Yaml): {
   frontmatter: Record<string, unknown>;
   refs: FrontmatterRefSpec[];
+  tags: TagSpec[];
 } {
   const refs: FrontmatterRefSpec[] = [];
+  const tags: TagSpec[] = [];
   let frontmatter: Record<string, unknown> = {};
   if (node.value.length > 0) {
     const parsed = parseYaml(node.value);
@@ -169,7 +190,25 @@ function parseFrontmatter(node: Yaml): {
   for (const [key, value] of Object.entries(frontmatter)) {
     walkFrontmatterValue(key, value, refs);
   }
-  return { frontmatter, refs };
+  // Frontmatter tags attach to the note (FROM = note), so fromBlockOrd stays
+  // null. Both `tags` (plural) and `tag` (singular) are accepted; values may
+  // be a string or an array of strings. Lowercase before validating against
+  // the schema regex; non-matching values drop silently.
+  for (const tagKey of FRONTMATTER_TAG_KEYS) {
+    if (!Object.hasOwn(frontmatter, tagKey)) {
+      continue;
+    }
+    const rawValues: string[] = [];
+    collectFrontmatterTagValues(frontmatter[tagKey], rawValues);
+    for (const raw of rawValues) {
+      const path = raw.toLowerCase();
+      if (!FRONTMATTER_TAG_PATH_PATTERN.test(path)) {
+        continue;
+      }
+      tags.push({ fromBlockOrd: null, path });
+    }
+  }
+  return { frontmatter, refs, tags };
 }
 
 function pushBlock(
@@ -262,6 +301,7 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
       const parsed = parseFrontmatter(child as Yaml);
       frontmatter = parsed.frontmatter;
       frontmatterRefs.push(...parsed.refs);
+      tags.push(...parsed.tags);
       continue;
     }
 

@@ -89,3 +89,79 @@ describe("markdown extractor", () => {
     expect(extraction.tags.map((tag) => tag.path)).not.toContain("skipped");
   });
 });
+
+function extractFromSource(source: string) {
+  const tree = processAst(source);
+  return extract(tree, "notes/inline.md", source);
+}
+
+describe("frontmatter tags", () => {
+  test("array form yields one TagSpec per entry, all note-rooted", () => {
+    const source = `---\ntags: [homelab, architecture]\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    const paths = result.tags.map((tag) => tag.path);
+    expect(paths).toContain("homelab");
+    expect(paths).toContain("architecture");
+    const fromForFrontmatter = result.tags
+      .filter((tag) => tag.path === "homelab" || tag.path === "architecture")
+      .map((tag) => tag.fromBlockOrd);
+    for (const from of fromForFrontmatter) {
+      expect(from).toBeNull();
+    }
+  });
+
+  test("string form yields a single TagSpec", () => {
+    const source = `---\ntags: homelab\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    expect(result.tags).toHaveLength(1);
+    expect(result.tags[0]).toEqual({ fromBlockOrd: null, path: "homelab" });
+  });
+
+  test("singular `tag:` array form is honored", () => {
+    const source = `---\ntag: [foo, bar]\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    const paths = result.tags.map((tag) => tag.path).sort();
+    expect(paths).toEqual(["bar", "foo"]);
+    for (const tag of result.tags) {
+      expect(tag.fromBlockOrd).toBeNull();
+    }
+  });
+
+  test("mixed-case values are lowercased", () => {
+    const source = `---\ntags: [Homelab, ARCHITECTURE]\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    const paths = result.tags.map((tag) => tag.path).sort();
+    expect(paths).toEqual(["architecture", "homelab"]);
+  });
+
+  test("malformed values drop silently, valid ones survive", () => {
+    const source = `---\ntags: ["-leading-dash", "/leading-slash", "space in tag", "valid"]\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    const paths = result.tags.map((tag) => tag.path);
+    expect(paths).toEqual(["valid"]);
+  });
+
+  test("nested tag paths are preserved", () => {
+    const source = `---\ntags: ["homelab/cluster"]\n---\n\nbody.\n`;
+    const result = extractFromSource(source);
+    expect(result.tags).toHaveLength(1);
+    expect(result.tags[0]).toEqual({ fromBlockOrd: null, path: "homelab/cluster" });
+  });
+
+  test("frontmatter tags coexist with inline body tags", () => {
+    const source = `---\ntags: [a]\n---\n\n# Section\n\nbody with #b inline.\n`;
+    const result = extractFromSource(source);
+    const frontmatterTag = result.tags.find(
+      (tag) => tag.path === "a" && tag.fromBlockOrd === null,
+    );
+    const inlineTag = result.tags.find(
+      (tag) => tag.path === "b" && tag.fromBlockOrd !== null,
+    );
+    expect(frontmatterTag).toBeDefined();
+    expect(inlineTag).toBeDefined();
+    // Frontmatter tags emit before inline tags walk the body.
+    const aIndex = result.tags.findIndex((tag) => tag.path === "a");
+    const bIndex = result.tags.findIndex((tag) => tag.path === "b");
+    expect(aIndex).toBeLessThan(bIndex);
+  });
+});
