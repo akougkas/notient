@@ -227,14 +227,14 @@ async function rpcSearch(context: SlashContext, query: string): Promise<SlashOut
     return { message: `search error: ${formatError(result)}` };
   }
   const detail = result as unknown as {
-    result?: { hits?: { path: string; score: number }[] };
+    result?: { hits?: { notePath: string; score: number }[] };
   };
   const hits = detail.result?.hits ?? [];
   if (hits.length === 0) return { message: "no hits." };
   return {
     message: hits
       .slice(0, 5)
-      .map((hit) => `${hit.path} (${hit.score.toFixed(2)})`)
+      .map((hit) => `${hit.notePath} (${hit.score.toFixed(2)})`)
       .join("\n"),
   };
 }

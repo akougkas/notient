@@ -200,6 +200,40 @@ describe("dispatchSlashCommand", () => {
     expect(outcome.message).toBe("```md\nhello world\n```");
   });
 
+  test("/search renders hits with their notePath (not undefined)", async () => {
+    const client = makeFakeClient([
+      {
+        method: "search.run",
+        result: {
+          result: {
+            hits: [
+              { notePath: "alpha/note.md", score: 0.81 },
+              { notePath: "beta.md", score: 0.66 },
+            ],
+          },
+        },
+      },
+    ]);
+    const outcome = await dispatchSlashCommand("/search topic", {
+      client,
+      vaultPath: "/tmp/vault",
+    });
+    expect(client.calls[0]?.method).toBe("search.run");
+    expect(outcome.message).toBe("alpha/note.md (0.81)\nbeta.md (0.66)");
+    expect(outcome.message).not.toContain("undefined");
+  });
+
+  test("/search reports no hits when the result is empty", async () => {
+    const client = makeFakeClient([
+      { method: "search.run", result: { result: { hits: [] } } },
+    ]);
+    const outcome = await dispatchSlashCommand("/search nothing", {
+      client,
+      vaultPath: "/tmp/vault",
+    });
+    expect(outcome.message).toBe("no hits.");
+  });
+
   test("/read truncates a 6000-char body with elision marker", async () => {
     const body = "a".repeat(6000);
     const client = makeFakeClient([{ method: "notes.read", result: { body } }]);
