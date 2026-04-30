@@ -904,9 +904,9 @@ export interface FindRecentDaemonWriteInput {
   noteId: RecordId<"note">;
   sha: string;
   /**
-   * Tolerance window in seconds. Defaults to 5s, which absorbs the race
-   * between an agent's atomic file write and the filesystem watcher firing
-   * a re-index for the same body.
+   * Tolerance window in seconds. Defaults to 60s to cover realistic watcher
+   * timing on the dogfood corpus: ~5s debounce plus tier 1 reindex up to
+   * ~30s plus clock-skew margin all add up well above the original 5s.
    */
   withinSeconds?: number;
 }
@@ -916,7 +916,7 @@ export interface DaemonWriteMatch {
   targets: RecordId[];
 }
 
-const DEFAULT_DAEMON_WRITE_WINDOW_SECONDS = 5;
+const DEFAULT_DAEMON_WRITE_WINDOW_SECONDS = 60;
 
 export async function findRecentDaemonWrite(
   db: Surreal,
@@ -934,10 +934,10 @@ export async function findRecentDaemonWrite(
   //
   // Clock-skew trade-off: the cutoff is computed client-side via Date.now()
   // while `written_at` is stamped server-side via time::now(). On a single
-  // host with sub-second skew the 5s default tolerates the file-write /
-  // watcher race. Cross-host SurrealDB deployments with multi-second skew
-  // may need a wider window or a server-side cutoff via `time::now() -
-  // <duration>`.
+  // host with sub-second skew the 60s default tolerates the file-write /
+  // watcher race plus tier 1 reindex latency. Cross-host SurrealDB
+  // deployments with multi-second skew may need a wider window or a
+  // server-side cutoff via `time::now() - <duration>`.
   const cutoffDate = new Date(Date.now() - Math.floor(withinSeconds * 1000));
   const cutoff = new DateTime(cutoffDate);
   // SurrealDB 3.0.5 requires every `ORDER BY` field to appear in the

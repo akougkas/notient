@@ -174,6 +174,34 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] daemon_write DAL", () => {
     expect(match).toBeNull();
   });
 
+  test("findRecentDaemonWrite default window tolerates ~30s lag from watcher debounce + tier 1 reindex", async () => {
+    // Backdate the row to 30 seconds ago. Pre-fix the 5s default window
+    // would have missed this row and tier 1 would have lost daemon
+    // provenance, falling back to source='wikilink' instead of 'linker'.
+    // The 60s default covers the realistic watcher debounce (~5s) plus
+    // tier 1 transaction duration (up to ~30s) plus clock-skew margin.
+    const thirtySecondsAgo = new DateTime(new Date(Date.now() - 30_000));
+    await connection.db
+      .query(
+        "CREATE daemon_write CONTENT { note: $note, sha: $sha, agent: $agent, targets: $targets, written_at: $writtenAt };",
+        {
+          note: noteIdA,
+          sha: "realistic-lag-sha",
+          agent: "linker",
+          targets: [targetNoteId],
+          writtenAt: thirtySecondsAgo,
+        },
+      )
+      .collect();
+    const match = await findRecentDaemonWrite(connection.db, {
+      noteId: noteIdA,
+      sha: "realistic-lag-sha",
+    });
+    expect(match).not.toBeNull();
+    if (match === null) return;
+    expect(match.agent).toBe("linker");
+  });
+
   test("findRecentDaemonWrite returns the most recent row when multiple match", async () => {
     // First row: older agent label.
     await recordDaemonWrite(connection.db, {
