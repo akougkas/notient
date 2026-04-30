@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { RecordId } from "surrealdb";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
-import { createRun, findCurrent } from "../../core/awaken/awakenRun";
+import {
+  createRun,
+  findCurrent,
+  findLatestResumable,
+  updateStatus,
+} from "../../core/awaken/awakenRun";
 import { runAwakenWorker } from "../../core/awaken/awakenWorker";
 import { type SurrealConnection, clearTierAtByPath } from "../../core/db/surreal";
 import type { EventBus } from "../../core/events/eventBus";
@@ -150,11 +155,7 @@ export function makeAwakenHandler(deps: AwakenHandlerDeps) {
       listMarkdownPaths: async (): Promise<string[]> => queuedPaths,
     };
     const indexerQueue = {
-      enqueue: (
-        path: string,
-        priority?: number,
-        filter?: ReadonlyArray<number>,
-      ): void => {
+      enqueue: (path: string, priority?: number, filter?: ReadonlyArray<number>): void => {
         deps.indexer.enqueue(path, priority, filter);
       },
     };
@@ -171,7 +172,15 @@ export function makeAwakenHandler(deps: AwakenHandlerDeps) {
         priorityGlobs: [],
         total: queuedPaths.length,
       });
-      kickOffBackgroundWorker(deps, surreal, vaultFacade, indexerQueue, tierFilter, runId);
+      kickOffBackgroundWorker({
+        deps,
+        surreal,
+        vaultFacade,
+        indexerQueue,
+        tierFilter,
+        runId,
+        resume: false,
+      });
       return {
         ok: true,
         queued: queuedPaths.length,
@@ -208,38 +217,119 @@ export function makeAwakenHandler(deps: AwakenHandlerDeps) {
   };
 }
 
-function kickOffBackgroundWorker(
-  deps: AwakenHandlerDeps,
-  surreal: SurrealConnection,
-  vaultFacade: { listMarkdownPaths(): Promise<string[]> },
+interface BackgroundWorkerDispatch {
+  deps: AwakenHandlerDeps;
+  surreal: SurrealConnection;
+  vaultFacade: { listMarkdownPaths(): Promise<string[]> };
   indexerQueue: {
     enqueue(path: string, priority?: number, filter?: ReadonlyArray<number>): void;
-  },
-  tierFilter: number[],
-  runId: RecordId<"awaken_run">,
-): void {
+  };
+  tierFilter: number[];
+  runId: RecordId<"awaken_run">;
+  /**
+   * Forwarded to `runAwakenWorker.resume`. `awaken.run --background`
+   * passes `false` (fresh row); `awaken.resume` passes `true` so the
+   * worker reloads counters from the existing row instead of starting
+   * fresh.
+   */
+  resume: boolean;
+}
+
+function kickOffBackgroundWorker(dispatch: BackgroundWorkerDispatch): void {
   // The worker drives the loop asynchronously. We do NOT await the
   // promise; the RPC reply already returned the runId. A throw inside
   // the worker is funneled to `indexer:error` so the daemon never
   // crashes from a background run.
   const promise = runAwakenWorker({
-    db: surreal.db,
-    vaultFacade,
-    indexerQueue,
-    tierFilter,
+    db: dispatch.surreal.db,
+    vaultFacade: dispatch.vaultFacade,
+    indexerQueue: dispatch.indexerQueue,
+    tierFilter: dispatch.tierFilter,
     priorityGlobs: [],
-    resume: false,
-    bus: deps.bus,
-    existingRunId: runId,
+    resume: dispatch.resume,
+    bus: dispatch.deps.bus,
+    existingRunId: dispatch.runId,
   })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      deps.bus.emit({ type: "indexer:error", message, phase: "awaken-background" });
+      dispatch.deps.bus.emit({
+        type: "indexer:error",
+        message,
+        phase: "awaken-background",
+      });
     })
     .finally(() => {
       backgroundRuns.delete(promise);
     });
   backgroundRuns.add(promise);
+}
+
+/**
+ * `awaken.resume` RPC handler. The CLI's `awaken --resume` calls this
+ * instead of touching SurrealDB directly. The previous design flipped
+ * the row's status to `running` from the CLI, but the daemon's worker
+ * had already exited at pause time (its live-query subscription closed
+ * in `finally`), so no worker observed the change. The row stayed
+ * `running` indefinitely.
+ *
+ * This handler:
+ *   - Refuses if a different run is already `running` for this vault
+ *     (`findCurrent` returns it). The pause/resume cycle leaves the
+ *     paused row outside `findCurrent`'s active set, so a coexisting
+ *     `running` row is the concurrent-run case the spec rejects.
+ *   - Picks the latest resumable row via `findLatestResumable`.
+ *   - Flips status to `running` so the row visibly reflects the
+ *     command before the worker spins up.
+ *   - Spawns a fresh worker via the same fire-and-forget path
+ *     `awaken.run --background` uses, with `resume: true` and
+ *     `existingRunId: resumable.id` so the worker reloads counters
+ *     and the cursor.
+ *   - Returns synchronously with the run's current counters.
+ */
+export function makeAwakenResumeHandler(deps: AwakenHandlerDeps) {
+  return async (): Promise<Record<string, unknown>> => {
+    if (deps.surreal === undefined) {
+      throw new Error("awaken.resume: SurrealDB connection is required");
+    }
+    const surreal = deps.surreal;
+    const active = await findCurrent(surreal.db);
+    if (active !== null && active.status === "running") {
+      throw new Error("INVALID_PARAMS: a different run is already active");
+    }
+    const resumable = await findLatestResumable(surreal.db);
+    if (resumable === null) {
+      throw new Error("INVALID_PARAMS: no resumable awaken run found");
+    }
+    await updateStatus(surreal.db, resumable.id, "running");
+
+    const queuedPaths = (await deps.vault.listMarkdown()).map((entry) => entry.path);
+    const vaultFacade = {
+      listMarkdownPaths: async (): Promise<string[]> => queuedPaths,
+    };
+    const indexerQueue = {
+      enqueue: (path: string, priority?: number, filter?: ReadonlyArray<number>): void => {
+        deps.indexer.enqueue(path, priority, filter);
+      },
+    };
+    kickOffBackgroundWorker({
+      deps,
+      surreal,
+      vaultFacade,
+      indexerQueue,
+      tierFilter: resumable.tier_filter,
+      runId: resumable.id,
+      resume: true,
+    });
+
+    return {
+      ok: true,
+      runId: resumable.id.toString(),
+      processed: resumable.processed,
+      failed: resumable.failed,
+      total: resumable.total,
+      status: "running",
+    };
+  };
 }
 
 export function makeReindexHandler(deps: AwakenHandlerDeps) {

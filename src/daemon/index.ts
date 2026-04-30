@@ -7,7 +7,7 @@ import { makeAgentAskHandler } from "./handlers/agentAsk";
 import { makeAgentBriefHandler } from "./handlers/agentBrief";
 import { makeAgentDistillHandler } from "./handlers/agentDistill";
 import { createAgentEventsHandler } from "./handlers/agentEvents";
-import { makeAwakenHandler, makeReindexHandler } from "./handlers/awaken";
+import { makeAwakenHandler, makeAwakenResumeHandler, makeReindexHandler } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeHealthHandler } from "./handlers/health";
 import { makeNotesHandlers } from "./handlers/notes";
@@ -140,6 +140,15 @@ async function main(argv: string[]): Promise<void> {
   dispatcher.register(
     "awaken.run",
     makeAwakenHandler({
+      bus: kernel.get("bus"),
+      indexer,
+      vault: kernel.get("vault"),
+      ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
+    }),
+  );
+  dispatcher.register(
+    "awaken.resume",
+    makeAwakenResumeHandler({
       bus: kernel.get("bus"),
       indexer,
       vault: kernel.get("vault"),

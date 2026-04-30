@@ -4,7 +4,7 @@ import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import type { SurrealConnection } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
 import type { IndexerQueue } from "../../core/indexer/indexerQueue";
-import { makeAwakenHandler, makeReindexHandler } from "./awaken";
+import { makeAwakenHandler, makeAwakenResumeHandler, makeReindexHandler } from "./awaken";
 
 interface RecordedEnqueue {
   path: string;
@@ -396,6 +396,121 @@ describe("awaken handler", () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain("SurrealDB connection is required");
+  });
+});
+
+describe("awaken resume handler", () => {
+  function seedPausedRow(
+    surreal: FakeSurrealConnection,
+    paths: ReadonlyArray<string>,
+    cursor: string,
+  ): RecordId<"awaken_run"> {
+    const id = new RecordId("awaken_run", "fake-paused");
+    const row: AwakenRowState = {
+      id,
+      status: "paused",
+      started_at: new Date(),
+      finished_at: null,
+      total: paths.length,
+      processed: paths.indexOf(cursor) + 1,
+      failed: 0,
+      tier_filter: [1, 2, 3],
+      priority_globs: [],
+      cursor,
+      error: null,
+    };
+    surreal.awakenRows.set(id.id.toString(), row);
+    return id;
+  }
+
+  async function waitForRowStatus(
+    surreal: FakeSurrealConnection,
+    runId: RecordId<"awaken_run">,
+    target: string,
+    timeoutMs = 1_000,
+  ): Promise<AwakenRowState> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const row = surreal.awakenRows.get(runId.id.toString());
+      if (row !== undefined && row.status === target) return row;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const row = surreal.awakenRows.get(runId.id.toString());
+    if (row === undefined) {
+      throw new Error("awaken resume test: row vanished before reaching target status");
+    }
+    throw new Error(
+      `awaken resume test: row reached status='${row.status}' instead of '${target}'`,
+    );
+  }
+
+  test("rejects when no resumable row exists", async () => {
+    const bus = new EventBus();
+    const queue = makeQueue(bus);
+    const surreal = makeFakeSurreal();
+    const vault = makeVault([{ path: "a.md", mtime: 1 }]);
+    const handler = makeAwakenResumeHandler({
+      bus,
+      indexer: queue as unknown as IndexerQueue,
+      vault: vault as VaultAdapter,
+      surreal,
+    });
+    let caught: unknown;
+    try {
+      await handler();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("no resumable awaken run found");
+  });
+
+  test("rejects when surreal is missing", async () => {
+    const bus = new EventBus();
+    const queue = makeQueue(bus);
+    const vault = makeVault([{ path: "a.md", mtime: 1 }]);
+    const handler = makeAwakenResumeHandler({
+      bus,
+      indexer: queue as unknown as IndexerQueue,
+      vault: vault as VaultAdapter,
+    });
+    let caught: unknown;
+    try {
+      await handler();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("SurrealDB connection is required");
+  });
+
+  test("flips paused row to running, kicks worker, and drives it to completed", async () => {
+    const bus = new EventBus();
+    const queue = makeQueue(bus);
+    const surreal = makeFakeSurreal();
+    const paths = ["a.md", "b.md", "c.md", "d.md", "e.md"];
+    const vault = makeVault(paths.map((entry, index) => ({ path: entry, mtime: index })));
+    const runId = seedPausedRow(surreal, paths, "b.md");
+
+    const handler = makeAwakenResumeHandler({
+      bus,
+      indexer: queue as unknown as IndexerQueue,
+      vault: vault as VaultAdapter,
+      surreal,
+    });
+
+    const result = await handler();
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("running");
+    expect(result.runId).toBe(runId.toString());
+    expect(result.processed).toBe(2);
+    expect(result.total).toBe(paths.length);
+
+    const finalRow = await waitForRowStatus(surreal, runId, "completed");
+    expect(finalRow.processed).toBe(paths.length);
+    expect(finalRow.failed).toBe(0);
+    // Only the paths after the cursor were enqueued during resume.
+    expect(queue.enqueued).toEqual(["c.md", "d.md", "e.md"]);
   });
 });
 

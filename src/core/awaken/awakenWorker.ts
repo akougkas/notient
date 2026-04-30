@@ -188,6 +188,21 @@ async function resolveStart(
   totalPaths: number,
 ): Promise<ResolvedStart> {
   if (options.resume) {
+    // When the daemon's `awaken.resume` RPC handler picked the row, it
+    // forwards the id via `existingRunId`. Prefer that exact row over
+    // re-querying for the latest resumable so the worker targets the
+    // same row the handler already validated. The handler also flips
+    // the status to `running` before kicking the worker off; calling
+    // `updateStatus` again here is idempotent and keeps the foreground
+    // resume path (no `existingRunId`) in sync.
+    if (options.existingRunId !== undefined) {
+      const row = await findById(options.db, options.existingRunId);
+      if (row === null) {
+        throw new Error("runAwakenWorker: existingRunId not found");
+      }
+      await updateStatus(options.db, row.id, "running");
+      return startFromRow(row);
+    }
     const resumable = await findLatestResumable(options.db);
     if (resumable === null) {
       throw new Error("runAwakenWorker: no resumable run found");

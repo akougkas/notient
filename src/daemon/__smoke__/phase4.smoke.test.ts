@@ -36,8 +36,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { ApprovalService } from "../../core/approvals/approvalService";
-import { findCurrent, updateStatus } from "../../core/awaken/awakenRun";
+import { findById, findCurrent, updateStatus } from "../../core/awaken/awakenRun";
 import {
   type AwakenWorkerIndexerQueue,
   type AwakenWorkerVaultFacade,
@@ -51,7 +52,9 @@ import {
   upsertNoteByPath,
 } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
+import type { IndexerQueue } from "../../core/indexer/indexerQueue";
 import { runTier1 } from "../../core/indexer/tier1";
+import { makeAwakenResumeHandler } from "../handlers/awaken";
 import { type SurrealServerHandle, startSurreal } from "../surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -230,38 +233,59 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     expect(pausedRows[0]?.cursor).toBe("b.md");
     expect(pausedRows[0]?.finished_at == null).toBe(true);
 
-    // Second pass: `resume: true` adopts the same run row, picks up the
-    // remaining paths after the cursor, and reaches `completed`.
+    // Second pass: drive resume through the daemon's `awaken.resume`
+    // handler the way the production CLI now does. The handler picks the
+    // resumable row, flips it to `running`, and spawns a fresh worker
+    // via the same fire-and-forget background path `awaken --background`
+    // uses. The CLI used to mutate SurrealDB directly, but the worker's
+    // live-query subscription closes when the run pauses, so no worker
+    // ever observed the status flip. The RPC handler fixes that gap by
+    // owning the worker spawn.
     const secondEnqueued: RecordedEnqueue[] = [];
-    const secondResult = await runAwakenWorker({
-      db: connection.db,
-      vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(secondEnqueued),
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      resume: true,
-      onNoteIndexed: async () => {},
+    const secondBus = new EventBus();
+    const secondVault: Pick<VaultAdapter, "listMarkdown" | "read"> = {
+      listMarkdown: async () => paths.map((entry, index) => ({ path: entry, mtime: index })),
+      read: async (target: string) => `# ${target}\n`,
+    };
+    const secondIndexerQueue = {
+      enqueue(filePath: string, priority?: number): void {
+        secondEnqueued.push({ path: filePath, priority: priority ?? 2 });
+        // Mirror the unit-test pattern: tee `enqueue` into the worker's
+        // per-note completion event so the background worker drains
+        // without needing the real indexer.
+        queueMicrotask(() => {
+          secondBus.emit({ type: "indexer:tier3-done", path: filePath });
+        });
+      },
+    };
+    const resumeHandler = makeAwakenResumeHandler({
+      bus: secondBus,
+      indexer: secondIndexerQueue as unknown as IndexerQueue,
+      vault: secondVault as VaultAdapter,
+      surreal: connection,
     });
+    const resumeResult = await resumeHandler();
+    expect(resumeResult.ok).toBe(true);
+    expect(resumeResult.status).toBe("running");
+    expect(resumeResult.runId).toBe(firstResult.runId.toString());
 
-    expect(secondResult.runId.toString()).toBe(firstResult.runId.toString());
-    expect(secondResult.status).toBe("completed");
-    expect(secondResult.processed).toBe(paths.length);
-    expect(secondResult.failed).toBe(0);
+    // The handler returns synchronously after kicking the worker off.
+    // Poll the row until the worker reaches `completed` or fails.
+    const completionDeadline = Date.now() + 5_000;
+    let finalRow = await findById(connection.db, firstResult.runId);
+    while (Date.now() < completionDeadline && finalRow !== null && finalRow.status === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      finalRow = await findById(connection.db, firstResult.runId);
+    }
+    if (finalRow === null) {
+      throw new Error("phase4 smoke: run row vanished during resume");
+    }
+    expect(finalRow.status).toBe("completed");
+    expect(finalRow.processed).toBe(paths.length);
+    expect(finalRow.failed).toBe(0);
+    expect(finalRow.cursor).toBeNull();
+    expect(finalRow.finished_at).not.toBeNull();
     expect(secondEnqueued.map((entry) => entry.path)).toEqual(["c.md", "d.md", "e.md"]);
-
-    const [completedRows] = await connection.db
-      .query<
-        [Array<{ status: string; processed: number; cursor: string | null; finished_at: unknown }>]
-      >("SELECT status, processed, cursor, finished_at FROM awaken_run WHERE id = $id;", {
-        id: secondResult.runId,
-      })
-      .collect<
-        [Array<{ status: string; processed: number; cursor: string | null; finished_at: unknown }>]
-      >();
-    expect(completedRows[0]?.status).toBe("completed");
-    expect(completedRows[0]?.processed).toBe(paths.length);
-    expect(completedRows[0]?.cursor == null).toBe(true);
-    expect(completedRows[0]?.finished_at != null).toBe(true);
   });
 
   test("[smoke] approve linker proposal writes ## Related, records daemon_write, and re-Tier1 attributes the wikilink to linker", async () => {
