@@ -3,6 +3,7 @@ import type { Linker } from "../agents/linker";
 import {
   type SurrealConnection,
   fetchChunksForTier3,
+  fetchNoteTierState,
   listNotePaths,
   lookupNoteByPath,
 } from "../db/surreal";
@@ -60,27 +61,43 @@ export interface IndexNoteArgs {
    */
   chunkSizes?: ChunkBlockSizes;
   /**
-   * Optional per-note tier filter. When provided, only the listed tiers
-   * (any subset of `[1, 2, 3]`) execute against this note. Tiers that
-   * are filtered OUT but whose `tier{N}_at` is already set are skipped
-   * silently; filtered-out tiers whose `tier{N}_at` is NONE are also
-   * skipped (the indexer respects the caller's explicit scope).
+   * Optional per-note tier filter, interpreted as an UPPER BOUND on the
+   * tier ladder rather than a literal subset. The indexer derives
+   * `maxRequested = max(filter)` and considers tiers `[1..maxRequested]`;
+   * any tier in that range whose `tier{N}_at` is already set is skipped,
+   * so prerequisite tiers run transparently when needed and tiers above
+   * `maxRequested` never run. Tiers below `maxRequested` that the caller
+   * did not list are not re-run if they are already done — `reindex` is
+   * the opt-in path for replaying a tier (it clears `tier{N}_at` before
+   * enqueueing, so the corresponding column reads NONE here and the tier
+   * runs again while its already-done lower tiers stay skipped).
    *
-   * Spec: Phase 5 Task 11 — the tier filter flows from `awaken --tier`
-   * (per-run scope) and `reindex --tier` (per-glob scope) through the
-   * indexer queue and into this orchestrator. When omitted, every tier
-   * runs (preserving the pre-Phase-5 behaviour).
+   * Spec: Phase 5 Task 11 (the tier filter flows from `awaken --tier`
+   * per-run scope and `reindex --tier` per-glob scope through the
+   * indexer queue into this orchestrator) plus Bug 4 (`awaken --tier N`
+   * on a fresh note must auto-run Tiers 1..N-1 instead of failing in
+   * Tier 2's `Tier 1 must run first` guard). When omitted, every tier
+   * whose `tier{N}_at` is NONE runs (preserving the pre-Phase-5
+   * behaviour on fresh notes and idempotency on already-indexed ones).
    */
   tierFilter?: ReadonlyArray<number>;
 }
 
-const ALL_TIERS: ReadonlyArray<number> = [1, 2, 3];
+const MAX_TIER = 3;
 
-function normaliseTierFilter(filter: ReadonlyArray<number> | undefined): ReadonlyArray<number> {
-  if (filter === undefined) return ALL_TIERS;
+/**
+ * Reduce the caller's tier filter to a single upper-bound integer in
+ * `[1, MAX_TIER]`. An undefined or empty filter widens to the full ladder
+ * (`MAX_TIER`); invalid entries (anything outside `1..MAX_TIER`) are
+ * dropped before computing the max so a stray `0` or `5` does not collapse
+ * the bound. Spec: Bug 4 reinterprets `tierFilter` as an upper bound rather
+ * than a literal subset.
+ */
+function maxRequestedTier(filter: ReadonlyArray<number> | undefined): number {
+  if (filter === undefined) return MAX_TIER;
   const valid = filter.filter((tier) => tier === 1 || tier === 2 || tier === 3);
-  if (valid.length === 0) return ALL_TIERS;
-  return Array.from(new Set(valid)).sort((a, b) => a - b);
+  if (valid.length === 0) return MAX_TIER;
+  return Math.max(...valid);
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: tier-by-tier orchestration is clearer in one function than split across helpers; mirrors the per-tier try/catch pattern that has lived here since Phase 3.
@@ -112,10 +129,18 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
     };
   }
 
-  const filter = normaliseTierFilter(tierFilter);
-  const runTier1Wanted = filter.includes(1);
-  const runTier2Wanted = filter.includes(2);
-  const runTier3Wanted = filter.includes(3);
+  // Bug 4 fix: `tierFilter` is an upper bound, not a literal subset. We
+  // run every tier in `[1..maxRequested]` whose `tier{N}_at` is still
+  // NONE so a fresh note enqueued with `awaken --tier 2` transparently
+  // runs Tier 1 first, while a `reindex --tier 2` call (which clears
+  // only `tier2_at` upstream) re-runs Tier 2 alone because Tier 1 is
+  // already stamped and skipped here. Tiers above `maxRequested` never
+  // run regardless of their state.
+  const upperBound = maxRequestedTier(tierFilter);
+  const tierState = await fetchNoteTierState(surrealDb.db, notePath);
+  const runTier1Wanted = upperBound >= 1 && !tierState.tier1Done;
+  const runTier2Wanted = upperBound >= 2 && !tierState.tier2Done;
+  const runTier3Wanted = upperBound >= 3 && !tierState.tier3Done;
 
   // Phase 5 Task 11: when Tier 1 is filtered out the orchestrator must
   // still hand Tier 2 a `BlockSpec[]` and Tier 3 a `noteId`. Both are
