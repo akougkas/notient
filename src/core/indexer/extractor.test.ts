@@ -12,7 +12,7 @@ import type {
   JsonSchema,
   LLMProvider,
 } from "../llm/provider";
-import { Extractor, writeExtractionToSurreal } from "./extractor";
+import { Extractor, filterNoiseEntities, writeExtractionToSurreal } from "./extractor";
 import type { Chunk } from "./types";
 
 function chunk(text: string, ord = 0): Chunk {
@@ -97,6 +97,128 @@ describe("Extractor", () => {
     });
     const out = await extractor.extract([chunk("a", 0), chunk("b", 1), chunk("c", 2)]);
     expect(out.entities.sort()).toEqual(["E1", "E3"]);
+  });
+
+  test("filters generic noise entities from merged extraction output", async () => {
+    const responses: Array<{ entities: string[]; claims: string[]; questions: string[] }> = [
+      {
+        entities: ["structure", "Drive API v3", "connection_builder"],
+        claims: [],
+        questions: [],
+      },
+      { entities: ["Container Dark", "Illumina MiSeq"], claims: [], questions: [] },
+    ];
+    let i = 0;
+    const provider = fakeProvider({
+      chatJson: async <T>() => responses[i++] as T,
+    });
+    const extractor = new Extractor(provider, {
+      model: "test-model",
+      concurrency: 1,
+    });
+    const out = await extractor.extract([chunk("first", 0), chunk("second", 1)]);
+    expect(out.entities.sort()).toEqual(["Drive API v3", "Illumina MiSeq"].sort());
+  });
+});
+
+describe("filterNoiseEntities", () => {
+  test("returns [] for empty input", () => {
+    expect(filterNoiseEntities([])).toEqual([]);
+  });
+
+  describe("predicate (a): single short lowercase token", () => {
+    test("drops 'structure'", () => {
+      expect(filterNoiseEntities(["structure"])).toEqual([]);
+    });
+
+    test("drops 'wrappers'", () => {
+      expect(filterNoiseEntities(["wrappers"])).toEqual([]);
+    });
+
+    test("drops 'haiku'", () => {
+      expect(filterNoiseEntities(["haiku"])).toEqual([]);
+    });
+
+    test("keeps capitalized 'Haiku'", () => {
+      expect(filterNoiseEntities(["Haiku"])).toEqual(["Haiku"]);
+    });
+
+    test("keeps 'Drive' (length 5)", () => {
+      expect(filterNoiseEntities(["Drive"])).toEqual(["Drive"]);
+    });
+
+    test("keeps uppercase 'POSIX' (not lowercase)", () => {
+      expect(filterNoiseEntities(["POSIX"])).toEqual(["POSIX"]);
+    });
+  });
+
+  describe("predicate (b): short snake/kebab identifier", () => {
+    test("drops 'connection_builder'", () => {
+      expect(filterNoiseEntities(["connection_builder"])).toEqual([]);
+    });
+
+    test("drops 'npm-db'", () => {
+      expect(filterNoiseEntities(["npm-db"])).toEqual([]);
+    });
+
+    test("keeps long hyphenated model name 'text-embedding-nomic-embed-text-v2-moe'", () => {
+      expect(filterNoiseEntities(["text-embedding-nomic-embed-text-v2-moe"])).toEqual([
+        "text-embedding-nomic-embed-text-v2-moe",
+      ]);
+    });
+
+    test("keeps 'Drive API v3' (has spaces, not a single token)", () => {
+      expect(filterNoiseEntities(["Drive API v3"])).toEqual(["Drive API v3"]);
+    });
+  });
+
+  describe("predicate (c): generic two-word UI/design phrase", () => {
+    test("drops 'Container Dark'", () => {
+      expect(filterNoiseEntities(["Container Dark"])).toEqual([]);
+    });
+
+    test("drops 'Elegant Technical'", () => {
+      expect(filterNoiseEntities(["Elegant Technical"])).toEqual([]);
+    });
+
+    test("keeps 'Drive API' (API is short and uppercase)", () => {
+      expect(filterNoiseEntities(["Drive API"])).toEqual(["Drive API"]);
+    });
+
+    test("keeps 'Illumina MiSeq' (mixed case in second word)", () => {
+      expect(filterNoiseEntities(["Illumina MiSeq"])).toEqual(["Illumina MiSeq"]);
+    });
+  });
+
+  describe("kept cases (no predicate fires)", () => {
+    test("keeps multi-word phrase 'RAG filtering protocols'", () => {
+      expect(filterNoiseEntities(["RAG filtering protocols"])).toEqual(["RAG filtering protocols"]);
+    });
+
+    test("keeps single capitalized 'Distributed' (intentional trade-off)", () => {
+      expect(filterNoiseEntities(["Distributed"])).toEqual(["Distributed"]);
+    });
+
+    test("keeps proper noun 'Hermes'", () => {
+      expect(filterNoiseEntities(["Hermes"])).toEqual(["Hermes"]);
+    });
+
+    test("keeps proper noun 'Nemotron'", () => {
+      expect(filterNoiseEntities(["Nemotron"])).toEqual(["Nemotron"]);
+    });
+  });
+
+  test("filters mixed batch correctly", () => {
+    const input = [
+      "structure",
+      "Drive API v3",
+      "connection_builder",
+      "Container Dark",
+      "Illumina MiSeq",
+      "npm-db",
+      "wrappers",
+    ];
+    expect(filterNoiseEntities(input)).toEqual(["Drive API v3", "Illumina MiSeq"]);
   });
 });
 

@@ -16,7 +16,7 @@ const MAX_QUESTIONS_PER_CHUNK = 3;
 const SYSTEM_PROMPT = `You are Notient's extractor. Read one note chunk and output ONLY what a careful human reader would highlight as worth tracking.
 
 Return at most:
-- ${MAX_ENTITIES_PER_CHUNK} entities — proper nouns (people, named projects, named systems, products), or domain-specific technical terms with strong specificity. Use the canonical singular form. Skip generic words like "system", "process", "note", "thing", "user". If the chunk has none, return [].
+- ${MAX_ENTITIES_PER_CHUNK} entities — proper nouns (people, named projects, named systems, products), or domain-specific technical terms with strong specificity. Use the canonical singular form. Skip generic words like "system", "process", "note", "thing", "user", "structure", "wrappers", "Distributed". Skip code-shaped tokens with underscores or hyphens (e.g. "connection_builder", "npm-db"); name the concept they represent in plain words instead, or omit. Skip generic two-word UI/design phrases (e.g. "Container Dark", "Elegant Technical") that are not specific entities. If the chunk has none, return [].
 - ${MAX_CLAIMS_PER_CHUNK} claims — non-trivial, specific assertions the chunk makes. A claim must be sharp enough that a thoughtful reader could disagree. Skip restatements of obvious facts and definitions. One declarative sentence each. If the chunk has none, return [].
 - ${MAX_QUESTIONS_PER_CHUNK} questions — genuine open questions the chunk raises and does not answer. End each with "?". Skip rhetorical questions. If the chunk has none, return [].
 
@@ -99,10 +99,58 @@ function ensureStringArray(value: unknown): string[] {
 }
 
 function mergeExtractions(parts: Extraction[]): Extraction {
-  const entities = dedupeCaseInsensitive(parts.flatMap((p) => p.entities));
+  const entities = dedupeCaseInsensitive(filterNoiseEntities(parts.flatMap((p) => p.entities)));
   const claims = dedupe(parts.flatMap((p) => p.claims));
   const questions = dedupe(parts.flatMap((p) => p.questions));
   return { entities, claims, questions };
+}
+
+/**
+ * Drop generic-noise entity strings the LLM emits despite the prompt.
+ *
+ * Defense-in-depth post-extraction filter: the prompt asks the model to skip
+ * these patterns, but the model partially ignores it. Three small predicates
+ * run per entity; any match drops the entity. Pure and synchronous.
+ *
+ * Trade-off: single capitalized abstract nouns like "Distributed" are NOT
+ * filtered here because that risks dropping legitimate proper nouns
+ * ("Hermes", "Nemotron"). The prompt sharpening handles those instead.
+ */
+export function filterNoiseEntities(entities: string[]): string[] {
+  return entities.filter((e) => !isNoiseEntity(e));
+}
+
+function isNoiseEntity(entity: string): boolean {
+  return (
+    isBareLowercaseToken(entity) ||
+    isShortCodeIdentifier(entity) ||
+    isGenericTwoWordPhrase(entity)
+  );
+}
+
+// Predicate (a): single token, all-lowercase letters only. Filters bare
+// common words like "structure", "wrappers", "haiku". Capitalized variants
+// ("Haiku", "Drive") and uppercase tokens ("POSIX") pass through unchanged.
+function isBareLowercaseToken(entity: string): boolean {
+  if (entity.includes(" ")) return false;
+  return /^[a-z]+$/.test(entity);
+}
+
+// Predicate (b): single token containing _ or -, no spaces, length < 30.
+// Filters code-shaped identifiers like "connection_builder" and "npm-db".
+// Long hyphenated names like model IDs (e.g. length 38) pass through.
+function isShortCodeIdentifier(entity: string): boolean {
+  if (entity.includes(" ")) return false;
+  if (entity.length >= 30) return false;
+  return /[_-]/.test(entity);
+}
+
+// Predicate (c): two tokens both matching ^[A-Z][a-z]+$. Filters generic
+// UI/design phrases like "Container Dark" and "Elegant Technical" while
+// keeping mixed-case second words ("Illumina MiSeq") and uppercase tokens
+// ("Drive API") that fail the all-lowercase-tail constraint.
+function isGenericTwoWordPhrase(entity: string): boolean {
+  return /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(entity);
 }
 
 function dedupeCaseInsensitive(values: string[]): string[] {
