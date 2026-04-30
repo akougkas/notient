@@ -50,12 +50,28 @@ export interface SearchVectorInput {
   ef?: number;
 }
 
+/**
+ * Open an authenticated SurrealDB session that survives WebSocket reconnects.
+ *
+ * The credentials are passed via `connect`'s `authentication` option rather
+ * than a one-shot `signin()` call so the SDK's auto-renewal pipeline owns
+ * the auth lifecycle: on disconnect the SDK cancels the renewal timer and
+ * wipes session state, on reconnect it re-applies the auth provider, and
+ * before token expiration it re-signs proactively. A standalone `signin()`
+ * call locks the session to the initial token; after a transient
+ * disconnect the reconnected socket is anonymous and every subsequent
+ * query fails with "Anonymous access not allowed". Long-running Tier 2/3
+ * indexer paths and idle CLI subscriptions both surface that failure mode
+ * in production, so the auth provider form is the only acceptable shape.
+ */
 export async function connect(options: ConnectOptions): Promise<SurrealConnection> {
   const db = new SurrealClass();
   try {
-    await db.connect(options.url);
-    await db.signin({ username: options.user, password: options.pass });
-    await db.use({ namespace: options.namespace, database: options.database });
+    await db.connect(options.url, {
+      namespace: options.namespace,
+      database: options.database,
+      authentication: { username: options.user, password: options.pass },
+    });
   } catch (error) {
     try {
       await db.close();
