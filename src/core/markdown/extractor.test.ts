@@ -165,3 +165,48 @@ describe("frontmatter tags", () => {
     expect(aIndex).toBeLessThan(bIndex);
   });
 });
+
+describe("frontmatter wikilink enumeration", () => {
+  test("recursive walker captures every wikilink under nested notient.* keys", () => {
+    const source = [
+      "---",
+      "notient:",
+      "  related:",
+      '    - "[[a]]"',
+      "  supports:",
+      '    - "[[b]]"',
+      "  contradicts:",
+      '    - "[[c]]"',
+      "  extends:",
+      '    - "[[d]]"',
+      "  exemplifies:",
+      '    - "[[e]]"',
+      "  synthesizes:",
+      '    - "[[f]]"',
+      '  author: "Anthony"',
+      "---",
+      "",
+      "body.",
+      "",
+    ].join("\n");
+    const result = extractFromSource(source);
+    expect(result.frontmatterRefs).toHaveLength(6);
+    const pairs = result.frontmatterRefs
+      .map((ref) => `${ref.key}::${ref.rawTarget}`)
+      .sort();
+    expect(pairs).toEqual(
+      [
+        "notient.contradicts::c",
+        "notient.exemplifies::e",
+        "notient.extends::d",
+        "notient.related::a",
+        "notient.supports::b",
+        "notient.synthesizes::f",
+      ].sort(),
+    );
+    const authorRef = result.frontmatterRefs.find(
+      (ref) => ref.key === "notient.author",
+    );
+    expect(authorRef).toBeUndefined();
+  });
+});
