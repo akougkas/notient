@@ -44,6 +44,7 @@ import {
   type AwakenWorkerVaultFacade,
   runAwakenWorker,
 } from "../../core/awaken/awakenWorker";
+import { AwakenBackgroundRegistry } from "../../core/awaken/backgroundRegistry";
 import { applySchema } from "../../core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -262,6 +263,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       bus: secondBus,
       indexer: secondIndexerQueue as unknown as IndexerQueue,
       vault: secondVault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal: connection,
     });
     const resumeResult = await resumeHandler();

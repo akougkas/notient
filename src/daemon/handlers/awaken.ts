@@ -8,6 +8,7 @@ import {
   updateStatus,
 } from "../../core/awaken/awakenRun";
 import { runAwakenWorker } from "../../core/awaken/awakenWorker";
+import type { BackgroundRegistry } from "../../core/awaken/backgroundRegistry";
 import { type SurrealConnection, clearTierAtByPath } from "../../core/db/surreal";
 import type { EventBus } from "../../core/events/eventBus";
 import type { IndexerQueue } from "../../core/indexer/indexerQueue";
@@ -39,6 +40,17 @@ export interface AwakenHandlerDeps {
    * fails fast when the field is absent.
    */
   surreal?: SurrealConnection;
+  /**
+   * Process-wide registry of in-flight background workers. The handler
+   * registers every fire-and-forget worker promise here so the daemon's
+   * shutdown path can await pending workers within a bounded grace
+   * window. Workers that exceed the window are flipped to
+   * `status='failed'` with `failure_reason='daemon_shutdown'` by the
+   * shutdown step. Every consumer of `kickOffBackgroundWorker` must
+   * supply a registry; the handler does not fall back to a process-wide
+   * Set because the daemon's shutdown path needs a single shared hook.
+   */
+  awakenBackgroundRegistry: BackgroundRegistry;
 }
 
 /**
@@ -111,20 +123,6 @@ async function preCreateNoteRows(
     await prepareNoteRow(surreal.db, { path, sha, wordCount });
   }
 }
-
-/**
- * Background runs share a process-wide registry so the daemon shutdown
- * path could in principle await pending workers. Today the registry is
- * unused beyond preventing the unhandled-rejection warning that would
- * fire if a kicked-off worker threw. The Set is keyed by the in-flight
- * promise itself; entries delete themselves in the `.finally` of the
- * worker invocation. If the daemon process exits while a background run
- * is in flight, the SurrealDB live-query subscription terminates and
- * the worker's loop unwinds (with the row left at `running` until the
- * next daemon boot — `findCurrent` will surface it for a future
- * `--resume`).
- */
-const backgroundRuns = new Set<Promise<unknown>>();
 
 export function makeAwakenHandler(deps: AwakenHandlerDeps) {
   return async (
@@ -239,7 +237,9 @@ function kickOffBackgroundWorker(dispatch: BackgroundWorkerDispatch): void {
   // The worker drives the loop asynchronously. We do NOT await the
   // promise; the RPC reply already returned the runId. A throw inside
   // the worker is funneled to `indexer:error` so the daemon never
-  // crashes from a background run.
+  // crashes from a background run. The registry tracks the wrapped
+  // promise so the daemon's shutdown path can race it against a bounded
+  // grace window before flipping orphans to `failed`.
   const promise = runAwakenWorker({
     db: dispatch.surreal.db,
     vaultFacade: dispatch.vaultFacade,
@@ -249,19 +249,15 @@ function kickOffBackgroundWorker(dispatch: BackgroundWorkerDispatch): void {
     resume: dispatch.resume,
     bus: dispatch.deps.bus,
     existingRunId: dispatch.runId,
-  })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      dispatch.deps.bus.emit({
-        type: "indexer:error",
-        message,
-        phase: "awaken-background",
-      });
-    })
-    .finally(() => {
-      backgroundRuns.delete(promise);
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    dispatch.deps.bus.emit({
+      type: "indexer:error",
+      message,
+      phase: "awaken-background",
     });
-  backgroundRuns.add(promise);
+  });
+  dispatch.deps.awakenBackgroundRegistry.track(promise);
 }
 
 /**

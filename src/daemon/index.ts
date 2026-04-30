@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { type Socket, createServer } from "node:net";
 import { dirname } from "node:path";
+import { awaitBackgroundWorkers } from "./awaitBackgroundWorkers";
 import { bootstrap } from "./bootstrap";
 import { CoordinatorRunner } from "./coordinatorRunner";
 import { makeAgentAskHandler } from "./handlers/agentAsk";
@@ -24,6 +25,14 @@ import { VaultWatcher } from "./watcher";
 
 const VERSION = "0.1.0-phaseA";
 const DEFAULT_IDLE_HOURS = 4;
+/**
+ * Maximum time the shutdown sequence waits for in-flight `awaken
+ * --background` workers to settle. Workers that exceed the window are
+ * flipped from `running` to `failed` with `failure_reason='daemon_shutdown'`
+ * so the next boot does not need an operator-driven `awaken --resume`.
+ * Not configurable yet; the spec pins the default at 30s.
+ */
+const BACKGROUND_WORKER_GRACE_MS = 30_000;
 
 interface DaemonArgs {
   vaultPath: string;
@@ -137,12 +146,14 @@ async function main(argv: string[]): Promise<void> {
   let bridgeUp = false;
 
   const surrealForHandlers = kernel.has("surrealDb") ? kernel.get("surrealDb") : undefined;
+  const awakenBackgroundRegistry = kernel.get("awakenBackgroundRegistry");
   dispatcher.register(
     "awaken.run",
     makeAwakenHandler({
       bus: kernel.get("bus"),
       indexer,
       vault: kernel.get("vault"),
+      awakenBackgroundRegistry,
       ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
     }),
   );
@@ -152,6 +163,7 @@ async function main(argv: string[]): Promise<void> {
       bus: kernel.get("bus"),
       indexer,
       vault: kernel.get("vault"),
+      awakenBackgroundRegistry,
       ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
     }),
   );
@@ -161,6 +173,7 @@ async function main(argv: string[]): Promise<void> {
       bus: kernel.get("bus"),
       indexer,
       vault: kernel.get("vault"),
+      awakenBackgroundRegistry,
       ...(surrealForHandlers !== undefined ? { surreal: surrealForHandlers } : {}),
     }),
   );
@@ -295,6 +308,38 @@ async function main(argv: string[]): Promise<void> {
     for (const socket of sockets) socket.end();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(socketPath, { force: true }).catch(() => {});
+    // Await any in-flight `awaken --background` workers within a bounded
+    // grace window. Workers that exceed the window are flipped from
+    // `running` to `failed` with `failure_reason='daemon_shutdown'` so
+    // the next boot does not need an operator-driven `awaken --resume`.
+    // The step runs after the socket file is removed (no new clients) but
+    // before `closeBootstrap()` (which closes the SurrealDB SDK
+    // connection) so the orphan-flip UPDATE has a live transport. The
+    // try/catch keeps any registry/transport failure from preventing
+    // exit.
+    if (kernel.has("surrealDb")) {
+      try {
+        const summary = await awaitBackgroundWorkers({
+          registry: awakenBackgroundRegistry,
+          db: kernel.get("surrealDb").db,
+          graceMs: BACKGROUND_WORKER_GRACE_MS,
+        });
+        process.stderr.write(
+          `${JSON.stringify({
+            type: "daemon:awaken_workers_drained",
+            completed: summary.completed,
+            orphaned: summary.orphaned,
+          })}\n`,
+        );
+      } catch (error) {
+        process.stderr.write(
+          `${JSON.stringify({
+            type: "daemon:awaken_workers_drain_failed",
+            message: error instanceof Error ? error.message : String(error),
+          })}\n`,
+        );
+      }
+    }
     coordinatorRunner.disarm();
     await watcher.stop();
     await closeBootstrap();

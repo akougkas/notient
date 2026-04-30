@@ -50,6 +50,14 @@ export interface AwakenRunRow {
   priority_globs: string[];
   cursor: string | null;
   error: string | null;
+  /**
+   * Reason a terminal `failed` status was set. Populated by the daemon
+   * shutdown path with `'daemon_shutdown'` when the awaken worker did
+   * not settle within the grace window. Other failure paths (worker
+   * exception, embedding model unreachable) leave this null and write
+   * the human-readable error to `error`. Schema: option<string>.
+   */
+  failure_reason: string | null;
 }
 
 export interface CreateRunInput {
@@ -63,6 +71,14 @@ export interface UpdateStatusExtra {
   failed?: number;
   cursor?: string | null;
   error?: string | null;
+  /**
+   * Optional `failure_reason` payload. Mirrors `error`'s contract:
+   * `undefined` leaves the field untouched, an explicit `null` clears
+   * it via NONE, a string sets it. The daemon shutdown path bypasses
+   * this DAL because it filters by status across all rows, but tests
+   * and any future per-row caller can route through `updateStatus`.
+   */
+  failureReason?: string | null;
 }
 
 export interface StatusSubscription {
@@ -81,6 +97,7 @@ interface AwakenRunRecordRow {
   priority_globs: string[];
   cursor: string | null | undefined;
   error: string | null | undefined;
+  failure_reason: string | null | undefined;
 }
 
 export async function createRun(
@@ -110,7 +127,7 @@ export async function createRun(
 
 export async function findCurrent(db: Surreal): Promise<AwakenRunRow | null> {
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error FROM awaken_run WHERE status INSIDE ['running','paused'] ORDER BY started_at DESC LIMIT 1;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE status INSIDE ['running','paused'] ORDER BY started_at DESC LIMIT 1;";
   const [rows] = await db.query<[AwakenRunRecordRow[]]>(sql).collect<[AwakenRunRecordRow[]]>();
   const row = rows[0];
   return row === undefined ? null : mapRow(row);
@@ -118,7 +135,7 @@ export async function findCurrent(db: Surreal): Promise<AwakenRunRow | null> {
 
 export async function findLatestResumable(db: Surreal): Promise<AwakenRunRow | null> {
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error FROM awaken_run WHERE status INSIDE ['paused','failed'] ORDER BY started_at DESC LIMIT 1;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE status INSIDE ['paused','failed'] ORDER BY started_at DESC LIMIT 1;";
   const [rows] = await db.query<[AwakenRunRecordRow[]]>(sql).collect<[AwakenRunRecordRow[]]>();
   const row = rows[0];
   return row === undefined ? null : mapRow(row);
@@ -134,7 +151,7 @@ export async function findById(
   // status, so they would hide the row in exactly the state the caller
   // wants to surface (`completed` / `cancelled` / `failed`).
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error FROM awaken_run WHERE id = $id;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE id = $id;";
   const [rows] = await db
     .query<[AwakenRunRecordRow[]]>(sql, { id: runId })
     .collect<[AwakenRunRecordRow[]]>();
@@ -158,6 +175,7 @@ export async function updateStatus(
     appendCounter(setClauses, bindings, "failed", extra.failed);
     appendOptionString(setClauses, bindings, "cursor", extra.cursor);
     appendOptionString(setClauses, bindings, "error", extra.error);
+    appendOptionString(setClauses, bindings, "failure_reason", extra.failureReason);
   }
   const sql = `UPDATE $id SET ${setClauses.join(", ")};`;
   await db.query(sql, bindings).collect();
@@ -180,7 +198,7 @@ function appendCounter(
 function appendOptionString(
   setClauses: string[],
   bindings: Record<string, unknown>,
-  field: "cursor" | "error",
+  field: "cursor" | "error" | "failure_reason",
   value: string | null | undefined,
 ): void {
   // option<string>: explicit null clears the field via NONE; a string value
@@ -250,6 +268,7 @@ function mapRow(row: AwakenRunRecordRow): AwakenRunRow {
     priority_globs: row.priority_globs,
     cursor: row.cursor ?? null,
     error: row.error ?? null,
+    failure_reason: row.failure_reason ?? null,
   };
 }
 

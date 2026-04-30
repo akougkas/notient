@@ -7,6 +7,7 @@ import { probeVisionRoute } from "../agent/visionProbe";
 import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
 import { ApprovalService } from "../core/approvals/approvalService";
+import { AwakenBackgroundRegistry } from "../core/awaken/backgroundRegistry";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
 import { ContextManager } from "../core/chat/contextManager";
@@ -259,6 +260,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   );
   const sessionGrants = new SessionGrants({ db: surrealConnection.db });
   kernel.register("sessionGrants", sessionGrants);
+  kernel.register("awakenBackgroundRegistry", new AwakenBackgroundRegistry());
   kernel.register("surrealDb", surrealConnection);
   kernel.register("vaultConfig", vaultConfig);
 

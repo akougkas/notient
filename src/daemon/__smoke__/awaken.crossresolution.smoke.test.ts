@@ -25,6 +25,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FsVault } from "../../adapters/fsVault";
+import { AwakenBackgroundRegistry } from "../../core/awaken/backgroundRegistry";
 import { applySchema } from "../../core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
@@ -206,6 +207,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
       bus,
       indexer,
       vault,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal: connection,
     });
     const result = await handler({ tier: [1] }, () => {}, "smoke-1");

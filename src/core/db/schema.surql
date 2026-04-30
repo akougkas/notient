@@ -172,6 +172,7 @@ DEFINE FIELD OVERWRITE tier_filter ON awaken_run TYPE array<int> DEFAULT [1,2,3]
 DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
+DEFINE FIELD OVERWRITE failure_reason ON awaken_run TYPE option<string>;
 
 -- Phase D1 ledger of swarm discoveries surfaced through `notient events
 -- --since <cursor>`. The `seq` field is the wire cursor: the producer assigns

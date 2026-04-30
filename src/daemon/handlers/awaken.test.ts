@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { RecordId, type Surreal, Table } from "surrealdb";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import { AwakenBackgroundRegistry } from "../../core/awaken/backgroundRegistry";
 import type { SurrealConnection } from "../../core/db/surreal";
 import { EventBus } from "../../core/events/eventBus";
 import type { IndexerQueue } from "../../core/indexer/indexerQueue";
@@ -232,6 +233,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     const result = await handler(
@@ -269,6 +271,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     await handler({ since: 3000 }, () => {}, "req-1");
@@ -287,6 +290,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     const result = await handler({ tier: [2] }, () => {}, "req-1");
@@ -306,6 +310,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     await handler({ tier: [1, 2, 3] }, () => {}, "req-1");
@@ -321,6 +326,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     const result = await handler({ tier: ["abc", 0, 5] }, () => {}, "req-1");
@@ -358,6 +364,7 @@ describe("awaken handler", () => {
       bus,
       indexer: slowQueue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     const startedAt = Date.now();
@@ -387,6 +394,7 @@ describe("awaken handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
     });
     let caught: unknown;
     try {
@@ -453,6 +461,7 @@ describe("awaken resume handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     let caught: unknown;
@@ -473,6 +482,7 @@ describe("awaken resume handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
     });
     let caught: unknown;
     try {
@@ -496,6 +506,7 @@ describe("awaken resume handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
 
@@ -527,6 +538,7 @@ describe("reindex handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
     });
     await handler({ pattern: "notes/*.md" }, () => {}, "req-1");
     expect(queue.enqueued.sort()).toEqual(["notes/a.md", "notes/b.md"]);
@@ -544,6 +556,7 @@ describe("reindex handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     await handler({ pattern: "notes/*.md", tier: [2] }, () => {}, "req-1");
@@ -571,6 +584,7 @@ describe("reindex handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     await handler({ pattern: "notes/*.md", tier: [2, 3] }, () => {}, "req-1");
@@ -591,6 +605,7 @@ describe("reindex handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal,
     });
     const result = await handler({ pattern: "notes/*.md", tier: ["abc"] }, () => {}, "req-1");
@@ -617,6 +632,7 @@ describe("reindex handler", () => {
       bus,
       indexer: queue as unknown as IndexerQueue,
       vault: vault as VaultAdapter,
+      awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
     });
     await handler({ pattern: "notes/*.md", tier: [2] }, () => {}, "req-1");
     expect(queue.records[0]?.tierFilter).toEqual([2]);

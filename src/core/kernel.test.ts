@@ -13,6 +13,7 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "probeCache",
   "agentEventStore",
   "sessionGrants",
+  "awakenBackgroundRegistry",
   "indexer",
   "embedder",
   "extractor",

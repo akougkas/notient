@@ -1,5 +1,6 @@
 import type { VaultAdapter } from "../adapters/vaultAdapter";
 import type { ApprovalService } from "./approvals/approvalService";
+import type { BackgroundRegistry } from "./awaken/backgroundRegistry";
 import type { ApprovalGate } from "./chat/approvalGate";
 import type { ChatService } from "./chat/chatService";
 import type { ContextManager } from "./chat/contextManager";
@@ -43,6 +44,15 @@ export interface ServiceRegistry {
   probeCache: ProbeCache;
   agentEventStore: AgentEventStore;
   sessionGrants: SessionGrants;
+  /**
+   * Process-wide registry of in-flight `awaken --background` workers.
+   * The daemon's shutdown path reads this registry to await pending
+   * workers within a bounded grace window before flipping any rows that
+   * remained `running` to `failed` with `failure_reason='daemon_shutdown'`.
+   * Bootstrap registers the concrete instance during Phase A so the
+   * registry is available before the awaken handlers wire up.
+   */
+  awakenBackgroundRegistry: BackgroundRegistry;
   indexer: IndexerQueue;
   embedder: Embedder;
   extractor: Extractor;
@@ -115,6 +125,7 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "probeCache",
   "agentEventStore",
   "sessionGrants",
+  "awakenBackgroundRegistry",
   "indexer",
   "embedder",
   "extractor",
@@ -150,6 +161,7 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "probeCache",
   "agentEventStore",
   "sessionGrants",
+  "awakenBackgroundRegistry",
 ];
 
 const PHASE_B_KEYS: ServiceKey[] = [
