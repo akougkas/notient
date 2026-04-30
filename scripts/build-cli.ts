@@ -36,9 +36,3 @@ async function bundle(entry: string, finalName: string): Promise<void> {
 await rm(DIST, { recursive: true, force: true });
 await bundle("src/cli/index.ts", "notient.js");
 await bundle("src/daemon/index.ts", "daemon.js");
-
-// Copy sql.js's wasm sidecar so the database can boot from the bundled CLI.
-const sqlSource = "node_modules/sql.js/dist/sql-wasm.wasm";
-const sqlTarget = join(DIST, "sql-wasm.wasm");
-await Bun.write(sqlTarget, Bun.file(sqlSource));
-console.log(`build-cli: copied ${sqlSource} -> ${sqlTarget}`);
