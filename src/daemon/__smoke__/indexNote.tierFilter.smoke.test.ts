@@ -314,6 +314,76 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
     expect(state.tier3Done).toBe(true);
   });
 
+  test("[E] body sha drift forces a full re-run of all three tiers", async () => {
+    // M2: a watcher edit lands new bytes on disk while the previously
+    // indexed `note` row still carries the old `sha` and stamped
+    // `tier{1,2,3}_at`. Without the sha-drift gate `indexNote` would
+    // short-circuit (chunkCount=0, no events) and search would keep the
+    // pre-edit chunks. With the gate the orchestrator clears all three
+    // stamps and runs Tier 1 → Tier 2 → Tier 3 against the new body.
+    await clearAllNoteTables(connection);
+    const bus = new EventBus();
+
+    // Seed: full pass with the original body so all three tiers stamp.
+    await indexNote({
+      notePath,
+      noteBody: noteSource,
+      embedder: makeEmbedder(),
+      extractor: makeExtractor(),
+      bus,
+      surrealDb: connection,
+      linker: makeLinker(connection),
+    });
+
+    const noteId = await lookupNoteByPath(connection.db, notePath);
+    expect(noteId).not.toBeNull();
+    if (noteId === null) return;
+
+    const chunksBefore = await countWhereNote(connection, "chunk", noteId);
+    expect(chunksBefore).toBeGreaterThan(0);
+
+    const stateBefore = await fetchNoteTierState(connection.db, notePath);
+    expect(stateBefore.tier1Done).toBe(true);
+    expect(stateBefore.tier2Done).toBe(true);
+    expect(stateBefore.tier3Done).toBe(true);
+
+    // Mutate the body so the recomputed sha drifts from the seeded one.
+    const editedSource = `${noteSource}\n\n## Watcher addition\n\nA freshly typed paragraph that did not exist in the seed pass.\n`;
+
+    let tier1DoneSeen = 0;
+    let tier2DoneSeen = 0;
+    let tier3DoneSeen = 0;
+    bus.on("indexer:tier1-done", () => {
+      tier1DoneSeen += 1;
+    });
+    bus.on("indexer:tier2-done", () => {
+      tier2DoneSeen += 1;
+    });
+    bus.on("indexer:tier3-done", () => {
+      tier3DoneSeen += 1;
+    });
+
+    const result = await indexNote({
+      notePath,
+      noteBody: editedSource,
+      embedder: makeEmbedder(),
+      extractor: makeExtractor(),
+      bus,
+      surrealDb: connection,
+      linker: makeLinker(connection),
+    });
+
+    expect(tier1DoneSeen).toBe(1);
+    expect(tier2DoneSeen).toBe(1);
+    expect(tier3DoneSeen).toBe(1);
+    expect(result.chunkCount).toBeGreaterThan(0);
+
+    const stateAfter = await fetchNoteTierState(connection.db, notePath);
+    expect(stateAfter.tier1Done).toBe(true);
+    expect(stateAfter.tier2Done).toBe(true);
+    expect(stateAfter.tier3Done).toBe(true);
+  });
+
   test("[D] all tiers stamped + default filter is a no-op", async () => {
     await clearAllNoteTables(connection);
     const bus = new EventBus();

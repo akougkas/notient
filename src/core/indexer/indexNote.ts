@@ -2,7 +2,9 @@ import type { RecordId } from "surrealdb";
 import type { Linker } from "../agents/linker";
 import {
   type SurrealConnection,
+  clearTierAtByPath,
   fetchChunksForTier3,
+  fetchNoteShaByPath,
   fetchNoteTierState,
   listNotePaths,
   lookupNoteByPath,
@@ -137,7 +139,20 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   // already stamped and skipped here. Tiers above `maxRequested` never
   // run regardless of their state.
   const upperBound = maxRequestedTier(tierFilter);
-  const tierState = await fetchNoteTierState(surrealDb.db, notePath);
+  const fetchedTierState = await fetchNoteTierState(surrealDb.db, notePath);
+  // M2: when the on-disk body sha drifts from the previously indexed sha,
+  // a watcher-driven edit landed but the existing `tier{N}_at` stamps still
+  // reflect the pre-edit content. Clear all three stamps and treat every
+  // tier as un-run so the new body flows through Tier 1 → Tier 2 → Tier 3
+  // regardless of the caller's filter staying within `[1..upperBound]`.
+  const storedSha = await fetchNoteShaByPath(surrealDb.db, notePath);
+  const shaDrifted = storedSha !== null && storedSha !== sha;
+  if (shaDrifted) {
+    await clearTierAtByPath(surrealDb.db, notePath, [1, 2, 3]);
+  }
+  const tierState = shaDrifted
+    ? { tier1Done: false, tier2Done: false, tier3Done: false }
+    : fetchedTierState;
   const runTier1Wanted = upperBound >= 1 && !tierState.tier1Done;
   const runTier2Wanted = upperBound >= 2 && !tierState.tier2Done;
   const runTier3Wanted = upperBound >= 3 && !tierState.tier3Done;

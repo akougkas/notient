@@ -653,6 +653,29 @@ export interface NoteTierState {
 }
 
 /**
+ * Return the stored `sha` for the `note` row at `path`, or `null` when no
+ * row exists. Used by `indexNote` to detect a watcher-edit drift between
+ * the on-disk body sha and the previously indexed sha so the orchestrator
+ * can force a full re-run of every tier instead of short-circuiting on
+ * stale `tier{N}_at` stamps.
+ *
+ * Spec: M2 watcher-driven edits flow into search. Mirrors
+ * `fetchNoteTierState` in shape so the indexer can fetch tier state and
+ * the prior sha from the same row in two adjacent calls.
+ */
+export async function fetchNoteShaByPath(db: Surreal, path: string): Promise<string | null> {
+  const [rows] = await db
+    .query<[Array<{ sha: string | null | undefined }>]>(
+      "SELECT sha FROM note WHERE path = $path LIMIT 1;",
+      { path },
+    )
+    .collect<[Array<{ sha: string | null | undefined }>]>();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return row.sha ?? null;
+}
+
+/**
  * Read the per-tier completion state for the note at `path`. Missing
  * notes (no row in `note`) return all-false so a fresh note runs every
  * tier the caller's filter allows.
