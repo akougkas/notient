@@ -166,6 +166,18 @@ describe("frontmatter tags", () => {
   });
 });
 
+describe("heading-less notes", () => {
+  test("note without any heading produces a single preamble block carrying all text", () => {
+    const source = "This is a reference letter.\n\nIt has multiple paragraphs but no headings.\n";
+    const result = extractFromSource(source);
+    expect(result.blocks.length).toBe(1);
+    expect(result.blocks[0].headingLevel).toBeNull();
+    expect(result.blocks[0].text).toContain("reference letter");
+    expect(result.blocks[0].text).toContain("no headings");
+    expect(result.wordCount).toBeGreaterThan(0);
+  });
+});
+
 describe("frontmatter wikilink enumeration", () => {
   test("recursive walker captures every wikilink under nested notient.* keys", () => {
     const source = [

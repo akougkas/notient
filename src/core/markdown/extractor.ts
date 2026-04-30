@@ -259,6 +259,31 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
   const headingStack: HeadingFrame[] = [];
   let openHeadingBlock: OpenBlock | null = null;
 
+  // A note that opens with body content before any H1/H2/H3 (or has no
+  // heading at all) would otherwise drop every paragraph because
+  // `appendText(null, ...)` is a no-op. Lazily synthesize a preamble block
+  // the first time content needs a home so the same close/flush contract
+  // that governs heading blocks applies to it too.
+  function ensureOpenBlock(node: Node): OpenBlock {
+    if (openHeadingBlock !== null) {
+      return openHeadingBlock;
+    }
+    const startLine = nodeStartLine(node);
+    const spec: BlockSpec = {
+      blockId: null,
+      headingLevel: null,
+      headingPath: [],
+      headingSlug: null,
+      ord: blocks.length,
+      startLine,
+      endLine: startLine,
+      text: "",
+    };
+    blocks.push(spec);
+    openHeadingBlock = { spec, textParts: [] };
+    return openHeadingBlock;
+  }
+
   function makeOpenHeadingBlock(node: Heading, level: 1 | 2 | 3): OpenBlock {
     const headingText = mdastToString(node);
     const ord = blocks.length;
@@ -342,10 +367,11 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
           collectInlineSignals(item as ListItem, standalone.spec.ord, wikilinks, tags, headingStack);
         } else {
           const itemText = mdastToString(item);
-          appendText(openHeadingBlock, itemText, nodeEndLine(item));
+          const target = ensureOpenBlock(item);
+          appendText(target, itemText, nodeEndLine(item));
           collectInlineSignals(
             item as ListItem,
-            openHeadingBlock?.spec.ord ?? null,
+            target.spec.ord,
             wikilinks,
             tags,
             headingStack,
@@ -363,10 +389,11 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
         continue;
       }
       const text = mdastToString(child);
-      appendText(openHeadingBlock, text, nodeEndLine(child));
+      const target = ensureOpenBlock(child);
+      appendText(target, text, nodeEndLine(child));
       collectInlineSignals(
         child,
-        openHeadingBlock?.spec.ord ?? null,
+        target.spec.ord,
         wikilinks,
         tags,
         headingStack,
@@ -375,10 +402,11 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
     }
 
     const generic = mdastToString(child);
-    appendText(openHeadingBlock, generic, nodeEndLine(child));
+    const target = ensureOpenBlock(child);
+    appendText(target, generic, nodeEndLine(child));
     collectInlineSignals(
       child,
-      openHeadingBlock?.spec.ord ?? null,
+      target.spec.ord,
       wikilinks,
       tags,
       headingStack,
