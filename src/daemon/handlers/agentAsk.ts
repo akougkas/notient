@@ -159,6 +159,7 @@ interface DrainedTurn {
   finalContent: string;
   loopError: string | null;
   unauthorizedTool: string | null;
+  seenPaths: Set<string>;
 }
 
 async function drainAskEvents(
@@ -167,6 +168,10 @@ async function drainAskEvents(
 ): Promise<DrainedTurn> {
   const toolCalls: AgentAskToolCallSummary[] = [];
   const callStartTimes = new Map<string, number>();
+  // Map call id -> tool name + args so we can interpret the matching result.
+  // The model picks both, and we only see the name on the loop:tool-call event.
+  const callMetadata = new Map<string, { name: string; args: unknown }>();
+  const seenPaths = new Set<string>();
   let finalContent = "";
   let loopError: string | null = null;
   let unauthorizedTool: string | null = null;
@@ -179,11 +184,13 @@ async function drainAskEvents(
         continue;
       }
       callStartTimes.set(event.call.id, Date.now());
+      callMetadata.set(event.call.id, { name: event.call.name, args: event.call.args });
       toolCalls.push({ name: event.call.name, args: event.call.args, durationMs: 0 });
       continue;
     }
     if (event.type === "loop:tool-result") {
       finalizeToolCallDuration(toolCalls, callStartTimes, event.result.callId);
+      handleToolResultPaths(event.result, callMetadata, seenPaths);
       continue;
     }
     if (event.type === "loop:done") {
@@ -195,7 +202,76 @@ async function drainAskEvents(
     }
   }
 
-  return { toolCalls, finalContent, loopError, unauthorizedTool };
+  return { toolCalls, finalContent, loopError, unauthorizedTool, seenPaths };
+}
+
+function handleToolResultPaths(
+  result: import("../../core/chat/types").ToolResult,
+  callMetadata: Map<string, { name: string; args: unknown }>,
+  seenPaths: Set<string>,
+): void {
+  const metadata = callMetadata.get(result.callId);
+  callMetadata.delete(result.callId);
+  if (!metadata || result.status !== "ok") return;
+  collectSeenPaths(metadata.name, metadata.args, result.data, seenPaths);
+}
+
+/**
+ * Records every vault path that the agent legitimately observed via a
+ * successful tool call. The handler later filters model-emitted citations
+ * against this set so a hallucinated "looks like a path" citation cannot
+ * leak into the response.
+ *
+ * The extraction is best-effort and per-tool: shapes that don't match are
+ * silently skipped so a malformed tool result never crashes the turn.
+ *
+ * proposals.*, graph.*, and agents.* are intentionally absent; they do not
+ * return note paths the model would cite. Extend this map if a future tool
+ * starts returning paths.
+ */
+function collectSeenPaths(
+  toolName: string,
+  args: unknown,
+  data: unknown,
+  seenPaths: Set<string>,
+): void {
+  const collector = SEEN_PATH_COLLECTORS[toolName];
+  if (collector) collector(args, data, seenPaths);
+}
+
+type SeenPathCollector = (args: unknown, data: unknown, seenPaths: Set<string>) => void;
+
+const SEEN_PATH_COLLECTORS: Record<string, SeenPathCollector> = {
+  "vault.search_notes": (_args, data, seenPaths) => {
+    const hits = isRecord(data) ? data.hits : undefined;
+    if (Array.isArray(hits)) addNotePathsFromArray(hits, seenPaths);
+  },
+  "vault.read_note": (args, data, seenPaths) => {
+    addNotePathFromRecord(args, seenPaths);
+    addNotePathFromRecord(data, seenPaths);
+  },
+  "vault.list_neighbors": (_args, data, seenPaths) => {
+    addNotePathFromRecord(data, seenPaths);
+    const neighbors = isRecord(data) ? data.neighbors : undefined;
+    if (Array.isArray(neighbors)) addNotePathsFromArray(neighbors, seenPaths);
+  },
+  "vault.get_vitals": (args, _data, seenPaths) => {
+    addNotePathFromRecord(args, seenPaths);
+  },
+};
+
+function addNotePathFromRecord(value: unknown, seenPaths: Set<string>): void {
+  if (!isRecord(value)) return;
+  const path = value.notePath;
+  if (typeof path === "string" && path.length > 0) seenPaths.add(path);
+}
+
+function addNotePathsFromArray(entries: unknown[], seenPaths: Set<string>): void {
+  for (const entry of entries) addNotePathFromRecord(entry, seenPaths);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function finalizeToolCallDuration(
@@ -225,10 +301,18 @@ function buildAskResponse(drained: DrainedTurn, startedAt: number): Record<strin
       durationMs,
     };
   }
+  // Filter out citations the agent could not have legitimately seen via a
+  // successful tool call this turn. A model that hallucinates "looks like a
+  // vault path" must not win. confidence is left untouched on purpose: the
+  // operator gets the prose answer, the tool-call trail, and an honest
+  // citations array, then decides what to trust.
+  const validatedCitations = parsedShape.citations.filter((citation) =>
+    drained.seenPaths.has(citation.path),
+  );
   return {
     ok: true,
     answer: parsedShape.answer,
-    citations: parsedShape.citations,
+    citations: validatedCitations,
     openQuestions: parsedShape.openQuestions,
     confidence: parsedShape.confidence,
     toolCalls: drained.toolCalls,

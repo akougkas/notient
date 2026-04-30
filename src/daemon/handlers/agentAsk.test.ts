@@ -112,11 +112,13 @@ function makeWriteOnlyNotesCreateTool(
   };
 }
 
-function buildRegistry(): ToolRegistry {
+function buildRegistry(
+  searchInvoke: (args: unknown, signal: AbortSignal) => Promise<unknown> = async () => ({
+    hits: [{ notePath: "a.md", score: 0.9, snippet: "auth body" }],
+  }),
+): ToolRegistry {
   const registry = new ToolRegistry();
-  registry.register(
-    makeReadOnlyVaultSearchTool(async () => ({ hits: [{ path: "a.md", score: 0.9 }] })),
-  );
+  registry.register(makeReadOnlyVaultSearchTool(searchInvoke));
   registry.register(
     makeWriteOnlyNotesCreateTool(async () => {
       throw new Error("write tools must never run during agent.ask");
@@ -152,7 +154,7 @@ describe("agent.ask handler", () => {
   test("happy path returns the parsed JSON shape with tool-call summaries", async () => {
     const structured = {
       answer: "Auth uses JWT bearer tokens with rotating refresh tokens.",
-      citations: [{ path: "Notient/auth.md", score: 0.91, snippet: "JWT-based auth" }],
+      citations: [{ path: "a.md", score: 0.91, snippet: "JWT-based auth" }],
       openQuestions: ["What is the refresh window?"],
       confidence: 0.82,
     };
@@ -187,6 +189,67 @@ describe("agent.ask handler", () => {
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("vault.search_notes");
     expect(typeof result.durationMs).toBe("number");
+  });
+
+  test("fabricated citations are filtered against seen tool-result paths", async () => {
+    const structured = {
+      answer: "There is one real reference and one made-up one.",
+      citations: [
+        { path: "real/found.md", score: 0.7, snippet: "real" },
+        { path: "fake/never_searched.md", score: 0.95, snippet: "made up" },
+      ],
+      openQuestions: [],
+      confidence: 0.6,
+    };
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [{ id: "tc1", name: "vault.search_notes", args: { query: "anything" } }],
+      },
+      { finalContent: JSON.stringify(structured) },
+    ]);
+
+    const handler = makeAgentAskHandler({
+      provider,
+      toolRegistry: buildRegistry(async () => ({
+        hits: [{ notePath: "real/found.md", score: 0.7, snippet: "..." }],
+      })),
+      approvalGate: makeNoopGate(),
+      toolModeCache: makeNativeCache(),
+      bus: new EventBus(),
+      settings: SETTINGS,
+    });
+
+    const result = await handler({ intent: "anything" }, () => {}, "req-fab", "claude-code");
+    const citations = result.citations as Array<{ path: string }>;
+    expect(citations).toHaveLength(1);
+    expect(citations[0].path).toBe("real/found.md");
+    expect(citations.some((entry) => entry.path === "fake/never_searched.md")).toBe(false);
+    // Confidence and answer are deliberately not mutated by the filter.
+    expect(result.answer).toBe(structured.answer);
+    expect(result.confidence).toBe(structured.confidence);
+  });
+
+  test("citations dropped when no tools were called", async () => {
+    const structured = {
+      answer: "Pure hallucination, no tools were ever run.",
+      citations: [{ path: "anything.md", score: 0.99, snippet: "..." }],
+      openQuestions: [],
+      confidence: 0.9,
+    };
+    const provider = new ScriptedProvider([{ finalContent: JSON.stringify(structured) }]);
+
+    const handler = makeAgentAskHandler({
+      provider,
+      toolRegistry: buildRegistry(),
+      approvalGate: makeNoopGate(),
+      toolModeCache: makeNativeCache(),
+      bus: new EventBus(),
+      settings: SETTINGS,
+    });
+
+    const result = await handler({ intent: "anything" }, () => {}, "req-no-tool", "claude-code");
+    expect(result.citations).toEqual([]);
+    expect(result.answer).toBe(structured.answer);
   });
 
   test("read-only enforcement rejects out-of-band write tool calls", async () => {
