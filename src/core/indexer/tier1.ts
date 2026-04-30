@@ -1,6 +1,7 @@
 import type { RecordId, Surreal } from "surrealdb";
 import { TIER1_EDGE_CLASS, TIER1_EDGE_TABLES } from "../db/edgeTables";
 import {
+  createNote,
   findRecentDaemonWrite,
   lookupBlockByExplicitId,
   lookupBlockByHeading,
@@ -410,6 +411,49 @@ function buildTier1Transaction(
   statements.push("COMMIT TRANSACTION;");
 
   return { sql: statements.join("\n"), bindings };
+}
+
+export interface PrepareNoteRowInput {
+  path: string;
+  sha: string;
+  wordCount: number;
+}
+
+/**
+ * Pre-create (or refresh) the bare `note` row for a given path so cross-note
+ * edge resolution inside `runTier1` can succeed on a single awaken pass.
+ *
+ * Bug fix context. `runTier1` resolves wikilink and frontmatter_ref targets
+ * by calling `lookupNoteByPath`. When a note is processed before its
+ * neighbour is known to the database, those lookups return null:
+ * wikilinks fall back to the recoverable `wikilink_unresolved` table, but
+ * frontmatter_refs are silently dropped. Pre-creating every note row
+ * before the per-note loop guarantees the lookups find a target. The
+ * pre-create writes only `path`, `sha`, and `word_count`; it never
+ * advances `tier1_at`/`tier2_at`/`tier3_at`, never deletes blocks, and
+ * never relates edges. Tier 1's existing transaction continues to own
+ * those mutations and will overwrite the placeholder `sha`/`word_count`
+ * with the freshly extracted values when it runs against the same path.
+ *
+ * Idempotent. Calling it twice with the same input is a no-op write of
+ * the same scalar fields. The caller orchestrates the two phases:
+ * `prepareNoteRow` first for every queued path, then the indexer drains
+ * its queue and `runTier1` walks the AST as before. `runTier1` does not
+ * call `prepareNoteRow` itself.
+ */
+export async function prepareNoteRow(db: Surreal, input: PrepareNoteRowInput): Promise<void> {
+  const existing = await lookupNoteByPath(db, input.path);
+  if (existing !== null) {
+    await db
+      .query("UPDATE $id SET sha = $sha, word_count = $wordCount;", {
+        id: existing,
+        sha: input.sha,
+        wordCount: input.wordCount,
+      })
+      .collect();
+    return;
+  }
+  await createNote(db, input);
 }
 
 export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Output> {
