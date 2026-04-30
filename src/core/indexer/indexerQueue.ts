@@ -135,6 +135,7 @@ export class IndexerQueue {
       } catch (error) {
         this.bus.emit({
           type: "indexer:error",
+          path,
           message: (error as Error).message ?? String(error),
         });
       }

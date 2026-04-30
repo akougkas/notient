@@ -172,6 +172,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
     } catch (error) {
       bus.emit({
         type: "indexer:error",
+        path: notePath,
         message: error instanceof Error ? error.message : String(error),
         phase: "tier1",
       });
@@ -195,6 +196,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
     } catch (error) {
       bus.emit({
         type: "indexer:error",
+        path: notePath,
         message: error instanceof Error ? error.message : String(error),
         phase: "tier2",
       });
@@ -222,6 +224,7 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
     } catch (error) {
       bus.emit({
         type: "indexer:error",
+        path: notePath,
         message: error instanceof Error ? error.message : String(error),
         phase: "tier3",
       });

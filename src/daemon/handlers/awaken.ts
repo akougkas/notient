@@ -265,6 +265,7 @@ function kickOffBackgroundWorker(dispatch: BackgroundWorkerDispatch): void {
     const message = error instanceof Error ? error.message : String(error);
     dispatch.deps.bus.emit({
       type: "indexer:error",
+      path: "",
       message,
       phase: "awaken-background",
     });

@@ -266,7 +266,10 @@ function sliceAfterCursor(paths: string[], cursor: string | null): string[] {
   return paths.slice(index + 1);
 }
 
-async function waitForNoteIndexed(options: AwakenWorkerOptions, notePath: string): Promise<void> {
+export async function waitForNoteIndexed(
+  options: AwakenWorkerOptions,
+  notePath: string,
+): Promise<void> {
   if (options.onNoteIndexed) {
     await options.onNoteIndexed(notePath);
     return;
@@ -307,10 +310,12 @@ async function waitForNoteIndexed(options: AwakenWorkerOptions, notePath: string
     });
     const offError = bus.on("indexer:error", (event) => {
       if (settled) return;
-      // The error event does not carry a path; we cannot scope it. The
-      // worker treats any unscoped error as terminating the wait so a
-      // single broken note never wedges the entire run. The caller's
-      // try/catch lifts this rejection into the `failed` counter.
+      // Scope the rejection to the currently-waited note. Errors for other
+      // paths (watcher-driven reindexes that race with the awaken cycle,
+      // or the awaken-background worker-level emit with an empty path) are
+      // intentionally ignored so the awaken counter reflects only the
+      // outcome of `notePath`.
+      if (event.path !== notePath) return;
       settled = true;
       offNoteIndexed();
       offTier3();

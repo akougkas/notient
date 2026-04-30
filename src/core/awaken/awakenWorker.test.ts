@@ -20,11 +20,13 @@ import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServ
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect } from "../db/surreal";
 import { findCurrent, updateStatus } from "./awakenRun";
+import { EventBus } from "../events/eventBus";
 import {
   type AwakenWorkerIndexerQueue,
   type AwakenWorkerVaultFacade,
   runAwakenWorker,
   sortByPriorityGlobs,
+  waitForNoteIndexed,
 } from "./awakenWorker";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -112,6 +114,62 @@ describe("awaken worker module shape", () => {
   test("module exports the public worker surface", () => {
     expect(typeof runAwakenWorker).toBe("function");
     expect(typeof sortByPriorityGlobs).toBe("function");
+  });
+});
+
+describe("waitForNoteIndexed listener scoping", () => {
+  // Regression: bug #4 / bug #5. Awaken concurrency with the watcher
+  // produced false `failed` increments because `indexer:error` events for
+  // unrelated paths terminated the currently-waited promise. The fix
+  // (carry `path` on every emit and filter the listener) means errors for
+  // other notes must be ignored here.
+  test("ignores indexer:error for a different note and resolves on note-indexed", async () => {
+    const bus = new EventBus();
+    const options = { bus } as unknown as Parameters<typeof waitForNoteIndexed>[0];
+    const pending = waitForNoteIndexed(options, "a.md");
+
+    const state: { value: "resolved" | "rejected" | "pending" } = { value: "pending" };
+    pending.then(
+      () => {
+        state.value = "resolved";
+      },
+      () => {
+        state.value = "rejected";
+      },
+    );
+
+    // Emit an error for a different note. The wait must NOT settle.
+    bus.emit({
+      type: "indexer:error",
+      path: "b.md",
+      message: "transaction conflict on b.md",
+      phase: "tier1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.value).toBe("pending");
+
+    // Now emit the terminal event for the awaited note. The wait resolves.
+    bus.emit({
+      type: "indexer:note-indexed",
+      path: "a.md",
+      result: { chunkCount: 0, embedCount: 0, nodeCount: 0, edgeCount: 0, durationMs: 1 },
+    });
+    await pending;
+    expect(state.value).toBe("resolved");
+  });
+
+  test("rejects when indexer:error matches the awaited note path", async () => {
+    const bus = new EventBus();
+    const options = { bus } as unknown as Parameters<typeof waitForNoteIndexed>[0];
+    const pending = waitForNoteIndexed(options, "a.md");
+
+    bus.emit({
+      type: "indexer:error",
+      path: "a.md",
+      message: "tier1 boom",
+      phase: "tier1",
+    });
+    await expect(pending).rejects.toThrow("tier1 boom");
   });
 });
 

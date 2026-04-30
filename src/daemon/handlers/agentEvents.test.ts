@@ -515,7 +515,11 @@ describe("agent.events watches indexer events", () => {
           type: eventType,
           payload: { message: "test", phase: "tier1" },
         });
-        bus.emit({ type: eventType, message: "test", phase: "tier1" });
+        if (eventType === "indexer:error") {
+          bus.emit({ type: eventType, path: "x.md", message: "test", phase: "tier1" });
+        } else {
+          bus.emit({ type: eventType, message: "test", phase: "tier1" });
+        }
       }, 25);
       const result = await pending;
       const events = result.events as Array<{ type: string }>;

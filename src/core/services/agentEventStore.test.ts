@@ -241,7 +241,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       },
     });
     await flush();
-    bus.emit({ type: "indexer:error", message: "tier2 failed", phase: "tier2" });
+    bus.emit({ type: "indexer:error", path: "01-introduction.md", message: "tier2 failed", phase: "tier2" });
     await flush();
     bus.emit({ type: "indexer:warn", message: "ref dropped", phase: "tier1" });
     await flush();
