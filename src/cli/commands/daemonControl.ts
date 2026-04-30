@@ -69,12 +69,7 @@ export const defaultDaemonStopHook: DaemonStopHook = async (args) => {
 export const defaultDaemonStartHook: DaemonStartHook = async (args) => {
   const child: ChildProcess = spawn(
     process.execPath,
-    [
-      "--env-file=/dev/null",
-      new URL("../../daemon/index.ts", import.meta.url).pathname,
-      "--vault",
-      args.vaultPath,
-    ],
+    ["--env-file=/dev/null", resolveDaemonEntry(), "--vault", args.vaultPath],
     { detached: true, stdio: "ignore", env: process.env },
   );
   child.unref();
@@ -105,4 +100,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+// Mirrors the resolver in `daemon.ts#runStart`. Production runs spawn the
+// sibling `dist/daemon.js`; dev runs spawn `src/daemon/index.ts`.
+function resolveDaemonEntry(): string {
+  if (import.meta.url.endsWith("/dist/notient.js")) {
+    return new URL("./daemon.js", import.meta.url).pathname;
+  }
+  return new URL("../../daemon/index.ts", import.meta.url).pathname;
 }

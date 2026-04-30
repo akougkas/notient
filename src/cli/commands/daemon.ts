@@ -42,16 +42,16 @@ async function runStart(options: DaemonCommandOptions): Promise<void> {
   options.emitter.emit({ type: "daemon:start_spawned", pid: child.pid ?? -1 });
 }
 
-// `import.meta.url` points to dist/notient.js in production runs and
-// src/cli/index.ts in dev runs. The daemon entry sits at dist/daemon.js
-// (sibling) and src/daemon/index.ts (sibling of src/cli/) respectively.
-// The previous single-form path resolved to a non-existent location in
-// both modes; the conditional below restores the spawn path.
+// `import.meta.url` points to `dist/notient.js` in bundled runs and to
+// `src/cli/commands/daemon.ts` in dev runs (esbuild does not inline this
+// module). The daemon entry sits at `dist/daemon.js` and at
+// `src/daemon/index.ts` respectively. The previous resolver walked two
+// levels up from the bundle, which landed outside the project root.
 function resolveDaemonEntry(): string {
   if (import.meta.url.endsWith("/dist/notient.js")) {
     return new URL("./daemon.js", import.meta.url).pathname;
   }
-  return new URL("../daemon/index.ts", import.meta.url).pathname;
+  return new URL("../../daemon/index.ts", import.meta.url).pathname;
 }
 
 async function runStop(options: DaemonCommandOptions): Promise<void> {
