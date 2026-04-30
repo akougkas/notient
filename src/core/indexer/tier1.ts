@@ -143,6 +143,28 @@ async function lookupTagId(db: Surreal, tagPath: string): Promise<RecordId<"tag"
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Returns the record ids of every `block` row currently anchored to `noteId`,
+ * sorted by `ord`. Tier 1's transaction script reuses these slots in place
+ * via UPDATE rather than DELETE+CREATE because SurrealDB 2.x mishandles
+ * same-table DELETE-then-CREATE inside a single transaction: the engine
+ * reorders or coalesces the operations and a subset of the deleted rows
+ * survives the commit, leaking duplicate blocks across re-runs. Reusing the
+ * existing record ids avoids the conflict entirely.
+ */
+async function listBlockIdsForNote(
+  db: Surreal,
+  noteId: RecordId<"note">,
+): Promise<Array<RecordId<"block">>> {
+  const [rows] = await db
+    .query<[Array<{ id: RecordId<"block">; ord: number }>]>(
+      "SELECT id, ord FROM block WHERE note = $note ORDER BY ord;",
+      { note: noteId },
+    )
+    .collect<[Array<{ id: RecordId<"block">; ord: number }>]>();
+  return rows.map((row) => row.id);
+}
+
 interface TransactionScript {
   sql: string;
   bindings: Record<string, unknown>;
@@ -179,6 +201,7 @@ function buildTier1Transaction(
   notePath: string,
   extraction: MarkdownExtraction,
   existingNoteId: RecordId<"note"> | null,
+  existingBlockIds: Array<RecordId<"block">>,
   existingTagIds: Array<RecordId<"tag"> | null>,
   wikilinkTargets: WikilinkTarget[],
   frontmatterTargets: FrontmatterTarget[],
@@ -204,18 +227,33 @@ function buildTier1Transaction(
     );
   }
 
+  // Bind the pre-fetched block-id snapshot once. Edge cleanup targets the
+  // set explicitly so the per-table DELETE never walks `in.note` through
+  // the very rows we are about to mutate; the graph-walk variant tripped
+  // a SurrealDB 2.x quirk where DELETE+CREATE on the same table inside one
+  // transaction left a subset of the original rows on disk. Filtering on
+  // `class` keeps Tier 3 edges (class = 'INFERRED') safe.
+  bindings.oldBlockIds = existingBlockIds;
   for (const table of TIER1_EDGE_TABLES) {
-    // Walk the edge's `in` record to its host note. For block-rooted edges
-    // `in.note` resolves; for note-rooted edges `in` is the note itself.
     statements.push(
-      `DELETE ${table} WHERE class = $tier1Class AND (in = $noteId OR in.note = $noteId);`,
+      `DELETE ${table} WHERE class = $tier1Class AND (in = $noteId OR in IN $oldBlockIds);`,
     );
   }
-  statements.push("DELETE wikilink_unresolved WHERE in = $noteId OR in.note = $noteId;");
-  statements.push("DELETE embed_unresolved WHERE in = $noteId OR in.note = $noteId;");
-  statements.push("DELETE block WHERE note = $noteId;");
+  statements.push("DELETE wikilink_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
+  statements.push("DELETE embed_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
 
+  // Block reuse strategy. SurrealDB 2.x reorders same-table DELETE+CREATE
+  // pairs inside a single transaction, so the original "DELETE block /
+  // CREATE block" pattern silently leaked the un-uniquely-keyed rows
+  // (heading-aggregated blocks have no `block_id` and therefore no unique
+  // index to force the delete). We avoid the conflict by reusing existing
+  // record ids in place via UPDATE for the overlapping prefix, only
+  // CREATE-ing rows when the new extraction is longer than the old, and
+  // only DELETE-ing rows when it is shorter. UPDATE and CREATE coexist
+  // without engine reordering; DELETE-only-the-surplus has no CREATE on
+  // the same table after it.
   const blocks = extraction.blocks;
+  const reuseCount = Math.min(blocks.length, existingBlockIds.length);
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
     const fields: string[] = [
@@ -231,21 +269,35 @@ function buildTier1Transaction(
     bindings[`block${index}_endLine`] = block.endLine;
     bindings[`block${index}_text`] = block.text;
     bindings[`block${index}_headingPath`] = block.headingPath;
-    if (block.blockId !== null) {
-      fields.push(`block_id: $block${index}_blockId`);
-      bindings[`block${index}_blockId`] = block.blockId;
+    // `block_id`, `heading_slug`, and `heading_level` are `option<...>` in
+    // the schema; we always set them so reused rows shed stale values when
+    // the new extraction has none for that slot. JavaScript `undefined`
+    // serializes to SurrealQL `NONE`, which is the empty branch of an
+    // `option<T>` and satisfies every relevant ASSERT. JavaScript `null`
+    // would be sent as a typed null and trip the ASSERT for option<string>.
+    fields.push(`block_id: $block${index}_blockId`);
+    bindings[`block${index}_blockId`] = block.blockId ?? undefined;
+    fields.push(`heading_slug: $block${index}_headingSlug`);
+    bindings[`block${index}_headingSlug`] = block.headingSlug ?? undefined;
+    fields.push(`heading_level: $block${index}_headingLevel`);
+    bindings[`block${index}_headingLevel`] = block.headingLevel ?? undefined;
+
+    if (index < reuseCount) {
+      const reusedId = existingBlockIds[index];
+      bindings[`block${index}_existingId`] = reusedId;
+      statements.push(`UPDATE $block${index}_existingId CONTENT { ${fields.join(", ")} };`);
+      statements.push(`LET $block${index} = $block${index}_existingId;`);
+    } else {
+      statements.push(
+        `LET $block${index} = (CREATE ONLY block CONTENT { ${fields.join(", ")} }).id;`,
+      );
     }
-    if (block.headingSlug !== null) {
-      fields.push(`heading_slug: $block${index}_headingSlug`);
-      bindings[`block${index}_headingSlug`] = block.headingSlug;
-    }
-    if (block.headingLevel !== null) {
-      fields.push(`heading_level: $block${index}_headingLevel`);
-      bindings[`block${index}_headingLevel`] = block.headingLevel;
-    }
-    statements.push(
-      `LET $block${index} = (CREATE ONLY block CONTENT { ${fields.join(", ")} }).id;`,
-    );
+  }
+
+  if (existingBlockIds.length > blocks.length) {
+    const surplus = existingBlockIds.slice(blocks.length);
+    bindings.surplusBlockIds = surplus;
+    statements.push("DELETE block WHERE id IN $surplusBlockIds;");
   }
 
   let currentHeadingIndex: number | null = null;
@@ -386,6 +438,12 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     Promise.all(extraction.tags.map((tag) => lookupTagId(db, tag.path))),
   ]);
 
+  // Fetching block ids is sequential after `existingNoteId` resolves
+  // because the lookup needs the note record id. First-time-seen notes
+  // skip the round-trip and start with an empty slot list.
+  const existingBlockIds: Array<RecordId<"block">> =
+    existingNoteId === null ? [] : await listBlockIdsForNote(db, existingNoteId);
+
   // The daemon_write audit row lives in SurrealDB and references the note
   // by record id. Only an existing note can have one, so we skip the lookup
   // for first-time-seen notes. The lookup runs exactly once per `runTier1`
@@ -409,6 +467,7 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     input.notePath,
     extraction,
     existingNoteId,
+    existingBlockIds,
     existingTagIds,
     wikilinkTargets,
     frontmatterTargets,

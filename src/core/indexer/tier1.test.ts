@@ -453,3 +453,119 @@ A paragraph that links to [[target]] but the body has more text now.
     expect(source).toBe("wikilink");
   });
 });
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 idempotent re-run cleanup", () => {
+  // Regression harness for the orphan-block leak that surfaced when
+  // `awaken --tier 1` was run twice over the same vault. The earlier
+  // re-run test in this file shares state with prior tests and only
+  // asserts a count delta; here we run on an isolated database, sweep
+  // a multi-paragraph note repeatedly, and assert that block and
+  // `contained_in` counts stay flat across passes.
+  let tempDir: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "tier1-rerun-secret";
+  const activePath = "notes/rerun.md";
+  const peerPath = "notes/rerun-peer.md";
+  const vaultPaths = [activePath, peerPath];
+
+  const fixture = `# Heading
+
+First paragraph with [[rerun-peer]] and a #topic/sub tag.
+
+Second paragraph that stands alone.
+
+Third paragraph anchors the note. ^anchor-1
+`;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-tier1-rerun-"));
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+    await upsertNoteByPath(connection.db, {
+      path: peerPath,
+      sha: "peer-sha",
+      wordCount: 1,
+    });
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) {
+      await connection.close().catch(() => {});
+    }
+    if (handle !== undefined) {
+      await handle.stop().catch(() => {});
+    }
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  async function countBlocksForNote(noteId: RecordId<"note">): Promise<number> {
+    const [rows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM block WHERE note = $note GROUP ALL;",
+        { note: noteId },
+      )
+      .collect<[Array<{ count: number }>]>();
+    return rows[0]?.count ?? 0;
+  }
+
+  async function countContainedInForNote(noteId: RecordId<"note">): Promise<number> {
+    const [rows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM contained_in WHERE in.note = $note GROUP ALL;",
+        { note: noteId },
+      )
+      .collect<[Array<{ count: number }>]>();
+    return rows[0]?.count ?? 0;
+  }
+
+  test("block and contained_in counts stay stable across three re-runs", async () => {
+    const first = await runTier1(connection.db, {
+      notePath: activePath,
+      source: fixture,
+      vaultPaths,
+    });
+    const expectedBlocks = first.extraction.blocks.length;
+    expect(expectedBlocks).toBeGreaterThan(1);
+
+    const blocksAfterFirst = await countBlocksForNote(first.noteId);
+    const containedAfterFirst = await countContainedInForNote(first.noteId);
+    expect(blocksAfterFirst).toBe(expectedBlocks);
+    expect(containedAfterFirst).toBe(expectedBlocks);
+
+    await runTier1(connection.db, {
+      notePath: activePath,
+      source: fixture,
+      vaultPaths,
+    });
+    const blocksAfterSecond = await countBlocksForNote(first.noteId);
+    const containedAfterSecond = await countContainedInForNote(first.noteId);
+    expect(blocksAfterSecond).toBe(expectedBlocks);
+    expect(containedAfterSecond).toBe(expectedBlocks);
+
+    await runTier1(connection.db, {
+      notePath: activePath,
+      source: fixture,
+      vaultPaths,
+    });
+    const blocksAfterThird = await countBlocksForNote(first.noteId);
+    const containedAfterThird = await countContainedInForNote(first.noteId);
+    expect(blocksAfterThird).toBe(expectedBlocks);
+    expect(containedAfterThird).toBe(expectedBlocks);
+  });
+});
