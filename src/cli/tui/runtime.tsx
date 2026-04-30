@@ -20,7 +20,7 @@ import {
   routeHistoryKey,
 } from "./history";
 import { computeInputHeight } from "./inputBindings";
-import { dispatchSlashCommand, isSlashCommand } from "./slashCommands";
+import { type ProposalListItem, dispatchSlashCommand, isSlashCommand } from "./slashCommands";
 import { type StatusBarFields, buildStatusBar, estimateTokens } from "./statusBar";
 
 const HISTORY_MAX = 100;
@@ -106,6 +106,7 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
   const [buffer, setBuffer] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [pendingApprovals, setPendingApprovals] = useState<Map<string, string>>(new Map());
+  const [proposalItems, setProposalItems] = useState<ProposalListItem[]>([]);
   const [model, setModel] = useState<string | null>(null);
   const [lastTurnTokens, setLastTurnTokens] = useState<number | null>(null);
   const lastAssistantRef = useRef<string | null>(null);
@@ -150,6 +151,9 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
         setLines([{ kind: "system", text: "Transcript cleared." }]);
       } else if (outcome.message.length > 0) {
         setLines((prior) => [...prior, { kind: "system", text: outcome.message }]);
+      }
+      if (outcome.proposalItems !== undefined) {
+        setProposalItems(outcome.proposalItems);
       }
       if (outcome.exit) onExit();
     },
@@ -228,6 +232,7 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       }
       if (tryPageScroll(event)) return;
       if (busy) return;
+      if (tryProposalKey(event, buffer, proposalItems, runSlash, setProposalItems)) return;
       if (event.name === "tab" && !event.shift && !event.ctrl) {
         handleTabKey(buffer, handleBufferChange, setLines, client);
         event.preventDefault();
@@ -235,7 +240,17 @@ function App({ vaultPath, client, conversationId, topic, onExit }: AppProps): Re
       }
       tryHistoryKey(event);
     },
-    [busy, buffer, client, handleBufferChange, onExit, tryHistoryKey, tryPageScroll],
+    [
+      busy,
+      buffer,
+      client,
+      handleBufferChange,
+      onExit,
+      proposalItems,
+      runSlash,
+      tryHistoryKey,
+      tryPageScroll,
+    ],
   );
   useKeyboard(handleKey);
 
@@ -340,6 +355,25 @@ export function buildStatusLabel(vaultPath: string, busy: boolean, pendingCount:
     lastTurnTokens: null,
   });
   return segs.right === "" ? segs.left : `${segs.left} · ${segs.right}`;
+}
+
+function tryProposalKey(
+  event: KeyEvent,
+  buffer: string,
+  proposalItems: ReadonlyArray<ProposalListItem>,
+  runSlash: (line: string) => Promise<void>,
+  setProposalItems: React.Dispatch<React.SetStateAction<ProposalListItem[]>>,
+): boolean {
+  if (buffer.length > 0 || proposalItems.length === 0) return false;
+  if (event.name !== "a" && event.name !== "r") return false;
+  const first = proposalItems[0];
+  if (first === undefined) return false;
+  event.preventDefault();
+  setProposalItems((prior) => prior.slice(1));
+  const command =
+    event.name === "a" ? `/approve-edge ${first.id}` : `/reject-edge ${first.id} rejected from TUI`;
+  void runSlash(command);
+  return true;
 }
 
 export function frameToErrorLine(frame: { type: "error"; message?: unknown }): ChatLine {

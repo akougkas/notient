@@ -243,6 +243,32 @@ describe("LMStudioProvider chatJson", () => {
 });
 
 describe("LMStudioProvider chatWithTools", () => {
+  test("sends response_format when responseSchema is provided", async () => {
+    mockFetch(() => new Response("data: [DONE]\n", { status: 200 }));
+    const schema: JsonSchema = {
+      name: "agent_ask_response",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    };
+    const provider = new LMStudioProvider({ baseUrl: "http://x/v1" });
+    await provider.chatWithTools({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      signal: new AbortController().signal,
+      responseSchema: schema,
+    });
+
+    const sent = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(sent.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: schema.name, strict: true, schema: schema.schema },
+    });
+  });
+
   test("falls back to reasoning_content when no tool calls and content is empty", async () => {
     const sse = `data: ${JSON.stringify({
       choices: [{ delta: { reasoning_content: "thinking out loud" } }],

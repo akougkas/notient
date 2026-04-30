@@ -437,6 +437,52 @@ describe("chat.send handler", () => {
   });
 });
 
+describe("chat.approve handler", () => {
+  test("errors when the call id is unknown", async () => {
+    const handlers = makeChatHandlers({
+      chatService: makeChatService([]),
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    await expect(
+      handlers.approve({ callId: "missing", approved: true }, () => {}, "req-1", "human"),
+    ).rejects.toThrow("INVALID_PARAMS: unknown call id: missing");
+  });
+
+  test("resolves a pending call id", async () => {
+    const gate = makeGate();
+    const handlers = makeChatHandlers({
+      chatService: makeChatService([]),
+      approvalGate: gate,
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    const controller = new AbortController();
+    const pending = gate.request(
+      { id: "call-1", name: "notes.create", args: { path: "x.md" } },
+      "safe",
+      "preview",
+      controller.signal,
+    );
+
+    const result = await handlers.approve(
+      { callId: "call-1", approved: false, reason: "not now" },
+      () => {},
+      "req-1",
+      "human",
+    );
+
+    expect(result).toEqual({ ok: true });
+    await expect(pending).resolves.toEqual({ approved: false, reason: "not now" });
+  });
+});
+
 describe("chat.start handler identity plumbing", () => {
   test("forwards clientIdentity from the envelope into ChatService.startConversation", async () => {
     const captured: Array<{ topic: string; clientIdentity: string | undefined }> = [];

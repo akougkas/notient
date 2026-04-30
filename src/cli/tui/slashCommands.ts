@@ -15,6 +15,12 @@ import { dirname, join } from "node:path";
 import type { NotientSettings } from "../../core/settings/types";
 import type { ClientHandle, RpcResponseFrame } from "../client";
 import {
+  runProposalsApproveCommand,
+  runProposalsListCommand,
+  runProposalsRejectCommand,
+} from "../commands/proposalsCli";
+import type { Emitter } from "../output";
+import {
   type ModelInfo,
   buildEndpointPatch,
   buildModelView,
@@ -27,6 +33,7 @@ import {
 export interface SlashContext {
   client: ClientHandle;
   vaultPath: string;
+  proposals?: ProposalActions;
   /**
    * Returns the most recent fully streamed assistant reply, or null when no
    * turn has produced an assistant message yet. Used by /copy.
@@ -34,10 +41,26 @@ export interface SlashContext {
   getLastAssistant?: () => string | null;
 }
 
+export interface ProposalListItem {
+  id: string;
+  table: string;
+  source: string | null;
+  target: string | null;
+  agent: string | null;
+  confidence: number;
+}
+
+export interface ProposalActions {
+  list(): Promise<ProposalListItem[]>;
+  approve(id: string): Promise<string>;
+  reject(id: string, reason?: string): Promise<string>;
+}
+
 export interface SlashOutcome {
   message: string;
   exit?: boolean;
   resetTranscript?: boolean;
+  proposalItems?: ProposalListItem[];
 }
 
 export function isSlashCommand(line: string): boolean {
@@ -67,6 +90,9 @@ const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["/model endpoint <url>", "switch the OpenAI-compatible endpoint"],
   ["/approve <id> [r]", "approve a pending tool call"],
   ["/deny <id> [r]", "deny a pending tool call"],
+  ["/proposals [page]", "list pending edge proposals"],
+  ["/approve-edge <id>", "approve a pending edge"],
+  ["/reject-edge <id> [r]", "reject a pending edge"],
   ["/undo", "reverse the latest write"],
   ["/history", "list recent chat-driven writes"],
   ["/copy", "save the last assistant reply"],
@@ -103,6 +129,9 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   health: async (_rest, context) => rpcHealth(context),
   approve: async (rest, context) => approvalVerb(rest, context, true),
   deny: async (rest, context) => approvalVerb(rest, context, false),
+  proposals: async (rest, context) => proposalsVerb(rest, context),
+  "approve-edge": async (rest, context) => approveEdgeVerb(rest, context),
+  "reject-edge": async (rest, context) => rejectEdgeVerb(rest, context),
   undo: async (_rest, context) => rpcUndo(context),
   history: async (_rest, context) => rpcHistory(context),
   copy: async (_rest, context) => copyLastAssistant(context),
@@ -129,6 +158,127 @@ async function modelVerb(rest: string, context: SlashContext): Promise<SlashOutc
     return modelApplyPatch(context, buildEndpointPatch(arg), `endpoint → ${arg}`);
   }
   return { message: `/model: unknown action '${sub}' (try /help)` };
+}
+
+const PROPOSALS_PAGE_SIZE = 8;
+
+async function proposalsVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
+  const page = parseProposalPage(rest);
+  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
+  const items = await actions.list();
+  if (items.length === 0) return { message: "proposals: (empty)", proposalItems: [] };
+  const totalPages = Math.max(1, Math.ceil(items.length / PROPOSALS_PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const offset = (clampedPage - 1) * PROPOSALS_PAGE_SIZE;
+  const pageItems = items.slice(offset, offset + PROPOSALS_PAGE_SIZE);
+  const rows = pageItems.map(
+    (item, index) =>
+      `${offset + index + 1}. ${item.id} ${item.table} ${item.source ?? "?"} -> ${
+        item.target ?? "?"
+      } agent=${item.agent ?? "?"} confidence=${item.confidence.toFixed(2)}`,
+  );
+  return {
+    message: [
+      `proposals page ${clampedPage}/${totalPages}`,
+      ...rows,
+      "keys: a approve first visible, r reject first visible, /approve-edge <id>, /reject-edge <id>",
+    ].join("\n"),
+    proposalItems: pageItems,
+  };
+}
+
+function parseProposalPage(rest: string): number {
+  if (rest.length === 0) return 1;
+  const parsed = Number(rest);
+  if (!Number.isInteger(parsed) || parsed <= 0) return 1;
+  return parsed;
+}
+
+async function approveEdgeVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
+  const id = rest.trim();
+  if (id.length === 0) return { message: "/approve-edge needs <id>" };
+  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
+  return { message: await actions.approve(id) };
+}
+
+async function rejectEdgeVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
+  const space = rest.indexOf(" ");
+  const id = space < 0 ? rest.trim() : rest.slice(0, space).trim();
+  const reason = space < 0 ? undefined : rest.slice(space + 1).trim();
+  if (id.length === 0) return { message: "/reject-edge needs <id>" };
+  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
+  return { message: await actions.reject(id, reason === "" ? undefined : reason) };
+}
+
+function defaultProposalActions(vaultPath: string): ProposalActions {
+  return {
+    list: async () => {
+      let captured = "";
+      const exitCode = await runProposalsListCommand({
+        vaultPath,
+        emitter: silentEmitter,
+        asJson: true,
+        limit: 100,
+        writeStdout: (line) => {
+          captured += line;
+        },
+      });
+      if (exitCode !== 0) return [];
+      const parsed = JSON.parse(captured) as ProposalListItem[];
+      return parsed;
+    },
+    approve: async (id) => {
+      const events = captureEvents();
+      const exitCode = await runProposalsApproveCommand({
+        vaultPath,
+        vaultRoot: vaultPath,
+        emitter: events.emitter,
+        id,
+      });
+      return proposalActionMessage(exitCode, events.events, "approved", id);
+    },
+    reject: async (id, reason) => {
+      const events = captureEvents();
+      const exitCode = await runProposalsRejectCommand({
+        vaultPath,
+        vaultRoot: vaultPath,
+        emitter: events.emitter,
+        id,
+        reason,
+      });
+      return proposalActionMessage(exitCode, events.events, "rejected", id);
+    },
+  };
+}
+
+const silentEmitter: Emitter = {
+  emit: () => {},
+};
+
+function captureEvents(): { emitter: Emitter; events: Array<Record<string, unknown>> } {
+  const events: Array<Record<string, unknown>> = [];
+  return {
+    events,
+    emitter: {
+      emit: (event) => {
+        events.push(event);
+      },
+    },
+  };
+}
+
+function proposalActionMessage(
+  exitCode: number,
+  events: ReadonlyArray<Record<string, unknown>>,
+  verb: "approved" | "rejected",
+  id: string,
+): string {
+  const error = events.find((event) => event.type === "error");
+  if (error !== undefined) return `${verb} error: ${String(error.message ?? "unknown")}`;
+  const notFound = events.find((event) => event.type === "proposals:not_found");
+  if (notFound !== undefined) return String(notFound.message ?? "proposal not found");
+  if (exitCode !== 0) return `${verb} error: exit ${exitCode}`;
+  return `edge ${verb} ${id}`;
 }
 
 async function modelShow(context: SlashContext): Promise<SlashOutcome> {

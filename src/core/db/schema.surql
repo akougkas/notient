@@ -73,11 +73,17 @@ DEFINE INDEX OVERWRITE tag_path ON tag FIELDS path UNIQUE;
 DEFINE TABLE OVERWRITE concept SCHEMAFULL;
 DEFINE FIELD OVERWRITE label ON concept TYPE string;
 DEFINE FIELD OVERWRITE norm_label ON concept TYPE string;
+DEFINE FIELD OVERWRITE kind ON concept TYPE string DEFAULT 'other'
+  ASSERT $value INSIDE ['proper_noun','system','technique','metric','quantity','event','other'];
+DEFINE FIELD OVERWRITE source ON concept TYPE string DEFAULT 'extractor'
+  ASSERT $value INSIDE ['extractor','user','linker'];
 DEFINE INDEX OVERWRITE concept_norm ON concept FIELDS norm_label UNIQUE;
 
 DEFINE TABLE OVERWRITE claim SCHEMAFULL;
 DEFINE FIELD OVERWRITE text ON claim TYPE string;
 DEFINE FIELD OVERWRITE sha ON claim TYPE string;
+DEFINE FIELD OVERWRITE kind ON claim TYPE string DEFAULT 'assertion'
+  ASSERT $value INSIDE ['definition','assertion','datum','speculation'];
 DEFINE INDEX OVERWRITE claim_sha ON claim FIELDS sha UNIQUE;
 
 DEFINE TABLE OVERWRITE question SCHEMAFULL;

@@ -111,6 +111,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   // last successfully checkpointed path; we resume from the entry strictly
   // after it.
   const remainingPaths = sliceAfterCursor(orderedPaths, start.resumeCursor);
+  const attemptedPaths = pathsThroughCursor(orderedPaths, start.resumeCursor);
 
   // The live-query callback mutates `current` from another microtask; we
   // wrap it in an object so TypeScript does not narrow the field to its
@@ -130,6 +131,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
       }
 
       const waitForDone = waitForNoteIndexed(options, notePath);
+      attemptedPaths.push(notePath);
       try {
         // Forward the run's tier filter so per-note Tier 1/2/3 execution
         // honours the operator's `--tier` scope. A full filter (`[1, 2, 3]`)
@@ -140,7 +142,15 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
         await waitForDone;
         processed += 1;
       } catch {
-        failed += 1;
+        const counters =
+          options.onNoteIndexed === undefined
+            ? await reconcileCountersFromTierState(options.db, attemptedPaths, {
+                processed,
+                failed: failed + 1,
+              })
+            : { processed, failed: failed + 1 };
+        processed = counters.processed;
+        failed = counters.failed;
       }
       lastProcessedPath = notePath;
 
@@ -162,6 +172,14 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   }
 
   const finalStatus = statusRef.current;
+  if (options.onNoteIndexed === undefined) {
+    const finalCounters = await reconcileCountersFromTierState(options.db, attemptedPaths, {
+      processed,
+      failed,
+    });
+    processed = finalCounters.processed;
+    failed = finalCounters.failed;
+  }
   if (finalStatus === "paused" || finalStatus === "cancelled") {
     // Preserve the user's terminal status. Persist final counters and the
     // last processed path so a future `resume` picks up exactly where we
@@ -264,6 +282,66 @@ function sliceAfterCursor(paths: string[], cursor: string | null): string[] {
   const index = paths.indexOf(cursor);
   if (index === -1) return paths;
   return paths.slice(index + 1);
+}
+
+function pathsThroughCursor(paths: string[], cursor: string | null): string[] {
+  if (cursor === null) return [];
+  const index = paths.indexOf(cursor);
+  if (index === -1) return [];
+  return paths.slice(0, index + 1);
+}
+
+interface AwakenCounters {
+  processed: number;
+  failed: number;
+}
+
+interface AwakenTier1State {
+  rowExists: boolean;
+  tier1Done: boolean;
+}
+
+export async function reconcileCountersFromTierState(
+  db: Surreal,
+  attemptedPaths: ReadonlyArray<string>,
+  fallback: AwakenCounters,
+): Promise<AwakenCounters> {
+  if (attemptedPaths.length === 0) return fallback;
+  try {
+    let failed = 0;
+    let observedRows = 0;
+    for (const notePath of attemptedPaths) {
+      const tierState = await fetchAwakenTier1State(db, notePath);
+      if (tierState.rowExists) observedRows += 1;
+      if (!tierState.tier1Done) failed += 1;
+    }
+    if (observedRows === 0 && fallback.failed === 0) {
+      return fallback;
+    }
+    return {
+      processed: attemptedPaths.length - failed,
+      failed,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function fetchAwakenTier1State(db: Surreal, path: string): Promise<AwakenTier1State> {
+  const [rows] = await db
+    .query<[Array<{ tier1_at: string | Date | null | undefined }>]>(
+      "SELECT tier1_at FROM note WHERE path = $path LIMIT 1;",
+      { path },
+    )
+    .collect<[Array<{ tier1_at: string | Date | null | undefined }>]>();
+  const row = rows[0];
+  if (row === undefined) {
+    return { rowExists: false, tier1Done: false };
+  }
+  return {
+    rowExists: true,
+    tier1Done: row.tier1_at !== null && row.tier1_at !== undefined,
+  };
 }
 
 export async function waitForNoteIndexed(

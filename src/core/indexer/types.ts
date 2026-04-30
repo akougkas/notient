@@ -1,3 +1,16 @@
+export type ConceptKind =
+  | "proper_noun"
+  | "system"
+  | "technique"
+  | "metric"
+  | "quantity"
+  | "event"
+  | "other";
+
+export type ConceptSource = "extractor" | "user" | "linker";
+
+export type ClaimKind = "definition" | "assertion" | "datum" | "speculation";
+
 export interface Chunk {
   id: string;
   notePath: string;
@@ -11,6 +24,8 @@ export interface Extraction {
   entities: string[];
   claims: string[];
   questions: string[];
+  entityKinds?: Record<string, ConceptKind>;
+  claimKinds?: Record<string, ClaimKind>;
 }
 
 export interface IndexResult {

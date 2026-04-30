@@ -150,6 +150,33 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     expect(rows[0].path).toBe("topic/sub");
   });
 
+  test("reuses a single tag row when one note repeats the same tag", async () => {
+    const duplicatePath = "notes/duplicate-tags.md";
+    const duplicateFixture = `# Duplicate Tags
+
+First mention #dupe and second mention #dupe.
+`;
+
+    const result = await runTier1(connection.db, {
+      notePath: duplicatePath,
+      source: duplicateFixture,
+      vaultPaths: [...vaultPaths, duplicatePath],
+    });
+
+    const [tagRows] = await connection.db
+      .query<[Array<{ path: string }>]>("SELECT path FROM tag WHERE path = 'dupe';")
+      .collect<[Array<{ path: string }>]>();
+    expect(tagRows.length).toBe(1);
+
+    const [edgeRows] = await connection.db
+      .query<[Array<{ count: number }>]>(
+        "SELECT count() AS count FROM tagged WHERE out IN (SELECT VALUE id FROM tag WHERE path = 'dupe') AND (in = $note OR in.note = $note) GROUP ALL;",
+        { note: result.noteId },
+      )
+      .collect<[Array<{ count: number }>]>();
+    expect(edgeRows[0]?.count ?? 0).toBe(2);
+  });
+
   test("frontmatter_ref edge exists from active to other.md", async () => {
     const [rows] = await connection.db
       .query<[Array<{ in: RecordId<"note">; out: RecordId<"note">; source: string }>]>(

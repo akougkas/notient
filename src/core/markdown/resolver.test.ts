@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveTargets, type ResolveInput } from "./resolver";
+import { type ResolveInput, resolveTargets } from "./resolver";
 
 function makeInput(rawTarget: string): ResolveInput {
   return { rawTarget, targetHeading: null, targetBlockId: null };
@@ -37,11 +37,7 @@ describe("resolveTargets", () => {
     const result = resolveTargets(
       "projects/alpha/active.md",
       [makeInput("readme")],
-      [
-        "projects/alpha/active.md",
-        "projects/alpha/readme.md",
-        "archive/old/readme.md",
-      ],
+      ["projects/alpha/active.md", "projects/alpha/readme.md", "archive/old/readme.md"],
     );
     expect(result[0].targetPath).toBe("projects/alpha/readme.md");
   });

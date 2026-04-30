@@ -1,5 +1,5 @@
 /**
- * `notient reindex <glob>` command entrypoint.
+ * `notient reindex [<glob>] [--pattern <glob>]` command entrypoint.
  *
  * Phase 5 Task 11 adds `--tier <csv>` so the operator can re-run a
  * subset of tiers across matched notes. The CSV is parsed via
@@ -15,6 +15,9 @@ import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { connectClient } from "../client";
 import type { Emitter } from "../output";
 
+export const DEFAULT_REINDEX_PATTERN = "**/*.md";
+export const REINDEX_USAGE = "usage: notient reindex [<glob>] [--pattern <glob>] [--tier <csv>]";
+
 export interface ReindexCommandOptions {
   vaultPath: string;
   pattern: string;
@@ -27,6 +30,31 @@ export interface ReindexCommandOptions {
   tier?: number[];
   emitter: Emitter;
   clientIdentity?: string;
+}
+
+export class ReindexPatternError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReindexPatternError";
+  }
+}
+
+export function resolveReindexPattern(options: {
+  positionalPattern?: string;
+  flagPattern?: string | boolean;
+}): string {
+  const flagPattern = normalizePatternFlag(options.flagPattern);
+  const positionalPattern = options.positionalPattern;
+  if (
+    positionalPattern !== undefined &&
+    flagPattern !== undefined &&
+    positionalPattern !== flagPattern
+  ) {
+    throw new ReindexPatternError(
+      `${REINDEX_USAGE}; positional glob and --pattern must match when both are supplied`,
+    );
+  }
+  return flagPattern ?? positionalPattern ?? DEFAULT_REINDEX_PATTERN;
 }
 
 export async function runReindexCommand(options: ReindexCommandOptions): Promise<void> {
@@ -43,4 +71,12 @@ export async function runReindexCommand(options: ReindexCommandOptions): Promise
     if (frame.type === "result" || frame.type === "error") break;
   }
   await client.close();
+}
+
+function normalizePatternFlag(raw: string | boolean | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new ReindexPatternError(`${REINDEX_USAGE}; --pattern requires a glob value`);
+  }
+  return raw;
 }

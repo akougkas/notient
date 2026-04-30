@@ -171,10 +171,17 @@ describe("ApprovalGate", () => {
     const gate = makeGate(recorder);
     const controller = new AbortController();
     const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
-    gate.resolve("call-1", { approved: true });
+    expect(gate.resolve("call-1", { approved: true })).toBe(true);
     await promise;
-    gate.resolve("call-1", { approved: false, reason: "ignored" });
+    expect(gate.resolve("call-1", { approved: false, reason: "ignored" })).toBe(false);
     expect(recorder.resolved).toHaveLength(1);
+  });
+
+  test("resolve reports false for unknown call ids", () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const gate = makeGate(recorder);
+    expect(gate.resolve("missing", { approved: true })).toBe(false);
+    expect(recorder.resolved).toHaveLength(0);
   });
 
   test("cancelAll resolves every pending entry as rejected with the supplied reason", async () => {

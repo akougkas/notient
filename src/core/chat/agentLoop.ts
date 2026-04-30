@@ -17,6 +17,7 @@
 import type {
   ChatWithToolsEvent,
   ChatWithToolsResult,
+  JsonSchema,
   LLMProvider,
   ChatMessage as ProviderChatMessage,
   ToolSpec,
@@ -31,6 +32,7 @@ export interface AgentLoopOptions {
   approvalGate: ApprovalGate;
   maxRoundsPerTurn: number;
   toolMode: () => "native" | "json-fallback" | "disabled";
+  responseSchema?: JsonSchema;
   generateId?: () => string;
   now?: () => number;
 }
@@ -163,6 +165,7 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
     messages: context.messages,
     tools: context.tools,
     signal: input.signal,
+    responseSchema: options.responseSchema,
   });
 
   const buffers = { content: "", reasoning: "" };

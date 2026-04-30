@@ -25,6 +25,7 @@ import { VaultWatcher } from "./watcher";
 
 const VERSION = "0.1.0-phaseA";
 const DEFAULT_IDLE_HOURS = 4;
+const STATUS_PROBE_TIMEOUT_MS = 2_000;
 /**
  * Maximum time the shutdown sequence waits for in-flight `awaken
  * --background` workers to settle. Workers that exceed the window are
@@ -38,6 +39,28 @@ interface DaemonArgs {
   vaultPath: string;
 }
 
+interface DaemonModelProbeInput {
+  endpoint: string;
+  configuredModel: string;
+  configuredContextTokens: number;
+}
+
+interface DaemonModelProbe {
+  endpoint: string;
+  configuredModel: string;
+  loadedModel: string | null;
+  configuredContextTokens: number;
+  loadedContextLength: number | null;
+  status: "ok" | "mismatch";
+  message: string;
+}
+
+interface RawLmStudioModel {
+  id?: unknown;
+  state?: unknown;
+  loaded_context_length?: unknown;
+}
+
 function parseArgs(argv: string[]): DaemonArgs {
   const flagIndex = argv.indexOf("--vault");
   if (flagIndex === -1 || flagIndex === argv.length - 1) {
@@ -45,6 +68,75 @@ function parseArgs(argv: string[]): DaemonArgs {
   }
   const vaultPath = argv[flagIndex + 1];
   return { vaultPath };
+}
+
+async function probeDaemonModel(input: DaemonModelProbeInput): Promise<DaemonModelProbe> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STATUS_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(lmStudioModelsUrl(input.endpoint), {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return buildModelProbe(input, null, null, `HTTP ${response.status}`);
+    }
+    const body = (await response.json()) as { data?: ReadonlyArray<RawLmStudioModel> };
+    const loaded = selectLoadedModel(body.data ?? [], input.configuredModel);
+    return buildModelProbe(input, loaded?.id ?? null, loaded?.loadedContextLength ?? null, null);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return buildModelProbe(input, null, null, reason);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function lmStudioModelsUrl(endpoint: string): string {
+  const baseUrl = endpoint.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+  return `${baseUrl}/api/v0/models`;
+}
+
+function selectLoadedModel(
+  models: ReadonlyArray<RawLmStudioModel>,
+  configuredModel: string,
+): { id: string; loadedContextLength: number | null } | null {
+  const loaded = models.flatMap((model) => {
+    if (typeof model.id !== "string" || model.state !== "loaded") return [];
+    return [
+      {
+        id: model.id,
+        loadedContextLength:
+          typeof model.loaded_context_length === "number" ? model.loaded_context_length : null,
+      },
+    ];
+  });
+  return loaded.find((model) => model.id === configuredModel) ?? loaded[0] ?? null;
+}
+
+function buildModelProbe(
+  input: DaemonModelProbeInput,
+  loadedModel: string | null,
+  loadedContextLength: number | null,
+  error: string | null,
+): DaemonModelProbe {
+  const status = loadedModel === input.configuredModel ? "ok" : "mismatch";
+  const modelText =
+    loadedModel === null ? "no loaded model reported" : `loaded model ${loadedModel}`;
+  const message =
+    status === "ok"
+      ? `configured model ${input.configuredModel} is loaded`
+      : `model mismatch: configured ${input.configuredModel}; ${modelText}${
+          error === null ? "" : `; probe error ${error}`
+        }`;
+  return {
+    endpoint: input.endpoint,
+    configuredModel: input.configuredModel,
+    loadedModel,
+    configuredContextTokens: input.configuredContextTokens,
+    loadedContextLength,
+    status,
+    message,
+  };
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -109,7 +201,12 @@ async function main(argv: string[]): Promise<void> {
   }
 
   dispatcher.register("daemon.status", async () => {
-    const probe = kernel.has("probeCache") ? kernel.get("probeCache").get() : null;
+    const current = kernel.get("settings").get();
+    const probe = await probeDaemonModel({
+      endpoint: current.primary.baseUrl,
+      configuredModel: current.primary.reasoningModel,
+      configuredContextTokens: current.chat.modelContextTokens,
+    });
     return {
       ok: true,
       vault: args.vaultPath,

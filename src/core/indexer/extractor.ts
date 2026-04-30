@@ -1,7 +1,7 @@
 import type { RecordId, Surreal } from "surrealdb";
 import { relateEdge, upsertClaim, upsertConcept, upsertQuestion } from "../db/surreal";
 import type { ChatMessage, JsonSchema, LLMProvider } from "../llm/provider";
-import type { Chunk, Extraction } from "./types";
+import type { Chunk, ClaimKind, ConceptKind, ConceptSource, Extraction } from "./types";
 
 export interface ExtractorOptions {
   model: string;
@@ -16,8 +16,10 @@ const MAX_QUESTIONS_PER_CHUNK = 3;
 const SYSTEM_PROMPT = `You are Notient's extractor. Read one note chunk and output ONLY what a careful human reader would highlight as worth tracking.
 
 Return at most:
-- ${MAX_ENTITIES_PER_CHUNK} entities — proper nouns (people, named projects, named systems, products), or domain-specific technical terms with strong specificity. Use the canonical singular form. Skip generic words like "system", "process", "note", "thing", "user", "structure", "wrappers", "Distributed". Skip code-shaped tokens with underscores or hyphens (e.g. "connection_builder", "npm-db"); name the concept they represent in plain words instead, or omit. Skip generic two-word UI/design phrases (e.g. "Container Dark", "Elegant Technical") that are not specific entities. If the chunk has none, return [].
+- ${MAX_ENTITIES_PER_CHUNK} entities — proper nouns (people, named projects, named systems, products), or domain-specific technical terms with strong specificity. Use the canonical singular form. Skip generic words like "system", "process", "note", "thing", "user", "structure", "wrappers", "Distributed". Skip code-shaped tokens with underscores or hyphens (e.g. "connection_builder", "npm-db"); name the concept they represent in plain words instead, or omit. Skip generic two-word UI/design phrases (e.g. "Container Dark", "Elegant Technical") unless the phrase is a named framework, named pattern, or domain term that the surrounding chunk treats as a concept. Valid examples include "Stakeholder Trifecta"; invalid examples include visual style fragments and adjective-noun labels. If the chunk has none, return [].
+  Each entity must include kind: proper_noun, system, technique, metric, quantity, event, or other.
 - ${MAX_CLAIMS_PER_CHUNK} claims — non-trivial, specific assertions the chunk makes. A claim must be sharp enough that a thoughtful reader could disagree. Skip restatements of obvious facts and definitions. One declarative sentence each. If the chunk has none, return [].
+  Each claim must include kind: definition, assertion, datum, or speculation.
 - ${MAX_QUESTIONS_PER_CHUNK} questions — genuine open questions the chunk raises and does not answer. End each with "?". Skip rhetorical questions. If the chunk has none, return [].
 
 Quality over quantity. Empty arrays are correct when nothing is worth tracking. Never invent facts.`;
@@ -29,12 +31,34 @@ const SCHEMA: JsonSchema = {
     properties: {
       entities: {
         type: "array",
-        items: { type: "string" },
+        items: {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            kind: {
+              type: "string",
+              enum: ["proper_noun", "system", "technique", "metric", "quantity", "event", "other"],
+            },
+          },
+          required: ["label", "kind"],
+          additionalProperties: false,
+        },
         maxItems: MAX_ENTITIES_PER_CHUNK,
       },
       claims: {
         type: "array",
-        items: { type: "string" },
+        items: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+            kind: {
+              type: "string",
+              enum: ["definition", "assertion", "datum", "speculation"],
+            },
+          },
+          required: ["text", "kind"],
+          additionalProperties: false,
+        },
         maxItems: MAX_CLAIMS_PER_CHUNK,
       },
       questions: {
@@ -86,11 +110,96 @@ export class Extractor {
       SCHEMA,
     );
     return {
-      entities: ensureStringArray(result.entities).slice(0, MAX_ENTITIES_PER_CHUNK),
-      claims: ensureStringArray(result.claims).slice(0, MAX_CLAIMS_PER_CHUNK),
+      ...normalizeEntities(result.entities, MAX_ENTITIES_PER_CHUNK),
+      ...normalizeClaims(result.claims, MAX_CLAIMS_PER_CHUNK),
       questions: ensureStringArray(result.questions).slice(0, MAX_QUESTIONS_PER_CHUNK),
     };
   }
+}
+
+interface EntityNormalization {
+  entities: string[];
+  entityKinds: Record<string, ConceptKind>;
+}
+
+interface ClaimNormalization {
+  claims: string[];
+  claimKinds: Record<string, ClaimKind>;
+}
+
+const CONCEPT_KINDS: ReadonlySet<string> = new Set([
+  "proper_noun",
+  "system",
+  "technique",
+  "metric",
+  "quantity",
+  "event",
+  "other",
+]);
+
+const CLAIM_KINDS: ReadonlySet<string> = new Set([
+  "definition",
+  "assertion",
+  "datum",
+  "speculation",
+]);
+
+function normalizeEntities(value: unknown, limit: number): EntityNormalization {
+  if (!Array.isArray(value)) return { entities: [], entityKinds: {} };
+  const entities: string[] = [];
+  const entityKinds: Record<string, ConceptKind> = {};
+  for (const entry of value) {
+    const normalized = normalizeEntityEntry(entry);
+    if (normalized === null) continue;
+    entities.push(normalized.label);
+    entityKinds[normalized.label] = normalized.kind;
+    if (entities.length >= limit) break;
+  }
+  return { entities, entityKinds };
+}
+
+function normalizeEntityEntry(entry: unknown): { label: string; kind: ConceptKind } | null {
+  if (typeof entry === "string") {
+    const label = entry.trim();
+    return label.length === 0 ? null : { label, kind: "other" };
+  }
+  if (!isRecord(entry)) return null;
+  const label = typeof entry.label === "string" ? entry.label.trim() : "";
+  if (label.length === 0) return null;
+  const kind =
+    typeof entry.kind === "string" && CONCEPT_KINDS.has(entry.kind) ? entry.kind : "other";
+  return { label, kind: kind as ConceptKind };
+}
+
+function normalizeClaims(value: unknown, limit: number): ClaimNormalization {
+  if (!Array.isArray(value)) return { claims: [], claimKinds: {} };
+  const claims: string[] = [];
+  const claimKinds: Record<string, ClaimKind> = {};
+  for (const entry of value) {
+    const normalized = normalizeClaimEntry(entry);
+    if (normalized === null) continue;
+    claims.push(normalized.text);
+    claimKinds[normalized.text] = normalized.kind;
+    if (claims.length >= limit) break;
+  }
+  return { claims, claimKinds };
+}
+
+function normalizeClaimEntry(entry: unknown): { text: string; kind: ClaimKind } | null {
+  if (typeof entry === "string") {
+    const text = entry.trim();
+    return text.length === 0 ? null : { text, kind: "assertion" };
+  }
+  if (!isRecord(entry)) return null;
+  const text = typeof entry.text === "string" ? entry.text.trim() : "";
+  if (text.length === 0) return null;
+  const kind =
+    typeof entry.kind === "string" && CLAIM_KINDS.has(entry.kind) ? entry.kind : "assertion";
+  return { text, kind: kind as ClaimKind };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function ensureStringArray(value: unknown): string[] {
@@ -99,10 +208,46 @@ function ensureStringArray(value: unknown): string[] {
 }
 
 function mergeExtractions(parts: Extraction[]): Extraction {
-  const entities = dedupeCaseInsensitive(filterNoiseEntities(parts.flatMap((p) => p.entities)));
+  const rawEntities = filterNoiseEntities(parts.flatMap((p) => p.entities));
+  const entities = dedupeCaseInsensitive(rawEntities);
+  const entityKinds = mergeEntityKinds(parts, entities);
   const claims = dedupe(parts.flatMap((p) => p.claims));
+  const claimKinds = mergeClaimKinds(parts, claims);
   const questions = dedupe(parts.flatMap((p) => p.questions));
-  return { entities, claims, questions };
+  return { entities, claims, questions, entityKinds, claimKinds };
+}
+
+function mergeEntityKinds(parts: Extraction[], entities: string[]): Record<string, ConceptKind> {
+  const out: Record<string, ConceptKind> = {};
+  for (const entity of entities) {
+    out[entity] = "other";
+    const norm = entity.toLowerCase();
+    for (const part of parts) {
+      const match = Object.entries(part.entityKinds ?? {}).find(
+        ([label]) => label.toLowerCase() === norm,
+      );
+      if (match !== undefined) {
+        out[entity] = match[1];
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function mergeClaimKinds(parts: Extraction[], claims: string[]): Record<string, ClaimKind> {
+  const out: Record<string, ClaimKind> = {};
+  for (const claim of claims) {
+    out[claim] = "assertion";
+    for (const part of parts) {
+      const kind = part.claimKinds?.[claim];
+      if (kind !== undefined) {
+        out[claim] = kind;
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -112,20 +257,17 @@ function mergeExtractions(parts: Extraction[]): Extraction {
  * these patterns, but the model partially ignores it. Three small predicates
  * run per entity; any match drops the entity. Pure and synchronous.
  *
- * Trade-off: single capitalized abstract nouns like "Distributed" are NOT
- * filtered here because that risks dropping legitimate proper nouns
- * ("Hermes", "Nemotron"). The prompt sharpening handles those instead.
+ * Trade-off: single capitalized abstract nouns and two-word Title Case
+ * phrases are NOT filtered here because that risks dropping legitimate
+ * concepts ("Hermes", "Nemotron", "Stakeholder Trifecta"). The prompt
+ * sharpening handles those instead.
  */
 export function filterNoiseEntities(entities: string[]): string[] {
   return entities.filter((e) => !isNoiseEntity(e));
 }
 
 function isNoiseEntity(entity: string): boolean {
-  return (
-    isBareLowercaseToken(entity) ||
-    isShortCodeIdentifier(entity) ||
-    isGenericTwoWordPhrase(entity)
-  );
+  return isBareLowercaseToken(entity) || isShortCodeIdentifier(entity);
 }
 
 // Predicate (a): single token, all-lowercase letters only. Filters bare
@@ -143,14 +285,6 @@ function isShortCodeIdentifier(entity: string): boolean {
   if (entity.includes(" ")) return false;
   if (entity.length >= 30) return false;
   return /[_-]/.test(entity);
-}
-
-// Predicate (c): two tokens both matching ^[A-Z][a-z]+$. Filters generic
-// UI/design phrases like "Container Dark" and "Elegant Technical" while
-// keeping mixed-case second words ("Illumina MiSeq") and uppercase tokens
-// ("Drive API") that fail the all-lowercase-tail constraint.
-function isGenericTwoWordPhrase(entity: string): boolean {
-  return /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(entity);
 }
 
 function dedupeCaseInsensitive(values: string[]): string[] {
@@ -181,8 +315,12 @@ export async function writeExtractionToSurreal(
   noteId: RecordId<"note">,
   extraction: Extraction,
 ): Promise<void> {
+  await deletePriorExtractorRelations(db, noteId);
   for (const entity of extraction.entities) {
-    const conceptId = await upsertConcept(db, entity);
+    const conceptId = await upsertConcept(db, entity, {
+      kind: extraction.entityKinds?.[entity] ?? "other",
+      source: "extractor" satisfies ConceptSource,
+    });
     await relateEdge(db, {
       table: "mentions",
       from: noteId,
@@ -195,7 +333,9 @@ export async function writeExtractionToSurreal(
     });
   }
   for (const claim of extraction.claims) {
-    const claimId = await upsertClaim(db, claim);
+    const claimId = await upsertClaim(db, claim, {
+      kind: extraction.claimKinds?.[claim] ?? "assertion",
+    });
     await relateEdge(db, {
       table: "asserts",
       from: noteId,
@@ -219,5 +359,16 @@ export async function writeExtractionToSurreal(
       agent: "extractor",
       approved: true,
     });
+  }
+}
+
+async function deletePriorExtractorRelations(db: Surreal, noteId: RecordId<"note">): Promise<void> {
+  for (const table of ["mentions", "asserts", "asks"] as const) {
+    await db
+      .query(
+        `DELETE ${table} WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');`,
+        { note: noteId },
+      )
+      .collect();
   }
 }

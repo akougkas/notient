@@ -1,13 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RecordId } from "surrealdb";
-import { createHash } from "node:crypto";
 import { applySchema } from "../core/db/schemaApplier";
-import { connect, type SurrealConnection, upsertNoteByPath } from "../core/db/surreal";
+import { type SurrealConnection, connect, upsertNoteByPath } from "../core/db/surreal";
 import { EventBus } from "../core/events/eventBus";
-import { startSurreal, type SurrealServerHandle } from "./surrealServer";
+import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 import { VaultWatcher, isWslPath } from "./watcher";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -85,7 +85,6 @@ describe("VaultWatcher", () => {
     expect(enqueued).toEqual([]);
   });
 });
-
 
 describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
   let tempDir: string;

@@ -43,7 +43,7 @@
  *     RecordId format.
  */
 
-import { DateTime, type Surreal } from "surrealdb";
+import type { DateTime, Surreal } from "surrealdb";
 import type { VaultFacade } from "../../core/chat/tools/vault";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../../core/llm/provider";
 import type { SearchEvent, SearchHit, SearchQuery, SearchResult } from "../../core/search/types";
@@ -342,10 +342,9 @@ function dedupeHitsByPath(hits: SearchHit[]): SearchHit[] {
 
 async function readNoteUpdatedAt(db: Surreal, notePath: string): Promise<number> {
   const [rows] = await db
-    .query<[NoteUpdatedAtRow[]]>(
-      "SELECT last_user_edit_at FROM note WHERE path = $path LIMIT 1;",
-      { path: notePath },
-    )
+    .query<[NoteUpdatedAtRow[]]>("SELECT last_user_edit_at FROM note WHERE path = $path LIMIT 1;", {
+      path: notePath,
+    })
     .collect<[NoteUpdatedAtRow[]]>();
   const value = rows[0]?.last_user_edit_at;
   if (value === null || value === undefined) return 0;
@@ -544,4 +543,3 @@ function buildUserMessage(options: SummaryOptions): string {
   }
   return lines.join("\n");
 }
-

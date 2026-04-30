@@ -1,13 +1,20 @@
 import { spawn } from "node:child_process";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { connectClient } from "../client";
-import type { Emitter } from "../output";
+import type { Emitter, StructuredEvent } from "../output";
 
 export interface DaemonCommandOptions {
   verb: "start" | "stop" | "status" | "list";
   vaultPath: string | null;
   emitter: Emitter;
   clientIdentity?: string;
+}
+
+interface DaemonStatusProbe {
+  status: "ok" | "mismatch";
+  configuredModel: string;
+  loadedModel: string | null;
+  message: string;
 }
 
 export async function runDaemonCommand(options: DaemonCommandOptions): Promise<void> {
@@ -29,15 +36,11 @@ export async function runDaemonCommand(options: DaemonCommandOptions): Promise<v
 
 async function runStart(options: DaemonCommandOptions): Promise<void> {
   if (!options.vaultPath) throw new Error("daemon start requires --vault");
-  const child = spawn(
-    process.execPath,
-    [resolveDaemonEntry(), "--vault", options.vaultPath],
-    {
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    },
-  );
+  const child = spawn(process.execPath, [resolveDaemonEntry(), "--vault", options.vaultPath], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
   child.unref();
   options.emitter.emit({ type: "daemon:start_spawned", pid: child.pid ?? -1 });
 }
@@ -78,8 +81,53 @@ async function runStatus(options: DaemonCommandOptions): Promise<void> {
     clientIdentity: options.clientIdentity,
   });
   for await (const frame of client.call("daemon.status", {})) {
-    options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
+    options.emitter.emit(renderDaemonStatusFrame(frame));
     if (frame.type === "result" || frame.type === "error") break;
   }
   await client.close();
+}
+
+export function renderDaemonStatusFrame(frame: Record<string, unknown>): StructuredEvent {
+  const type = typeof frame.type === "string" ? frame.type : "event";
+  if (type !== "result") {
+    return { ...frame, type: `rpc:${type}` };
+  }
+  const probe = parseDaemonStatusProbe(frame.probe);
+  if (probe === null) {
+    return { ...frame, type: "rpc:result" };
+  }
+
+  const { type: _type, id, ...rest } = frame;
+  const rendered: StructuredEvent = {
+    type: "rpc:result",
+    id,
+    modelStatus: probe.status,
+    configuredModel: probe.configuredModel,
+    loadedModel: probe.loadedModel,
+  };
+  if (probe.status === "mismatch") {
+    rendered.modelWarning = probe.message;
+  }
+  return { ...rendered, ...rest };
+}
+
+function parseDaemonStatusProbe(value: unknown): DaemonStatusProbe | null {
+  if (!isRecord(value)) return null;
+  const status = value.status;
+  if (status !== "ok" && status !== "mismatch") return null;
+  if (typeof value.configuredModel !== "string") return null;
+  if (value.loadedModel !== null && typeof value.loadedModel !== "string") return null;
+  return {
+    status,
+    configuredModel: value.configuredModel,
+    loadedModel: value.loadedModel,
+    message:
+      typeof value.message === "string"
+        ? value.message
+        : `model ${status}: configured ${value.configuredModel}`,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

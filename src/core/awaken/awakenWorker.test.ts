@@ -19,11 +19,12 @@ import type { RecordId } from "surrealdb";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect } from "../db/surreal";
-import { findCurrent, updateStatus } from "./awakenRun";
 import { EventBus } from "../events/eventBus";
+import { findCurrent, updateStatus } from "./awakenRun";
 import {
   type AwakenWorkerIndexerQueue,
   type AwakenWorkerVaultFacade,
+  reconcileCountersFromTierState,
   runAwakenWorker,
   sortByPriorityGlobs,
   waitForNoteIndexed,
@@ -170,6 +171,80 @@ describe("waitForNoteIndexed listener scoping", () => {
       phase: "tier1",
     });
     await expect(pending).rejects.toThrow("tier1 boom");
+  });
+});
+
+describe("reconcileCountersFromTierState", () => {
+  test("counts only attempted notes whose tier1_at is still missing as failed", async () => {
+    const byPath = new Map<string, { tier1_at: string | null }>([
+      ["done.md", { tier1_at: "2026-04-30T00:00:00Z" }],
+      ["missing.md", { tier1_at: null }],
+      ["retried.md", { tier1_at: "2026-04-30T00:00:01Z" }],
+    ]);
+    const db = {
+      query: (_sql: string, bindings: { path?: string }) => ({
+        collect: async () => {
+          const row = bindings.path === undefined ? undefined : byPath.get(bindings.path);
+          if (row === undefined) return [[]];
+          return [[{ tier1_at: row.tier1_at, tier2_at: null, tier3_at: null }]];
+        },
+      }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+
+    const counters = await reconcileCountersFromTierState(
+      db,
+      ["done.md", "missing.md", "retried.md"],
+      { processed: 0, failed: 3 },
+    );
+
+    expect(counters).toEqual({ processed: 2, failed: 1 });
+  });
+
+  test("falls back to existing counters if the tier-state query fails", async () => {
+    const db = {
+      query: () => ({
+        collect: async () => {
+          throw new Error("db unavailable");
+        },
+      }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+
+    const counters = await reconcileCountersFromTierState(db, ["a.md"], {
+      processed: 7,
+      failed: 2,
+    });
+
+    expect(counters).toEqual({ processed: 7, failed: 2 });
+  });
+
+  test("keeps successful fallback counters when no note rows are observable", async () => {
+    const db = {
+      query: () => ({
+        collect: async () => [[]],
+      }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+
+    const counters = await reconcileCountersFromTierState(db, ["a.md", "b.md"], {
+      processed: 2,
+      failed: 0,
+    });
+
+    expect(counters).toEqual({ processed: 2, failed: 0 });
+  });
+
+  test("counts missing note rows as failed after an indexer error", async () => {
+    const db = {
+      query: () => ({
+        collect: async () => [[]],
+      }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+
+    const counters = await reconcileCountersFromTierState(db, ["a.md", "b.md"], {
+      processed: 1,
+      failed: 1,
+    });
+
+    expect(counters).toEqual({ processed: 0, failed: 2 });
   });
 });
 

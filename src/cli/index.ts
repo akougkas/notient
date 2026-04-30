@@ -30,7 +30,7 @@ import {
   runProposalsListCommand,
   runProposalsRejectCommand,
 } from "./commands/proposalsCli";
-import { runReindexCommand } from "./commands/reindex";
+import { ReindexPatternError, resolveReindexPattern, runReindexCommand } from "./commands/reindex";
 import { runRestoreCommand } from "./commands/restore";
 import { runSearchCommand } from "./commands/search";
 import {
@@ -91,7 +91,7 @@ function selectMode(parsed: ParsedArgs): EmitterMode {
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat command routing table is clearer than indirection
 async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
-  if (!parsed.command || parsed.command === "help" || parsed.flags.help) {
+  if (!parsed.command || parsed.command === "help") {
     emitter.emit({
       type: "help",
       commands: [
@@ -120,6 +120,10 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
       note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants and Phase 5 graph/links/backup/restore/nuke/migrate-vault operator verbs; richer surface lands in Phases D-E.",
     });
     return 0;
+  }
+
+  if (parsed.flags.help === true) {
+    return printVerbHelp(parsed.command, emitter);
   }
 
   const clientIdentity = resolveClientIdentity(parsed);
@@ -156,6 +160,154 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
     message: `Unknown command: ${parsed.command}`,
   });
   return 2;
+}
+
+interface VerbHelp {
+  usage: string;
+  flags: string[];
+}
+
+const VERB_HELP: Record<string, VerbHelp> = {
+  init: {
+    usage: "notient init <vault>",
+    flags: [],
+  },
+  daemon: {
+    usage: "notient daemon start|stop|status|list --vault <path>",
+    flags: ["--vault <path>", "--as <agent>"],
+  },
+  db: {
+    usage: "notient db sql --vault <path>",
+    flags: ["--vault <path>"],
+  },
+  awaken: {
+    usage: "notient awaken --vault <path> [--batch N] [--since ISO] [--tier 1,2,3]",
+    flags: [
+      "--vault <path>",
+      "--batch <number>",
+      "--since <datetime>",
+      "--tier <csv>",
+      "--background",
+      "--pause",
+      "--resume",
+      "--cancel",
+      "--status",
+    ],
+  },
+  reindex: {
+    usage: "notient reindex [<glob>] --vault <path> [--pattern <glob>] [--tier 1,2,3]",
+    flags: ["--vault <path>", "--pattern <glob>", "--tier <csv>"],
+  },
+  search: {
+    usage: "notient search <query> --vault <path> [--mode quick|balanced|deep] [--limit N]",
+    flags: ["--vault <path>", "--query <text>", "--mode <mode>", "--limit <number>"],
+  },
+  vitals: {
+    usage: "notient vitals <note-path> --vault <path>",
+    flags: ["--vault <path>"],
+  },
+  health: {
+    usage: "notient health --vault <path>",
+    flags: ["--vault <path>"],
+  },
+  chat: {
+    usage: "notient chat [prompt] --vault <path> [--approve auto|ask]",
+    flags: ["--vault <path>", "--prompt <text>", "--approve <mode>"],
+  },
+  ask: {
+    usage: "notient ask <intent> --vault <path> [--format json|text] [--max-rounds N]",
+    flags: ["--vault <path>", "--format <format>", "--max-rounds <number>"],
+  },
+  brief: {
+    usage: "notient brief <topic> --vault <path> [--file <path>]",
+    flags: [
+      "--vault <path>",
+      "--file <path>",
+      "--max-notes <number>",
+      "--max-questions <number>",
+      "--max-decisions <number>",
+    ],
+  },
+  distill: {
+    usage: "notient distill --from <transcript> --vault <path> [--dry-run]",
+    flags: ["--vault <path>", "--from <path>", "--format <format>", "--dry-run"],
+  },
+  events: {
+    usage: "notient events --vault <path> [--since N] [--no-poll]",
+    flags: [
+      "--vault <path>",
+      "--since <number>",
+      "--limit <number>",
+      "--long-poll-ms <ms>",
+      "--no-poll",
+    ],
+  },
+  session: {
+    usage: "notient session list|grant|revoke --vault <path>",
+    flags: [
+      "--vault <path>",
+      "--client <id>",
+      "--folders <csv>",
+      "--tools <csv>",
+      "--ttl <minutes>",
+      "--max-writes <number>",
+      "--session-id <id>",
+    ],
+  },
+  graph: {
+    usage: "notient graph dump|stats --vault <path>",
+    flags: ["--vault <path>", "--tier <number>", "--format <format>", "--out <path>", "--json"],
+  },
+  links: {
+    usage: "notient links sync|audit --vault <path>",
+    flags: ["--vault <path>", "--json", "--pretty", "--ndjson"],
+  },
+  proposals: {
+    usage: "notient proposals list|approve|reject --vault <path>",
+    flags: [
+      "--vault <path>",
+      "--note <path>",
+      "--agent <id>",
+      "--limit <number>",
+      "--reason <text>",
+      "--json",
+    ],
+  },
+  backup: {
+    usage: "notient backup --vault <path> [--out <file.surql>]",
+    flags: ["--vault <path>", "--out <path>"],
+  },
+  restore: {
+    usage: "notient restore <file.surql> --vault <path>",
+    flags: ["--vault <path>"],
+  },
+  nuke: {
+    usage: "notient nuke --vault <path> --yes",
+    flags: ["--vault <path>", "--yes"],
+  },
+  "migrate-vault": {
+    usage: "notient migrate-vault <target-vault> --vault <source-vault>",
+    flags: ["--vault <path>"],
+  },
+};
+
+function printVerbHelp(command: string, emitter: Emitter): number {
+  const help = VERB_HELP[command];
+  if (help === undefined) {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_PARAMS",
+      message: `Unknown command: ${command}`,
+    });
+    return 2;
+  }
+  emitter.emit({
+    type: "help",
+    command,
+    usage: help.usage,
+    flags: help.flags,
+  });
+  return 0;
 }
 
 /**
@@ -246,7 +398,23 @@ async function dispatchReindex(
   clientIdentity: string | undefined,
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
-  const pattern = parsed.positional[0] ?? "**/*.md";
+  let pattern: string;
+  try {
+    pattern = resolveReindexPattern({
+      positionalPattern: parsed.positional[0],
+      flagPattern: parsed.flags.pattern,
+    });
+  } catch (error) {
+    if (error instanceof ReindexPatternError) {
+      emitter.emit({
+        type: "error",
+        code: "INVALID_PARAMS",
+        message: error.message,
+      });
+      return 2;
+    }
+    throw error;
+  }
   const tier = parsed.flags.tier === undefined ? undefined : parseTierCsv(parsed.flags.tier);
   await runReindexCommand({ vaultPath, pattern, tier, emitter, clientIdentity });
   return 0;
@@ -395,10 +563,11 @@ async function dispatchEvents(
   clientIdentity: string | undefined,
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
-  const since = parseEventsSince(parsed.flags.since);
+  const noPoll = parsed.flags["no-poll"] === true;
+  const since =
+    noPoll && parsed.flags.since === undefined ? 0 : parseEventsSince(parsed.flags.since);
   const limit = parseEventsPositiveInt(parsed.flags.limit, "limit");
   const longPollMs = parseEventsLongPollMs(parsed.flags["long-poll-ms"]);
-  const noPoll = parsed.flags["no-poll"] === true;
   return await runEventsCommand({
     vaultPath,
     since,

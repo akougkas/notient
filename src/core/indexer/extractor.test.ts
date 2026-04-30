@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { RecordId, type Surreal, Table } from "surrealdb";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../db/surreal";
@@ -80,6 +81,25 @@ describe("Extractor", () => {
     expect(calls[0].opts.model).toBe("test-model");
     expect(calls[0].schema.name).toBe("Extraction");
     expect(JSON.stringify(calls[0].messages)).toContain("Alice met Bob.");
+    expect(JSON.stringify(calls[0].schema.schema)).toContain("proper_noun");
+    expect(JSON.stringify(calls[0].schema.schema)).toContain("definition");
+  });
+
+  test("threads entity and claim kinds from extractor JSON", async () => {
+    const provider = fakeProvider({
+      chatJson: async <T>() =>
+        ({
+          entities: [{ label: "Hermes", kind: "system" }],
+          claims: [{ text: "Hermes accelerates I/O.", kind: "assertion" }],
+          questions: [],
+        }) as T,
+    });
+    const extractor = new Extractor(provider, { model: "test-model" });
+    const out = await extractor.extract([chunk("Hermes accelerates I/O.")]);
+    expect(out.entities).toEqual(["Hermes"]);
+    expect(out.entityKinds).toEqual({ Hermes: "system" });
+    expect(out.claims).toEqual(["Hermes accelerates I/O."]);
+    expect(out.claimKinds).toEqual({ "Hermes accelerates I/O.": "assertion" });
   });
 
   test("survives a single failing chunk and continues with others", async () => {
@@ -106,7 +126,7 @@ describe("Extractor", () => {
         claims: [],
         questions: [],
       },
-      { entities: ["Container Dark", "Illumina MiSeq"], claims: [], questions: [] },
+      { entities: ["Stakeholder Trifecta", "Illumina MiSeq"], claims: [], questions: [] },
     ];
     let i = 0;
     const provider = fakeProvider({
@@ -117,7 +137,9 @@ describe("Extractor", () => {
       concurrency: 1,
     });
     const out = await extractor.extract([chunk("first", 0), chunk("second", 1)]);
-    expect(out.entities.sort()).toEqual(["Drive API v3", "Illumina MiSeq"].sort());
+    expect(out.entities.sort()).toEqual(
+      ["Drive API v3", "Stakeholder Trifecta", "Illumina MiSeq"].sort(),
+    );
   });
 });
 
@@ -172,13 +194,13 @@ describe("filterNoiseEntities", () => {
     });
   });
 
-  describe("predicate (c): generic two-word UI/design phrase", () => {
-    test("drops 'Container Dark'", () => {
-      expect(filterNoiseEntities(["Container Dark"])).toEqual([]);
+  describe("prompt-only handling for two-word Title Case phrases", () => {
+    test("keeps 'Container Dark' in the post-filter", () => {
+      expect(filterNoiseEntities(["Container Dark"])).toEqual(["Container Dark"]);
     });
 
-    test("drops 'Elegant Technical'", () => {
-      expect(filterNoiseEntities(["Elegant Technical"])).toEqual([]);
+    test("keeps 'Stakeholder Trifecta'", () => {
+      expect(filterNoiseEntities(["Stakeholder Trifecta"])).toEqual(["Stakeholder Trifecta"]);
     });
 
     test("keeps 'Drive API' (API is short and uppercase)", () => {
@@ -213,12 +235,58 @@ describe("filterNoiseEntities", () => {
       "structure",
       "Drive API v3",
       "connection_builder",
-      "Container Dark",
+      "Stakeholder Trifecta",
       "Illumina MiSeq",
       "npm-db",
       "wrappers",
     ];
-    expect(filterNoiseEntities(input)).toEqual(["Drive API v3", "Illumina MiSeq"]);
+    expect(filterNoiseEntities(input)).toEqual([
+      "Drive API v3",
+      "Stakeholder Trifecta",
+      "Illumina MiSeq",
+    ]);
+  });
+});
+
+describe("writeExtractionToSurreal", () => {
+  test("replaces prior extractor relations for the note before writing new extraction", async () => {
+    const queries: Array<{ sql: string; bindings: Record<string, unknown> | undefined }> = [];
+    let counter = 0;
+    const db = {
+      query: (sql: string, bindings?: Record<string, unknown>) => ({
+        collect: async () => {
+          queries.push({ sql, bindings });
+          return [[]];
+        },
+      }),
+      create: (target: unknown) => {
+        const tableName = target instanceof Table ? target.name : String(target);
+        return {
+          content: async () => {
+            counter += 1;
+            return { id: new RecordId(tableName, `test-${counter}`) };
+          },
+        };
+      },
+    } as unknown as Surreal;
+    const noteId = new RecordId("note", "sample");
+
+    await writeExtractionToSurreal(db, noteId, {
+      entities: ["POSIX"],
+      entityKinds: { POSIX: "system" },
+      claims: ["POSIX is leaky."],
+      claimKinds: { "POSIX is leaky.": "assertion" },
+      questions: ["Why is POSIX leaky?"],
+    });
+
+    expect(queries.slice(0, 3).map((query) => query.sql)).toEqual([
+      "DELETE mentions WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+      "DELETE asserts WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+      "DELETE asks WHERE in = $note AND (agent = 'extractor' OR source = 'extractor');",
+    ]);
+    for (const query of queries.slice(0, 3)) {
+      expect(query.bindings).toEqual({ note: noteId });
+    }
   });
 });
 
@@ -269,7 +337,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] writeExtractionToSurreal", () => {
     });
     await writeExtractionToSurreal(connection.db, noteId, {
       entities: ["POSIX", "HPC"],
+      entityKinds: { POSIX: "system", HPC: "proper_noun" },
       claims: ["POSIX is leaky.", "HPC needs new abstractions."],
+      claimKinds: {
+        "POSIX is leaky.": "assertion",
+        "HPC needs new abstractions.": "assertion",
+      },
       questions: ["Why is POSIX leaky?"],
     });
 
@@ -305,20 +378,36 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] writeExtractionToSurreal", () => {
     expect(asksRows[0].approved).toBe(true);
 
     const [conceptRows] = await connection.db
-      .query<[Array<{ label: string }>]>(
-        "SELECT label FROM concept WHERE label IN ['POSIX','HPC'];",
+      .query<[Array<{ label: string; kind: string; source: string }>]>(
+        "SELECT label, kind, source FROM concept WHERE label IN ['POSIX','HPC'];",
       )
-      .collect<[Array<{ label: string }>]>();
+      .collect<[Array<{ label: string; kind: string; source: string }>]>();
     expect(conceptRows.length).toBe(2);
+    expect(conceptRows).toContainEqual({ label: "POSIX", kind: "system", source: "extractor" });
+    expect(conceptRows).toContainEqual({ label: "HPC", kind: "proper_noun", source: "extractor" });
 
     const [claimRows] = await connection.db
-      .query<[Array<{ count: number }>]>("SELECT count() AS count FROM claim GROUP ALL;")
-      .collect<[Array<{ count: number }>]>();
-    expect(claimRows[0]?.count ?? 0).toBeGreaterThanOrEqual(2);
+      .query<[Array<{ kind: string }>]>("SELECT kind FROM claim;")
+      .collect<[Array<{ kind: string }>]>();
+    expect(claimRows).toHaveLength(2);
+    expect(claimRows.every((row) => row.kind === "assertion")).toBe(true);
 
     const [questionRows] = await connection.db
       .query<[Array<{ count: number }>]>("SELECT count() AS count FROM question GROUP ALL;")
       .collect<[Array<{ count: number }>]>();
     expect(questionRows[0]?.count ?? 0).toBeGreaterThanOrEqual(1);
+
+    await writeExtractionToSurreal(connection.db, noteId, {
+      entities: ["RAG"],
+      entityKinds: { RAG: "technique" },
+      claims: [],
+      questions: [],
+    });
+    const [replacedMentionsRows] = await connection.db
+      .query<[Array<{ out: unknown }>]>("SELECT out FROM mentions WHERE in = $note;", {
+        note: noteId,
+      })
+      .collect<[Array<{ out: unknown }>]>();
+    expect(replacedMentionsRows).toHaveLength(1);
   });
 });

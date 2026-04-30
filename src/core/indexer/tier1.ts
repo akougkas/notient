@@ -389,21 +389,27 @@ function buildTier1Transaction(
     );
   }
 
+  const tagVarByPath = new Map<string, string>();
   for (let index = 0; index < extraction.tags.length; index += 1) {
     const tag = extraction.tags[index];
     const existingTagId = existingTagIds[index];
-    if (existingTagId !== null) {
-      bindings[`tag${index}_existingId`] = existingTagId;
-      statements.push(`LET $tag${index} = $tag${index}_existingId;`);
-    } else {
-      bindings[`tag${index}_path`] = tag.path;
-      statements.push(
-        `LET $tag${index} = (CREATE ONLY tag CONTENT { path: $tag${index}_path }).id;`,
-      );
+    const existingTagVar = tagVarByPath.get(tag.path);
+    const tagVar = existingTagVar ?? `$tag${index}`;
+    if (existingTagVar === undefined) {
+      tagVarByPath.set(tag.path, tagVar);
+      if (existingTagId !== null) {
+        bindings[`tag${index}_existingId`] = existingTagId;
+        statements.push(`LET $tag${index} = $tag${index}_existingId;`);
+      } else {
+        bindings[`tag${index}_path`] = tag.path;
+        statements.push(
+          `LET $tag${index} = (CREATE ONLY tag CONTENT { path: $tag${index}_path }).id;`,
+        );
+      }
     }
     const fromExpr = fromExpression(tag.fromBlockOrd, blocks.length);
     statements.push(
-      `RELATE ${fromExpr} -> tagged -> $tag${index} SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
+      `RELATE ${fromExpr} -> tagged -> ${tagVar} SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
     );
   }
 

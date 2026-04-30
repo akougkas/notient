@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { makeEmitter } from "../output";
 import {
@@ -75,6 +76,26 @@ const SAMPLE_EVENTS = [
   { id: 2, ts: 1_700_000_010, type: "swarm:cluster_emerged", payload: { clusterId: "c1" } },
 ];
 
+const CLI_ENTRY_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts");
+
+async function runCli(
+  args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const processHandle = Bun.spawn(
+    [process.execPath, "--env-file=/dev/null", CLI_ENTRY_PATH, ...args],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(processHandle.stdout).text(),
+    new Response(processHandle.stderr).text(),
+    processHandle.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 describe("notient events CLI", () => {
   let rootDir: string;
   let daemon: FakeDaemon;
@@ -138,6 +159,25 @@ describe("notient events CLI", () => {
     const sent = daemon.framesReceived[0];
     const params = sent.params as Record<string, unknown>;
     expect(params.since).toBe(42);
+    expect(params.longPollMs).toBe(0);
+  });
+
+  test("CLI --no-poll defaults omitted --since to 0", async () => {
+    daemon.setReply({
+      type: "result",
+      ok: true,
+      events: [],
+      cursor: 0,
+      longPollExpired: false,
+    });
+    const result = await runCli(["events", "--vault", rootDir, "--no-poll", "--ndjson"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(JSON.stringify({ type: "events:cursor", cursor: 0 }));
+    expect(daemon.framesReceived).toHaveLength(1);
+    const sent = daemon.framesReceived[0];
+    const params = sent.params as Record<string, unknown>;
+    expect(params.since).toBe(0);
     expect(params.longPollMs).toBe(0);
   });
 

@@ -20,10 +20,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect } from "../db/surreal";
 import { EventBus } from "../events/eventBus";
-import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { Coordinator } from "./coordinator";
 import { ReasoningMutex } from "./reasoningMutex";
 import type { Agent, AgentRunContext } from "./types";

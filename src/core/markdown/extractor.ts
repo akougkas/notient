@@ -1,19 +1,12 @@
 import { createHash } from "node:crypto";
-import type {
-  Heading,
-  ListItem,
-  Paragraph,
-  Root,
-  RootContent,
-  Yaml,
-} from "mdast";
+import type { Heading, ListItem, Paragraph, Root, RootContent, Yaml } from "mdast";
 import { toString as mdastToString } from "mdast-util-to-string";
 import type { Node } from "unist";
 import { visit } from "unist-util-visit";
 import { parse as parseYaml } from "yaml";
-import { headingSlug } from "./slug";
 import type { TagRefNode } from "./plugins/remarkTag";
 import type { WikiEmbedNode, WikiLinkNode } from "./plugins/remarkWikilink";
+import { headingSlug } from "./slug";
 import type {
   BlockSpec,
   FrontmatterRefSpec,
@@ -105,9 +98,7 @@ function collectInlineSignals(
     if (current.type === "wikiLink" || current.type === "wikiEmbed") {
       const link = current as WikiLinkNode | WikiEmbedNode;
       const targetHeadingPath: string[] =
-        link.heading !== null
-          ? [...headingStack.map((frame) => frame.text), link.heading]
-          : [];
+        link.heading !== null ? [...headingStack.map((frame) => frame.text), link.heading] : [];
       wikilinks.push({
         fromBlockOrd,
         rawTarget: link.target,
@@ -126,11 +117,7 @@ function collectInlineSignals(
   });
 }
 
-function walkFrontmatterValue(
-  key: string,
-  value: unknown,
-  refs: FrontmatterRefSpec[],
-): void {
+function walkFrontmatterValue(key: string, value: unknown, refs: FrontmatterRefSpec[]): void {
   if (value === null || value === undefined) {
     return;
   }
@@ -211,10 +198,7 @@ function parseFrontmatter(node: Yaml): {
   return { frontmatter, refs, tags };
 }
 
-function pushBlock(
-  blocks: BlockSpec[],
-  spec: BlockSpec,
-): void {
+function pushBlock(blocks: BlockSpec[], spec: BlockSpec): void {
   blocks.push(spec);
 }
 
@@ -288,7 +272,10 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
     const headingText = mdastToString(node);
     const ord = blocks.length;
     const slug = headingSlug(headingText);
-    const path = [...headingStack.filter((frame) => frame.level < level).map((frame) => frame.text), headingText];
+    const path = [
+      ...headingStack.filter((frame) => frame.level < level).map((frame) => frame.text),
+      headingText,
+    ];
     const spec: BlockSpec = {
       blockId: null,
       headingLevel: level,
@@ -364,18 +351,18 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
         const itemBlockId = nodeBlockId(item);
         if (itemBlockId !== null) {
           const standalone = makeStandaloneBlock(item, itemBlockId);
-          collectInlineSignals(item as ListItem, standalone.spec.ord, wikilinks, tags, headingStack);
-        } else {
-          const itemText = mdastToString(item);
-          const target = ensureOpenBlock(item);
-          appendText(target, itemText, nodeEndLine(item));
           collectInlineSignals(
             item as ListItem,
-            target.spec.ord,
+            standalone.spec.ord,
             wikilinks,
             tags,
             headingStack,
           );
+        } else {
+          const itemText = mdastToString(item);
+          const target = ensureOpenBlock(item);
+          appendText(target, itemText, nodeEndLine(item));
+          collectInlineSignals(item as ListItem, target.spec.ord, wikilinks, tags, headingStack);
         }
       }
       continue;
@@ -391,26 +378,14 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
       const text = mdastToString(child);
       const target = ensureOpenBlock(child);
       appendText(target, text, nodeEndLine(child));
-      collectInlineSignals(
-        child,
-        target.spec.ord,
-        wikilinks,
-        tags,
-        headingStack,
-      );
+      collectInlineSignals(child, target.spec.ord, wikilinks, tags, headingStack);
       continue;
     }
 
     const generic = mdastToString(child);
     const target = ensureOpenBlock(child);
     appendText(target, generic, nodeEndLine(child));
-    collectInlineSignals(
-      child,
-      target.spec.ord,
-      wikilinks,
-      tags,
-      headingStack,
-    );
+    collectInlineSignals(child, target.spec.ord, wikilinks, tags, headingStack);
   }
 
   closeBlock(openHeadingBlock);

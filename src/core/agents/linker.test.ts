@@ -31,8 +31,8 @@ import {
 import { EventBus } from "../events/eventBus";
 import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../llm/provider";
 import {
-  type LinkerJsonResponse,
   Linker,
+  type LinkerJsonResponse,
   MAX_PROPOSALS_PER_NOTE,
   RANK_TO_CONFIDENCE,
   filterProposals,

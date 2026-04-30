@@ -841,8 +841,23 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
-export async function upsertConcept(db: Surreal, label: string): Promise<RecordId<"concept">> {
+export interface ConceptUpsertOptions {
+  kind?: string;
+  source?: string;
+}
+
+export interface ClaimUpsertOptions {
+  kind?: string;
+}
+
+export async function upsertConcept(
+  db: Surreal,
+  label: string,
+  options: ConceptUpsertOptions = {},
+): Promise<RecordId<"concept">> {
   const normalized = normalizeLabel(label);
+  const kind = options.kind ?? "other";
+  const source = options.source ?? "extractor";
   const [rows] = await db
     .query<[Array<{ id: RecordId<"concept"> }>]>(
       "SELECT id FROM concept WHERE norm_label = $norm LIMIT 1;",
@@ -850,11 +865,18 @@ export async function upsertConcept(db: Surreal, label: string): Promise<RecordI
     )
     .collect<[Array<{ id: RecordId<"concept"> }>]>();
   if (rows[0] !== undefined) {
+    await db
+      .query("UPDATE $id SET kind = $kind, source = $source;", {
+        id: rows[0].id,
+        kind,
+        source,
+      })
+      .collect();
     return rows[0].id;
   }
   const result = await db
     .create<{ id: RecordId<"concept">; label: string; norm_label: string }>(new Table("concept"))
-    .content({ label, norm_label: normalized });
+    .content({ label, norm_label: normalized, kind, source });
   const record = Array.isArray(result) ? result[0] : result;
   if (record === undefined) {
     throw new Error("upsertConcept: SurrealDB returned no record");
@@ -862,19 +884,25 @@ export async function upsertConcept(db: Surreal, label: string): Promise<RecordI
   return record.id;
 }
 
-export async function upsertClaim(db: Surreal, text: string): Promise<RecordId<"claim">> {
+export async function upsertClaim(
+  db: Surreal,
+  text: string,
+  options: ClaimUpsertOptions = {},
+): Promise<RecordId<"claim">> {
   const sha = await sha256Hex(text);
+  const kind = options.kind ?? "assertion";
   const [rows] = await db
     .query<[Array<{ id: RecordId<"claim"> }>]>("SELECT id FROM claim WHERE sha = $sha LIMIT 1;", {
       sha,
     })
     .collect<[Array<{ id: RecordId<"claim"> }>]>();
   if (rows[0] !== undefined) {
+    await db.query("UPDATE $id SET kind = $kind;", { id: rows[0].id, kind }).collect();
     return rows[0].id;
   }
   const result = await db
     .create<{ id: RecordId<"claim">; text: string; sha: string }>(new Table("claim"))
-    .content({ text, sha });
+    .content({ text, sha, kind });
   const record = Array.isArray(result) ? result[0] : result;
   if (record === undefined) {
     throw new Error("upsertClaim: SurrealDB returned no record");

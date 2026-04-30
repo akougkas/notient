@@ -210,4 +210,3 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     }
   });
 });
-

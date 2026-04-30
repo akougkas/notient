@@ -76,6 +76,7 @@ export interface ChatWithToolsRequest {
   signal: AbortSignal;
   temperature?: number;
   maxTokens?: number;
+  responseSchema?: JsonSchema;
   /** See {@link ChatOptions.enableThinking}. */
   enableThinking?: boolean;
 }

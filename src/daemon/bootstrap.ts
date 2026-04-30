@@ -8,6 +8,7 @@ import { Linker } from "../core/agents/linker";
 import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
 import { ApprovalService } from "../core/approvals/approvalService";
 import { AwakenBackgroundRegistry } from "../core/awaken/backgroundRegistry";
+import { reconcileAwakenOrphans } from "../core/awaken/reconcileAwakenOrphans";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
 import { ContextManager } from "../core/chat/contextManager";
@@ -239,6 +240,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       database: "vault",
     });
     await applySchema(surrealConnection.db, surrealSecret);
+    const awakenOrphans = await reconcileAwakenOrphans(surrealConnection.db);
+    process.stderr.write(
+      `${JSON.stringify({
+        type: "daemon:awaken_orphans_reconciled",
+        reconciled: awakenOrphans.reconciled,
+      })}\n`,
+    );
   }
   if (surrealConnection === null) {
     throw new Error(

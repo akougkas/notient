@@ -168,7 +168,10 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       if (callId.length === 0) {
         throw new Error("INVALID_PARAMS: callId is required");
       }
-      deps.approvalGate.resolve(callId, { approved, reason });
+      const resolved = deps.approvalGate.resolve(callId, { approved, reason });
+      if (!resolved) {
+        throw new Error(`INVALID_PARAMS: unknown call id: ${callId}`);
+      }
       return { ok: true };
     },
   };

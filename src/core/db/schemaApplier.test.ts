@@ -60,6 +60,15 @@ describe("applySchema", () => {
     expect(combined).toContain("DEFINE NAMESPACE IF NOT EXISTS notient");
     expect(combined).toContain("DEFINE TABLE OVERWRITE note SCHEMAFULL");
     expect(combined).toContain("DEFINE TABLE OVERWRITE wikilink TYPE RELATION");
+    expect(combined).toContain(
+      "DEFINE FIELD OVERWRITE kind ON concept TYPE string DEFAULT 'other'",
+    );
+    expect(combined).toContain(
+      "DEFINE FIELD OVERWRITE source ON concept TYPE string DEFAULT 'extractor'",
+    );
+    expect(combined).toContain(
+      "DEFINE FIELD OVERWRITE kind ON claim TYPE string DEFAULT 'assertion'",
+    );
     expect(combined).toContain("DEFINE ACCESS OVERWRITE agent_jwt");
   });
 

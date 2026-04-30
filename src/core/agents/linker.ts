@@ -52,9 +52,7 @@ export const MAX_PROPOSALS_PER_NOTE = 4;
 export const RANK_TO_CONFIDENCE: readonly number[] = [0.95, 0.85, 0.75, 0.65];
 
 if (RANK_TO_CONFIDENCE.length !== MAX_PROPOSALS_PER_NOTE) {
-  throw new Error(
-    "linker: RANK_TO_CONFIDENCE length must equal MAX_PROPOSALS_PER_NOTE",
-  );
+  throw new Error("linker: RANK_TO_CONFIDENCE length must equal MAX_PROPOSALS_PER_NOTE");
 }
 
 export interface LinkerProposal {

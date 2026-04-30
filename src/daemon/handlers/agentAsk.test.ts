@@ -19,7 +19,7 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../core/llm/provider";
-import { AGENT_ASK_ROUND_CAP, makeAgentAskHandler } from "./agentAsk";
+import { AGENT_ASK_RESPONSE_SCHEMA, AGENT_ASK_ROUND_CAP, makeAgentAskHandler } from "./agentAsk";
 
 interface ScriptedTurn {
   toolCalls?: ChatWithToolsToolCall[];
@@ -155,8 +155,6 @@ describe("agent.ask handler", () => {
     const structured = {
       answer: "Auth uses JWT bearer tokens with rotating refresh tokens.",
       citations: [{ path: "a.md", score: 0.91, snippet: "JWT-based auth" }],
-      openQuestions: ["What is the refresh window?"],
-      confidence: 0.82,
     };
     const provider = new ScriptedProvider([
       {
@@ -182,9 +180,10 @@ describe("agent.ask handler", () => {
     );
     expect(result.ok).toBe(true);
     expect(result.answer).toBe(structured.answer);
-    expect(result.citations).toEqual(structured.citations);
-    expect(result.openQuestions).toEqual(structured.openQuestions);
-    expect(result.confidence).toBe(structured.confidence);
+    expect(result.citations).toEqual([{ path: "a.md", score: 0.9, snippet: "auth body" }]);
+    expect(result.openQuestions).toEqual([]);
+    expect(result.confidence).toBe(0);
+    expect(provider.requests[1]?.responseSchema).toEqual(AGENT_ASK_RESPONSE_SCHEMA);
     const toolCalls = result.toolCalls as Array<{ name: string; durationMs: number }>;
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("vault.search_notes");
@@ -195,11 +194,9 @@ describe("agent.ask handler", () => {
     const structured = {
       answer: "There is one real reference and one made-up one.",
       citations: [
-        { path: "real/found.md", score: 0.7, snippet: "real" },
+        { path: "real/found.md", score: 0.96, snippet: "model snippet" },
         { path: "fake/never_searched.md", score: 0.95, snippet: "made up" },
       ],
-      openQuestions: [],
-      confidence: 0.6,
     };
     const provider = new ScriptedProvider([
       {
@@ -220,21 +217,20 @@ describe("agent.ask handler", () => {
     });
 
     const result = await handler({ intent: "anything" }, () => {}, "req-fab", "claude-code");
-    const citations = result.citations as Array<{ path: string }>;
+    const citations = result.citations as Array<{ path: string; score: number; snippet: string }>;
     expect(citations).toHaveLength(1);
     expect(citations[0].path).toBe("real/found.md");
+    expect(citations[0].score).toBe(0.7);
+    expect(citations[0].snippet).toBe("...");
     expect(citations.some((entry) => entry.path === "fake/never_searched.md")).toBe(false);
-    // Confidence and answer are deliberately not mutated by the filter.
     expect(result.answer).toBe(structured.answer);
-    expect(result.confidence).toBe(structured.confidence);
+    expect(result.confidence).toBe(0);
   });
 
   test("citations dropped when no tools were called", async () => {
     const structured = {
       answer: "Pure hallucination, no tools were ever run.",
       citations: [{ path: "anything.md", score: 0.99, snippet: "..." }],
-      openQuestions: [],
-      confidence: 0.9,
     };
     const provider = new ScriptedProvider([{ finalContent: JSON.stringify(structured) }]);
 
@@ -283,7 +279,7 @@ describe("agent.ask handler", () => {
     expect((thrown as Error).message).toContain("not available to agent.ask");
   });
 
-  test("parse-failure fallback wraps raw text with confidence zero", async () => {
+  test("schema failure rejects instead of wrapping raw markdown as an answer", async () => {
     const provider = new ScriptedProvider([{ finalContent: "I do not know." }]);
 
     const handler = makeAgentAskHandler({
@@ -295,11 +291,31 @@ describe("agent.ask handler", () => {
       settings: SETTINGS,
     });
 
-    const result = await handler({ intent: "anything" }, () => {}, "req-3", "claude-code");
-    expect(result.answer).toBe("I do not know.");
-    expect(result.citations).toEqual([]);
-    expect(result.openQuestions).toEqual([]);
-    expect(result.confidence).toBe(0);
+    await expect(handler({ intent: "anything" }, () => {}, "req-3", "claude-code")).rejects.toThrow(
+      "INVALID_LLM_OUTPUT",
+    );
+  });
+
+  test("fenced JSON final content is rejected", async () => {
+    const provider = new ScriptedProvider([
+      {
+        finalContent:
+          '```json\n{"answer":"wrapped","citations":[{"path":"a.md","score":0.9,"snippet":"x"}]}\n```',
+      },
+    ]);
+
+    const handler = makeAgentAskHandler({
+      provider,
+      toolRegistry: buildRegistry(),
+      approvalGate: makeNoopGate(),
+      toolModeCache: makeNativeCache(),
+      bus: new EventBus(),
+      settings: SETTINGS,
+    });
+
+    await expect(
+      handler({ intent: "anything" }, () => {}, "req-fence", "claude-code"),
+    ).rejects.toThrow("INVALID_LLM_OUTPUT");
   });
 
   test("empty intent rejects before calling the provider", async () => {
@@ -345,17 +361,9 @@ describe("agent.ask handler", () => {
       settings: SETTINGS,
     });
 
-    const result = await handler(
-      { intent: "loop please", maxRoundsPerTurn: 100 },
-      () => {},
-      "req-5",
-      "claude-code",
-    );
+    await expect(
+      handler({ intent: "loop please", maxRoundsPerTurn: 100 }, () => {}, "req-5", "claude-code"),
+    ).rejects.toThrow("INVALID_LLM_OUTPUT");
     expect(provider.requests).toHaveLength(AGENT_ASK_ROUND_CAP);
-    // Truncated final message is plain prose; the handler wraps it as the
-    // parse-failure fallback with confidence zero.
-    expect(result.confidence).toBe(0);
-    const toolCalls = result.toolCalls as Array<{ name: string }>;
-    expect(toolCalls.length).toBe(AGENT_ASK_ROUND_CAP);
   });
 });

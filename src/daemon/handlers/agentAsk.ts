@@ -14,9 +14,9 @@
  *   - The tool registry is filtered to a read-only allowlist before the loop
  *     starts so the LLM never sees write tools in its catalog. A defense-in-
  *     depth check in the event drain rejects any out-of-band call.
- *   - The final assistant message is parsed as JSON; on parse or shape failure
- *     the handler wraps the raw text into a confidence-zero fallback so a
- *     misbehaving model never crashes the verb.
+ *   - The final assistant message is parsed as schema-conformant JSON.
+ *     Markdown wrappers and malformed shapes are rejected so the caller
+ *     does not mistake model prose for structured output.
  */
 
 import { runAgentTurn } from "../../core/chat/agentLoop";
@@ -25,7 +25,11 @@ import { type ToolMode, type ToolModeCache, probeToolMode } from "../../core/cha
 import type { ToolRegistry } from "../../core/chat/tools/registry";
 import type { Conversation } from "../../core/chat/types";
 import type { EventBus } from "../../core/events/eventBus";
-import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../../core/llm/provider";
+import type {
+  JsonSchema,
+  LLMProvider,
+  ChatMessage as ProviderChatMessage,
+} from "../../core/llm/provider";
 
 export interface AgentAskHandlerDeps {
   provider: LLMProvider;
@@ -83,13 +87,36 @@ const ASK_SYSTEM_PROMPT = [
   "Your final message MUST be a single JSON object with this exact shape:",
   "{",
   '  "answer": "<concise prose answer, 1-3 paragraphs>",',
-  '  "citations": [{"path": "<note path>", "score": <0-1>, "snippet": "<short quote>"}],',
-  '  "openQuestions": ["<question 1>", ...],',
-  '  "confidence": <0-1, your confidence in the answer>',
+  '  "citations": [{"path": "<note path>", "score": <0-1>, "snippet": "<short quote>"}]',
   "}",
   "",
   "Do not wrap the JSON in code fences. Do not include any prose before or after the JSON. Do not include tool-call narration in your final message.",
 ].join("\n");
+
+export const AGENT_ASK_RESPONSE_SCHEMA: JsonSchema = {
+  name: "agent_ask_response",
+  schema: {
+    type: "object",
+    properties: {
+      answer: { type: "string" },
+      citations: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            score: { type: "number" },
+            snippet: { type: "string" },
+          },
+          required: ["path", "score", "snippet"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["answer", "citations"],
+    additionalProperties: false,
+  },
+};
 
 export type AgentAskHandler = (
   params: Record<string, unknown>,
@@ -127,6 +154,7 @@ export function makeAgentAskHandler(deps: AgentAskHandlerDeps): AgentAskHandler 
         approvalGate: deps.approvalGate,
         maxRoundsPerTurn,
         toolMode: () => toolMode,
+        responseSchema: AGENT_ASK_RESPONSE_SCHEMA,
       },
       {
         conversation: makeEphemeralConversation(clientIdentity, settings.model),
@@ -159,7 +187,7 @@ interface DrainedTurn {
   finalContent: string;
   loopError: string | null;
   unauthorizedTool: string | null;
-  seenPaths: Set<string>;
+  citationSources: Map<string, AgentAskCitation>;
 }
 
 async function drainAskEvents(
@@ -171,7 +199,7 @@ async function drainAskEvents(
   // Map call id -> tool name + args so we can interpret the matching result.
   // The model picks both, and we only see the name on the loop:tool-call event.
   const callMetadata = new Map<string, { name: string; args: unknown }>();
-  const seenPaths = new Set<string>();
+  const citationSources = new Map<string, AgentAskCitation>();
   let finalContent = "";
   let loopError: string | null = null;
   let unauthorizedTool: string | null = null;
@@ -190,7 +218,7 @@ async function drainAskEvents(
     }
     if (event.type === "loop:tool-result") {
       finalizeToolCallDuration(toolCalls, callStartTimes, event.result.callId);
-      handleToolResultPaths(event.result, callMetadata, seenPaths);
+      handleToolResultCitations(event.result, callMetadata, citationSources);
       continue;
     }
     if (event.type === "loop:done") {
@@ -202,72 +230,56 @@ async function drainAskEvents(
     }
   }
 
-  return { toolCalls, finalContent, loopError, unauthorizedTool, seenPaths };
+  return { toolCalls, finalContent, loopError, unauthorizedTool, citationSources };
 }
 
-function handleToolResultPaths(
+function handleToolResultCitations(
   result: import("../../core/chat/types").ToolResult,
   callMetadata: Map<string, { name: string; args: unknown }>,
-  seenPaths: Set<string>,
+  citationSources: Map<string, AgentAskCitation>,
 ): void {
   const metadata = callMetadata.get(result.callId);
   callMetadata.delete(result.callId);
   if (!metadata || result.status !== "ok") return;
-  collectSeenPaths(metadata.name, metadata.args, result.data, seenPaths);
+  collectCitationSources(metadata.name, result.data, citationSources);
 }
 
 /**
- * Records every vault path that the agent legitimately observed via a
- * successful tool call. The handler later filters model-emitted citations
- * against this set so a hallucinated "looks like a path" citation cannot
- * leak into the response.
+ * Records citation payloads returned by retrieval. The final model JSON may
+ * choose which paths to cite, but score and snippet must come from the
+ * retrieval result, not from the model.
  *
  * The extraction is best-effort and per-tool: shapes that don't match are
  * silently skipped so a malformed tool result never crashes the turn.
  *
- * proposals.*, graph.*, and agents.* are intentionally absent; they do not
- * return note paths the model would cite. Extend this map if a future tool
- * starts returning paths.
+ * Non-search tools are intentionally absent because they do not produce a
+ * retrieval score. Citations whose scores cannot be sourced are dropped.
  */
-function collectSeenPaths(
+function collectCitationSources(
   toolName: string,
-  args: unknown,
   data: unknown,
-  seenPaths: Set<string>,
+  citationSources: Map<string, AgentAskCitation>,
 ): void {
-  const collector = SEEN_PATH_COLLECTORS[toolName];
-  if (collector) collector(args, data, seenPaths);
+  if (toolName !== "vault.search_notes") return;
+  const hits = isRecord(data) ? data.hits : undefined;
+  if (!Array.isArray(hits)) return;
+  for (const hit of hits) addCitationFromSearchHit(hit, citationSources);
 }
 
-type SeenPathCollector = (args: unknown, data: unknown, seenPaths: Set<string>) => void;
-
-const SEEN_PATH_COLLECTORS: Record<string, SeenPathCollector> = {
-  "vault.search_notes": (_args, data, seenPaths) => {
-    const hits = isRecord(data) ? data.hits : undefined;
-    if (Array.isArray(hits)) addNotePathsFromArray(hits, seenPaths);
-  },
-  "vault.read_note": (args, data, seenPaths) => {
-    addNotePathFromRecord(args, seenPaths);
-    addNotePathFromRecord(data, seenPaths);
-  },
-  "vault.list_neighbors": (_args, data, seenPaths) => {
-    addNotePathFromRecord(data, seenPaths);
-    const neighbors = isRecord(data) ? data.neighbors : undefined;
-    if (Array.isArray(neighbors)) addNotePathsFromArray(neighbors, seenPaths);
-  },
-  "vault.get_vitals": (args, _data, seenPaths) => {
-    addNotePathFromRecord(args, seenPaths);
-  },
-};
-
-function addNotePathFromRecord(value: unknown, seenPaths: Set<string>): void {
+function addCitationFromSearchHit(
+  value: unknown,
+  citationSources: Map<string, AgentAskCitation>,
+): void {
   if (!isRecord(value)) return;
-  const path = value.notePath;
-  if (typeof path === "string" && path.length > 0) seenPaths.add(path);
-}
-
-function addNotePathsFromArray(entries: unknown[], seenPaths: Set<string>): void {
-  for (const entry of entries) addNotePathFromRecord(entry, seenPaths);
+  const path = typeof value.notePath === "string" ? value.notePath : value.path;
+  const score = value.score;
+  const snippet = value.snippet;
+  if (typeof path !== "string" || path.length === 0) return;
+  if (typeof score !== "number" || !Number.isFinite(score)) return;
+  if (typeof snippet !== "string") return;
+  const existing = citationSources.get(path);
+  if (existing !== undefined && existing.score >= score) return;
+  citationSources.set(path, { path, score, snippet });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -291,30 +303,18 @@ function buildAskResponse(drained: DrainedTurn, startedAt: number): Record<strin
   const durationMs = Date.now() - startedAt;
   const parsedShape = tryParseAskShape(drained.finalContent);
   if (parsedShape === null) {
-    return {
-      ok: true,
-      answer: drained.finalContent,
-      citations: [],
-      openQuestions: [],
-      confidence: 0,
-      toolCalls: drained.toolCalls,
-      durationMs,
-    };
+    throw new Error("INVALID_LLM_OUTPUT: agent.ask final response must be schema-conformant JSON");
   }
-  // Filter out citations the agent could not have legitimately seen via a
-  // successful tool call this turn. A model that hallucinates "looks like a
-  // vault path" must not win. confidence is left untouched on purpose: the
-  // operator gets the prose answer, the tool-call trail, and an honest
-  // citations array, then decides what to trust.
-  const validatedCitations = parsedShape.citations.filter((citation) =>
-    drained.seenPaths.has(citation.path),
-  );
+  const validatedCitations = parsedShape.citations.flatMap((citation) => {
+    const source = drained.citationSources.get(citation.path);
+    return source === undefined ? [] : [source];
+  });
   return {
     ok: true,
     answer: parsedShape.answer,
     citations: validatedCitations,
-    openQuestions: parsedShape.openQuestions,
-    confidence: parsedShape.confidence,
+    openQuestions: parsedShape.openQuestions ?? [],
+    confidence: parsedShape.confidence ?? 0,
     toolCalls: drained.toolCalls,
     durationMs,
   };
@@ -378,13 +378,14 @@ function makeEphemeralConversation(clientIdentity: string, model: string): Conve
 interface ParsedAskShape {
   answer: string;
   citations: AgentAskCitation[];
-  openQuestions: string[];
-  confidence: number;
+  openQuestions?: string[];
+  confidence?: number;
 }
 
 function tryParseAskShape(content: string): ParsedAskShape | null {
   const trimmed = content.trim();
   if (trimmed.length === 0) return null;
+  if (/```(?:json)?/i.test(trimmed)) return null;
   let raw: unknown;
   try {
     raw = JSON.parse(trimmed);
@@ -396,11 +397,19 @@ function tryParseAskShape(content: string): ParsedAskShape | null {
   const answer = candidate.answer;
   const confidence = candidate.confidence;
   if (typeof answer !== "string") return null;
-  if (typeof confidence !== "number" || !Number.isFinite(confidence)) return null;
   const citations = parseCitationArray(candidate.citations);
-  const openQuestions = parseStringArray(candidate.openQuestions);
-  if (citations === null || openQuestions === null) return null;
-  return { answer, citations, openQuestions, confidence };
+  if (citations === null) return null;
+  const parsed: ParsedAskShape = { answer, citations };
+  if (candidate.openQuestions !== undefined) {
+    const openQuestions = parseStringArray(candidate.openQuestions);
+    if (openQuestions === null) return null;
+    parsed.openQuestions = openQuestions;
+  }
+  if (confidence !== undefined) {
+    if (typeof confidence !== "number" || !Number.isFinite(confidence)) return null;
+    parsed.confidence = confidence;
+  }
+  return parsed;
 }
 
 function parseCitationArray(value: unknown): AgentAskCitation[] | null {

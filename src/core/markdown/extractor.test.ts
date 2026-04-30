@@ -97,7 +97,7 @@ function extractFromSource(source: string) {
 
 describe("frontmatter tags", () => {
   test("array form yields one TagSpec per entry, all note-rooted", () => {
-    const source = `---\ntags: [homelab, architecture]\n---\n\nbody.\n`;
+    const source = "---\ntags: [homelab, architecture]\n---\n\nbody.\n";
     const result = extractFromSource(source);
     const paths = result.tags.map((tag) => tag.path);
     expect(paths).toContain("homelab");
@@ -111,14 +111,14 @@ describe("frontmatter tags", () => {
   });
 
   test("string form yields a single TagSpec", () => {
-    const source = `---\ntags: homelab\n---\n\nbody.\n`;
+    const source = "---\ntags: homelab\n---\n\nbody.\n";
     const result = extractFromSource(source);
     expect(result.tags).toHaveLength(1);
     expect(result.tags[0]).toEqual({ fromBlockOrd: null, path: "homelab" });
   });
 
   test("singular `tag:` array form is honored", () => {
-    const source = `---\ntag: [foo, bar]\n---\n\nbody.\n`;
+    const source = "---\ntag: [foo, bar]\n---\n\nbody.\n";
     const result = extractFromSource(source);
     const paths = result.tags.map((tag) => tag.path).sort();
     expect(paths).toEqual(["bar", "foo"]);
@@ -128,35 +128,32 @@ describe("frontmatter tags", () => {
   });
 
   test("mixed-case values are lowercased", () => {
-    const source = `---\ntags: [Homelab, ARCHITECTURE]\n---\n\nbody.\n`;
+    const source = "---\ntags: [Homelab, ARCHITECTURE]\n---\n\nbody.\n";
     const result = extractFromSource(source);
     const paths = result.tags.map((tag) => tag.path).sort();
     expect(paths).toEqual(["architecture", "homelab"]);
   });
 
   test("malformed values drop silently, valid ones survive", () => {
-    const source = `---\ntags: ["-leading-dash", "/leading-slash", "space in tag", "valid"]\n---\n\nbody.\n`;
+    const source =
+      '---\ntags: ["-leading-dash", "/leading-slash", "space in tag", "valid"]\n---\n\nbody.\n';
     const result = extractFromSource(source);
     const paths = result.tags.map((tag) => tag.path);
     expect(paths).toEqual(["valid"]);
   });
 
   test("nested tag paths are preserved", () => {
-    const source = `---\ntags: ["homelab/cluster"]\n---\n\nbody.\n`;
+    const source = '---\ntags: ["homelab/cluster"]\n---\n\nbody.\n';
     const result = extractFromSource(source);
     expect(result.tags).toHaveLength(1);
     expect(result.tags[0]).toEqual({ fromBlockOrd: null, path: "homelab/cluster" });
   });
 
   test("frontmatter tags coexist with inline body tags", () => {
-    const source = `---\ntags: [a]\n---\n\n# Section\n\nbody with #b inline.\n`;
+    const source = "---\ntags: [a]\n---\n\n# Section\n\nbody with #b inline.\n";
     const result = extractFromSource(source);
-    const frontmatterTag = result.tags.find(
-      (tag) => tag.path === "a" && tag.fromBlockOrd === null,
-    );
-    const inlineTag = result.tags.find(
-      (tag) => tag.path === "b" && tag.fromBlockOrd !== null,
-    );
+    const frontmatterTag = result.tags.find((tag) => tag.path === "a" && tag.fromBlockOrd === null);
+    const inlineTag = result.tags.find((tag) => tag.path === "b" && tag.fromBlockOrd !== null);
     expect(frontmatterTag).toBeDefined();
     expect(inlineTag).toBeDefined();
     // Frontmatter tags emit before inline tags walk the body.
@@ -203,9 +200,7 @@ describe("frontmatter wikilink enumeration", () => {
     ].join("\n");
     const result = extractFromSource(source);
     expect(result.frontmatterRefs).toHaveLength(6);
-    const pairs = result.frontmatterRefs
-      .map((ref) => `${ref.key}::${ref.rawTarget}`)
-      .sort();
+    const pairs = result.frontmatterRefs.map((ref) => `${ref.key}::${ref.rawTarget}`).sort();
     expect(pairs).toEqual(
       [
         "notient.contradicts::c",
@@ -216,9 +211,7 @@ describe("frontmatter wikilink enumeration", () => {
         "notient.synthesizes::f",
       ].sort(),
     );
-    const authorRef = result.frontmatterRefs.find(
-      (ref) => ref.key === "notient.author",
-    );
+    const authorRef = result.frontmatterRefs.find((ref) => ref.key === "notient.author");
     expect(authorRef).toBeUndefined();
   });
 });

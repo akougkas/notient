@@ -88,9 +88,7 @@ function resolveOne(
     return null;
   }
   const baseTarget = basenameWithoutExtension(raw);
-  const candidates = vaultPaths.filter(
-    (path) => basenameWithoutExtension(path) === baseTarget,
-  );
+  const candidates = vaultPaths.filter((path) => basenameWithoutExtension(path) === baseTarget);
   if (candidates.length === 0) {
     return null;
   }

@@ -207,6 +207,41 @@ describe("runAgentTurn", () => {
     expect(provider.requests.length).toBe(1);
   });
 
+  test("passes responseSchema through to provider chatWithTools", async () => {
+    const provider = new ScriptedProvider([{ finalContent: "{}" }]);
+    const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
+    const { approvalGate } = makeApprovalGate();
+    const responseSchema: JsonSchema = {
+      name: "answer_shape",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    };
+
+    await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          approvalGate,
+          maxRoundsPerTurn: 1,
+          toolMode: () => "native",
+          responseSchema,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "hi" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+
+    expect(provider.requests[0]?.responseSchema).toEqual(responseSchema);
+  });
+
   test("executes a read-only tool call and resumes the loop", async () => {
     const provider = new ScriptedProvider([
       {

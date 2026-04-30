@@ -186,7 +186,9 @@ export class Coordinator {
     ].join("\n");
     const results = await this.opts.db.query(sql, bindings).collect<unknown[]>();
     const lastSlice = results[results.length - 1];
-    const rows = (Array.isArray(lastSlice) ? (lastSlice as CreatedRunRow[]) : []) as CreatedRunRow[];
+    const rows = (
+      Array.isArray(lastSlice) ? (lastSlice as CreatedRunRow[]) : []
+    ) as CreatedRunRow[];
     const created = rows[0];
     if (created === undefined) {
       throw new Error("Coordinator.createRun: SurrealDB returned no row");

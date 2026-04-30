@@ -266,10 +266,11 @@ export class ApprovalGate {
     });
   }
 
-  resolve(callId: string, decision: ApprovalDecision): void {
+  resolve(callId: string, decision: ApprovalDecision): boolean {
     const pending = this.pending.get(callId);
-    if (!pending) return;
+    if (!pending) return false;
     pending.resolve(decision);
+    return true;
   }
 
   /**

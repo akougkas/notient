@@ -135,6 +135,72 @@ describe("dispatchSlashCommand", () => {
     expect(outcome.message).toBe("denied abc123");
   });
 
+  test("/approve surfaces unknown call id errors from chat.approve", async () => {
+    const client = makeFakeClient([
+      {
+        method: "chat.approve",
+        result: { type: "error", code: "INVALID_PARAMS", message: "unknown call id" },
+      },
+    ]);
+    const outcome = await dispatchSlashCommand("/approve missing", {
+      client,
+      vaultPath: "/tmp/vault",
+    });
+    expect(outcome.message).toBe("approve error: unknown call id");
+  });
+
+  test("/proposals renders pending edge rows and returns visible items", async () => {
+    const item = {
+      id: "related_to:abc",
+      table: "related_to",
+      source: "a.md",
+      target: "b.md",
+      agent: "linker",
+      confidence: 0.85,
+    };
+    const outcome = await dispatchSlashCommand("/proposals", {
+      client: makeFakeClient([]),
+      vaultPath: "/tmp/vault",
+      proposals: {
+        list: async () => [item],
+        approve: async () => "unused",
+        reject: async () => "unused",
+      },
+    });
+    expect(outcome.message).toContain("proposals page 1/1");
+    expect(outcome.message).toContain("related_to:abc related_to a.md -> b.md");
+    expect(outcome.proposalItems).toEqual([item]);
+  });
+
+  test("/approve-edge and /reject-edge use the proposal actions", async () => {
+    const calls: string[] = [];
+    const proposals = {
+      list: async () => [],
+      approve: async (id: string) => {
+        calls.push(`approve:${id}`);
+        return `edge approved ${id}`;
+      },
+      reject: async (id: string, reason?: string) => {
+        calls.push(`reject:${id}:${reason ?? ""}`);
+        return `edge rejected ${id}`;
+      },
+    };
+    const approve = await dispatchSlashCommand("/approve-edge related_to:abc", {
+      client: makeFakeClient([]),
+      vaultPath: "/tmp/vault",
+      proposals,
+    });
+    const reject = await dispatchSlashCommand("/reject-edge related_to:def weak", {
+      client: makeFakeClient([]),
+      vaultPath: "/tmp/vault",
+      proposals,
+    });
+
+    expect(approve.message).toBe("edge approved related_to:abc");
+    expect(reject.message).toBe("edge rejected related_to:def");
+    expect(calls).toEqual(["approve:related_to:abc", "reject:related_to:def:weak"]);
+  });
+
   test("/undo renders reversed entry on success", async () => {
     const client = makeFakeClient([
       {
@@ -224,9 +290,7 @@ describe("dispatchSlashCommand", () => {
   });
 
   test("/search reports no hits when the result is empty", async () => {
-    const client = makeFakeClient([
-      { method: "search.run", result: { result: { hits: [] } } },
-    ]);
+    const client = makeFakeClient([{ method: "search.run", result: { result: { hits: [] } } }]);
     const outcome = await dispatchSlashCommand("/search nothing", {
       client,
       vaultPath: "/tmp/vault",

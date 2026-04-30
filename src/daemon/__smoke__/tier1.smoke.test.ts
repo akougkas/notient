@@ -17,9 +17,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { applySchema } from "../../core/db/schemaApplier";
-import { connect, type SurrealConnection } from "../../core/db/surreal";
+import { type SurrealConnection, connect } from "../../core/db/surreal";
 import { runTier1 } from "../../core/indexer/tier1";
-import { startSurreal, type SurrealServerHandle } from "../surrealServer";
+import { type SurrealServerHandle, startSurreal } from "../surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -118,9 +118,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 2 Tier 1 end-to-end", () => {
 
   test("[smoke] tag rows include the nested path 'philosophy/ethics'", async () => {
     const [rows] = await connection.db
-      .query<[Array<{ path: string }>]>(
-        "SELECT path FROM tag WHERE path = 'philosophy/ethics';",
-      )
+      .query<[Array<{ path: string }>]>("SELECT path FROM tag WHERE path = 'philosophy/ethics';")
       .collect<[Array<{ path: string }>]>();
     expect(rows.length).toBe(1);
   });

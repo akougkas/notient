@@ -103,6 +103,7 @@ export class LMStudioProvider implements LLMProvider {
       temperature: request.temperature ?? 0.3,
       max_tokens: request.maxTokens,
       stream: true,
+      ...responseSchemaBody(request.responseSchema),
       ...thinkingBody(request.enableThinking),
     });
     const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
@@ -192,6 +193,16 @@ export class LMStudioProvider implements LLMProvider {
 function thinkingBody(enableThinking: boolean | undefined): Record<string, unknown> {
   if (enableThinking !== false) return {};
   return { chat_template_kwargs: { enable_thinking: false } };
+}
+
+function responseSchemaBody(schema: JsonSchema | undefined): Record<string, unknown> {
+  if (schema === undefined) return {};
+  return {
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: schema.name, strict: true, schema: schema.schema },
+    },
+  };
 }
 
 function pickJsonPayload(content: string, reasoningContent: string): string {
