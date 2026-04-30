@@ -14,14 +14,17 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { FsVault } from "../../adapters/fsVault";
 import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServer";
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect, lookupNoteByPath, upsertNoteByPath } from "../db/surreal";
 import { EventBus } from "../events/eventBus";
+import { HistoryService } from "../history/historyService";
+import { makeNoteAppendSectionInverter } from "../history/inverters/noteAppendSection";
 import { ApprovalService, type WritebackEdgeTable } from "./approvalService";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -205,10 +208,77 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] ApprovalService", () => {
       .collect<[Array<{ kind: string; target: string; client_identity: string }>]>();
     expect(historyRows.length).toBe(1);
     expect(historyRows[0].kind).toBe("note.frontmatter");
-    expect(historyRows[0].target).toBe(sourcePath);
+    expect(historyRows[0].target).toBe("alpha.md");
     expect(historyRows[0].client_identity).toBe("linker");
 
     expect(events).toEqual(["edge:accepted"]);
+  });
+
+  test("[smoke] approve → undo → file restored, no nested-mirror artifact", async () => {
+    const initialBody = "# Alpha\n\nbody.\n";
+    const sourcePath = path.join(vaultRoot, "alpha.md");
+    await writeFile(sourcePath, initialBody);
+    await writeFile(path.join(vaultRoot, "beta.md"), "# Beta\n");
+    const seed = await seedProposal(connection, "related_to");
+    const bus = new EventBus();
+
+    const service = new ApprovalService({
+      db: connection.db,
+      bus,
+      vaultRoot,
+      fs: realFs,
+      readFile: (filePath) => readFile(filePath, "utf8"),
+      hash: sha256Hex,
+    });
+    await service.approveEdge({ id: seed.edgeId, table: "related_to" });
+
+    // Writeback ran: `## Related` section now present with `[[beta]]`.
+    const bodyAfterApprove = await readFile(sourcePath, "utf8");
+    expect(bodyAfterApprove).toContain("## Related");
+    expect(bodyAfterApprove).toContain("[[beta]]");
+
+    // History row carries the vault-relative path, not an absolute one. Pre-fix
+    // this was the absolute `sourcePath`, which the inverter then re-joined
+    // under vaultRoot to produce the phantom mirror.
+    const vault = new FsVault(vaultRoot);
+    const historyService = new HistoryService({
+      db: connection.db,
+      inverters: {
+        "note.append_section": makeNoteAppendSectionInverter({
+          facade: { writeNote: (target, content) => vault.writeNote(target, content) },
+          hash: sha256Hex,
+          updateNoteSha: async () => {
+            // The smoke harness does not exercise the SurrealDB note.sha
+            // refresh; the bug surfaces in the file-write path before this
+            // callback runs.
+          },
+        }),
+      },
+      retention: { max: 100, maxPerTarget: 50 },
+    });
+    const recent = await historyService.getRecent(1);
+    expect(recent.length).toBe(1);
+    expect(recent[0].target).toBe("alpha.md");
+
+    const undoResult = await historyService.undo(recent[0].id);
+    expect(undoResult.ok).toBe(true);
+
+    // Source file body is restored verbatim.
+    const bodyAfterUndo = await readFile(sourcePath, "utf8");
+    expect(bodyAfterUndo).toBe(initialBody);
+
+    // No phantom-mirror artifact under vaultRoot. The bug always materializes
+    // through `vaultRoot/tmp/...` because vaultRoot starts with `/tmp/...` in
+    // this harness, so the existence of `vaultRoot/tmp` is the canary.
+    const phantomRoot = path.join(vaultRoot, "tmp");
+    let phantomExists = false;
+    try {
+      await stat(phantomRoot);
+      phantomExists = true;
+    } catch {
+      phantomExists = false;
+    }
+    expect(phantomExists).toBe(false);
   });
 
   test("[smoke] approve idempotent no-op: target already present, no duplicate daemon_write or history", async () => {

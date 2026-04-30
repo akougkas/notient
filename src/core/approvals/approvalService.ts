@@ -329,7 +329,7 @@ export class ApprovalService {
          COMMIT;`,
         {
           kind,
-          target: sourcePath,
+          target: sourceNote.path,
           before: JSON.stringify(beforeBody),
           after: JSON.stringify(afterBody),
           clientIdentity: agentName,
