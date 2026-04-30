@@ -31,7 +31,7 @@ async function runStart(options: DaemonCommandOptions): Promise<void> {
   if (!options.vaultPath) throw new Error("daemon start requires --vault");
   const child = spawn(
     process.execPath,
-    [new URL("../../daemon/index.ts", import.meta.url).pathname, "--vault", options.vaultPath],
+    [resolveDaemonEntry(), "--vault", options.vaultPath],
     {
       detached: true,
       stdio: "ignore",
@@ -40,6 +40,18 @@ async function runStart(options: DaemonCommandOptions): Promise<void> {
   );
   child.unref();
   options.emitter.emit({ type: "daemon:start_spawned", pid: child.pid ?? -1 });
+}
+
+// `import.meta.url` points to dist/notient.js in production runs and
+// src/cli/index.ts in dev runs. The daemon entry sits at dist/daemon.js
+// (sibling) and src/daemon/index.ts (sibling of src/cli/) respectively.
+// The previous single-form path resolved to a non-existent location in
+// both modes; the conditional below restores the spawn path.
+function resolveDaemonEntry(): string {
+  if (import.meta.url.endsWith("/dist/notient.js")) {
+    return new URL("./daemon.js", import.meta.url).pathname;
+  }
+  return new URL("../daemon/index.ts", import.meta.url).pathname;
 }
 
 async function runStop(options: DaemonCommandOptions): Promise<void> {
