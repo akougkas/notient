@@ -2,20 +2,26 @@
  * agent.events RPC handler (Phase D1 T6).
  *
  * Drains the `agent_events` ledger that AgentEventStore (T2) writes when any
- * of the four `swarm:*` discoveries fire on the bus. The wire shape is a
- * curated, persisted, long-pollable channel: a client passes the highest id
- * it has already seen as `since`, and the handler returns every newer row up
- * to `limit`, plus a fresh cursor.
+ * of the watched bus events fire. The wire shape is a curated, persisted,
+ * long-pollable channel: a client passes the highest id it has already seen
+ * as `since`, and the handler returns every newer row up to `limit`, plus a
+ * fresh cursor.
+ *
+ * Watched event set must stay aligned with AgentEventStore's subscription
+ * list. The store persists rows for the four `swarm:*` discoveries plus
+ * `indexer:note-indexed`, `indexer:error`, and `indexer:warn`. The
+ * long-poll subscribes to that same set so an indexing run wakes the
+ * waiter, not just swarm activity.
  *
  * Long-poll path: when the first read returns no rows AND `longPollMs > 0`,
- * the handler subscribes to the four swarm bus events. The first event to
- * fire wins. The handler then waits a brief flush interval so the store's
- * own bus subscriber finishes its INSERT, re-reads the ledger, and returns.
- * On expiry, it returns `{ events: [], cursor: since, longPollExpired: true }`.
+ * the handler subscribes to every watched bus event. The first event to fire
+ * wins. The handler then waits a brief flush interval so the store's own
+ * bus subscriber finishes its INSERT, re-reads the ledger, and returns. On
+ * expiry, it returns `{ events: [], cursor: since, longPollExpired: true }`.
  *
  * Listener cleanup: every long-poll path goes through a try/finally that
- * invokes the four unsubscribe functions returned by `bus.on`. There is no
- * path through the long-poll branch that leaves listeners attached.
+ * invokes the unsubscribe functions returned by `bus.on`. There is no path
+ * through the long-poll branch that leaves listeners attached.
  */
 
 import type { EventBus } from "../../core/events/eventBus";
@@ -69,11 +75,14 @@ export const AGENT_EVENTS_MAX_LONG_POLL_MS = 60_000;
  */
 const FLUSH_INTERVAL_MS = 50;
 
-const SWARM_EVENT_TYPES = [
+const WATCHED_EVENT_TYPES = [
   "swarm:contradiction_discovered",
   "swarm:cluster_emerged",
   "swarm:claim_advanced",
   "swarm:link_proposed",
+  "indexer:note-indexed",
+  "indexer:error",
+  "indexer:warn",
 ] as const satisfies readonly EventType[];
 
 interface ParsedEventsParams {
@@ -117,7 +126,7 @@ async function runEvents(
       longPollExpired: false,
     });
   }
-  const fired = await waitForSwarmFire(deps.bus, parsed.longPollMs);
+  const fired = await waitForWatchedFire(deps.bus, parsed.longPollMs);
   if (!fired) {
     return buildResponse({
       events: [],
@@ -154,13 +163,13 @@ function buildResponse(options: BuildResponseOptions): Record<string, unknown> {
 }
 
 /**
- * Subscribes to the four swarm event types and resolves to true on the first
+ * Subscribes to every watched event type and resolves to true on the first
  * fire, or false on timeout. Listener cleanup is unconditional: the finally
- * block runs all four unsubscribes whether the race resolves via fire or
+ * block runs every unsubscribe whether the race resolves via fire or
  * timeout, so concurrent or repeated calls cannot accumulate dead handlers
  * on the bus.
  */
-async function waitForSwarmFire(bus: EventBus, longPollMs: number): Promise<boolean> {
+async function waitForWatchedFire(bus: EventBus, longPollMs: number): Promise<boolean> {
   const unsubscribes: Array<() => void> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -171,7 +180,7 @@ async function waitForSwarmFire(bus: EventBus, longPollMs: number): Promise<bool
         settled = true;
         resolve(fired);
       };
-      for (const eventType of SWARM_EVENT_TYPES) {
+      for (const eventType of WATCHED_EVENT_TYPES) {
         const unsubscribe = bus.on(eventType, makeFireOnce(settle));
         unsubscribes.push(unsubscribe);
       }
@@ -185,13 +194,13 @@ async function waitForSwarmFire(bus: EventBus, longPollMs: number): Promise<bool
 
 /**
  * Builds a one-shot bus handler. Because the EventBus invokes every handler
- * registered for a type, four subscribed handlers race on the same `settle`
+ * registered for a type, the subscribed handlers race on the same `settle`
  * latch and the first one wins. The handler ignores the event payload because
  * the rich row lands in `agent_events` via AgentEventStore's own subscriber;
  * this handler only signals that a fresh row exists to be read.
  */
 function makeFireOnce(settle: (fired: boolean) => void) {
-  return (_event: EventOf<(typeof SWARM_EVENT_TYPES)[number]>): void => {
+  return (_event: EventOf<(typeof WATCHED_EVENT_TYPES)[number]>): void => {
     settle(true);
   };
 }

@@ -190,6 +190,66 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] agent.events handler", () => {
     rig.store.dispose();
   });
 
+  test("[smoke] indexer:note-indexed fired on the bus lands in the ledger", async () => {
+    const rig = makeRig();
+    const handler = createAgentEventsHandler({
+      agentEventStore: rig.store,
+      bus: rig.bus,
+      flushIntervalMs: 0,
+    });
+    rig.bus.emit({
+      type: "indexer:note-indexed",
+      path: "01-introduction.md",
+      result: {
+        chunkCount: 3,
+        embedCount: 3,
+        nodeCount: 1,
+        edgeCount: 0,
+        durationMs: 12,
+      },
+    });
+    await flush();
+    const result = await handler({ since: 0, longPollMs: 0 }, () => {}, "req-idx", "claude-code");
+    const events = result.events as Array<{ type: string; payload: { path: string } }>;
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events.some((event) => event.type === "indexer:note-indexed")).toBe(true);
+    rig.store.dispose();
+  });
+
+  test("[smoke] long-poll resolves when an indexer:note-indexed event fires", async () => {
+    const rig = makeRig();
+    const handler = createAgentEventsHandler({
+      agentEventStore: rig.store,
+      bus: rig.bus,
+      flushIntervalMs: 100,
+    });
+    const pending = handler(
+      { since: 0, longPollMs: 2000 },
+      () => {},
+      "req-idx-poll",
+      "claude-code",
+    );
+    setTimeout(() => {
+      rig.bus.emit({
+        type: "indexer:note-indexed",
+        path: "01-introduction.md",
+        result: {
+          chunkCount: 3,
+          embedCount: 3,
+          nodeCount: 1,
+          edgeCount: 0,
+          durationMs: 12,
+        },
+      });
+    }, 25);
+    const result = await pending;
+    const events = result.events as Array<{ type: string }>;
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0].type).toBe("indexer:note-indexed");
+    expect(result.longPollExpired).toBe(false);
+    rig.store.dispose();
+  });
+
   test("[smoke] long-poll resolves when a swarm event fires before the timeout", async () => {
     const rig = makeRig();
     const handler = createAgentEventsHandler({
@@ -355,5 +415,152 @@ describe("agent.events defaults", () => {
     expect(AGENT_EVENTS_MAX_LIMIT).toBe(1000);
     expect(AGENT_EVENTS_DEFAULT_LONG_POLL_MS).toBe(30_000);
     expect(AGENT_EVENTS_MAX_LONG_POLL_MS).toBe(60_000);
+  });
+});
+
+/**
+ * Unit-only regression tests for the indexer-event extension. These do not
+ * require SurrealDB so they run on every `bun test` invocation. The store is
+ * stubbed because the handler only depends on `since(cursor, limit)`; the
+ * end-to-end persistence path is exercised by the smoke suite above.
+ */
+interface StubRow {
+  id: number;
+  ts: number;
+  type: string;
+  payload: unknown;
+}
+
+class StubAgentEventStore {
+  private rows: StubRow[] = [];
+
+  enqueue(row: StubRow): void {
+    this.rows.push(row);
+  }
+
+  async since(cursor: number, limit: number): Promise<StubRow[]> {
+    return this.rows.filter((row) => row.id > cursor).slice(0, limit);
+  }
+}
+
+describe("agent.events watches indexer events", () => {
+  test("long-poll wakes when an indexer:note-indexed event fires", async () => {
+    const bus = new EventBus();
+    const stub = new StubAgentEventStore();
+    const handler = createAgentEventsHandler({
+      // Cast: handler only uses `since`, which the stub implements.
+      agentEventStore: stub as unknown as AgentEventStore,
+      bus,
+      flushIntervalMs: 5,
+    });
+    const pending = handler({ since: 0, longPollMs: 1000 }, () => {}, "req-idx", "claude-code");
+    setTimeout(() => {
+      // The store stub does not subscribe to the bus, so the handler's read
+      // would otherwise return nothing. Seed the row in the same tick the
+      // event fires so the post-flush re-read finds it.
+      stub.enqueue({
+        id: 1,
+        ts: Date.now(),
+        type: "indexer:note-indexed",
+        payload: {
+          path: "01-introduction.md",
+          result: {
+            chunkCount: 3,
+            embedCount: 3,
+            nodeCount: 1,
+            edgeCount: 0,
+            durationMs: 12,
+          },
+        },
+      });
+      bus.emit({
+        type: "indexer:note-indexed",
+        path: "01-introduction.md",
+        result: {
+          chunkCount: 3,
+          embedCount: 3,
+          nodeCount: 1,
+          edgeCount: 0,
+          durationMs: 12,
+        },
+      });
+    }, 25);
+    const result = await pending;
+    const events = result.events as Array<{ type: string }>;
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("indexer:note-indexed");
+    expect(result.longPollExpired).toBe(false);
+    expect(result.cursor).toBe(1);
+  });
+
+  test("long-poll also wakes on indexer:error and indexer:warn", async () => {
+    for (const eventType of ["indexer:error", "indexer:warn"] as const) {
+      const bus = new EventBus();
+      const stub = new StubAgentEventStore();
+      const handler = createAgentEventsHandler({
+        agentEventStore: stub as unknown as AgentEventStore,
+        bus,
+        flushIntervalMs: 5,
+      });
+      const pending = handler(
+        { since: 0, longPollMs: 1000 },
+        () => {},
+        `req-${eventType}`,
+        "claude-code",
+      );
+      setTimeout(() => {
+        stub.enqueue({
+          id: 1,
+          ts: Date.now(),
+          type: eventType,
+          payload: { message: "test", phase: "tier1" },
+        });
+        bus.emit({ type: eventType, message: "test", phase: "tier1" });
+      }, 25);
+      const result = await pending;
+      const events = result.events as Array<{ type: string }>;
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe(eventType);
+      expect(result.longPollExpired).toBe(false);
+    }
+  });
+
+  test("long-poll expires cleanly when no watched event fires", async () => {
+    const bus = new EventBus();
+    const stub = new StubAgentEventStore();
+    const handler = createAgentEventsHandler({
+      agentEventStore: stub as unknown as AgentEventStore,
+      bus,
+      flushIntervalMs: 0,
+    });
+    const result = await handler(
+      { since: 0, longPollMs: 60 },
+      () => {},
+      "req-expire",
+      "claude-code",
+    );
+    expect(result.events).toEqual([]);
+    expect(result.longPollExpired).toBe(true);
+    expect(result.cursor).toBe(0);
+  });
+
+  test("ignored indexer events (progress, tier1-done, tier2-done, tier3-done) do not wake the poll", async () => {
+    const bus = new EventBus();
+    const stub = new StubAgentEventStore();
+    const handler = createAgentEventsHandler({
+      agentEventStore: stub as unknown as AgentEventStore,
+      bus,
+      flushIntervalMs: 0,
+    });
+    const pending = handler({ since: 0, longPollMs: 80 }, () => {}, "req-noise", "claude-code");
+    setTimeout(() => {
+      bus.emit({ type: "indexer:progress", processed: 1, total: 10 });
+      bus.emit({ type: "indexer:tier1-done", path: "x.md", bodySha: "deadbeef" });
+      bus.emit({ type: "indexer:tier2-done", path: "x.md", chunkCount: 2 });
+      bus.emit({ type: "indexer:tier3-done", path: "x.md" });
+    }, 10);
+    const result = await pending;
+    expect(result.events).toEqual([]);
+    expect(result.longPollExpired).toBe(true);
   });
 });

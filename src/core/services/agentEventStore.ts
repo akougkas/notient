@@ -1,8 +1,22 @@
 /**
- * Append-only ledger of swarm discoveries. The store self-subscribes to the
- * four `swarm:*` bus events on construction so external clients (Phase D1
- * `notient events --since <cursor>`) can drain a consistent stream from
- * SurrealDB without each producer threading a separate writer.
+ * Append-only ledger of operator-relevant bus events. The store self-subscribes
+ * on construction so external clients (Phase D1 `notient events --since
+ * <cursor>`) can drain a consistent stream from SurrealDB without each
+ * producer threading a separate writer.
+ *
+ * Subscribed event set (kept narrow to bound ledger growth):
+ *   - swarm:contradiction_discovered, swarm:cluster_emerged,
+ *     swarm:claim_advanced, swarm:link_proposed (the original four).
+ *   - indexer:note-indexed, indexer:error, indexer:warn (added so the
+ *     `events` RPC surfaces vault-indexing progress).
+ *
+ * Indexer events deliberately exclude `indexer:tier1-done`, `indexer:tier2-done`,
+ * `indexer:tier3-done`, and `indexer:progress`. The tier-done events are
+ * intermediate signals that fire alongside the per-note terminal
+ * `indexer:note-indexed`; persisting all four would multiply ledger rows by
+ * roughly 4x per note. `indexer:progress` is also too noisy. Operators get
+ * per-note completion plus failures and dropped-ref warnings, which is enough
+ * for the single-pane operator stream without inflating the row count.
  *
  * Phase 4 Task 12 migrated the storage backend from SQLite to SurrealDB.
  * The wire-shape contract is unchanged: `record` returns `{ id, ts }`,
@@ -17,10 +31,10 @@
  * are not a real concern; the transaction is defense-in-depth against any
  * future producer that fans out the bus emit. `seq` is the wire id.
  *
- * Async write semantics: `record` returns a Promise. The four bus
- * subscribers fire-and-forget the write because `EventBus.emit` is sync.
- * The 50ms flush guard in `agentEvents.ts` accommodates the brief async
- * window between bus.emit and the resulting CREATE landing.
+ * Async write semantics: `record` returns a Promise. Bus subscribers
+ * fire-and-forget the write because `EventBus.emit` is sync. The 50ms
+ * flush guard in `agentEvents.ts` accommodates the brief async window
+ * between bus.emit and the resulting CREATE landing.
  */
 
 import type { RecordId, Surreal } from "surrealdb";
@@ -30,7 +44,10 @@ export type AgentEventType =
   | "swarm:contradiction_discovered"
   | "swarm:cluster_emerged"
   | "swarm:claim_advanced"
-  | "swarm:link_proposed";
+  | "swarm:link_proposed"
+  | "indexer:note-indexed"
+  | "indexer:error"
+  | "indexer:warn";
 
 export interface AgentEventRow {
   id: number;
@@ -84,6 +101,15 @@ export class AgentEventStore {
       }),
       bus.on("swarm:link_proposed", ({ type: _t, ...payload }) => {
         void this.record("swarm:link_proposed", payload);
+      }),
+      bus.on("indexer:note-indexed", ({ type: _t, ...payload }) => {
+        void this.record("indexer:note-indexed", payload);
+      }),
+      bus.on("indexer:error", ({ type: _t, ...payload }) => {
+        void this.record("indexer:error", payload);
+      }),
+      bus.on("indexer:warn", ({ type: _t, ...payload }) => {
+        void this.record("indexer:warn", payload);
       }),
     );
   }

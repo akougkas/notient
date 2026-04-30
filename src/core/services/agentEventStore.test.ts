@@ -226,6 +226,49 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
     store.dispose();
   });
 
+  test("[smoke] subscribes to indexer:note-indexed, indexer:error, indexer:warn", async () => {
+    const bus = new EventBus();
+    const store = new AgentEventStore({ db: connection.db, bus });
+    bus.emit({
+      type: "indexer:note-indexed",
+      path: "01-introduction.md",
+      result: {
+        chunkCount: 3,
+        embedCount: 3,
+        nodeCount: 1,
+        edgeCount: 0,
+        durationMs: 12,
+      },
+    });
+    await flush();
+    bus.emit({ type: "indexer:error", message: "tier2 failed", phase: "tier2" });
+    await flush();
+    bus.emit({ type: "indexer:warn", message: "ref dropped", phase: "tier1" });
+    await flush();
+    const rows = await store.since(0, 10);
+    expect(rows.map((row) => row.type)).toEqual([
+      "indexer:note-indexed",
+      "indexer:error",
+      "indexer:warn",
+    ]);
+    store.dispose();
+  });
+
+  test("[smoke] does not subscribe to indexer:tier1-done, tier2-done, tier3-done, progress", async () => {
+    const bus = new EventBus();
+    const store = new AgentEventStore({ db: connection.db, bus });
+    bus.emit({ type: "indexer:tier1-done", path: "x.md", bodySha: "deadbeef" });
+    await flush();
+    bus.emit({ type: "indexer:tier2-done", path: "x.md", chunkCount: 2 });
+    await flush();
+    bus.emit({ type: "indexer:tier3-done", path: "x.md" });
+    await flush();
+    bus.emit({ type: "indexer:progress", processed: 1, total: 10 });
+    await flush();
+    expect(await store.countSince(0)).toBe(0);
+    store.dispose();
+  });
+
   test("[smoke] dispose detaches listeners so further events do not produce rows", async () => {
     const bus = new EventBus();
     const store = new AgentEventStore({ db: connection.db, bus });
