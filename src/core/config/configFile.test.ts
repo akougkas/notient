@@ -161,6 +161,9 @@ default_priority_globs = ["projects/**"]
 [surrealdb]
 hnsw_cache_mib = 1024
 log_level = "info"
+
+[agent_events]
+max_rows = 12345
 `,
     );
 
@@ -180,7 +183,30 @@ log_level = "info"
         hnswCacheMib: 1024,
         logLevel: "info",
       },
+      agentEvents: {
+        maxRows: 12345,
+      },
     });
+  });
+
+  it("defaults agentEvents.maxRows to 50_000 and reads max_rows override", async () => {
+    const defaultsVault = await makeVault();
+    vaults.push(defaultsVault);
+    const defaults = await loadVaultConfig(defaultsVault);
+    expect(defaults.agentEvents.maxRows).toBe(50_000);
+
+    const overrideVault = await makeVault();
+    vaults.push(overrideVault);
+    await writeToml(
+      overrideVault,
+      `[agent_events]
+max_rows = 1000
+`,
+    );
+    const override = await loadVaultConfig(overrideVault);
+    expect(override.agentEvents.maxRows).toBe(1000);
+    expect(override.indexer).toEqual(DEFAULT_CONFIG.indexer);
+    expect(override.surrealdb).toEqual(DEFAULT_CONFIG.surrealdb);
   });
 });
 

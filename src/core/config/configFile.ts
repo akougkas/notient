@@ -40,6 +40,15 @@ export interface VaultConfig {
     hnswCacheMib: number;
     logLevel: SurrealLogLevel;
   };
+  agentEvents: {
+    /**
+     * Maximum number of rows retained in the `agent_event` ledger. The store
+     * sweeps rows whose seq is at or below `latestSeq - maxRows` so the table
+     * stays within this bound. Operators size this by the number of recent
+     * events they want to scan, not by wall-clock age.
+     */
+    maxRows: number;
+  };
 }
 
 const SURREAL_LOG_LEVELS: ReadonlySet<SurrealLogLevel> = new Set([
@@ -63,6 +72,9 @@ export const DEFAULT_CONFIG: VaultConfig = {
   surrealdb: {
     hnswCacheMib: 512,
     logLevel: "warn",
+  },
+  agentEvents: {
+    maxRows: 50_000,
   },
 };
 
@@ -117,6 +129,9 @@ default_priority_globs = []
 [surrealdb]
 hnsw_cache_mib = 512
 log_level = "warn"
+
+[agent_events]
+max_rows = 50000
 `;
 }
 
@@ -187,6 +202,7 @@ function mergeConfig(defaults: VaultConfig, override: unknown): VaultConfig {
   const chunkSection = isPlainObject(indexerSection.chunk) ? indexerSection.chunk : {};
   const awakenSection = isPlainObject(override.awaken) ? override.awaken : {};
   const surrealSection = isPlainObject(override.surrealdb) ? override.surrealdb : {};
+  const agentEventsSection = isPlainObject(override.agent_events) ? override.agent_events : {};
 
   return {
     indexer: {
@@ -213,6 +229,9 @@ function mergeConfig(defaults: VaultConfig, override: unknown): VaultConfig {
     surrealdb: {
       hnswCacheMib: pickNumber(surrealSection.hnsw_cache_mib, defaults.surrealdb.hnswCacheMib),
       logLevel: pickLogLevel(surrealSection.log_level, defaults.surrealdb.logLevel),
+    },
+    agentEvents: {
+      maxRows: pickNumber(agentEventsSection.max_rows, defaults.agentEvents.maxRows),
     },
   };
 }

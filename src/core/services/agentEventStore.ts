@@ -35,6 +35,15 @@
  * fire-and-forget the write because `EventBus.emit` is sync. The 50ms
  * flush guard in `agentEvents.ts` accommodates the brief async window
  * between bus.emit and the resulting CREATE landing.
+ *
+ * Retention: when `maxRows` is supplied the store sweeps the table after
+ * each successful CREATE under two conditions: every 1000th write
+ * (`seq % 1000 === 0`) so steady-state vaults stay bounded with negligible
+ * overhead, and every write past the cap (`seq > maxRows`) so a small cap
+ * still trims promptly. The sweep is a single DELETE keyed on
+ * `seq <= latestSeq - maxRows`; cursor consumers never observe sweep gaps
+ * because `since(cursor, limit)` filters by `seq > cursor` and the assigned
+ * seq always advances. A `maxRows` of zero or negative disables the sweep.
  */
 
 import type { RecordId, Surreal } from "surrealdb";
@@ -59,6 +68,14 @@ export interface AgentEventRow {
 export interface AgentEventStoreOptions {
   db: Surreal;
   bus: EventBus;
+  /**
+   * Optional row-count cap on the `agent_event` ledger. The store sweeps
+   * after each successful CREATE when `seq % 1000 === 0` or when the cap
+   * has been exceeded. Values at or below zero disable the sweep; the
+   * production wiring always supplies a positive integer sourced from
+   * `<vault>/.notient/config.toml` under `[agent_events] max_rows`.
+   */
+  maxRows?: number;
 }
 
 interface PersistedRow {
@@ -85,9 +102,14 @@ interface SeqRow {
 export class AgentEventStore {
   private readonly db: Surreal;
   private readonly unsubscribes: Array<() => void> = [];
+  private readonly maxRows: number;
 
   constructor(options: AgentEventStoreOptions) {
     this.db = options.db;
+    this.maxRows =
+      typeof options.maxRows === "number" && Number.isFinite(options.maxRows) && options.maxRows > 0
+        ? Math.floor(options.maxRows)
+        : 0;
     const { bus } = options;
     this.unsubscribes.push(
       bus.on("swarm:contradiction_discovered", ({ type: _t, ...payload }) => {
@@ -141,7 +163,27 @@ export class AgentEventStore {
     if (created === undefined) {
       throw new Error("AgentEventStore.record: SurrealDB returned no row");
     }
+    await this.maybeSweep(created.seq);
     return { id: created.seq, ts: created.ts_ms };
+  }
+
+  /**
+   * Trim the ledger when the freshly-assigned seq triggers a sweep. Two
+   * conditions fire the DELETE: every 1000th write keeps steady-state
+   * growth bounded with negligible overhead, and any write past the cap
+   * keeps small caps trimmed promptly. The DELETE is a single SurrealQL
+   * statement filtered on `seq <= $cutoff` where the cutoff is
+   * `latestSeq - maxRows`; consumers of `since(cursor, limit)` are unaffected
+   * because that query filters by `seq > cursor` and seq always advances.
+   */
+  private async maybeSweep(latestSeq: number): Promise<void> {
+    if (this.maxRows <= 0) return;
+    const periodic = latestSeq % 1000 === 0;
+    const overCap = latestSeq > this.maxRows;
+    if (!periodic && !overCap) return;
+    const cutoff = latestSeq - this.maxRows;
+    if (cutoff <= 0) return;
+    await this.db.query("DELETE agent_event WHERE seq <= $cutoff;", { cutoff }).collect();
   }
 
   async since(cursor: number, limit: number): Promise<AgentEventRow[]> {

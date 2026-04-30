@@ -269,6 +269,22 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
     store.dispose();
   });
 
+  test("[smoke] maxRows caps the ledger via per-write sweep past the cap", async () => {
+    const bus = new EventBus();
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 5 });
+    for (let index = 0; index < 12; index++) {
+      await store.record("swarm:link_proposed", { index });
+    }
+    const count = await store.countSince(0);
+    expect(count).toBe(5);
+    const latest = await store.latestId();
+    expect(latest).toBe(12);
+    const rows = await store.since(0, 100);
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => row.id)).toEqual([8, 9, 10, 11, 12]);
+    store.dispose();
+  });
+
   test("[smoke] dispose detaches listeners so further events do not produce rows", async () => {
     const bus = new EventBus();
     const store = new AgentEventStore({ db: connection.db, bus });

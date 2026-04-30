@@ -249,7 +249,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("health", health);
   kernel.register("lock", lockHandle);
   kernel.register("probeCache", new ProbeCache(bus));
-  kernel.register("agentEventStore", new AgentEventStore({ db: surrealConnection.db, bus }));
+  kernel.register(
+    "agentEventStore",
+    new AgentEventStore({
+      db: surrealConnection.db,
+      bus,
+      maxRows: vaultConfig.agentEvents.maxRows,
+    }),
+  );
   const sessionGrants = new SessionGrants({ db: surrealConnection.db });
   kernel.register("sessionGrants", sessionGrants);
   kernel.register("surrealDb", surrealConnection);
