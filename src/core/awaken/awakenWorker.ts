@@ -28,6 +28,7 @@ import {
   type AwakenRunRow,
   type AwakenStatus,
   createRun,
+  findById,
   findCurrent,
   findLatestResumable,
   subscribeToStatus,
@@ -69,6 +70,16 @@ export interface AwakenWorkerOptions {
    * faster mechanism here; production wires up the bus path.
    */
   onNoteIndexed?: (path: string) => Promise<void>;
+  /**
+   * Optional pre-created `awaken_run` id. The background `awaken --run`
+   * path creates the row in the daemon handler before kicking off the
+   * worker so the synchronous RPC reply already carries a valid runId.
+   * When supplied the worker skips its own `findCurrent` / `createRun`
+   * logic and adopts this row as the run cursor. The handler is
+   * responsible for the concurrency check (mirroring the worker's
+   * `findCurrent` guard) before creating the row.
+   */
+  existingRunId?: RecordId<"awaken_run">;
 }
 
 export interface AwakenWorkerResult {
@@ -185,6 +196,18 @@ async function resolveStart(
     return startFromRow(resumable);
   }
 
+  if (options.existingRunId !== undefined) {
+    // Background dispatch path. The handler already created the row and
+    // performed the `findCurrent` concurrency check; the worker adopts
+    // the row's existing counters and cursor so a future `--resume`
+    // observes the same state machine the foreground path uses.
+    const row = await findById(options.db, options.existingRunId);
+    if (row === null) {
+      throw new Error("runAwakenWorker: existingRunId not found");
+    }
+    return startFromRow(row);
+  }
+
   const active = await findCurrent(options.db);
   if (active !== null) {
     throw new Error("runAwakenWorker: a run is already active");
@@ -220,11 +243,49 @@ async function waitForNoteIndexed(options: AwakenWorkerOptions, notePath: string
   }
   const bus = options.bus;
   if (bus === undefined) return;
-  await new Promise<void>((resolve) => {
-    const unsubscribe = bus.on("indexer:tier3-done", (event) => {
-      if (event.path !== notePath) return;
-      unsubscribe();
+  await new Promise<void>((resolve, reject) => {
+    // The indexer emits one of three terminal events per note:
+    //   - `indexer:note-indexed` after the orchestrator finishes
+    //     (Tier 3 success, Tier 3 failure with partial result, or a
+    //     filtered run that stops short of Tier 3 but still reaches
+    //     the end of `indexNote`).
+    //   - `indexer:tier3-done` immediately before `indexer:note-indexed`
+    //     when Tier 3 succeeds; included as a defensive resolve path
+    //     so a future indexer rewrite that drops the trailing
+    //     `note-indexed` still satisfies the per-note wait.
+    //   - `indexer:error` for Tier 1 / Tier 2 failures, where the
+    //     orchestrator returns before emitting `note-indexed`. Treat
+    //     it as a per-note completion (the run continues with the
+    //     `failed` counter incremented) instead of leaking a hung
+    //     listener.
+    let settled = false;
+    const offNoteIndexed = bus.on("indexer:note-indexed", (event) => {
+      if (event.path !== notePath || settled) return;
+      settled = true;
+      offNoteIndexed();
+      offTier3();
+      offError();
       resolve();
+    });
+    const offTier3 = bus.on("indexer:tier3-done", (event) => {
+      if (event.path !== notePath || settled) return;
+      settled = true;
+      offNoteIndexed();
+      offTier3();
+      offError();
+      resolve();
+    });
+    const offError = bus.on("indexer:error", (event) => {
+      if (settled) return;
+      // The error event does not carry a path; we cannot scope it. The
+      // worker treats any unscoped error as terminating the wait so a
+      // single broken note never wedges the entire run. The caller's
+      // try/catch lifts this rejection into the `failed` counter.
+      settled = true;
+      offNoteIndexed();
+      offTier3();
+      offError();
+      reject(new Error(event.message));
     });
   });
 }

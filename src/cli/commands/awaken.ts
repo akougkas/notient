@@ -45,6 +45,14 @@ export interface AwakenCommandOptions {
    * reaching the wire.
    */
   tier?: number[];
+  /**
+   * When true, the daemon creates the `awaken_run` row, kicks the worker
+   * off in the background, and returns the runId immediately. The CLI
+   * then exits without streaming per-note progress; consumers poll via
+   * `awaken --status` for run progress and reach for `--pause`,
+   * `--resume`, or `--cancel` to drive the control plane.
+   */
+  background?: boolean;
   emitter: Emitter;
   clientIdentity?: string;
   /**
@@ -109,6 +117,7 @@ async function startFreshAwaken(options: AwakenCommandOptions): Promise<number> 
   if (options.batch !== undefined) params.batch = options.batch;
   if (options.since !== undefined) params.since = options.since;
   if (options.tier !== undefined) params.tier = options.tier;
+  if (options.background === true) params.background = true;
   for await (const frame of client.call("awaken.run", params)) {
     options.emitter.emit({ ...frame, type: `rpc:${frame.type}` });
     if (frame.type === "result" || frame.type === "error") break;

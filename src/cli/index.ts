@@ -206,7 +206,16 @@ async function dispatchAwaken(
   const batch = typeof parsed.flags.batch === "string" ? Number(parsed.flags.batch) : undefined;
   const since = typeof parsed.flags.since === "string" ? Date.parse(parsed.flags.since) : undefined;
   const tier = parsed.flags.tier === undefined ? undefined : parseTierCsv(parsed.flags.tier);
-  return await runAwakenCommand({ vaultPath, batch, since, tier, emitter, clientIdentity });
+  const background = parsed.flags.background === true;
+  return await runAwakenCommand({
+    vaultPath,
+    batch,
+    since,
+    tier,
+    background,
+    emitter,
+    clientIdentity,
+  });
 }
 
 function selectAwakenMode(parsed: ParsedArgs): AwakenControlMode | undefined {

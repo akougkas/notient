@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import type { RecordId } from "surrealdb";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import { createRun, findCurrent } from "../../core/awaken/awakenRun";
+import { runAwakenWorker } from "../../core/awaken/awakenWorker";
 import { type SurrealConnection, clearTierAtByPath } from "../../core/db/surreal";
 import type { EventBus } from "../../core/events/eventBus";
 import type { IndexerQueue } from "../../core/indexer/indexerQueue";
@@ -13,19 +16,22 @@ export interface AwakenHandlerDeps {
   indexer: IndexerQueue;
   vault: VaultAdapter;
   /**
-   * Optional SurrealDB connection. Two roles:
+   * SurrealDB connection. Required by `awaken.run` so the handler can
+   * create the `awaken_run` row that the control-plane CLI helpers
+   * (`--pause`, `--resume`, `--cancel`, `--status`) read and mutate.
+   * Also used to:
    *
-   * 1. The `reindex.glob` flow uses it to clear `tier{N}_at` timestamps
-   *    on matched notes before enqueueing.
-   * 2. Both `awaken.run` and `reindex.glob` use it to pre-create the
-   *    `note` row for every queued path so Tier 1's cross-note edge
-   *    resolution (`lookupNoteByPath`) succeeds on a single awaken
-   *    pass. Without this pre-pass, a note linking to a sibling that
-   *    sits later in the queue silently drops its frontmatter_ref.
+   * 1. Pre-create the `note` row for every queued path so Tier 1's
+   *    cross-note edge resolution (`lookupNoteByPath`) succeeds on a
+   *    single awaken pass. Without this pre-pass, a note linking to a
+   *    sibling that sits later in the queue silently drops its
+   *    frontmatter_ref.
+   * 2. Clear `tier{N}_at` timestamps on matched notes before the
+   *    `reindex.glob` flow enqueues.
    *
-   * When `undefined` (early-exit and unit-test paths) both behaviours
-   * are skipped; the indexer still drains and Tier 1 falls back to
-   * the legacy multi-pass convergence.
+   * `reindex.glob` keeps the field optional so the unit tests can
+   * still drive its enqueue path without booting Surreal; `awaken.run`
+   * fails fast when the field is absent.
    */
   surreal?: SurrealConnection;
 }
@@ -101,43 +107,139 @@ async function preCreateNoteRows(
   }
 }
 
+/**
+ * Background runs share a process-wide registry so the daemon shutdown
+ * path could in principle await pending workers. Today the registry is
+ * unused beyond preventing the unhandled-rejection warning that would
+ * fire if a kicked-off worker threw. The Set is keyed by the in-flight
+ * promise itself; entries delete themselves in the `.finally` of the
+ * worker invocation. If the daemon process exits while a background run
+ * is in flight, the SurrealDB live-query subscription terminates and
+ * the worker's loop unwinds (with the row left at `running` until the
+ * next daemon boot — `findCurrent` will surface it for a future
+ * `--resume`).
+ */
+const backgroundRuns = new Set<Promise<unknown>>();
+
 export function makeAwakenHandler(deps: AwakenHandlerDeps) {
   return async (
     params: Record<string, unknown>,
     emit: (line: string) => void,
     envelopeId: string,
   ): Promise<Record<string, unknown>> => {
+    if (deps.surreal === undefined) {
+      throw new Error("awaken.run: SurrealDB connection is required");
+    }
+    const surreal = deps.surreal;
     const since = typeof params.since === "number" ? params.since : null;
     const tierFilter = parseTierFilterParam(params.tier);
+    const background = params.background === true;
     const all = await deps.vault.listMarkdown();
     const filtered = since === null ? all : all.filter((entry) => entry.mtime >= since);
+    const queuedPaths = filtered.map((entry) => entry.path);
 
     // Phase 5 cross-note edge fix. Pre-create every queued note row so
     // Tier 1's `lookupNoteByPath` calls during edge resolution find a
     // target. Without this pass, the first awaken over a fresh vault
     // silently drops frontmatter_refs whose target sits later in the
-    // queue. Pre-create runs synchronously before the enqueue loop so
-    // every path has a row by the time the indexer worker spins up.
-    if (deps.surreal !== undefined) {
-      await preCreateNoteRows(
-        deps.surreal,
-        deps.vault,
-        filtered.map((entry) => entry.path),
-      );
+    // queue. Pre-create runs synchronously before the worker spins up
+    // so every path has a row by the time Tier 1 starts.
+    await preCreateNoteRows(surreal, deps.vault, queuedPaths);
+
+    const vaultFacade = {
+      listMarkdownPaths: async (): Promise<string[]> => queuedPaths,
+    };
+    const indexerQueue = {
+      enqueue: (
+        path: string,
+        priority?: number,
+        filter?: ReadonlyArray<number>,
+      ): void => {
+        deps.indexer.enqueue(path, priority, filter);
+      },
+    };
+    if (background) {
+      // Mirror the worker's concurrency guard before we create the row
+      // ourselves; the worker only runs `findCurrent` on the default
+      // path, so the handler enforces it for the `existingRunId` path.
+      const active = await findCurrent(surreal.db);
+      if (active !== null) {
+        throw new Error("awaken.run: a run is already active");
+      }
+      const runId = await createRun(surreal.db, {
+        tierFilter,
+        priorityGlobs: [],
+        total: queuedPaths.length,
+      });
+      kickOffBackgroundWorker(deps, surreal, vaultFacade, indexerQueue, tierFilter, runId);
+      return {
+        ok: true,
+        queued: queuedPaths.length,
+        tier: tierFilter,
+        runId: runId.toString(),
+        status: "running",
+        background: true,
+      };
     }
 
     const forwardEvents = subscribeIndexerEvents(deps.bus, emit, envelopeId);
     try {
-      const enqueueFilter = isFullTierFilter(tierFilter) ? undefined : tierFilter;
-      for (const entry of filtered) {
-        deps.indexer.enqueue(entry.path, undefined, enqueueFilter);
-      }
-      await deps.indexer.drain();
-      return { ok: true, queued: filtered.length, tier: tierFilter };
+      const result = await runAwakenWorker({
+        db: surreal.db,
+        vaultFacade,
+        indexerQueue,
+        tierFilter,
+        priorityGlobs: [],
+        resume: false,
+        bus: deps.bus,
+      });
+      return {
+        ok: true,
+        queued: queuedPaths.length,
+        tier: tierFilter,
+        runId: result.runId.toString(),
+        status: result.status,
+        processed: result.processed,
+        failed: result.failed,
+      };
     } finally {
       forwardEvents();
     }
   };
+}
+
+function kickOffBackgroundWorker(
+  deps: AwakenHandlerDeps,
+  surreal: SurrealConnection,
+  vaultFacade: { listMarkdownPaths(): Promise<string[]> },
+  indexerQueue: {
+    enqueue(path: string, priority?: number, filter?: ReadonlyArray<number>): void;
+  },
+  tierFilter: number[],
+  runId: RecordId<"awaken_run">,
+): void {
+  // The worker drives the loop asynchronously. We do NOT await the
+  // promise; the RPC reply already returned the runId. A throw inside
+  // the worker is funneled to `indexer:error` so the daemon never
+  // crashes from a background run.
+  const promise = runAwakenWorker({
+    db: surreal.db,
+    vaultFacade,
+    indexerQueue,
+    tierFilter,
+    priorityGlobs: [],
+    resume: false,
+    bus: deps.bus,
+    existingRunId: runId,
+  })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.bus.emit({ type: "indexer:error", message, phase: "awaken-background" });
+    })
+    .finally(() => {
+      backgroundRuns.delete(promise);
+    });
+  backgroundRuns.add(promise);
 }
 
 export function makeReindexHandler(deps: AwakenHandlerDeps) {

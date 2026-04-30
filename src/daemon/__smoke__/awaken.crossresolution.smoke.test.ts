@@ -184,6 +184,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
           vaultPaths,
           bus,
         });
+        // The awaken handler now drives `runAwakenWorker`, which awaits
+        // `indexer:note-indexed` per note before advancing. The bare
+        // Tier-1-only indexNote in this smoke does not emit it; emit it
+        // here so the worker observes per-note completion.
+        bus.emit({
+          type: "indexer:note-indexed",
+          path: notePath,
+          result: {
+            chunkCount: 0,
+            embedCount: 0,
+            nodeCount: 0,
+            edgeCount: 0,
+            durationMs: 0,
+          },
+        });
       },
     });
 
