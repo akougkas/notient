@@ -181,6 +181,36 @@ describe("synthesize", () => {
     ).rejects.toBeDefined();
   });
 
+  test("tolerates graph-expanded hits that lack a notePath at runtime", async () => {
+    // Graph-expanded hits set viaPath instead of notePath. The runtime can
+    // produce entries where notePath is undefined even though the SearchHit
+    // type declares it required. The prompt builder must not crash on such
+    // entries via `notePath.split("/")`.
+    const baseHit: SearchHit = makeHit("/Notes/Indexing.md", "tier 1 indexing");
+    const graphExpandedHit = {
+      notePath: undefined,
+      chunkId: null,
+      snippet: "via [[06-indexing.md]] (wikilink, agent: unknown)",
+      score: 0.5,
+      matchedText: "",
+      viaPath: "06-indexing.md",
+    } as unknown as SearchHit;
+    const provider = fakeProvider({
+      tokens: ["- Indexing is tiered [[Indexing]]\n"],
+    });
+    const card = await synthesize({
+      provider,
+      model: "reasoning",
+      query: "tier 1 indexing",
+      hits: [baseHit, graphExpandedHit],
+      signal: new AbortController().signal,
+    });
+    expect(card.error).toBeUndefined();
+    expect(card.rawText.length).toBeGreaterThan(0);
+    expect(card.bullets).toHaveLength(1);
+    expect(card.bullets[0].citations).toEqual(["[[Indexing]]"]);
+  });
+
   test("forwards model and signal into the provider call", async () => {
     const captured: { options: ChatOptions | null } = { options: null };
     const provider = fakeProvider({

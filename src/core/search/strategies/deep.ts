@@ -72,11 +72,14 @@ export async function* deepSearch(
   if (options.synthesisEnabled && baseHits.length > 0) {
     yield { type: "search:synthesizing" };
     try {
+      // Synthesis grounds bullets in note content; graph-expanded hits carry
+      // a `via [[...]]` placeholder instead of real chunk text and would
+      // dilute the prompt without adding evidence. Pass only the base hits.
       synthesis = await synthesize({
         provider: options.provider,
         model: options.reasoningModel,
         query: options.query,
-        hits: allHits,
+        hits: baseHits,
         signal: options.signal,
       });
       yield { type: "search:synthesis-done", card: synthesis };
