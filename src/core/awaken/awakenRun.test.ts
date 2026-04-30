@@ -21,6 +21,7 @@ import { type SurrealServerHandle, startSurreal } from "../../daemon/surrealServ
 import { applySchema } from "../db/schemaApplier";
 import { type SurrealConnection, connect } from "../db/surreal";
 import {
+  AwakenRunAlreadyActiveError,
   type AwakenStatus,
   createRun,
   findCurrent,
@@ -198,12 +199,19 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
   });
 
   test("[smoke] findLatestResumable returns the most recent paused row", async () => {
+    // The `awaken_run_active_unique` index forbids two coexisting rows in
+    // `status INSIDE ['running','paused']`, so the older row must be
+    // released to a terminal status before the second `createRun` can
+    // land. Drive the older row to `failed` first; the test still
+    // exercises the "latest paused or failed" sort because
+    // `findLatestResumable`'s status filter accepts both.
     const olderId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
       total: 3,
     });
     await updateStatus(connection.db, olderId, "paused", { processed: 1 });
+    await updateStatus(connection.db, olderId, "failed", { error: "synthetic-older" });
     // Sleep 25ms to ensure server-side started_at on the second row sorts
     // strictly after the first; SurrealDB's millisecond clock can collide
     // on rapid back-to-back creates inside the same Bun event loop tick.
@@ -230,6 +238,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
       total: 4,
     });
     await updateStatus(connection.db, pausedId, "paused");
+    // Release the active slot before the next `createRun`; the unique
+    // index over `active_marker` rejects a second row while the paused
+    // row still occupies the active set. Flip to `failed` so the row is
+    // still surfaced by `findLatestResumable` (which selects `paused` or
+    // `failed`) but no longer holds the active marker.
+    await updateStatus(connection.db, pausedId, "failed", { error: "synthetic-older" });
     await new Promise((resolve) => setTimeout(resolve, 25));
     const failedId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
@@ -329,12 +343,18 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
   });
 
   test("[smoke] subscribeToStatus fires for the target run and ignores other rows", async () => {
-    const targetId = await createRun(connection.db, {
+    // The `awaken_run_active_unique` index allows only one row in the
+    // active set at a time. Land the "other" row first and freeze it to
+    // `failed` before creating the target row so both rows can coexist
+    // for the duration of the live-query check. The test only cares that
+    // the live-query callback ignores updates to non-target rows.
+    const otherId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
       total: 3,
     });
-    const otherId = await createRun(connection.db, {
+    await updateStatus(connection.db, otherId, "failed", { error: "synthetic-other" });
+    const targetId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
       total: 3,
@@ -346,7 +366,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     });
 
     try {
-      await updateStatus(connection.db, otherId, "paused");
+      // Re-touch the other row so SurrealDB emits an UPDATE notification.
+      // The handler under test must ignore this event because its record
+      // id does not match `targetId`.
+      await updateStatus(connection.db, otherId, "failed", { error: "synthetic-touch" });
       await updateStatus(connection.db, targetId, "paused", { processed: 1 });
       await updateStatus(connection.db, targetId, "completed");
       // Allow live-query notifications to settle. The SDK delivers via the
@@ -378,5 +401,13 @@ describe("awaken_run module shape", () => {
     expect(typeof findLatestResumable).toBe("function");
     expect(typeof updateStatus).toBe("function");
     expect(typeof subscribeToStatus).toBe("function");
+  });
+
+  test("AwakenRunAlreadyActiveError is exported and inherits from Error", () => {
+    const instance = new AwakenRunAlreadyActiveError();
+    expect(instance).toBeInstanceOf(Error);
+    expect(instance).toBeInstanceOf(AwakenRunAlreadyActiveError);
+    expect(instance.name).toBe("AwakenRunAlreadyActiveError");
+    expect(instance.message.length).toBeGreaterThan(0);
   });
 });

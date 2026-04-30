@@ -25,6 +25,7 @@
 import type { RecordId, Surreal } from "surrealdb";
 import type { EventBus } from "../events/eventBus";
 import {
+  AwakenRunAlreadyActiveError,
   type AwakenRunRow,
   type AwakenStatus,
   createRun,
@@ -227,11 +228,25 @@ async function resolveStart(
   if (active !== null) {
     throw new Error("runAwakenWorker: a run is already active");
   }
-  const runId = await createRun(options.db, {
-    tierFilter: options.tierFilter,
-    priorityGlobs: options.priorityGlobs,
-    total: totalPaths,
-  });
+  // The `findCurrent` check above is an early guard, but two concurrent
+  // worker invocations can both observe `null` before either calls
+  // `createRun`. The `awaken_run_active_unique` index serializes the
+  // race; translate its typed error into the same `INVALID_PARAMS` wire
+  // string the daemon's RPC handlers emit so the foreground path's
+  // failure reads identically to the background path's failure.
+  let runId: RecordId<"awaken_run">;
+  try {
+    runId = await createRun(options.db, {
+      tierFilter: options.tierFilter,
+      priorityGlobs: options.priorityGlobs,
+      total: totalPaths,
+    });
+  } catch (error) {
+    if (error instanceof AwakenRunAlreadyActiveError) {
+      throw new Error("INVALID_PARAMS: a different run is already active");
+    }
+    throw error;
+  }
   return { runId, processed: 0, failed: 0, resumeCursor: null };
 }
 

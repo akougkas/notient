@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { RecordId } from "surrealdb";
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import {
+  AwakenRunAlreadyActiveError,
   createRun,
   findCurrent,
   findLatestResumable,
@@ -161,15 +162,26 @@ export function makeAwakenHandler(deps: AwakenHandlerDeps) {
       // Mirror the worker's concurrency guard before we create the row
       // ourselves; the worker only runs `findCurrent` on the default
       // path, so the handler enforces it for the `existingRunId` path.
+      // The `findCurrent` check is the fast path; the
+      // `awaken_run_active_unique` index in the schema is the backstop
+      // for two RPCs that both observe `null` before either inserts.
       const active = await findCurrent(surreal.db);
       if (active !== null) {
         throw new Error("awaken.run: a run is already active");
       }
-      const runId = await createRun(surreal.db, {
-        tierFilter,
-        priorityGlobs: [],
-        total: queuedPaths.length,
-      });
+      let runId: RecordId<"awaken_run">;
+      try {
+        runId = await createRun(surreal.db, {
+          tierFilter,
+          priorityGlobs: [],
+          total: queuedPaths.length,
+        });
+      } catch (error) {
+        if (error instanceof AwakenRunAlreadyActiveError) {
+          throw new Error("INVALID_PARAMS: a different run is already active");
+        }
+        throw error;
+      }
       kickOffBackgroundWorker({
         deps,
         surreal,

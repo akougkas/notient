@@ -173,6 +173,19 @@ DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE failure_reason ON awaken_run TYPE option<string>;
+-- Derived marker that pins a row into the unique index only while its
+-- status is in the active set ('running','paused'). The field evaluates
+-- to the literal string 'active' for active rows and to NONE for terminal
+-- rows. SurrealDB's unique index treats a NONE-valued field as the row
+-- being absent from the index, which gives partial-uniqueness semantics:
+-- at most one active row coexists, terminal rows release the slot.
+-- Choice rationale: SurrealQL's DEFINE INDEX does not expose a WHERE
+-- predicate, and a transaction-wrapped check would still race with
+-- concurrent writers. The computed field plus a unique index over it is
+-- the simplest server-side guard that 3.x accepts.
+DEFINE FIELD OVERWRITE active_marker ON awaken_run TYPE option<string>
+  VALUE IF status INSIDE ['running','paused'] THEN 'active' ELSE NONE END;
+DEFINE INDEX OVERWRITE awaken_run_active_unique ON awaken_run FIELDS active_marker UNIQUE;
 
 -- Phase D1 ledger of swarm discoveries surfaced through `notient events
 -- --since <cursor>`. The `seq` field is the wire cursor: the producer assigns

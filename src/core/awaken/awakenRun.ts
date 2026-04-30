@@ -17,12 +17,19 @@
  *   - `subscribeToStatus` filters live-query notifications down to the
  *     specific `runId`; updates to other rows are ignored.
  *
- * Invariants intentionally NOT enforced here:
- *   - At-most-one row in `status IN ('running','paused')`. The CLI
- *     (Phase 4 task 9) calls `findCurrent` before `createRun` and refuses
- *     to start a fresh run when one is active. Adding a server-side guard
- *     would require a transaction or a unique partial index that
- *     SurrealDB 2.x does not expose cleanly.
+ * Single-active-row invariant: at-most-one row sits in `status INSIDE
+ * ['running','paused']` per vault. SurrealDB enforces it server-side via
+ * the `awaken_run_active_unique` index defined over the computed
+ * `active_marker` field; see `src/core/db/schema.surql`. The marker is
+ * `'active'` while the status is in the active set and `NONE` otherwise,
+ * which converts SurrealDB's standard unique constraint into a partial
+ * unique index. `createRun` translates the resulting unique-violation
+ * error into `AwakenRunAlreadyActiveError` so callers (the daemon's
+ * `awaken.run` handler and the `runAwakenWorker` start guard) can map it
+ * onto the wire-level `INVALID_PARAMS` reply that the CLI's `findCurrent`
+ * guard already emits. The pre-existing `findCurrent` checks in callers
+ * stay; the index is the backstop for racing RPCs that both observe
+ * `findCurrent === null` before either inserts.
  *
  * Live-query implementation choice: `db.live(new Table("awaken_run"))`
  * resolves to a `LiveSubscription` whose `subscribe(handler)` callback
@@ -37,6 +44,35 @@ import { type RecordId, type Surreal, Table } from "surrealdb";
 export type AwakenStatus = "running" | "paused" | "cancelled" | "completed" | "failed";
 
 const TERMINAL_STATUSES: ReadonlySet<AwakenStatus> = new Set(["cancelled", "completed", "failed"]);
+
+/**
+ * Thrown by `createRun` when the `awaken_run_active_unique` index rejects
+ * a fresh insert because another row in `status INSIDE ['running','paused']`
+ * already exists. Two near-simultaneous `awaken.run` RPCs are the canonical
+ * trigger: both observe `findCurrent === null` and both attempt to create
+ * the row, so the index serializes them. Callers should map this onto the
+ * existing `INVALID_PARAMS: a different run is already active` wire string
+ * to keep the CLI's race-time error consistent with the foreground guard.
+ */
+export class AwakenRunAlreadyActiveError extends Error {
+  constructor(message = "AwakenRunAlreadyActiveError: a different run is already active") {
+    super(message);
+    this.name = "AwakenRunAlreadyActiveError";
+  }
+}
+
+/**
+ * Index name configured in `src/core/db/schema.surql`. SurrealDB 3.x
+ * surfaces unique-violation errors with the literal index name embedded
+ * in the message, so the lookup is a stable hook for translating the
+ * raw error into the typed exception.
+ */
+const ACTIVE_UNIQUE_INDEX_NAME = "awaken_run_active_unique";
+
+function isActiveUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes(ACTIVE_UNIQUE_INDEX_NAME);
+}
 
 export interface AwakenRunRow {
   id: RecordId<"awaken_run">;
@@ -110,14 +146,26 @@ export async function createRun(
   // `started_at` has a DEFAULT of `time::now()` in the schema; we omit it
   // so SurrealDB stamps the server-side wallclock. `cursor` and `error`
   // are option<> fields that must be omitted (not nulled) when absent.
-  const result = await db.create<{ id: RecordId<"awaken_run"> }>(new Table("awaken_run")).content({
-    status: "running",
-    total: input.total,
-    processed: 0,
-    failed: 0,
-    tier_filter: input.tierFilter,
-    priority_globs: input.priorityGlobs,
-  });
+  let result: Awaited<ReturnType<ReturnType<Surreal["create"]>["content"]>>;
+  try {
+    result = await db.create<{ id: RecordId<"awaken_run"> }>(new Table("awaken_run")).content({
+      status: "running",
+      total: input.total,
+      processed: 0,
+      failed: 0,
+      tier_filter: input.tierFilter,
+      priority_globs: input.priorityGlobs,
+    });
+  } catch (error) {
+    // The `awaken_run_active_unique` index rejects a second active row.
+    // Map only that specific violation onto the typed error; every other
+    // failure is rethrown unchanged so we never swallow a real SurrealDB
+    // problem under the concurrency hood.
+    if (isActiveUniqueViolation(error)) {
+      throw new AwakenRunAlreadyActiveError();
+    }
+    throw error;
+  }
   const record = Array.isArray(result) ? result[0] : result;
   if (record === undefined) {
     throw new Error("createRun: SurrealDB returned no record");
