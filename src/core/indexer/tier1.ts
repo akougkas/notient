@@ -365,14 +365,26 @@ function buildTier1Transaction(
       continue;
     }
     let toExpr: string;
+    let resolvedTargetKey: string | null;
     if (target.kind === "selfNote") {
       toExpr = "$noteId";
+      // Self-note frontmatter refs (resolved back to the active note) do
+      // not have a pre-known record-id string to match against
+      // `daemon_write.targets`, so we leave them with the default source.
+      // Phase 4 writebacks never record the active note as a self-target.
+      resolvedTargetKey = null;
     } else {
       bindings[`fm${index}_target`] = target.recordId;
       toExpr = `$fm${index}_target`;
+      resolvedTargetKey = target.recordId.toString();
     }
+    bindings[`fm${index}_source`] = resolveWikilinkSourceLabel(
+      "frontmatter",
+      resolvedTargetKey,
+      daemonOverride,
+    );
     statements.push(
-      `RELATE $noteId -> frontmatter_ref -> ${toExpr} SET source = 'frontmatter', class = 'EXTRACTED', confidence = 1;`,
+      `RELATE $noteId -> frontmatter_ref -> ${toExpr} SET source = $fm${index}_source, class = 'EXTRACTED', confidence = 1;`,
     );
   }
 

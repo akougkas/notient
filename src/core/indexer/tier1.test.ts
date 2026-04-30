@@ -569,3 +569,163 @@ Third paragraph anchors the note. ^anchor-1
     expect(containedAfterThird).toBe(expectedBlocks);
   });
 });
+
+describe.skipIf(!SMOKE_ENABLED)(
+  "[smoke] Tier 1 daemon_write source override on frontmatter_ref",
+  () => {
+    // Regression for the linker writeback attribution gap. Phase 4 writes a
+    // wikilink under `frontmatter.notient.<key>` and records a `daemon_write`
+    // row whose `targets` includes the resolved target. Tier 1 then re-runs
+    // over the new body, the frontmatter wikilink resolves to the target,
+    // and the resulting `frontmatter_ref` edge must inherit the agent name
+    // from the matching `daemon_write` row instead of the default
+    // `'frontmatter'` literal.
+    let tempDir: string;
+    let handle: SurrealServerHandle;
+    let connection: SurrealConnection;
+    const secret = "tier1-frontmatter-override-secret";
+    const activePath = "notes/frontmatter/active.md";
+    const targetPath = "notes/frontmatter/target.md";
+    const otherTargetPath = "notes/frontmatter/other.md";
+    const vaultPaths = [activePath, targetPath, otherTargetPath];
+
+    // The fixture seeds `notient.supports: [[target]]` in the frontmatter to
+    // mirror the linker writeback shape. The body has no wikilinks so the
+    // single edge under test is the frontmatter_ref to `target`.
+    const sourceWithFrontmatterSupports = [
+      "---",
+      "notient:",
+      "  supports:",
+      '    - "[[target]]"',
+      "---",
+      "",
+      "# Heading",
+      "",
+      "Body without wikilinks.",
+      "",
+    ].join("\n");
+
+    beforeAll(async () => {
+      tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-tier1-frontmatter-"));
+      handle = await startSurreal({
+        dataDir: path.join(tempDir, "data"),
+        secret,
+        portFile: path.join(tempDir, "port"),
+        pidFile: path.join(tempDir, "pid"),
+        logLevel: "warn",
+      });
+      connection = await connect({
+        url: handle.url,
+        user: "root",
+        pass: secret,
+        namespace: "notient",
+        database: "vault",
+      });
+      await applySchema(connection.db, secret);
+      await upsertNoteByPath(connection.db, {
+        path: targetPath,
+        sha: "target-sha",
+        wordCount: 1,
+      });
+      await upsertNoteByPath(connection.db, {
+        path: otherTargetPath,
+        sha: "other-sha",
+        wordCount: 1,
+      });
+    });
+
+    afterAll(async () => {
+      if (connection !== undefined) {
+        await connection.close().catch(() => {});
+      }
+      if (handle !== undefined) {
+        await handle.stop().catch(() => {});
+      }
+      if (tempDir !== undefined) {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    async function fetchSingleFrontmatterRefSource(noteId: RecordId<"note">): Promise<string> {
+      const [rows] = await connection.db
+        .query<[Array<{ source: string }>]>(
+          "SELECT source FROM frontmatter_ref WHERE in = $note;",
+          { note: noteId },
+        )
+        .collect<[Array<{ source: string }>]>();
+      expect(rows.length).toBe(1);
+      return rows[0].source;
+    }
+
+    async function fetchActiveNoteSha(noteId: RecordId<"note">): Promise<string> {
+      const [rows] = await connection.db
+        .query<[Array<{ sha: string }>]>("SELECT sha FROM note WHERE id = $id;", { id: noteId })
+        .collect<[Array<{ sha: string }>]>();
+      expect(rows.length).toBe(1);
+      return rows[0].sha;
+    }
+
+    test("frontmatter_ref edge gets source=<agent> when daemon_write matches noteId+sha+target", async () => {
+      // Seed the active note via Tier 1 first so a record id and sha exist
+      // for the daemon_write row to reference.
+      const seeded = await runTier1(connection.db, {
+        notePath: activePath,
+        source: sourceWithFrontmatterSupports,
+        vaultPaths,
+      });
+      const noteId = seeded.noteId;
+      const targetId = await lookupNoteByPath(connection.db, targetPath);
+      expect(targetId).not.toBeNull();
+      if (targetId === null) return;
+      const currentSha = await fetchActiveNoteSha(noteId);
+
+      await connection.db
+        .query("DELETE daemon_write WHERE note = $note;", { note: noteId })
+        .collect();
+      await recordDaemonWrite(connection.db, {
+        noteId,
+        sha: currentSha,
+        agent: "linker",
+        targets: [targetId],
+      });
+
+      await runTier1(connection.db, {
+        notePath: activePath,
+        source: sourceWithFrontmatterSupports,
+        vaultPaths,
+      });
+
+      const source = await fetchSingleFrontmatterRefSource(noteId);
+      expect(source).toBe("linker");
+    });
+
+    test("frontmatter_ref keeps source='frontmatter' when daemon_write targets do not include the resolved target", async () => {
+      const noteId = await lookupNoteByPath(connection.db, activePath);
+      expect(noteId).not.toBeNull();
+      if (noteId === null) return;
+      const otherTargetId = await lookupNoteByPath(connection.db, otherTargetPath);
+      expect(otherTargetId).not.toBeNull();
+      if (otherTargetId === null) return;
+      const currentSha = await fetchActiveNoteSha(noteId);
+
+      await connection.db
+        .query("DELETE daemon_write WHERE note = $note;", { note: noteId })
+        .collect();
+      await recordDaemonWrite(connection.db, {
+        noteId,
+        sha: currentSha,
+        agent: "linker",
+        targets: [otherTargetId],
+      });
+
+      await runTier1(connection.db, {
+        notePath: activePath,
+        source: sourceWithFrontmatterSupports,
+        vaultPaths,
+      });
+
+      const source = await fetchSingleFrontmatterRefSource(noteId);
+      expect(source).toBe("frontmatter");
+    });
+  },
+);
