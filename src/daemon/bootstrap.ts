@@ -94,13 +94,6 @@ const ENV_KEYS: ReadonlyArray<keyof EnvSource> = [
 ];
 
 /**
- * Build an EnvSource by overlaying process.env on top of the vault's
- * <vault>/.notient/.env file. Process env wins so an operator can run
- * NOTIENT_LLM_MODEL=... bun ... daemon start to override the vault default
- * for one boot. Only NOTIENT_-prefixed keys we explicitly recognize are
- * carried through.
- */
-/**
  * Refuse to seal the daemon if the operator hasn't pointed it at a real
  * LM Studio endpoint and a real chat model. The DEFAULT_SETTINGS values
  * are empty strings so that no model name is ever pinned in source code;
@@ -122,7 +115,19 @@ function assertEndpointConfigured(settings: {
   );
 }
 
-async function readEnvSource(vault: FsVault, processEnv: NodeJS.ProcessEnv): Promise<EnvSource> {
+/**
+ * Build an EnvSource by overlaying the vault's <vault>/.notient/.env file
+ * on top of process.env. Vault `.env` wins; process env is the fallback so
+ * operators with no vault `.env` still work. Notient is a per-vault local
+ * tool, so the operator-visible rule is that pinning a model in the vault
+ * file binds the daemon to that model regardless of the inherited shell
+ * environment. Only NOTIENT_-prefixed keys we explicitly recognize are
+ * carried through.
+ */
+export async function readEnvSource(
+  vault: FsVault,
+  processEnv: NodeJS.ProcessEnv,
+): Promise<EnvSource> {
   const fileEnv = await vault
     .read(ENV_PATH)
     .then((text) => (text === null ? {} : parseEnvFile(text)))
@@ -131,7 +136,9 @@ async function readEnvSource(vault: FsVault, processEnv: NodeJS.ProcessEnv): Pro
   for (const key of ENV_KEYS) {
     const fileValue = fileEnv[key];
     const processValue = processEnv[key];
-    const chosen = processValue ?? fileValue;
+    // Vault `.env` wins; process env is the fallback so operators with no
+    // vault `.env` still work. See the readEnvSource doc-comment above.
+    const chosen = fileValue ?? processValue;
     if (typeof chosen === "string" && chosen.length > 0) result[key] = chosen;
   }
   return result as EnvSource;

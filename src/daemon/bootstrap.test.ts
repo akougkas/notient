@@ -18,9 +18,10 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FsVault } from "../adapters/fsVault";
 import { ApprovalService } from "../core/approvals/approvalService";
 import type { NotesHistoryRecord } from "../core/chat/tools/notes";
 import type { ToolCall } from "../core/chat/types";
@@ -33,7 +34,7 @@ import { EventBus } from "../core/events/eventBus";
 import { HistoryService } from "../core/history/historyService";
 import type { HistoryKind } from "../core/history/types";
 import { Kernel } from "../core/kernel";
-import { buildHistoryInverters, buildRecordHistoryAutoApprove } from "./bootstrap";
+import { buildHistoryInverters, buildRecordHistoryAutoApprove, readEnvSource } from "./bootstrap";
 import { type SurrealServerHandle, startSurreal } from "./surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -456,5 +457,87 @@ describe("bootstrap buildHistoryInverters", () => {
     expect(inverters["edge.reject"]).toBeUndefined();
     expect(inverters["node.approve"]).toBeUndefined();
     expect(inverters["node.reject"]).toBeUndefined();
+  });
+});
+
+describe("bootstrap readEnvSource", () => {
+  /**
+   * Phase 4 Task M4: vault `.env` wins over process env. Notient is a
+   * per-vault local tool, so an operator who pins a model in the vault
+   * file expects the file to bind the daemon. Process env stays as the
+   * fallback so operators with no vault `.env` still work.
+   */
+  let tempDir: string;
+  let vaultRoot: string;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-readenv-"));
+    vaultRoot = path.join(tempDir, "vault");
+    await mkdir(path.join(vaultRoot, ".notient"), { recursive: true });
+  });
+
+  afterAll(async () => {
+    if (tempDir !== undefined) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(async () => {
+    await unlink(path.join(vaultRoot, ".notient", ".env")).catch(() => {
+      // missing-file is not an error for cleanup
+    });
+  });
+
+  test("vault .env wins when both vault file and process env define the same key", async () => {
+    await writeFile(
+      path.join(vaultRoot, ".notient", ".env"),
+      "NOTIENT_LLM_MODEL=from-vault-file\n",
+    );
+    const vault = new FsVault(vaultRoot);
+    const result = await readEnvSource(vault, { NOTIENT_LLM_MODEL: "from-process-env" });
+    expect(result.NOTIENT_LLM_MODEL).toBe("from-vault-file");
+  });
+
+  test("process env is the fallback when only process env defines the key", async () => {
+    const vault = new FsVault(vaultRoot);
+    const result = await readEnvSource(vault, { NOTIENT_LLM_MODEL: "from-process-env" });
+    expect(result.NOTIENT_LLM_MODEL).toBe("from-process-env");
+  });
+
+  test("vault .env value is used when only the vault file defines the key", async () => {
+    await writeFile(
+      path.join(vaultRoot, ".notient", ".env"),
+      "NOTIENT_LLM_MODEL=from-vault-file\n",
+    );
+    const vault = new FsVault(vaultRoot);
+    const result = await readEnvSource(vault, {});
+    expect(result.NOTIENT_LLM_MODEL).toBe("from-vault-file");
+  });
+
+  test("merges keys from both sources with vault winning per-key", async () => {
+    await writeFile(
+      path.join(vaultRoot, ".notient", ".env"),
+      "NOTIENT_LLM_MODEL=vault-model\nNOTIENT_LLM_BASE_URL=http://vault:1234/v1\n",
+    );
+    const vault = new FsVault(vaultRoot);
+    const result = await readEnvSource(vault, {
+      NOTIENT_LLM_MODEL: "process-model",
+      NOTIENT_EMBED_MODEL: "process-embed",
+    });
+    expect(result.NOTIENT_LLM_MODEL).toBe("vault-model");
+    expect(result.NOTIENT_LLM_BASE_URL).toBe("http://vault:1234/v1");
+    expect(result.NOTIENT_EMBED_MODEL).toBe("process-embed");
+  });
+
+  test("ignores keys outside the recognized NOTIENT_ allowlist", async () => {
+    await writeFile(
+      path.join(vaultRoot, ".notient", ".env"),
+      "NOTIENT_LLM_MODEL=vault-model\nUNRELATED_KEY=should-be-dropped\n",
+    );
+    const vault = new FsVault(vaultRoot);
+    const result = await readEnvSource(vault, { ANOTHER_UNRELATED: "also-dropped" });
+    expect(result.NOTIENT_LLM_MODEL).toBe("vault-model");
+    expect((result as Record<string, string>).UNRELATED_KEY).toBeUndefined();
+    expect((result as Record<string, string>).ANOTHER_UNRELATED).toBeUndefined();
   });
 });
