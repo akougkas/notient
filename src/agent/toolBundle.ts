@@ -17,6 +17,7 @@
  */
 
 import type { Surreal } from "surrealdb";
+import type { ApprovalService } from "../core/approvals/approvalService";
 import type { ApprovalGate } from "../core/chat/approvalGate";
 import { makeContradictionCheckTool, makeSynthesizeTool } from "../core/chat/tools/agents";
 import {
@@ -32,7 +33,12 @@ import {
   makeReplaceSectionTool,
   makeUpdateFrontmatterTool,
 } from "../core/chat/tools/notes";
-import { makeGetProposalTool, makeListProposalsTool } from "../core/chat/tools/proposals";
+import {
+  makeApproveProposalTool,
+  makeGetProposalTool,
+  makeListProposalsTool,
+  makeRejectProposalTool,
+} from "../core/chat/tools/proposals";
 import { ToolRegistry } from "../core/chat/tools/registry";
 import {
   type VaultFacade,
@@ -60,6 +66,13 @@ export interface AgentToolDeps {
   vaultFacade: VaultFacade;
   notesFacade: NotesFacade;
   approvalGate: ApprovalGate;
+  /**
+   * SurrealDB-backed approval service. Powers the write-gated
+   * `proposals.approve` and `proposals.reject` chat tools (M1). Production
+   * shares the same instance the daemon uses for the boot-time
+   * reconcileLinkerWritebacks call.
+   */
+  approvalService: ApprovalService;
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
   recordHistory: (record: NotesHistoryRecord) => Promise<string>;
@@ -100,9 +113,18 @@ export function buildAgentToolRegistry(deps: AgentToolDeps): ToolRegistry {
   registry.register(makeReplaceSectionTool(notesContext));
   registry.register(makeUpdateFrontmatterTool(notesContext));
 
-  // proposals.* (read-only)
+  // proposals.* (read-only list/get + write-gated approve/reject)
   registry.register(makeListProposalsTool(deps.db));
   registry.register(makeGetProposalTool(deps.db));
+  const proposalsWriteContext = {
+    db: deps.db,
+    approvalService: deps.approvalService,
+    approvalGate: deps.approvalGate,
+    approvalMode: deps.approvalMode,
+    generateCallId: deps.generateCallId,
+  };
+  registry.register(makeApproveProposalTool(proposalsWriteContext));
+  registry.register(makeRejectProposalTool({ ...proposalsWriteContext, bus: deps.bus }));
 
   // graph.* (read-only)
   registry.register(makeFindPathTool(deps.db));

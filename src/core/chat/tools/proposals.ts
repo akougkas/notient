@@ -1,6 +1,17 @@
 import { type RecordId, StringRecordId, type Surreal } from "surrealdb";
+import type { ApprovalService } from "../../approvals/approvalService";
 import { WRITEBACK_EDGE_TABLES, type WritebackEdgeTable } from "../../approvals/approvalService";
-import { type ToolDefinition, isObject, optionalPositiveInt, optionalString } from "./registry";
+import type { EventBus } from "../../events/eventBus";
+import type { ApprovalGate } from "../approvalGate";
+import type { ApprovalMode } from "../types";
+import {
+  type ToolDefinition,
+  type ToolJsonSchema,
+  isObject,
+  optionalPositiveInt,
+  optionalString,
+  requireString,
+} from "./registry";
 
 export interface ProposalEdge {
   kind: "edge";
@@ -230,4 +241,226 @@ function parseDateTime(value: Date | string | null | undefined): number {
   if (value instanceof Date) return value.getTime();
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Detects the writeback-capable table from a SurrealDB record-id string of
+ * shape `{table}:{recordId}`. Returns null when the prefix does not match
+ * one of the six writeback edge tables, so the chat tool can refuse the
+ * call before opening a SurrealDB connection.
+ */
+function tableFromEdgeId(id: string): WritebackEdgeTable | null {
+  const colonIndex = id.indexOf(":");
+  if (colonIndex <= 0) return null;
+  const prefix = id.slice(0, colonIndex);
+  if ((WRITEBACK_EDGE_TABLES as ReadonlyArray<string>).includes(prefix)) {
+    return prefix as WritebackEdgeTable;
+  }
+  return null;
+}
+
+export interface ProposalsApproveArgs {
+  id: string;
+}
+
+export type ProposalsApproveResult =
+  | { applied: true; id: string; table: WritebackEdgeTable }
+  | { applied: false; reason: string };
+
+export interface ProposalsApproveContext {
+  db: Surreal;
+  approvalService: ApprovalService;
+  approvalGate: ApprovalGate;
+  approvalMode: () => ApprovalMode;
+  generateCallId: () => string;
+}
+
+const APPROVE_SCHEMA: ToolJsonSchema = {
+  type: "object",
+  properties: {
+    id: {
+      type: "string",
+      description:
+        "SurrealDB edge record id (e.g. `supports:abc...`). Must address one of the six writeback-capable edge tables.",
+    },
+  },
+  required: ["id"],
+};
+
+/**
+ * Write-gated chat tool that promotes one linker proposal through the
+ * three-state contract by delegating to `ApprovalService.approveEdge`. The
+ * tool routes through `ApprovalGate.request` first so safe-mode operators
+ * get prompted before the writeback runs. Idempotent semantics: an unknown
+ * id returns `applied: false` with a `not found or already applied` reason
+ * rather than throwing.
+ */
+export function makeApproveProposalTool(
+  context: ProposalsApproveContext,
+): ToolDefinition<ProposalsApproveArgs, ProposalsApproveResult> {
+  return {
+    name: "proposals.approve",
+    description:
+      "Approve a pending linker proposal by edge id. Writes the corresponding wikilink or frontmatter relation to the source note.",
+    schema: APPROVE_SCHEMA,
+    writeGated: true,
+    validate: (raw) => {
+      if (!isObject(raw)) throw new Error("expected object");
+      const id = requireString(raw.id, "id");
+      return { id };
+    },
+    invoke: async (args, signal, invokeContext) => {
+      const table = tableFromEdgeId(args.id);
+      if (table === null) {
+        return {
+          applied: false,
+          reason: `id '${args.id}' has no writeback-capable table prefix`,
+        };
+      }
+      let recordId: StringRecordId;
+      try {
+        recordId = new StringRecordId(args.id);
+      } catch (error) {
+        return {
+          applied: false,
+          reason: `id '${args.id}' is not a valid SurrealDB record id (${
+            error instanceof Error ? error.message : String(error)
+          })`,
+        };
+      }
+      if (!(await edgeExists(context.db, table, recordId))) {
+        return { applied: false, reason: "proposal not found or already applied" };
+      }
+      const decision = await context.approvalGate.request(
+        { id: context.generateCallId(), name: "proposals.approve", args: { ...args } },
+        context.approvalMode(),
+        `Approve proposal ${args.id}`,
+        signal,
+        invokeContext,
+      );
+      if (!decision.approved) {
+        return { applied: false, reason: decision.reason ?? "rejected by user" };
+      }
+      await context.approvalService.approveEdge({
+        id: recordId as unknown as RecordId,
+        table,
+      });
+      return { applied: true, id: args.id, table };
+    },
+  };
+}
+
+export interface ProposalsRejectArgs {
+  id: string;
+  reason?: string;
+}
+
+export type ProposalsRejectResult =
+  | { applied: true; id: string; table: WritebackEdgeTable; reason: string | null }
+  | { applied: false; reason: string };
+
+export interface ProposalsRejectContext {
+  db: Surreal;
+  approvalService: ApprovalService;
+  approvalGate: ApprovalGate;
+  approvalMode: () => ApprovalMode;
+  generateCallId: () => string;
+  /**
+   * Optional sink for the operator-supplied rejection `reason`. The
+   * underlying `rejectEdge` does not persist a reason today; the chat
+   * surface still surfaces it on the wire for observability.
+   */
+  bus?: EventBus;
+}
+
+const REJECT_SCHEMA: ToolJsonSchema = {
+  type: "object",
+  properties: {
+    id: {
+      type: "string",
+      description:
+        "SurrealDB edge record id (e.g. `supports:abc...`). Must address one of the six writeback-capable edge tables.",
+    },
+    reason: {
+      type: "string",
+      description:
+        "Optional human-readable reason for the rejection. Surfaced on the wire only; not persisted.",
+    },
+  },
+  required: ["id"],
+};
+
+/**
+ * Write-gated chat tool that deletes one linker proposal by delegating to
+ * `ApprovalService.rejectEdge`. Routes through `ApprovalGate.request` so
+ * safe-mode operators get prompted before the row disappears. The optional
+ * `reason` is echoed in the result and reserved for future persistence;
+ * `rejectEdge` does not record one today.
+ */
+export function makeRejectProposalTool(
+  context: ProposalsRejectContext,
+): ToolDefinition<ProposalsRejectArgs, ProposalsRejectResult> {
+  return {
+    name: "proposals.reject",
+    description:
+      "Reject a pending linker proposal by edge id. Deletes the edge row; the linker may re-propose the same edge on its next pass.",
+    schema: REJECT_SCHEMA,
+    writeGated: true,
+    validate: (raw) => {
+      if (!isObject(raw)) throw new Error("expected object");
+      const id = requireString(raw.id, "id");
+      const reason = optionalString(raw.reason, "reason");
+      return reason === undefined ? { id } : { id, reason };
+    },
+    invoke: async (args, signal, invokeContext) => {
+      const table = tableFromEdgeId(args.id);
+      if (table === null) {
+        return {
+          applied: false,
+          reason: `id '${args.id}' has no writeback-capable table prefix`,
+        };
+      }
+      let recordId: StringRecordId;
+      try {
+        recordId = new StringRecordId(args.id);
+      } catch (error) {
+        return {
+          applied: false,
+          reason: `id '${args.id}' is not a valid SurrealDB record id (${
+            error instanceof Error ? error.message : String(error)
+          })`,
+        };
+      }
+      if (!(await edgeExists(context.db, table, recordId))) {
+        return { applied: false, reason: "proposal not found or already applied" };
+      }
+      const decision = await context.approvalGate.request(
+        { id: context.generateCallId(), name: "proposals.reject", args: { ...args } },
+        context.approvalMode(),
+        `Reject proposal ${args.id}${args.reason ? ` (${args.reason})` : ""}`,
+        signal,
+        invokeContext,
+      );
+      if (!decision.approved) {
+        return { applied: false, reason: decision.reason ?? "rejected by user" };
+      }
+      await context.approvalService.rejectEdge({
+        id: recordId as unknown as RecordId,
+        table,
+      });
+      return { applied: true, id: args.id, table, reason: args.reason ?? null };
+    },
+  };
+}
+
+async function edgeExists(
+  db: Surreal,
+  table: WritebackEdgeTable,
+  id: StringRecordId,
+): Promise<boolean> {
+  const sql = `SELECT id FROM ${table} WHERE id = $id LIMIT 1;`;
+  const [rows] = await db
+    .query<[Array<{ id: RecordId }>]>(sql, { id })
+    .collect<[Array<{ id: RecordId }>]>();
+  return rows.length > 0;
 }

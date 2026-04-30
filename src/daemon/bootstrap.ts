@@ -573,6 +573,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     vaultFacade: { readNote: (path) => vault.read(path) },
     notesFacade,
     approvalGate,
+    approvalService,
     hash: simpleHash,
     approvalMode: () => current.chat.approvalMode,
     recordHistory: async (record) => historyService.record(record),

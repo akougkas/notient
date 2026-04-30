@@ -25,6 +25,11 @@ import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit
 import { runLinksSyncCommand } from "./commands/linksSync";
 import { runMigrateVaultCommand } from "./commands/migrateVault";
 import { runNukeCommand } from "./commands/nuke";
+import {
+  runProposalsApproveCommand,
+  runProposalsListCommand,
+  runProposalsRejectCommand,
+} from "./commands/proposalsCli";
 import { runReindexCommand } from "./commands/reindex";
 import { runRestoreCommand } from "./commands/restore";
 import { runSearchCommand } from "./commands/search";
@@ -106,6 +111,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
         "session",
         "graph",
         "links",
+        "proposals",
         "backup",
         "restore",
         "nuke",
@@ -134,6 +140,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (parsed.command === "session") return await dispatchSession(parsed, emitter, clientIdentity);
   if (parsed.command === "graph") return await dispatchGraph(parsed, emitter, clientIdentity);
   if (parsed.command === "links") return await dispatchLinks(parsed, emitter, clientIdentity);
+  if (parsed.command === "proposals") {
+    return await dispatchProposals(parsed, emitter, clientIdentity);
+  }
   if (parsed.command === "backup") return await dispatchBackup(parsed, emitter, clientIdentity);
   if (parsed.command === "restore") return await dispatchRestore(parsed, emitter, clientIdentity);
   if (parsed.command === "nuke") return await dispatchNuke(parsed, emitter, clientIdentity);
@@ -521,6 +530,117 @@ function selectLinksAuditMode(parsed: ParsedArgs): LinksAuditMode {
   if (parsed.flags.pretty === true) return "pretty";
   if (parsed.flags.ndjson === true) return "ndjson";
   return process.stdout.isTTY === true ? "pretty" : "ndjson";
+}
+
+async function dispatchProposals(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const subcommand = parsed.positional[0];
+  if (subcommand === "list") return await dispatchProposalsList(parsed, emitter, clientIdentity);
+  if (subcommand === "approve") {
+    return await dispatchProposalsApprove(parsed, emitter, clientIdentity);
+  }
+  if (subcommand === "reject")
+    return await dispatchProposalsReject(parsed, emitter, clientIdentity);
+  emitter.emit({
+    type: "error",
+    code: "INVALID_PARAMS",
+    message: "usage: notient proposals list|approve|reject",
+  });
+  return 2;
+}
+
+async function dispatchProposalsList(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const notePath =
+    typeof parsed.flags.note === "string" && parsed.flags.note.length > 0
+      ? parsed.flags.note
+      : undefined;
+  const agent =
+    typeof parsed.flags.agent === "string" && parsed.flags.agent.length > 0
+      ? parsed.flags.agent
+      : undefined;
+  let limit: number | undefined;
+  if (typeof parsed.flags.limit === "string") {
+    const parsedLimit = Number(parsed.flags.limit);
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      emitter.emit({
+        type: "error",
+        code: "INVALID_PARAMS",
+        message: "proposals list: --limit must be a positive number",
+      });
+      return 2;
+    }
+    limit = Math.floor(parsedLimit);
+  }
+  return await runProposalsListCommand({
+    vaultPath,
+    emitter,
+    asJson: parsed.flags.json === true,
+    notePath,
+    agent,
+    limit,
+    clientIdentity,
+  });
+}
+
+async function dispatchProposalsApprove(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const id = parsed.positional[1];
+  if (typeof id !== "string" || id.length === 0) {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_PARAMS",
+      message: "proposals approve requires a positional id (e.g. supports:abc...)",
+    });
+    return 2;
+  }
+  const vaultPath = await requireVault(parsed);
+  return await runProposalsApproveCommand({
+    vaultPath,
+    vaultRoot: vaultPath,
+    emitter,
+    id,
+    clientIdentity,
+  });
+}
+
+async function dispatchProposalsReject(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const id = parsed.positional[1];
+  if (typeof id !== "string" || id.length === 0) {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_PARAMS",
+      message: "proposals reject requires a positional id (e.g. supports:abc...)",
+    });
+    return 2;
+  }
+  const vaultPath = await requireVault(parsed);
+  const reason =
+    typeof parsed.flags.reason === "string" && parsed.flags.reason.length > 0
+      ? parsed.flags.reason
+      : undefined;
+  return await runProposalsRejectCommand({
+    vaultPath,
+    vaultRoot: vaultPath,
+    emitter,
+    id,
+    reason,
+    clientIdentity,
+  });
 }
 
 async function dispatchBackup(

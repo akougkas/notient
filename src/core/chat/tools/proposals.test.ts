@@ -17,15 +17,22 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DateTime, type RecordId } from "surrealdb";
 import { type SurrealServerHandle, startSurreal } from "../../../daemon/surrealServer";
-import type { WritebackEdgeTable } from "../../approvals/approvalService";
+import { ApprovalService, type WritebackEdgeTable } from "../../approvals/approvalService";
 import { applySchema } from "../../db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../../db/surreal";
-import { makeGetProposalTool, makeListProposalsTool } from "./proposals";
+import { EventBus } from "../../events/eventBus";
+import { ApprovalGate } from "../approvalGate";
+import {
+  makeApproveProposalTool,
+  makeGetProposalTool,
+  makeListProposalsTool,
+  makeRejectProposalTool,
+} from "./proposals";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -305,5 +312,193 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
     const tool = makeGetProposalTool(connection.db);
     expect(() => tool.validate({ id: "" })).toThrow();
     expect(() => tool.validate({})).toThrow();
+  });
+});
+
+describe("proposals.approve / proposals.reject validation", () => {
+  function makeContext() {
+    return {
+      db: {} as SurrealConnection["db"],
+      approvalService: {} as unknown as ApprovalService,
+      approvalGate: new ApprovalGate({
+        events: { onPending: () => {}, onResolved: () => {} },
+        recordHistoryAutoApprove: async () => {},
+        sessionGrants: { find: () => null, incrementWriteCount: () => {} },
+      }),
+      approvalMode: () => "yolo" as const,
+      generateCallId: () => "call-1",
+    };
+  }
+
+  test("approve schema rejects empty / missing id", () => {
+    const tool = makeApproveProposalTool(makeContext());
+    expect(() => tool.validate({ id: "" })).toThrow();
+    expect(() => tool.validate({})).toThrow();
+    expect(() => tool.validate("nope")).toThrow();
+  });
+
+  test("approve flags writeGated", () => {
+    const tool = makeApproveProposalTool(makeContext());
+    expect(tool.writeGated).toBe(true);
+    expect(tool.name).toBe("proposals.approve");
+  });
+
+  test("reject schema accepts optional reason", () => {
+    const tool = makeRejectProposalTool({ ...makeContext(), bus: new EventBus() });
+    expect(tool.validate({ id: "supports:abc" })).toEqual({ id: "supports:abc" });
+    expect(tool.validate({ id: "supports:abc", reason: "noisy" })).toEqual({
+      id: "supports:abc",
+      reason: "noisy",
+    });
+    expect(() => tool.validate({ id: "" })).toThrow();
+    expect(() => tool.validate({ id: "supports:abc", reason: 7 })).toThrow();
+  });
+
+  test("reject flags writeGated", () => {
+    const tool = makeRejectProposalTool({ ...makeContext(), bus: new EventBus() });
+    expect(tool.writeGated).toBe(true);
+    expect(tool.name).toBe("proposals.reject");
+  });
+});
+
+describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", () => {
+  let tempDir: string;
+  let vaultRoot: string;
+  let handle: SurrealServerHandle;
+  let connection: SurrealConnection;
+  const secret = "phase5-proposals-write-smoke-secret";
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-proposals-write-smoke-"));
+    vaultRoot = path.join(tempDir, "vault");
+    await rm(vaultRoot, { recursive: true, force: true });
+    await (await import("node:fs/promises")).mkdir(vaultRoot, { recursive: true });
+    handle = await startSurreal({
+      dataDir: path.join(tempDir, "data"),
+      secret,
+      portFile: path.join(tempDir, "port"),
+      pidFile: path.join(tempDir, "pid"),
+      logLevel: "warn",
+    });
+    connection = await connect({
+      url: handle.url,
+      user: "root",
+      pass: secret,
+      namespace: "notient",
+      database: "vault",
+    });
+    await applySchema(connection.db, secret);
+  });
+
+  afterAll(async () => {
+    if (connection !== undefined) await connection.close().catch(() => {});
+    if (handle !== undefined) await handle.stop().catch(() => {});
+    if (tempDir !== undefined) await rm(tempDir, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    await clearVault(connection);
+  });
+
+  function buildApprovalService(): ApprovalService {
+    return new ApprovalService({
+      db: connection.db,
+      bus: new EventBus(),
+      vaultRoot,
+      fs: {
+        writeBinary: async (filePath, data) => {
+          await writeFile(filePath, new Uint8Array(data));
+        },
+        rename: async (from, to) => {
+          await (await import("node:fs/promises")).rename(from, to);
+        },
+        remove: async (filePath) => {
+          await (await import("node:fs/promises")).unlink(filePath).catch(() => {});
+        },
+      },
+      readFile: (filePath) => readFile(filePath, "utf8"),
+    });
+  }
+
+  function buildApprovalGate(): ApprovalGate {
+    return new ApprovalGate({
+      events: { onPending: () => {}, onResolved: () => {} },
+      recordHistoryAutoApprove: async () => {},
+      sessionGrants: { find: () => null, incrementWriteCount: () => {} },
+    });
+  }
+
+  test("[smoke] approve writes the wikilink and lands the edge in state 3", async () => {
+    const sourcePath = path.join(vaultRoot, "alpha.md");
+    await writeFile(sourcePath, "# Alpha\n\nbody.\n");
+    await writeFile(path.join(vaultRoot, "beta.md"), "# Beta\n");
+    const id = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "alpha.md",
+      toPath: "beta.md",
+      agent: "linker",
+      createdAtSec: 1,
+    });
+    const tool = makeApproveProposalTool({
+      db: connection.db,
+      approvalService: buildApprovalService(),
+      approvalGate: buildApprovalGate(),
+      approvalMode: () => "yolo",
+      generateCallId: () => "call-approve",
+    });
+    const result = await tool.invoke({ id: id.toString() }, new AbortController().signal);
+    expect(result).toEqual({ applied: true, id: id.toString(), table: "supports" });
+    const body = await readFile(sourcePath, "utf8");
+    expect(body).toContain("[[beta]]");
+  });
+
+  test("[smoke] approve on missing id returns applied:false", async () => {
+    const tool = makeApproveProposalTool({
+      db: connection.db,
+      approvalService: buildApprovalService(),
+      approvalGate: buildApprovalGate(),
+      approvalMode: () => "yolo",
+      generateCallId: () => "call-missing",
+    });
+    const result = await tool.invoke(
+      { id: "supports:not_a_real_id" },
+      new AbortController().signal,
+    );
+    expect(result).toEqual({
+      applied: false,
+      reason: "proposal not found or already applied",
+    });
+  });
+
+  test("[smoke] reject deletes the edge and echoes the reason", async () => {
+    const id = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "alpha.md",
+      toPath: "beta.md",
+      agent: "linker",
+      createdAtSec: 1,
+    });
+    const tool = makeRejectProposalTool({
+      db: connection.db,
+      approvalService: buildApprovalService(),
+      approvalGate: buildApprovalGate(),
+      approvalMode: () => "yolo",
+      generateCallId: () => "call-reject",
+      bus: new EventBus(),
+    });
+    const result = await tool.invoke(
+      { id: id.toString(), reason: "noisy" },
+      new AbortController().signal,
+    );
+    expect(result).toEqual({
+      applied: true,
+      id: id.toString(),
+      table: "supports",
+      reason: "noisy",
+    });
+    const [rows] = await connection.db
+      .query<[Array<{ id: RecordId }>]>("SELECT id FROM supports WHERE id = $id;", { id })
+      .collect<[Array<{ id: RecordId }>]>();
+    expect(rows).toHaveLength(0);
   });
 });

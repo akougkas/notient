@@ -202,6 +202,8 @@ export const DEFAULT_SETTINGS: NotientSettings = {
       "vault.get_vitals": "auto",
       "proposals.list_pending": "auto",
       "proposals.get": "auto",
+      "proposals.approve": "ask",
+      "proposals.reject": "ask",
       "graph.find_path": "auto",
       "graph.list_clusters": "auto",
       "agents.contradiction_check": "auto",

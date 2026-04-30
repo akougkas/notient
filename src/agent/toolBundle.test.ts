@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Surreal } from "surrealdb";
+import type { ApprovalService } from "../core/approvals/approvalService";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import type { Agent, AgentRunResult } from "../core/coordinator/types";
 import { EventBus } from "../core/events/eventBus";
@@ -31,6 +32,7 @@ function makeDeps(): Parameters<typeof buildAgentToolRegistry>[0] {
       recordHistoryAutoApprove: async () => {},
       sessionGrants: { find: () => null, incrementWriteCount: () => {} },
     }),
+    approvalService: {} as ApprovalService,
     hash: async () => "00",
     approvalMode: () => "yolo",
     recordHistory: async () => "history:fake-0",
@@ -56,6 +58,8 @@ describe("buildAgentToolRegistry", () => {
     expect(names).toContain("notes.update_frontmatter");
     expect(names).toContain("proposals.list_pending");
     expect(names).toContain("proposals.get");
+    expect(names).toContain("proposals.approve");
+    expect(names).toContain("proposals.reject");
     expect(names).toContain("graph.find_path");
     expect(names).toContain("graph.list_clusters");
     expect(names).toContain("agents.contradiction_check");
@@ -68,6 +72,10 @@ describe("buildAgentToolRegistry", () => {
     expect(registry.isWriteGated("notes.append")).toBe(true);
     expect(registry.isWriteGated("notes.replace_section")).toBe(true);
     expect(registry.isWriteGated("notes.update_frontmatter")).toBe(true);
+    expect(registry.isWriteGated("proposals.approve")).toBe(true);
+    expect(registry.isWriteGated("proposals.reject")).toBe(true);
+    expect(registry.isWriteGated("proposals.list_pending")).toBe(false);
+    expect(registry.isWriteGated("proposals.get")).toBe(false);
     expect(registry.isWriteGated("vault.search_notes")).toBe(false);
     expect(registry.isWriteGated("vault.read_note")).toBe(false);
     expect(registry.isWriteGated("graph.find_path")).toBe(false);
