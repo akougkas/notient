@@ -7,12 +7,16 @@ import type { LLMProvider } from "../llm/provider";
 /**
  * Linker agent: proposes typed semantic edges between the active note and
  * its kNN neighbours. Reads chunks + vectors from SurrealDB, asks the
- * reasoning model for a small set of typed proposals, and writes each
+ * reasoning model to rank the strongest few neighbours, and writes each
  * accepted proposal as an unapproved edge in the target table.
  *
- * Spec: Phase 3 plan §Task 8. Edges land with `class = 'INFERRED'`,
- * `agent = 'linker'`, `source = 'linker'`, `approved = false` so the
- * /links inbox surfaces them for human review.
+ * Spec: Phase 3 plan §Task 8 with M3 rewrite. The model is asked to pick the
+ * top few related neighbours (no per-pair confidence number); rank position
+ * in the model's returned array maps deterministically to confidence via
+ * RANK_TO_CONFIDENCE so the operator sees a graded distribution instead of
+ * the bimodal cluster the threshold-anchored prompt produced. Edges land
+ * with `class = 'INFERRED'`, `agent = 'linker'`, `source = 'linker'`,
+ * `approved = false` so the /links inbox surfaces them for human review.
  */
 
 export interface LinkerOptions {
@@ -38,21 +42,33 @@ function isAllowedEdgeType(value: string): value is AllowedEdgeType {
   return (ALLOWED_EDGE_TYPES as readonly string[]).includes(value);
 }
 
-interface LinkerProposal {
+/**
+ * Confidence for a kept proposal is derived from its rank position in the
+ * model's returned array, not from a model-emitted number. The ladder spreads
+ * across {0.95, 0.85, 0.75, 0.65} so the inbox shows a graded distribution.
+ * MAX_PROPOSALS_PER_NOTE and RANK_TO_CONFIDENCE.length must stay in sync.
+ */
+export const MAX_PROPOSALS_PER_NOTE = 4;
+export const RANK_TO_CONFIDENCE: readonly number[] = [0.95, 0.85, 0.75, 0.65];
+
+if (RANK_TO_CONFIDENCE.length !== MAX_PROPOSALS_PER_NOTE) {
+  throw new Error(
+    "linker: RANK_TO_CONFIDENCE length must equal MAX_PROPOSALS_PER_NOTE",
+  );
+}
+
+export interface LinkerProposal {
   targetNotePath: string;
   type: AllowedEdgeType;
   confidence: number;
   rationale: string;
-  evidenceChunkIds: string[];
 }
 
-interface LinkerJsonResponse {
+export interface LinkerJsonResponse {
   edges: Array<{
     targetNotePath: string;
     type: string;
-    confidence: number;
     rationale: string;
-    evidenceChunkIds: string[];
   }>;
 }
 
@@ -65,11 +81,11 @@ const SCHEMA = {
     properties: {
       edges: {
         type: "array",
-        maxItems: 8,
+        maxItems: MAX_PROPOSALS_PER_NOTE,
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["targetNotePath", "type", "confidence", "rationale", "evidenceChunkIds"],
+          required: ["targetNotePath", "type", "rationale"],
           properties: {
             targetNotePath: { type: "string" },
             type: {
@@ -83,9 +99,7 @@ const SCHEMA = {
                 "related_to",
               ],
             },
-            confidence: { type: "number", minimum: 0, maximum: 1 },
             rationale: { type: "string", maxLength: 240 },
-            evidenceChunkIds: { type: "array", items: { type: "string" }, maxItems: 4 },
           },
         },
       },
@@ -93,10 +107,52 @@ const SCHEMA = {
   },
 } as const;
 
+const SYSTEM_PROMPT = `You are the Notient Linker. You are given an active note and a set of candidate neighbour notes selected by embedding similarity. Your job is to rank the neighbours by how strongly the active note actually relates to them in substance, then output only the strongest few.
+
+Return at most ${MAX_PROPOSALS_PER_NOTE} edges, ordered from strongest relationship to weakest. For each kept neighbour emit:
+- targetNotePath: the neighbour's path exactly as given
+- type: one of supports | contradicts | extends | exemplifies | synthesizes | related_to
+- rationale: one short sentence naming the specific shared idea
+
+Edge type rubric:
+- supports: the active note argues for or provides evidence for a position the neighbour holds
+- contradicts: the active note argues against a position the neighbour holds
+- extends: the active note builds on or generalises a thread the neighbour starts
+- exemplifies: the active note is a concrete instance of a pattern the neighbour describes (or vice versa)
+- synthesizes: the active note combines threads from the neighbour with other material
+- related_to: same domain and clearly relevant, but the relationship is not one of the above
+
+Quality over quantity. Skip neighbours that are merely topically adjacent or that share vocabulary without sharing an argument. An empty array is correct when nothing is worth proposing. Never invent paths or claims.`;
+
 interface ChunkRow {
   ord: number;
   text: string;
   vector: number[];
+}
+
+/**
+ * Pure post-processor exported for unit tests. Validates each model-emitted
+ * edge, truncates to MAX_PROPOSALS_PER_NOTE, and assigns confidence by rank
+ * position via RANK_TO_CONFIDENCE.
+ */
+export function filterProposals(response: LinkerJsonResponse): LinkerProposal[] {
+  if (response === null || response === undefined) return [];
+  const edges = Array.isArray(response.edges) ? response.edges : [];
+  const accepted: LinkerProposal[] = [];
+  for (const edge of edges) {
+    if (accepted.length >= MAX_PROPOSALS_PER_NOTE) break;
+    if (edge === null || typeof edge !== "object") continue;
+    if (typeof edge.targetNotePath !== "string" || edge.targetNotePath.length === 0) continue;
+    if (typeof edge.type !== "string" || !isAllowedEdgeType(edge.type)) continue;
+    const rank = accepted.length;
+    accepted.push({
+      targetNotePath: edge.targetNotePath,
+      type: edge.type,
+      confidence: RANK_TO_CONFIDENCE[rank],
+      rationale: typeof edge.rationale === "string" ? edge.rationale : "",
+    });
+  }
+  return accepted;
 }
 
 export class Linker implements Agent {
@@ -127,8 +183,7 @@ export class Linker implements Agent {
     const messages = [
       {
         role: "system" as const,
-        content:
-          "You are the Notient Linker. Given an active note and its top embedding neighbours, propose typed edges with evidence. Cite only chunk IDs that appear in the input. Be conservative: confidence < 0.6 means do not propose.",
+        content: SYSTEM_PROMPT,
       },
       {
         role: "user" as const,
@@ -144,7 +199,6 @@ export class Linker implements Agent {
           neighbors: neighbors.map((candidate) => ({
             notePath: candidate.notePath,
             bestDistance: candidate.bestDistance,
-            evidenceChunkIds: candidate.evidenceChunkIds.map((id) => id.toString()),
           })),
           edgeTypes: ALLOWED_EDGE_TYPES,
         }),
@@ -162,7 +216,7 @@ export class Linker implements Agent {
       SCHEMA,
     );
 
-    const proposals = this.filterProposals(response);
+    const proposals = filterProposals(response);
 
     let written = 0;
     for (const proposal of proposals) {
@@ -201,26 +255,5 @@ export class Linker implements Agent {
       )
       .collect<[ChunkRow[]]>();
     return rows;
-  }
-
-  private filterProposals(response: LinkerJsonResponse): LinkerProposal[] {
-    const accepted: LinkerProposal[] = [];
-    for (const edge of response.edges) {
-      if (!isAllowedEdgeType(edge.type)) continue;
-      if (typeof edge.targetNotePath !== "string" || edge.targetNotePath.length === 0) continue;
-      if (typeof edge.confidence !== "number" || edge.confidence < 0 || edge.confidence > 1) {
-        continue;
-      }
-      accepted.push({
-        targetNotePath: edge.targetNotePath,
-        type: edge.type,
-        confidence: edge.confidence,
-        rationale: typeof edge.rationale === "string" ? edge.rationale : "",
-        evidenceChunkIds: Array.isArray(edge.evidenceChunkIds)
-          ? edge.evidenceChunkIds.filter((id): id is string => typeof id === "string")
-          : [],
-      });
-    }
-    return accepted;
   }
 }

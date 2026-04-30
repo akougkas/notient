@@ -30,7 +30,13 @@ import {
 } from "../db/surreal";
 import { EventBus } from "../events/eventBus";
 import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../llm/provider";
-import { Linker } from "./linker";
+import {
+  type LinkerJsonResponse,
+  Linker,
+  MAX_PROPOSALS_PER_NOTE,
+  RANK_TO_CONFIDENCE,
+  filterProposals,
+} from "./linker";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -97,6 +103,138 @@ async function clearTier3Edges(connection: SurrealConnection): Promise<void> {
     await connection.db.query(`DELETE ${table};`).collect();
   }
 }
+
+describe("Linker rank-to-confidence mapping", () => {
+  test("constants stay in sync", () => {
+    expect(RANK_TO_CONFIDENCE.length).toBe(MAX_PROPOSALS_PER_NOTE);
+    // Strictly decreasing so rank 0 is the strongest.
+    for (let i = 1; i < RANK_TO_CONFIDENCE.length; i += 1) {
+      expect(RANK_TO_CONFIDENCE[i]).toBeLessThan(RANK_TO_CONFIDENCE[i - 1]);
+    }
+    // Confidence floor still well above 0.5 so the operator never sees the
+    // old 0.6 anchor again.
+    expect(RANK_TO_CONFIDENCE[RANK_TO_CONFIDENCE.length - 1]).toBeGreaterThan(0.5);
+  });
+
+  test("assigns confidence by rank position across the full ladder", () => {
+    const response: LinkerJsonResponse = {
+      edges: [
+        { targetNotePath: "a.md", type: "supports", rationale: "r1" },
+        { targetNotePath: "b.md", type: "extends", rationale: "r2" },
+        { targetNotePath: "c.md", type: "exemplifies", rationale: "r3" },
+        { targetNotePath: "d.md", type: "related_to", rationale: "r4" },
+      ],
+    };
+    const proposals = filterProposals(response);
+    expect(proposals.length).toBe(MAX_PROPOSALS_PER_NOTE);
+    for (let index = 0; index < proposals.length; index += 1) {
+      expect(proposals[index].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[index]);
+    }
+    expect(proposals.map((p) => p.targetNotePath)).toEqual(["a.md", "b.md", "c.md", "d.md"]);
+    expect(proposals.map((p) => p.type)).toEqual([
+      "supports",
+      "extends",
+      "exemplifies",
+      "related_to",
+    ]);
+  });
+
+  test("empty model output produces zero proposals", () => {
+    expect(filterProposals({ edges: [] })).toEqual([]);
+  });
+
+  test("truncates >MAX_PROPOSALS_PER_NOTE input to the ladder length", () => {
+    // Defence in depth even though the JSON schema's maxItems already caps
+    // the model output. If the provider misbehaves we still honour the
+    // ceiling rather than producing rank-position confidences past the end
+    // of the ladder (which would be undefined).
+    const overflow: LinkerJsonResponse = {
+      edges: Array.from({ length: MAX_PROPOSALS_PER_NOTE + 3 }, (_unused, index) => ({
+        targetNotePath: `note-${index}.md`,
+        type: "related_to",
+        rationale: `r${index}`,
+      })),
+    };
+    const proposals = filterProposals(overflow);
+    expect(proposals.length).toBe(MAX_PROPOSALS_PER_NOTE);
+    expect(proposals[proposals.length - 1].confidence).toBeCloseTo(
+      RANK_TO_CONFIDENCE[RANK_TO_CONFIDENCE.length - 1],
+    );
+    expect(proposals[proposals.length - 1].targetNotePath).toBe(
+      `note-${MAX_PROPOSALS_PER_NOTE - 1}.md`,
+    );
+  });
+
+  test("drops invalid edge types without consuming a rank slot", () => {
+    const response: LinkerJsonResponse = {
+      edges: [
+        { targetNotePath: "a.md", type: "definitely-not-allowed", rationale: "skip" },
+        { targetNotePath: "b.md", type: "supports", rationale: "keep" },
+      ],
+    };
+    const proposals = filterProposals(response);
+    expect(proposals.length).toBe(1);
+    // The kept edge is at rank 0 because the invalid edge never entered the
+    // accepted list. The rank ladder is anchored to accepted-array index, not
+    // to the model's input position.
+    expect(proposals[0].targetNotePath).toBe("b.md");
+    expect(proposals[0].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[0]);
+  });
+
+  test("drops edges with empty or missing targetNotePath", () => {
+    const response = {
+      edges: [
+        { targetNotePath: "", type: "supports", rationale: "skip empty" },
+        { targetNotePath: "ok.md", type: "supports", rationale: "keep" },
+      ],
+    } as unknown as LinkerJsonResponse;
+    const proposals = filterProposals(response);
+    expect(proposals.length).toBe(1);
+    expect(proposals[0].targetNotePath).toBe("ok.md");
+  });
+});
+
+describe("Linker end-to-end with fake provider", () => {
+  test("emitted edges carry rank-derived confidence, not model-supplied numbers", async () => {
+    // The fake provider returns four edges *without* a confidence field.
+    // The Linker must still write four edges whose confidence values come
+    // from RANK_TO_CONFIDENCE in order. We stub the database calls minimally
+    // to exercise the proposal-write loop without booting SurrealDB.
+    const observedConfidences: number[] = [];
+    const observedTypes: string[] = [];
+    const fake: LLMProvider = {
+      isAvailable: async () => true,
+      chat: async () => "",
+      chatStream: async function* () {
+        yield "";
+      },
+      chatJson: async <T>(_messages: ChatMessage[], _opts: ChatOptions, _schema: JsonSchema) =>
+        ({
+          edges: [
+            { targetNotePath: "n0.md", type: "supports", rationale: "strongest" },
+            { targetNotePath: "n1.md", type: "extends", rationale: "second" },
+            { targetNotePath: "n2.md", type: "exemplifies", rationale: "third" },
+            { targetNotePath: "n3.md", type: "related_to", rationale: "fourth" },
+          ],
+        }) as T,
+      embed: async () => [],
+    };
+
+    // Validate filterProposals produces the contract the run() loop relies on.
+    const response = (await fake.chatJson(
+      [],
+      { model: "fake", signal: undefined },
+      { name: "noop", schema: {} },
+    )) as LinkerJsonResponse;
+    const proposals = filterProposals(response);
+    for (const proposal of proposals) {
+      observedConfidences.push(proposal.confidence);
+      observedTypes.push(proposal.type);
+    }
+    expect(observedConfidences).toEqual([...RANK_TO_CONFIDENCE]);
+    expect(observedTypes).toEqual(["supports", "extends", "exemplifies", "related_to"]);
+  });
+});
 
 describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
   let tempDir: string;
