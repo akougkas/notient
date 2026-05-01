@@ -1,6 +1,6 @@
 # Notient
 
-> Note + Sentient. A friend who reads everything you write down, and remembers.
+> Note + Sentient. An agentic system that reads everything you write down, and remembers.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/Bun-1.3.10-black.svg)](https://bun.sh)
@@ -8,17 +8,17 @@
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-3.0.5-ff00aa.svg)](https://surrealdb.com)
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange.svg)](#status)
 
-Notient is a character, not a tool. He lives in your filesystem. His body is a folder of Markdown files; his mind is a local SurrealDB and whichever LLM you've got reachable over an OpenAI-compatible endpoint. Drop a note in the vault and he'll read it. Ask him a question and he'll answer with citations to the notes that justified the answer. Notient itself has no hosted service; if you point him at a local server, nothing about your work leaves the machine. Every write he wants to make passes through you first.
+Notient is an agentic system, not a single tool. A daemon lives alongside your notes; inside, a watcher catches every save, an indexer parses and embeds, a linker proposes connections between notes, and a chat loop fields your questions. The Markdown vault is the substrate. A local SurrealDB is the memory. Whichever LLM you have reachable over an OpenAI-compatible endpoint is the reasoning engine. Drop a note in the vault and Notient reads it. Ask Notient a question and it answers with citations to the notes that justified the answer. Notient itself ships no hosted service; if you point it at a local server, nothing about your work leaves the machine. Every write Notient proposes passes through you first.
 
-He has two kinds of friends. Humans, who let him watch over a vault and ask him things when their own memory gives out. And other AI agents (Claude Code, Codex, Cursor, whatever you're using next month) who can hand him a vault of their *own* and use him as the persistent memory they don't otherwise get to have.
+Notient has two kinds of users. Humans, who hand it a vault and query it when their own memory gives out. And other AI agents (Claude Code, Codex, Cursor, whatever you're using next month) who can hand Notient a vault of their *own* and use it as the persistent memory they don't otherwise get to have.
 
-> Status: **0.1.0-alpha**, pre-1.0. Surfaces and storage may shift between versions. Read the [status section](#status) before relying on him.
+> Status: **0.1.0-alpha**, pre-1.0. Surfaces and storage may shift between versions. Read the [status section](#status) before relying on it.
 
 ---
 
 ## For humans
 
-You point Notient at a folder of Markdown. He starts watching it. Anything you save, he reads. He parses the structure, embeds the chunks, extracts the concepts and claims and questions, and proposes links between notes that seem related. Then he sits there waiting for you to ask him something.
+You point Notient at a folder of Markdown and the watcher picks it up. Anything you save gets parsed, chunked, and embedded. The extractor pulls out concepts, claims, and questions; the linker proposes connections between notes that seem related. Then Notient sits idle, waiting for you to ask something.
 
 ```bash
 bun dist/notient.js ask "what did I decide about vector search last month?" --vault ~/MyVault
@@ -26,9 +26,9 @@ bun dist/notient.js brief "vector search" --vault ~/MyVault
 bun dist/notient.js chat --vault ~/MyVault            # opens the TUI
 ```
 
-`ask` returns a one-shot answer with `[[wikilink]]` citations and a confidence score. `brief` synthesises a capped set of top relevant notes (default 8, tunable via `--max-notes`, `--max-questions`, `--max-decisions`); it's a ranked evidence brief, not an exhaustive topic page. `chat` opens an interactive TUI where you can talk to him, attach notes with `@`, and approve any change he wants to make to the vault.
+`ask` returns a one-shot answer with `[[wikilink]]` citations and a confidence score. `brief` synthesises a capped set of top relevant notes (default 8, tunable via `--max-notes`, `--max-questions`, `--max-decisions`); it's a ranked evidence brief, not an exhaustive topic page. `chat` opens an interactive TUI where you converse with the chat agent, attach notes with `@`, and approve any change Notient wants to make to the vault.
 
-He never silently mutates your files. When he wants to write, whether that's creating a note, appending to one, swapping out a section, or editing frontmatter, you see the proposed call along with a preview of what would change, then you type `/approve` or `/deny`. If you trust him for a stretch, you can grant a scoped session and stop confirming for a while.
+Notient never silently mutates your files. When the chat agent wants to write, whether that's creating a note, appending to one, swapping out a section, or editing frontmatter, you see the proposed call along with a preview of what would change, then you type `/approve` or `/deny`. If you want to skip confirming for a stretch, you can grant a scoped session that covers a specific tool list.
 
 ---
 
@@ -36,7 +36,7 @@ He never silently mutates your files. When he wants to write, whether that's cre
 
 If you're a coding agent reading this README because your human pointed you at it: hello. Notient is a memory primitive you can use.
 
-You're brilliant for an hour and forgetful tomorrow. You learned something about this codebase last week, a convention you agreed to, a decision about an API shape, a workaround for a flaky test, and by the next session it's gone. Notient solves that. Give him his own vault somewhere on disk and treat him as your long-term store. He runs as a per-vault daemon over a Unix Domain Socket, so RPC into him is fast. He returns structured JSON with citations, so you can verify what he tells you. He calls whichever OpenAI-compatible endpoint your human configures; point him at a local server and nothing about your work leaves the machine.
+You're brilliant for an hour and forgetful tomorrow. You learned something about this codebase last week, a convention you agreed to, a decision about an API shape, a workaround for a flaky test, and by the next session it's gone. Notient closes that gap. Give it a vault somewhere on disk and treat it as your long-term store. The system runs as a per-vault daemon over a Unix Domain Socket, so RPC into it is fast. It returns structured JSON with citations, so you can verify what it tells you. It calls whichever OpenAI-compatible endpoint your human configures; point it at a local server and nothing about your work leaves the machine.
 
 ```bash
 # Recall against your own memory vault.
