@@ -6,6 +6,7 @@ export interface StartupProbeInput {
   readonly endpoint: string;
   readonly modelId: string;
   readonly configuredContextTokens: number;
+  readonly parallelSlots?: number;
   /** Optional fetch override for tests. */
   readonly fetchImpl?: FetchLike;
   /** Wall-clock cap for the probe; default 2000ms. */
@@ -32,6 +33,8 @@ interface RawModel {
 export async function runStartupProbe(input: StartupProbeInput): Promise<StartupProbeEvent> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const timeoutMs = input.timeoutMs ?? 2000;
+  const parallelSlots = normalizeParallelSlots(input.parallelSlots);
+  const requestedTotalContextTokens = input.configuredContextTokens * parallelSlots;
   const baseUrl = input.endpoint.replace(/\/v1\/?$/, "");
   const url = `${baseUrl}/api/v0/models`;
 
@@ -40,33 +43,77 @@ export async function runStartupProbe(input: StartupProbeInput): Promise<Startup
   try {
     const response = await fetchImpl(url, { signal: controller.signal });
     if (!response.ok) {
-      return buildEvent(input, null, "endpoint-unreachable", `HTTP ${response.status}`);
+      return buildEvent(
+        input,
+        parallelSlots,
+        requestedTotalContextTokens,
+        null,
+        "endpoint-unreachable",
+        `HTTP ${response.status}`,
+      );
     }
     const body = (await response.json()) as { data?: ReadonlyArray<RawModel> };
     const match = (body.data ?? []).find((m) => m?.id === input.modelId);
     if (match === undefined) {
-      return buildEvent(input, null, "model-not-loaded", "model id not present in /api/v0/models");
+      return buildEvent(
+        input,
+        parallelSlots,
+        requestedTotalContextTokens,
+        null,
+        "model-not-loaded",
+        "model id not present in /api/v0/models",
+      );
     }
     if (match.state !== "loaded") {
-      return buildEvent(input, null, "model-not-loaded", `model state is ${String(match.state)}`);
+      return buildEvent(
+        input,
+        parallelSlots,
+        requestedTotalContextTokens,
+        null,
+        "model-not-loaded",
+        `model state is ${String(match.state)}`,
+      );
     }
     const loaded =
       typeof match.loaded_context_length === "number" ? match.loaded_context_length : null;
     if (loaded === null) {
-      return buildEvent(input, null, "model-not-loaded", "loaded_context_length missing");
-    }
-    if (input.configuredContextTokens > loaded) {
       return buildEvent(
         input,
-        loaded,
-        "loaded-too-small",
-        `configured ${input.configuredContextTokens.toLocaleString()} > loaded ${loaded.toLocaleString()}; reduce chat.modelContextTokens or load a larger window`,
+        parallelSlots,
+        requestedTotalContextTokens,
+        null,
+        "model-not-loaded",
+        "loaded_context_length missing",
       );
     }
-    return buildEvent(input, loaded, "ok", "context budget within loaded window");
+    if (requestedTotalContextTokens > loaded) {
+      return buildEvent(
+        input,
+        parallelSlots,
+        requestedTotalContextTokens,
+        loaded,
+        "loaded-too-small",
+        `configured ${input.configuredContextTokens.toLocaleString()} x ${parallelSlots.toLocaleString()} slots = ${requestedTotalContextTokens.toLocaleString()} > loaded ${loaded.toLocaleString()}; reduce chat.modelContextTokens/chat.reasoningSlots or load a larger window`,
+      );
+    }
+    return buildEvent(
+      input,
+      parallelSlots,
+      requestedTotalContextTokens,
+      loaded,
+      "ok",
+      `context budget within loaded window (${input.configuredContextTokens.toLocaleString()} x ${parallelSlots.toLocaleString()} slots = ${requestedTotalContextTokens.toLocaleString()})`,
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown";
-    return buildEvent(input, null, "endpoint-unreachable", reason);
+    return buildEvent(
+      input,
+      parallelSlots,
+      requestedTotalContextTokens,
+      null,
+      "endpoint-unreachable",
+      reason,
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -74,6 +121,8 @@ export async function runStartupProbe(input: StartupProbeInput): Promise<Startup
 
 function buildEvent(
   input: StartupProbeInput,
+  parallelSlots: number,
+  requestedTotalContextTokens: number,
   loaded: number | null,
   status: StartupProbeStatus,
   message: string,
@@ -82,8 +131,16 @@ function buildEvent(
     endpoint: input.endpoint,
     modelId: input.modelId,
     configuredContextTokens: input.configuredContextTokens,
+    parallelSlots,
+    requestedTotalContextTokens,
     loadedContextLength: loaded,
     status,
     message,
   };
+}
+
+function normalizeParallelSlots(value: number | undefined): number {
+  if (value === undefined) return 1;
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  return Math.trunc(value);
 }

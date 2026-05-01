@@ -16,6 +16,10 @@ describe("buildModelView", () => {
     expect(view.chatModel).toBe(DEFAULT_SETTINGS.primary.reasoningModel);
     expect(view.embedModel).toBe(DEFAULT_SETTINGS.embedding.model);
     expect(view.contextTokens).toBe(DEFAULT_SETTINGS.chat.modelContextTokens);
+    expect(view.reasoningSlots).toBe(DEFAULT_SETTINGS.chat.reasoningSlots);
+    expect(view.requestedTotalContextTokens).toBe(
+      DEFAULT_SETTINGS.chat.modelContextTokens * DEFAULT_SETTINGS.chat.reasoningSlots,
+    );
   });
 });
 
@@ -26,12 +30,15 @@ describe("formatModelView", () => {
       chatModel: "m",
       embedModel: "e",
       contextTokens: 200000,
+      reasoningSlots: 4,
+      requestedTotalContextTokens: 800000,
     });
     const lines = text.split("\n");
     expect(lines[0]).toBe("model:    m");
     expect(lines[1]).toBe("embed:    e");
     expect(lines[2]).toBe("endpoint: http://h:1/v1");
     expect(lines[3]).toBe("context:  200,000 tok");
+    expect(lines[4]).toBe("slots:    4 (800,000 tok total)");
   });
 });
 

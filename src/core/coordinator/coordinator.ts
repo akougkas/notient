@@ -26,6 +26,14 @@ interface CreatedRunRow {
   seq: number;
 }
 
+interface StartedAgentRun {
+  agent: Agent;
+  trigger: AgentTrigger;
+  notePath: string | null;
+  startedAt: number;
+  runId: number;
+}
+
 export class Coordinator {
   private readonly subs: Array<() => void> = [];
   private inflight: Set<Promise<unknown>> = new Set();
@@ -92,28 +100,30 @@ export class Coordinator {
   private dispatch(trigger: AgentTrigger, notePath: string | null, agents: AgentName[]): void {
     if (!this.running) return;
     if (this.userActive && trigger.startsWith("idle")) return;
-    const promise = this.runSequential(trigger, notePath, agents).finally(() => {
+    const promise = this.runConcurrent(trigger, notePath, agents).finally(() => {
       this.inflight.delete(promise);
     });
     this.inflight.add(promise);
   }
 
-  private async runSequential(
+  private async runConcurrent(
     trigger: AgentTrigger,
     notePath: string | null,
     agents: AgentName[],
   ): Promise<void> {
+    const runs: StartedAgentRun[] = [];
     for (const name of agents) {
       const agent = this.opts.agents[name];
-      await this.runOne(agent, trigger, notePath);
+      runs.push(await this.startRun(agent, trigger, notePath));
     }
+    await Promise.all(runs.map((run) => this.finishRun(run)));
   }
 
-  private async runOne(
+  private async startRun(
     agent: Agent,
     trigger: AgentTrigger,
     notePath: string | null,
-  ): Promise<void> {
+  ): Promise<StartedAgentRun> {
     const startedAt = Date.now();
     const runId = await this.createRun(agent.name, trigger, notePath, startedAt);
     this.opts.bus.emit({
@@ -123,26 +133,34 @@ export class Coordinator {
       notePath,
       runId,
     });
+    return { agent, trigger, notePath, startedAt, runId };
+  }
+
+  private async finishRun(run: StartedAgentRun): Promise<void> {
     let proposals = 0;
     let ok = false;
     let errorMessage: string | undefined;
     try {
-      const result = await this.executeAgent(agent, { trigger, notePath, runId });
+      const result = await this.executeAgent(run.agent, {
+        trigger: run.trigger,
+        notePath: run.notePath,
+        runId: run.runId,
+      });
       proposals = result.proposals;
       ok = true;
     } catch (error) {
       errorMessage = (error as Error).message ?? String(error);
     }
     const finishedAt = Date.now();
-    await this.finalizeRun(runId, finishedAt, ok, errorMessage, proposals);
+    await this.finalizeRun(run.runId, finishedAt, ok, errorMessage, proposals);
     this.opts.bus.emit({
       type: "agent:run-finished",
-      agent: agent.name,
+      agent: run.agent.name,
       ok,
       proposals,
-      durationMs: finishedAt - startedAt,
+      durationMs: finishedAt - run.startedAt,
       error: errorMessage,
-      runId,
+      runId: run.runId,
     });
   }
 

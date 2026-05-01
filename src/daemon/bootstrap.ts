@@ -92,6 +92,7 @@ const ENV_KEYS: ReadonlyArray<keyof EnvSource> = [
   "NOTIENT_LLM_MODEL",
   "NOTIENT_EMBED_MODEL",
   "NOTIENT_CONTEXT_TOKENS",
+  "NOTIENT_REASONING_SLOTS",
 ];
 
 /**
@@ -314,7 +315,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
 
   const idleDetector = new IdleDetector(bus, {});
-  const reasoningMutex = new ReasoningMutex();
+  const reasoningMutex = new ReasoningMutex({ maxConcurrent: current.chat.reasoningSlots });
 
   const reranker = new Reranker({
     provider: deepLLM,
@@ -741,6 +742,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     endpoint: current.primary.baseUrl,
     modelId: current.primary.reasoningModel,
     configuredContextTokens: current.chat.modelContextTokens,
+    parallelSlots: current.chat.reasoningSlots,
   }).then((event) => {
     bus.emit({ type: "daemon:startup_probe", ...event });
   });

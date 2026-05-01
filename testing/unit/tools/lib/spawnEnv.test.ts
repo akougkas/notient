@@ -20,6 +20,7 @@ describe("captureNotientEnv", () => {
       chatModel: "test-model",
       embedModel: "test-embed",
       contextTokens: undefined,
+      reasoningSlots: undefined,
     });
   });
 
@@ -29,11 +30,13 @@ describe("captureNotientEnv", () => {
       NOTIENT_LLM_MODEL: "\ttest-model\n",
       NOTIENT_EMBED_MODEL: " test-embed ",
       NOTIENT_CONTEXT_TOKENS: " 200000 ",
+      NOTIENT_REASONING_SLOTS: " 4 ",
     });
     expect(snapshot.baseUrl).toBe("http://example:1234/v1");
     expect(snapshot.chatModel).toBe("test-model");
     expect(snapshot.embedModel).toBe("test-embed");
     expect(snapshot.contextTokens).toBe("200000");
+    expect(snapshot.reasoningSlots).toBe("4");
   });
 
   test("captures optional context tokens when present", () => {
@@ -44,6 +47,16 @@ describe("captureNotientEnv", () => {
       NOTIENT_CONTEXT_TOKENS: "200000",
     });
     expect(snapshot.contextTokens).toBe("200000");
+  });
+
+  test("captures optional reasoning slots when present", () => {
+    const snapshot = captureNotientEnv({
+      NOTIENT_LLM_BASE_URL: "http://x/v1",
+      NOTIENT_LLM_MODEL: "m",
+      NOTIENT_EMBED_MODEL: "e",
+      NOTIENT_REASONING_SLOTS: "4",
+    });
+    expect(snapshot.reasoningSlots).toBe("4");
   });
 
   test("throws listing every missing required var", () => {
@@ -80,7 +93,7 @@ describe("captureNotientEnv", () => {
 });
 
 describe("writeVaultEnvFile", () => {
-  test("writes .notient/.env with all four keys when context tokens supplied", async () => {
+  test("writes .notient/.env with optional context and slot keys when supplied", async () => {
     const root = await mkdtemp(join(tmpdir(), "spawn-env-test-"));
     try {
       await writeVaultEnvFile(root, {
@@ -88,12 +101,14 @@ describe("writeVaultEnvFile", () => {
         chatModel: "test-chat",
         embedModel: "test-embed",
         contextTokens: "200000",
+        reasoningSlots: "4",
       });
       const text = await readFile(join(root, ".notient", ".env"), "utf-8");
       expect(text).toContain("NOTIENT_LLM_BASE_URL=http://x/v1");
       expect(text).toContain("NOTIENT_LLM_MODEL=test-chat");
       expect(text).toContain("NOTIENT_EMBED_MODEL=test-embed");
       expect(text).toContain("NOTIENT_CONTEXT_TOKENS=200000");
+      expect(text).toContain("NOTIENT_REASONING_SLOTS=4");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -107,9 +122,11 @@ describe("writeVaultEnvFile", () => {
         chatModel: "m",
         embedModel: "e",
         contextTokens: undefined,
+        reasoningSlots: undefined,
       });
       const text = await readFile(join(root, ".notient", ".env"), "utf-8");
       expect(text).not.toContain("NOTIENT_CONTEXT_TOKENS");
+      expect(text).not.toContain("NOTIENT_REASONING_SLOTS");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -123,6 +140,7 @@ describe("writeVaultEnvFile", () => {
         chatModel: "m",
         embedModel: "e",
         contextTokens: undefined,
+        reasoningSlots: undefined,
       });
       const text = await readFile(join(root, ".notient", ".env"), "utf-8");
       expect(text.length).toBeGreaterThan(0);

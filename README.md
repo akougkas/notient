@@ -169,10 +169,10 @@ Real-time intelligence for the active note:
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Reasoning** | LM Studio | OpenAI-compatible API. Chat, classification, reranking. |
-| **Embeddings** | Ollama | Vector embeddings for semantic search. |
-| **Vector Store** | WASM HNSW | High-performance approximate nearest neighbor. Scales to 100K+ notes. |
-| **Storage** | Local | Everything in `.obsidian/plugins/notient/` |
+| **Reasoning** | LM Studio / llama.cpp-compatible OpenAI API | Chat, structured extraction, reranking, synthesis. |
+| **Embeddings** | LM Studio / OpenAI-compatible embeddings endpoint | Vector embeddings for semantic search. |
+| **Vector Store** | SurrealDB HNSW | High-performance approximate nearest neighbor over chunk vectors. |
+| **Storage** | Local | Everything in the vault `.notient/` state and Markdown files. |
 
 Privacy-first. No telemetry. No cloud calls. Period.
 
@@ -226,7 +226,7 @@ Notient learns your domain without cluttering the UI:
 
 ### Core Principles
 
-1. **Local-only** — No cloud APIs. Ever. Ollama + LM Studio only.
+1. **Local-only** — No cloud APIs. Ever. Local OpenAI-compatible AI endpoints only.
 2. **Human-in-steering-wheel** — Trust levels for autonomy, universal undo, you command agents.
 3. **Grounded reasoning** — LLM responses cite actual notes. Zero hallucination tolerance.
 4. **Theme-aware** — Respects your Obsidian theme. Clean, native UI.
@@ -273,16 +273,19 @@ Notient pioneers a new paradigm:
 ### Prerequisites
 
 1. **Obsidian** 1.4.0+ installed
-2. **Ollama** running locally (for embeddings)
-   ```bash
-   # Install: https://ollama.ai
-   ollama pull nomic-embed-text
-   ```
-3. **LM Studio** running locally (for reasoning)
+2. **LM Studio or llama.cpp-compatible server** running locally or on your LAN
    ```bash
    # Install: https://lmstudio.ai
-   # Load a model (Llama 3.1, Mistral, Phi-3)
-   # Start server on port 1234
+   # Load a chat model and an embedding model
+   # Start the OpenAI-compatible server on port 1234
+   ```
+3. **Notient AI env** configured in project `.env`, process env, or `<vault>/.notient/.env`
+   ```bash
+   NOTIENT_LLM_BASE_URL=http://192.168.86.143:1234/v1
+   NOTIENT_LLM_MODEL=nvidia-nemotron-3-nano-omni-30b-a3b-reasoning
+   NOTIENT_EMBED_MODEL=text-embedding-nomic-embed-text-v2-moe
+   NOTIENT_CONTEXT_TOKENS=200000
+   NOTIENT_REASONING_SLOTS=4
    ```
 
 ### Installation
@@ -334,7 +337,7 @@ bun run dev  # Build + copy to test vault
 │   Services    │       │     Pipeline      │       │   Providers   │
 │               │       │                   │       │               │
 │ Trust Levels  │       │ Vector Search     │       │ LM Studio     │
-│ Action Apply  │       │ LLM Reranking     │       │ Ollama        │
+│ Action Apply  │       │ LLM Reranking     │       │ Embeddings    │
 │ Action History│       │ Context Builder   │       │               │
 └───────────────┘       └───────────────────┘       └───────────────┘
                                   │
@@ -355,7 +358,7 @@ bun run dev  # Build + copy to test vault
 | Search | LLM reranking of vector top-50 | Semantic relevance, not just similarity |
 | Context | Dynamic per-query | Fresh, relevant, not stale scans |
 | Agent autonomy | Trust levels + batch review | Human control without friction |
-| Agent concurrency | Sequential, one at a time | Predictable, debuggable |
+| Agent concurrency | Bounded by local AI slots | Uses multi-slot local inference while preserving UI priority |
 | Activity retention | Session-only | Privacy, simplicity |
 | LLM abstraction | Provider interface | Swappable backends |
 
@@ -413,7 +416,7 @@ MIT License — Free to use, modify, distribute. Attribution appreciated.
 
 ## Acknowledgments
 
-**Built with:** [Obsidian](https://obsidian.md) | [LM Studio](https://lmstudio.ai) | [Ollama](https://ollama.ai) | [Bun](https://bun.sh) | [esbuild](https://esbuild.github.io) | [Biome](https://biomejs.dev)
+**Built with:** [Obsidian](https://obsidian.md) | [LM Studio](https://lmstudio.ai) | [Bun](https://bun.sh) | [esbuild](https://esbuild.github.io) | [Biome](https://biomejs.dev)
 
 **Inspired by:** [PARA Method](https://fortelabs.com/blog/para/) | [Zettelkasten](https://zettelkasten.de) | [Building a Second Brain](https://www.buildingasecondbrain.com)
 

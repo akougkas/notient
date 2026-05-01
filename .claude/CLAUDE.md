@@ -15,7 +15,7 @@ The user-facing surface is the `notient` CLI (built into `dist/notient.js`). The
 | Build | bun (single-file build into `dist/notient.js`) via `tools/build-cli.ts` |
 | Lint / format | Biome 1.9.0 |
 | Database | SurrealDB 3.0.5 (spawned as a child process by the daemon) |
-| LLM | LM Studio (OpenAI-compatible chat + vision); Ollama for embeddings |
+| LLM | LM Studio / llama.cpp-compatible OpenAI API for chat, structured JSON, vision, and embeddings |
 | TUI | `@opentui/core` + `@opentui/react` |
 | Markdown pipeline | unified / remark-parse / remark-stringify / remark-frontmatter |
 
@@ -44,6 +44,18 @@ bun run smoke:cli:phaseD1
 `bun test testing/integration` requires the `surreal` binary on PATH and `NOTIENT_SMOKE=1`. CI installs SurrealDB v3.0.5 in the integration job; locally the dev machine pins the same version.
 
 The `smoke:cli:phase*` scripts in `tools/` are not part of `bun test` — they drive the live LM Studio + daemon end-to-end and live as standalone harnesses.
+
+Local AI tuning is controlled by vault `.notient/.env`, project `.env`, or process env:
+
+```bash
+NOTIENT_LLM_BASE_URL=http://host:1234/v1
+NOTIENT_LLM_MODEL=nvidia-nemotron-3-nano-omni-30b-a3b-reasoning
+NOTIENT_EMBED_MODEL=text-embedding-nomic-embed-text-v2-moe
+NOTIENT_CONTEXT_TOKENS=200000       # per request/slot
+NOTIENT_REASONING_SLOTS=4           # match LM Studio / llama.cpp parallel slots
+```
+
+With a server loaded at 800K total context and 4 slots, keep `NOTIENT_CONTEXT_TOKENS=200000` and `NOTIENT_REASONING_SLOTS=4`. Startup/status probes report both the per-slot budget and total requested context.
 
 ---
 
@@ -177,11 +189,11 @@ Three boundaries matter:
 
 2. **Daemon ↔ SurrealDB** (`src/core/db/surreal.ts`, `src/daemon/surrealServer.ts`). The daemon owns the surreal child process. All persistence routes through `SurrealConnection`. Schema applied at startup via `applySchema`.
 
-3. **Daemon ↔ LM Studio (chat) and Ollama (embeddings)** through `src/core/llm/`. All chat/agent traffic goes through `LLMProvider`. Vision probe at `src/agent/visionProbe.ts`.
+3. **Daemon ↔ local OpenAI-compatible AI server** through `src/core/llm/`. Chat, structured JSON extraction/reranking, vision, and embeddings all go through `LLMProvider`; the current production provider is `LMStudioProvider`. Vision probe at `src/agent/visionProbe.ts`.
 
 The **awaken pipeline** is the indexer's batch driver. `awakenWorker` walks the vault, runs tier-1 (note + structure), tier-2 (chunks + embeddings), and tier-3 (extraction + linker proposals). `awaken_run` rows track progress for resume-on-restart.
 
-The **coordinator** dispatches background swarm agents (linker, maturity advancer) when EventBus signals fire (e.g., `note:indexed`).
+The **coordinator** dispatches background swarm agents (linker, maturity advancer) when EventBus signals fire (e.g., `note:indexed`). Reasoning-model work is bounded by `chat.reasoningSlots` so it can use multi-slot local servers without silently oversubscribing them.
 
 The **chat agent loop** (`src/core/chat/agentLoop.ts`) drives a tool-using turn over `ToolRegistry`. Tools live under `src/core/chat/tools/` (vault, notes, graph, proposals, registry).
 

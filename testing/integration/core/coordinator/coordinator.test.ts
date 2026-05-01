@@ -231,7 +231,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Coordinator", () => {
     expect(calls).toEqual(["ma:idle-30m"]);
   });
 
-  test("[smoke] user-action 'deepen' fires all four sequentially on a single note", async () => {
+  test("[smoke] user-action 'deepen' fires all four on a single note", async () => {
     const bus = new EventBus();
     const calls: string[] = [];
     const make = (name: Agent["name"], usesReasoning: boolean): Agent => ({
@@ -257,11 +257,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Coordinator", () => {
     bus.emit({ type: "user:action", kind: "deepen", notePath: "/x.md" });
     await coord.idle();
     coord.stop();
-    expect(calls).toEqual([
-      "linker:/x.md",
-      "synthesizer:/x.md",
+    expect(calls.sort()).toEqual([
       "contradictionHunter:/x.md",
+      "linker:/x.md",
       "maturityAdvancer:/x.md",
+      "synthesizer:/x.md",
     ]);
   });
 

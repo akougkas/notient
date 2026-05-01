@@ -98,17 +98,7 @@ export class ChatService {
   }
 
   abort(): void {
-    // Replacing the current chat job with a fresh one preempts via the mutex.
-    // Callers wire this to a UI cancel button; pending background agents will
-    // resume after the chat slot returns.
-    this.options.mutex
-      .runPriority("chat", async () => {
-        // intentional no-op; the act of taking the slot at "chat" priority
-        // aborts the in-flight chat task.
-      })
-      .catch(() => {
-        // The runPriority caller wins; ignore aborts.
-      });
+    this.options.mutex.abort("chat");
   }
 
   async *sendMessage(input: SendMessageInput): AsyncGenerator<ChatStreamEvent> {

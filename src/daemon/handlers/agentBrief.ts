@@ -115,7 +115,6 @@ export const AGENT_BRIEF_DEFAULT_MAX_NOTES = 8;
 export const AGENT_BRIEF_DEFAULT_MAX_QUESTIONS = 5;
 export const AGENT_BRIEF_DEFAULT_MAX_DECISIONS = 5;
 export const AGENT_BRIEF_FILE_CONTENT_CAP_CHARS = 4000;
-export const AGENT_BRIEF_SUMMARY_MAX_TOKENS = 400;
 
 const BRIEF_SYSTEM_PROMPT =
   "You compose a short knowledge brief. Given a topic, a list of relevant notes with snippets, recent decisions, and open questions, write 2 to 3 sentences in plain prose that summarizes what the vault knows about the topic. Stay grounded in the supplied evidence; do not invent. If evidence is thin, say so plainly.";
@@ -499,7 +498,6 @@ async function composeSummary(options: SummaryOptions): Promise<string> {
     const result = await options.provider.chat(messages, {
       model: options.model,
       temperature: 0.2,
-      maxTokens: AGENT_BRIEF_SUMMARY_MAX_TOKENS,
       signal: options.signal,
       enableThinking: false,
     });

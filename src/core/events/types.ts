@@ -136,6 +136,8 @@ export interface StartupProbeEvent {
   endpoint: string;
   modelId: string;
   configuredContextTokens: number;
+  parallelSlots: number;
+  requestedTotalContextTokens: number;
   loadedContextLength: number | null;
   status: StartupProbeStatus;
   message: string;

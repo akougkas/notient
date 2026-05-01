@@ -54,10 +54,12 @@ export interface NotientEnvSnapshot {
   embedModel: string;
   /** Optional override for chat.modelContextTokens; undefined leaves the daemon default in place. */
   contextTokens: string | undefined;
+  /** Optional override for chat.reasoningSlots; undefined leaves the daemon default in place. */
+  reasoningSlots: string | undefined;
 }
 
 /**
- * Capture the four NOTIENT_-prefixed vars from the supplied env (defaults to
+ * Capture the supported NOTIENT_-prefixed vars from the supplied env (defaults to
  * process.env). The caller MUST invoke this before stripNotientEnvFromProcess
  * because the strip wipes the values. Throws a clear, operator-actionable
  * error listing every missing required var so the failure mode is "set the
@@ -72,6 +74,11 @@ export function captureNotientEnv(
   const contextTokensRaw = env.NOTIENT_CONTEXT_TOKENS?.trim();
   const contextTokens =
     contextTokensRaw !== undefined && contextTokensRaw.length > 0 ? contextTokensRaw : undefined;
+  const reasoningSlotsRaw = env.NOTIENT_REASONING_SLOTS?.trim();
+  const reasoningSlots =
+    reasoningSlotsRaw !== undefined && reasoningSlotsRaw.length > 0
+      ? reasoningSlotsRaw
+      : undefined;
 
   const missing: string[] = [];
   if (baseUrl.length === 0) missing.push("NOTIENT_LLM_BASE_URL");
@@ -82,11 +89,11 @@ export function captureNotientEnv(
       `notient smoke: missing required env vars: ${missing.join(", ")}. Set them in <project-root>/.env or the calling process env before running smokes.`,
     );
   }
-  return { baseUrl, chatModel, embedModel, contextTokens };
+  return { baseUrl, chatModel, embedModel, contextTokens, reasoningSlots };
 }
 
 /**
- * Write the four NOTIENT_-prefixed vars into <vault>/.notient/.env. The
+ * Write the supported NOTIENT_-prefixed vars into <vault>/.notient/.env. The
  * daemon's readEnvSource overlays this file on top of process env at seal,
  * so smokes use this to inject the substrate identity into a freshly init'd
  * tmp vault without leaking the developer's project-root .env into the
@@ -105,6 +112,9 @@ export async function writeVaultEnvFile(
   ];
   if (snapshot.contextTokens !== undefined) {
     lines.push(`NOTIENT_CONTEXT_TOKENS=${snapshot.contextTokens}`);
+  }
+  if (snapshot.reasoningSlots !== undefined) {
+    lines.push(`NOTIENT_REASONING_SLOTS=${snapshot.reasoningSlots}`);
   }
   await writeFile(join(notientDir, ".env"), `${lines.join("\n")}\n`);
 }

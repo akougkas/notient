@@ -76,12 +76,16 @@ export interface NotientSettings {
     /**
      * Model context window in tokens. ContextManager budgets this fraction
      * (chat.contextBudgetFraction) before triggering history summarization.
-     * Defaults to 200_000 for the locked Nemotron-Cascade-2-30B substrate;
-     * lower for 8K/32K models (Llama 3.1 8B, Qwen2.5 7B). When the
-     * configured value is too small for a given turn the loop emits
-     * loop:context_overflow_warning so the operator can adjust.
+     * This is the per-request budget. When the local server is launched with
+     * multiple slots, total loaded context must be at least
+     * modelContextTokens * reasoningSlots.
      */
     modelContextTokens: number;
+    /**
+     * Maximum concurrent reasoning-model calls Notient may run. Match this to
+     * the local server's slot count (for llama.cpp, `-np` / `--parallel`).
+     */
+    reasoningSlots: number;
     history: {
       /** Maximum HistoryService rows kept globally; older rows prune on record. */
       maxEntries: number;
@@ -228,6 +232,7 @@ export const DEFAULT_SETTINGS: NotientSettings = {
       pinnedNoteMaxTokens: 4000,
     },
     modelContextTokens: 200_000,
+    reasoningSlots: 4,
     history: { maxEntries: 200, maxPerTarget: 20 },
   },
   history: {

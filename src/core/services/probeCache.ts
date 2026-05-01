@@ -16,6 +16,8 @@ export class ProbeCache {
         endpoint: event.endpoint,
         modelId: event.modelId,
         configuredContextTokens: event.configuredContextTokens,
+        parallelSlots: event.parallelSlots,
+        requestedTotalContextTokens: event.requestedTotalContextTokens,
         loadedContextLength: event.loadedContextLength,
         status: event.status,
         message: event.message,

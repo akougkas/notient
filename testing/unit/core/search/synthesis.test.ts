@@ -265,4 +265,22 @@ describe("synthesize", () => {
     expect(captured.options?.model).toBe("reason-1");
     expect(captured.options?.signal).toBe(controller.signal);
   });
+
+  test("does not set a default maxTokens cap", async () => {
+    const captured: { options: ChatOptions | null } = { options: null };
+    const provider = fakeProvider({
+      tokens: ["- ok [[Graph]]\n"],
+      onStream: (_messages, options) => {
+        captured.options = options;
+      },
+    });
+    await synthesize({
+      provider,
+      model: "reason-1",
+      query: "q",
+      hits: baseHits,
+      signal: new AbortController().signal,
+    });
+    expect(captured.options?.maxTokens).toBeUndefined();
+  });
 });

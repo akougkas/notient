@@ -5,6 +5,8 @@ export interface ModelVerbView {
   readonly chatModel: string;
   readonly embedModel: string;
   readonly contextTokens: number;
+  readonly reasoningSlots: number;
+  readonly requestedTotalContextTokens: number;
 }
 
 export interface ModelInfo {
@@ -29,6 +31,8 @@ export function buildModelView(settings: NotientSettings): ModelVerbView {
     chatModel: settings.primary.reasoningModel,
     embedModel: settings.embedding.model,
     contextTokens: settings.chat.modelContextTokens,
+    reasoningSlots: settings.chat.reasoningSlots,
+    requestedTotalContextTokens: settings.chat.modelContextTokens * settings.chat.reasoningSlots,
   };
 }
 
@@ -38,6 +42,7 @@ export function formatModelView(view: ModelVerbView): string {
     `embed:    ${view.embedModel}`,
     `endpoint: ${view.endpoint}`,
     `context:  ${view.contextTokens.toLocaleString()} tok`,
+    `slots:    ${view.reasoningSlots.toLocaleString()} (${view.requestedTotalContextTokens.toLocaleString()} tok total)`,
   ].join("\n");
 }
 

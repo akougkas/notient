@@ -53,6 +53,8 @@ describe("LMStudioProvider.chatVision", () => {
     expect(result.content).toBe("a cat sitting on a fence");
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(calls[0].url).toBe("http://x/v1/chat/completions");
+    const sent = JSON.parse(calls[0].init?.body as string);
+    expect(sent.max_tokens).toBeUndefined();
   });
 
   test("throws when the server returns 4xx", async () => {

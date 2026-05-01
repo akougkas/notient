@@ -22,6 +22,23 @@ describe("runStartupProbe", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.loadedContextLength).toBe(800000);
+    expect(result.parallelSlots).toBe(1);
+    expect(result.requestedTotalContextTokens).toBe(200000);
+  });
+
+  test("ok when four 200K slots fit an 800K loaded window", async () => {
+    const result = await runStartupProbe({
+      endpoint: "http://h:1/v1",
+      modelId: "model-x",
+      configuredContextTokens: 200000,
+      parallelSlots: 4,
+      fetchImpl: fakeFetch({
+        body: { data: [{ id: "model-x", state: "loaded", loaded_context_length: 800000 }] },
+      }),
+    });
+    expect(result.status).toBe("ok");
+    expect(result.parallelSlots).toBe(4);
+    expect(result.requestedTotalContextTokens).toBe(800000);
   });
 
   test("loaded-too-small when configured exceeds loaded window", async () => {
@@ -37,6 +54,22 @@ describe("runStartupProbe", () => {
     expect(result.loadedContextLength).toBe(200000);
     expect(result.message).toContain("1,000,000");
     expect(result.message).toContain("200,000");
+  });
+
+  test("loaded-too-small when total slot budget exceeds loaded window", async () => {
+    const result = await runStartupProbe({
+      endpoint: "http://h:1/v1",
+      modelId: "model-x",
+      configuredContextTokens: 200000,
+      parallelSlots: 4,
+      fetchImpl: fakeFetch({
+        body: { data: [{ id: "model-x", state: "loaded", loaded_context_length: 600000 }] },
+      }),
+    });
+    expect(result.status).toBe("loaded-too-small");
+    expect(result.requestedTotalContextTokens).toBe(800000);
+    expect(result.message).toContain("800,000");
+    expect(result.message).toContain("600,000");
   });
 
   test("model-not-loaded when the id is not in /api/v0/models", async () => {

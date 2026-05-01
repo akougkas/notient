@@ -143,7 +143,7 @@ export class LMStudioProvider implements LLMProvider {
         model: request.model,
         messages: request.messages,
         temperature: request.temperature ?? 0.2,
-        max_tokens: request.maxTokens ?? 512,
+        max_tokens: request.maxTokens,
         stream: false,
       }),
     });

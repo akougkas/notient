@@ -22,6 +22,7 @@ import type {
 import {
   AGENT_ASK_RESPONSE_SCHEMA,
   AGENT_ASK_ROUND_CAP,
+  ASK_SYSTEM_PROMPT,
   UNGROUNDED_ANSWER,
   makeAgentAskHandler,
 } from "../../../../src/daemon/handlers/agentAsk";
@@ -156,6 +157,12 @@ const SETTINGS = (): { model: string; defaultMaxRoundsPerTurn: number } => ({
 });
 
 describe("agent.ask handler", () => {
+  test("prompt requires exact search result notePath citations", () => {
+    expect(ASK_SYSTEM_PROMPT).toContain("exact notePath string");
+    expect(ASK_SYSTEM_PROMPT).toContain("vault.search_notes hit");
+    expect(ASK_SYSTEM_PROMPT).toContain("Do not cite note titles");
+  });
+
   test("happy path returns the parsed JSON shape with tool-call summaries", async () => {
     const structured = {
       answer: "Auth uses JWT bearer tokens with rotating refresh tokens.",

@@ -44,6 +44,13 @@ describe("applyEnvOverrides", () => {
     expect(result.chat.modelContextTokens).toBe(800000);
   });
 
+  test("NOTIENT_REASONING_SLOTS sets chat.reasoningSlots when a positive integer", () => {
+    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
+      NOTIENT_REASONING_SLOTS: "4",
+    });
+    expect(result.chat.reasoningSlots).toBe(4);
+  });
+
   test("NOTIENT_CONTEXT_TOKENS leaves the persisted value alone when not a positive integer", () => {
     const original = DEFAULT_SETTINGS.chat.modelContextTokens;
     expect(
@@ -58,6 +65,22 @@ describe("applyEnvOverrides", () => {
     ).toBe(original);
     expect(
       applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_CONTEXT_TOKENS: "-5" }).chat.modelContextTokens,
+    ).toBe(original);
+  });
+
+  test("NOTIENT_REASONING_SLOTS leaves the persisted value alone when not a positive integer", () => {
+    const original = DEFAULT_SETTINGS.chat.reasoningSlots;
+    expect(
+      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "" }).chat.reasoningSlots,
+    ).toBe(original);
+    expect(
+      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "abc" }).chat.reasoningSlots,
+    ).toBe(original);
+    expect(
+      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "0" }).chat.reasoningSlots,
+    ).toBe(original);
+    expect(
+      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "-5" }).chat.reasoningSlots,
     ).toBe(original);
   });
 
@@ -76,11 +99,13 @@ describe("applyEnvOverrides", () => {
       NOTIENT_LLM_MODEL: "m1",
       NOTIENT_EMBED_MODEL: "e1",
       NOTIENT_CONTEXT_TOKENS: "12345",
+      NOTIENT_REASONING_SLOTS: "3",
     });
     expect(result.primary.baseUrl).toBe("http://h:1/v1");
     expect(result.primary.reasoningModel).toBe("m1");
     expect(result.embedding.model).toBe("e1");
     expect(result.chat.modelContextTokens).toBe(12345);
+    expect(result.chat.reasoningSlots).toBe(3);
     // Untouched fields survive.
     expect(result.chat.maxRoundsPerTurn).toBe(DEFAULT_SETTINGS.chat.maxRoundsPerTurn);
     expect(result.search.defaultMode).toBe(DEFAULT_SETTINGS.search.defaultMode);

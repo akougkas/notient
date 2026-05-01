@@ -10,7 +10,7 @@ export interface SynthesizerOptions {
   query: string;
   hits: SearchHit[];
   signal: AbortSignal;
-  /** Optional cap on response tokens. Defaults to 600. */
+  /** Optional cap on response tokens. Undefined lets the local server decide. */
   maxTokens?: number;
   /** Optional callback invoked for each streamed delta. */
   onToken?: (token: string) => void;
@@ -37,7 +37,7 @@ export async function synthesize(options: SynthesizerOptions): Promise<Synthesis
       model: options.model,
       signal: options.signal,
       temperature: 0.2,
-      maxTokens: options.maxTokens ?? 600,
+      maxTokens: options.maxTokens,
     });
     for await (const token of stream) {
       if (options.signal.aborted) {

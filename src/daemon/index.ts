@@ -43,6 +43,7 @@ interface DaemonModelProbeInput {
   endpoint: string;
   configuredModel: string;
   configuredContextTokens: number;
+  parallelSlots: number;
 }
 
 interface DaemonModelProbe {
@@ -50,6 +51,8 @@ interface DaemonModelProbe {
   configuredModel: string;
   loadedModel: string | null;
   configuredContextTokens: number;
+  parallelSlots: number;
+  requestedTotalContextTokens: number;
   loadedContextLength: number | null;
   status: "ok" | "mismatch";
   message: string;
@@ -119,20 +122,30 @@ function buildModelProbe(
   loadedContextLength: number | null,
   error: string | null,
 ): DaemonModelProbe {
-  const status = loadedModel === input.configuredModel ? "ok" : "mismatch";
+  const requestedTotalContextTokens = input.configuredContextTokens * input.parallelSlots;
+  const modelMatches = loadedModel === input.configuredModel;
+  const contextFits =
+    loadedContextLength === null || requestedTotalContextTokens <= loadedContextLength;
+  const status = modelMatches && contextFits ? "ok" : "mismatch";
   const modelText =
     loadedModel === null ? "no loaded model reported" : `loaded model ${loadedModel}`;
-  const message =
-    status === "ok"
-      ? `configured model ${input.configuredModel} is loaded`
-      : `model mismatch: configured ${input.configuredModel}; ${modelText}${
-          error === null ? "" : `; probe error ${error}`
-        }`;
+  let message: string;
+  if (!modelMatches) {
+    message = `model mismatch: configured ${input.configuredModel}; ${modelText}${
+      error === null ? "" : `; probe error ${error}`
+    }`;
+  } else if (!contextFits) {
+    message = `context mismatch: configured ${input.configuredContextTokens.toLocaleString()} x ${input.parallelSlots.toLocaleString()} slots = ${requestedTotalContextTokens.toLocaleString()}; loaded ${loadedContextLength?.toLocaleString() ?? "unknown"}`;
+  } else {
+    message = `configured model ${input.configuredModel} is loaded; context ${input.configuredContextTokens.toLocaleString()} x ${input.parallelSlots.toLocaleString()} slots = ${requestedTotalContextTokens.toLocaleString()}`;
+  }
   return {
     endpoint: input.endpoint,
     configuredModel: input.configuredModel,
     loadedModel,
     configuredContextTokens: input.configuredContextTokens,
+    parallelSlots: input.parallelSlots,
+    requestedTotalContextTokens,
     loadedContextLength,
     status,
     message,
@@ -206,6 +219,7 @@ async function main(argv: string[]): Promise<void> {
       endpoint: current.primary.baseUrl,
       configuredModel: current.primary.reasoningModel,
       configuredContextTokens: current.chat.modelContextTokens,
+      parallelSlots: current.chat.reasoningSlots,
     });
     return {
       ok: true,

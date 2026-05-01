@@ -12,12 +12,15 @@ import type { NotientSettings } from "./types";
  *   NOTIENT_EMBED_MODEL     → embedding.model + primary/deep.embeddingModel
  *   NOTIENT_CONTEXT_TOKENS  → chat.modelContextTokens (parsed as integer;
  *                             ignored if not a positive integer)
+ *   NOTIENT_REASONING_SLOTS → chat.reasoningSlots (parsed as integer;
+ *                             ignored if not a positive integer)
  */
 export interface EnvSource {
   readonly NOTIENT_LLM_BASE_URL?: string;
   readonly NOTIENT_LLM_MODEL?: string;
   readonly NOTIENT_EMBED_MODEL?: string;
   readonly NOTIENT_CONTEXT_TOKENS?: string;
+  readonly NOTIENT_REASONING_SLOTS?: string;
 }
 
 interface ResolvedEnv {
@@ -25,6 +28,7 @@ interface ResolvedEnv {
   model: string | null;
   embed: string | null;
   ctxTokens: number | null;
+  reasoningSlots: number | null;
 }
 
 function resolveEnv(env: EnvSource): ResolvedEnv {
@@ -33,6 +37,7 @@ function resolveEnv(env: EnvSource): ResolvedEnv {
     model: nonEmpty(env.NOTIENT_LLM_MODEL),
     embed: nonEmpty(env.NOTIENT_EMBED_MODEL),
     ctxTokens: parsePositiveInt(env.NOTIENT_CONTEXT_TOKENS),
+    reasoningSlots: parsePositiveInt(env.NOTIENT_REASONING_SLOTS),
   };
 }
 
@@ -41,7 +46,8 @@ function isEmpty(resolved: ResolvedEnv): boolean {
     resolved.baseUrl === null &&
     resolved.model === null &&
     resolved.embed === null &&
-    resolved.ctxTokens === null
+    resolved.ctxTokens === null &&
+    resolved.reasoningSlots === null
   );
 }
 
@@ -78,6 +84,7 @@ export function applyEnvOverrides(settings: NotientSettings, env: EnvSource): No
     chat: {
       ...settings.chat,
       modelContextTokens: resolved.ctxTokens ?? settings.chat.modelContextTokens,
+      reasoningSlots: resolved.reasoningSlots ?? settings.chat.reasoningSlots,
     },
   };
 }

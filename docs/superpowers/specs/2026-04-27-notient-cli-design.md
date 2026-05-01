@@ -69,7 +69,7 @@ One **daemon per vault**, many thin clients.
 
 **Idle exit.** The daemon tracks `lastRequestAt`. After 4 hours with no client requests AND no autonomous-coordinator activity, it calls `kernel.close()` (persists DB, persists vectors, releases lock) and exits. Tunable via `<vault>/.notient/config.json` → `daemon.idleExitHours`. Set to `0` to keep the daemon up forever.
 
-**Concurrency.** One daemon per vault. The daemon serializes LLM calls through the existing `ReasoningMutex` (chat priority > agent priority). Concurrent RPC connections are accepted; reads (DB+HNSW only) run in parallel with chat turns.
+**Concurrency.** One daemon per vault. The daemon gates reasoning LLM calls through `ReasoningMutex` with a configurable slot count (`chat.reasoningSlots`, `NOTIENT_REASONING_SLOTS`), so local servers launched with multiple parallel slots can be used without unbounded fan-out. Chat uses priority scheduling and preempts background work when all slots are occupied. Concurrent RPC connections are accepted; reads (DB+HNSW only) run in parallel with chat turns.
 
 ### 2.2 Layered architecture
 
@@ -164,7 +164,7 @@ src/
 
 - **Reasoning host:** dynamo `http://192.168.86.143:1234/v1` (LMStudio).
 - **Chat model:** `nemotron-cascade-2-30b-a3b-i1`.
-- **Embedding model:** `text-embedding-nomic-embed-text-v2-moe` (Ollama).
+- **Embedding model:** `text-embedding-nomic-embed-text-v2-moe` through the configured OpenAI-compatible embedding endpoint.
 - **Database:** sql.js + sql-wasm.wasm.
 - **Vectors:** hnswlib-wasm.
 - **TUI runtime:** OpenTUI (`@opentui/core@0.1.105` + `@opentui/react@0.1.105`), pinned.
@@ -314,7 +314,7 @@ Hybrid: autonomous + on-demand.
 - **Autonomous.** `Coordinator` runs inside the daemon. When the system is idle (no chat turn in flight, no awaken running), it schedules subagents in priority order against the `ReasoningMutex`. They scan recent notes, find links / contradictions / cluster opportunities, and write proposals to `staging_edges` / `staging_nodes`. Visible via `notient stream` or `/stream` in the TUI. This is what makes notes "sentient".
 - **On-demand.** Each subagent is also exposed as a tool (`subagent.contradiction_hunter`, etc.) the main Notient agent calls explicitly. Same code path, same staging tables, same approval gate.
 
-**Pause-on-chat.** Autonomous subagents naturally yield when chat starts via `ReasoningMutex` priority (`chat` > `agent`). LMStudio serves only one inference at a time; the mutex enforces it.
+**Pause-on-chat.** Autonomous subagents naturally yield when chat starts via `ReasoningMutex` priority (`chat` > `agent`) if all local AI slots are occupied. When the server exposes spare slots, chat can run immediately without aborting in-flight background work.
 
 ---
 
