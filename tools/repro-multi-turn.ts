@@ -6,7 +6,7 @@
  * conversationId. Streams every wire frame to stdout so the failing turn's
  * loop:error or turn:aborted is captured verbatim.
  *
- *   bun run scripts/repro-multi-turn.ts /mnt/c/Users/akougk/Projects/vaultex
+ *   bun run tools/repro-multi-turn.ts /mnt/c/Users/akougk/Projects/vaultex
  *
  * Set NOTIENT_DEBUG_LLM=1 to also dump the upstream request body of any 4xx
  * or 5xx LM Studio response to /tmp/notient-llm-request-<ts>.json.
@@ -23,7 +23,7 @@ const TURN_PROMPTS = [
 async function main(): Promise<void> {
   const vaultPath = process.argv[2];
   if (!vaultPath) {
-    process.stderr.write("usage: bun scripts/repro-multi-turn.ts <vault>\n");
+    process.stderr.write("usage: bun tools/repro-multi-turn.ts <vault>\n");
     process.exit(2);
   }
   const socketPath = resolveSocketPath(vaultPath, currentPlatform());
@@ -122,10 +122,8 @@ async function runTurn(
       break;
     }
     if (frame.type === "error") {
-      outcome.rpcError =
-        typeof (frame as { message?: unknown }).message === "string"
-          ? ((frame as { message: string }).message)
-          : "unknown rpc error";
+      const message = (frame as { message?: unknown }).message;
+      outcome.rpcError = typeof message === "string" ? message : "unknown rpc error";
       emit({ phase: "rpc:error", turn, message: outcome.rpcError });
       break;
     }

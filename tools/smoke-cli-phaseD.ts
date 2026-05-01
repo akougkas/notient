@@ -2,7 +2,7 @@
  * Phase D end-to-end smoke harness.
  *
  * Drives the daemon RPC against a fixture-vault copy and the live LM Studio
- * substrate. Mirrors the structural shape of `scripts/smoke-cli-phaseC.ts`:
+ * substrate. Mirrors the structural shape of `tools/smoke-cli-phaseC.ts`:
  * mkdtemp the fixture, init, pin the primary model's tool mode (so probe
  * variability does not flake the suite), awaken, then run four Phase D
  * passes. Each pass connects via `connectClient`, drives RPCs, asserts the

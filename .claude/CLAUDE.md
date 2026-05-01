@@ -1,375 +1,223 @@
-# Notient - AI Assistant Context
+# Notient — AI Assistant Context
 
-> AI-powered vault management for Obsidian using local LLMs only.
+Local-first agentic CLI that turns a Markdown vault into a queryable, self-organising knowledge base. Notient owns a long-lived daemon, talks to a local LM Studio instance over OpenAI-compatible HTTP, and persists everything to an embedded SurrealDB. Notient = Note + Sentient. Local-only. Human-in-the-steering-wheel.
 
-**Notient = Note + Sentient** — Local-only. Privacy-first. Human-in-the-steering-wheel.
-
-**4-Agent Swarm**: User (President) → Orchestrator (brain) → [NoteEditor | ContextBuilder | Worker]
+The user-facing surface is the `notient` CLI (built into `dist/notient.js`). The CLI either drives the daemon or spawns one on demand; the daemon owns SurrealDB, the indexer/awaken pipelines, the chat/agent loop, the watcher, and the swarm agents.
 
 ---
 
-## Tech Stack
+## Tech stack
 
 | Layer | Technology |
-|-------|------------|
-| Language | TypeScript (strict) |
-| Runtime | Bun |
-| Build | esbuild |
-| Lint | Biome |
-| UI | Preact + @preact/signals |
-| Reasoning LLM | mini llama-server (OpenAI-compatible) |
-| Embedding LLM | mini Ollama |
-| Vector Store | HNSW (WASM) |
+|---|---|
+| Language | TypeScript (strict, isolatedModules) |
+| Runtime | Bun 1.3.10 |
+| Build | bun (single-file build into `dist/notient.js`) via `tools/build-cli.ts` |
+| Lint / format | Biome 1.9.0 |
+| Database | SurrealDB 3.0.5 (spawned as a child process by the daemon) |
+| LLM | LM Studio (OpenAI-compatible chat + vision); Ollama for embeddings |
+| TUI | `@opentui/core` + `@opentui/react` |
+| Markdown pipeline | unified / remark-parse / remark-stringify / remark-frontmatter |
 
 ---
 
 ## Commands
 
 ```bash
-bun run dev              # Build + copy to test vault
-bun run dev:watch        # Watch mode with auto-copy
-bun run dev:clean        # Wipe plugin data + fresh build
-bun run dev:reset        # Soft reset (settings only)
-bun run dev:hard-reset   # Hard reset (everything)
-bun run build            # Typecheck + production build
-bun run typecheck        # TypeScript check
-bun run lint             # Biome lint
-bun run lint:fix         # Auto-fix
-bun run format           # Format code
+bun run typecheck         # tsc --noEmit (covers src/, testing/, tools/)
+bun run test              # bun test testing/unit (fast, no external deps)
+bun run test:integration  # NOTIENT_SMOKE=1 bun test testing/integration (spawns SurrealDB)
+bun run test:smoke        # alias for test:integration
+bun run test:all          # test then test:integration
+bun run lint              # biome check src/ testing/
+bun run lint:fix          # biome check --write src/ testing/
+bun run format            # biome format --write src/ testing/
+bun run build             # alias for build:cli
+bun run build:cli         # bun tools/build-cli.ts → dist/notient.js
+bun run smoke:cli:phaseA  # standalone phase-A end-to-end smoke (live LM Studio)
+bun run smoke:cli:phaseB
+bun run smoke:cli:phaseC
+bun run smoke:cli:phaseD
+bun run smoke:cli:phaseD1
 ```
 
-**Test Vault:** `/mnt/c/Users/akougk/Projects/vaultex`
+`bun test testing/integration` requires the `surreal` binary on PATH and `NOTIENT_SMOKE=1`. CI installs SurrealDB v3.0.5 in the integration job; locally the dev machine pins the same version.
+
+The `smoke:cli:phase*` scripts in `tools/` are not part of `bun test` — they drive the live LM Studio + daemon end-to-end and live as standalone harnesses.
 
 ---
 
-## Git Infrastructure
+## Code map
 
-### Worktree Layout (Role-Based)
-
-| Path | Branch | Role |
-|------|--------|------|
-| `~/projects/notient/` | `beta-spec` | Orchestrator |
-| `~/projects/_worktrees/notient-implementer/` | `implementer/{task}` | Coder: Feature builder |
-| `~/projects/_worktrees/notient-simplifier/` | `simplifier/{task}` | Coder: Code clarifier |
-| `~/projects/_worktrees/notient-validator/` | `validator/{task}` | Coder: Quality gate |
-| `~/projects/_worktrees/notient-tester/` | `tester/{task}` | Coder: Test specialist |
-| `~/projects/_worktrees/notient-docs-fetcher/` | `docs-fetcher/{task}` | Researcher: Documentation |
-| `~/projects/_worktrees/notient-codebase-navigator/` | `codebase-navigator/{task}` | Researcher: Codebase expert |
-| `~/projects/_worktrees/notient-world-knowledge/` | `world-knowledge/{task}` | Researcher: External intel |
-
-### Quick Commands
-
-```bash
-# Prepare role worktree
-.claude/agents/git-prepare.sh implementer implementer/retry-logic
-
-# Dispatch task with CLI choice
-uv run .claude/agents/dispatch.py task implementer "Add retry logic" --cli claude
-uv run .claude/agents/dispatch.py task docs-fetcher "Get Preact docs" --cli gemini
-
-# Check all roles status
-uv run .claude/agents/dispatch.py status
-
-# Check responses for a role
-uv run .claude/agents/dispatch.py responses implementer
-
-# Merge role work
-git merge implementer/retry-logic --no-ff -m "Merge implementer: retry logic"
-```
-
-### Rules
-
-- Never push role branches (all work is local)
-- Orchestrator owns merges (roles only commit)
-- Worktrees are disposable (reset via `git-prepare.sh`)
-- Main stays clean (only tagged releases)
-
----
-
-## 4-Agent Swarm Architecture
+Verify against the repo before trusting; this map gets stale when subsystems shift. Source of truth is the filesystem.
 
 ```
-User (President)
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                      ORCHESTRATOR                            │
-│  (chiefOfStaff.ts) - Reasoning brain, makes plans, delegates │
-└──────────────────────────────────────────────────────────────┘
-       ↓                    ↓                    ↓
-┌─────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ NoteEditor  │    │ ContextBuilder  │    │   Worker    │
-│ (I/O)       │    │ (search)        │    │ (workflows) │
-│ Uses Skills │    │ Uses Embeddings │    │ Uses Prompts│
-└─────────────┘    └─────────────────┘    └─────────────┘
-```
-
-**Three Triggers → Orchestrator:**
-1. UI (Quick Actions, Agent Streams)
-2. ChatService (hybrid mode)
-3. Editor Decorations (future)
-
-### Key Patterns
-
-**Kernel Pattern**: All services in `kernel.ts`, DI via `kernel.get<T>(ServiceName)`
-
-**Two-Tier Identity**:
-- Tier 1: `src/core/agent/identity.ts` — Core persona (shared by ALL agents)
-- Tier 2: `src/core/agents/agentIdentity.ts` — Agent-specific specialization
-- ALWAYS use `buildAgentSystemPrompt()` (calls `buildBaseIdentity()` internally)
-
-**Skills Architecture** (NoteEditor only):
-- `SkillRegistry` injects schemas (Canvas, Bases, Markdown)
-- `ObsidianFacade` handles atomic writes
-- NoteEditor "equips" skills dynamically
-
-**Streaming First**: All LLM calls via `AsyncIterable<AgentEvent>`, AbortController for cancellation
-
----
-
-## Anti-Patterns (DON'Ts)
-
-### Architecture
-- ❌ Don't duplicate Tier 1 identity — ALWAYS call `buildBaseIdentity()` or `buildAgentSystemPrompt()`
-- ❌ Don't put business logic in views — Delegate to services via Kernel
-- ❌ Don't bypass Orchestrator — All agent execution goes through Orchestrator
-- ❌ Don't create parallel type systems — Reuse existing types from `types.ts`
-
-### Code Style
-- ❌ Don't use abbreviations — `context` not `ctx`, `message` not `msg`
-- ❌ Don't add debug logging — No `console.log` in production
-- ❌ Don't use `any` without justification — TypeScript strict mode enforced
-
-### LLM Integration
-- ❌ Don't assume LLM availability — Handle connection failures gracefully
-- ❌ Don't ignore abort signals — All streaming must respect `AbortController`
-- ❌ Don't hardcode prompts in agents — Use `agentIdentity.ts` or `prompts/*.ts`
-
-### UI
-- ❌ Don't change sidebar structure — Layout locked: Note Vitals | Agent Streams | Chat
-- ❌ Don't use inline styles — Use CSS classes with `nv2-*` prefix
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `src/main.ts` | Plugin entry point |
-| `src/core/kernel.ts` | Service registry, DI container |
-| `src/core/agents/chiefOfStaff.ts` | Orchestrator (brain) |
-| `src/core/agents/workerAgent.ts` | Workflow executor |
-| `src/core/agents/noteEditorAgent.ts` | Obsidian I/O specialist |
-| `src/core/agents/contextBuilderAgent.ts` | Vault awareness |
-| `src/core/agents/agentIdentity.ts` | Tier 2 agent prompts |
-| `src/core/agent/identity.ts` | Tier 1 core identity |
-| `src/core/llm/provider.ts` | LLM interface |
-| `src/core/chat/chatService.ts` | Chat orchestration, streaming |
-| `src/core/search/pipeline.ts` | Vector + reranking |
-| `src/core/skills/registry.ts` | Skill injection for NoteEditor |
-| `src/adapters/obsidianFacade.ts` | Obsidian API wrapper |
-| `src/ui/sidebar/App.tsx` | Main sidebar UI (Preact) |
-
----
-
-## Code Map
-
-**CRITICAL**: Work within this structure. Don't create new files without explicit approval.
-
-```
-src/
-├── main.ts                           # Plugin entry point
-├── adapters/
-│   └── obsidianFacade.ts             # Obsidian API wrapper
+.
+├── .github/workflows/ci.yml      # unit job (always) + integration job (push-to-main + dispatch)
+├── .claude/CLAUDE.md             # this file
+├── package.json
+├── tsconfig.json
+├── biome.json
+├── bun.lock
+├── docs/                         # specs, deep-dives
+├── src/                          # production code only — no tests
+│   ├── adapters/
+│   │   └── fsVault.ts            # filesystem vault adapter (atomic writes, listing, read/append)
+│   ├── agent/                    # tier-1 identity + helpers used by the chat agent
+│   │   ├── attachments.ts        # @-mention/attachment resolution from chat input
+│   │   ├── identity.ts           # TIER_1_IDENTITY system prompt
+│   │   ├── toolBundle.ts         # builds the chat tool registry
+│   │   └── visionProbe.ts        # detects whether the active model accepts vision
+│   ├── bridge/                   # bridges to host environments (Obsidian)
+│   │   ├── obsidianCli.ts        # spawns Obsidian via /bin/sh
+│   │   └── obsidianProbe.ts      # detects whether Obsidian is reachable
+│   ├── cli/                      # `notient` binary
+│   │   ├── index.ts              # CLI entry (dispatches verbs)
+│   │   ├── client.ts             # connects to daemon over UDS, spawns one if absent
+│   │   ├── env.ts / identity.ts / output.ts / help.ts
+│   │   ├── commands/             # one file per top-level verb (ask, brief, distill,
+│   │   │                         #   awaken, backup, restore, nuke, reindex, events,
+│   │   │                         #   session, daemon, graphDump, graphStats, linksAudit,
+│   │   │                         #   linksSync, migrateVault, proposalsCli, …)
+│   │   └── tui/                  # @opentui-based TUI (slash commands, history,
+│   │                             #   model verbs, status bar, keybindings)
+│   ├── core/
+│   │   ├── kernel.ts             # DI container; wires services for the daemon
+│   │   ├── agent/identity.ts     # (tier-1 prompt; lives at src/agent/identity.ts now)
+│   │   ├── agents/               # swarm agents driven by the coordinator
+│   │   │   ├── linker.ts         # rank-based confidence link proposals
+│   │   │   ├── dbscan.ts         # cosine-DBSCAN clustering primitive
+│   │   │   └── maturityAdvancer.ts
+│   │   ├── approvals/            # ApprovalService — reconcile + apply pending writebacks
+│   │   ├── awaken/               # awaken pipeline (vault-wide indexer drive)
+│   │   │   ├── awakenWorker.ts
+│   │   │   ├── awakenRun.ts      # awaken_run DAL
+│   │   │   ├── backgroundRegistry.ts
+│   │   │   └── reconcileAwakenOrphans.ts
+│   │   ├── chat/                 # chat orchestration
+│   │   │   ├── chatService.ts
+│   │   │   ├── agentLoop.ts      # tool-using agent turn loop
+│   │   │   ├── approvalGate.ts
+│   │   │   ├── contextManager.ts
+│   │   │   ├── conversationStore.ts / conversationIndex.ts / conversationParser.ts
+│   │   │   ├── toolModeProbe.ts
+│   │   │   └── tools/            # vault, notes, graph, proposals, registry
+│   │   ├── config/configFile.ts  # vault TOML config loader
+│   │   ├── coordinator/          # background-agent coordinator + reasoning mutex
+│   │   ├── db/                   # SurrealDB DAL
+│   │   │   ├── surreal.ts        # connect, upsertNoteByPath, relateEdge, …
+│   │   │   ├── schemaApplier.ts  # applies the vault schema
+│   │   │   └── edgeTables.ts
+│   │   ├── distill/              # transcript distiller
+│   │   ├── events/eventBus.ts    # in-process pub/sub
+│   │   ├── history/              # HistoryService + Inverter contract
+│   │   ├── indexer/              # tier 1/2/3 indexer + chunker + embedder + extractor
+│   │   │   ├── tier1.ts / tier2.ts / tier3.ts
+│   │   │   ├── chunker.ts
+│   │   │   ├── embedder.ts
+│   │   │   ├── extractor.ts      # mdast → entities/edges
+│   │   │   ├── indexNote.ts
+│   │   │   ├── indexerQueue.ts / priorityQueue.ts / indexerRuntime.ts
+│   │   │   └── excludePaths.ts
+│   │   ├── llm/                  # LLM provider abstraction
+│   │   │   ├── provider.ts       # LLMProvider interface
+│   │   │   └── lmStudioProvider.ts (and .vision)
+│   │   ├── markdown/             # remark pipeline
+│   │   │   ├── pipeline.ts / extractor.ts / writeback.ts / resolver.ts / slug.ts
+│   │   │   └── plugins/          # remarkBlockId, remarkTag, remarkWikilink
+│   │   ├── search/               # search orchestration
+│   │   │   ├── searchPipeline.ts / synthesis.ts / reranker.ts
+│   │   │   ├── filters.ts / graphExpansion.ts / savedQueries.ts / searchHistory.ts
+│   │   │   ├── strategies/       # quick (BM25), balanced (vec+rerank), deep (agentic)
+│   │   │   └── prompts/
+│   │   ├── services/             # daemon services
+│   │   │   ├── healthMonitor.ts / idleDetector.ts / probeCache.ts
+│   │   │   ├── sessionGrants.ts / startupProbe.ts / vaultBootstrap.ts / vaultLock.ts
+│   │   │   └── agentEventStore.ts
+│   │   ├── settings/             # env + settings
+│   │   ├── utils/atomicWrite.ts
+│   │   ├── vault/                # vault identity (paths, secret, port files)
+│   │   └── vitals/               # note vitals (freshness, vitalsService)
+│   └── daemon/                   # long-running daemon
+│       ├── index.ts              # daemon entry
+│       ├── bootstrap.ts          # wires kernel + services + handlers
+│       ├── lifecycle.ts          # PID + idle-exit timer
+│       ├── socket.ts             # UDS path resolution
+│       ├── rpc.ts                # envelope codec + MethodDispatcher
+│       ├── surrealServer.ts      # spawns/stops the SurrealDB child
+│       ├── watcher.ts            # chokidar-backed vault watcher (with WSL polling)
+│       ├── coordinatorRunner.ts  # bridges EventBus events to the agent coordinator
+│       ├── awaitBackgroundWorkers.ts
+│       └── handlers/             # per-RPC method (chat, search, vault, notes, vitals,
+│                                 #   awaken, agentAsk, agentBrief, agentDistill, agentEvents,
+│                                 #   session)
 │
-├── core/
-│   ├── kernel.ts                     # Service registry, DI container
-│   ├── constants.ts                  # PLUGIN_ID, VIEW_TYPES
-│   │
-│   ├── events/
-│   │   ├── eventBus.ts               # Typed pub/sub
-│   │   └── types.ts                  # Event definitions
-│   │
-│   ├── llm/
-│   │   ├── provider.ts               # LLMProvider interface
-│   │   └── providers/
-│   │       └── openai-compatible.ts  # Base for OpenAI-style APIs
-│   │
-│   ├── agent/                        # TIER 1 IDENTITY
-│   │   ├── identity.ts               # buildBaseIdentity()
-│   │   ├── profileManager.ts         # User profile CRUD
-│   │   └── taskQueue.ts              # Background tasks
-│   │
-│   ├── agents/                       # 4-AGENT SWARM
-│   │   ├── types.ts                  # AgentType, AgentContext
-│   │   ├── base.ts                   # BaseAgent abstract
-│   │   ├── agentIdentity.ts          # TIER 2 - buildAgentSystemPrompt()
-│   │   ├── chiefOfStaff.ts           # Orchestrator (brain)
-│   │   ├── noteEditorAgent.ts        # Obsidian I/O
-│   │   ├── contextBuilderAgent.ts    # Vault awareness
-│   │   ├── workerAgent.ts            # Workflow executor
-│   │   └── workflowAgents.ts         # Workflow configs
-│   │
-│   ├── chat/
-│   │   ├── chatService.ts            # Chat orchestration
-│   │   ├── conversationStore.ts      # Persistence
-│   │   ├── thinkingParser.ts         # <think> extraction
-│   │   └── types.ts                  # ChatMessage types
-│   │
-│   ├── indexer/
-│   │   ├── simpleIndexer.ts          # Vault sync
-│   │   ├── simpleChunker.ts          # Content hashing
-│   │   └── tieredSemanticChunker.ts  # 3-tier chunking
-│   │
-│   ├── intelligence/
-│   │   ├── noteIntelligence.ts       # Background generation
-│   │   ├── intelligenceDb.ts         # Persistence
-│   │   └── prompts/                  # Workflow prompts
-│   │       ├── index.ts
-│   │       ├── enhance.ts
-│   │       ├── atomic.ts
-│   │       ├── synthesis.ts
-│   │       ├── connection.ts
-│   │       └── ...
-│   │
-│   ├── agentic/
-│   │   ├── actionApplier.ts          # Execute actions
-│   │   ├── actionHistory.ts          # Undo history
-│   │   ├── trustLevelManager.ts      # Risk evaluation
-│   │   └── types.ts                  # Action types
-│   │
-│   ├── search/
-│   │   ├── pipeline.ts               # SearchPipeline
-│   │   └── strategies/
-│   │       ├── quick.ts              # Obsidian native
-│   │       ├── balanced.ts           # Vector + reranking
-│   │       └── deep.ts               # Agentic exploration
-│   │
-│   ├── skills/                       # NoteEditor capabilities
-│   │   ├── registry.ts               # SkillRegistry
-│   │   ├── types.ts                  # Skill interface
-│   │   └── definitions/
-│   │       ├── jsonCanvas.ts
-│   │       ├── obsidianBases.ts
-│   │       └── obsidianMarkdown.ts
-│   │
-│   ├── context/
-│   │   └── vaultContextBuilder.ts    # LLM context building
-│   │
-│   ├── vitals/
-│   │   └── simpleVitals.ts           # Note health
-│   │
-│   ├── db/
-│   │   ├── database.ts               # SQLite wrapper
-│   │   ├── schema.ts                 # Table definitions
-│   │   └── migrations.ts             # Schema migrations
-│   │
-│   └── evolution/
-│       └── userEvolutionService.ts   # Preference learning
+├── testing/
+│   ├── unit/                     # fast, no external deps. Mirror of src/ + tools/.
+│   ├── integration/              # NOTIENT_SMOKE=1, spawns SurrealDB / subprocess /
+│   │                             #   real chokidar. Mirror of src/ where applicable;
+│   │                             #   __smoke__/ retained as a sub-tree.
+│   └── fixtures/markdown/        # shared markdown samples for the markdown tests
 │
-├── services/
-│   ├── storagePaths.ts               # Path management
-│   ├── indexManager.ts               # Index I/O
-│   ├── vectorStore.ts                # VectorStore interface
-│   ├── hnswVectorStore.ts            # HNSW WASM impl
-│   ├── ollama.ts                     # Embedding service
-│   ├── ollamaReranker.ts             # LLM reranking
-│   ├── healthMonitor.ts              # Health checks
-│   └── vaultLock.ts                  # Multi-window locking
-│
-├── types/
-│   ├── settings.ts                   # NotientSettings
-│   ├── indexer.ts                    # Chunk types
-│   ├── search.ts                     # Search types
-│   └── profile.ts                    # UserProfile
-│
-├── ui/
-│   ├── sidebar/
-│   │   ├── App.tsx                   # Main sidebar
-│   │   ├── SidebarView.tsx           # Obsidian view wrapper
-│   │   ├── hooks/                    # Preact hooks
-│   │   └── components/
-│   │       ├── NavDeck.tsx           # Tab navigation
-│   │       ├── SystemDashboard.tsx   # Status footer
-│   │       ├── NoteVitalsView.tsx    # Health + insights
-│   │       ├── AgentStreamsView.tsx  # Agent activity
-│   │       └── chat/
-│   │           ├── RichChatView.tsx
-│   │           ├── MessageBubble.tsx
-│   │           └── ThinkingBlock.tsx
-│   │
-│   ├── settings/
-│   │   └── SettingsTab.ts            # Settings panel
-│   │
-│   ├── modals/
-│   │   ├── SetupWizard.ts
-│   │   ├── IndexDashboardModal.ts
-│   │   └── ProfileEditModal.ts
-│   │
-│   └── dashboard/
-│       └── DashboardView.ts
-│
-├── workers/
-│   ├── embed.worker.ts               # Embedding worker
-│   └── vector.worker.ts              # HNSW worker
-│
-├── utils/
-│   └── atomicWrite.ts                # Crash-safe writes
-│
-└── styles.css                        # Design tokens
+└── tools/                        # standalone scripts (not bundled into dist/)
+    ├── build-cli.ts              # production CLI build
+    ├── lib/spawnEnv.ts           # hermetic env helpers used by the smoke harnesses
+    ├── repro-multi-turn.ts       # standalone multi-turn chat repro
+    ├── smoke-cli-phaseA.ts … phaseD1.ts   # live-LM-Studio end-to-end smokes
+    └── import-bridge/            # standalone import-normalisation utility
 ```
 
 ---
 
-## .claude Infrastructure (Role-Based v3)
+## Architecture quick reference
 
-```
-.claude/
-├── CLAUDE.md                    # This file (project context)
-├── agents/
-│   ├── dispatch.py              # Role-based task dispatcher
-│   ├── queue-processor.py       # Role queue processor
-│   ├── watcher.py               # Response watcher
-│   ├── git-prepare.sh           # Worktree setup
-│   └── watcher.py               # Response watcher
-├── orchestration/
-│   ├── orchestrator/
-│   │   └── CLAUDE.md            # Chief Engineer identity
-│   ├── core/                    # Shared identities
-│   │   ├── CODER.md             # Shared coder traits
-│   │   └── RESEARCHER.md        # Shared researcher traits
-│   ├── implementer/             # Coder: Feature builder
-│   │   ├── ROLE.md
-│   │   ├── queue/
-│   │   └── responses/
-│   ├── simplifier/              # Coder: Code clarifier
-│   ├── validator/               # Coder: Quality gate
-│   ├── tester/                  # Coder: Test specialist
-│   ├── architect/               # Coder: System designer
-│   ├── advisor/                 # Coder: Technical consultant
-│   ├── docs-fetcher/            # Researcher: Documentation expert
-│   ├── codebase-navigator/      # Researcher: Codebase expert
-│   ├── world-knowledge/         # Researcher: External intel
-│   └── state/
-│       └── instances.json       # Runtime state tracking
-└── hooks/                       # Session hooks
-```
+Three boundaries matter:
 
-### CLI Platforms
+1. **CLI ↔ daemon over Unix Domain Socket** (`src/daemon/socket.ts`, `src/daemon/rpc.ts`). Every CLI verb either reads from or RPC's into the daemon. The CLI may spawn the daemon if no UDS exists.
 
-| CLI | Trust | Best For |
-|-----|-------|----------|
-| **claude** | 🟢 HIGH | Complex reasoning, architecture |
-| **gemini** | 🟢 HIGH | Research, fast iteration |
-| **cursor-agent** | 🟡 MEDIUM | Bulk code generation |
-| **opencode** | 🔴 LOW | Local/offline, sensitive tasks |
+2. **Daemon ↔ SurrealDB** (`src/core/db/surreal.ts`, `src/daemon/surrealServer.ts`). The daemon owns the surreal child process. All persistence routes through `SurrealConnection`. Schema applied at startup via `applySchema`.
+
+3. **Daemon ↔ LM Studio (chat) and Ollama (embeddings)** through `src/core/llm/`. All chat/agent traffic goes through `LLMProvider`. Vision probe at `src/agent/visionProbe.ts`.
+
+The **awaken pipeline** is the indexer's batch driver. `awakenWorker` walks the vault, runs tier-1 (note + structure), tier-2 (chunks + embeddings), and tier-3 (extraction + linker proposals). `awaken_run` rows track progress for resume-on-restart.
+
+The **coordinator** dispatches background swarm agents (linker, maturity advancer) when EventBus signals fire (e.g., `note:indexed`).
+
+The **chat agent loop** (`src/core/chat/agentLoop.ts`) drives a tool-using turn over `ToolRegistry`. Tools live under `src/core/chat/tools/` (vault, notes, graph, proposals, registry).
 
 ---
 
-## Version
+## Conventions
 
-- **Current:** 0.3.1
-- **Min Obsidian:** 1.4.0
+- **No tests in `src/`.** Unit tests in `testing/unit/<mirror>`, integration in `testing/integration/<mirror>`. Fixtures in `testing/fixtures/`. Imports from tests traverse back to `../../../../src/...` (depth depends on file location).
+- **Smoke gating.** Integration tests use `describe.skipIf(!SMOKE_ENABLED)` keyed off `process.env.NOTIENT_SMOKE === "1"`. Anything that spawns SurrealDB, a subprocess, or real chokidar is integration-only.
+- **No `any` without justification.** Strict TypeScript. The repo allows unused locals / imports (so generated code stays cheap) but `useConst` is enforced.
+- **Atomic writes.** Use `src/core/utils/atomicWrite.ts` rather than `fs.writeFile` directly when touching vault state.
+- **Streaming.** LLM and search return `AsyncIterable<...Event>`. Respect `AbortSignal` in every long-running operation.
+- **Identity.** `agent.ask` style handlers carry `clientIdentity` end-to-end (claude-code, human, etc.). Never drop or fabricate identity in handler plumbing.
+- **Path aliases.** Only two are wired: `@/*` → `src/*` and `@core/*` → `src/core/*`. Prefer relative imports inside a subsystem.
 
-## Archive (.nuked/)
+---
 
-`.nuked/` holds pre-pivot code retained for reference. Never import from it. Never restore without explicit approval. The directory is gitignored and excluded from tsc and biome.
+## Anti-patterns
+
+- Don't add tests under `src/`.
+- Don't put product logic inside CLI command files. Commands marshal arguments and call into daemon RPC or core services.
+- Don't bypass `LLMProvider`. Every model call goes through the provider so the chat-mode probe and vision routing work.
+- Don't bypass `SurrealConnection`. No raw drivers, no per-call connect.
+- Don't introduce parallel type systems. Reuse `src/core/db/surreal.ts` row types and `src/core/llm/provider.ts` message types.
+- Don't catch + swallow `AbortError`. Propagate it so the agent loop can unwind cleanly.
+
+---
+
+## Versions
+
+- Notient package: `0.1.0-phaseA`
+- Bun: 1.3.10 (CI pinned)
+- SurrealDB: 3.0.5 (CI pinned)
+- TypeScript: ^5.6.0
+- Biome: 1.9.0
+
+## Archive
+
+`.nuked/` previously held pre-pivot Obsidian-plugin code; the directory is gitignored and not present in the working tree. Never restore without explicit approval.

@@ -6,7 +6,7 @@ import {
   captureNotientEnv,
   stripNotientEnvFromProcess,
   writeVaultEnvFile,
-} from "../../../../scripts/lib/spawnEnv";
+} from "../../../../tools/lib/spawnEnv";
 
 describe("captureNotientEnv", () => {
   test("returns trimmed snapshot when all three required vars are present", () => {
@@ -122,6 +122,7 @@ describe("writeVaultEnvFile", () => {
         baseUrl: "u",
         chatModel: "m",
         embedModel: "e",
+        contextTokens: undefined,
       });
       const text = await readFile(join(root, ".notient", ".env"), "utf-8");
       expect(text.length).toBeGreaterThan(0);

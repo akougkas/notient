@@ -18,16 +18,17 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@core/*": ["src/core/*"],
-      "@ui/*": ["src/ui/*"],
-      "@services/*": ["src/services/*"],
-      "@types/*": ["src/types/*"],
-      "@views/*": ["src/views/*"]
+      "@core/*": ["src/core/*"]
     },
     "types": ["bun-types", "node"],
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/react"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "testing/**/*.ts",
+    "tools/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", ".nuked"]
 }

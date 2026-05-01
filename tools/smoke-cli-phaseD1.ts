@@ -5,7 +5,7 @@
  * substrate, exercising the seven new Phase D1 verbs added to the CLI:
  * `chat --as`, `ask`, `brief` (topic and file forms), `session grant/list/
  * revoke`, `distill --dry-run`, `distill` (live), and `events`. The harness
- * mirrors the structural shape of `scripts/smoke-cli-phaseD.ts`: capture the
+ * mirrors the structural shape of `tools/smoke-cli-phaseD.ts`: capture the
  * project-root NOTIENT_* env BEFORE stripping, mkdtemp the fixture, init,
  * pre-seed config (tool-mode pin + auto-approve), awaken, then run each
  * verb pass.

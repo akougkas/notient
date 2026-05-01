@@ -64,6 +64,12 @@ mprocs.log
 .codex
 .planning/
 
+# Audit/move scratch artifacts produced by repo plumbing sessions
+/tmp/notient-*
+
+# Claude Code wakeup runtime (per-session lock)
+.claude/scheduled_tasks.lock
+
 # Notient v0.1 archive
 /.nuked/
 dist/
