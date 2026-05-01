@@ -118,8 +118,16 @@ export const AGENT_ASK_RESPONSE_SCHEMA: JsonSchema = {
           additionalProperties: false,
         },
       },
+      // Self-reported confidence in [0, 1]. Required so LM Studio's strict
+      // json_schema mode actually emits the field; the parser still
+      // tolerates clamping.
+      confidence: { type: "number" },
+      openQuestions: {
+        type: "array",
+        items: { type: "string" },
+      },
     },
-    required: ["answer", "citations"],
+    required: ["answer", "citations", "confidence", "openQuestions"],
     additionalProperties: false,
   },
 };

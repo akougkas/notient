@@ -179,6 +179,10 @@ DEFINE FIELD OVERWRITE priority_globs ON awaken_run TYPE array<string> DEFAULT [
 DEFINE FIELD OVERWRITE cursor ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE error ON awaken_run TYPE option<string>;
 DEFINE FIELD OVERWRITE failure_reason ON awaken_run TYPE option<string>;
+-- Vault-relative paths whose tier 1 / 2 / 3 indexing did not complete
+-- during this run. Capped server-side by the worker (currently 200) so
+-- the row stays small even for vaults with thousands of bad notes.
+DEFINE FIELD OVERWRITE failures ON awaken_run TYPE array<string> DEFAULT [];
 -- Derived marker that pins a row into the unique index only while its
 -- status is in the active set ('running','paused'). The field evaluates
 -- to the literal string 'active' for active rows and to NONE for terminal

@@ -113,6 +113,14 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   let processed = start.processed;
   let failed = start.failed;
   let lastProcessedPath: string | null = start.resumeCursor;
+  // Vault-relative paths whose indexing did not complete during this run.
+  // Capped to keep the awaken_run row small even on pathological vaults.
+  const failurePaths: string[] = [];
+  const FAILURE_PATHS_CAP = 200;
+  const recordFailure = (notePath: string): void => {
+    if (failurePaths.length >= FAILURE_PATHS_CAP) return;
+    failurePaths.push(notePath);
+  };
 
   // Drop already-processed paths when resuming. The cursor records the
   // last successfully checkpointed path; we resume from the entry strictly
@@ -149,6 +157,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
         await waitForDone;
         processed += 1;
       } catch {
+        recordFailure(notePath);
         const requiredTier = maxRequestedTier(options.tierFilter);
         const counters =
           options.onNoteIndexed === undefined
@@ -176,6 +185,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
             processed,
             failed,
             cursor: lastProcessedPath,
+            failurePaths: [...failurePaths],
           });
         }
       }
@@ -207,6 +217,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
       processed,
       failed,
       cursor: lastProcessedPath,
+      failurePaths: [...failurePaths],
     });
     return { runId: start.runId, status: finalStatus, processed, failed };
   }
@@ -217,6 +228,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
     processed,
     failed,
     cursor: null,
+    failurePaths: [...failurePaths],
   });
   return { runId: start.runId, status: "completed", processed, failed };
 }

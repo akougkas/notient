@@ -88,7 +88,9 @@ function renderResult(
 
 export function parseAskFormat(value: unknown): AskFormat {
   if (value === "text") return "text";
-  if (value === "structured" || value === undefined || value === true) return "structured";
+  if (value === "structured" || value === "json" || value === undefined || value === true) {
+    return "structured";
+  }
   throw new Error(`INVALID_PARAMS: --format must be 'structured' or 'text' (got ${String(value)})`);
 }
 

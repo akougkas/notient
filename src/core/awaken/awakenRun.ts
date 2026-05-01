@@ -94,6 +94,12 @@ export interface AwakenRunRow {
    * the human-readable error to `error`. Schema: option<string>.
    */
   failure_reason: string | null;
+  /**
+   * Vault-relative paths whose indexing did not complete during this run.
+   * Schema-defaulted to an empty array, capped by the worker so the row
+   * stays small.
+   */
+  failures: string[];
 }
 
 export interface CreateRunInput {
@@ -115,6 +121,13 @@ export interface UpdateStatusExtra {
    * and any future per-row caller can route through `updateStatus`.
    */
   failureReason?: string | null;
+  /**
+   * Replace the run's `failures` array. The worker collects per-note
+   * failure paths in memory and flushes the (capped) snapshot at
+   * checkpoints and at terminal status updates. Pass `undefined` to
+   * leave the field untouched.
+   */
+  failurePaths?: string[];
 }
 
 export interface StatusSubscription {
@@ -134,6 +147,7 @@ interface AwakenRunRecordRow {
   cursor: string | null | undefined;
   error: string | null | undefined;
   failure_reason: string | null | undefined;
+  failures: string[] | null | undefined;
 }
 
 export async function createRun(
@@ -175,7 +189,7 @@ export async function createRun(
 
 export async function findCurrent(db: Surreal): Promise<AwakenRunRow | null> {
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE status INSIDE ['running','paused'] ORDER BY started_at DESC LIMIT 1;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason, failures FROM awaken_run WHERE status INSIDE ['running','paused'] ORDER BY started_at DESC LIMIT 1;";
   const [rows] = await db.query<[AwakenRunRecordRow[]]>(sql).collect<[AwakenRunRecordRow[]]>();
   const row = rows[0];
   return row === undefined ? null : mapRow(row);
@@ -183,7 +197,7 @@ export async function findCurrent(db: Surreal): Promise<AwakenRunRow | null> {
 
 export async function findLatestResumable(db: Surreal): Promise<AwakenRunRow | null> {
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE status INSIDE ['paused','failed'] ORDER BY started_at DESC LIMIT 1;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason, failures FROM awaken_run WHERE status INSIDE ['paused','failed'] ORDER BY started_at DESC LIMIT 1;";
   const [rows] = await db.query<[AwakenRunRecordRow[]]>(sql).collect<[AwakenRunRecordRow[]]>();
   const row = rows[0];
   return row === undefined ? null : mapRow(row);
@@ -199,7 +213,7 @@ export async function findById(
   // status, so they would hide the row in exactly the state the caller
   // wants to surface (`completed` / `cancelled` / `failed`).
   const sql =
-    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason FROM awaken_run WHERE id = $id;";
+    "SELECT id, status, started_at, finished_at, total, processed, failed, tier_filter, priority_globs, cursor, error, failure_reason, failures FROM awaken_run WHERE id = $id;";
   const [rows] = await db
     .query<[AwakenRunRecordRow[]]>(sql, { id: runId })
     .collect<[AwakenRunRecordRow[]]>();
@@ -224,6 +238,10 @@ export async function updateStatus(
     appendOptionString(setClauses, bindings, "cursor", extra.cursor);
     appendOptionString(setClauses, bindings, "error", extra.error);
     appendOptionString(setClauses, bindings, "failure_reason", extra.failureReason);
+    if (extra.failurePaths !== undefined) {
+      setClauses.push("failures = $failures");
+      bindings.failures = extra.failurePaths;
+    }
   }
   const sql = `UPDATE $id SET ${setClauses.join(", ")};`;
   await db.query(sql, bindings).collect();
@@ -317,6 +335,7 @@ function mapRow(row: AwakenRunRecordRow): AwakenRunRow {
     cursor: row.cursor ?? null,
     error: row.error ?? null,
     failure_reason: row.failure_reason ?? null,
+    failures: row.failures ?? [],
   };
 }
 

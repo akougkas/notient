@@ -156,6 +156,22 @@ const SETTINGS = (): { model: string; defaultMaxRoundsPerTurn: number } => ({
   defaultMaxRoundsPerTurn: 4,
 });
 
+describe("AGENT_ASK_RESPONSE_SCHEMA", () => {
+  test("requires confidence and openQuestions so strict json_schema mode emits them", () => {
+    const schema = AGENT_ASK_RESPONSE_SCHEMA.schema as {
+      properties: Record<string, unknown>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+    expect(schema.properties.confidence).toBeDefined();
+    expect(schema.properties.openQuestions).toBeDefined();
+    expect(schema.required).toEqual(
+      expect.arrayContaining(["answer", "citations", "confidence", "openQuestions"]),
+    );
+    expect(schema.additionalProperties).toBe(false);
+  });
+});
+
 describe("agent.ask handler", () => {
   test("prompt requires exact search result notePath citations", () => {
     expect(ASK_SYSTEM_PROMPT).toContain("exact notePath string");

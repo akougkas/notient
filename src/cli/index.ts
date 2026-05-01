@@ -215,7 +215,7 @@ const VERB_HELP: Record<string, VerbHelp> = {
     flags: ["--vault <path>", "--prompt <text>", "--approve <mode>"],
   },
   ask: {
-    usage: "notient ask <intent> --vault <path> [--format json|text] [--max-rounds N]",
+    usage: "notient ask <intent> --vault <path> [--format structured|text] [--max-rounds N]",
     flags: ["--vault <path>", "--format <format>", "--max-rounds <number>"],
   },
   brief: {

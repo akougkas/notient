@@ -3,6 +3,7 @@ import { searchVectorWithPath } from "../../db/surreal";
 import { buildChunkNoteFilter } from "../filters";
 import type { Reranker } from "../reranker";
 import type { SearchFilters, SearchHit } from "../types";
+import { applyPathTokenBoost } from "./pathTokenBoost";
 import { quickSearch } from "./quick";
 
 export interface BalancedSearchOptions {
@@ -56,5 +57,10 @@ export async function balancedSearch(options: BalancedSearchOptions): Promise<Se
     score: row.distance === null ? 0 : 1 - row.distance,
     matchedText: options.query,
   }));
-  return options.reranker.rerank(options.query, initial, options.rerankTopN, options.signal);
+  // Promote notes whose filename slug carries the query terms verbatim
+  // (e.g. "vector-search.md" wins over "fan-vector-search.md") before the
+  // LLM rerank. Without this nudge, fillers that simply mention the term
+  // outrank a canonical concept note that uses the unhyphenated phrase.
+  const boosted = applyPathTokenBoost(initial, options.query);
+  return options.reranker.rerank(options.query, boosted, options.rerankTopN, options.signal);
 }

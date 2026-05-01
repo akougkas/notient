@@ -68,6 +68,15 @@ export function InputBar({
         onSubmit={() => {
           const textarea = ref.current;
           const final = textarea ? textarea.plainText : value;
+          // Clear the textarea's internal buffer up front so the input box
+          // visually empties on submit regardless of whether the parent's
+          // setBuffer("") + value-change useEffect fires before the next
+          // onContentChange tick. The parent path also resets `value`; the
+          // useEffect's plainText==value guard then keeps this idempotent.
+          if (textarea) {
+            textarea.editBuffer.setText("");
+            textarea.cursorOffset = 0;
+          }
           onSubmit(final);
         }}
       />

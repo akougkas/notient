@@ -180,6 +180,7 @@ describe("ask flag parsing", () => {
     expect(parseAskFormat(undefined)).toBe("structured");
     expect(parseAskFormat(true)).toBe("structured");
     expect(parseAskFormat("structured")).toBe("structured");
+    expect(parseAskFormat("json")).toBe("structured");
     expect(parseAskFormat("text")).toBe("text");
     expect(() => parseAskFormat("yaml")).toThrow();
   });
