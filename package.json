@@ -1,6 +1,6 @@
 {
   "name": "notient",
-  "version": "0.1.0-phaseA",
+  "version": "0.1.0-alpha",
   "description": "Local-first agentic CLI for sentient vaults",
   "type": "module",
   "bin": {

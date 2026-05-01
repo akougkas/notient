@@ -224,7 +224,7 @@ The **chat agent loop** (`src/core/chat/agentLoop.ts`) drives a tool-using turn 
 
 ## Versions
 
-- Notient package: `0.1.0-phaseA`
+- Notient package: `0.1.0-alpha`
 - Bun: 1.3.10 (CI pinned)
 - SurrealDB: 3.0.5 (CI pinned)
 - TypeScript: ^5.6.0

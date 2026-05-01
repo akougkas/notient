@@ -1,432 +1,250 @@
 # Notient
 
-> **Your Research Chief of Staff for Obsidian**
-> *AI-powered vault intelligence using local LLMs only.*
+> **Local-first agentic CLI for sentient Markdown vaults.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Obsidian](https://img.shields.io/badge/Obsidian-1.4.0+-purple.svg)](https://obsidian.md)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.10-black.svg)](https://bun.sh)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg)](https://www.typescriptlang.org/)
+[![SurrealDB](https://img.shields.io/badge/SurrealDB-3.0.5-ff00aa.svg)](https://surrealdb.com)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange.svg)](#status)
 
-**Notient** (Note + Sentient) transforms your Obsidian notes from passive files into living entities with health, context, and agency—all powered by local LLMs. No cloud, no data leaving your machine, ever.
+Notient (Note + Sentient) turns a Markdown vault into a queryable, self-organising knowledge base. It indexes notes into an embedded SurrealDB, runs a local OpenAI-compatible LLM for chat and embeddings, and lets you talk to your vault from a TUI or single-shot CLI verbs. Everything stays on your machine. Every write is human-in-the-loop.
 
----
-
-## Vision
-
-**Notient = Note + Sentient — Sentient Notes for the thinking human.**
-
-Imagine a research assistant who:
-- Analyzes your vault with expert-level pattern recognition
-- Proposes structured, actionable improvements grounded in your actual content
-- Adapts to your domain expertise (HPC, law, biology, business—you name it)
-- Never hallucinates, always cites sources
-- Respects your autonomy through trust levels and universal undo
-- Evolves with you as your knowledge grows
-- Challenges your ideas with a devil's advocate when you need it
-
-That's Notient. It's the **Research Chief of Staff** you didn't know you needed.
-
-### The Process (Not Just a Tagline)
-
-```
-Vaults that breathe  →  Notes that think  →  Knowledge that evolves
-     (awareness)           (intelligence)          (growth)
-```
-
-This is **sequential**, not parallel:
-1. **Vault awareness** (holistic health, pulse, structure) **enables**
-2. **Note intelligence** (individual agency, suggestions) which **produces**
-3. **Knowledge evolution** (learning, connecting, growing over time)
-
-### The Sentient Notes Philosophy
-
-- **Every note has a pulse** — Health scores, freshness indicators, connectivity metrics
-- **Every note has context** — PARA classification, related notes, semantic connections
-- **Every note can speak** — Proactive suggestions surface when notes need attention
-- **You steer; Notient amplifies** — Human-in-the-steering-wheel always
+> Status: **0.1.0-alpha**, pre-1.0, not yet feature-complete. Surfaces and storage may shift between versions.
 
 ---
 
-## The White House Model
+## What it does today
 
-Notient's multi-agent architecture follows a "White House" organizational model—a mental model for understanding how AI agents collaborate:
+- **Watcher pipeline.** A long-lived daemon owns a chokidar watcher (with WSL polling auto-detected) that observes the vault. `add` / `change` / `unlink` events enqueue tier-1/2/3 indexing. `unlink` writes a `tombstoned_at` marker and schedules a 60-second cascade-delete; an `add` whose body sha matches a tombstoned row inside that window is treated as a rename and the tombstone is reverted in place.
+- **Awaken pipeline.** A vault-wide indexer driver walks every Markdown file and runs three tiers inside a single SurrealQL transaction per note:
+  - **Tier 1**: unified/remark parse, structure extraction, deterministic edges (`wikilink`, `embed`, `frontmatter_ref`, `tagged`, `contained_in`, `under_heading`).
+  - **Tier 2**: chunker (target 400 tokens, max 800) plus embedder against your local embedding endpoint, writing 768-dim vectors.
+  - **Tier 3**: concurrent extractor (concepts, claims, questions) and rank-based linker (kNN cosine + DBSCAN) producing semantic edges. Linker edges land with `approved = false` for operator review.
+- **Three search strategies.**
+  - `quick`: SurrealDB BM25 over `chunk.text`. Note: the daemon `search` RPC currently gates `quick` behind an Obsidian bridge probe and returns `BRIDGE_DOWN` without it. The agent loop's internal quick path runs against SurrealDB directly.
+  - `balanced` (default): HNSW kNN over `chunk.vector` plus a Jaccard path-token boost (cubic, +0.30 cap) plus LLM rerank. Falls back to `quick` if embedding fails.
+  - `deep`: Hybrid kNN+BM25 fusion (0.7·sim + 0.3·bm25), LLM rerank, 1-hop graph expansion over approved edges, grounded LLM synthesis with `[[wikilink]]` citations.
+- **Citation-grounded ask.** `notient ask` returns `{ answer, citations, confidence, openQuestions }` from a non-interactive read-only agent loop. Verified on a 100-note dogfood pass with confidence ~0.94 on real BM25 questions.
+- **TUI chat.** `notient chat` (no prompt) opens an `@opentui/react` TUI with slash commands, `@`-completion against vault paths, persistent history, and a status bar reporting model, pending tool calls, and approximate token usage.
+- **Approval gate.** Four write-side `notes.*` tools (`create`, `append`, `replace_section`, `update_frontmatter`) plus `proposals.approve` / `proposals.reject` are blocked until you run `/approve <callId>` (or `/deny <callId>`) in the TUI, or until a session grant covers them.
+
+---
+
+## Architecture at a glance
+
+Three boundaries to keep in mind:
 
 ```
-                    ┌─────────────────────────────┐
-                    │    YOU (The President)      │
-                    │  Decision maker. Commander. │
-                    │    Approves all actions.    │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │     CHIEF OF STAFF          │
-                    │   (Central Orchestrator)    │
-                    │                             │
-                    │  • Routes tasks to agents   │
-                    │  • Builds context briefings │
-                    │  • Manages delegation       │
-                    │  • Aggregates intelligence  │
-                    └─────────────┬───────────────┘
-                                  │
-        ┌─────────────────────────┼─────────────────────────┐
-        │                         │                         │
-        ▼                         ▼                         ▼
-┌───────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│    CHAT       │       │   NOTE EDITOR   │       │   CLASSIFIER    │
-│   ADVISOR     │       │                 │       │                 │
-│               │       │ Content         │       │ Knowledge       │
-│ Senior Advisor│       │ Architect       │       │ Taxonomist      │
-│ & Liaison     │       │                 │       │                 │
-│               │       │ Structural      │       │ PARA method,    │
-│ Your primary  │──────►│ improvements,   │       │ tagging,        │
-│ interface     │       │ edits,          │       │ organization    │
-│               │       │ frontmatter     │       │                 │
-└───────────────┘       └─────────────────┘       └─────────────────┘
+  notient CLI / TUI
         │
-        │ can delegate
+        │  Unix Domain Socket  (envelope codec, MethodDispatcher,
+        │                       AsyncIterable<RpcResponseFrame>)
         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    WORKFLOW AGENTS (Intelligence 2.0)                │
-│                                                                      │
-│  /enhance     Transform quick captures → structured, polished notes │
-│  /atomize     Split complex notes → atomic concepts (100-300 words) │
-│  /synthesize  Cluster related notes → synthesis narratives          │
-│  /tasks       Extract actions & deadlines → task notes              │
-│  /brand       Check content against your voice → consistency audit  │
-│  /connect     Find semantic relationships → 6 connection types      │
-│  /challenge   Devil's advocate → surface blind spots, stress-test   │
-│  /clipping    Process web dumps → clean, tagged vault notes         │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+   notient daemon  ────────►  SurrealDB 3.0.5 child process
+   (one per vault)            (namespace=notient, database=vault,
+        │                      schema applied at boot)
+        │
+        │  HTTP (OpenAI-compatible)
+        ▼
+   LM Studio / llama.cpp
+   (chat, structured JSON, vision, embeddings)
 ```
 
-**Why this model?**
-- **Clear hierarchy**: You're always in command. Agents propose, you decide.
-- **Specialization**: Each agent has distinct expertise, not generic capabilities.
-- **Delegation**: Complex requests flow through appropriate specialists.
-- **Coherent voice**: All agents share core identity but maintain unique missions.
+- **CLI ↔ daemon over UDS.** The CLI connects to a per-vault socket and spawns the daemon on demand if no socket exists. Streams come back as `AsyncIterable<RpcResponseFrame>`.
+- **Daemon ↔ SurrealDB.** The daemon owns the `surreal` child process. All persistence routes through `SurrealConnection`. Schema is applied at startup from `dist/schema.surql` plus runtime-emitted edge tables.
+- **Daemon ↔ LLM.** Every chat, structured JSON call, vision call, and embedding goes through `LLMProvider`. The current production implementation is `LMStudioProvider`. Vision is probed at boot.
+- **Watcher.** chokidar with `usePolling=true` for WSL paths and a 1000 ms interval. Markdown only. The 60-second tombstone window is what turns sequential `unlink`/`add` events into renames.
+- **Coordinator.** Bridges `EventBus` signals (`note:indexed`, `indexer:tier3-done`) to background swarm agents. Reasoning-model concurrency is bounded by `chat.reasoningSlots` so it never silently oversubscribes a multi-slot local server.
 
 ---
 
-## Core Features
-
-### 🧠 13 Specialized Agents
-
-| Agent | Role | What It Does |
-|-------|------|--------------|
-| **Chat Advisor** | Senior Advisor & Liaison | Your primary interface. Answers questions grounded in vault content. Delegates to specialists when needed. |
-| **Note Editor** | Content Architect | Proposes structural improvements, frontmatter updates, content expansions. Output: actionable edit proposals. |
-| **Classifier** | Knowledge Taxonomist | PARA classification, smart tagging, folder recommendations. Expert in organizational methodology. |
-| **Link Finder** | Connection Specialist | Discovers non-obvious semantic relationships. Explains *why* notes connect (6 connection types). |
-| **Context Builder** | Intelligence Analyst | Pre-flight agent. Searches vault, builds briefings for other agents. Never user-facing. |
-| **Enhance** | Enhancement Specialist | `/enhance` — Transforms quick captures into polished, structured notes. |
-| **Atomic** | Atomic Architect | `/atomize` — Splits complex notes into atomic concepts (100-300 words each). Literature review → 8 concept notes. |
-| **Synthesis** | Synthesis Specialist | `/synthesize` — Clusters related notes into narrative syntheses (500-800 words). 15 meeting notes → strategy doc. |
-| **Task** | Task Extractor | `/tasks` — Pulls action items and deadlines. "Follow up Tuesday" → Task note with `2026-01-15`. |
-| **Brand** | Brand Auditor | `/brand` — Evaluates content against your voice. Ensures consistency across your vault. |
-| **Connection** | Graph Engineer | `/connect` — Classifies connections into 6 semantic types: conceptual, methodological, problem-solution, hierarchical, temporal, contrast. |
-| **Antagonist** | Devil's Advocate | `/challenge` — Challenges your ideas. Surfaces blind spots. Stress-tests arguments. |
-| **Clipping** | Clipping Processor | `/clipping` — Transforms messy web clippings into structured vault notes. |
-
-### 🔍 LLM-Reranked Search
-
-Not your typical vector search:
-
-1. **Vector search** → top-50 candidates (<100ms)
-2. **LLM reranking** → semantic relevance scoring (~500ms)
-3. **Results with reasoning** → "This note matches because it discusses X methodology"
-
-**Three Presets:**
-- **Quick** — 5 results, no reranking, 0.5 min score. For fast lookups.
-- **Balanced** — 10 results, reranking enabled, 0.3 min score. Default.
-- **Thorough** — 25 results, reranking enabled, 0.2 min score. Deep research.
-
-### 🎯 Trust Levels & Universal Undo
-
-AI proposes. You decide.
-
-| Risk Level | Actions | Behavior |
-|------------|---------|----------|
-| **Low** | Add tags, update frontmatter | Auto-apply, log to history |
-| **Medium** | Move notes, create links | Show confirmation, one-click approve |
-| **High** | Merge notes, archive, delete | Warning dialog, require explicit confirm |
-
-Every action is reversible. Full action history in Dashboard. Universal undo.
-
-### 📊 Note Vitals Dashboard
-
-Real-time intelligence for the active note:
-- **Health score** — Connectivity, freshness, completeness (0-100%)
-- **Link count** — Backlinks + outlinks with quick navigation
-- **Staleness** — Days since last modified
-- **PARA classification** — Project | Area | Resource | Archive with confidence
-- **Tags** — From frontmatter, with suggestions
-- **Quick Actions** — Enhance, Link, Move → Trigger agentic tasks
-
-### 🤝 Local-Only Architecture
-
-**Zero cloud dependencies. Your notes never leave your machine.**
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Reasoning** | LM Studio / llama.cpp-compatible OpenAI API | Chat, structured extraction, reranking, synthesis. |
-| **Embeddings** | LM Studio / OpenAI-compatible embeddings endpoint | Vector embeddings for semantic search. |
-| **Vector Store** | SurrealDB HNSW | High-performance approximate nearest neighbor over chunk vectors. |
-| **Storage** | Local | Everything in the vault `.notient/` state and Markdown files. |
-
-Privacy-first. No telemetry. No cloud calls. Period.
-
----
-
-## Agent Architecture
-
-**Key clarification**: Agents are **capabilities**, not personas. They have expertise and specialization, not voice or personality. The Chief of Staff IS Notient—it orchestrates everything.
-
-### Two-Tier System
-
-**Tier 1: Core Identity (Shared)**
-- Analytical, grounded, professional
-- Always cites sources (`[[Note#Heading]]`)
-- Domain-aware via user profile
-
-**Tier 2: Specialization (Per Capability)**
-- Each agent has distinct expertise area
-- Output varies: conversational (Chat) vs structured (Editors)
-- Chief of Staff routes to appropriate capability
-
-**Result:** Unified intelligence layer with specialized capabilities.
-
-### User Profile Adaptation
-
-Notient learns your domain without cluttering the UI:
-
-```json
-{
-  "domain": {
-    "primary": "High-Performance Computing",
-    "secondary": ["AI/ML", "Distributed Systems"],
-    "keywords": ["NSF grants", "supercomputing", "MPI"]
-  },
-  "para": {
-    "projects": ["10 Projects/"],
-    "areas": ["20 Areas/"],
-    "resources": ["30 Resources/"],
-    "archives": ["40 Archives/"]
-  }
-}
-```
-
-**Impact:**
-- Without profile: "Add more details"
-- With HPC profile: "Add scalability analysis and MPI communication patterns"
-
----
-
-## Philosophy
-
-### Core Principles
-
-1. **Local-only** — No cloud APIs. Ever. Local OpenAI-compatible AI endpoints only.
-2. **Human-in-steering-wheel** — Trust levels for autonomy, universal undo, you command agents.
-3. **Grounded reasoning** — LLM responses cite actual notes. Zero hallucination tolerance.
-4. **Theme-aware** — Respects your Obsidian theme. Clean, native UI.
-5. **Simplicity over complexity** — Modular architecture, clean abstractions, no debug cruft.
-
-### Agentic UI Philosophy
-
-Notient pioneers a new paradigm:
-
-| Traditional Software | Agentic Software |
-|---------------------|------------------|
-| Static buttons do fixed things | AI analyzes context |
-| User navigates menus | Relevant actions surface automatically |
-| One-size-fits-all | UI adapts to note state |
-
-**v0.x:** Static Quick Actions + AI-generated suggestions (hybrid)
-**Future:** Fully contextual interface where the UI itself is AI-driven
-
-*Software that talks back.*
-
----
-
-## Current Status
-
-**Version**: 0.4.0-beta (in development)
-
-| Component | Status |
-|-----------|--------|
-| Progressive Search | ✅ Working |
-| Chat with Notes | ✅ Working |
-| Quick Actions | ✅ Working (6 actions) |
-| Note Vitals | ✅ Working |
-| 13 Agent Capabilities | ✅ Implemented |
-| WASM Vector Store | 🔄 Upgrading |
-| Insights Stream | 🔧 Fixing |
-| Error Boundaries | 🔄 Adding |
-
-**Spec**: See `planning/BETA-SPEC.md` for full product specification.
-
----
-
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
-1. **Obsidian** 1.4.0+ installed
-2. **LM Studio or llama.cpp-compatible server** running locally or on your LAN
-   ```bash
-   # Install: https://lmstudio.ai
-   # Load a chat model and an embedding model
-   # Start the OpenAI-compatible server on port 1234
-   ```
-3. **Notient AI env** configured in project `.env`, process env, or `<vault>/.notient/.env`
-   ```bash
-   NOTIENT_LLM_BASE_URL=http://192.168.86.143:1234/v1
-   NOTIENT_LLM_MODEL=nvidia-nemotron-3-nano-omni-30b-a3b-reasoning
-   NOTIENT_EMBED_MODEL=text-embedding-nomic-embed-text-v2-moe
-   NOTIENT_CONTEXT_TOKENS=200000
-   NOTIENT_REASONING_SLOTS=4
-   ```
+- **Bun 1.3.10.** The bundle uses Bun-native APIs (`Bun.file`, Bun module resolution, `__require`). Running under `node` will fail.
+- **A local OpenAI-compatible LLM server** (LM Studio, llama.cpp `server`, or any compatible alternative) with a chat model and an embedding model loaded.
+- **SurrealDB 3.0.5** is bundled by way of the daemon spawning the `surreal` binary; integration tests require it on `PATH`.
 
-### Installation
+### Configure your AI endpoint
+
+Notient reads env vars from process env, then project `.env`, then `<vault>/.notient/.env` (the vault file wins for vault-scoped configuration):
+
+```bash
+NOTIENT_LLM_BASE_URL=http://192.168.86.143:1234/v1
+NOTIENT_LLM_MODEL=nvidia-nemotron-3-nano-omni-30b-a3b-reasoning
+NOTIENT_EMBED_MODEL=text-embedding-nomic-embed-text-v2-moe
+NOTIENT_CONTEXT_TOKENS=200000
+NOTIENT_REASONING_SLOTS=4
+```
+
+`NOTIENT_REASONING_SLOTS` should match your server's `-np` / `--parallel` slot count.
+
+### Install and build
 
 ```bash
 git clone https://github.com/akougkas/notient.git
 cd notient
 bun install
-bun run dev  # Build + copy to test vault
+bun run build           # → dist/notient.js, dist/daemon.js, dist/schema.surql
 ```
 
-### First Run
+### First run
 
-1. Enable Notient in Settings > Community Plugins
-2. **Setup Wizard** guides provider connections
-3. Build initial index
-4. Explore Note Vitals for your active note
-5. Try Quick Actions: Enhance, Link, Move
+```bash
+bun dist/notient.js init ~/MyVault
+bun dist/notient.js daemon start --vault ~/MyVault
+bun dist/notient.js awaken --vault ~/MyVault --background
+bun dist/notient.js awaken --vault ~/MyVault --status     # NDJSON until terminal
+bun dist/notient.js chat --vault ~/MyVault                # opens the TUI
+```
+
+Always invoke the bundle as `bun dist/notient.js <verb>`. The build is Bun-native and is not Node-compatible.
 
 ---
 
-## Architecture
+## CLI verbs
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                              UI Layer                                │
-│         Sidebar │ Dashboard │ TaskModal │ Setup Wizard               │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │ Events (EventBus)
-┌─────────────────────────────────▼───────────────────────────────────┐
-│                          Kernel                                      │
-│                   Service Registry & Orchestration                   │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────┐
-│                        ChiefOfStaff                                  │
-│              Central Orchestrator (White House Model)                │
-│                                                                      │
-│    Chat Agent │ NoteEditor │ Classifier │ LinkFinder │ ContextBuilder│
-│                                                                      │
-│                     Workflow Agents (Intelligence 2.0)               │
-│         Enhance │ Atomic │ Synthesis │ Task │ Brand │ etc.          │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-        ┌─────────────────────────┼─────────────────────────┐
-        │                         │                         │
-┌───────▼───────┐       ┌─────────▼─────────┐       ┌───────▼───────┐
-│   Agentic     │       │      Search       │       │      LLM      │
-│   Services    │       │     Pipeline      │       │   Providers   │
-│               │       │                   │       │               │
-│ Trust Levels  │       │ Vector Search     │       │ LM Studio     │
-│ Action Apply  │       │ LLM Reranking     │       │ Embeddings    │
-│ Action History│       │ Context Builder   │       │               │
-└───────────────┘       └───────────────────┘       └───────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────┐
-│                       Storage & Indexing                             │
-│                                                                      │
-│  Vector Store │ Index Manager │ Intelligence DB │ Action History     │
-│                                                                      │
-│  Hybrid embeddings: note-level + section-level for flexible retrieval│
-└─────────────────────────────────────────────────────────────────────┘
-```
+Top-level dispatch lives in `src/cli/index.ts`. Global flags: `--vault <path>`, `--as <agent>` (client identity), output mode `--json|--ndjson|--pretty`. Each verb supports `--help`.
 
-### Key Design Decisions
+| Verb | Purpose | Example |
+|---|---|---|
+| `init <vault>` | Create `<vault>/.notient/` config and record `lastVault`. | `bun dist/notient.js init ~/MyVault` |
+| `daemon start\|stop\|status\|list` | Lifecycle of the per-vault daemon. | `bun dist/notient.js daemon start --vault ~/MyVault` |
+| `awaken` | Run the full vault enrichment pipeline. Flags: `--batch`, `--since`, `--tier`, `--background`, `--pause`, `--resume`, `--cancel`, `--status`. | `bun dist/notient.js awaken --vault ~/MyVault --background` |
+| `reindex [<glob>]` | Re-index a subset by pattern and/or tier. | `bun dist/notient.js reindex "Inbox/**/*.md" --vault ~/MyVault --tier 2,3` |
+| `search <query>` | Streaming search. `--mode quick\|balanced\|deep` (default balanced), `--limit`. | `bun dist/notient.js search "vector search" --vault ~/MyVault --mode deep` |
+| `ask <intent>` | Read-only citation-grounded agent ask. `--format structured\|text`, `--max-rounds`. | `bun dist/notient.js ask "what does the vector search note claim" --vault ~/MyVault` |
+| `brief <topic\|--file>` | Synthesised topic brief. `--max-notes`, `--max-questions`, `--max-decisions`. | `bun dist/notient.js brief "vector search" --vault ~/MyVault` |
+| `distill --from <transcript>` | Extract proposed notes/edges from a Markdown transcript. | `bun dist/notient.js distill --from chat.md --vault ~/MyVault --dry-run` |
+| `chat [prompt]` | Single-shot if `prompt` is given, else launches the TUI. `--approve auto\|ask`. | `bun dist/notient.js chat --vault ~/MyVault` |
+| `vitals <note-path>` | Health/freshness/connectivity snapshot for one note. | `bun dist/notient.js vitals "0002-vector-search.md" --vault ~/MyVault` |
+| `health` | Substrate + bridge probes. | `bun dist/notient.js health --vault ~/MyVault` |
+| `events` | Drain the `agent_event` ledger. `--since`, `--limit`, `--long-poll-ms`, `--no-poll`. | `bun dist/notient.js events --vault ~/MyVault --long-poll-ms 5000` |
+| `session list\|grant\|revoke` | Manage scoped trust grants for unattended writes. | `bun dist/notient.js session grant --vault ~/MyVault --tools notes.append --ttl 30` |
+| `graph dump\|stats` | Export nodes/edges or print counts. | `bun dist/notient.js graph stats --vault ~/MyVault --json` |
+| `links sync\|audit` | Resolve wikilinks/embeds or report unresolved targets. | `bun dist/notient.js links audit --vault ~/MyVault --json` |
+| `proposals list\|approve\|reject` | Operator queue for linker edge proposals. | `bun dist/notient.js proposals list --vault ~/MyVault` |
+| `db sql` | Interactive SurrealQL REPL bound to the daemon's connection. | `bun dist/notient.js db sql --vault ~/MyVault` |
+| `backup` | SurrealQL dump under `<vault>/.notient/backups/`. | `bun dist/notient.js backup --vault ~/MyVault` |
+| `restore <file.surql>` | Replay a dump into the daemon's database. | `bun dist/notient.js restore backup.surql --vault ~/MyVault` |
+| `nuke --yes` | Delete `<vault>/.notient/db/` and reset graph state. | `bun dist/notient.js nuke --vault ~/MyVault --yes` |
+| `migrate-vault <new-path>` | Relocate a vault and rewrite `lastVault`. | `bun dist/notient.js migrate-vault /new/path --vault /old/path` |
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Chunking | Hybrid (note + section) | Broad matching + precise retrieval |
-| Search | LLM reranking of vector top-50 | Semantic relevance, not just similarity |
-| Context | Dynamic per-query | Fresh, relevant, not stale scans |
-| Agent autonomy | Trust levels + batch review | Human control without friction |
-| Agent concurrency | Bounded by local AI slots | Uses multi-slot local inference while preserving UI priority |
-| Activity retention | Session-only | Privacy, simplicity |
-| LLM abstraction | Provider interface | Swappable backends |
+Run `<verb> --help` for the full flag set.
 
 ---
 
-## Comparisons
+## TUI reference
 
-### vs. Smart Connections v4
+`notient chat` (no positional prompt) starts the `@opentui/react` TUI defined in `src/cli/tui/runtime.tsx`.
 
-| Feature | Notient | Smart Connections v4 |
-|---------|---------|---------------------|
-| Local-only | ✅ Required | ⚠️ Optional |
-| LLM reranking | ✅ Core feature | ❌ |
-| Vault context | ✅ Dynamic per-query | ❌ Static |
-| Dual-panel UI | ✅ Search + Chat | ⚠️ Chat only |
-| Agent trust levels | ✅ Low/Med/High | ❌ |
-| PARA-aware | ✅ Built-in | ❌ |
-| Specialized agents | ✅ 13 agents | ❌ |
-| Modular architecture | ✅ Clean abstractions | ❌ |
+**Slash commands:** `/read <path>`, `/search <query>`, `/awaken`, `/vitals <path>`, `/health`, `/model` (no-arg show), `/model list`, `/model use <id>`, `/model embed <id>`, `/model endpoint <url>`, `/approve <callId> [reason]`, `/deny <callId> [reason]`, `/proposals [page]`, `/approve-edge <id>`, `/reject-edge <id> [reason]`, `/undo`, `/history`, `/copy` (saves last reply to `<vault>/.notient/last.txt`), `/clear`, `/help`, `/quit` (alias `/exit`). The proposals view also accepts `a` and `r` to approve or reject the first visible row.
 
-### vs. Obsidian Copilot
+**Keybindings:** Enter submits; Shift+Enter and Alt+Enter insert a newline; Ctrl+C exits; Ctrl+U cuts to start of line; Ctrl+W kills the previous word; Tab triggers `@`-completion against vault paths; Up/Down walk the input history (persisted to `<vault>/.notient/history.txt`); PgUp/PgDn scroll the chat viewport.
 
-| Feature | Notient | Copilot |
-|---------|---------|---------|
-| Local-first | ✅ Required | ❌ Cloud-first |
-| Privacy | ✅ Zero cloud | ⚠️ Sends to OpenAI/Claude |
-| Cost | ✅ Free (local compute) | ⚠️ Freemium (API costs) |
-| Vault intelligence | ✅ PARA, health, vitals | ❌ |
-| Agentic workflows | ✅ Trust levels, undo | ❌ |
-| Specialized agents | ✅ 13 agents | ❌ |
+**Chat tools (`src/agent/toolBundle.ts`):**
+
+- Read-only: `vault.search_notes`, `vault.read_note`, `vault.list_neighbors`, `vault.get_vitals`, `proposals.list_pending`, `proposals.get`, `graph.find_path`, `graph.list_clusters`. (`agents.contradiction_check` and `agents.synthesize` are wired but currently no-op shells.)
+- Write-gated, requires `/approve` or a session grant: `notes.create`, `notes.append`, `notes.replace_section`, `notes.update_frontmatter`, `proposals.approve`, `proposals.reject`.
+
+When a write-gated tool is invoked, the agent loop pauses, the status bar shows `pending:N`, and the TUI prints the call id. Use `/approve <callId>` to apply or `/deny <callId>` to abort.
 
 ---
 
-## Contributing
+## Configuration
 
-We welcome contributions! Notient is open-source and community-driven.
+Environment variables (vault `.notient/.env` wins over project `.env` wins over process env):
 
-**Areas for contribution:**
-- Additional LLM provider implementations
-- Performance optimizations
-- UI/UX improvements
-- Documentation and tutorials
-- Testing coverage
-- Community prompts and profiles
+| Var | Purpose | Default |
+|---|---|---|
+| `NOTIENT_LLM_BASE_URL` | OpenAI-compatible base URL. | required |
+| `NOTIENT_LLM_MODEL` | Chat / reasoning / extraction model id. | required |
+| `NOTIENT_EMBED_MODEL` | Embedding model id. | required |
+| `NOTIENT_CONTEXT_TOKENS` | Per-request/slot budget. | `200000` |
+| `NOTIENT_REASONING_SLOTS` | Concurrent reasoning calls. Match server `-np`. | `4` |
 
-See `CONTRIBUTING.md` for guidelines.
+`<vault>/.notient/config.toml` (loaded once at boot; restart to apply changes):
+
+```toml
+[indexer]
+debounce_ms = 500
+[indexer.concurrency]
+embed = 4
+extract = 2
+[indexer.chunk]
+target_tokens = 400
+max_tokens = 800
+
+[awaken]
+default_tier_filter = [1, 2, 3]
+default_priority_globs = []
+
+[surrealdb]
+hnsw_cache_mib = 512
+log_level = "warn"     # trace|debug|info|warn|error
+
+[agent_events]
+max_rows = 50000
+```
+
+`<vault>/.notient/config.json` carries the richer `NotientSettings` shape: primary/deep `LLMEndpointConfig`, embedding endpoint, agent toggles, approvals, search defaults, vitals weights, chat policy (`approvalMode safe|yolo`, `modelContextTokens`, `reasoningSlots`, `perTool` map, `conversationsFolder`, `proposalsFolder`, `maxRoundsPerTurn`, `contextBudgetFraction`), history retention, and `indexer.excludePaths` (defaults: `Notient/conversations`, `Notient/proposals`, `Notient/searches`).
+
+---
+
+## Status
+
+**v0.1.0-alpha.** Pre-1.0. Surfaces and storage layout may change.
+
+**Verified working** (most recent 100-note dogfood pass):
+
+- Full awaken pipeline completes in ~3 minutes on 100 notes.
+- Citation-grounded `ask` answers across 5 question classes with confidence ~0.94.
+- Real LLM 4-slot parallel chatJson under the reasoning-slot mutex.
+- Watcher round-trips for create / edit / burst-edit / delete / rename, 60-second tombstone window honoured.
+- 890 / 890 unit tests passing across 110 unit test files.
+
+**Known incomplete or partial:**
+
+- No dedicated `proposal` table. Linker proposals live in their target edge table with `approved = false`. The `ApprovalService` linker writeback path is not exercised end-to-end yet.
+- `notient search --mode quick` from the CLI requires the Obsidian bridge and returns `BRIDGE_DOWN` without it. Only `balanced` and `deep` work without Obsidian. The internal agent-loop quick path is unaffected.
+- Vision attachment path (`src/agent/visionProbe.ts`, `LMStudioProvider.vision`) is wired but untested in the dogfood pass.
+- No `notes.delete` and no `notes.rename` chat tools. `notes.*` exposes only `create`, `append`, `replace_section`, `update_frontmatter`. Renames happen only through filesystem + watcher's tombstone-window heuristic.
+- `agents.contradiction_check` and `agents.synthesize` chat tools are Phase 5 no-op shells; the underlying agents do not yet write back.
+- The Obsidian bridge (`src/bridge/`) is a vestige of the pre-pivot plugin era. It is only required by the quick-search guard above.
+- Integration tests (`bun run test:integration`, `NOTIENT_SMOKE=1`) were not run in the most recent dogfood pass.
+
+---
+
+## Development
+
+```bash
+bun run typecheck         # tsc --noEmit (covers src/, testing/, tools/)
+bun run lint              # biome check src/ testing/
+bun run lint:fix          # biome check --write src/ testing/
+bun run format            # biome format --write src/ testing/
+bun run build             # alias for build:cli
+bun run build:cli         # bun tools/build-cli.ts → dist/notient.js
+bun run test              # bun test testing/unit (fast, no external deps)
+bun run test:integration  # NOTIENT_SMOKE=1 bun test testing/integration (spawns SurrealDB)
+bun run test:all          # test then test:integration
+```
+
+**Test layout.** No tests live under `src/`. Unit tests are in `testing/unit/<mirror>` and run on every CI push. Integration tests are in `testing/integration/<mirror>`, gated on `process.env.NOTIENT_SMOKE === "1"` via `describe.skipIf(...)`, and require the `surreal` binary on `PATH`. Shared markdown samples live in `testing/fixtures/markdown/`. Standalone live-LM-Studio harnesses in `tools/smoke-cli-phase{A,B,C,D,D1}.ts` exercise the daemon end-to-end and are not part of `bun test`.
+
+**Adding a test.** Mirror the source path under `testing/unit/` (or `testing/integration/` if it spawns SurrealDB, a subprocess, or real chokidar). Imports traverse back to source via `../../../../src/...`. Path aliases are `@/*` → `src/*` and `@core/*` → `src/core/*`.
+
+---
+
+## Philosophy
+
+- **Local-only.** No cloud APIs. Every model call hits a local OpenAI-compatible endpoint you run.
+- **Human-in-the-loop.** Writes are gated by an approval flow or an explicit session grant. The agent never silently mutates the vault.
+- **Citation-grounded.** Answers cite `[[wikilinks]]` to actual notes. The synthesis step in deep search and the `ask` agent both require evidence.
 
 ---
 
 ## License
 
-MIT License — Free to use, modify, distribute. Attribution appreciated.
-
----
-
-## Acknowledgments
-
-**Built with:** [Obsidian](https://obsidian.md) | [LM Studio](https://lmstudio.ai) | [Bun](https://bun.sh) | [esbuild](https://esbuild.github.io) | [Biome](https://biomejs.dev)
-
-**Inspired by:** [PARA Method](https://fortelabs.com/blog/para/) | [Zettelkasten](https://zettelkasten.de) | [Building a Second Brain](https://www.buildingasecondbrain.com)
-
----
-
-<p align="center">
-  <strong>Notient</strong> — Your Research Chief of Staff<br>
-  <em>Notes that think. Vaults that breathe. Knowledge that evolves.</em>
-</p>
-
-<p align="center">
-  <sub>Built with ❤️ and local LLMs by researchers, for researchers.</sub>
-</p>
+MIT. See `LICENSE`.

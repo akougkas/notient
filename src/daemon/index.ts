@@ -23,7 +23,7 @@ import { MethodDispatcher, parseEnvelope } from "./rpc";
 import { currentPlatform, resolveSocketPath } from "./socket";
 import { VaultWatcher } from "./watcher";
 
-const VERSION = "0.1.0-phaseA";
+const VERSION = "0.1.0-alpha";
 const DEFAULT_IDLE_HOURS = 4;
 const STATUS_PROBE_TIMEOUT_MS = 2_000;
 /**
