@@ -11,6 +11,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { runLinksAuditCommand } from "../../../../src/cli/commands/linksAudit";
+import { makeEmitter } from "../../../../src/cli/output";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -21,8 +23,6 @@ import {
 } from "../../../../src/core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-import { makeEmitter } from "../../../../src/cli/output";
-import { runLinksAuditCommand } from "../../../../src/cli/commands/linksAudit";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

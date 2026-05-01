@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { BlockSpec } from "../../../../src/core/markdown/types";
 import { chunkBlocks, chunkNote, tokenEstimate } from "../../../../src/core/indexer/chunker";
 import { CHUNK } from "../../../../src/core/indexer/concurrencyDefaults";
+import type { BlockSpec } from "../../../../src/core/markdown/types";
 
 describe("chunkNote", () => {
   test("returns single chunk for short note", async () => {

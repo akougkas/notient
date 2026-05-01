@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { probeToolMode, tryParseToolJson } from "../../../../src/core/chat/toolModeProbe";
+import type { ToolMode } from "../../../../src/core/chat/toolModeProbe";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type { EventOf } from "../../../../src/core/events/types";
 import type {
@@ -11,8 +13,6 @@ import type {
   JsonSchema,
   LLMProvider,
 } from "../../../../src/core/llm/provider";
-import { probeToolMode, tryParseToolJson } from "../../../../src/core/chat/toolModeProbe";
-import type { ToolMode } from "../../../../src/core/chat/toolModeProbe";
 
 interface ProbeOutcome {
   result: ChatWithToolsResult;

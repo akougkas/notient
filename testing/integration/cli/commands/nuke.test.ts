@@ -17,6 +17,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { DaemonStartHook, DaemonStopHook } from "../../../../src/cli/commands/daemonControl";
+import { runNukeCommand } from "../../../../src/cli/commands/nuke";
+import { makeEmitter } from "../../../../src/cli/output";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -30,9 +33,6 @@ import {
   vaultStateDir,
 } from "../../../../src/core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-import { makeEmitter } from "../../../../src/cli/output";
-import type { DaemonStartHook, DaemonStopHook } from "../../../../src/cli/commands/daemonControl";
-import { runNukeCommand } from "../../../../src/cli/commands/nuke";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

@@ -36,11 +36,11 @@ import type {
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
 import type { SearchEvent, SearchHit, SearchQuery } from "../../../../src/core/search/types";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import {
   type BriefSearchPipeline,
   makeAgentBriefHandler,
 } from "../../../../src/daemon/handlers/agentBrief";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

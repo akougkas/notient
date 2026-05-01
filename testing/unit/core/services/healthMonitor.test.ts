@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../../../src/core/llm/provider";
+import type {
+  ChatMessage,
+  ChatOptions,
+  JsonSchema,
+  LLMProvider,
+} from "../../../../src/core/llm/provider";
 import { HealthMonitor } from "../../../../src/core/services/healthMonitor";
 
 class FakeProvider implements LLMProvider {

@@ -16,11 +16,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { HistoryService } from "../../../../src/core/history/historyService";
 import type { Inverter } from "../../../../src/core/history/types";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

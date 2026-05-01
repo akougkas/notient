@@ -15,10 +15,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
-import { SESSION_GRANT_TTL_MAX_MINUTES, type SessionGrant, SessionGrants } from "../../../../src/core/services/sessionGrants";
+import {
+  SESSION_GRANT_TTL_MAX_MINUTES,
+  type SessionGrant,
+  SessionGrants,
+} from "../../../../src/core/services/sessionGrants";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

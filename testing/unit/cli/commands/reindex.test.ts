@@ -15,13 +15,13 @@ import { mkdir, mkdtemp, rm, unlink } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 import {
   DEFAULT_REINDEX_PATTERN,
   ReindexPatternError,
   resolveReindexPattern,
   runReindexCommand,
 } from "../../../../src/cli/commands/reindex";
+import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 
 interface FakeDaemon {
   framesReceived: Record<string, unknown>[];

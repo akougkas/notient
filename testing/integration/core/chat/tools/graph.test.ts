@@ -17,15 +17,20 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
-import { applySchema } from "../../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect, relateEdge, upsertNoteByPath } from "../../../../../src/core/db/surreal";
 import {
   type ClusterEntry,
   InMemoryClusterCache,
   makeFindPathTool,
   makeListClustersTool,
 } from "../../../../../src/core/chat/tools/graph";
+import { applySchema } from "../../../../../src/core/db/schemaApplier";
+import {
+  type SurrealConnection,
+  connect,
+  relateEdge,
+  upsertNoteByPath,
+} from "../../../../../src/core/db/surreal";
+import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

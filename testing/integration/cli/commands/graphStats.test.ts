@@ -8,12 +8,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { runGraphStatsCommand } from "../../../../src/cli/commands/graphStats";
+import { makeEmitter } from "../../../../src/cli/output";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../src/core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-import { makeEmitter } from "../../../../src/cli/output";
-import { runGraphStatsCommand } from "../../../../src/cli/commands/graphStats";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

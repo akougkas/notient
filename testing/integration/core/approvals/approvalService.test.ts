@@ -17,15 +17,23 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { RecordId } from "surrealdb";
+import type { RecordId } from "surrealdb";
 import { FsVault } from "../../../../src/adapters/fsVault";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import {
+  ApprovalService,
+  type WritebackEdgeTable,
+} from "../../../../src/core/approvals/approvalService";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect, lookupNoteByPath, upsertNoteByPath } from "../../../../src/core/db/surreal";
+import {
+  type SurrealConnection,
+  connect,
+  lookupNoteByPath,
+  upsertNoteByPath,
+} from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import { HistoryService } from "../../../../src/core/history/historyService";
 import { makeNoteAppendSectionInverter } from "../../../../src/core/history/inverters/noteAppendSection";
-import { ApprovalService, type WritebackEdgeTable } from "../../../../src/core/approvals/approvalService";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

@@ -11,13 +11,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
-import { applySchema } from "../../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect, relateEdge, upsertNoteByPath } from "../../../../../src/core/db/surreal";
-import type { SearchPipeline } from "../../../../../src/core/search/searchPipeline";
-import type { SearchEvent, SearchHit, SearchQuery } from "../../../../../src/core/search/types";
-import type { VitalsSnapshot } from "../../../../../src/core/vitals/types";
-import type { VitalsService } from "../../../../../src/core/vitals/vitalsService";
 import { ToolValidationError } from "../../../../../src/core/chat/tools/registry";
 import {
   type VaultFacade,
@@ -26,6 +19,18 @@ import {
   makeReadNoteTool,
   makeVaultSearchTool,
 } from "../../../../../src/core/chat/tools/vault";
+import { applySchema } from "../../../../../src/core/db/schemaApplier";
+import {
+  type SurrealConnection,
+  connect,
+  relateEdge,
+  upsertNoteByPath,
+} from "../../../../../src/core/db/surreal";
+import type { SearchPipeline } from "../../../../../src/core/search/searchPipeline";
+import type { SearchEvent, SearchHit, SearchQuery } from "../../../../../src/core/search/types";
+import type { VitalsSnapshot } from "../../../../../src/core/vitals/types";
+import type { VitalsService } from "../../../../../src/core/vitals/vitalsService";
+import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

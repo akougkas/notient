@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { createTranscriptDistiller } from "../../../../src/core/distill/transcriptDistiller";
+import type { TranscriptMessage } from "../../../../src/core/distill/transcriptParser";
 import type {
   ChatOptions,
   EmbedOptions,
@@ -6,8 +8,6 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
-import { createTranscriptDistiller } from "../../../../src/core/distill/transcriptDistiller";
-import type { TranscriptMessage } from "../../../../src/core/distill/transcriptParser";
 
 class StubProvider implements LLMProvider {
   public readonly chatCalls: ProviderChatMessage[][] = [];

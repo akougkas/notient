@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
-import { makeEmitter } from "../../../../src/cli/output";
 import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "../../../../src/cli/commands/ask";
+import { makeEmitter } from "../../../../src/cli/output";
+import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 
 interface FakeDaemon {
   server: Server;

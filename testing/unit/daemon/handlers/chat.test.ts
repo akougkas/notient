@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { VaultAdapter } from "../../../../src/adapters/vaultAdapter";
 import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
 import type { ChatService } from "../../../../src/core/chat/chatService";
-import { ConversationStore, type ConversationStoreFacade } from "../../../../src/core/chat/conversationStore";
+import {
+  ConversationStore,
+  type ConversationStoreFacade,
+} from "../../../../src/core/chat/conversationStore";
 import type { Conversation } from "../../../../src/core/chat/types";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import { makeChatHandlers } from "../../../../src/daemon/handlers/chat";

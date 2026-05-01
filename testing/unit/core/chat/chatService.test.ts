@@ -1,4 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
+import {
+  type ChatRuntimeSettings,
+  ChatService,
+  type ChatStreamEvent,
+} from "../../../../src/core/chat/chatService";
+import { ContextManager, type ContextSettingsView } from "../../../../src/core/chat/contextManager";
+import {
+  ConversationIndex,
+  type ConversationIndexFacade,
+  encodeBase64Float32,
+} from "../../../../src/core/chat/conversationIndex";
+import {
+  ConversationStore,
+  type ConversationStoreFacade,
+} from "../../../../src/core/chat/conversationStore";
+import type { ToolMode, ToolModeCache } from "../../../../src/core/chat/toolModeProbe";
+import { ToolRegistry } from "../../../../src/core/chat/tools/registry";
+import type { Conversation } from "../../../../src/core/chat/types";
 import { ReasoningMutex } from "../../../../src/core/coordinator/reasoningMutex";
 import type {
   ChatOptions,
@@ -11,18 +30,6 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
-import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
-import { type ChatRuntimeSettings, ChatService, type ChatStreamEvent } from "../../../../src/core/chat/chatService";
-import { ContextManager, type ContextSettingsView } from "../../../../src/core/chat/contextManager";
-import {
-  ConversationIndex,
-  type ConversationIndexFacade,
-  encodeBase64Float32,
-} from "../../../../src/core/chat/conversationIndex";
-import { ConversationStore, type ConversationStoreFacade } from "../../../../src/core/chat/conversationStore";
-import type { ToolMode, ToolModeCache } from "../../../../src/core/chat/toolModeProbe";
-import { ToolRegistry } from "../../../../src/core/chat/tools/registry";
-import type { Conversation } from "../../../../src/core/chat/types";
 
 interface ScriptedTurn {
   toolCalls?: ChatWithToolsToolCall[];

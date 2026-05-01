@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseBoundPort, parseSurrealVersion, stopStaleSurrealProcess } from "../../../src/daemon/surrealServer";
+import {
+  parseBoundPort,
+  parseSurrealVersion,
+  stopStaleSurrealProcess,
+} from "../../../src/daemon/surrealServer";
 
 const spawnedPids = new Set<number>();
 

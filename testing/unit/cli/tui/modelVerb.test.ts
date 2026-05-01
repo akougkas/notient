@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS } from "../../../../src/core/settings/types";
 import {
   buildEndpointPatch,
   buildModelView,
@@ -8,6 +7,7 @@ import {
   formatModelList,
   formatModelView,
 } from "../../../../src/cli/tui/modelVerb";
+import { DEFAULT_SETTINGS } from "../../../../src/core/settings/types";
 
 describe("buildModelView", () => {
   test("projects the relevant slots out of the persisted settings", () => {

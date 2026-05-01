@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { SessionGrant, SessionGrantFindQuery } from "../../../../src/core/services/sessionGrants";
 import {
   ApprovalGate,
   type ApprovalGateEvents,
@@ -8,6 +7,10 @@ import {
   extractFolder,
 } from "../../../../src/core/chat/approvalGate";
 import type { ToolCall } from "../../../../src/core/chat/types";
+import type {
+  SessionGrant,
+  SessionGrantFindQuery,
+} from "../../../../src/core/services/sessionGrants";
 
 function makeCall(id = "call-1", name = "notes.create"): ToolCall {
   return { id, name, args: { path: "/x.md" } };

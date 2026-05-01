@@ -17,7 +17,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import {
+  Linker,
+  type LinkerJsonResponse,
+  MAX_PROPOSALS_PER_NOTE,
+  RANK_TO_CONFIDENCE,
+  filterProposals,
+  filterProposalsForCandidates,
+} from "../../../../src/core/agents/linker";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -29,15 +36,13 @@ import {
   upsertNoteByPath,
 } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../../../src/core/llm/provider";
-import {
-  Linker,
-  type LinkerJsonResponse,
-  MAX_PROPOSALS_PER_NOTE,
-  RANK_TO_CONFIDENCE,
-  filterProposals,
-  filterProposalsForCandidates,
-} from "../../../../src/core/agents/linker";
+import type {
+  ChatMessage,
+  ChatOptions,
+  JsonSchema,
+  LLMProvider,
+} from "../../../../src/core/llm/provider";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

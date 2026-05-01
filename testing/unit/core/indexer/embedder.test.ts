@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Embedder } from "../../../../src/core/indexer/embedder";
 import type {
   ChatMessage,
   ChatOptions,
@@ -6,7 +7,6 @@ import type {
   JsonSchema,
   LLMProvider,
 } from "../../../../src/core/llm/provider";
-import { Embedder } from "../../../../src/core/indexer/embedder";
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {

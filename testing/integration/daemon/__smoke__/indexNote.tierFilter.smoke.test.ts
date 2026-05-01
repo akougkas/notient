@@ -37,7 +37,12 @@ import { Embedder } from "../../../../src/core/indexer/embedder";
 import { Extractor } from "../../../../src/core/indexer/extractor";
 import { indexNote } from "../../../../src/core/indexer/indexNote";
 import { EMBED_MODEL } from "../../../../src/core/indexer/tier2";
-import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../../../src/core/llm/provider";
+import type {
+  ChatMessage,
+  ChatOptions,
+  JsonSchema,
+  LLMProvider,
+} from "../../../../src/core/llm/provider";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";

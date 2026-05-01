@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import type { LLMProvider } from "../../../../src/core/llm/provider";
 import { Embedder } from "../../../../src/core/indexer/embedder";
 import { Extractor } from "../../../../src/core/indexer/extractor";
 import { indexNote } from "../../../../src/core/indexer/indexNote";
 import type { Extraction } from "../../../../src/core/indexer/types";
+import type { LLMProvider } from "../../../../src/core/llm/provider";
 
 function fakeProvider(extraction: Extraction, dim = 4): LLMProvider {
   return {

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { Surreal } from "surrealdb";
-import { DAEMON_RESTART_ORPHAN_REASON, reconcileAwakenOrphans } from "../../../../src/core/awaken/reconcileAwakenOrphans";
+import {
+  DAEMON_RESTART_ORPHAN_REASON,
+  reconcileAwakenOrphans,
+} from "../../../../src/core/awaken/reconcileAwakenOrphans";
 
 describe("reconcileAwakenOrphans", () => {
   test("marks running awaken rows failed with the restart orphan reason", async () => {

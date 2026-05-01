@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatLineKind, chatLineMeta, shouldRenderSpacer } from "../../../../src/cli/tui/chatLineStyles";
+import {
+  type ChatLineKind,
+  chatLineMeta,
+  shouldRenderSpacer,
+} from "../../../../src/cli/tui/chatLineStyles";
 
 describe("chatLineMeta", () => {
   test("user uses cyan label", () => {

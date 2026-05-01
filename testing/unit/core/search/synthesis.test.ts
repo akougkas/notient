@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatMessage, ChatOptions, JsonSchema, LLMProvider } from "../../../../src/core/llm/provider";
+import type {
+  ChatMessage,
+  ChatOptions,
+  JsonSchema,
+  LLMProvider,
+} from "../../../../src/core/llm/provider";
 import { parseSynthesis, synthesize } from "../../../../src/core/search/synthesis";
 import type { SearchHit } from "../../../../src/core/search/types";
 

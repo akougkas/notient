@@ -13,13 +13,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { runLinksSyncCommand } from "../../../../src/cli/commands/linksSync";
+import type { StructuredEvent } from "../../../../src/cli/output";
+import { makeEmitter } from "../../../../src/cli/output";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../src/core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-import type { StructuredEvent } from "../../../../src/cli/output";
-import { makeEmitter } from "../../../../src/cli/output";
-import { runLinksSyncCommand } from "../../../../src/cli/commands/linksSync";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

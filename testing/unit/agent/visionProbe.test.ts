@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { LLMProvider } from "../../../src/core/llm/provider";
 import { probeVisionRoute } from "../../../src/agent/visionProbe";
+import type { LLMProvider } from "../../../src/core/llm/provider";
 
 function makeProviderWithVision(supports: boolean): LLMProvider {
   return {

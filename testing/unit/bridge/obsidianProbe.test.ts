@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { EventBus } from "../../../src/core/events/eventBus";
 import { ObsidianProbe } from "../../../src/bridge/obsidianProbe";
+import { EventBus } from "../../../src/core/events/eventBus";
 
 interface BusEvent {
   type: string;

@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { Surreal } from "surrealdb";
+import {
+  ContextManager,
+  type ContextManagerOptions,
+  type ContextSettingsView,
+} from "../../../../src/core/chat/contextManager";
+import { ConversationIndex } from "../../../../src/core/chat/conversationIndex";
+import { encodeBase64Float32 } from "../../../../src/core/chat/conversationIndex";
+import type { ChatMessage, Conversation } from "../../../../src/core/chat/types";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import type { ContextOverflowWarningEvent, ContextSummarizedEvent } from "../../../../src/core/events/types";
+import type {
+  ContextOverflowWarningEvent,
+  ContextSummarizedEvent,
+} from "../../../../src/core/events/types";
 import type {
   ChatOptions,
   ChatWithToolsHandle,
@@ -11,14 +22,6 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
-import {
-  ContextManager,
-  type ContextManagerOptions,
-  type ContextSettingsView,
-} from "../../../../src/core/chat/contextManager";
-import { ConversationIndex } from "../../../../src/core/chat/conversationIndex";
-import { encodeBase64Float32 } from "../../../../src/core/chat/conversationIndex";
-import type { ChatMessage, Conversation } from "../../../../src/core/chat/types";
 
 interface CountRow {
   count: number;

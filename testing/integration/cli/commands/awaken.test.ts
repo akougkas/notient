@@ -14,17 +14,17 @@ import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DEFAULT_TIER_FILTER, parseTierCsv } from "../../../../src/cli/commands/awaken";
+import { runAwakenCancel } from "../../../../src/cli/commands/awakenCancel";
+import { runAwakenPause } from "../../../../src/cli/commands/awakenPause";
+import { runAwakenResume } from "../../../../src/cli/commands/awakenResume";
+import { runAwakenStatus } from "../../../../src/cli/commands/awakenStatus";
 import { createRun, updateStatus } from "../../../../src/core/awaken/awakenRun";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
 import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-import { DEFAULT_TIER_FILTER, parseTierCsv } from "../../../../src/cli/commands/awaken";
-import { runAwakenCancel } from "../../../../src/cli/commands/awakenCancel";
-import { runAwakenPause } from "../../../../src/cli/commands/awakenPause";
-import { runAwakenResume } from "../../../../src/cli/commands/awakenResume";
-import { runAwakenStatus } from "../../../../src/cli/commands/awakenStatus";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

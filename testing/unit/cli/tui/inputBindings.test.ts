@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildTextareaKeyBindings, computeInputHeight } from "../../../../src/cli/tui/inputBindings";
+import {
+  buildTextareaKeyBindings,
+  computeInputHeight,
+} from "../../../../src/cli/tui/inputBindings";
 
 describe("buildTextareaKeyBindings", () => {
   test("Enter alone submits the buffer", () => {

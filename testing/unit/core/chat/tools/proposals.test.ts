@@ -21,11 +21,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DateTime, type RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
-import { ApprovalService, type WritebackEdgeTable } from "../../../../../src/core/approvals/approvalService";
-import { applySchema } from "../../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../../src/core/db/surreal";
-import { EventBus } from "../../../../../src/core/events/eventBus";
+import type {
+  ApprovalService,
+  WritebackEdgeTable,
+} from "../../../../../src/core/approvals/approvalService";
 import { ApprovalGate } from "../../../../../src/core/chat/approvalGate";
 import {
   makeApproveProposalTool,
@@ -33,6 +32,14 @@ import {
   makeListProposalsTool,
   makeRejectProposalTool,
 } from "../../../../../src/core/chat/tools/proposals";
+import { applySchema } from "../../../../../src/core/db/schemaApplier";
+import {
+  type SurrealConnection,
+  connect,
+  upsertNoteByPath,
+} from "../../../../../src/core/db/surreal";
+import { EventBus } from "../../../../../src/core/events/eventBus";
+import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

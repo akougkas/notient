@@ -5,7 +5,11 @@ import { AwakenBackgroundRegistry } from "../../../../src/core/awaken/background
 import type { SurrealConnection } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type { IndexerQueue } from "../../../../src/core/indexer/indexerQueue";
-import { makeAwakenHandler, makeAwakenResumeHandler, makeReindexHandler } from "../../../../src/daemon/handlers/awaken";
+import {
+  makeAwakenHandler,
+  makeAwakenResumeHandler,
+  makeReindexHandler,
+} from "../../../../src/daemon/handlers/awaken";
 
 interface RecordedEnqueue {
   path: string;

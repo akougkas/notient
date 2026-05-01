@@ -4,7 +4,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -15,6 +14,7 @@ import {
 } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import { prepareNoteRow, runTier1 } from "../../../../src/core/indexer/tier1";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 function sha256Hex(input: string): string {
   return createHash("sha256").update(input).digest("hex");

@@ -1,4 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { type AgentLoopEvent, runAgentTurn } from "../../../../src/core/chat/agentLoop";
+import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
+import {
+  type ToolDefinition,
+  type ToolJsonSchema,
+  ToolRegistry,
+} from "../../../../src/core/chat/tools/registry";
+import type { Conversation, ToolCall } from "../../../../src/core/chat/types";
 import type {
   ChatOptions,
   ChatWithToolsEvent,
@@ -11,10 +19,6 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
-import { type AgentLoopEvent, runAgentTurn } from "../../../../src/core/chat/agentLoop";
-import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
-import { type ToolDefinition, type ToolJsonSchema, ToolRegistry } from "../../../../src/core/chat/tools/registry";
-import type { Conversation, ToolCall } from "../../../../src/core/chat/types";
 
 interface ScriptedTurn {
   contentChunks?: string[];

@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visit } from "unist-util-visit";
-import { getMarkdownPipeline, parse, processAst, stringify } from "../../../../src/core/markdown/pipeline";
+import {
+  getMarkdownPipeline,
+  parse,
+  processAst,
+  stringify,
+} from "../../../../src/core/markdown/pipeline";
 
 const goldenPath = join(import.meta.dir, "../../../fixtures/markdown", "golden.md");
 

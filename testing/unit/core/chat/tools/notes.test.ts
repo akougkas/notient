@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { ApprovalGate } from "../../../../../src/core/chat/approvalGate";
-import type { ApprovalMode } from "../../../../../src/core/chat/types";
 import {
   type NotesFacade,
   type NotesHistoryRecord,
@@ -12,6 +11,7 @@ import {
   mergeFrontmatter,
   replaceSection,
 } from "../../../../../src/core/chat/tools/notes";
+import type { ApprovalMode } from "../../../../../src/core/chat/types";
 
 async function waitForPending(
   gate: ApprovalGate,

@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { Surreal } from "surrealdb";
+import { buildAgentToolRegistry } from "../../../src/agent/toolBundle";
 import type { ApprovalService } from "../../../src/core/approvals/approvalService";
 import { ApprovalGate } from "../../../src/core/chat/approvalGate";
 import type { Agent, AgentRunResult } from "../../../src/core/coordinator/types";
 import { EventBus } from "../../../src/core/events/eventBus";
 import type { SearchPipeline } from "../../../src/core/search/searchPipeline";
 import type { VitalsService } from "../../../src/core/vitals/vitalsService";
-import { buildAgentToolRegistry } from "../../../src/agent/toolBundle";
 
 function noopAgent(name: Agent["name"]): Agent {
   return {

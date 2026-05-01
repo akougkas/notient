@@ -34,7 +34,11 @@ import { EventBus } from "../../../src/core/events/eventBus";
 import { HistoryService } from "../../../src/core/history/historyService";
 import type { HistoryKind } from "../../../src/core/history/types";
 import { Kernel } from "../../../src/core/kernel";
-import { buildHistoryInverters, buildRecordHistoryAutoApprove, readEnvSource } from "../../../src/daemon/bootstrap";
+import {
+  buildHistoryInverters,
+  buildRecordHistoryAutoApprove,
+  readEnvSource,
+} from "../../../src/daemon/bootstrap";
 import { type SurrealServerHandle, startSurreal } from "../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";

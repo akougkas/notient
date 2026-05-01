@@ -12,7 +12,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DateTime, RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -21,6 +20,7 @@ import {
   recordDaemonWrite,
   upsertNoteByPath,
 } from "../../../../src/core/db/surreal";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

@@ -18,10 +18,13 @@ import * as path from "node:path";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { SessionGrants } from "../../../../src/core/services/sessionGrants";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { makeSessionGrantHandler } from "../../../../src/daemon/handlers/sessionGrant";
-import { type SessionListEntry, makeSessionListHandler } from "../../../../src/daemon/handlers/sessionList";
+import {
+  type SessionListEntry,
+  makeSessionListHandler,
+} from "../../../../src/daemon/handlers/sessionList";
 import { makeSessionRevokeHandler } from "../../../../src/daemon/handlers/sessionRevoke";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

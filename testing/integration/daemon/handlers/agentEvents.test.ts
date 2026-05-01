@@ -20,7 +20,6 @@ import { type SurrealConnection, connect } from "../../../../src/core/db/surreal
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type { EventHandler, EventType } from "../../../../src/core/events/types";
 import { AgentEventStore } from "../../../../src/core/services/agentEventStore";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import {
   AGENT_EVENTS_DEFAULT_LIMIT,
   AGENT_EVENTS_DEFAULT_LONG_POLL_MS,
@@ -28,6 +27,7 @@ import {
   AGENT_EVENTS_MAX_LONG_POLL_MS,
   createAgentEventsHandler,
 } from "../../../../src/daemon/handlers/agentEvents";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 

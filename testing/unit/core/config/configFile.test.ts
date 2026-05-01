@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Embedder } from "../../../../src/core/indexer/embedder";
-import type { LLMProvider } from "../../../../src/core/llm/provider";
 import {
   DEFAULT_CONFIG,
   defaultConfigToml,
   loadVaultConfig,
   writeDefaultConfigIfAbsent,
 } from "../../../../src/core/config/configFile";
+import { Embedder } from "../../../../src/core/indexer/embedder";
+import type { LLMProvider } from "../../../../src/core/llm/provider";
 
 async function makeVault(): Promise<string> {
   return await mkdtemp(join(tmpdir(), "notient-config-"));

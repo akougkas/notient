@@ -3,10 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { prepareNoteRow, runTier1 } from "../../../../src/core/indexer/tier1";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 /**
  * Regression coverage for cross-note edge resolution determinism.

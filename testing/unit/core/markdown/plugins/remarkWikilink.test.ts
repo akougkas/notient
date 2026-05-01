@@ -3,7 +3,10 @@ import type { Root } from "mdast";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
-import remarkWikilink, { type WikiEmbedNode, type WikiLinkNode } from "../../../../../src/core/markdown/plugins/remarkWikilink";
+import remarkWikilink, {
+  type WikiEmbedNode,
+  type WikiLinkNode,
+} from "../../../../../src/core/markdown/plugins/remarkWikilink";
 
 function parse(source: string): Root {
   return unified().use(remarkParse).use(remarkWikilink).parse(source) as Root;

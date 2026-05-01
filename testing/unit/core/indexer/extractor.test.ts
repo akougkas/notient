@@ -3,9 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RecordId, type Surreal, Table } from "surrealdb";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../src/core/db/surreal";
+import {
+  Extractor,
+  filterNoiseEntities,
+  writeExtractionToSurreal,
+} from "../../../../src/core/indexer/extractor";
+import type { Chunk } from "../../../../src/core/indexer/types";
 import type {
   ChatMessage,
   ChatOptions,
@@ -13,8 +18,7 @@ import type {
   JsonSchema,
   LLMProvider,
 } from "../../../../src/core/llm/provider";
-import { Extractor, filterNoiseEntities, writeExtractionToSurreal } from "../../../../src/core/indexer/extractor";
-import type { Chunk } from "../../../../src/core/indexer/types";
+import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 function chunk(text: string, ord = 0): Chunk {
   return {

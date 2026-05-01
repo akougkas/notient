@@ -4,14 +4,14 @@ import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
-import { makeEmitter } from "../../../../src/cli/output";
 import {
   parseEventsLongPollMs,
   parseEventsPositiveInt,
   parseEventsSince,
   runEventsCommand,
 } from "../../../../src/cli/commands/events";
+import { makeEmitter } from "../../../../src/cli/output";
+import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 
 interface FakeDaemon {
   server: Server;

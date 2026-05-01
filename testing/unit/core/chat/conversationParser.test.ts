@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { parseConversation, serializeConversation } from "../../../../src/core/chat/conversationParser";
+import {
+  parseConversation,
+  serializeConversation,
+} from "../../../../src/core/chat/conversationParser";
 import type { ChatMessage, Conversation } from "../../../../src/core/chat/types";
 
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {

@@ -14,7 +14,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createRun, findById, findCurrent, updateStatus } from "../../../../src/core/awaken/awakenRun";
+import {
+  createRun,
+  findById,
+  findCurrent,
+  updateStatus,
+} from "../../../../src/core/awaken/awakenRun";
 import {
   DAEMON_RESTART_ORPHAN_REASON,
   reconcileAwakenOrphans,
