@@ -52,7 +52,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -sSf https://install.surrealdb.com | sh -s -- --version v3.0.5 "$HOME/.local/bin"
+          # The upstream installer mis-parses a positional install directory under dash.
+          curl -sSfL https://github.com/surrealdb/surrealdb/releases/download/v3.0.5/surreal-v3.0.5.linux-amd64.tgz \
+            | tar -xz -C "$HOME/.local/bin" surreal
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Verify SurrealDB version
@@ -70,7 +72,7 @@ jobs:
       - run: bun run test:integration
 
   candidate:
-    name: Installed pre-release candidate
+    name: Installed release package
     needs: [unit, integration]
     runs-on: ubuntu-latest
     steps:
@@ -82,8 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -sSf https://install.surrealdb.com | sh -s -- --version v3.0.5 "$HOME/.local/bin"
+          # The upstream installer mis-parses a positional install directory under dash.
+          curl -sSfL https://github.com/surrealdb/surrealdb/releases/download/v3.0.5/surreal-v3.0.5.linux-amd64.tgz \
+            | tar -xz -C "$HOME/.local/bin" surreal
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Verify SurrealDB version
+        run: surreal version
       - run: bun install --frozen-lockfile
       - run: bun install --cwd integrations/obsidian --frozen-lockfile
       - run: bun run release:prepare
@@ -96,6 +102,6 @@ jobs:
           bun run release:check "${packages[0]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: notient-local-candidate-${{ github.sha }}
+          name: notient-package-${{ github.sha }}
           path: artifacts/*/*
           if-no-files-found: error
