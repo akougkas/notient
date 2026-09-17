@@ -1,17 +1,6 @@
 /**
- * Phase 3 Tier 3 smoke harness.
- *
- * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
- * or directly via `NOTIENT_SMOKE=1 bun test src/core/indexer/tier3.test.ts`.
- *
- * Boots a real SurrealDB, applies the schema, seeds Tier 1 (note + blocks)
- * for an active note plus a chunk-only neighbour with `tier3_at` set so the
- * linker's kNN candidate filter accepts it. Mocks the LLM provider for both
- * the extractor and the linker, runs `runTier3`, and asserts:
- *   - extractor edges (`mentions`, `asserts`, `asks`) land with
- *     `approved = true` and the right targets;
- *   - linker `supports` edge lands with `approved = false`;
- *   - the active note's `tier3_at` advances.
+ * Real-Surreal Tier 3 coverage for extracted findings, reviewed Linker edges,
+ * durable run provenance, persisted swarm events, and the completion stamp.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -20,15 +9,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { Linker } from "../../../../src/core/agents/linker";
+import { AgentRunExecutor } from "../../../../src/core/coordinator/agentRunExecutor";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
+import { parseUuidRecordId } from "../../../../src/core/db/recordId";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
   connect,
+  fetchChunksForTier3,
   lookupNoteByPath,
+  markTier2Done,
   markTier3Done,
   replaceChunks,
   upsertNoteByPath,
 } from "../../../../src/core/db/surreal";
+import { EventBus } from "../../../../src/core/events/eventBus";
 import { Extractor } from "../../../../src/core/indexer/extractor";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
 import { type Tier3Chunk, runTier3 } from "../../../../src/core/indexer/tier3";
@@ -38,12 +33,13 @@ import type {
   JsonSchema,
   LLMProvider,
 } from "../../../../src/core/llm/provider";
+import { AgentEventStore } from "../../../../src/core/services/agentEventStore";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "tier3-fixture", dimension: VECTOR_DIM } as const;
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
@@ -88,6 +84,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -96,25 +93,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     await runTier1(connection.db, {
       notePath: activePath,
       source: activeNoteSource,
       vaultPaths: [activePath],
+      bus: new EventBus(),
     });
 
     const activeId = await lookupNoteByPath(connection.db, activePath);
     if (activeId === null) {
       throw new Error("setup: failed to find active note after Tier 1");
     }
-    await replaceChunks(connection.db, activeId, [
+    await replaceChunks(connection.db, activeId, EMBEDDING_IDENTITY, [
       {
         ord: 0,
         text: "A paragraph about POSIX limits in distributed file systems.",
         tokenEstimate: 12,
         vector: vectorOf(0.42),
-        embedModel: EMBED_MODEL,
       },
     ]);
 
@@ -123,17 +120,20 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
       sha: "neighbor-sha",
       wordCount: 8,
     });
-    await replaceChunks(connection.db, neighborId, [
+    await replaceChunks(connection.db, neighborId, EMBEDDING_IDENTITY, [
       {
         ord: 0,
         text: "Distributed POSIX assumptions break at scale.",
         tokenEstimate: 8,
         vector: vectorOf(0.42),
-        embedModel: EMBED_MODEL,
       },
     ]);
+    // linkerNeighbors gates candidates on `tier2_at`, which real Tier 2 stamps
+    // after replaceChunks. The seeding here bypasses Tier 2, so stamp it
+    // explicitly or the neighbour is invisible to the kNN probe.
+    await markTier2Done(connection.db, neighborId);
     await markTier3Done(connection.db, neighborId);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -145,14 +145,24 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("[smoke] persists extractor + linker findings and stamps tier3_at", async () => {
+    const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
     const extractorProvider = fakeProvider({
       chatJson: async <T>() =>
-        ({ entities: ["POSIX"], claims: ["POSIX is leaky."], questions: ["Why?"] }) as T,
+        ({
+          entities: [{ label: "POSIX", kind: "system", chunkRefs: [0] }],
+          claims: [{ text: "POSIX is leaky.", kind: "assertion", chunkRefs: [0] }],
+          questions: [{ text: "Why?", chunkRefs: [0] }],
+        }) as T,
     });
-    const extractor = new Extractor(extractorProvider, { model: "test-extractor-model" });
+    const extractor = new Extractor(extractorProvider, {
+      model: "test-extractor-model",
+      scheduler,
+
+      concurrency: 1,
+    });
 
     const linkerProvider = fakeProvider({
       chatJson: async <T>(_messages: ChatMessage[], _opts: ChatOptions, _schema: JsonSchema) =>
@@ -161,9 +171,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
             {
               targetNotePath: neighborPath,
               type: "supports",
-              confidence: 0.85,
               rationale: "Both notes argue POSIX limits.",
-              evidenceChunkIds: ["chunk-0"],
             },
           ],
         }) as T,
@@ -173,29 +181,51 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
       provider: linkerProvider,
       reasoningModel: "test-linker-model",
     });
+    const bus = new EventBus();
+    const eventStore = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
+    const executor = new AgentRunExecutor({ db: connection.db, bus, scheduler, now: Date.now });
+    const runLinker = executor.bind(linker);
 
-    const inputChunks: Tier3Chunk[] = [
-      {
-        ord: 0,
-        text: "A paragraph about POSIX limits in distributed file systems.",
-        vector: vectorOf(0.42),
-      },
-    ];
+    // Read the real chunk rows so each Tier3Chunk carries its `chunk` record
+    // id; that is what lets the windowed extractor's chunkRefs land in the
+    // `evidence` field on the extractor edges.
+    const activeNoteId = await lookupNoteByPath(connection.db, activePath);
+    if (activeNoteId === null) throw new Error("test: active note vanished");
+    const inputChunks: Tier3Chunk[] = await fetchChunksForTier3(
+      connection.db,
+      activeNoteId,
+      EMBEDDING_IDENTITY,
+    );
+    expect(inputChunks).toHaveLength(1);
 
     const result = await runTier3(connection.db, {
       notePath: activePath,
       chunks: inputChunks,
       extractor,
-      linker,
+      runLinker,
     });
 
+    // One chunk fits in one extraction window and uses one structured-output call.
+    expect(result.extractionWindows).toBe(1);
+    expect(result.llmCalls).toBe(1);
+
+    type MentionsRow = {
+      approved: boolean;
+      agent: string;
+      source: string;
+      class: string;
+      evidence: unknown[] | undefined;
+    };
     const [mentionsRows] = await connection.db
-      .query<[Array<{ approved: boolean; agent: string; source: string; class: string }>]>(
-        "SELECT approved, agent, source, class FROM mentions WHERE in = $note;",
+      .query<[MentionsRow[]]>(
+        "SELECT approved, agent, source, class, evidence FROM mentions WHERE in = $note;",
         { note: result.noteId },
       )
-      .collect<[Array<{ approved: boolean; agent: string; source: string; class: string }>]>();
+      .collect<[MentionsRow[]]>();
     expect(mentionsRows.length).toBe(1);
+    // Chunk-level evidence survives windowed extraction.
+    expect(mentionsRows[0].evidence?.length).toBe(1);
+    expect(String(mentionsRows[0].evidence?.[0])).toBe(String(inputChunks[0].id));
     expect(mentionsRows[0].approved).toBe(true);
     expect(mentionsRows[0].agent).toBe("extractor");
     expect(mentionsRows[0].source).toBe("extractor");
@@ -261,6 +291,47 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
     expect(supportsRows[0].agent).toBe("linker");
     expect(supportsRows[0].source).toBe("linker");
 
+    eventStore.dispose();
+    await eventStore.drain();
+    const persistedSwarmEvents = (await eventStore.since(null, 100)).filter(
+      (event) => event.type === "swarm:link_proposed",
+    );
+    const swarmRunIds = persistedSwarmEvents.map((event) => {
+      const payload = event.payload as { runId?: unknown };
+      expect(typeof payload.runId).toBe("string");
+      expect(payload.runId).toMatch(/^agent_run:u"[0-9a-f-]{36}"$/);
+      return payload.runId as string;
+    });
+    expect(swarmRunIds).toHaveLength(1);
+    const [runRows] = await connection.db
+      .query<
+        [
+          Array<{
+            id: RecordId<"agent_run">;
+            trigger: string;
+            ok: boolean;
+            finished_at?: Date | string;
+          }>,
+        ]
+      >("SELECT id, trigger, ok, finished_at FROM agent_run WHERE id IN $runIds;", {
+        runIds: swarmRunIds.map((runId) => parseUuidRecordId(runId, "agent_run", "runId")),
+      })
+      .collect<
+        [
+          Array<{
+            id: RecordId<"agent_run">;
+            trigger: string;
+            ok: boolean;
+            finished_at?: Date | string;
+          }>,
+        ]
+      >();
+    expect(runRows).toHaveLength(swarmRunIds.length);
+    expect(runRows[0].id.toString()).toBe(swarmRunIds[0]);
+    expect(runRows[0].trigger).toBe("vault-save");
+    expect(runRows[0].ok).toBe(true);
+    expect(runRows[0].finished_at).toBeDefined();
+
     const [noteRows] = await connection.db
       .query<[Array<{ tier3_at: string | null }>]>("SELECT tier3_at FROM note WHERE id = $note;", {
         note: result.noteId,
@@ -271,18 +342,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] runTier3", () => {
   });
 
   test("[smoke] throws when active note is not in SurrealDB", async () => {
-    const extractor = new Extractor(fakeProvider({}), { model: "noop" });
+    const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
+    const extractor = new Extractor(fakeProvider({}), { model: "noop", scheduler, concurrency: 1 });
     const linker = new Linker({
       db: connection.db,
       provider: fakeProvider({}),
       reasoningModel: "noop",
+    });
+    const executor = new AgentRunExecutor({
+      db: connection.db,
+      bus: new EventBus(),
+      scheduler,
+      now: Date.now,
     });
     await expect(
       runTier3(connection.db, {
         notePath: "missing.md",
         chunks: [],
         extractor,
-        linker,
+        runLinker: executor.bind(linker),
       }),
     ).rejects.toThrow("runTier3: note not found by path 'missing.md'");
   });

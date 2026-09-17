@@ -1,9 +1,9 @@
 /**
- * agent.distill RPC handler (Phase D1 T5).
+ * `agent.distill` RPC handler.
  *
- * Ingests an external transcript (markdown / JSONL / JSON) supplied by an
- * external skill, runs the TranscriptDistiller against it, and lands
- * candidate proposals as markdown files under
+ * Ingests a transcript from one canonical public Markdown file in the vault,
+ * runs the TranscriptDistiller against it, and lands candidate proposals as
+ * markdown files under
  * `<vault>/Notient/proposals/distilled-*.md`.
  *
  * Why a new agent instead of reusing Synthesizer:
@@ -18,39 +18,80 @@
  *
  * The TranscriptDistiller in `core/distill/transcriptDistiller.ts` runs a
  * single LLM call against a parsed transcript and returns the four-kind
- * candidate list directly. The handler stays thin: it parses, calls the
- * distiller, and writes proposal files.
+ * candidate list directly. A live result is then treated as one write batch:
+ * every exact path and body is prepared before one `agent.distill` approval,
+ * and an approval creates the notes through VaultAdapter with one guarded
+ * `notes.create` history row per file. Dry runs stop before the gate.
  *
- * Path resolution accepts both vault-relative and absolute paths so a caller
- * can point at `~/.claude/projects/<slug>/*.jsonl` files that live outside
- * the vault. Both forms reject `..` traversal.
+ * Path authorization accepts one canonical vault-relative spelling and pins
+ * the reachable set to ordinary Markdown and exact native conversation paths.
+ * Absolute paths are not a second spelling for the same authority. JSON and
+ * JSONL transcript bodies remain supported inside an ordinary
+ * `.md` file; their old filename extensions are not a second file-read
+ * authority. The per-vault state dir
+ * (`~/.notient/<vaultId>/`) is deliberately not reachable: it holds
+ * `admin.token`, `secret.key` and the SurrealDB data dir, and `agent.distill`
+ * is a `write` method any agent principal may call, so a reachable state dir
+ * would let an agent launder the admin token into a proposal note it can then
+ * read. Chat transcripts live under `<vault>/Notient/conversations/`, so the
+ * vault root is the only root the runtime needs. The actual read is one
+ * descriptor-anchored vault operation: each ancestor refuses symlinks, the
+ * final descriptor must be a regular file, and a max+1 sentinel enforces the
+ * hard byte ceiling even if the file grows. Hidden paths, Notient-owned
+ * artifacts other than exact conversations, special files, links, traversal,
+ * and oversized inputs are rejected before the distiller.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  type VaultAdapter,
+  VaultPathError,
+  VaultReadLimitError,
+} from "../../adapters/vaultAdapter";
+import type { ApprovalGate } from "../../core/chat/approvalGate";
+import { parseConversation } from "../../core/chat/conversationParser";
+import type { NotesHistoryRecord } from "../../core/chat/tools/notes";
+import type { ApprovalMode } from "../../core/chat/types";
 import type { Candidate, TranscriptDistiller } from "../../core/distill/transcriptDistiller";
 import {
   type TranscriptFormat,
   type TranscriptMessage,
+  buildTranscriptMessages,
   detectFormat,
   parseTranscript,
 } from "../../core/distill/transcriptParser";
-import { encodeEvent } from "../rpc";
+import type { DurableNoteWriteResult } from "../../core/history/durableNoteWriter";
+import {
+  isCanonicalConversationPath,
+  isCanonicalOrdinaryNotePath,
+} from "../../core/vault/publicPath";
+import { type MethodHandler, type Principal, RpcError, encodeEvent } from "../rpc";
+import {
+  type NonBlockingApprovalTracker,
+  invokeWithNonBlockingApproval,
+} from "./nonBlockingApproval";
 
 export interface AgentDistillHandlerDeps {
-  vaultRoot: string;
   distiller: TranscriptDistiller;
+  vault: Pick<VaultAdapter, "exists" | "readBounded">;
+  approvalGate: ApprovalGate;
+  approvalTracker?: NonBlockingApprovalTracker;
+  approvalMode: () => ApprovalMode;
+  applyWrite: (record: NotesHistoryRecord) => Promise<DurableNoteWriteResult>;
+  /** Content hash recorded in each successful proposal receipt. */
+  hash: (content: string) => Promise<string>;
+  now?: () => number;
+  generateCallId?: () => string;
 }
 
-export type AgentDistillHandler = (
-  params: Record<string, unknown>,
-  emit: (line: string) => void,
-  envelopeId: string,
-  clientIdentity: string,
-) => Promise<Record<string, unknown>>;
+export type AgentDistillHandler = MethodHandler;
 
 const PROPOSALS_FOLDER = "Notient/proposals";
 const TITLE_MAX_CHARS = 80;
+const PREVIEW_BODY_MAX_CHARS = 800;
+const PREVIEW_BATCH_MAX_CHARS = 8_000;
+/** Bound provider input and memory use even if the opened file grows during the read. */
+export const AGENT_DISTILL_MAX_TRANSCRIPT_BYTES = 1_048_576;
 const SUPPORTED_FORMATS: ReadonlySet<TranscriptFormat> = new Set([
   "auto",
   "markdown",
@@ -64,69 +105,211 @@ interface ParsedDistillParams {
   dryRun: boolean;
 }
 
+interface ProposalPlan {
+  path: string;
+  body: string;
+}
+
+interface ProposalWriteReceipt {
+  path: string;
+  sha: string;
+  historyId: string;
+}
+
+type BatchApplyResult =
+  | { applied: true; writes: ProposalWriteReceipt[] }
+  | { applied: false; reason: string; writes: ProposalWriteReceipt[] };
+
 export function makeAgentDistillHandler(deps: AgentDistillHandlerDeps): AgentDistillHandler {
-  return async (params, emit, envelopeId, clientIdentity) => {
-    const startedAt = Date.now();
+  const now = deps.now ?? Date.now;
+  const generateCallId = deps.generateCallId ?? (() => `agent-distill-${randomUUID()}`);
+
+  return async ({ params, emit, requestId, principal }) => {
+    const startedAt = now();
     const parsed = parseDistillParams(params);
-    const absolutePath = resolveTranscriptPath(parsed.transcriptPath, deps.vaultRoot);
-    const content = await readTranscriptFile(absolutePath, parsed.transcriptPath);
-    const format = parsed.format === "auto" ? detectFormat(content, absolutePath) : parsed.format;
-    const messages = parseTranscript(content, format);
-    // Path B fallback. `parseTranscript` returns an empty array when the
-    // input lacks transcript markers (e.g., a plain vault note). The
-    // distiller would then short-circuit to `[]` and the CLI would return
-    // an empty result with no signal. Treat the file body as a single
-    // synthetic user message so the LLM still runs, and emit a
-    // `distill:fallback` event so the caller knows the path was taken.
-    let inputMessages = messages;
-    if (inputMessages.length === 0) {
-      emit(
-        encodeEvent(envelopeId, "distill:fallback", {
-          reason: "non-transcript",
-          transcriptPath: parsed.transcriptPath,
-        }),
-      );
-      inputMessages = [
-        {
-          sourceMessageId: `vault-note:${basename(absolutePath)}`,
-          role: "user",
-          content,
-        },
-      ];
-    }
-    const candidates = await deps.distiller.distill(inputMessages);
-    const proposalsCreated = parsed.dryRun
-      ? 0
-      : await writeProposalFiles({
-          vaultRoot: deps.vaultRoot,
-          candidates,
-          transcriptPath: parsed.transcriptPath,
-          clientIdentity,
-        });
+    const messages = await readAuthorizedTranscript(parsed, deps.vault, principal);
+    const candidates = await deps.distiller.distill(messages);
+    const callId = generateCallId();
+    const createdAt = now();
+    const plans = planProposals({
+      candidates,
+      transcriptPath: parsed.transcriptPath,
+      clientIdentity: principal.id,
+      createdAt,
+      batchToken: proposalBatchToken(callId),
+    });
+    const proposalPaths = plans.map((plan) => plan.path);
     const byKind = tallyByKind(candidates);
-    return {
+    const baseResult = (): Record<string, unknown> => ({
       ok: true,
       candidates,
-      proposalsCreated,
+      proposalPaths,
       byKind,
-      durationMs: Date.now() - startedAt,
+      durationMs: now() - startedAt,
+    });
+
+    if (parsed.dryRun) {
+      return {
+        ...baseResult(),
+        dryRun: true,
+        applied: false,
+        pending: false,
+        denied: false,
+        proposalsCreated: 0,
+        writes: [],
+      };
+    }
+
+    if (plans.length === 0) {
+      return {
+        ...baseResult(),
+        dryRun: false,
+        applied: true,
+        pending: false,
+        denied: false,
+        proposalsCreated: 0,
+        writes: [],
+      };
+    }
+
+    // Refuse a stale or colliding plan before asking a human to approve it.
+    // The same check runs again after approval because a call may remain
+    // parked while another process creates one of these paths.
+    const existingPath = await findExistingPath(deps.vault, plans);
+    if (existingPath !== null) {
+      return deniedResult(baseResult(), `path already exists: ${existingPath}`, []);
+    }
+
+    const preview = renderBatchPreview(plans);
+    const outcome = await invokeWithNonBlockingApproval({
+      approvalGate: deps.approvalGate,
+      tracker: deps.approvalTracker,
+      callId,
+      invoke: (signal) =>
+        approveAndApplyBatch({
+          deps,
+          plans,
+          callId,
+          clientIdentity: principal.id,
+          transcriptPath: parsed.transcriptPath,
+          preview,
+          signal,
+        }),
+    });
+
+    if (outcome.kind === "pending") {
+      return {
+        ...baseResult(),
+        dryRun: false,
+        applied: false,
+        pending: true,
+        denied: false,
+        proposalsCreated: 0,
+        writes: [],
+        callId,
+        preview: outcome.preview,
+      };
+    }
+
+    if (!outcome.value.applied) {
+      return deniedResult(baseResult(), outcome.value.reason, outcome.value.writes);
+    }
+
+    return {
+      ...baseResult(),
+      dryRun: false,
+      applied: true,
+      pending: false,
+      denied: false,
+      proposalsCreated: outcome.value.writes.length,
+      writes: outcome.value.writes,
     };
   };
 }
 
+async function readAuthorizedTranscript(
+  parsed: ParsedDistillParams,
+  vault: Pick<VaultAdapter, "readBounded">,
+  principal: Pick<Principal, "id" | "kind">,
+): Promise<TranscriptMessage[]> {
+  const authorizedPath = authorizeTranscriptPath(parsed.transcriptPath);
+  const content = await readTranscriptFile(vault, parsed.transcriptPath);
+  const conversation =
+    authorizedPath.kind === "conversation"
+      ? authorizeConversationTranscript({
+          vaultPath: authorizedPath.vaultPath,
+          content,
+          principalKind: principal.kind,
+          principalId: principal.id,
+        })
+      : null;
+  // Every authorized filename ends in `.md`, so a filename hint would force
+  // Markdown and defeat supported JSON/JSONL content sniffing.
+  const format = parsed.format === "auto" ? detectFormat(content) : parsed.format;
+  const messages =
+    conversation === null
+      ? parseTranscript(content, format)
+      : buildTranscriptMessages(
+          conversation.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        );
+  if (messages.length > 0) return messages;
+  throw new RpcError(
+    "INVALID_PARAMS",
+    `transcript contains no ${format} messages: ${parsed.transcriptPath}`,
+  );
+}
+
+interface ConversationTranscriptAuthorization {
+  vaultPath: string;
+  content: string;
+  principalKind: "human" | "agent";
+  principalId: string;
+}
+
+function authorizeConversationTranscript(
+  options: ConversationTranscriptAuthorization,
+): ReturnType<typeof parseConversation> {
+  let conversation: ReturnType<typeof parseConversation>;
+  try {
+    conversation = parseConversation(options.content, options.vaultPath);
+  } catch {
+    throw new RpcError("INVALID_PARAMS", "canonical conversation transcript is malformed");
+  }
+  if (options.principalKind === "human" || conversation.clientIdentity === options.principalId) {
+    return conversation;
+  }
+  throw new RpcError(
+    "FORBIDDEN",
+    "agent may distill only its own canonical conversation transcripts",
+  );
+}
+
 function parseDistillParams(params: Record<string, unknown>): ParsedDistillParams {
+  const keys = Object.keys(params);
+  if (keys.some((key) => key !== "transcriptPath" && key !== "format" && key !== "dryRun")) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      "agent.distill accepts only transcriptPath, format, and dryRun",
+    );
+  }
   const rawPath = params.transcriptPath;
-  if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
-    throw new Error("INVALID_PARAMS: transcriptPath is required");
+  if (typeof rawPath !== "string" || rawPath.length === 0 || rawPath.trim() !== rawPath) {
+    throw new RpcError("INVALID_PARAMS", "transcriptPath must be one exact non-empty string");
   }
   if (containsParentTraversal(rawPath)) {
-    throw new Error("INVALID_PARAMS: transcriptPath must not contain '..' traversal segments");
+    throw new RpcError("INVALID_PARAMS", "transcriptPath must not contain '..' traversal segments");
   }
   const rawFormat = params.format ?? "auto";
   if (typeof rawFormat !== "string" || !SUPPORTED_FORMATS.has(rawFormat as TranscriptFormat)) {
-    throw new Error("INVALID_PARAMS: format must be one of auto | markdown | jsonl | json");
+    throw new RpcError("INVALID_PARAMS", "format must be one of auto | markdown | jsonl | json");
   }
-  const dryRun = params.dryRun === true;
+  if (params.dryRun !== undefined && typeof params.dryRun !== "boolean") {
+    throw new RpcError("INVALID_PARAMS", "dryRun must be a boolean when provided");
+  }
+  const dryRun = params.dryRun ?? false;
   return {
     transcriptPath: rawPath,
     format: rawFormat as TranscriptFormat,
@@ -139,50 +322,203 @@ function containsParentTraversal(path: string): boolean {
   return segments.some((segment) => segment === "..");
 }
 
-function resolveTranscriptPath(transcriptPath: string, vaultRoot: string): string {
-  if (isAbsolute(transcriptPath)) return transcriptPath;
-  return resolve(vaultRoot, transcriptPath);
+type AuthorizedTranscriptKind = "ordinary" | "conversation";
+
+interface AuthorizedTranscriptPath {
+  vaultPath: string;
+  kind: AuthorizedTranscriptKind;
 }
 
-async function readTranscriptFile(absolutePath: string, displayPath: string): Promise<string> {
+function authorizeTranscriptPath(transcriptPath: string): AuthorizedTranscriptPath {
+  const vaultPath = transcriptPath;
+  const kind: AuthorizedTranscriptKind | null = isCanonicalConversationPath(vaultPath)
+    ? "conversation"
+    : isCanonicalOrdinaryNotePath(vaultPath)
+      ? "ordinary"
+      : null;
+  if (kind === null) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      "transcriptPath must name canonical public Markdown or an exact conversation",
+    );
+  }
+
+  return {
+    vaultPath,
+    kind,
+  };
+}
+
+async function readTranscriptFile(
+  vault: Pick<VaultAdapter, "readBounded">,
+  displayPath: string,
+): Promise<string> {
   try {
-    return await readFile(absolutePath, "utf-8");
+    return await vault.readBounded(displayPath, AGENT_DISTILL_MAX_TRANSCRIPT_BYTES);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    if (reason.includes("ENOENT")) {
-      throw new Error(`transcript file not found: ${displayPath}`);
-    }
-    throw new Error(`failed to read transcript ${displayPath}: ${reason}`);
+    return throwTranscriptOpenError(error, displayPath);
   }
 }
 
-interface WriteProposalsOptions {
-  vaultRoot: string;
+function throwTranscriptOpenError(error: unknown, displayPath: string): never {
+  if (error instanceof VaultReadLimitError) {
+    throw new RpcError("INVALID_PARAMS", `transcript exceeds ${error.maxBytes} byte limit`);
+  }
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === "ENOENT") {
+    throw new RpcError("INVALID_PARAMS", `transcript file not found: ${displayPath}`);
+  }
+  if (error instanceof VaultPathError) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      "transcriptPath must name a readable regular file without symbolic links",
+    );
+  }
+  throw new RpcError("INVALID_PARAMS", `transcript is not a readable regular file: ${displayPath}`);
+}
+
+interface PlanProposalsOptions {
   candidates: Candidate[];
   transcriptPath: string;
   clientIdentity: string;
+  createdAt: number;
+  batchToken: string;
 }
 
-async function writeProposalFiles(options: WriteProposalsOptions): Promise<number> {
-  if (options.candidates.length === 0) return 0;
-  const proposalsDir = join(options.vaultRoot, PROPOSALS_FOLDER);
-  await mkdir(proposalsDir, { recursive: true });
-  const createdAt = Date.now();
-  let written = 0;
-  for (let index = 0; index < options.candidates.length; index++) {
-    const candidate = options.candidates[index];
-    const seq = index + 1;
-    const filename = `distilled-${createdAt}-${candidate.kind}-${seq}.md`;
-    const body = renderProposalBody({
-      candidate,
-      transcriptPath: options.transcriptPath,
-      clientIdentity: options.clientIdentity,
-      createdAt,
-    });
-    await writeFile(join(proposalsDir, filename), body, "utf-8");
-    written++;
+function planProposals(options: PlanProposalsOptions): ProposalPlan[] {
+  return options.candidates.map((candidate, index) => {
+    const sequence = index + 1;
+    const filename = `distilled-${options.createdAt}-${candidate.kind}-${sequence}-${options.batchToken}.md`;
+    return {
+      path: `${PROPOSALS_FOLDER}/${filename}`,
+      body: renderProposalBody({
+        candidate,
+        transcriptPath: options.transcriptPath,
+        clientIdentity: options.clientIdentity,
+        createdAt: options.createdAt,
+      }),
+    };
+  });
+}
+
+/** Keep filenames collision-resistant without exposing arbitrary call-id bytes. */
+function proposalBatchToken(callId: string): string {
+  const token = callId
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(-16);
+  return token.length > 0 ? token : randomUUID().replaceAll("-", "").slice(0, 16);
+}
+
+interface ApplyBatchOptions {
+  deps: AgentDistillHandlerDeps;
+  plans: ProposalPlan[];
+  callId: string;
+  clientIdentity: string;
+  transcriptPath: string;
+  preview: string;
+  signal: AbortSignal;
+}
+
+async function approveAndApplyBatch(options: ApplyBatchOptions): Promise<BatchApplyResult> {
+  const proposalPaths = options.plans.map((plan) => plan.path);
+  const decision = await options.deps.approvalGate.request(
+    {
+      id: options.callId,
+      name: "agent.distill",
+      // ApprovalGate derives the grant folder from `path`. Keeping the first
+      // exact proposal path here scopes the whole batch to
+      // `Notient/proposals/`; `proposalPaths` is retained for the audit row.
+      args: {
+        path: proposalPaths[0],
+        proposalPaths,
+        transcriptPath: options.transcriptPath,
+        proposals: proposalPaths.length,
+      },
+    },
+    options.deps.approvalMode(),
+    options.preview,
+    options.signal,
+    { clientIdentity: options.clientIdentity },
+  );
+  if (!decision.approved) {
+    return { applied: false, reason: decision.reason, writes: [] };
   }
-  return written;
+
+  const existingPath = await findExistingPath(options.deps.vault, options.plans);
+  if (existingPath !== null) {
+    return { applied: false, reason: `path already exists: ${existingPath}`, writes: [] };
+  }
+
+  // Finish all pure preparation before the first mutation. Each proposal then
+  // crosses the durable intent -> exclusive create -> history close boundary.
+  // A later collision cannot roll back an earlier committed history receipt;
+  // the caller receives that exact committed prefix instead of a false
+  // all-or-nothing result.
+  const shas = await Promise.all(options.plans.map((plan) => options.deps.hash(plan.body)));
+  const writes: ProposalWriteReceipt[] = [];
+  for (let index = 0; index < options.plans.length; index++) {
+    const plan = options.plans[index];
+    const sha = shas[index];
+    if (plan === undefined || sha === undefined) {
+      throw new Error("agent.distill: proposal plan and hash count diverged");
+    }
+    const receipt = await options.deps.applyWrite({
+      ...options.deps.approvalGate.writeGuard(decision, options.signal),
+      kind: "notes.create",
+      target: plan.path,
+      before: null,
+      after: plan.body,
+      clientIdentity: options.clientIdentity,
+    });
+    if (!receipt.applied) {
+      return { applied: false, reason: `path already exists: ${plan.path}`, writes };
+    }
+    writes.push({ path: plan.path, sha, historyId: receipt.historyId });
+  }
+  return { applied: true, writes };
+}
+
+async function findExistingPath(
+  vault: Pick<VaultAdapter, "exists">,
+  plans: readonly ProposalPlan[],
+): Promise<string | null> {
+  for (const plan of plans) {
+    if (await vault.exists(plan.path)) return plan.path;
+  }
+  return null;
+}
+
+function deniedResult(
+  base: Record<string, unknown>,
+  reason: string,
+  writes: readonly ProposalWriteReceipt[],
+): Record<string, unknown> {
+  return {
+    ...base,
+    dryRun: false,
+    applied: false,
+    pending: false,
+    denied: true,
+    proposalsCreated: writes.length,
+    writes,
+    partial: writes.length > 0,
+    reason,
+  };
+}
+
+function renderBatchPreview(plans: readonly ProposalPlan[]): string {
+  const manifest = plans.map((plan) => `- ${plan.path}`).join("\n");
+  const sections = plans.map((plan) => {
+    const body =
+      plan.body.length <= PREVIEW_BODY_MAX_CHARS
+        ? plan.body
+        : `${plan.body.slice(0, PREVIEW_BODY_MAX_CHARS)}\n... (${plan.body.length - PREVIEW_BODY_MAX_CHARS} more chars)`;
+    return `Create ${plan.path}\n---\n${body}`;
+  });
+  const preview = `Create ${plans.length} distilled proposal note${plans.length === 1 ? "" : "s"}\n\nPaths:\n${manifest}\n\nContents:\n${sections.join("\n\n")}`;
+  if (preview.length <= PREVIEW_BATCH_MAX_CHARS) return preview;
+  return `${preview.slice(0, PREVIEW_BATCH_MAX_CHARS)}\n... (batch preview truncated)`;
 }
 
 interface RenderProposalOptions {

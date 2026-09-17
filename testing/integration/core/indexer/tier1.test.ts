@@ -52,6 +52,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -60,11 +61,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     await upsertNoteByPath(connection.db, { path: otherPath, sha: "other-sha", wordCount: 1 });
     await upsertNoteByPath(connection.db, { path: alsoPath, sha: "also-sha", wordCount: 1 });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -76,13 +77,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("inserts blocks including one with block_id = 'para-1'", async () => {
     const result = await runTier1(connection.db, {
       notePath: activePath,
       source: fixtureNote,
       vaultPaths,
+      bus: new EventBus(),
     });
     expect(result.noteId).toBeDefined();
 
@@ -95,6 +97,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 1 indexer", () => {
     expect(blocks.length).toBeGreaterThan(0);
     const explicit = blocks.find((row) => row.block_id === "para-1");
     expect(explicit).toBeDefined();
+  });
+
+  test("persists an H6 heading as level 6 end to end", async () => {
+    const deepPath = "notes/deep-heading.md";
+    const result = await runTier1(connection.db, {
+      notePath: deepPath,
+      source: "# Root\n\n###### Deep truth\n\nThis note keeps its full depth.\n",
+      vaultPaths: [...vaultPaths, deepPath],
+      bus: new EventBus(),
+    });
+    const [blocks] = await connection.db
+      .query<[Array<{ heading_level?: number; heading_slug?: string }>]>(
+        "SELECT heading_level, heading_slug FROM block WHERE note = $note AND heading_slug = 'deep-truth';",
+        { note: result.noteId },
+      )
+      .collect<[Array<{ heading_level?: number; heading_slug?: string }>]>();
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.heading_level).toBe(6);
   });
 
   test("note.sha equals sha-256 of the raw file body (frontmatter included)", async () => {
@@ -161,6 +182,7 @@ First mention #dupe and second mention #dupe.
       notePath: duplicatePath,
       source: duplicateFixture,
       vaultPaths: [...vaultPaths, duplicatePath],
+      bus: new EventBus(),
     });
 
     const [tagRows] = await connection.db
@@ -175,6 +197,27 @@ First mention #dupe and second mention #dupe.
       )
       .collect<[Array<{ count: number }>]>();
     expect(edgeRows[0]?.count ?? 0).toBe(2);
+  });
+
+  test("stores Unicode and emoji tags under one case-insensitive identity", async () => {
+    const unicodePath = "notes/unicode-tags.md";
+    const source =
+      '---\ntags: ["#Café"]\n---\n# Reading #📚Books\n\nNotes on #café, #日本語 and #emoji✨. \\#escaped #2024\n';
+    const result = await runTier1(connection.db, {
+      notePath: unicodePath,
+      source,
+      vaultPaths: [...vaultPaths, unicodePath],
+      bus: new EventBus(),
+    });
+    const [rows] = await connection.db
+      .query<[Array<{ path: string }>]>(
+        "SELECT VALUE out.path AS path FROM tagged WHERE in = $note OR in.note = $note;",
+        { note: result.noteId },
+      )
+      .collect<[Array<{ path: string }>]>();
+    expect([...new Set(rows as unknown as string[])].sort()).toEqual(
+      ["café", "emoji✨", "日本語", "📚books"].sort(),
+    );
   });
 
   test("frontmatter_ref edge exists from active to other.md", async () => {
@@ -200,6 +243,7 @@ First mention #dupe and second mention #dupe.
       notePath: activePath,
       source: fixtureNote,
       vaultPaths,
+      bus: new EventBus(),
     });
 
     const [afterCount] = await connection.db
@@ -212,7 +256,12 @@ First mention #dupe and second mention #dupe.
     expect(after).toBe(before);
   });
 
-  test("rolls back the entire transaction when a tag CREATE violates the schema regex", async () => {
+  test("rolls back the entire transaction when a tag CREATE violates the schema", async () => {
+    // Parser and storage share one tag grammar, so force a storage refusal for
+    // this run only and restore the managed definition afterwards.
+    await connection.db
+      .query("DEFINE FIELD OVERWRITE path ON tag TYPE string ASSERT $value != '_badtag';")
+      .collect();
     const badNotePath = "notes/rollback.md";
     const badFixture = `# Rollback Heading
 
@@ -224,9 +273,12 @@ A paragraph with [[rollback-only-missing-target]] and a #rollbackonlytag and an 
         notePath: badNotePath,
         source: badFixture,
         vaultPaths: [...vaultPaths, badNotePath],
+        bus: new EventBus(),
       });
     } catch {
       threwError = true;
+    } finally {
+      await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
     }
     expect(threwError).toBe(true);
 
@@ -328,6 +380,7 @@ A paragraph that links to [[target]] but the body has more text now.
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -336,7 +389,7 @@ A paragraph that links to [[target]] but the body has more text now.
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
     await upsertNoteByPath(connection.db, {
       path: targetPath,
       sha: "target-sha",
@@ -347,7 +400,7 @@ A paragraph that links to [[target]] but the body has more text now.
       sha: "other-sha",
       wordCount: 1,
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -359,16 +412,19 @@ A paragraph that links to [[target]] but the body has more text now.
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  async function fetchSingleWikilinkSource(noteId: RecordId<"note">): Promise<string> {
+  async function fetchSingleWikilinkProvenance(
+    noteId: RecordId<"note">,
+  ): Promise<{ source: string; agent?: string }> {
     const [rows] = await connection.db
-      .query<[Array<{ source: string }>]>("SELECT source FROM wikilink WHERE in.note = $note;", {
-        note: noteId,
-      })
-      .collect<[Array<{ source: string }>]>();
+      .query<[Array<{ source: string; agent?: string }>]>(
+        "SELECT source, agent FROM wikilink WHERE in.note = $note;",
+        { note: noteId },
+      )
+      .collect<[Array<{ source: string; agent?: string }>]>();
     expect(rows.length).toBe(1);
-    return rows[0].source;
+    return rows[0];
   }
 
   async function fetchActiveNoteSha(noteId: RecordId<"note">): Promise<string> {
@@ -384,12 +440,13 @@ A paragraph that links to [[target]] but the body has more text now.
       notePath: activePath,
       source: sourceWithTargetLink,
       vaultPaths,
+      bus: new EventBus(),
     });
-    const source = await fetchSingleWikilinkSource(result.noteId);
-    expect(source).toBe("wikilink");
+    const provenance = await fetchSingleWikilinkProvenance(result.noteId);
+    expect(provenance).toEqual({ source: "wikilink", agent: undefined });
   });
 
-  test("wikilink edge gets source=<agent> when daemon_write matches noteId+sha+target", async () => {
+  test("wikilink keeps canonical source and attributes an arbitrary MCP client", async () => {
     const noteId = await lookupNoteByPath(connection.db, activePath);
     expect(noteId).not.toBeNull();
     if (noteId === null) return;
@@ -401,7 +458,7 @@ A paragraph that links to [[target]] but the body has more text now.
     await recordDaemonWrite(connection.db, {
       noteId,
       sha: currentSha,
-      agent: "linker",
+      agent: "claude-code",
       targets: [targetId],
     });
 
@@ -409,10 +466,11 @@ A paragraph that links to [[target]] but the body has more text now.
       notePath: activePath,
       source: sourceWithTargetLink,
       vaultPaths,
+      bus: new EventBus(),
     });
 
-    const source = await fetchSingleWikilinkSource(noteId);
-    expect(source).toBe("linker");
+    const provenance = await fetchSingleWikilinkProvenance(noteId);
+    expect(provenance).toEqual({ source: "wikilink", agent: "claude-code" });
   });
 
   test("wikilink keeps source='wikilink' when daemon_write targets do not include the link target (sha collision alone is insufficient)", async () => {
@@ -440,10 +498,11 @@ A paragraph that links to [[target]] but the body has more text now.
       notePath: activePath,
       source: sourceWithTargetLink,
       vaultPaths,
+      bus: new EventBus(),
     });
 
-    const source = await fetchSingleWikilinkSource(noteId);
-    expect(source).toBe("wikilink");
+    const provenance = await fetchSingleWikilinkProvenance(noteId);
+    expect(provenance).toEqual({ source: "wikilink", agent: undefined });
   });
 
   test("wikilink keeps source='wikilink' when daemon_write sha differs from the current body sha", async () => {
@@ -472,12 +531,13 @@ A paragraph that links to [[target]] but the body has more text now.
       notePath: activePath,
       source: sourceWithDifferentBody,
       vaultPaths,
+      bus: new EventBus(),
     });
     const newSha = await fetchActiveNoteSha(noteId);
     expect(newSha).not.toBe(previousSha);
 
-    const source = await fetchSingleWikilinkSource(noteId);
-    expect(source).toBe("wikilink");
+    const provenance = await fetchSingleWikilinkProvenance(noteId);
+    expect(provenance).toEqual({ source: "wikilink", agent: undefined });
   });
 });
 
@@ -513,6 +573,7 @@ Third paragraph anchors the note. ^anchor-1
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -521,13 +582,13 @@ Third paragraph anchors the note. ^anchor-1
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
     await upsertNoteByPath(connection.db, {
       path: peerPath,
       sha: "peer-sha",
       wordCount: 1,
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -539,7 +600,7 @@ Third paragraph anchors the note. ^anchor-1
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   async function countBlocksForNote(noteId: RecordId<"note">): Promise<number> {
     const [rows] = await connection.db
@@ -566,6 +627,7 @@ Third paragraph anchors the note. ^anchor-1
       notePath: activePath,
       source: fixture,
       vaultPaths,
+      bus: new EventBus(),
     });
     const expectedBlocks = first.extraction.blocks.length;
     expect(expectedBlocks).toBeGreaterThan(1);
@@ -579,6 +641,7 @@ Third paragraph anchors the note. ^anchor-1
       notePath: activePath,
       source: fixture,
       vaultPaths,
+      bus: new EventBus(),
     });
     const blocksAfterSecond = await countBlocksForNote(first.noteId);
     const containedAfterSecond = await countContainedInForNote(first.noteId);
@@ -589,6 +652,7 @@ Third paragraph anchors the note. ^anchor-1
       notePath: activePath,
       source: fixture,
       vaultPaths,
+      bus: new EventBus(),
     });
     const blocksAfterThird = await countBlocksForNote(first.noteId);
     const containedAfterThird = await countContainedInForNote(first.noteId);
@@ -640,6 +704,7 @@ describe.skipIf(!SMOKE_ENABLED)(
         portFile: path.join(tempDir, "port"),
         pidFile: path.join(tempDir, "pid"),
         logLevel: "warn",
+        hnswCacheMib: 64,
       });
       connection = await connect({
         url: handle.url,
@@ -648,7 +713,7 @@ describe.skipIf(!SMOKE_ENABLED)(
         namespace: "notient",
         database: "vault",
       });
-      await applySchema(connection.db, secret);
+      await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
       await upsertNoteByPath(connection.db, {
         path: targetPath,
         sha: "target-sha",
@@ -659,7 +724,7 @@ describe.skipIf(!SMOKE_ENABLED)(
         sha: "other-sha",
         wordCount: 1,
       });
-    });
+    }, 30_000);
 
     afterAll(async () => {
       if (connection !== undefined) {
@@ -671,17 +736,19 @@ describe.skipIf(!SMOKE_ENABLED)(
       if (tempDir !== undefined) {
         await rm(tempDir, { recursive: true, force: true });
       }
-    });
+    }, 30_000);
 
-    async function fetchSingleFrontmatterRefSource(noteId: RecordId<"note">): Promise<string> {
+    async function fetchSingleFrontmatterRefProvenance(
+      noteId: RecordId<"note">,
+    ): Promise<{ source: string; agent?: string }> {
       const [rows] = await connection.db
-        .query<[Array<{ source: string }>]>(
-          "SELECT source FROM frontmatter_ref WHERE in = $note;",
+        .query<[Array<{ source: string; agent?: string }>]>(
+          "SELECT source, agent FROM frontmatter_ref WHERE in = $note;",
           { note: noteId },
         )
-        .collect<[Array<{ source: string }>]>();
+        .collect<[Array<{ source: string; agent?: string }>]>();
       expect(rows.length).toBe(1);
-      return rows[0].source;
+      return rows[0];
     }
 
     async function fetchActiveNoteSha(noteId: RecordId<"note">): Promise<string> {
@@ -692,13 +759,14 @@ describe.skipIf(!SMOKE_ENABLED)(
       return rows[0].sha;
     }
 
-    test("frontmatter_ref edge gets source=<agent> when daemon_write matches noteId+sha+target", async () => {
+    test("frontmatter_ref keeps canonical source and attributes the daemon client", async () => {
       // Seed the active note via Tier 1 first so a record id and sha exist
       // for the daemon_write row to reference.
       const seeded = await runTier1(connection.db, {
         notePath: activePath,
         source: sourceWithFrontmatterSupports,
         vaultPaths,
+        bus: new EventBus(),
       });
       const noteId = seeded.noteId;
       const targetId = await lookupNoteByPath(connection.db, targetPath);
@@ -712,7 +780,7 @@ describe.skipIf(!SMOKE_ENABLED)(
       await recordDaemonWrite(connection.db, {
         noteId,
         sha: currentSha,
-        agent: "linker",
+        agent: "claude-code",
         targets: [targetId],
       });
 
@@ -720,10 +788,11 @@ describe.skipIf(!SMOKE_ENABLED)(
         notePath: activePath,
         source: sourceWithFrontmatterSupports,
         vaultPaths,
+        bus: new EventBus(),
       });
 
-      const source = await fetchSingleFrontmatterRefSource(noteId);
-      expect(source).toBe("linker");
+      const provenance = await fetchSingleFrontmatterRefProvenance(noteId);
+      expect(provenance).toEqual({ source: "frontmatter", agent: "claude-code" });
     });
 
     test("frontmatter_ref keeps source='frontmatter' when daemon_write targets do not include the resolved target", async () => {
@@ -749,10 +818,11 @@ describe.skipIf(!SMOKE_ENABLED)(
         notePath: activePath,
         source: sourceWithFrontmatterSupports,
         vaultPaths,
+        bus: new EventBus(),
       });
 
-      const source = await fetchSingleFrontmatterRefSource(noteId);
-      expect(source).toBe("frontmatter");
+      const provenance = await fetchSingleFrontmatterRefProvenance(noteId);
+      expect(provenance).toEqual({ source: "frontmatter", agent: undefined });
     });
   },
 );

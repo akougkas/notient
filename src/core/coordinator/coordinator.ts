@@ -1,259 +1,242 @@
-import type { Surreal } from "surrealdb";
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import { NoteCatalogService } from "../../api/catalog";
+import { contentRevision } from "../../api/notes";
+import { type PipelineId, pipelineIdSchema } from "../../api/operations";
+import type { PipelineJob } from "../../api/pipelines";
+import type { NoteReference } from "../../api/schema";
+import { insideFolder } from "../../api/scope";
 import type { EventBus } from "../events/eventBus";
-import type { ReasoningMutex } from "./reasoningMutex";
-import type { Agent, AgentName, AgentRunContext, AgentTrigger } from "./types";
-
-export interface CoordinatorAgents {
-  linker: Agent;
-  synthesizer: Agent;
-  contradictionHunter: Agent;
-  maturityAdvancer: Agent;
-}
+import type { JobService } from "../pipelines/jobService";
+import { insideOperatingWindow, nextOperatingTime } from "../pipelines/schedule";
+import type { SentienceActivity } from "../services/sentienceActivity";
+import type { SettingsService } from "../settings/settingsService";
 
 export interface CoordinatorOptions {
   bus: EventBus;
-  /**
-   * SurrealDB connection. Phase 5 Task 3 migrated `agent_run` writes off the
-   * SQLite mirror; the wire-shape numeric `runId` is preserved by the `seq`
-   * pattern Phase 4 Task 12 established for `agent_event` and `agent_session`.
-   */
-  db: Surreal;
-  mutex: ReasoningMutex;
-  agents: CoordinatorAgents;
+  jobs: JobService;
+  settings: SettingsService;
+  vault: VaultAdapter;
+  activity: Pick<SentienceActivity, "snapshot">;
+  now?: () => number;
+}
+export interface PipelineScheduleStatus {
+  lastRun: number | null;
+  nextRun: number | null;
+  reason: string;
 }
 
-interface CreatedRunRow {
-  seq: number;
-}
-
-interface StartedAgentRun {
-  agent: Agent;
-  trigger: AgentTrigger;
-  notePath: string | null;
-  startedAt: number;
-  runId: number;
-}
-
+/** Finite, explicitly enabled background scheduling over the durable job path. */
 export class Coordinator {
   private readonly subs: Array<() => void> = [];
-  private inflight: Set<Promise<unknown>> = new Set();
-  private activeNotePath: string | null = null;
-  private userActive = false;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
-
-  constructor(private readonly opts: CoordinatorOptions) {}
-
-  setActiveNote(path: string | null): void {
-    this.activeNotePath = path;
+  private pending: Promise<void> = Promise.resolve();
+  private ticking = false;
+  private readonly saves = new Map<string, number>();
+  private readonly status = new Map<PipelineId, PipelineScheduleStatus>();
+  private readonly now: () => number;
+  constructor(private readonly opts: CoordinatorOptions) {
+    this.now = opts.now ?? Date.now;
   }
-
   start(): void {
     if (this.running) return;
     this.running = true;
-    const { bus } = this.opts;
+    this.opts.jobs.resume();
     this.subs.push(
-      bus.on("vault:note-saved", (event) => {
-        this.userActive = false;
-        this.dispatch("vault-save", event.path, ["linker"]);
-      }),
-      bus.on("user:active", () => {
-        this.userActive = true;
-      }),
-      bus.on("user:idle", (event) => {
-        if (event.level === "30s") {
-          this.dispatch("idle-30s", this.activeNotePath, ["linker"]);
-        } else if (event.level === "5m") {
-          this.dispatch("idle-5m", this.activeNotePath, ["synthesizer", "contradictionHunter"]);
-        } else if (event.level === "30m") {
-          this.dispatch("idle-30m", null, ["maturityAdvancer"]);
-        }
-      }),
-      bus.on("user:action", (event) => {
-        if (event.kind === "deepen") {
-          this.dispatch("user-action", event.notePath, [
-            "linker",
-            "synthesizer",
-            "contradictionHunter",
-            "maturityAdvancer",
-          ]);
-        }
-      }),
-      bus.on("active-leaf-change", (event) => {
-        this.activeNotePath = event.notePath;
+      this.opts.bus.on("sentience:activity", (event) => {
+        // The watcher has already checked the daemon mutation journal. Focus,
+        // polling and Notient writes never manufacture a save trigger.
+        if (
+          event.activeNotePath &&
+          ["vault:add", "vault:change", "vault:rename"].includes(event.source)
+        )
+          this.saves.set(event.activeNotePath, this.now());
       }),
     );
+    this.timer = setInterval(() => {
+      void this.tick().catch((error) => this.report(error));
+    }, 1000);
+    this.timer.unref();
+    void this.tick().catch((error) => this.report(error));
   }
-
   stop(): void {
     this.running = false;
-    for (const off of this.subs) off();
-    this.subs.length = 0;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    for (const off of this.subs.splice(0)) off();
+    this.opts.jobs.suspend();
   }
-
-  /** Resolves once all dispatched agent runs complete. Used by tests. */
   async idle(): Promise<void> {
-    while (this.inflight.size > 0) {
-      await Promise.allSettled(Array.from(this.inflight));
-    }
+    await this.pending;
+    await this.opts.jobs.idle();
   }
-
-  private dispatch(trigger: AgentTrigger, notePath: string | null, agents: AgentName[]): void {
+  schedule(pipeline: PipelineId): PipelineScheduleStatus {
+    return (
+      this.status.get(pipeline) ?? {
+        lastRun: null,
+        nextRun: null,
+        reason: "Scheduler has not inspected this policy yet.",
+      }
+    );
+  }
+  tick(): Promise<void> {
+    if (this.ticking) return this.pending;
+    this.ticking = true;
+    const work = this.pending
+      .catch(() => {})
+      .then(() => this.tickSerial())
+      .finally(() => {
+        this.ticking = false;
+      });
+    this.pending = work;
+    return work;
+  }
+  private async tickSerial(): Promise<void> {
     if (!this.running) return;
-    if (this.userActive && trigger.startsWith("idle")) return;
-    const promise = this.runConcurrent(trigger, notePath, agents).finally(() => {
-      this.inflight.delete(promise);
-    });
-    this.inflight.add(promise);
-  }
-
-  private async runConcurrent(
-    trigger: AgentTrigger,
-    notePath: string | null,
-    agents: AgentName[],
-  ): Promise<void> {
-    const runs: StartedAgentRun[] = [];
-    for (const name of agents) {
-      const agent = this.opts.agents[name];
-      runs.push(await this.startRun(agent, trigger, notePath));
-    }
-    await Promise.all(runs.map((run) => this.finishRun(run)));
-  }
-
-  private async startRun(
-    agent: Agent,
-    trigger: AgentTrigger,
-    notePath: string | null,
-  ): Promise<StartedAgentRun> {
-    const startedAt = Date.now();
-    const runId = await this.createRun(agent.name, trigger, notePath, startedAt);
-    this.opts.bus.emit({
-      type: "agent:run-started",
-      agent: agent.name,
-      trigger,
-      notePath,
-      runId,
-    });
-    return { agent, trigger, notePath, startedAt, runId };
-  }
-
-  private async finishRun(run: StartedAgentRun): Promise<void> {
-    let proposals = 0;
-    let ok = false;
-    let errorMessage: string | undefined;
+    // Invalid disk configuration closes execution until the owner corrects it.
     try {
-      const result = await this.executeAgent(run.agent, {
-        trigger: run.trigger,
-        notePath: run.notePath,
-        runId: run.runId,
-      });
-      proposals = result.proposals;
-      ok = true;
+      await this.opts.settings.refreshBackground();
     } catch (error) {
-      errorMessage = (error as Error).message ?? String(error);
+      this.opts.jobs.suspend();
+      throw error;
     }
-    const finishedAt = Date.now();
-    await this.finalizeRun(run.runId, finishedAt, ok, errorMessage, proposals);
-    this.opts.bus.emit({
-      type: "agent:run-finished",
-      agent: run.agent.name,
-      ok,
-      proposals,
-      durationMs: finishedAt - run.startedAt,
-      error: errorMessage,
-      runId: run.runId,
-    });
+    this.opts.jobs.resume();
+    const configuration = this.opts.settings.background();
+    const at = this.now();
+    const jobs = await this.opts.jobs.options.store.list(10000);
+    for (const pipeline of pipelineIdSchema.options) {
+      const policy = configuration.settings.pipelines[pipeline];
+      const prior = jobs.filter((job) => job.background && job.pipeline === pipeline);
+      const last = prior.reduce<number | null>(
+        (value, job) => Math.max(value ?? 0, job.createdAt),
+        null,
+      );
+      const state: PipelineScheduleStatus = { lastRun: last, nextRun: null, reason: "" };
+      this.status.set(pipeline, state);
+      if (configuration.settings.paused) {
+        state.reason = "All background pipelines are paused.";
+        continue;
+      }
+      if (!policy.enabled) {
+        state.reason = "AI background work is disabled for this pipeline.";
+        continue;
+      }
+      if (!policy.triggers.length) {
+        state.reason = "No background trigger is selected.";
+        continue;
+      }
+      const earliest = Math.max(at, (last ?? 0) + policy.cooldownMs);
+      state.nextRun = nextOperatingTime(policy, earliest);
+      if (!insideOperatingWindow(policy, at)) {
+        state.reason = "Outside the configured operating window.";
+        continue;
+      }
+      if (earliest > at) {
+        state.reason = "Waiting for the configured cooldown.";
+        continue;
+      }
+      if (
+        prior.some((job) =>
+          ["queued", "running", "waiting-inference", "paused"].includes(job.state),
+        )
+      ) {
+        state.reason = "An earlier background run is still pending.";
+        continue;
+      }
+      const saved = policy.triggers.includes("save")
+        ? [...this.saves]
+            .filter(
+              ([, savedAt]) =>
+                at - savedAt >= policy.debounceMs && (last === null || savedAt > last),
+            )
+            .map(([path]) => path)
+        : [];
+      const idle =
+        policy.triggers.includes("idle") &&
+        at - this.opts.activity.snapshot().lastHumanActivityAt >= policy.idleMs;
+      const interval =
+        policy.triggers.includes("interval") && (last === null || at - last >= policy.intervalMs);
+      if (!saved.length && !idle && !interval) {
+        state.reason = "Waiting for an enabled save, idle or interval trigger.";
+        if (policy.triggers.includes("interval"))
+          state.nextRun = nextOperatingTime(
+            policy,
+            Math.max(earliest, (last ?? at) + policy.intervalMs),
+          );
+        continue;
+      }
+      const selection = await this.select(pipeline, saved, prior);
+      if (!selection.sources.length) {
+        state.reason = "No changed, eligible inputs remain inside this policy's scope.";
+        continue;
+      }
+      const trigger = saved.length ? "save" : idle ? "idle" : "interval";
+      const key = contentRevision(
+        [
+          pipeline,
+          configuration.revision,
+          selection.inventory,
+          ...selection.sources.map((source) => `${source.path}:${source.revision}`),
+        ].join("\n"),
+      );
+      const submitted = await this.opts.jobs.run(
+        { pipeline, sources: selection.sources, preview: false, idempotencyKey: key },
+        { id: "background", kind: "agent", scopes: ["read", "write"] },
+        {
+          reason: `${trigger} trigger under configuration ${configuration.revision.slice(0, 12)}; ${selection.sources.length} scoped notes`,
+          key,
+        },
+      );
+      state.lastRun = submitted.createdAt;
+      state.reason = `${trigger} job is ${submitted.state} for ${selection.sources.length} notes.`;
+      state.nextRun = nextOperatingTime(
+        policy,
+        at + Math.max(policy.cooldownMs, policy.intervalMs),
+      );
+    }
+    for (const [path, atSaved] of this.saves) if (at - atSaved > 86400000) this.saves.delete(path);
+    await this.opts.jobs.pump();
   }
-
-  /**
-   * Allocate a fresh `seq` and CREATE the `agent_run` row inside a single
-   * SurrealQL transaction. The `BEGIN; LET $next = ...; CREATE; COMMIT;`
-   * pattern matches Phase 4 Task 12's `agent_event` and `agent_session`
-   * producers; the post-commit SELECT reads the freshly assigned `seq` so
-   * the caller sees the wire-shape integer without a second roundtrip.
-   *
-   * `note_path` is omitted from CONTENT when null because the SurrealDB
-   * `option<string>` field rejects an explicit `null`.
-   */
-  private async createRun(
-    agent: AgentName,
-    trigger: AgentTrigger,
-    notePath: string | null,
-    startedAt: number,
-  ): Promise<number> {
-    const setClauses: string[] = [
-      "seq: ($next ?? 0) + 1",
-      "agent: $agent",
-      "trigger: $trigger",
-      "started_at: $startedAt",
-    ];
-    const bindings: Record<string, unknown> = {
-      agent,
-      trigger,
-      startedAt,
-    };
-    if (notePath !== null) {
-      setClauses.push("note_path: $notePath");
-      bindings.notePath = notePath;
-    }
-    const sql = [
-      "BEGIN;",
-      "LET $next = (SELECT VALUE seq FROM agent_run ORDER BY seq DESC LIMIT 1)[0];",
-      `LET $row = CREATE ONLY agent_run CONTENT { ${setClauses.join(", ")} };`,
-      "COMMIT;",
-      "SELECT seq FROM agent_run WHERE started_at = $startedAt AND agent = $agent AND trigger = $trigger ORDER BY seq DESC LIMIT 1;",
-    ].join("\n");
-    const results = await this.opts.db.query(sql, bindings).collect<unknown[]>();
-    const lastSlice = results[results.length - 1];
-    const rows = (
-      Array.isArray(lastSlice) ? (lastSlice as CreatedRunRow[]) : []
-    ) as CreatedRunRow[];
-    const created = rows[0];
-    if (created === undefined) {
-      throw new Error("Coordinator.createRun: SurrealDB returned no row");
-    }
-    return created.seq;
+  private async select(pipeline: PipelineId, saved: string[], prior: PipelineJob[]) {
+    const current = this.opts.settings.background();
+    const policy = current.settings.pipelines[pipeline];
+    const scope = structuredClone(policy.readScope);
+    const catalog = new NoteCatalogService(this.opts.vault);
+    const notes: NoteReference[] = [];
+    let cursor: string | undefined;
+    let inventory = "";
+    do {
+      const page = await catalog.list({ scope, limit: 200, ...(cursor ? { cursor } : {}) });
+      inventory = page.snapshot;
+      notes.push(...page.notes);
+      cursor = page.nextCursor ?? undefined;
+      if (notes.length >= 10000) break;
+    } while (cursor);
+    const completed = new Set(
+      prior
+        .filter(
+          (job) =>
+            job.configurationRevision === current.revision &&
+            ["completed", "awaiting-approval", "partial"].includes(job.state),
+        )
+        .flatMap((job) => job.sourceRevisions.map((source) => `${source.path}:${source.revision}`)),
+    );
+    const maximum = ["index-extract", "enrich"].includes(pipeline)
+      ? policy.budget.notes
+      : Math.max(1, Math.floor(policy.budget.notes / 2));
+    const sources = notes
+      .filter(
+        (note) =>
+          (pipeline !== "inbox" || insideFolder(note.path, policy.destinations.inbox)) &&
+          (!saved.length || saved.includes(note.path)) &&
+          !completed.has(`${note.path}:${note.revision}`),
+      )
+      .slice(0, maximum);
+    return { sources, inventory };
   }
-
-  /**
-   * Update the `agent_run` row identified by `seq` with the run outcome.
-   * `error` is omitted from the SET clause when undefined so the
-   * `option<string>` field stays NONE on success rather than being
-   * written as a literal null.
-   */
-  private async finalizeRun(
-    seq: number,
-    finishedAt: number,
-    ok: boolean,
-    errorMessage: string | undefined,
-    proposals: number,
-  ): Promise<void> {
-    const setClauses: string[] = [
-      "finished_at = $finishedAt",
-      "ok = $ok",
-      "proposals_count = $proposals",
-    ];
-    const bindings: Record<string, unknown> = {
-      seq,
-      finishedAt,
-      ok,
-      proposals,
-    };
-    if (errorMessage !== undefined) {
-      setClauses.push("error = $error");
-      bindings.error = errorMessage;
-    }
-    const sql = `UPDATE agent_run SET ${setClauses.join(", ")} WHERE seq = $seq;`;
-    await this.opts.db.query(sql, bindings).collect();
-  }
-
-  private async executeAgent(agent: Agent, base: Omit<AgentRunContext, "signal" | "bus">) {
-    const bus = this.opts.bus;
-    if (agent.usesReasoningModel) {
-      return this.opts.mutex.run(`agent:${agent.name}`, async (signal) => {
-        return agent.run({ ...base, signal, bus });
-      });
-    }
-    const controller = new AbortController();
-    return agent.run({ ...base, signal: controller.signal, bus });
+  private report(error: unknown): void {
+    process.stderr.write(
+      `${JSON.stringify({ type: "pipeline:scheduler_error", message: error instanceof Error ? error.message : String(error) })}\n`,
+    );
   }
 }

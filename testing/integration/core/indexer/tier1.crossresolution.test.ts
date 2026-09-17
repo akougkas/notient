@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
+import { EventBus } from "../../../../src/core/events/eventBus";
 import { prepareNoteRow, runTier1 } from "../../../../src/core/indexer/tier1";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
@@ -74,6 +75,7 @@ B links to [[a]].
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -82,8 +84,8 @@ B links to [[a]].
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -95,7 +97,7 @@ B links to [[a]].
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("prepareNoteRow plus runTier1 emits both directions of the frontmatter_ref edge in one pass", async () => {
     // Pre-create both note rows so the second-phase Tier 1 lookups for
@@ -119,6 +121,7 @@ B links to [[a]].
       notePath: aPath,
       source: aSource,
       vaultPaths,
+      bus: new EventBus(),
     });
     // Then process B. B's frontmatter_ref to A always resolved because
     // A's row was created by A's own runTier1; the pre-create is the
@@ -127,6 +130,7 @@ B links to [[a]].
       notePath: bPath,
       source: bSource,
       vaultPaths,
+      bus: new EventBus(),
     });
 
     const [refs] = await connection.db

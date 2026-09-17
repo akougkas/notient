@@ -1,132 +1,48 @@
-/**
- * Phase 4 Task 9 awaken control-plane CLI smoke harness.
- *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/cli/commands/awaken.test.ts`.
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, hand-writes a per-vault
- * state directory under a tempdir-rooted `HOME`, and exercises the four
- * control-plane handlers (`runAwakenPause`, `runAwakenCancel`,
- * `runAwakenResume`, `runAwakenStatus`) end-to-end against the Task 7 DAL.
- */
+import { describe, expect, test } from "bun:test";
+import type { ClientHandle, RpcResponseFrame } from "../../../../src/cli/client";
+import {
+  parseAwakenSince,
+  parseTierCsv,
+  runAwakenCommand,
+} from "../../../../src/cli/commands/awaken";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
+import { FULL_INDEX_TIER_FILTER } from "../../../../src/core/indexer/tierFilter";
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
-import { type Server, type Socket, createServer } from "node:net";
-import * as os from "node:os";
-import * as path from "node:path";
-import { DEFAULT_TIER_FILTER, parseTierCsv } from "../../../../src/cli/commands/awaken";
-import { runAwakenCancel } from "../../../../src/cli/commands/awakenCancel";
-import { runAwakenPause } from "../../../../src/cli/commands/awakenPause";
-import { runAwakenResume } from "../../../../src/cli/commands/awakenResume";
-import { runAwakenStatus } from "../../../../src/cli/commands/awakenStatus";
-import { createRun, updateStatus } from "../../../../src/core/awaken/awakenRun";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
-import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
-import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+const RUN_ID = createUuidRecordId("awaken_run", "018f05cd-3f7b-7000-8000-000000000001").toString();
 
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
-
-interface Captured {
-  stdout: string[];
-  stderr: string[];
-}
-
-function makeCaptured(): Captured {
-  return { stdout: [], stderr: [] };
-}
-
-function makeStdoutWriter(captured: Captured): (line: string) => void {
-  return (line) => {
-    captured.stdout.push(line);
-  };
-}
-
-function makeStderrWriter(captured: Captured): (line: string) => void {
-  return (line) => {
-    captured.stderr.push(line);
-  };
-}
-
-interface FakeDaemonResponse {
-  type: "result" | "error";
-  payload: Record<string, unknown>;
-}
-
-interface FakeDaemon {
-  server: Server;
-  close: () => Promise<void>;
-}
-
-/**
- * Minimal Unix-socket daemon stub for the `awaken --resume` CLI tests.
- *
- * `awaken --resume` is a thin client over the daemon's `awaken.resume` RPC,
- * so this fixture lets the smoke tests assert what the CLI does with a
- * canned daemon reply without standing up a real daemon (and a second
- * SurrealDB child) inside an in-process test. The fixture mirrors the
- * shape of the helper in `src/cli/client.test.ts` but is duplicated here
- * to keep each test file self-contained.
- */
-async function startFakeDaemon(
-  socketPath: string,
-  respond: (frame: Record<string, unknown>) => FakeDaemonResponse,
-): Promise<FakeDaemon> {
-  await mkdir(path.dirname(socketPath), { recursive: true });
-  // A previous run may have left an orphan socket file behind. `listen`
-  // would otherwise fail with EADDRINUSE; unlink first and ignore ENOENT.
-  await unlink(socketPath).catch(() => {});
-  const sockets = new Set<Socket>();
-  const server = createServer((socket) => {
-    sockets.add(socket);
-    socket.on("close", () => {
-      sockets.delete(socket);
-    });
-    let buffer = "";
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf-8");
-      let newlineIndex = buffer.indexOf("\n");
-      while (newlineIndex !== -1) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          const reply = respond(frame);
-          socket.write(`${JSON.stringify({ id, type: reply.type, ...reply.payload })}\n`);
-        }
-        newlineIndex = buffer.indexOf("\n");
-      }
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, resolve);
-  });
-
+function fakeClient(
+  frames: RpcResponseFrame[],
+  options: { closeError?: Error } = {},
+): { client: ClientHandle; calls: Array<{ method: string; params: Record<string, unknown> }> } {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   return {
-    server,
-    close: async () => {
-      for (const socket of sockets) socket.end();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await unlink(socketPath).catch(() => {});
+    calls,
+    client: {
+      principal: { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+      call(method, params) {
+        calls.push({ method, params });
+        return (async function* () {
+          if (frames[0]?.type !== "ack") {
+            yield { id: frames[0]?.id ?? "req-1", type: "ack", method };
+          }
+          for (const frame of frames) yield frame;
+        })();
+      },
+      close: async () => {
+        if (options.closeError !== undefined) throw options.closeError;
+      },
     },
   };
 }
 
-// Phase 5 Task 11: `--tier <csv>` flag parsing. The CLI should strip
-// invalid tokens, accept whitespace around tokens, and fall back to the
-// default `[1, 2, 3]` when the result is empty.
 describe("parseTierCsv", () => {
-  test("returns the default filter for undefined or boolean inputs", () => {
-    expect(parseTierCsv(undefined)).toEqual([...DEFAULT_TIER_FILTER]);
-    expect(parseTierCsv(true)).toEqual([...DEFAULT_TIER_FILTER]);
+  test("returns the full filter only when the flag is omitted", () => {
+    expect(parseTierCsv(undefined)).toEqual([...FULL_INDEX_TIER_FILTER]);
+    expect(() => parseTierCsv(true)).toThrow(/requires a comma-separated subset/);
   });
 
-  test("returns the default filter for an empty string", () => {
-    expect(parseTierCsv("")).toEqual([...DEFAULT_TIER_FILTER]);
+  test("rejects an empty string", () => {
+    expect(() => parseTierCsv("")).toThrow(/requires a comma-separated subset/);
   });
 
   test("parses a single tier", () => {
@@ -153,14 +69,179 @@ describe("parseTierCsv", () => {
     expect(parseTierCsv("2,2")).toEqual([2]);
   });
 
-  test("falls back to the default filter when input has only invalid tokens", () => {
-    expect(parseTierCsv("abc")).toEqual([...DEFAULT_TIER_FILTER]);
-    expect(parseTierCsv("0,5")).toEqual([...DEFAULT_TIER_FILTER]);
-    expect(parseTierCsv("99")).toEqual([...DEFAULT_TIER_FILTER]);
+  test("rejects invalid tokens", () => {
+    expect(() => parseTierCsv("abc")).toThrow(/received abc/);
+    expect(() => parseTierCsv("0,5")).toThrow(/received 0/);
+    expect(() => parseTierCsv("99")).toThrow(/received 99/);
   });
 
-  test("drops invalid tokens but keeps valid ones", () => {
-    expect(parseTierCsv("0,2,5")).toEqual([2]);
-    expect(parseTierCsv("abc,1,xyz")).toEqual([1]);
+  test("rejects mixed-validity input instead of broadening or narrowing it", () => {
+    expect(() => parseTierCsv("0,2,5")).toThrow(/received 0/);
+    expect(() => parseTierCsv("abc,1,xyz")).toThrow(/received abc/);
+  });
+});
+
+describe("parseAwakenSince", () => {
+  test("accepts an exact ISO date or timezone-qualified instant", () => {
+    expect(parseAwakenSince("2026-08-30")).toBe(Date.parse("2026-08-30"));
+    expect(parseAwakenSince("2026-08-30T12:34:56.789Z")).toBe(
+      Date.parse("2026-08-30T12:34:56.789Z"),
+    );
+    expect(parseAwakenSince("2026-08-30T07:34:56-05:00")).toBe(
+      Date.parse("2026-08-30T07:34:56-05:00"),
+    );
+  });
+
+  test("rejects parser aliases, normalized dates, missing zones, and bare flags", () => {
+    for (const value of [
+      true,
+      "tomorrow",
+      "2026-02-30",
+      "2026-08-30T12:34:56",
+      " 2026-08-30",
+      "2026-08-30T12:34:56+15:00",
+    ]) {
+      expect(() => parseAwakenSince(value)).toThrow(/--since/);
+    }
+  });
+});
+
+describe("awaken run CLI wire boundary", () => {
+  test("sends canonical run params and emits an exact background result", async () => {
+    const rpc = fakeClient([
+      { id: "req-1", type: "ack", method: "awaken.run" },
+      {
+        id: "req-1",
+        type: "result",
+        ok: true,
+        queued: 4,
+        tier: [2, 3],
+        runId: RUN_ID,
+        status: "running",
+        background: true,
+      },
+    ]);
+    const events: Record<string, unknown>[] = [];
+    const code = await runAwakenCommand({
+      vaultPath: "/vault",
+      since: 123,
+      tier: [2, 3],
+      background: true,
+      emitter: { emit: (event) => events.push(event) },
+      connect: async () => rpc.client,
+    });
+    expect(code).toBe(0);
+    expect(rpc.calls).toEqual([
+      {
+        method: "awaken.run",
+        params: { since: 123, tier: [2, 3], background: true },
+      },
+    ]);
+    expect(events.at(-1)).toEqual({
+      id: "req-1",
+      ok: true,
+      queued: 4,
+      tier: [2, 3],
+      runId: RUN_ID,
+      status: "running",
+      background: true,
+      type: "rpc:result",
+    });
+  });
+
+  test("returns nonzero for daemon errors and a stream with no terminal frame", async () => {
+    const errorRpc = fakeClient([
+      {
+        id: "req-1",
+        type: "error",
+        code: "INVALID_PARAMS",
+        message: "a run is already active",
+        detail: {},
+      },
+    ]);
+    const errorEvents: Record<string, unknown>[] = [];
+    expect(
+      await runAwakenCommand({
+        vaultPath: "/vault",
+        emitter: { emit: (event) => errorEvents.push(event) },
+        connect: async () => errorRpc.client,
+      }),
+    ).toBe(1);
+    expect(errorEvents.at(-1)?.type).toBe("rpc:error");
+
+    const emptyRpc = fakeClient([]);
+    const emptyEvents: Record<string, unknown>[] = [];
+    expect(
+      await runAwakenCommand({
+        vaultPath: "/vault",
+        emitter: { emit: (event) => emptyEvents.push(event) },
+        connect: async () => emptyRpc.client,
+      }),
+    ).toBe(1);
+    expect(emptyEvents.at(-1)?.message).toContain("returned no result");
+  });
+
+  test("rejects extra result fields and duplicate terminal frames", async () => {
+    const validResult: RpcResponseFrame = {
+      id: "req-1",
+      type: "result",
+      ok: true,
+      queued: 1,
+      tier: [1, 2, 3],
+      runId: RUN_ID,
+      status: "completed",
+      processed: 1,
+      failed: 0,
+    };
+    const extraRpc = fakeClient([{ ...validResult, compatibilityStatus: "done" }]);
+    const extraEvents: Record<string, unknown>[] = [];
+    expect(
+      await runAwakenCommand({
+        vaultPath: "/vault",
+        emitter: { emit: (event) => extraEvents.push(event) },
+        connect: async () => extraRpc.client,
+      }),
+    ).toBe(1);
+    expect(extraEvents.at(-1)?.message).toContain("unsupported fields");
+
+    const duplicateRpc = fakeClient([validResult, validResult]);
+    const duplicateEvents: Record<string, unknown>[] = [];
+    expect(
+      await runAwakenCommand({
+        vaultPath: "/vault",
+        emitter: { emit: (event) => duplicateEvents.push(event) },
+        connect: async () => duplicateRpc.client,
+      }),
+    ).toBe(1);
+    expect(duplicateEvents.at(-1)?.message).toContain("duplicate terminal");
+  });
+
+  test("does not emit success when connection close fails", async () => {
+    const rpc = fakeClient(
+      [
+        {
+          id: "req-1",
+          type: "result",
+          ok: true,
+          queued: 0,
+          tier: [1, 2, 3],
+          runId: RUN_ID,
+          status: "completed",
+          processed: 0,
+          failed: 0,
+        },
+      ],
+      { closeError: new Error("socket close failed") },
+    );
+    const events: Record<string, unknown>[] = [];
+    expect(
+      await runAwakenCommand({
+        vaultPath: "/vault",
+        emitter: { emit: (event) => events.push(event) },
+        connect: async () => rpc.client,
+      }),
+    ).toBe(1);
+    expect(events.filter((event) => event.type === "rpc:result")).toEqual([]);
+    expect(events.at(-1)?.message).toContain("connection close failed");
   });
 });

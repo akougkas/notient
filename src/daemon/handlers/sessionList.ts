@@ -1,5 +1,5 @@
 /**
- * session.list RPC handler (Phase D1 T7).
+ * `session.list` RPC handler.
  *
  * Returns the rows the storage layer surfaces, mapped to the wire response
  * shape. Defaults to active-only; callers pass `activeOnly: false` to also
@@ -7,6 +7,7 @@
  */
 
 import type { SessionGrant, SessionGrants } from "../../core/services/sessionGrants";
+import { type MethodHandler, RpcError } from "../rpc";
 
 export interface SessionListHandlerDeps {
   sessionGrants: SessionGrants;
@@ -18,7 +19,7 @@ export interface SessionListRequest {
 }
 
 export interface SessionListEntry {
-  sessionId: number;
+  sessionId: string;
   client: string;
   expiresAt: number;
   allowedFolders: string[];
@@ -32,16 +33,16 @@ export interface SessionListResponse {
   sessions: SessionListEntry[];
 }
 
-export type SessionListHandler = (
-  params: Record<string, unknown>,
-  emit: (line: string) => void,
-  envelopeId: string,
-  clientIdentity: string,
-) => Promise<Record<string, unknown>>;
+export type SessionListHandler = MethodHandler;
 
 export function makeSessionListHandler(deps: SessionListHandlerDeps): SessionListHandler {
-  return async (params) => {
+  return async ({ params, principal }) => {
     const filter = parseListParams(params);
+    // An agent sees only its own grants; the `client` filter it passed is
+    // overridden rather than rejected so the common call still works.
+    if (principal.kind !== "human") {
+      filter.client = principal.id;
+    }
     const grants = await deps.sessionGrants.list(filter);
     const response: SessionListResponse = {
       sessions: grants.map(grantToEntry),
@@ -57,13 +58,13 @@ function parseListParams(params: Record<string, unknown>): {
   const filter: { client?: string; activeOnly?: boolean } = {};
   if (params.client !== undefined && params.client !== null) {
     if (typeof params.client !== "string") {
-      throw new Error("INVALID_PARAMS: client must be a string when provided");
+      throw new RpcError("INVALID_PARAMS", "client must be a string when provided");
     }
     filter.client = params.client;
   }
   if (params.activeOnly !== undefined && params.activeOnly !== null) {
     if (typeof params.activeOnly !== "boolean") {
-      throw new Error("INVALID_PARAMS: activeOnly must be a boolean when provided");
+      throw new RpcError("INVALID_PARAMS", "activeOnly must be a boolean when provided");
     }
     filter.activeOnly = params.activeOnly;
   }

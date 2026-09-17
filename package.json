@@ -1,10 +1,17 @@
 {
   "name": "notient",
-  "version": "0.1.0-alpha",
-  "description": "Local-first agentic CLI for sentient vaults",
+  "version": "0.1.0",
+  "description": "A local-first terminal home for your Markdown notes: grounded search and answers, reviewed changes, agents over CLI and MCP, and an Obsidian companion",
   "type": "module",
   "bin": {
     "notient": "./dist/notient.js"
+  },
+  "exports": {
+    "./sdk": {
+      "types": "./dist/sdk/types/api/sdk.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -12,54 +19,96 @@
     "test:integration": "NOTIENT_SMOKE=1 bun test testing/integration",
     "test:smoke": "bun run test:integration",
     "test:all": "bun run test && bun run test:integration",
-    "lint": "biome check src/ testing/",
+    "lint": "biome check src/ testing/ integrations/obsidian/src/",
     "lint:fix": "biome check --write src/ testing/",
     "format": "biome format --write src/ testing/",
     "build": "bun run build:cli",
     "build:cli": "bun tools/build-cli.ts",
-    "smoke:cli:phaseA": "bun tools/smoke-cli-phaseA.ts",
-    "smoke:cli:phaseB": "bun tools/smoke-cli-phaseB.ts",
-    "smoke:cli:phaseC": "bun tools/smoke-cli-phaseC.ts",
-    "smoke:cli:phaseD": "bun tools/smoke-cli-phaseD.ts",
-    "smoke:cli:phaseD1": "bun tools/smoke-cli-phaseD1.ts"
+    "smoke:cli": "bun run smoke:cli:core && bun run smoke:cli:agents",
+    "smoke:cli:core": "bun tools/smoke-cli-core.ts",
+    "smoke:cli:agents": "bun tools/smoke-cli-agents.ts",
+    "prepublishOnly": "bun run build",
+    "typecheck:obsidian": "bun run --cwd integrations/obsidian typecheck",
+    "build:obsidian": "bun run --cwd integrations/obsidian build",
+    "release:prepare": "bun tools/prepare-prerelease.ts",
+    "release:check": "bun tools/check-prerelease.ts"
   },
+  "files": [
+    "dist",
+    "plugins",
+    ".agents",
+    ".claude-plugin",
+    "docs/agents.md",
+    "docs/getting-started.md",
+    "docs/mcp.md",
+    "docs/obsidian.md",
+    "docs/api-v1.md",
+    "docs/openapi-v1.json",
+    "docs/services.md",
+    "docs/release-v0.1.0.md",
+    "integrations/obsidian/README.md",
+    "docs/skills/notient.md",
+    "README.md",
+    "LICENSE",
+    "patches"
+  ],
   "keywords": [
-    "ai",
-    "local-llm",
-    "semantic-search",
+    "notes",
+    "markdown",
+    "obsidian",
+    "local-first",
     "knowledge-management",
+    "knowledge-graph",
+    "semantic-search",
+    "local-llm",
+    "mcp",
     "cli",
-    "agentic"
+    "tui",
+    "ai"
   ],
   "author": "Anthony Kougkas",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akougkas/notient.git"
+  },
+  "homepage": "https://github.com/akougkas/notient#readme",
+  "bugs": {
+    "url": "https://github.com/akougkas/notient/issues"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
   "devDependencies": {
     "@biomejs/biome": "1.9.0",
     "@types/mdast": "^4.0.4",
     "@types/node": "^20.10.0",
-    "@types/react": "^19.2.14",
+    "@types/react": "19.3.0",
     "@types/unist": "^3.0.3",
-    "bun-types": "^1.0.18",
+    "bun-types": "1.4.2",
     "tslib": "^2.6.2",
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "@lmstudio/sdk": "^1.5.0",
-    "@opentui/core": "0.1.105",
-    "@opentui/react": "0.1.105",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@opentui/core": "0.5.11",
+    "@opentui/react": "0.5.11",
     "chokidar": "^4.0.0",
-    "kysely": "^0.28.9",
     "mdast-util-to-string": "^4.0.0",
-    "ollama": "^0.6.3",
+    "react": "19.3.0",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
-    "smol-toml": "^1.6.1",
     "surrealdb": "^2.0.3",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "unpdf": "^0.12.0",
-    "yaml": "^2.8.3"
-  }
+    "yaml": "^2.8.3",
+    "zod": "4.5.2"
+  },
+  "patchedDependencies": {
+    "surrealdb@2.0.3": "patches/surrealdb@2.0.3.patch"
+  },
+  "packageManager": "bun@1.4.2"
 }

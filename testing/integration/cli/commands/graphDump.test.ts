@@ -53,6 +53,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
       portFile: path.join(tempDir, "surreal.port"),
       pidFile: path.join(tempDir, "surreal.pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -61,14 +62,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     const stateDir = vaultStateDir(vaultPath);
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
     const port = new URL(handle.url).port;
-    await writeFile(vaultPortPath(vaultPath), port, "utf8");
+    await writeFile(vaultPortPath(vaultPath), `${port}\n`, "utf8");
     await writeFile(vaultSecretPath(vaultPath), secret, { mode: 0o600 });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) await connection.close().catch(() => {});
@@ -81,7 +82,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     const tables = [
@@ -113,7 +114,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
     }
   });
 
-  async function seedGraph(): Promise<{ alpha: RecordId<"note">; beta: RecordId<"note"> }> {
+  async function seedGraph(
+    source: "wikilink" | "markdown" = "wikilink",
+  ): Promise<{ alpha: RecordId<"note">; beta: RecordId<"note"> }> {
     const alpha = await upsertNoteByPath(connection.db, {
       path: "alpha.md",
       sha: "sha-alpha",
@@ -127,8 +130,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
     // Tier 1 deterministic edge.
     await connection.db
       .query(
-        "RELATE $from->wikilink->$to SET source = 'wikilink', class = 'EXTRACTED', confidence = 1.0;",
-        { from: alpha, to: beta },
+        "RELATE $from->wikilink->$to SET source = $source, class = 'EXTRACTED', confidence = 1.0;",
+        { from: alpha, to: beta, source },
       )
       .collect();
     // Tier 3 inferred linker proposal.
@@ -141,35 +144,38 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph dump CLI", () => {
     return { alpha, beta };
   }
 
-  test("[smoke] tier 1 filter excludes INFERRED edges", async () => {
-    await seedGraph();
-    const stdoutLines: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    // biome-ignore lint/suspicious/noExplicitAny: temporarily replacing process.stdout.write for capture
-    (process.stdout as any).write = (chunk: string | Uint8Array): boolean => {
-      const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-      stdoutLines.push(text);
-      return true;
-    };
-    try {
-      const exitCode = await runGraphDumpCommand({
-        vaultPath,
-        tier: 1,
-        format: "json",
-        emitter: makeEmitter({ mode: "json", write: () => {} }),
-      });
-      expect(exitCode).toBe(0);
-    } finally {
-      // biome-ignore lint/suspicious/noExplicitAny: restoring process.stdout.write after capture
-      (process.stdout as any).write = originalWrite;
-    }
-    const captured = stdoutLines.join("");
-    const parsed = JSON.parse(captured) as DumpedGraph;
-    expect(parsed.tier).toBe(1);
-    // Wikilink stays; supports drops at tier 1.
-    const tables = parsed.edges.map((edge) => edge.table).sort();
-    expect(tables).toEqual(["wikilink"]);
-  });
+  test.each(["wikilink", "markdown"] as const)(
+    "[smoke] tier 1 exports %s and excludes INFERRED edges",
+    async (source) => {
+      await seedGraph(source);
+      const stdoutLines: string[] = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      // biome-ignore lint/suspicious/noExplicitAny: temporarily replacing process.stdout.write for capture
+      (process.stdout as any).write = (chunk: string | Uint8Array): boolean => {
+        const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+        stdoutLines.push(text);
+        return true;
+      };
+      try {
+        const exitCode = await runGraphDumpCommand({
+          vaultPath,
+          tier: 1,
+          format: "json",
+          emitter: makeEmitter({ mode: "json", write: () => {} }),
+        });
+        expect(exitCode).toBe(0);
+      } finally {
+        // biome-ignore lint/suspicious/noExplicitAny: restoring process.stdout.write after capture
+        (process.stdout as any).write = originalWrite;
+      }
+      const captured = stdoutLines.join("");
+      const parsed = JSON.parse(captured) as DumpedGraph;
+      expect(parsed.tier).toBe(1);
+      // Wikilink stays; supports drops at tier 1.
+      const tables = parsed.edges.map((edge) => edge.table).sort();
+      expect(tables).toEqual(["wikilink"]);
+    },
+  );
 
   test("[smoke] tier 3 includes INFERRED edges and the json round-trip matches DB counts", async () => {
     await seedGraph();

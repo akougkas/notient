@@ -20,14 +20,15 @@ import { findCurrent, updateStatus } from "../../../../src/core/awaken/awakenRun
 import {
   type AwakenWorkerIndexerQueue,
   type AwakenWorkerVaultFacade,
-  reconcileCountersFromTierState,
   runAwakenWorker,
-  sortByPriorityGlobs,
   waitForNoteIndexed,
 } from "../../../../src/core/awaken/awakenWorker";
+import { sortByPriorityGlobs } from "../../../../src/core/awaken/priorityGlob";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
+import { prepareNoteRow } from "../../../../src/core/indexer/tier1";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -41,8 +42,8 @@ interface FetchedRow {
   finished_at: string | Date | null;
 }
 
-async function clearAwakenRuns(connection: SurrealConnection): Promise<void> {
-  await connection.db.query("DELETE awaken_run;").collect();
+async function clearAwakenState(connection: SurrealConnection): Promise<void> {
+  await connection.db.query("DELETE awaken_run; DELETE note;").collect();
 }
 
 async function fetchRow(
@@ -63,10 +64,61 @@ interface RecordedEnqueue {
   priority: number;
 }
 
-function makeIndexerQueue(records: RecordedEnqueue[]): AwakenWorkerIndexerQueue {
+type AfterEnqueue = (notePath: string) => void | Promise<void>;
+
+async function persistSuccessfulTierState(
+  connection: SurrealConnection,
+  notePath: string,
+): Promise<void> {
+  await prepareNoteRow(connection.db, {
+    path: notePath,
+    sha: "0".repeat(64),
+    wordCount: 0,
+  });
+  await connection.db
+    .query(
+      "UPDATE note SET tier1_at = time::now(), tier2_at = time::now(), tier3_at = time::now() WHERE path = $path;",
+      { path: notePath },
+    )
+    .collect();
+}
+
+function emitNoteIndexed(bus: EventBus, notePath: string): void {
+  bus.emit({
+    type: "indexer:note-indexed",
+    path: notePath,
+    result: {
+      chunkCount: 0,
+      embedCount: 0,
+      durationMs: 1,
+      llmCalls: 0,
+      extractionWindows: 0,
+    },
+  });
+}
+
+function makeIndexerQueue(
+  connection: SurrealConnection,
+  records: RecordedEnqueue[],
+  bus: EventBus,
+  afterEnqueue: AfterEnqueue = () => {},
+): AwakenWorkerIndexerQueue {
   return {
     enqueue(path: string, priority?: number): void {
       records.push({ path, priority: priority ?? 2 });
+      void persistSuccessfulTierState(connection, path)
+        .then(() => afterEnqueue(path))
+        .then(
+          () => emitNoteIndexed(bus, path),
+          (error: unknown) => {
+            bus.emit({
+              type: "indexer:error",
+              path,
+              message: error instanceof Error ? error.message : String(error),
+              phase: "test-indexer",
+            });
+          },
+        );
     },
   };
 }
@@ -75,6 +127,10 @@ function makeVaultFacade(paths: string[]): AwakenWorkerVaultFacade {
   return {
     listMarkdownPaths: async () => [...paths],
   };
+}
+
+function workerSignal(): AbortSignal {
+  return new AbortController().signal;
 }
 
 const PROPAGATION_DELAY_MS = 250;
@@ -100,6 +156,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -108,8 +165,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -121,23 +178,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
-    await clearAwakenRuns(connection);
+    await clearAwakenState(connection);
   });
 
   test("[smoke] happy path completes all notes and clears the cursor", async () => {
     const paths = ["a.md", "b.md", "c.md", "d.md", "e.md"];
     const enqueued: RecordedEnqueue[] = [];
+    const bus = new EventBus();
     const result = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(enqueued),
+      indexerQueue: makeIndexerQueue(connection, enqueued, bus),
+      bus,
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
       resume: false,
-      onNoteIndexed: async () => {},
+      signal: workerSignal(),
     });
     expect(result.status).toBe("completed");
     expect(result.processed).toBe(paths.length);
@@ -154,9 +213,53 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
     expect(row?.finished_at != null).toBe(true);
   });
 
+  test("[smoke] a queued note remains uncounted until its canonical completion event", async () => {
+    const bus = new EventBus();
+    const enqueued: RecordedEnqueue[] = [];
+    const worker = runAwakenWorker({
+      db: connection.db,
+      vaultFacade: makeVaultFacade(["canonical-wait.md"]),
+      indexerQueue: {
+        enqueue(notePath: string, priority?: number): void {
+          enqueued.push({ path: notePath, priority: priority ?? 2 });
+        },
+      },
+      bus,
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      resume: false,
+      signal: workerSignal(),
+    });
+    let settled = false;
+    void worker.finally(() => {
+      settled = true;
+    });
+
+    const enqueueDeadline = Date.now() + 2_000;
+    while (enqueued.length === 0 && Date.now() < enqueueDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(enqueued.map((entry) => entry.path)).toEqual(["canonical-wait.md"]);
+    expect(settled).toBe(false);
+
+    // Tier progress is observability, not completion. The run must remain
+    // blocked until the orchestrator emits its terminal note event.
+    bus.emit({ type: "indexer:tier3-done", path: "canonical-wait.md" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+
+    await persistSuccessfulTierState(connection, "canonical-wait.md");
+    emitNoteIndexed(bus, "canonical-wait.md");
+    const result = await worker;
+    expect(result.status).toBe("completed");
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
   test("[smoke] pause mid-flight breaks the loop and persists counters", async () => {
     const paths = ["a.md", "b.md", "c.md", "d.md", "e.md"];
     const enqueued: RecordedEnqueue[] = [];
+    const bus = new EventBus();
 
     let pauseSignalled = false;
     let runIdRef: RecordId<"awaken_run"> | null = null;
@@ -164,11 +267,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
     const result = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(enqueued),
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      resume: false,
-      onNoteIndexed: async (notePath) => {
+      indexerQueue: makeIndexerQueue(connection, enqueued, bus, async (notePath) => {
         if (notePath === "b.md" && !pauseSignalled) {
           pauseSignalled = true;
           // Read the in-flight run id once so we can flip its status.
@@ -178,7 +277,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
           await updateStatus(connection.db, active.id, "paused");
           await waitForLiveQueryDelivery();
         }
-      },
+      }),
+      bus,
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      resume: false,
+      signal: workerSignal(),
     });
 
     expect(result.status).toBe("paused");
@@ -201,15 +305,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
 
     // First pass: pause after b.md.
     const firstEnqueued: RecordedEnqueue[] = [];
+    const firstBus = new EventBus();
     let pauseSignalled = false;
     const firstResult = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(firstEnqueued),
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      resume: false,
-      onNoteIndexed: async (notePath) => {
+      indexerQueue: makeIndexerQueue(connection, firstEnqueued, firstBus, async (notePath) => {
         if (notePath === "b.md" && !pauseSignalled) {
           pauseSignalled = true;
           const active = await findCurrent(connection.db);
@@ -217,21 +318,28 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
           await updateStatus(connection.db, active.id, "paused");
           await waitForLiveQueryDelivery();
         }
-      },
+      }),
+      bus: firstBus,
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      resume: false,
+      signal: workerSignal(),
     });
     expect(firstResult.status).toBe("paused");
     expect(firstResult.processed).toBe(2);
 
     // Second pass: resume picks up the same row and finishes the rest.
     const secondEnqueued: RecordedEnqueue[] = [];
+    const secondBus = new EventBus();
     const secondResult = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(secondEnqueued),
+      indexerQueue: makeIndexerQueue(connection, secondEnqueued, secondBus),
+      bus: secondBus,
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
       resume: true,
-      onNoteIndexed: async () => {},
+      signal: workerSignal(),
     });
 
     expect(secondResult.runId.toString()).toBe(firstResult.runId.toString());
@@ -249,17 +357,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
   test("[smoke] cancel mid-flight breaks the loop and persists cancelled status", async () => {
     const paths = ["a.md", "b.md", "c.md", "d.md", "e.md"];
     const enqueued: RecordedEnqueue[] = [];
+    const bus = new EventBus();
     let cancelSignalled = false;
     let runIdRef: RecordId<"awaken_run"> | null = null;
 
     const result = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(enqueued),
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      resume: false,
-      onNoteIndexed: async (notePath) => {
+      indexerQueue: makeIndexerQueue(connection, enqueued, bus, async (notePath) => {
         if (notePath === "a.md" && !cancelSignalled) {
           cancelSignalled = true;
           const active = await findCurrent(connection.db);
@@ -268,7 +373,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
           await updateStatus(connection.db, active.id, "cancelled");
           await waitForLiveQueryDelivery();
         }
-      },
+      }),
+      bus,
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      resume: false,
+      signal: workerSignal(),
     });
 
     expect(result.status).toBe("cancelled");
@@ -290,33 +400,38 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
     // worker invocations.
     await connection.db
       .query(
-        "CREATE awaken_run CONTENT { status: 'running', total: 0, processed: 0, failed: 0, tier_filter: [1,2,3], priority_globs: [] };",
+        "CREATE ONLY $id CONTENT { status: 'running', total: 0, processed: 0, failed: 0, tier_filter: [1,2,3], priority_globs: [] };",
+        { id: createUuidRecordId("awaken_run") },
       )
       .collect();
 
+    const bus = new EventBus();
     await expect(
       runAwakenWorker({
         db: connection.db,
         vaultFacade: makeVaultFacade(["a.md"]),
-        indexerQueue: makeIndexerQueue([]),
+        indexerQueue: makeIndexerQueue(connection, [], bus),
+        bus,
         tierFilter: [1, 2, 3],
         priorityGlobs: [],
         resume: false,
-        onNoteIndexed: async () => {},
+        signal: workerSignal(),
       }),
     ).rejects.toThrow(/already active/);
   });
 
   test("[smoke] resume guard rejects when no resumable run exists", async () => {
+    const bus = new EventBus();
     await expect(
       runAwakenWorker({
         db: connection.db,
         vaultFacade: makeVaultFacade(["a.md"]),
-        indexerQueue: makeIndexerQueue([]),
+        indexerQueue: makeIndexerQueue(connection, [], bus),
+        bus,
         tierFilter: [1, 2, 3],
         priorityGlobs: [],
         resume: true,
-        onNoteIndexed: async () => {},
+        signal: workerSignal(),
       }),
     ).rejects.toThrow(/no resumable run/);
   });
@@ -324,14 +439,16 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken worker run loop", () => {
   test("[smoke] priority globs reorder paths so daily/** notes go first", async () => {
     const paths = ["projects/x.md", "daily/2024-04-29.md", "MOCs/Index.md", "notes/g.md"];
     const enqueued: RecordedEnqueue[] = [];
+    const bus = new EventBus();
     const result = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(enqueued),
+      indexerQueue: makeIndexerQueue(connection, enqueued, bus),
+      bus,
       tierFilter: [1, 2, 3],
       priorityGlobs: ["daily/**", "MOCs/**"],
       resume: false,
-      onNoteIndexed: async () => {},
+      signal: workerSignal(),
     });
     expect(result.status).toBe("completed");
     expect(enqueued.map((entry) => entry.path)).toEqual([

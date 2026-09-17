@@ -21,10 +21,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DateTime, type RecordId } from "surrealdb";
-import {
-  ApprovalService,
-  type WritebackEdgeTable,
-} from "../../../../../src/core/approvals/approvalService";
+import { FsVault } from "../../../../../src/adapters/fsVault";
+import { ApprovalService } from "../../../../../src/core/approvals/approvalService";
 import { ApprovalGate } from "../../../../../src/core/chat/approvalGate";
 import {
   makeApproveProposalTool,
@@ -32,22 +30,26 @@ import {
   makeListProposalsTool,
   makeRejectProposalTool,
 } from "../../../../../src/core/chat/tools/proposals";
+import type { WritebackEdgeTable } from "../../../../../src/core/db/edgeTables";
 import { applySchema } from "../../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
   connect,
+  relateEdge,
   upsertNoteByPath,
 } from "../../../../../src/core/db/surreal";
 import { EventBus } from "../../../../../src/core/events/eventBus";
+import { sha256Hex } from "../../../../../src/core/utils/sha256";
 import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const TEST_CONTEXT = { clientIdentity: "human" } as const;
 
 interface SeedEdgeInput {
   table: WritebackEdgeTable;
   fromPath: string;
   toPath: string;
-  agent: string;
+  agent: "linker" | "synthesizer" | "contradictionHunter";
   confidence?: number;
   createdAtSec: number;
   approved?: boolean;
@@ -64,7 +66,7 @@ async function seedEdge(connection: SurrealConnection, input: SeedEdgeInput): Pr
     sha: `sha-${input.toPath}`,
     wordCount: 10,
   });
-  const sql = `RELATE $from->${input.table}->$to SET source = 'linker', class = 'INFERRED', confidence = $confidence, agent = $agent, approved = $approved, created_at = $createdAt RETURN id;`;
+  const sql = `RELATE $from->${input.table}->$to SET source = $agent, class = 'INFERRED', confidence = $confidence, agent = $agent, approved = $approved, created_at = $createdAt RETURN id;`;
   const [rows] = await connection.db
     .query<[Array<{ id: RecordId }>]>(sql, {
       from: fromId,
@@ -91,6 +93,10 @@ async function clearVault(connection: SurrealConnection): Promise<void> {
     "synthesizes",
     "related_to",
     "wikilink",
+    "approval_intent",
+    "daemon_write",
+    "history",
+    "chunk",
     "note",
   ]) {
     await connection.db.query(`DELETE ${table};`).collect();
@@ -111,6 +117,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -119,8 +126,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -132,7 +139,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearVault(connection);
@@ -154,7 +161,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
       createdAtSec: 1_700_001_000,
     });
     const tool = makeListProposalsTool(connection.db);
-    const result = await tool.invoke({}, new AbortController().signal);
+    const result = await tool.invoke({}, new AbortController().signal, TEST_CONTEXT);
     expect(result.proposals).toHaveLength(2);
     expect(result.proposals[0].id).toBe(later.toString());
     expect(result.proposals[1].id).toBe(earlier.toString());
@@ -167,6 +174,46 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
     }
   });
 
+  test("round-trips canonical optional evidence through the production edge writer", async () => {
+    const from = await upsertNoteByPath(connection.db, {
+      path: "evidence-source.md",
+      sha: "sha-evidence-source",
+      wordCount: 4,
+    });
+    const to = await upsertNoteByPath(connection.db, {
+      path: "evidence-target.md",
+      sha: "sha-evidence-target",
+      wordCount: 4,
+    });
+    const [chunk] = await connection.db
+      .query<[{ id: RecordId<"chunk"> } | null]>(
+        "CREATE ONLY chunk CONTENT { note: $note, ord: 0, text: 'Canonical proposal evidence.', token_estimate: 4 } RETURN id;",
+        { note: from },
+      )
+      .collect<[{ id: RecordId<"chunk"> } | null]>();
+    if (chunk === null) throw new Error("proposal evidence chunk was not created");
+
+    await relateEdge(connection.db, {
+      table: "supports",
+      from,
+      to,
+      source: "linker",
+      confidenceClass: "INFERRED",
+      confidence: 0.8,
+      agent: "linker",
+      approved: false,
+      evidence: [chunk.id],
+    });
+
+    const result = await makeListProposalsTool(connection.db).invoke(
+      {},
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0]?.evidence).toEqual([chunk.id.toString()]);
+  });
+
   test("excludes already-approved rows", async () => {
     await seedEdge(connection, {
       table: "supports",
@@ -177,8 +224,29 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
       approved: true,
     });
     const tool = makeListProposalsTool(connection.db);
-    const result = await tool.invoke({}, new AbortController().signal);
+    const result = await tool.invoke({}, new AbortController().signal, TEST_CONTEXT);
     expect(result.proposals).toEqual([]);
+  });
+
+  test("excludes a pending edge as soon as either note endpoint is tombstoned", async () => {
+    const edgeId = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "live.md",
+      toPath: "deleted.md",
+      agent: "linker",
+      createdAtSec: 1_700_000_600,
+    });
+    await connection.db
+      .query("UPDATE note SET tombstoned_at = time::now() WHERE path = 'deleted.md';")
+      .collect();
+    const list = makeListProposalsTool(connection.db);
+    expect((await list.invoke({}, new AbortController().signal, TEST_CONTEXT)).proposals).toEqual(
+      [],
+    );
+    const get = makeGetProposalTool(connection.db);
+    expect(
+      await get.invoke({ id: edgeId.toString() }, new AbortController().signal, TEST_CONTEXT),
+    ).toEqual({ proposal: null });
   });
 
   test("filters by notePath across in/out positions", async () => {
@@ -204,7 +272,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
       createdAtSec: 3,
     });
     const tool = makeListProposalsTool(connection.db);
-    const result = await tool.invoke({ notePath: "a.md" }, new AbortController().signal);
+    const result = await tool.invoke(
+      { notePath: "a.md" },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
     expect(result.proposals).toHaveLength(2);
     const targets = result.proposals.map((entry) => (entry.kind === "edge" ? entry.type : null));
     expect(targets.sort()).toEqual(["contradicts", "supports"]);
@@ -229,11 +301,35 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.list_pending", () => {
     const result = await tool.invoke(
       { agent: "contradictionHunter" },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
     expect(result.proposals).toHaveLength(1);
     if (result.proposals[0].kind === "edge") {
       expect(result.proposals[0].type).toBe("contradicts");
     }
+  });
+
+  test("fails closed on schema-valid rows with corrupt proposal semantics", async () => {
+    const id = await seedEdge(connection, {
+      table: "supports",
+      fromPath: "source.md",
+      toPath: "target.md",
+      agent: "linker",
+      createdAtSec: 1,
+    });
+    const tool = makeListProposalsTool(connection.db);
+
+    await connection.db.query("UPDATE $id SET agent = NONE;", { id }).collect();
+    await expect(tool.invoke({}, new AbortController().signal, TEST_CONTEXT)).rejects.toThrow(
+      "agent must exactly match",
+    );
+
+    await connection.db
+      .query("UPDATE $id SET agent = 'linker', applied = false;", { id })
+      .collect();
+    await expect(tool.invoke({}, new AbortController().signal, TEST_CONTEXT)).rejects.toThrow(
+      "pending state must be approved = false and applied = true",
+    );
   });
 
   test("validates argument shape", () => {
@@ -258,6 +354,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -266,8 +363,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -279,7 +376,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearVault(connection);
@@ -294,7 +391,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
       createdAtSec: 1,
     });
     const tool = makeGetProposalTool(connection.db);
-    const result = await tool.invoke({ id: id.toString() }, new AbortController().signal);
+    const result = await tool.invoke(
+      { id: id.toString() },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
     expect(result.proposal?.kind).toBe("edge");
     expect(result.proposal?.id).toBe(id.toString());
   });
@@ -309,8 +410,16 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.get", () => {
       approved: true,
     });
     const tool = makeGetProposalTool(connection.db);
-    const missing = await tool.invoke({ id: "supports:not-real" }, new AbortController().signal);
-    const decided = await tool.invoke({ id: approved.toString() }, new AbortController().signal);
+    const missing = await tool.invoke(
+      { id: "supports:abcdefghijklmnopqrst" },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
+    const decided = await tool.invoke(
+      { id: approved.toString() },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
     expect(missing.proposal).toBeNull();
     expect(decided.proposal).toBeNull();
   });
@@ -340,6 +449,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -348,14 +458,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) await connection.close().catch(() => {});
     if (handle !== undefined) await handle.stop().catch(() => {});
     if (tempDir !== undefined) await rm(tempDir, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearVault(connection);
@@ -365,27 +475,17 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
     return new ApprovalService({
       db: connection.db,
       bus: new EventBus(),
-      vaultRoot,
-      fs: {
-        writeBinary: async (filePath, data) => {
-          await writeFile(filePath, new Uint8Array(data));
-        },
-        rename: async (from, to) => {
-          await (await import("node:fs/promises")).rename(from, to);
-        },
-        remove: async (filePath) => {
-          await (await import("node:fs/promises")).unlink(filePath).catch(() => {});
-        },
-      },
-      readFile: (filePath) => readFile(filePath, "utf8"),
+      vault: new FsVault(vaultRoot),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
     });
   }
 
   function buildApprovalGate(): ApprovalGate {
     return new ApprovalGate({
-      events: { onPending: () => {}, onResolved: () => {} },
       recordHistoryAutoApprove: async () => {},
-      sessionGrants: { find: () => null, incrementWriteCount: () => {} },
+      perToolPolicy: () => ({}),
+      sessionGrants: { claim: async () => null },
     });
   }
 
@@ -401,29 +501,39 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
       createdAtSec: 1,
     });
     const tool = makeApproveProposalTool({
-      db: connection.db,
       approvalService: buildApprovalService(),
       approvalGate: buildApprovalGate(),
       approvalMode: () => "yolo",
       generateCallId: () => "call-approve",
     });
-    const result = await tool.invoke({ id: id.toString() }, new AbortController().signal);
-    expect(result).toEqual({ applied: true, id: id.toString(), table: "supports" });
+    const result = await tool.invoke(
+      { id: id.toString() },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
+    expect(result).toMatchObject({
+      applied: true,
+      id: id.toString(),
+      table: "supports",
+      approvedBy: "human",
+    });
+    if (!result.applied) throw new Error("expected proposal approval receipt");
+    expect(result.historyId).toStartWith('history:u"');
     const body = await readFile(sourcePath, "utf8");
     expect(body).toContain("[[beta]]");
   });
 
   test("[smoke] approve on missing id returns applied:false", async () => {
     const tool = makeApproveProposalTool({
-      db: connection.db,
       approvalService: buildApprovalService(),
       approvalGate: buildApprovalGate(),
       approvalMode: () => "yolo",
       generateCallId: () => "call-missing",
     });
     const result = await tool.invoke(
-      { id: "supports:not_a_real_id" },
+      { id: "supports:abcdefghijklmnopqrst" },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
     expect(result).toEqual({
       applied: false,
@@ -431,7 +541,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
     });
   });
 
-  test("[smoke] reject deletes the edge and echoes the reason", async () => {
+  test("[smoke] reject deletes the edge and returns its durable audit", async () => {
     const id = await seedEdge(connection, {
       table: "supports",
       fromPath: "alpha.md",
@@ -440,26 +550,56 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] proposals.approve / proposals.reject", 
       createdAtSec: 1,
     });
     const tool = makeRejectProposalTool({
-      db: connection.db,
       approvalService: buildApprovalService(),
       approvalGate: buildApprovalGate(),
       approvalMode: () => "yolo",
       generateCallId: () => "call-reject",
-      bus: new EventBus(),
     });
     const result = await tool.invoke(
       { id: id.toString(), reason: "noisy" },
       new AbortController().signal,
+      { clientIdentity: "chat-operator" },
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       applied: true,
       id: id.toString(),
       table: "supports",
       reason: "noisy",
     });
+    if (!result.applied) throw new Error("proposal rejection did not apply");
+    expect(result.historyId).toMatch(
+      /^history:u"[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"$/,
+    );
     const [rows] = await connection.db
       .query<[Array<{ id: RecordId }>]>("SELECT id FROM supports WHERE id = $id;", { id })
       .collect<[Array<{ id: RecordId }>]>();
     expect(rows).toHaveLength(0);
+
+    const [historyRows] = await connection.db
+      .query<
+        [
+          Array<{
+            id: RecordId<"history">;
+            after: { data: unknown };
+            client_identity: string;
+          }>,
+        ]
+      >("SELECT id, after, client_identity FROM history WHERE kind = 'proposal.reject';")
+      .collect<
+        [
+          Array<{
+            id: RecordId<"history">;
+            after: { data: unknown };
+            client_identity: string;
+          }>,
+        ]
+      >();
+    expect(historyRows).toHaveLength(1);
+    expect(historyRows[0]?.id.toString()).toBe(result.historyId);
+    expect(historyRows[0]?.client_identity).toBe("chat-operator");
+    expect(historyRows[0]?.after.data).toEqual({
+      decision: "rejected",
+      reason: "noisy",
+    });
   });
 });

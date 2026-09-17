@@ -1,9 +1,42 @@
 import { describe, expect, test } from "bun:test";
-import { type ResolveInput, resolveTargets } from "../../../../src/core/markdown/resolver";
+import {
+  type ResolveInput,
+  parseMarkdownDestination,
+  resolveMarkdownTarget,
+  resolveTargets,
+} from "../../../../src/core/markdown/resolver";
 
 function makeInput(rawTarget: string): ResolveInput {
   return { rawTarget, targetHeading: null, targetBlockId: null };
 }
+
+test("Markdown destinations resolve locally without basename fallback or vault escapes", () => {
+  const paths = [
+    "Projects/Active.md",
+    "Projects/Reference.md",
+    "Design Notes.md",
+    "Elsewhere/Remote.md",
+  ];
+  expect(resolveMarkdownTarget("Projects/Active.md", "../Design Notes.md", paths)).toBe(
+    "Design Notes.md",
+  );
+  expect(resolveMarkdownTarget("Projects/Active.md", "Reference", paths)).toBe(
+    "Projects/Reference.md",
+  );
+  expect(resolveMarkdownTarget("Projects/Active.md", "/Design Notes.md", paths)).toBe(
+    "Design Notes.md",
+  );
+  expect(resolveMarkdownTarget("Projects/Active.md", "Remote", paths)).toBeNull();
+  expect(resolveMarkdownTarget("Projects/Active.md", "../../Design Notes.md", paths)).toBeNull();
+  expect(resolveMarkdownTarget("Projects/Active.md", "", paths)).toBe("Projects/Active.md");
+  expect(parseMarkdownDestination("../C%23%20Notes.md#Trade%20offs")).toEqual({
+    rawTarget: "../C# Notes.md",
+    targetHeading: "Trade offs",
+    targetBlockId: null,
+  });
+  expect(parseMarkdownDestination("//example.com/Note.md")).toBeNull();
+  expect(parseMarkdownDestination("%2E%2E%5Coutside.md")).toBeNull();
+});
 
 describe("resolveTargets", () => {
   test("exact path match", () => {

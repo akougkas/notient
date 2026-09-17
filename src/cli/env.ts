@@ -1,6 +1,9 @@
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
+import { normalizeVaultPath } from "../core/vault/paths";
+
+export { normalizeVaultPath };
 
 export interface ResolveVaultOptions {
   flagVault: string | null;
@@ -48,7 +51,7 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function absolutize(path: string, cwd: string): string {
-  return isAbsolute(path) ? path : resolve(cwd, path);
+  return normalizeVaultPath(path, cwd);
 }
 
 export function defaultStateLoader(): () => Promise<string | null> {

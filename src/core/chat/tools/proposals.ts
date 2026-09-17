@@ -1,55 +1,44 @@
-import { type RecordId, StringRecordId, type Surreal } from "surrealdb";
+import type { RecordId, Surreal } from "surrealdb";
 import type { ApprovalService } from "../../approvals/approvalService";
-import { WRITEBACK_EDGE_TABLES, type WritebackEdgeTable } from "../../approvals/approvalService";
-import type { EventBus } from "../../events/eventBus";
+import {
+  PENDING_PROPOSAL_PROJECTION,
+  type ProposalSource,
+  type StoredPendingProposal,
+  assertProposalLimit,
+  isProposalAgentFilter,
+  parsePendingProposalLookup,
+  parseStoredPendingProposal,
+  proposalStatementRows,
+} from "../../approvals/proposalStorage";
+import { normalizeRejectionReason } from "../../approvals/rejectionReason";
+import { WRITEBACK_EDGE_TABLES, type WritebackEdgeTable } from "../../db/edgeTables";
+import { parseSurrealRelationRecordId } from "../../db/recordId";
+import { isCanonicalOrdinaryNotePath } from "../../vault/publicPath";
 import type { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
 import {
   type ToolDefinition,
+  type ToolInvokeContext,
   type ToolJsonSchema,
   isObject,
-  optionalPositiveInt,
-  optionalString,
   requireString,
 } from "./registry";
 
 export interface ProposalEdge {
   kind: "edge";
   id: string;
-  type: string;
+  type: WritebackEdgeTable;
   sourceId: string;
   targetId: string;
-  sourceNotePath: string | null;
-  targetNotePath: string | null;
+  sourceNotePath: string;
+  targetNotePath: string;
   confidence: number;
+  source: ProposalSource;
   agent: string;
   evidence: string[];
   rationale: string | null;
   createdAt: number;
 }
-
-/**
- * Phase 5 Task 7: the staging-node concept retired in Phase 4. Surrealdb
- * proposals are exclusively edge rows in the writeback-capable tables. The
- * `ProposalNode` shape is preserved as a type alias so the tool result
- * union still matches the SQLite-era LLM contract; production callers will
- * never see a `kind: "node"` entry.
- */
-export interface ProposalNode {
-  kind: "node";
-  id: string;
-  type: string;
-  label: string;
-  notePath: string | null;
-  agent: string;
-  confidence: number;
-  body: string | null;
-  memberPaths: string[];
-  targetPath: string | null;
-  createdAt: number;
-}
-
-export type ProposalEntry = ProposalEdge | ProposalNode;
 
 export interface ProposalsListArgs {
   notePath?: string;
@@ -58,31 +47,41 @@ export interface ProposalsListArgs {
 }
 
 export interface ProposalsListResult {
-  proposals: ProposalEntry[];
+  proposals: ProposalEdge[];
 }
 
-interface EdgeRow {
-  id: RecordId;
-  fromPath: string | null;
-  toPath: string | null;
-  fromId: RecordId<"note">;
-  toId: RecordId<"note">;
-  agent: string | null;
-  confidence: number;
-  /** SurrealDB datetime; SDK delivers it as `Date` or an ISO string. */
-  created_at: Date | string;
+const MAX_LIST_LIMIT = 200;
+
+function optionalNotePath(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isCanonicalOrdinaryNotePath(value)) {
+    throw new Error("notePath must be an exact ordinary public vault-relative Markdown note path");
+  }
+  return value;
+}
+
+function optionalAgent(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isProposalAgentFilter(value)) {
+    throw new Error("agent must be a canonical proposal producer or client identity");
+  }
+  return value;
+}
+
+function optionalListLimit(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`proposal limit must be an integer from 1 through ${MAX_LIST_LIMIT}`);
+  }
+  return assertProposalLimit(value, MAX_LIST_LIMIT);
 }
 
 /**
- * Read-only proposal listing. After Phase 4 the staging tables are gone;
- * proposals are rows in the six writeback-capable edge tables with
- * `approved = false`. Filters by the focal note (matches on either side of
- * an edge's resolved `note.path`) and by the linker `agent` field.
+ * Read-only proposal listing. Proposals are rows in the six writeback-capable
+ * edge tables with `approved = false`. Filters by the focal note (either side of
+ * an edge's resolved `note.path`) and by its attributed proposal agent.
  *
- * Drift note: the SQLite version ordered by autoincrement `id`. SurrealDB
- * ordering uses `created_at` (the closest monotonic equivalent). The chat
- * agent reads only `proposals[*].id` and `proposals[*].createdAt`, so the
- * wire shape is unchanged.
+ * Results are newest-first by the edge's canonical `created_at` timestamp.
  */
 export function makeListProposalsTool(
   db: Surreal,
@@ -90,28 +89,32 @@ export function makeListProposalsTool(
   return {
     name: "proposals.list_pending",
     description:
-      "List pending agent proposals (edges) awaiting approval. Optionally filter by notePath or agent.",
+      "List pending note-graph proposals awaiting approval. Optionally filter by notePath or attributed agent.",
     schema: {
       type: "object",
       properties: {
         notePath: { type: "string", description: "Filter to proposals touching this note." },
         agent: { type: "string", description: "Filter to a single agent name." },
-        limit: { type: "number", description: "Maximum proposals to return per kind." },
+        limit: { type: "number", description: "Maximum proposals to return in total." },
       },
       required: [],
     },
     validate: (raw) => {
-      if (raw === undefined || raw === null) return {};
+      if (raw === undefined) return {};
       if (!isObject(raw)) throw new Error("expected object");
-      const notePath = optionalString(raw.notePath, "notePath");
-      const agent = optionalString(raw.agent, "agent");
-      const limit = optionalPositiveInt(raw.limit, "limit");
+      const notePath = optionalNotePath(raw.notePath);
+      const agent = optionalAgent(raw.agent);
+      const requestedLimit = optionalListLimit(raw.limit);
+      const limit =
+        requestedLimit === undefined
+          ? undefined
+          : assertProposalLimit(requestedLimit, MAX_LIST_LIMIT);
       return { notePath, agent, limit };
     },
     invoke: async (args) => {
       const edges = await collectEdges(db, args);
       edges.sort((a, b) => b.createdAt - a.createdAt);
-      const limited = args.limit ? edges.slice(0, args.limit) : edges;
+      const limited = args.limit === undefined ? edges : edges.slice(0, args.limit);
       return { proposals: limited };
     },
     writeGated: false,
@@ -123,15 +126,13 @@ export interface ProposalsGetArgs {
 }
 
 export interface ProposalsGetResult {
-  proposal: ProposalEntry | null;
+  proposal: ProposalEdge | null;
 }
 
 /**
  * Read-only single-proposal lookup. Returns null when the row is missing or
  * has already been approved. The id may be a SurrealDB record id string
- * (e.g. `supports:abc123`) — the lookup walks the six writeback tables and
- * returns the first match. The chat surface never receives a node-kind id
- * post-Phase 4.
+ * (e.g. `supports:8z7li22oizca97c0mwo4`).
  */
 export function makeGetProposalTool(
   db: Surreal,
@@ -148,18 +149,14 @@ export function makeGetProposalTool(
     },
     validate: (raw) => {
       if (!isObject(raw)) throw new Error("expected object");
-      const id = typeof raw.id === "string" && raw.id.length > 0 ? raw.id : null;
-      if (!id) throw new Error("id must be a non-empty string");
+      const id = requireString(raw.id, "id");
+      parseSurrealRelationRecordId(id, WRITEBACK_EDGE_TABLES, "id");
       return { id };
     },
     invoke: async (args) => {
-      for (const table of WRITEBACK_EDGE_TABLES) {
-        const row = await selectEdgeById(db, table, args.id);
-        if (row !== null) {
-          return { proposal: toProposalEdge(table, row) };
-        }
-      }
-      return { proposal: null };
+      const parsed = parseSurrealRelationRecordId(args.id, WRITEBACK_EDGE_TABLES, "id");
+      const row = await selectEdgeById(db, parsed.table, parsed.recordId);
+      return { proposal: row === null ? null : toProposalEdge(row) };
     },
     writeGated: false,
   };
@@ -168,7 +165,11 @@ export function makeGetProposalTool(
 async function collectEdges(db: Surreal, args: ProposalsListArgs): Promise<ProposalEdge[]> {
   const proposals: ProposalEdge[] = [];
   for (const table of WRITEBACK_EDGE_TABLES) {
-    const conditions: string[] = ["approved = false"];
+    const conditions: string[] = [
+      "approved = false",
+      "in.tombstoned_at IS NONE",
+      "out.tombstoned_at IS NONE",
+    ];
     const bindings: Record<string, unknown> = {};
     if (args.agent !== undefined) {
       conditions.push("agent = $agent");
@@ -179,10 +180,11 @@ async function collectEdges(db: Surreal, args: ProposalsListArgs): Promise<Propo
       bindings.path = args.notePath;
     }
     // SurrealDB 3.x requires every ORDER BY field to appear in the projection.
-    const sql = `SELECT id, in AS fromId, out AS toId, in.path AS fromPath, out.path AS toPath, agent, confidence, created_at FROM ${table} WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`;
-    const [rows] = await db.query<[EdgeRow[]]>(sql, bindings).collect<[EdgeRow[]]>();
+    const sql = `SELECT ${PENDING_PROPOSAL_PROJECTION} FROM ${table} WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`;
+    const result: unknown = await db.query(sql, bindings).collect();
+    const rows = proposalStatementRows(result, `${table} proposal list`);
     for (const row of rows) {
-      proposals.push(toProposalEdge(table, row));
+      proposals.push(toProposalEdge(parseStoredPendingProposal(row, table)));
     }
   }
   return proposals;
@@ -191,72 +193,29 @@ async function collectEdges(db: Surreal, args: ProposalsListArgs): Promise<Propo
 async function selectEdgeById(
   db: Surreal,
   table: WritebackEdgeTable,
-  id: string,
-): Promise<EdgeRow | null> {
-  // The chat agent passes a stringified SurrealDB record id (e.g.
-  // `supports:⟨abc-uuid⟩`). Reject ids that target a different table; for
-  // the matching table we hand the SDK a `StringRecordId` so the WHERE
-  // clause does an indexed exact match.
-  if (!id.startsWith(`${table}:`)) return null;
-  let recordId: StringRecordId;
-  try {
-    recordId = new StringRecordId(id);
-  } catch {
-    return null;
-  }
-  try {
-    const sql = `SELECT id, in AS fromId, out AS toId, in.path AS fromPath, out.path AS toPath, agent, confidence, created_at FROM ${table} WHERE id = $id AND approved = false LIMIT 1;`;
-    const [rows] = await db.query<[EdgeRow[]]>(sql, { id: recordId }).collect<[EdgeRow[]]>();
-    return rows[0] ?? null;
-  } catch {
-    // Malformed record-id strings are not the caller's mistake; treat as a
-    // miss and let the next table try.
-    return null;
-  }
+  recordId: RecordId<WritebackEdgeTable>,
+): Promise<StoredPendingProposal | null> {
+  const sql = `SELECT ${PENDING_PROPOSAL_PROJECTION} FROM ${table} WHERE id = $id AND approved = false AND in.tombstoned_at IS NONE AND out.tombstoned_at IS NONE LIMIT 1;`;
+  const result: unknown = await db.query(sql, { id: recordId }).collect();
+  return parsePendingProposalLookup(result, table, recordId.toString());
 }
 
-function toProposalEdge(table: WritebackEdgeTable, row: EdgeRow): ProposalEdge {
+function toProposalEdge(proposal: StoredPendingProposal): ProposalEdge {
   return {
     kind: "edge",
-    id: row.id.toString(),
-    type: table,
-    sourceId: row.fromId.toString(),
-    targetId: row.toId.toString(),
-    sourceNotePath: row.fromPath,
-    targetNotePath: row.toPath,
-    confidence: row.confidence,
-    agent: row.agent ?? "unknown",
-    // The Phase 4 schema stores evidence as `option<array<record<chunk>>>`;
-    // chat tools surface it as a string array (chunk record ids stringified)
-    // so the LLM contract is untouched. Today the linker writes no evidence;
-    // the field is reserved for future extractor-emitted edges.
-    evidence: [],
+    id: proposal.id,
+    type: proposal.table,
+    sourceId: proposal.fromId.toString(),
+    targetId: proposal.toId.toString(),
+    sourceNotePath: proposal.fromPath,
+    targetNotePath: proposal.toPath,
+    confidence: proposal.confidence,
+    source: proposal.source,
+    agent: proposal.agent,
+    evidence: proposal.evidence.map((chunkId) => chunkId.toString()),
     rationale: null,
-    createdAt: parseDateTime(row.created_at),
+    createdAt: proposal.createdAt,
   };
-}
-
-function parseDateTime(value: Date | string | null | undefined): number {
-  if (value === null || value === undefined) return 0;
-  if (value instanceof Date) return value.getTime();
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * Detects the writeback-capable table from a SurrealDB record-id string of
- * shape `{table}:{recordId}`. Returns null when the prefix does not match
- * one of the six writeback edge tables, so the chat tool can refuse the
- * call before opening a SurrealDB connection.
- */
-function tableFromEdgeId(id: string): WritebackEdgeTable | null {
-  const colonIndex = id.indexOf(":");
-  if (colonIndex <= 0) return null;
-  const prefix = id.slice(0, colonIndex);
-  if ((WRITEBACK_EDGE_TABLES as ReadonlyArray<string>).includes(prefix)) {
-    return prefix as WritebackEdgeTable;
-  }
-  return null;
 }
 
 export interface ProposalsApproveArgs {
@@ -264,11 +223,16 @@ export interface ProposalsApproveArgs {
 }
 
 export type ProposalsApproveResult =
-  | { applied: true; id: string; table: WritebackEdgeTable }
+  | {
+      applied: true;
+      id: string;
+      table: WritebackEdgeTable;
+      historyId: string;
+      approvedBy: string;
+    }
   | { applied: false; reason: string };
 
 export interface ProposalsApproveContext {
-  db: Surreal;
   approvalService: ApprovalService;
   approvalGate: ApprovalGate;
   approvalMode: () => ApprovalMode;
@@ -281,19 +245,19 @@ const APPROVE_SCHEMA: ToolJsonSchema = {
     id: {
       type: "string",
       description:
-        "SurrealDB edge record id (e.g. `supports:abc...`). Must address one of the six writeback-capable edge tables.",
+        "Canonical SurrealDB 3.0.5 relation id (e.g. `supports:8z7li22oizca97c0mwo4`). Must address one of the six writeback-capable edge tables.",
     },
   },
   required: ["id"],
 };
 
 /**
- * Write-gated chat tool that promotes one linker proposal through the
+ * Write-gated chat tool that promotes one pending proposal through the
  * three-state contract by delegating to `ApprovalService.approveEdge`. The
  * tool routes through `ApprovalGate.request` first so safe-mode operators
- * get prompted before the writeback runs. Idempotent semantics: an unknown
- * id returns `applied: false` with a `not found or already applied` reason
- * rather than throwing.
+ * get prompted before the writeback runs. A retry of a completed approval
+ * returns its deterministic durable receipt. An unknown or still-unavailable
+ * id returns `applied: false` rather than throwing.
  */
 export function makeApproveProposalTool(
   context: ProposalsApproveContext,
@@ -301,36 +265,17 @@ export function makeApproveProposalTool(
   return {
     name: "proposals.approve",
     description:
-      "Approve a pending linker proposal by edge id. Writes the corresponding wikilink or frontmatter relation to the source note.",
+      "Approve a pending note-graph proposal by edge id. Writes the corresponding wikilink or frontmatter relation to the source note.",
     schema: APPROVE_SCHEMA,
     writeGated: true,
     validate: (raw) => {
       if (!isObject(raw)) throw new Error("expected object");
       const id = requireString(raw.id, "id");
+      parseSurrealRelationRecordId(id, WRITEBACK_EDGE_TABLES, "id");
       return { id };
     },
     invoke: async (args, signal, invokeContext) => {
-      const table = tableFromEdgeId(args.id);
-      if (table === null) {
-        return {
-          applied: false,
-          reason: `id '${args.id}' has no writeback-capable table prefix`,
-        };
-      }
-      let recordId: StringRecordId;
-      try {
-        recordId = new StringRecordId(args.id);
-      } catch (error) {
-        return {
-          applied: false,
-          reason: `id '${args.id}' is not a valid SurrealDB record id (${
-            error instanceof Error ? error.message : String(error)
-          })`,
-        };
-      }
-      if (!(await edgeExists(context.db, table, recordId))) {
-        return { applied: false, reason: "proposal not found or already applied" };
-      }
+      const parsed = parseSurrealRelationRecordId(args.id, WRITEBACK_EDGE_TABLES, "id");
       const decision = await context.approvalGate.request(
         { id: context.generateCallId(), name: "proposals.approve", args: { ...args } },
         context.approvalMode(),
@@ -339,13 +284,28 @@ export function makeApproveProposalTool(
         invokeContext,
       );
       if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
+        return { applied: false, reason: decision.reason };
       }
-      await context.approvalService.approveEdge({
-        id: recordId as unknown as RecordId,
-        table,
-      });
-      return { applied: true, id: args.id, table };
+      const guard = context.approvalGate.writeGuard(decision, signal);
+      const approval = await context.approvalService.approveEdge(
+        {
+          id: parsed.recordId,
+          table: parsed.table,
+          approvedBy: invokeContext.clientIdentity,
+          toolApproval: guard.toolApproval,
+        },
+        { authorize: guard.authorize },
+      );
+      if (approval === null) {
+        return { applied: false, reason: "proposal not found or already applied" };
+      }
+      return {
+        applied: true,
+        id: args.id,
+        table: parsed.table,
+        historyId: approval.historyId,
+        approvedBy: approval.approvedBy,
+      };
     },
   };
 }
@@ -356,21 +316,20 @@ export interface ProposalsRejectArgs {
 }
 
 export type ProposalsRejectResult =
-  | { applied: true; id: string; table: WritebackEdgeTable; reason: string | null }
+  | {
+      applied: true;
+      id: string;
+      table: WritebackEdgeTable;
+      reason: string | null;
+      historyId: string;
+    }
   | { applied: false; reason: string };
 
 export interface ProposalsRejectContext {
-  db: Surreal;
   approvalService: ApprovalService;
   approvalGate: ApprovalGate;
   approvalMode: () => ApprovalMode;
   generateCallId: () => string;
-  /**
-   * Optional sink for the operator-supplied rejection `reason`. The
-   * underlying `rejectEdge` does not persist a reason today; the chat
-   * surface still surfaces it on the wire for observability.
-   */
-  bus?: EventBus;
 }
 
 const REJECT_SCHEMA: ToolJsonSchema = {
@@ -379,23 +338,23 @@ const REJECT_SCHEMA: ToolJsonSchema = {
     id: {
       type: "string",
       description:
-        "SurrealDB edge record id (e.g. `supports:abc...`). Must address one of the six writeback-capable edge tables.",
+        "Canonical SurrealDB 3.0.5 relation id (e.g. `supports:8z7li22oizca97c0mwo4`). Must address one of the six writeback-capable edge tables.",
     },
     reason: {
       type: "string",
       description:
-        "Optional human-readable reason for the rejection. Surfaced on the wire only; not persisted.",
+        "Optional human-readable reason for the rejection. Persisted in the proposal.reject audit record.",
     },
   },
   required: ["id"],
 };
 
 /**
- * Write-gated chat tool that deletes one linker proposal by delegating to
+ * Write-gated chat tool that deletes one pending proposal by delegating to
  * `ApprovalService.rejectEdge`. Routes through `ApprovalGate.request` so
  * safe-mode operators get prompted before the row disappears. The optional
- * `reason` is echoed in the result and reserved for future persistence;
- * `rejectEdge` does not record one today.
+ * `reason` is committed atomically with the deletion in a non-reversible
+ * `proposal.reject` history row and returned with that row's id.
  */
 export function makeRejectProposalTool(
   context: ProposalsRejectContext,
@@ -403,64 +362,61 @@ export function makeRejectProposalTool(
   return {
     name: "proposals.reject",
     description:
-      "Reject a pending linker proposal by edge id. Deletes the edge row; the linker may re-propose the same edge on its next pass.",
+      "Reject a pending note-graph proposal by edge id. Records a terminal audit decision for that exact proposal identity.",
     schema: REJECT_SCHEMA,
     writeGated: true,
     validate: (raw) => {
       if (!isObject(raw)) throw new Error("expected object");
       const id = requireString(raw.id, "id");
-      const reason = optionalString(raw.reason, "reason");
+      parseSurrealRelationRecordId(id, WRITEBACK_EDGE_TABLES, "id");
+      const reasonInput = raw.reason;
+      if (reasonInput !== undefined && typeof reasonInput !== "string") {
+        throw new Error("reason must be a string");
+      }
+      const reason = normalizeRejectionReason(reasonInput);
       return reason === undefined ? { id } : { id, reason };
     },
-    invoke: async (args, signal, invokeContext) => {
-      const table = tableFromEdgeId(args.id);
-      if (table === null) {
-        return {
-          applied: false,
-          reason: `id '${args.id}' has no writeback-capable table prefix`,
-        };
-      }
-      let recordId: StringRecordId;
-      try {
-        recordId = new StringRecordId(args.id);
-      } catch (error) {
-        return {
-          applied: false,
-          reason: `id '${args.id}' is not a valid SurrealDB record id (${
-            error instanceof Error ? error.message : String(error)
-          })`,
-        };
-      }
-      if (!(await edgeExists(context.db, table, recordId))) {
-        return { applied: false, reason: "proposal not found or already applied" };
-      }
-      const decision = await context.approvalGate.request(
-        { id: context.generateCallId(), name: "proposals.reject", args: { ...args } },
-        context.approvalMode(),
-        `Reject proposal ${args.id}${args.reason ? ` (${args.reason})` : ""}`,
-        signal,
-        invokeContext,
-      );
-      if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
-      }
-      await context.approvalService.rejectEdge({
-        id: recordId as unknown as RecordId,
-        table,
-      });
-      return { applied: true, id: args.id, table, reason: args.reason ?? null };
-    },
+    invoke: (args, signal, invokeContext) =>
+      invokeRejectProposal(context, args, signal, invokeContext),
   };
 }
 
-async function edgeExists(
-  db: Surreal,
-  table: WritebackEdgeTable,
-  id: StringRecordId,
-): Promise<boolean> {
-  const sql = `SELECT id FROM ${table} WHERE id = $id AND approved = false LIMIT 1;`;
-  const [rows] = await db
-    .query<[Array<{ id: RecordId }>]>(sql, { id })
-    .collect<[Array<{ id: RecordId }>]>();
-  return rows.length > 0;
+async function invokeRejectProposal(
+  context: ProposalsRejectContext,
+  args: ProposalsRejectArgs,
+  signal: AbortSignal,
+  invokeContext: ToolInvokeContext,
+): Promise<ProposalsRejectResult> {
+  const parsed = parseSurrealRelationRecordId(args.id, WRITEBACK_EDGE_TABLES, "id");
+  const decision = await context.approvalGate.request(
+    { id: context.generateCallId(), name: "proposals.reject", args: { ...args } },
+    context.approvalMode(),
+    rejectionPreview(args),
+    signal,
+    invokeContext,
+  );
+  if (!decision.approved) return { applied: false, reason: decision.reason };
+  await context.approvalGate.writeGuard(decision, signal).authorize();
+  const rejection = await context.approvalService.rejectEdge({
+    id: parsed.recordId,
+    table: parsed.table,
+    ...(args.reason !== undefined ? { reason: args.reason } : {}),
+    rejectedBy: invokeContext.clientIdentity,
+  });
+  if (rejection === null) {
+    return { applied: false, reason: "proposal not found or already applied" };
+  }
+  return {
+    applied: true,
+    id: args.id,
+    table: parsed.table,
+    reason: rejection.reason,
+    historyId: rejection.historyId,
+  };
+}
+
+function rejectionPreview(args: ProposalsRejectArgs): string {
+  return args.reason === undefined
+    ? `Reject proposal ${args.id}`
+    : `Reject proposal ${args.id} (${args.reason})`;
 }

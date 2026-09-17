@@ -1,10 +1,15 @@
+import {
+  AGENT_EVENT_TYPES,
+  type AgentEventType,
+  parseAgentEventRecordId,
+} from "../../core/services/agentEventStore";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { connectClient } from "../client";
 import type { Emitter } from "../output";
 
 export interface EventsCommandOptions {
   vaultPath: string;
-  since: number;
+  since: string | null;
   limit?: number;
   longPollMs?: number;
   noPoll?: boolean;
@@ -34,7 +39,6 @@ export async function runEventsCommand(options: EventsCommandOptions): Promise<n
   try {
     return await drainEventsCall({
       frames: client.call("agent.events", params),
-      since: options.since,
       emitter: options.emitter,
       writeStdout,
       writeStderr,
@@ -53,9 +57,6 @@ function defaultStderrWriter(line: string): void {
 }
 
 function buildRequestParams(options: EventsCommandOptions): Record<string, unknown> {
-  if (!Number.isFinite(options.since) || options.since < 0 || !Number.isInteger(options.since)) {
-    throw new Error("INVALID_PARAMS: events requires --since <non-negative integer>");
-  }
   const params: Record<string, unknown> = { since: options.since };
   if (options.limit !== undefined) params.limit = options.limit;
   if (options.noPoll === true) {
@@ -68,7 +69,6 @@ function buildRequestParams(options: EventsCommandOptions): Record<string, unkno
 
 interface DrainEventsCallOptions {
   frames: AsyncIterable<Record<string, unknown>>;
-  since: number;
   emitter: Emitter;
   writeStdout: (line: string) => void;
   writeStderr: (line: string) => void;
@@ -77,7 +77,7 @@ interface DrainEventsCallOptions {
 async function drainEventsCall(options: DrainEventsCallOptions): Promise<number> {
   for await (const frame of options.frames) {
     if (frame.type === "result") {
-      renderResult(frame, options.since, options.writeStdout);
+      renderResult(decodeEventsResult(frame), options.writeStdout);
       return 0;
     }
     if (frame.type === "error") {
@@ -92,31 +92,81 @@ async function drainEventsCall(options: DrainEventsCallOptions): Promise<number>
   return 1;
 }
 
-function renderResult(
-  frame: Record<string, unknown>,
-  fallbackCursor: number,
-  writeStdout: (line: string) => void,
-): void {
-  const events = Array.isArray(frame.events) ? frame.events : [];
-  for (const event of events) {
+function renderResult(result: EventsResult, writeStdout: (line: string) => void): void {
+  for (const event of result.events) {
     writeStdout(JSON.stringify(event));
   }
-  const cursor = typeof frame.cursor === "number" ? frame.cursor : fallbackCursor;
-  writeStdout(JSON.stringify({ type: "events:cursor", cursor }));
+  writeStdout(JSON.stringify({ type: "events:cursor", cursor: result.cursor }));
 }
 
-export function parseEventsSince(value: unknown): number {
-  if (value === undefined || value === null || value === true || value === false) {
-    throw new Error("INVALID_PARAMS: events requires --since <non-negative integer>");
+interface EventResultRow {
+  id: string;
+  ts: number;
+  type: AgentEventType;
+  payload: unknown;
+}
+
+interface EventsResult {
+  events: EventResultRow[];
+  cursor: string | null;
+  longPollExpired: boolean;
+}
+
+const AGENT_EVENT_TYPE_SET = new Set<string>(AGENT_EVENT_TYPES);
+
+function decodeEventsResult(frame: Record<string, unknown>): EventsResult {
+  if (frame.ok !== true) throw malformedEventsResult("ok must be true");
+  if (!Array.isArray(frame.events)) throw malformedEventsResult("events must be an array");
+  const cursor = decodeCursor(frame.cursor, "cursor");
+  if (typeof frame.longPollExpired !== "boolean") {
+    throw malformedEventsResult("longPollExpired must be a boolean");
   }
-  if (typeof value !== "string" && typeof value !== "number") {
-    throw new Error("INVALID_PARAMS: events requires --since <non-negative integer>");
+  return {
+    events: frame.events.map((event, index) => decodeEvent(event, index)),
+    cursor,
+    longPollExpired: frame.longPollExpired,
+  };
+}
+
+function decodeEvent(raw: unknown, index: number): EventResultRow {
+  if (!isRecord(raw)) throw malformedEventsResult(`events[${index}] must be an object`);
+  const id = decodeCursor(raw.id, `events[${index}].id`);
+  if (id === null) throw malformedEventsResult(`events[${index}].id must not be null`);
+  if (typeof raw.ts !== "number" || !Number.isSafeInteger(raw.ts) || raw.ts < 0) {
+    throw malformedEventsResult(`events[${index}].ts must be a non-negative integer`);
   }
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-    throw new Error("INVALID_PARAMS: events requires --since <non-negative integer>");
+  if (typeof raw.type !== "string" || !AGENT_EVENT_TYPE_SET.has(raw.type)) {
+    throw malformedEventsResult(`events[${index}].type is not a persisted agent event type`);
   }
-  return parsed;
+  if (!("payload" in raw)) throw malformedEventsResult(`events[${index}].payload is required`);
+  return { id, ts: raw.ts, type: raw.type as AgentEventType, payload: raw.payload };
+}
+
+function decodeCursor(raw: unknown, label: string): string | null {
+  if (raw === null) return null;
+  try {
+    return parseAgentEventRecordId(raw).toString();
+  } catch {
+    throw malformedEventsResult(`${label} must be null or a canonical agent_event UUID record id`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function malformedEventsResult(reason: string): Error {
+  return new Error(`agent.events returned a malformed result: ${reason}`);
+}
+
+export function parseEventsSince(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  try {
+    return parseAgentEventRecordId(value).toString();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`INVALID_PARAMS: ${message}`);
+  }
 }
 
 export function parseEventsPositiveInt(value: unknown, label: string): number | undefined {
@@ -125,10 +175,10 @@ export function parseEventsPositiveInt(value: unknown, label: string): number | 
     throw new Error(`INVALID_PARAMS: --${label} must be a positive integer`);
   }
   const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`INVALID_PARAMS: --${label} must be a positive integer`);
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 export function parseEventsLongPollMs(value: unknown): number | undefined {
@@ -137,8 +187,8 @@ export function parseEventsLongPollMs(value: unknown): number | undefined {
     throw new Error("INVALID_PARAMS: --long-poll-ms must be a non-negative integer");
   }
   const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
     throw new Error("INVALID_PARAMS: --long-poll-ms must be a non-negative integer");
   }
-  return Math.floor(parsed);
+  return parsed;
 }

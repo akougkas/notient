@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,19 @@ import {
   runSessionCommand,
 } from "../../../../src/cli/commands/session";
 import { makeEmitter } from "../../../../src/cli/output";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
+import { installFakeDaemonAuth, replyToAuthenticatedHello } from "../../../helpers/fakeDaemonAuth";
+
+function sessionId(value: number): string {
+  return createUuidRecordId(
+    "agent_session",
+    `018f05cd-3f7b-7000-8000-${value.toString().padStart(12, "0")}`,
+  ).toString();
+}
+
+const FIXTURE_SESSION_ID = sessionId(5);
+const MISSING_SESSION_ID = sessionId(999);
 
 interface FakeDaemon {
   server: Server;
@@ -23,7 +35,7 @@ interface FakeDaemon {
 
 async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
   const socketPath = resolveSocketPath(rootDir, currentPlatform());
-  await mkdir(join(rootDir, ".notient"), { recursive: true });
+  const cleanupAuth = await installFakeDaemonAuth(rootDir);
   const sockets = new Set<Socket>();
   const framesReceived: Record<string, unknown>[] = [];
   let pendingReply: Record<string, unknown> = {
@@ -43,10 +55,12 @@ async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
         const line = buffer.slice(0, newlineIndex).trim();
         buffer = buffer.slice(newlineIndex + 1);
         if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          framesReceived.push(frame);
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          socket.write(`${JSON.stringify({ id, ...pendingReply })}\n`);
+          replyToFrame(
+            socket,
+            JSON.parse(line) as Record<string, unknown>,
+            framesReceived,
+            () => pendingReply,
+          );
         }
         newlineIndex = buffer.indexOf("\n");
       }
@@ -65,6 +79,7 @@ async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
     close: async () => {
       for (const socket of sockets) socket.end();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await cleanupAuth();
     },
   };
 }
@@ -86,7 +101,7 @@ describe("notient session CLI", () => {
     daemon.setReply({
       type: "result",
       ok: true,
-      sessionId: 1,
+      sessionId: sessionId(1),
       client: "claude-code",
       expiresAt: 1_700_000_000,
       allowedFolders: ["Inbox/"],
@@ -116,7 +131,7 @@ describe("notient session CLI", () => {
     expect(params.maxWrites).toBe(20);
     expect(params.ttlMinutes).toBe(60);
     const printed = JSON.parse(stdoutLines.join("\n")) as Record<string, unknown>;
-    expect(printed.sessionId).toBe(1);
+    expect(printed.sessionId).toBe(sessionId(1));
     expect(printed.client).toBe("claude-code");
   });
 
@@ -124,11 +139,11 @@ describe("notient session CLI", () => {
     daemon.setReply({
       type: "result",
       ok: true,
-      sessionId: 2,
+      sessionId: sessionId(2),
       client: "claude-code",
       expiresAt: 1_700_000_000,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     await runSessionCommand({
@@ -208,14 +223,14 @@ describe("notient session CLI", () => {
     daemon.setReply({
       type: "result",
       ok: true,
-      sessionId: 5,
+      sessionId: FIXTURE_SESSION_ID,
       revokedAt: 1_700_000_500,
     });
     const stdoutLines: string[] = [];
     const exitCode = await runSessionCommand({
       vaultPath: rootDir,
       subcommand: "revoke",
-      sessionId: 5,
+      sessionId: FIXTURE_SESSION_ID,
       emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
       writeStdout: (line) => stdoutLines.push(line),
       writeStderr: () => {},
@@ -224,9 +239,9 @@ describe("notient session CLI", () => {
     const sent = daemon.framesReceived[0];
     expect(sent.method).toBe("session.revoke");
     const params = sent.params as Record<string, unknown>;
-    expect(params.sessionId).toBe(5);
+    expect(params.sessionId).toBe(FIXTURE_SESSION_ID);
     const printed = JSON.parse(stdoutLines.join("\n")) as Record<string, unknown>;
-    expect(printed.sessionId).toBe(5);
+    expect(printed.sessionId).toBe(FIXTURE_SESSION_ID);
     expect(printed.revokedAt).toBe(1_700_000_500);
   });
 
@@ -234,13 +249,13 @@ describe("notient session CLI", () => {
     daemon.setReply({
       type: "error",
       code: "INTERNAL",
-      message: "SESSION_NOT_FOUND: no session with id 9999",
+      message: `SESSION_NOT_FOUND: no session with id ${MISSING_SESSION_ID}`,
     });
     const stderrLines: string[] = [];
     const exitCode = await runSessionCommand({
       vaultPath: rootDir,
       subcommand: "revoke",
-      sessionId: 9999,
+      sessionId: MISSING_SESSION_ID,
       emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
       writeStdout: () => {},
       writeStderr: (line) => stderrLines.push(line),
@@ -323,7 +338,7 @@ describe("session flag parsing", () => {
   test("parseSessionPositiveInt enforces positive integers", () => {
     expect(parseSessionPositiveInt("60", "ttl")).toBe(60);
     expect(parseSessionPositiveInt(60, "ttl")).toBe(60);
-    expect(parseSessionPositiveInt(60.7, "ttl")).toBe(60);
+    expect(() => parseSessionPositiveInt(60.7, "ttl")).toThrow();
     expect(() => parseSessionPositiveInt("0", "ttl")).toThrow();
     expect(() => parseSessionPositiveInt("abc", "ttl")).toThrow();
     expect(() => parseSessionPositiveInt(-1, "ttl")).toThrow();
@@ -335,12 +350,33 @@ describe("session flag parsing", () => {
     expect(() => parseSessionOptionalPositiveInt("0", "max-writes")).toThrow();
   });
 
-  test("parseSessionId requires a positive integer", () => {
-    expect(parseSessionId("5")).toBe(5);
-    expect(parseSessionId(5)).toBe(5);
+  test("parseSessionId requires a canonical agent_session record id", () => {
+    expect(parseSessionId(FIXTURE_SESSION_ID)).toBe(FIXTURE_SESSION_ID);
     expect(() => parseSessionId(undefined)).toThrow();
     expect(() => parseSessionId("abc")).toThrow();
+    expect(() => parseSessionId("note:fixture5")).toThrow();
+    expect(() => parseSessionId("agent_session:fixture5")).toThrow();
+    expect(() => parseSessionId(` ${FIXTURE_SESSION_ID}`)).toThrow();
+    expect(() => parseSessionId(`${FIXTURE_SESSION_ID} `)).toThrow();
     expect(() => parseSessionId(-1)).toThrow();
-    expect(() => parseSessionId(3.5)).toThrow();
   });
 });
+
+/**
+ * Answer one client frame. `session.hello` (which every client now opens
+ * with) is authenticated by the production protocol and kept out of `framesReceived`
+ * so assertions still address the command's own frame.
+ */
+function replyToFrame(
+  socket: Socket,
+  frame: Record<string, unknown>,
+  framesReceived: Record<string, unknown>[],
+  reply: () => Record<string, unknown>,
+): void {
+  const id = typeof frame.id === "string" ? frame.id : "unknown";
+  const method = typeof frame.method === "string" ? frame.method : "unknown";
+  socket.write(`${JSON.stringify({ id, type: "ack", method })}\n`);
+  if (replyToAuthenticatedHello(socket, frame)) return;
+  framesReceived.push(frame);
+  socket.write(`${JSON.stringify({ id, ...reply() })}\n`);
+}

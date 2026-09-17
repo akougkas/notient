@@ -1,54 +1,55 @@
 /**
  * Write-gated note tools. Every invocation routes through `ApprovalGate`;
  * only an approved decision results in a vault write. Each successful write
- * also records a row in the `history` table so Task 15 can offer one-click
- * undo. Phase 4 Task 6 removed the legacy self-write mark; the indexer
- * cross-references the SurrealDB `daemon_write` table (Task 2) to skip
- * daemon-authored writes without a per-call hook.
+ * also records a row in the `history` table for guarded undo. The indexer
+ * cross-references `daemon_write` to recognize daemon-authored changes.
  *
  * Tools provided:
  *   - notes.create               (fails if path already exists)
  *   - notes.append               (appends to end of note body)
  *   - notes.replace_section      (replaces body under a markdown heading)
  *   - notes.update_frontmatter   (merges shallow patch into YAML frontmatter)
+ *
+ * Existing-note tools are revision-bound. The caller names the exact saved
+ * revision it read; the tool plans the complete after-image once, against
+ * that revision, and the approval authorizes only that planned transition.
+ * A note that changes before planning, while approval is outstanding or at
+ * the final guarded write is a conflict. Nothing is recomputed against newer
+ * bytes, because nobody reviewed that recomputation.
  */
 
-import type { HistoryKind } from "../../history/types";
+import { z } from "zod";
+import { NoteReadService, contentRevision } from "../../../api/notes";
+import {
+  NoteApiError,
+  type NoteReadResult,
+  type SourceRange,
+  revisionSchema,
+} from "../../../api/schema";
+import type {
+  DurableNoteWriteInput,
+  DurableNoteWriteKind,
+  DurableNoteWriteResult,
+} from "../../history/durableNoteWriter";
+import { detectNewline, locateFrontmatter, patchFrontmatter } from "../../markdown/frontmatter";
+import { isCanonicalOrdinaryNotePath } from "../../vault/publicPath";
 import type { ApprovalGate } from "../approvalGate";
 import type { ApprovalMode } from "../types";
-import {
-  type ToolDefinition,
-  type ToolInvokeContext,
-  type ToolJsonSchema,
-  isObject,
-  requireString,
-} from "./registry";
+import type { ToolDefinition, ToolInvokeContext, ToolJsonSchema } from "./registry";
 
 export interface NotesFacade {
   readNote(path: string): Promise<string>;
-  writeNote(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
 }
 
-export interface NotesHistoryRecord {
-  kind: HistoryKind;
-  target: string;
-  before: string | null;
-  after: string;
-  /**
-   * Per-invocation client identity that produced the record (Phase D1 LD-5).
-   * Undefined falls back to `human` inside HistoryService.record so older
-   * call sites that don't yet plumb identity behave unchanged.
-   */
-  clientIdentity?: string;
-}
+export type NotesHistoryRecord = DurableNoteWriteInput;
 
 export interface NotesToolsContext {
   facade: NotesFacade;
   approvalGate: ApprovalGate;
   hash: (content: string) => Promise<string>;
   approvalMode: () => ApprovalMode;
-  recordHistory: (record: NotesHistoryRecord) => Promise<string>;
+  applyWrite: (record: NotesHistoryRecord) => Promise<DurableNoteWriteResult>;
   generateCallId: () => string;
 }
 
@@ -56,12 +57,8 @@ export interface NotesWriteSuccess {
   applied: true;
   path: string;
   sha: string;
-  /**
-   * SurrealDB record-id string from `HistoryService.record`. Phase 4
-   * Task 4 swapped the SQLite numeric autoincrement id for the
-   * `RecordId<"history">.toString()` form.
-   */
-  historyId?: string;
+  /** SurrealDB record-id string from `HistoryService.record`. */
+  historyId: string;
 }
 
 export interface NotesWriteSkipped {
@@ -71,42 +68,100 @@ export interface NotesWriteSkipped {
 
 export type NotesWriteResult = NotesWriteSuccess | NotesWriteSkipped;
 
-export interface NotesCreateArgs {
-  notePath: string;
-  body: string;
+const PREVIEW_SEGMENT_MAX = 4000;
+
+const writableNotePath = z
+  .string()
+  .refine(
+    isCanonicalOrdinaryNotePath,
+    "notePath must be an exact writable public Markdown note path outside Notient-owned artifact folders",
+  );
+const noteRevision = revisionSchema.describe(
+  "Exact saved revision returned when you read the note. A changed note is refused; read it again.",
+);
+
+const createArgs = z
+  .object({
+    notePath: writableNotePath.describe("Vault-relative path of the new note."),
+    body: z.string().describe("Full markdown body for the new note."),
+  })
+  .strict();
+export type NotesCreateArgs = z.infer<typeof createArgs>;
+
+const appendArgs = z
+  .object({
+    notePath: writableNotePath.describe("Vault-relative path of the note to append to."),
+    revision: noteRevision,
+    text: z.string().min(1).describe("Text to append to the end of the note body."),
+  })
+  .strict();
+export type NotesAppendArgs = z.infer<typeof appendArgs>;
+
+const replaceSectionArgs = z
+  .object({
+    notePath: writableNotePath.describe("Vault-relative path of the note."),
+    revision: noteRevision,
+    heading: z
+      .string()
+      .min(1)
+      .describe("Heading text exactly as reported in the note structure, without leading #."),
+    occurrence: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("1-based occurrence of a repeated heading. Required when the text repeats."),
+    body: z.string().describe("Replacement body for the section (without the heading line)."),
+  })
+  .strict();
+export type NotesReplaceSectionArgs = z.infer<typeof replaceSectionArgs>;
+
+const updateFrontmatterArgs = z
+  .object({
+    notePath: writableNotePath.describe("Vault-relative path of the note."),
+    revision: noteRevision,
+    patch: z
+      .record(z.string().min(1), z.json())
+      .refine((patch) => Object.keys(patch).length > 0, "patch must name at least one property")
+      .describe(
+        "Top-level properties to set. Each named value replaces the existing one (tags and aliases lists are replaced, not merged); null removes the property.",
+      ),
+  })
+  .strict();
+export type NotesUpdateFrontmatterArgs = z.infer<typeof updateFrontmatterArgs>;
+
+/** Provider grammars reject recursive `$defs`; the JSON patch stays an
+ * object at the model boundary and `validate` enforces the exact shape. */
+function jsonSchema(schema: z.ZodType): ToolJsonSchema {
+  const generated = z.toJSONSchema(schema, { io: "input" }) as ToolJsonSchema & {
+    $defs?: unknown;
+  };
+  const { $defs: _definitions, ...rest } = generated;
+  const patch = rest.properties.patch as { description?: string } | undefined;
+  if (patch) rest.properties.patch = { type: "object", description: patch.description };
+  return rest;
 }
 
-const PREVIEW_MAX = 800;
-
-function summarizeBody(body: string): string {
-  if (body.length <= PREVIEW_MAX) return body;
-  return `${body.slice(0, PREVIEW_MAX)}\n... (${body.length - PREVIEW_MAX} more chars)`;
+function strictParse<T>(schema: z.ZodType<T>, raw: unknown): T {
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new Error(
+    parsed.error.issues
+      .map((issue) =>
+        issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message,
+      )
+      .join("; "),
+  );
 }
 
-function previewCreate(path: string, body: string): string {
-  return `Create new note at ${path}\n---\n${summarizeBody(body)}`;
+function segment(text: string): string {
+  if (text.length <= PREVIEW_SEGMENT_MAX) return text;
+  return `${text.slice(0, PREVIEW_SEGMENT_MAX)}\n... (${text.length - PREVIEW_SEGMENT_MAX} more chars; exact content is bound by revision)`;
 }
 
-function previewAppend(path: string, before: string, addition: string): string {
-  return `Append to ${path}\n---\nBefore: ${before.length} chars\nAdding: ${summarizeBody(addition)}`;
+function short(revision: string): string {
+  return revision.slice(0, 12);
 }
-
-function previewReplaceSection(path: string, heading: string, replacement: string): string {
-  return `Replace section "${heading}" in ${path}\n---\n${summarizeBody(replacement)}`;
-}
-
-function previewFrontmatter(path: string, patch: Record<string, unknown>): string {
-  return `Update frontmatter on ${path}\n---\n${summarizeBody(JSON.stringify(patch, null, 2))}`;
-}
-
-const CREATE_SCHEMA: ToolJsonSchema = {
-  type: "object",
-  properties: {
-    notePath: { type: "string", description: "Vault-relative path of the new note." },
-    body: { type: "string", description: "Full markdown body for the new note." },
-  },
-  required: ["notePath", "body"],
-};
 
 export function makeCreateNoteTool(
   context: NotesToolsContext,
@@ -114,124 +169,69 @@ export function makeCreateNoteTool(
   return {
     name: "notes.create",
     description: "Create a new note at the given path. Fails when the path already exists.",
-    schema: CREATE_SCHEMA,
+    schema: jsonSchema(createArgs),
     writeGated: true,
-    validate: (raw) => {
-      if (!isObject(raw)) throw new Error("expected object");
-      const notePath = requireString(raw.notePath, "notePath");
-      const body = typeof raw.body === "string" ? raw.body : null;
-      if (body === null) throw new Error("body must be a string");
-      return { notePath, body };
-    },
+    validate: (raw) => strictParse(createArgs, raw),
     invoke: async (args, signal, invokeContext) => {
-      if (await context.facade.exists(args.notePath)) {
-        return { applied: false, reason: `path already exists: ${args.notePath}` };
-      }
+      if (await context.facade.exists(args.notePath))
+        throw new NoteApiError("CONFLICT", `path already exists: ${args.notePath}`);
+      const afterRevision = contentRevision(args.body);
       const decision = await context.approvalGate.request(
-        { id: context.generateCallId(), name: "notes.create", args: { ...args } },
+        {
+          id: invokeContext.callId ?? context.generateCallId(),
+          name: "notes.create",
+          args: { ...args, afterRevision },
+        },
         context.approvalMode(),
-        previewCreate(args.notePath, args.body),
+        `Create new note at ${args.notePath}\nRevision: new -> ${short(afterRevision)}\n---\n${segment(args.body)}`,
         signal,
         invokeContext,
       );
-      if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
-      }
-      const sha = await context.hash(args.body);
-      await context.facade.writeNote(args.notePath, args.body);
-      const historyId = await context.recordHistory({
+      if (!decision.approved) return { applied: false, reason: decision.reason };
+      // The invocation can sit pending for minutes on the RPC path; the
+      // guarded create below is the authority, this check only explains it.
+      if (await context.facade.exists(args.notePath))
+        return { applied: false, reason: `path already exists: ${args.notePath}` };
+      const receipt = await context.applyWrite({
+        ...context.approvalGate.writeGuard(decision, signal),
         kind: "notes.create",
         target: args.notePath,
         before: null,
         after: args.body,
-        clientIdentity: invokeContext?.clientIdentity,
+        clientIdentity: invokeContext.clientIdentity,
       });
-      return { applied: true, path: args.notePath, sha, historyId };
+      if (!receipt.applied)
+        return { applied: false, reason: `path already exists: ${args.notePath}` };
+      return {
+        applied: true,
+        path: args.notePath,
+        sha: await context.hash(args.body),
+        historyId: receipt.historyId,
+      };
     },
   };
 }
-
-export interface NotesAppendArgs {
-  notePath: string;
-  text: string;
-}
-
-const APPEND_SCHEMA: ToolJsonSchema = {
-  type: "object",
-  properties: {
-    notePath: { type: "string", description: "Vault-relative path of the note to append to." },
-    text: { type: "string", description: "Text to append to the end of the note body." },
-  },
-  required: ["notePath", "text"],
-};
 
 export function makeAppendNoteTool(
   context: NotesToolsContext,
 ): ToolDefinition<NotesAppendArgs, NotesWriteResult> {
   return {
     name: "notes.append",
-    description: "Append text to the end of an existing note's body.",
-    schema: APPEND_SCHEMA,
+    description:
+      "Append text to the end of an existing note's body. Requires the revision you read; a changed note is refused.",
+    schema: jsonSchema(appendArgs),
     writeGated: true,
-    validate: (raw) => {
-      if (!isObject(raw)) throw new Error("expected object");
-      const notePath = requireString(raw.notePath, "notePath");
-      const text = typeof raw.text === "string" ? raw.text : null;
-      if (text === null) throw new Error("text must be a string");
-      if (text.length === 0) throw new Error("text must not be empty");
-      return { notePath, text };
-    },
-    invoke: async (args, signal, invokeContext) => {
-      if (!(await context.facade.exists(args.notePath))) {
-        return { applied: false, reason: `path does not exist: ${args.notePath}` };
-      }
-      const before = await context.facade.readNote(args.notePath);
-      const after = appendBody(before, args.text);
-      const decision = await context.approvalGate.request(
-        { id: context.generateCallId(), name: "notes.append", args: { ...args } },
-        context.approvalMode(),
-        previewAppend(args.notePath, before, args.text),
-        signal,
-        invokeContext,
-      );
-      if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
-      }
-      const sha = await context.hash(after);
-      await context.facade.writeNote(args.notePath, after);
-      const historyId = await context.recordHistory({
-        kind: "notes.append",
-        target: args.notePath,
-        before,
-        after,
-        clientIdentity: invokeContext?.clientIdentity,
-      });
-      return { applied: true, path: args.notePath, sha, historyId };
-    },
+    validate: (raw) => strictParse(appendArgs, raw),
+    invoke: (args, signal, invokeContext) =>
+      applyPlannedEdit(context, "notes.append", args, signal, invokeContext, (note) => {
+        const after = appendBody(note.body, args.text);
+        return {
+          after,
+          preview: `Append to ${args.notePath} (${args.text.length} chars at the end)\n---\n${segment(after.slice(note.body.length))}`,
+        };
+      }),
   };
 }
-
-export interface NotesReplaceSectionArgs {
-  notePath: string;
-  heading: string;
-  body: string;
-}
-
-const REPLACE_SECTION_SCHEMA: ToolJsonSchema = {
-  type: "object",
-  properties: {
-    notePath: { type: "string", description: "Vault-relative path of the note." },
-    heading: {
-      type: "string",
-      description: "Markdown heading text (without leading #) to replace the body under.",
-    },
-    body: {
-      type: "string",
-      description: "Replacement body for the section (without the heading line).",
-    },
-  },
-  required: ["notePath", "heading", "body"],
-};
 
 export function makeReplaceSectionTool(
   context: NotesToolsContext,
@@ -239,69 +239,26 @@ export function makeReplaceSectionTool(
   return {
     name: "notes.replace_section",
     description:
-      "Replace the body content under a markdown heading. Heading line is preserved; only the section body changes.",
-    schema: REPLACE_SECTION_SCHEMA,
+      "Replace the body under one markdown heading; the heading line and the rest of the note are preserved. Requires the revision you read. Repeated headings require an occurrence; ambiguous or missing headings are refused.",
+    schema: jsonSchema(replaceSectionArgs),
     writeGated: true,
-    validate: (raw) => {
-      if (!isObject(raw)) throw new Error("expected object");
-      const notePath = requireString(raw.notePath, "notePath");
-      const heading = requireString(raw.heading, "heading");
-      const body = typeof raw.body === "string" ? raw.body : null;
-      if (body === null) throw new Error("body must be a string");
-      return { notePath, heading, body };
-    },
-    invoke: async (args, signal, invokeContext) => {
-      if (!(await context.facade.exists(args.notePath))) {
-        return { applied: false, reason: `path does not exist: ${args.notePath}` };
-      }
-      const before = await context.facade.readNote(args.notePath);
-      const replaced = replaceSection(before, args.heading, args.body);
-      if (replaced === null) {
+    validate: (raw) => strictParse(replaceSectionArgs, raw),
+    invoke: (args, signal, invokeContext) =>
+      applyPlannedEdit(context, "notes.replace_section", args, signal, invokeContext, (note) => {
+        const plan = planSectionReplacement(note, args.heading, args.body, args.occurrence);
         return {
-          applied: false,
-          reason: `heading not found: ${args.heading}`,
+          after: plan.after,
+          preview: [
+            `Replace section "${args.heading}" (occurrence ${plan.occurrence}, lines ${plan.range.startLine}-${plan.range.endLine}) in ${args.notePath}`,
+            `--- removed (${plan.removed.length} chars)`,
+            segment(plan.removed),
+            `+++ inserted (${plan.inserted.length} chars)`,
+            segment(plan.inserted),
+          ].join("\n"),
         };
-      }
-      const decision = await context.approvalGate.request(
-        { id: context.generateCallId(), name: "notes.replace_section", args: { ...args } },
-        context.approvalMode(),
-        previewReplaceSection(args.notePath, args.heading, args.body),
-        signal,
-        invokeContext,
-      );
-      if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
-      }
-      const sha = await context.hash(replaced);
-      await context.facade.writeNote(args.notePath, replaced);
-      const historyId = await context.recordHistory({
-        kind: "notes.replace_section",
-        target: args.notePath,
-        before,
-        after: replaced,
-        clientIdentity: invokeContext?.clientIdentity,
-      });
-      return { applied: true, path: args.notePath, sha, historyId };
-    },
+      }),
   };
 }
-
-export interface NotesUpdateFrontmatterArgs {
-  notePath: string;
-  patch: Record<string, unknown>;
-}
-
-const UPDATE_FRONTMATTER_SCHEMA: ToolJsonSchema = {
-  type: "object",
-  properties: {
-    notePath: { type: "string", description: "Vault-relative path of the note." },
-    patch: {
-      type: "object",
-      description: "Shallow object merged into the note's YAML frontmatter.",
-    },
-  },
-  required: ["notePath", "patch"],
-};
 
 export function makeUpdateFrontmatterTool(
   context: NotesToolsContext,
@@ -309,202 +266,180 @@ export function makeUpdateFrontmatterTool(
   return {
     name: "notes.update_frontmatter",
     description:
-      "Merge a shallow patch object into the note's YAML frontmatter. Creates the frontmatter block when absent.",
-    schema: UPDATE_FRONTMATTER_SCHEMA,
+      "Set top-level properties in the note's YAML frontmatter, creating the block when absent. Requires the revision you read. Named values replace existing ones; null removes a property. Unparseable frontmatter is refused.",
+    schema: jsonSchema(updateFrontmatterArgs),
     writeGated: true,
-    validate: (raw) => {
-      if (!isObject(raw)) throw new Error("expected object");
-      const notePath = requireString(raw.notePath, "notePath");
-      if (!isObject(raw.patch)) throw new Error("patch must be an object");
-      return { notePath, patch: raw.patch };
-    },
-    invoke: async (args, signal, invokeContext) => {
-      if (!(await context.facade.exists(args.notePath))) {
-        return { applied: false, reason: `path does not exist: ${args.notePath}` };
-      }
-      const before = await context.facade.readNote(args.notePath);
-      const next = mergeFrontmatter(before, args.patch);
-      const decision = await context.approvalGate.request(
-        { id: context.generateCallId(), name: "notes.update_frontmatter", args: { ...args } },
-        context.approvalMode(),
-        previewFrontmatter(args.notePath, args.patch),
-        signal,
-        invokeContext,
-      );
-      if (!decision.approved) {
-        return { applied: false, reason: decision.reason ?? "rejected by user" };
-      }
-      const sha = await context.hash(next);
-      await context.facade.writeNote(args.notePath, next);
-      const historyId = await context.recordHistory({
-        kind: "notes.update_frontmatter",
-        target: args.notePath,
-        before,
-        after: next,
-        clientIdentity: invokeContext?.clientIdentity,
-      });
-      return { applied: true, path: args.notePath, sha, historyId };
-    },
+    validate: (raw) => strictParse(updateFrontmatterArgs, raw),
+    invoke: (args, signal, invokeContext) =>
+      applyPlannedEdit(context, "notes.update_frontmatter", args, signal, invokeContext, (note) => {
+        if (note.structure.frontmatter.error !== null)
+          throw new NoteApiError(
+            "CONFLICT",
+            `frontmatter is not valid YAML; fix it before patching: ${note.structure.frontmatter.error}`,
+          );
+        const after = patchFrontmatter(note.body, args.patch);
+        return {
+          after,
+          preview: [
+            `Update properties ${Object.keys(args.patch).join(", ")} in ${args.notePath}`,
+            "--- before",
+            segment(locateFrontmatter(note.body)?.raw ?? "(no frontmatter)"),
+            "+++ after",
+            segment(locateFrontmatter(after)?.raw ?? "(no frontmatter)"),
+          ].join("\n"),
+        };
+      }),
   };
 }
 
+type ExistingNoteArgs = {
+  notePath: string;
+  revision: string;
+};
+
 /**
- * History record shape persisted by `HistoryService.record`. Phase 5 Task 7
- * removed the SQLite-backed `makeHistoryRecorder` factory because production
- * has wired `HistoryService` (SurrealDB) since Phase 4 Task 4 and the
- * factory has no remaining call site.
+ * One path for every existing-note effect: read the caller's exact revision,
+ * plan the full after-image, request approval for that plan, confirm the
+ * revision again and hand the planned bytes to the durable writer, whose
+ * guarded write and live `authorize` recheck close the final race.
  */
-export interface NotesHistoryColumns {
-  kind: string;
-  target: string;
-  before: string | null;
-  after: string;
-  createdAt: number;
+async function applyPlannedEdit<Args extends ExistingNoteArgs>(
+  context: NotesToolsContext,
+  name: Exclude<DurableNoteWriteKind, "notes.create" | "notes.move">,
+  args: Args,
+  signal: AbortSignal,
+  invokeContext: ToolInvokeContext,
+  plan: (note: NoteReadResult) => { after: string; preview: string },
+): Promise<NotesWriteResult> {
+  const note = await readRevision(context, args.notePath, args.revision);
+  const planned = plan(note);
+  if (planned.after === note.body)
+    throw new NoteApiError("CONFLICT", `change leaves ${args.notePath} unchanged`);
+  const afterRevision = contentRevision(planned.after);
+  const decision = await context.approvalGate.request(
+    {
+      id: invokeContext.callId ?? context.generateCallId(),
+      name,
+      args: { ...(args as ExistingNoteArgs), afterRevision },
+    },
+    context.approvalMode(),
+    `${planned.preview}\nRevision: ${short(args.revision)} -> ${short(afterRevision)}`,
+    signal,
+    invokeContext,
+  );
+  if (!decision.approved) return { applied: false, reason: decision.reason };
+  const current = (await context.facade.exists(args.notePath))
+    ? contentRevision(await context.facade.readNote(args.notePath))
+    : null;
+  if (current !== args.revision) return staleAfterApproval(args.notePath);
+  const receipt = await context.applyWrite({
+    ...context.approvalGate.writeGuard(decision, signal),
+    kind: name,
+    target: args.notePath,
+    before: note.body,
+    after: planned.after,
+    clientIdentity: invokeContext.clientIdentity,
+  });
+  if (!receipt.applied) return staleAfterApproval(args.notePath);
+  return {
+    applied: true,
+    path: args.notePath,
+    sha: await context.hash(planned.after),
+    historyId: receipt.historyId,
+  };
+}
+
+async function readRevision(
+  context: NotesToolsContext,
+  notePath: string,
+  revision: string,
+): Promise<NoteReadResult> {
+  if (!(await context.facade.exists(notePath)))
+    throw new NoteApiError("NOT_FOUND", `path does not exist: ${notePath}`);
+  const reader = new NoteReadService({ read: (path) => context.facade.readNote(path) });
+  try {
+    return await reader.read({ path: notePath, revision });
+  } catch (error) {
+    if (error instanceof NoteApiError && error.code === "CONFLICT")
+      throw new NoteApiError(
+        "CONFLICT",
+        `note revision changed: ${notePath}; read it again and plan against the current revision`,
+      );
+    throw error;
+  }
+}
+
+function staleAfterApproval(notePath: string): NotesWriteSkipped {
+  return {
+    applied: false,
+    reason: `note changed after the approved preview; nothing was written: ${notePath}`,
+  };
 }
 
 function appendBody(before: string, addition: string): string {
-  if (before.length === 0) return addition;
-  if (before.endsWith("\n")) return before + addition;
-  return `${before}\n${addition}`;
+  if (before.length === 0 || /[\r\n]$/.test(before)) return before + addition;
+  return `${before}${detectNewline(before)}${addition}`;
+}
+
+export interface SectionReplacement {
+  after: string;
+  removed: string;
+  inserted: string;
+  occurrence: number;
+  range: SourceRange;
 }
 
 /**
- * Replaces the body content under the given heading. Heading match is
- * case-sensitive on the trimmed text; leading `#` characters are stripped.
- * Returns `null` when no matching heading exists.
+ * Splices the body of one canonical heading section. Headings come from the
+ * shared Markdown structure, so fenced pseudo-headings, setext headings, BOMs
+ * and repeated headings resolve exactly as `notes.read` reports them. Only
+ * the bytes between the heading line and the next heading of the same or
+ * higher level change; the inserted text follows the heading's line endings.
  */
-export function replaceSection(content: string, heading: string, body: string): string | null {
-  const lines = content.split("\n");
-  let headingIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^(#{1,6})\s+(.*)$/);
-    if (!match) continue;
-    if (match[2].trim() === heading.trim()) {
-      headingIdx = i;
-      break;
-    }
-  }
-  if (headingIdx < 0) return null;
-  let endIdx = lines.length;
-  for (let j = headingIdx + 1; j < lines.length; j++) {
-    if (/^#{1,6}\s+/.test(lines[j])) {
-      endIdx = j;
-      break;
-    }
-  }
-  const before = lines.slice(0, headingIdx + 1);
-  const after = lines.slice(endIdx);
-  const replacement = body.length === 0 ? [""] : body.split("\n");
-  const next = [...before, ...replacement, ...after].join("\n");
-  if (content.endsWith("\n") && !next.endsWith("\n")) return `${next}\n`;
-  return next;
-}
-
-/**
- * Merges a shallow patch object into the note's YAML frontmatter. Existing
- * top-level keys are overwritten; new keys are appended. When no frontmatter
- * exists the function creates a fresh `---` block at the top of the note.
- */
-export function mergeFrontmatter(content: string, patch: Record<string, unknown>): string {
-  const fm = readFrontmatter(content);
-  const existing = fm ? parseFlatYaml(fm.yaml) : new Map<string, string>();
-  for (const [key, value] of Object.entries(patch)) {
-    const current = existing.get(key);
-    if (current !== undefined && isPlainObject(value)) {
-      const parsedCurrent = parseInlineYamlValue(current);
-      if (isPlainObject(parsedCurrent)) {
-        existing.set(key, formatYamlValue(deepMergePlainObjects(parsedCurrent, value)));
-        continue;
-      }
-    }
-    existing.set(key, formatYamlValue(value));
-  }
-  const yaml = Array.from(existing.entries())
-    .map(([key, value]) => `${key}: ${value}`)
-    .join("\n");
-  const block = `---\n${yaml}\n---\n`;
-  if (fm) {
-    return `${block}${fm.body}`;
-  }
-  return content.length === 0 ? block : `${block}${content}`;
-}
-
-interface RawFrontmatter {
-  yaml: string;
-  body: string;
-}
-
-function readFrontmatter(content: string): RawFrontmatter | null {
-  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return null;
-  const headerLen = content.startsWith("---\n") ? 4 : 5;
-  const closeIdx = content.indexOf("\n---", headerLen);
-  if (closeIdx === -1) return null;
-  const yaml = content.slice(headerLen, closeIdx);
-  const after = closeIdx + 4;
-  const body = content.slice(after).replace(/^\r?\n/, "");
-  return { yaml, body };
-}
-
-function parseFlatYaml(yaml: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const line of yaml.split("\n")) {
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!match) continue;
-    out.set(match[1], match[2]);
-  }
-  return out;
-}
-
-function formatYamlValue(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (typeof value === "string") {
-    if (/^[A-Za-z0-9_./-]+$/.test(value)) return value;
-    return JSON.stringify(value);
-  }
-  return JSON.stringify(value);
-}
-
-function parseInlineYamlValue(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function deepMergePlainObjects(
-  current: Record<string, unknown>,
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...current };
-  for (const [key, value] of Object.entries(patch)) {
-    const existing = next[key];
-    if (Array.isArray(existing) && Array.isArray(value)) {
-      next[key] = appendUnique(existing, value);
-    } else if (isPlainObject(existing) && isPlainObject(value)) {
-      next[key] = deepMergePlainObjects(existing, value);
-    } else {
-      next[key] = value;
-    }
-  }
-  return next;
-}
-
-function appendUnique(current: unknown[], additions: unknown[]): unknown[] {
-  const next = [...current];
-  const seen = new Set(current.map((value) => JSON.stringify(value)));
-  for (const value of additions) {
-    const key = JSON.stringify(value);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(value);
-  }
-  return next;
+export function planSectionReplacement(
+  note: Pick<NoteReadResult, "body" | "structure">,
+  heading: string,
+  replacement: string,
+  occurrence?: number,
+): SectionReplacement {
+  const { body } = note;
+  const candidates = note.structure.headings.filter(
+    (entry) =>
+      entry.text === heading && (occurrence === undefined || entry.occurrence === occurrence),
+  );
+  if (candidates.length === 0)
+    throw new NoteApiError(
+      "NOT_FOUND",
+      occurrence === undefined
+        ? `heading not found: ${heading}`
+        : `heading occurrence not found: ${heading} #${occurrence}`,
+    );
+  if (candidates.length > 1)
+    throw new NoteApiError(
+      "CONFLICT",
+      `heading "${heading}" occurs ${candidates.length} times; pass its occurrence`,
+    );
+  const target = candidates[0];
+  const headingEnd = target.range.end;
+  const terminator = body.startsWith("\r\n", headingEnd)
+    ? "\r\n"
+    : body[headingEnd] === "\n" || body[headingEnd] === "\r"
+      ? body[headingEnd]
+      : "";
+  const start = headingEnd + terminator.length;
+  const end = Math.max(start, target.section.end);
+  const removed = body.slice(start, end);
+  const newline = terminator || detectNewline(body);
+  let inserted = replacement.replace(/\r\n?/g, "\n");
+  if (newline !== "\n") inserted = inserted.replaceAll("\n", newline);
+  if (!inserted.endsWith(newline) && (end < body.length || /[\r\n]$/.test(body)))
+    inserted += newline;
+  const prefix = terminator === "" && inserted.length > 0 ? newline : "";
+  return {
+    after: body.slice(0, start) + prefix + inserted + body.slice(end),
+    removed,
+    inserted,
+    occurrence: target.occurrence,
+    range: target.section,
+  };
 }

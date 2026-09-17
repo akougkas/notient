@@ -14,7 +14,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.4.2
 
       - uses: actions/cache@v4
         with:
@@ -25,9 +25,17 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - run: bun install --cwd integrations/obsidian --frozen-lockfile
+
       - run: bun run typecheck
 
-      - run: bun test
+      - run: bun run typecheck:obsidian
+
+      - run: bun run build:obsidian
+
+      - run: bun run lint
+
+      - run: bun run test
 
   integration:
     name: Integration
@@ -38,15 +46,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.4.2
 
       - name: Install SurrealDB v3.0.5
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL https://github.com/surrealdb/surrealdb/releases/download/v3.0.5/surreal-v3.0.5.linux-amd64.tgz \
-            | tar -xz -C "$HOME/.local/bin"
-          chmod +x "$HOME/.local/bin/surreal"
+          curl -sSf https://install.surrealdb.com | sh -s -- --version v3.0.5 "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Verify SurrealDB version
@@ -62,3 +68,34 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - run: bun run test:integration
+
+  candidate:
+    name: Installed pre-release candidate
+    needs: [unit, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install SurrealDB v3.0.5
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -sSf https://install.surrealdb.com | sh -s -- --version v3.0.5 "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun install --cwd integrations/obsidian --frozen-lockfile
+      - run: bun run release:prepare
+      - name: Check the installed package
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(artifacts/*/notient-*.tgz)
+          test "${#packages[@]}" -eq 1
+          bun run release:check "${packages[0]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notient-local-candidate-${{ github.sha }}
+          path: artifacts/*/*
+          if-no-files-found: error

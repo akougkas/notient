@@ -1,38 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, expect, test } from "bun:test";
 import { RecordId } from "surrealdb";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import {
-  type SurrealConnection,
-  connect,
-  lookupNoteByPath,
-  recordDaemonWrite,
-  upsertNoteByPath,
-} from "../../../../src/core/db/surreal";
-import { EventBus } from "../../../../src/core/events/eventBus";
-import { prepareNoteRow, runTier1 } from "../../../../src/core/indexer/tier1";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-
-function sha256Hex(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
-}
-
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
-
-const fixtureNote = `---
-title: Active Note
-related: "[[other]]"
----
-
-# H1
-
-A paragraph with [[other]] and [[also#section]] and [[non-existent-target]]. ^para-1
-
-Tagged content #topic/sub here.
-`;
+import { prepareNoteRow } from "../../../../src/core/indexer/tier1";
 
 describe("prepareNoteRow", () => {
   test("clears stale tier timestamps before refreshing an existing note sha", async () => {

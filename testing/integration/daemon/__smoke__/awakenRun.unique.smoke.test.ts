@@ -43,6 +43,10 @@ import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/s
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
+function makeRunPaths(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `note-${index}.md`);
+}
+
 async function clearAwakenRuns(connection: SurrealConnection): Promise<void> {
   await connection.db.query("DELETE awaken_run;").collect();
 }
@@ -81,6 +85,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -89,7 +94,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterAll(async () => {
@@ -102,7 +107,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearAwakenRuns(connection);
@@ -115,7 +120,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     const inputs = {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     };
     const results = await Promise.allSettled([
       createRun(connection.db, inputs),
@@ -144,7 +149,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     const firstId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
 
     // The pre-existing fast-path guard. Callers consult `findCurrent`
@@ -160,7 +165,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
       await createRun(connection.db, {
         tierFilter: [1, 2, 3],
         priorityGlobs: [],
-        total: 1,
+        paths: makeRunPaths(1),
       });
     } catch (error) {
       caught = error;
@@ -172,9 +177,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     const firstId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 2,
+      paths: makeRunPaths(2),
     });
-    await updateStatus(connection.db, firstId, "paused", { processed: 1 });
+    await updateStatus(connection.db, firstId, "paused", { processed: 1, attempted: 1 });
 
     // A paused row still occupies the active marker.
     let caughtPaused: unknown;
@@ -182,7 +187,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
       await createRun(connection.db, {
         tierFilter: [1, 2, 3],
         priorityGlobs: [],
-        total: 2,
+        paths: makeRunPaths(2),
       });
     } catch (error) {
       caughtPaused = error;
@@ -198,7 +203,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run unique active index", () => 
     const secondId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 3,
+      paths: makeRunPaths(3),
     });
     expect(secondId.toString()).not.toBe(firstId.toString());
 

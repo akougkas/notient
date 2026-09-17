@@ -1,13 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { Surreal } from "surrealdb";
+import { NOTIENT_IDENTITY } from "../../../../src/agent/identity";
 import {
   ContextManager,
   type ContextManagerOptions,
   type ContextSettingsView,
+  toProviderMessages,
 } from "../../../../src/core/chat/contextManager";
-import { ConversationIndex } from "../../../../src/core/chat/conversationIndex";
-import { encodeBase64Float32 } from "../../../../src/core/chat/conversationIndex";
-import type { ChatMessage, Conversation } from "../../../../src/core/chat/types";
+import {
+  type ConversationMemory,
+  ConversationMemoryIntegrityError,
+  ConversationMemoryUnavailableError,
+} from "../../../../src/core/chat/conversationIndex";
+import type {
+  ChatMessage,
+  Conversation,
+  ConversationChatMessage,
+  ToolChatMessage,
+} from "../../../../src/core/chat/types";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type {
   ContextOverflowWarningEvent,
@@ -22,18 +32,43 @@ import type {
   LLMProvider,
   ChatMessage as ProviderChatMessage,
 } from "../../../../src/core/llm/provider";
+import { InMemoryConversationMemory } from "./conversationMemoryFake";
 
 interface CountRow {
   count: number;
 }
 
+test("unresolved optional recall does not disable chat, while storage integrity still fails closed", async () => {
+  const memory = new InMemoryConversationMemory();
+  memory.search = async () => {
+    throw new ConversationMemoryUnavailableError("temporarily-unresolved");
+  };
+  const { manager } = makeManager({
+    conversationIndex: memory,
+    embed: async () => new Float32Array([1, 0]),
+  });
+  const result = await manager.compose(
+    makeConversation(),
+    makeMessage("user", "Help develop my thought"),
+    new AbortController().signal,
+  );
+  expect(result.systemPrompt).toContain("Cross-session semantic recall is unavailable");
+  expect(result.messages.at(-1)?.content).toBe("Help develop my thought");
+  memory.search = async () => {
+    throw new ConversationMemoryIntegrityError("wrong owner");
+  };
+  await expect(
+    manager.compose(
+      makeConversation(),
+      makeMessage("user", "Try again"),
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("storage integrity failure");
+});
+
 /**
- * Phase 5 Task 7: minimal SurrealDB shim used by the unit tests. ContextManager
- * issues `SELECT count() FROM <table> [WHERE ...] GROUP ALL;` queries; the
- * fake matches each query string against a canned result set so the snapshot
- * line ("N notes. M approved edges. K pending proposals.") can be asserted
- * against without a live SurrealDB. The smoke surface owns the live-DB
- * coverage.
+ * Minimal SurrealDB shim for the snapshot count queries. Canned table counts
+ * keep the prompt assertions deterministic without a live database.
  */
 class FakeSurreal {
   // Defaults: 42 notes, 7 approved edges across all writeback tables (set on
@@ -109,21 +144,6 @@ class FakeProvider implements LLMProvider {
   }
 }
 
-interface IndexFile {
-  read(path: string): Promise<string | null>;
-  write(path: string, content: string): Promise<void>;
-}
-
-class InMemoryIndexFacade implements IndexFile {
-  private store = new Map<string, string>();
-  async read(path: string): Promise<string | null> {
-    return this.store.get(path) ?? null;
-  }
-  async write(path: string, content: string): Promise<void> {
-    this.store.set(path, content);
-  }
-}
-
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
     id: "conv-current",
@@ -133,7 +153,6 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
     approvalMode: "safe",
     topic: "Current",
     summary: "",
-    summaryEmbeddingB64: null,
     clientIdentity: "human",
     messageCount: 0,
     createdAt: 0,
@@ -143,15 +162,33 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   };
 }
 
-function makeMessage(role: ChatMessage["role"], content: string, createdAt = 0): ChatMessage {
+function makeMessage(
+  role: "tool",
+  content: string,
+  createdAt: number,
+  toolCallId: string,
+): ToolChatMessage;
+function makeMessage(
+  role: ConversationChatMessage["role"],
+  content: string,
+  createdAt?: number,
+): ConversationChatMessage;
+function makeMessage(
+  role: ChatMessage["role"],
+  content: string,
+  createdAt = 0,
+  toolCallId?: string,
+): ChatMessage {
+  if (role === "tool") {
+    if (toolCallId === undefined) throw new Error("test tool message requires toolCallId");
+    return { id: `${role}-${createdAt}`, role, content, toolCallId, createdAt };
+  }
   return { id: `${role}-${createdAt}`, role, content, createdAt };
 }
 
 function defaultSettings(overrides: Partial<ContextSettingsView> = {}): ContextSettingsView {
   return {
-    includeUserProfile: true,
     includeVaultSnapshot: true,
-    includeWorkspaceState: true,
     includeCrossSessionMemory: true,
     crossSessionTopK: 2,
     crossSessionSimThreshold: 0.7,
@@ -165,30 +202,19 @@ function defaultSettings(overrides: Partial<ContextSettingsView> = {}): ContextS
 function makeManager(options: Partial<ContextManagerOptions> = {}): {
   manager: ContextManager;
   provider: FakeProvider;
-  conversationIndex: ConversationIndex;
+  conversationIndex: ConversationMemory;
 } {
   const provider = options.provider instanceof FakeProvider ? options.provider : new FakeProvider();
   const facadeRead = options.facade?.readNote ?? (async () => "");
-  const conversationIndex =
-    options.conversationIndex ??
-    new ConversationIndex({
-      facade: new InMemoryIndexFacade(),
-      indexPath: "Notient/.index.json",
-    });
+  const conversationIndex = options.conversationIndex ?? new InMemoryConversationMemory();
   const manager = new ContextManager({
     db: (options.db ?? (new FakeSurreal() as unknown)) as Surreal,
     provider: provider as LLMProvider,
     conversationIndex,
     embed: options.embed ?? (async () => null),
     contextSettings: options.contextSettings ?? (() => defaultSettings()),
-    workspace: options.workspace ?? {
-      getActiveNotePath: () => null,
-      getOpenNotePaths: () => [],
-      getRecentNotePaths: () => [],
-      getRecentSearchQueries: () => [],
-    },
+    engagedNotePath: options.engagedNotePath ?? (() => null),
     facade: { readNote: facadeRead },
-    voiceProfile: options.voiceProfile ?? (() => ""),
     approvalMode: options.approvalMode ?? (() => "safe"),
     toolCatalog:
       options.toolCatalog ??
@@ -198,23 +224,15 @@ function makeManager(options: Partial<ContextManagerOptions> = {}): {
       ]),
     estimateTokens: options.estimateTokens ?? ((text) => Math.ceil(text.length / 4)),
     summaryModel: options.summaryModel ?? "Nemotron-Cascade-2-30B-A3B-i1-Q4_K_M",
-    identity: options.identity,
-    bus: options.bus,
+    bus: options.bus ?? new EventBus(),
   });
   return { manager, provider, conversationIndex };
 }
 
 describe("ContextManager.compose", () => {
-  test("composes all eight layers when every flag is enabled", async () => {
+  test("composes the canonical identity and every live context layer", async () => {
     const { manager } = makeManager({
-      voiceProfile: () =>
-        "Writes in second person. Prefers terse outlines. Uses lowercase headings.",
-      workspace: {
-        getActiveNotePath: () => "Notes/Today.md",
-        getOpenNotePaths: () => ["Notes/Today.md", "Notes/Other.md"],
-        getRecentNotePaths: () => ["Notes/Yesterday.md", "Notes/A.md"],
-        getRecentSearchQueries: () => ["embedding pipeline", "graph proposals"],
-      },
+      engagedNotePath: () => "Notes/Today.md",
       facade: { readNote: async () => "Pinned body content here." },
     });
     const conversation = makeConversation({ pinnedContext: ["Notes/Pinned.md"] });
@@ -224,10 +242,10 @@ describe("ContextManager.compose", () => {
       new AbortController().signal,
     );
     expect(result.systemPrompt).toContain("# Identity");
-    expect(result.systemPrompt).toContain("# User profile");
+    expect(result.systemPrompt).toContain(NOTIENT_IDENTITY);
     expect(result.systemPrompt).toContain("# Vault snapshot");
     expect(result.systemPrompt).toContain("42 notes");
-    expect(result.systemPrompt).toContain("# Workspace");
+    expect(result.systemPrompt).toContain("# Engaged note");
     expect(result.systemPrompt).toContain("[[Notes/Today.md]]");
     expect(result.systemPrompt).toContain("# Pinned context");
     expect(result.systemPrompt).toContain("Pinned body content here.");
@@ -245,22 +263,83 @@ describe("ContextManager.compose", () => {
     });
   });
 
-  test("omits sections when their setting is disabled", async () => {
+  test("injects resolved attachment content ephemerally without treating it as a vault path", async () => {
+    const reads: string[] = [];
+    const { manager } = makeManager({
+      facade: {
+        readNote: async (path) => {
+          reads.push(path);
+          return "unexpected";
+        },
+      },
+    });
+    const attachment = "[attachment: Notes/Evidence.md]\nExact resolved attachment body.";
+
+    const result = await manager.compose(
+      makeConversation(),
+      makeMessage("user", "Use @Notes/Evidence.md"),
+      new AbortController().signal,
+      [attachment],
+    );
+
+    expect(result.systemPrompt).toContain(attachment);
+    expect(reads).toEqual([]);
+  });
+
+  test("rejects Notient-owned or noncanonical pinned paths before reading the vault", async () => {
+    const reads: string[] = [];
+    const { manager } = makeManager({
+      facade: {
+        readNote: async (path) => {
+          reads.push(path);
+          return "must not be read";
+        },
+      },
+    });
+
+    for (const pinnedPath of [
+      "Notient/conversations/other.md",
+      "Notient/proposals/pending.md",
+      "../outside.md",
+    ]) {
+      await expect(
+        manager.compose(
+          makeConversation({ pinnedContext: [pinnedPath] }),
+          makeMessage("user", "read it"),
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("pinned-context integrity");
+    }
+    expect(reads).toEqual([]);
+  });
+
+  test("a failed snapshot query fails the turn instead of inventing an empty vault", async () => {
+    const db = {
+      query: () => ({
+        collect: async () => {
+          throw new Error("database unavailable");
+        },
+      }),
+    } as unknown as Surreal;
+    const { manager } = makeManager({ db });
+
+    await expect(
+      manager.compose(
+        makeConversation(),
+        makeMessage("user", "What is here?"),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("database unavailable");
+  });
+
+  test("omits optional snapshot and memory when disabled and no note is engaged", async () => {
     const { manager } = makeManager({
       contextSettings: () =>
         defaultSettings({
-          includeUserProfile: false,
           includeVaultSnapshot: false,
-          includeWorkspaceState: false,
           includeCrossSessionMemory: false,
         }),
-      voiceProfile: () => "should-not-appear",
-      workspace: {
-        getActiveNotePath: () => "should-not-appear.md",
-        getOpenNotePaths: () => [],
-        getRecentNotePaths: () => [],
-        getRecentSearchQueries: () => [],
-      },
+      engagedNotePath: () => null,
     });
     const conversation = makeConversation();
     const result = await manager.compose(
@@ -268,11 +347,43 @@ describe("ContextManager.compose", () => {
       makeMessage("user", "hello"),
       new AbortController().signal,
     );
-    expect(result.systemPrompt).not.toContain("# User profile");
     expect(result.systemPrompt).not.toContain("# Vault snapshot");
-    expect(result.systemPrompt).not.toContain("# Workspace");
+    expect(result.systemPrompt).not.toContain("# Engaged note");
     expect(result.systemPrompt).not.toContain("# Earlier conversations");
-    expect(result.systemPrompt).not.toContain("should-not-appear");
+  });
+
+  test("describes yolo writes without promising universal reversibility", async () => {
+    const { manager } = makeManager({ approvalMode: () => "yolo" });
+    const result = await manager.compose(
+      makeConversation(),
+      makeMessage("user", "apply the change"),
+      new AbortController().signal,
+    );
+    expect(result.systemPrompt).toContain("without per-call approval");
+    expect(result.systemPrompt).toContain("not imply that every operation is reversible");
+    expect(result.systemPrompt).not.toContain("Every action is undoable");
+    expect(result.systemPrompt).toContain("exact [[vault/path.md]]");
+  });
+
+  test("reads the currently engaged note for every turn", async () => {
+    let engaged = "Notes/First.md";
+    const { manager } = makeManager({ engagedNotePath: () => engaged });
+    const conversation = makeConversation();
+    const first = await manager.compose(
+      conversation,
+      makeMessage("user", "first"),
+      new AbortController().signal,
+    );
+    engaged = "Notes/Second.md";
+    const second = await manager.compose(
+      conversation,
+      makeMessage("user", "second"),
+      new AbortController().signal,
+    );
+    expect(first.systemPrompt).toContain("[[Notes/First.md]]");
+    expect(first.systemPrompt).not.toContain("Notes/Second.md");
+    expect(second.systemPrompt).toContain("[[Notes/Second.md]]");
+    expect(second.systemPrompt).not.toContain("Notes/First.md");
   });
 
   test("summarizes oldest 50% when token budget is exceeded", async () => {
@@ -299,16 +410,69 @@ describe("ContextManager.compose", () => {
     );
     expect(result.summarized).toBe(true);
     expect(provider.summaryCalls.length).toBe(1);
-    const summarySystem = result.messages.find(
+    const summarizationPrompt = provider.summaryCalls[0];
+    expect(summarizationPrompt?.[0]?.content).toContain(NOTIENT_IDENTITY);
+    expect(summarizationPrompt?.[0]?.content).not.toContain("Notient assistant");
+    expect(summarizationPrompt?.[1]?.content).toContain("Notient:");
+    const summaryContext = result.messages.find(
       (message) =>
-        message.role === "system" &&
+        message.role === "assistant" &&
         typeof message.content === "string" &&
-        message.content.startsWith("Earlier in this conversation:"),
+        message.content.startsWith("Earlier conversation summary (historical data"),
     );
-    expect(summarySystem).toBeDefined();
-    expect(summarySystem?.content as string).toContain("compressed earlier turns");
+    expect(summaryContext).toBeDefined();
+    expect(summaryContext?.content as string).toContain("compressed earlier turns");
+    expect(result.messages.filter((message) => message.role === "system")).toHaveLength(1);
     // Newest turn must still be present verbatim.
     expect(result.messages.at(-1)?.content).toBe("next question");
+  });
+
+  test("summarization never splits an assistant tool_calls group from its replies", async () => {
+    const provider = new FakeProvider("compressed earlier turns");
+    const filler = (role: "user" | "assistant", at: number): ChatMessage =>
+      makeMessage(role, `${role[0]}`.repeat(120), at);
+    // Nine messages once the latest user turn is appended, so the naive
+    // midpoint cutoff (floor(9 / 2) = 4) lands on the first tool reply and
+    // leaves its assistant tool_calls message behind in the summarized half.
+    const history: ChatMessage[] = [
+      filler("user", 0),
+      filler("assistant", 1),
+      filler("user", 2),
+      {
+        ...makeMessage("assistant", "calling tools", 3),
+        toolCalls: [
+          { id: "call-1", name: "vault.read", args: { path: "A.md" } },
+          { id: "call-2", name: "vault.read", args: { path: "B.md" } },
+        ],
+      },
+      makeMessage("tool", '{"body":"a"}', 4, "call-1"),
+      makeMessage("tool", '{"body":"b"}', 5, "call-2"),
+      filler("assistant", 6),
+      filler("user", 7),
+    ];
+    const { manager } = makeManager({
+      provider,
+      contextSettings: () =>
+        defaultSettings({ modelContextTokens: 200, contextBudgetFraction: 0.5 }),
+      estimateTokens: (text) => text.length,
+    });
+    const result = await manager.compose(
+      makeConversation({ messages: history }),
+      makeMessage("user", "next question", 8),
+      new AbortController().signal,
+    );
+    expect(result.summarized).toBe(true);
+    const announced = new Set<string>();
+    for (const message of result.messages) {
+      if (message.role === "assistant") {
+        for (const call of message.tool_calls ?? []) announced.add(call.id);
+      }
+      if (message.role === "tool") {
+        // An orphan tool message is what llama.cpp rejects with
+        // "tool message with no matching tool call".
+        expect(announced.has(message.tool_call_id)).toBe(true);
+      }
+    }
   });
 
   test("emits loop:context_summarized when oldest half is replaced by a summary", async () => {
@@ -373,42 +537,60 @@ describe("ContextManager.compose", () => {
   });
 
   test("cross-session memory injects top-K matches and excludes the current conversation", async () => {
-    const conversationIndex = new ConversationIndex({
-      facade: new InMemoryIndexFacade(),
-      indexPath: "Notient/.index.json",
-    });
+    const conversationIndex = new InMemoryConversationMemory("test-model", 3);
     const queryVector = new Float32Array([1, 0, 0]);
     const sameVector = new Float32Array([1, 0, 0]);
-    await conversationIndex.record({
-      id: "conv-other",
-      notePath: "Notient/conversations/2026-04-20 prior.md",
-      model: "model",
-      pinnedContext: [],
-      approvalMode: "safe",
-      topic: "Prior topic",
-      summary: "",
-      summaryEmbeddingB64: encodeBase64Float32(sameVector),
-      clientIdentity: "human",
-      messageCount: 0,
-      createdAt: 0,
-      updatedAt: 1,
-      messages: [],
-    });
-    await conversationIndex.record({
-      id: "conv-current",
-      notePath: "Notient/conversations/2026-04-25 current.md",
-      model: "model",
-      pinnedContext: [],
-      approvalMode: "safe",
-      topic: "Current topic",
-      summary: "",
-      summaryEmbeddingB64: encodeBase64Float32(sameVector),
-      clientIdentity: "human",
-      messageCount: 0,
-      createdAt: 0,
-      updatedAt: 2,
-      messages: [],
-    });
+    await conversationIndex.record(
+      {
+        id: "conv-other",
+        notePath: "Notient/conversations/2026-04-20 prior.md",
+        model: "model",
+        pinnedContext: [],
+        approvalMode: "safe",
+        topic: "Prior topic",
+        summary: "Prior summary",
+        clientIdentity: "human",
+        messageCount: 0,
+        createdAt: 0,
+        updatedAt: 1,
+        messages: [],
+      },
+      sameVector,
+    );
+    await conversationIndex.record(
+      {
+        id: "conv-other-owner",
+        notePath: "Notient/conversations/2026-04-21 private.md",
+        model: "model",
+        pinnedContext: [],
+        approvalMode: "safe",
+        topic: "Another agent private topic",
+        summary: "Another principal's private summary",
+        clientIdentity: "agent-b",
+        messageCount: 0,
+        createdAt: 0,
+        updatedAt: 3,
+        messages: [],
+      },
+      sameVector,
+    );
+    await conversationIndex.record(
+      {
+        id: "conv-current",
+        notePath: "Notient/conversations/2026-04-25 current.md",
+        model: "model",
+        pinnedContext: [],
+        approvalMode: "safe",
+        topic: "Current topic",
+        summary: "Current summary",
+        clientIdentity: "human",
+        messageCount: 0,
+        createdAt: 0,
+        updatedAt: 2,
+        messages: [],
+      },
+      sameVector,
+    );
     const { manager } = makeManager({
       conversationIndex,
       embed: async () => queryVector,
@@ -421,6 +603,7 @@ describe("ContextManager.compose", () => {
     expect(result.systemPrompt).toContain("# Earlier conversations");
     expect(result.systemPrompt).toContain("Prior topic");
     expect(result.systemPrompt).not.toContain("Current topic");
+    expect(result.systemPrompt).not.toContain("Another agent private topic");
   });
 
   test("propagates AbortError from cross-session memory embedder", async () => {
@@ -504,5 +687,48 @@ describe("ContextManager.compose", () => {
     expect(result.systemPrompt).toContain("[...");
     expect(result.systemPrompt).toContain("tokens elided...]");
     expect(result.systemPrompt.length).toBeLessThan(longBody.length + 2000);
+  });
+});
+
+describe("toProviderMessages", () => {
+  test("replays a persisted tool round in the OpenAI tool-call protocol", () => {
+    const history: ChatMessage[] = [
+      makeMessage("user", "read A"),
+      {
+        ...makeMessage("assistant", "looking"),
+        toolCalls: [{ id: "call-1", name: "vault.read", args: { path: "A.md" } }],
+        toolResults: [{ callId: "call-1", status: "ok", data: { body: "x" }, durationMs: 1 }],
+      },
+      makeMessage("tool", '{"body":"x"}', 0, "call-1"),
+    ];
+
+    expect(toProviderMessages(history)).toEqual([
+      { role: "user", content: "read A" },
+      {
+        role: "assistant",
+        content: "looking",
+        tool_calls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "vault.read", arguments: '{"path":"A.md"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call-1", content: '{"body":"x"}' },
+    ]);
+  });
+
+  test("rejects an assistant tool call without its canonical tool message", () => {
+    const history: ChatMessage[] = [
+      {
+        ...makeMessage("assistant", "looking"),
+        toolCalls: [{ id: "call-1", name: "vault.read", args: { path: "A.md" } }],
+      },
+    ];
+
+    expect(() => toProviderMessages(history)).toThrow(
+      "tool call call-1 has no matching tool message",
+    );
   });
 });

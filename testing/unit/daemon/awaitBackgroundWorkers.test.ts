@@ -78,10 +78,12 @@ describe("awaitBackgroundWorkers", () => {
     const registry = new AwakenBackgroundRegistry();
     const resolvers: Array<() => void> = [];
     for (let index = 0; index < 3; index += 1) {
-      const promise = new Promise<void>((resolve) => {
-        resolvers.push(resolve);
-      });
-      registry.track(promise);
+      registry.start(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvers.push(resolve);
+          }),
+      );
     }
     const fake = makeFakeDb([]);
 
@@ -101,14 +103,22 @@ describe("awaitBackgroundWorkers", () => {
     expect(registry.size()).toBe(0);
   });
 
-  test("flips orphan rows when the grace window expires before workers settle", async () => {
+  test("cancels and drains workers before flipping orphans after the grace", async () => {
     const registry = new AwakenBackgroundRegistry();
-    // A wedged promise that never resolves. The helper's race against
-    // the grace timeout must still return.
-    const wedged = new Promise<void>(() => {
-      // Intentionally never resolves; the grace timer wins the race.
-    });
-    registry.track(wedged);
+    let cancellationObserved = false;
+    registry.start(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancellationObserved = true;
+              queueMicrotask(resolve);
+            },
+            { once: true },
+          );
+        }),
+    );
 
     // Surface two orphan rows on the UPDATE so the orphan count flows
     // through the result.
@@ -125,7 +135,10 @@ describe("awaitBackgroundWorkers", () => {
     expect(elapsed).toBeLessThan(500);
     expect(result.completed).toBe(0);
     expect(result.orphaned).toBe(2);
-    expect(registry.size()).toBe(1);
+    expect(cancellationObserved).toBe(true);
+    expect(registry.size()).toBe(0);
+    expect(registry.start(async () => {})).toBeNull();
+    expect(fake.queries[0]?.sql).toContain("finished_at = array::max([started_at, time::now()])");
   });
 
   test("never throws when the SurrealDB UPDATE rejects", async () => {
@@ -145,14 +158,18 @@ describe("awaitBackgroundWorkers", () => {
     let rejectFn: (error: unknown) => void = () => {
       throw new Error("rejectFn not assigned");
     };
-    const failing = new Promise<never>((_resolve, reject) => {
-      rejectFn = reject;
-    });
-    // Attach the no-op catch BEFORE `track` so Bun's unhandled-
+    const failing = registry.start(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectFn = reject;
+        }),
+    );
+    if (failing === null) throw new Error("worker was unexpectedly refused");
+    // Attach the no-op catch before rejecting so Bun's unhandled-
     // rejection guard sees a caller-side handler the moment the
     // rejection propagates.
     failing.catch(() => {});
-    registry.track(failing);
+    await Promise.resolve();
     rejectFn(new Error("worker boom"));
     const fake = makeFakeDb([]);
     const result = await awaitBackgroundWorkers({

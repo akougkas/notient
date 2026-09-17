@@ -84,7 +84,15 @@ const handleParagraph: Handle = (node, parent, state, info) => {
 // paragraph's stringified content.
 const handleListItem: Handle = (node, parent, state, info) => {
   const item = node as ListItem;
-  const body = defaultHandlers.listItem(item, parent, state, info);
+  let body = defaultHandlers.listItem(item, parent, state, info);
+  // Registering a `listItem` handler shadows the one remark-gfm installs, so
+  // the task checkbox has to be re-inserted here or `- [ ] task` degrades to
+  // `- task`. Writes no longer go through this stringifier (see writeback.ts),
+  // but read-side consumers that re-render an AST still need the state.
+  if (typeof item.checked === "boolean" && item.children[0]?.type === "paragraph") {
+    const checkbox = `[${item.checked ? "x" : " "}] `;
+    body = body.replace(/^(?:[*+-]|\d+\.)([\r\n]| {1,3})/, (marker) => `${marker}${checkbox}`);
+  }
   if (item.blockId === undefined) {
     return body;
   }
@@ -138,11 +146,12 @@ export function stringify(ast: Root): string {
 /**
  * Parse and run all transformer plugins. Returns the enriched mdast tree
  * containing wikiLink, wikiEmbed, tagRef nodes and blockId-annotated
- * paragraphs/list-items. Used by the Tier 1 extractor and by the writeback
- * module so it operates on a fully-typed tree (Task 1, Phase 4).
+ * paragraphs/list-items. Used by the Tier 1 extractor and other consumers
+ * that require a fully typed tree.
  */
 export function processAst(source: string): Root {
   const processor = getMarkdownPipeline();
   const tree = processor.parse(source) as Root;
-  return processor.runSync(tree) as Root;
+  // The source lets transformers distinguish escaped syntax in text spans.
+  return processor.runSync(tree, source) as Root;
 }

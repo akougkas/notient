@@ -1,10 +1,9 @@
 /**
  * `notient nuke` CLI verb.
  *
- * Spec: Phase 5 plan §Task 10. Stops the daemon, removes the per-vault
- * data directory, and starts the daemon back up so the bootstrap
- * applies the schema to a fresh RocksDB. Idempotent: running on a
- * vault whose data directory is already gone succeeds without error.
+ * Stops the daemon, removes the per-vault data directory, and starts the
+ * daemon again so bootstrap applies the schema to a fresh RocksDB. The
+ * operation is idempotent when the data directory is already absent.
  *
  * Confirmation contract:
  *   - With `--yes`: proceeds unconditionally.
@@ -15,6 +14,7 @@
 
 import { rm } from "node:fs/promises";
 import { vaultDataDir } from "../../core/vault/identity";
+import { clearRestoreQuarantine } from "../../core/vault/restoreQuarantine";
 import type { Emitter } from "../output";
 import {
   type DaemonStartHook,
@@ -68,6 +68,7 @@ export async function runNukeCommand(options: NukeOptions): Promise<number> {
 
   const dataDir = vaultDataDir(options.vaultPath);
   await rm(dataDir, { recursive: true, force: true });
+  await clearRestoreQuarantine(options.vaultPath);
 
   await startDaemon({ vaultPath: options.vaultPath });
 

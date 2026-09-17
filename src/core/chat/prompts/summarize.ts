@@ -5,6 +5,7 @@
  * the model to a JSON object so the caller can reuse `provider.chatJson`.
  */
 
+import { NOTIENT_IDENTITY } from "../../../agent/identity";
 import type { ChatMessage as ProviderChatMessage } from "../../llm/provider";
 import type { ChatMessage } from "../types";
 
@@ -25,10 +26,11 @@ export function summarizePrompt(messages: ChatMessage[]): ProviderChatMessage[] 
   return [
     {
       role: "system",
-      content:
-        "You summarize a chat between a user and the Notient assistant. " +
-        "Preserve key facts, decisions, and any [[note]] paths referenced. " +
+      content: [
+        NOTIENT_IDENTITY,
+        "Preserve the conversation as memory for the notes themselves. Keep key facts, decisions, disagreement, uncertainty, and every referenced [[note]] path.",
         'Reply with JSON: {"summary": string}. Keep the summary under 600 tokens.',
+      ].join("\n\n"),
     },
     {
       role: "user",
@@ -39,7 +41,7 @@ export function summarizePrompt(messages: ChatMessage[]): ProviderChatMessage[] 
 
 function renderMessage(message: ChatMessage): string {
   const role =
-    message.role === "assistant" ? "Assistant" : message.role === "user" ? "User" : "System";
+    message.role === "assistant" ? "Notient" : message.role === "user" ? "User" : "System";
   const content = message.content.trim();
   return `${role}: ${content}`;
 }

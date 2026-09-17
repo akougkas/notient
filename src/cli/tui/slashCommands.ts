@@ -1,67 +1,30 @@
 /**
- * Slash command parser + dispatcher for the Phase C TUI.
+ * Slash command parser + dispatcher for the Notient TUI.
  *
- * Supported verbs (locked in the Phase C plan): /read, /search, /awaken,
- * /vitals, /health, /clear, /quit, /help. Unknown verbs return a usage hint.
- *
- * The dispatcher routes each verb to the daemon RPC equivalent of the
- * existing Phase B verb (search.run, awaken.run, vitals.get, health.probe)
- * and formats the terminal frame into a single system-line message that the
- * App appends to the transcript.
+ * The verb table is the only routing surface. Each domain lives in its own
+ * module under `slash/` so a verb's implementation and its daemon RPC stay
+ * next to each other.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { NotientSettings } from "../../core/settings/types";
-import type { ClientHandle, RpcResponseFrame } from "../client";
+import { createRpc } from "./rpc";
+import { rpcGraph, rpcPulse } from "./slash/graph";
+import { copyLastAssistant, rpcHistory, rpcUndo } from "./slash/history";
+import { inspectJob, listJobs } from "./slash/jobs";
+import { modelVerb } from "./slash/model";
+import { listPipelines, runPipeline } from "./slash/pipelines";
 import {
-  runProposalsApproveCommand,
-  runProposalsListCommand,
-  runProposalsRejectCommand,
-} from "../commands/proposalsCli";
-import type { Emitter } from "../output";
-import {
-  type ModelInfo,
-  buildEndpointPatch,
-  buildModelView,
-  buildUseEmbedPatch,
-  buildUseModelPatch,
-  formatModelList,
-  formatModelView,
-} from "./modelVerb";
+  approveEdgeVerb,
+  defaultProposalActions,
+  proposalsVerb,
+  rejectEdgeVerb,
+  rpcDiff,
+} from "./slash/proposals";
+import { formatError } from "./slash/rpc";
+import type { SlashContext, SlashHandler, SlashOutcome } from "./slash/types";
+import { rpcHealth, rpcSentient, rpcVitals } from "./slash/vitals";
 
-export interface SlashContext {
-  client: ClientHandle;
-  vaultPath: string;
-  proposals?: ProposalActions;
-  /**
-   * Returns the most recent fully streamed assistant reply, or null when no
-   * turn has produced an assistant message yet. Used by /copy.
-   */
-  getLastAssistant?: () => string | null;
-}
-
-export interface ProposalListItem {
-  id: string;
-  table: string;
-  source: string | null;
-  target: string | null;
-  agent: string | null;
-  confidence: number;
-}
-
-export interface ProposalActions {
-  list(): Promise<ProposalListItem[]>;
-  approve(id: string): Promise<string>;
-  reject(id: string, reason?: string): Promise<string>;
-}
-
-export interface SlashOutcome {
-  message: string;
-  exit?: boolean;
-  resetTranscript?: boolean;
-  proposalItems?: ProposalListItem[];
-}
+export type { SlashContext, SlashOutcome, ProposalActions, ProposalListItem } from "./slash/types";
+export { defaultProposalActions };
 
 export function isSlashCommand(line: string): boolean {
   return line.startsWith("/");
@@ -78,24 +41,31 @@ export function parseSlashCommand(line: string): { verb: string; rest: string } 
 }
 
 const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["/threads", "choose a saved conversation (Ctrl+O)"],
+  ["/new", "start a new conversation (Ctrl+N)"],
   ["/read <path>", "read a vault note"],
   ["/search <query>", "balanced search"],
   ["/awaken", "index the vault"],
   ["/vitals <path>", "note health snapshot"],
-  ["/health", "substrate + bridge status"],
+  ["/health", "substrate status"],
   ["/model", "show endpoint, model, embed, context"],
   ["/model list", "list models on the active endpoint"],
-  ["/model use <id>", "switch the chat model"],
-  ["/model embed <id>", "switch the embedding model"],
-  ["/model endpoint <url>", "switch the OpenAI-compatible endpoint"],
-  ["/approve <id> [r]", "approve a pending tool call"],
-  ["/deny <id> [r]", "deny a pending tool call"],
+  ["/approve <id>", "approve a pending tool call"],
+  ["/deny <id> [reason]", "deny a pending tool call"],
   ["/proposals [page]", "list pending edge proposals"],
   ["/approve-edge <id>", "approve a pending edge"],
-  ["/reject-edge <id> [r]", "reject a pending edge"],
-  ["/undo", "reverse the latest write"],
+  ["/reject-edge <id> [reason]", "reject a pending edge"],
+  ["/graph <from> [to]", "inspect note graph edges or path"],
+  ["/sentient", "substrate + swarm status"],
+  ["/pulse <path>", "note maturity and connectivity"],
+  ["/diff [id]", "preview proposal writeback diff"],
+  ["/undo [historyId]", "reverse one write"],
   ["/history", "list recent chat-driven writes"],
-  ["/copy", "save the last assistant reply"],
+  ["/jobs [cursor]", "list durable pipeline jobs"],
+  ["/pipelines", "inspect built-in pipelines and current policies"],
+  ["/pipeline <JSON request>", "start a bounded live pipeline and return its job"],
+  ["/job <id> [pause|resume|cancel|retry <revision> <key>]", "inspect or control a durable job"],
+  ["/copy", "save the last reply from your notes"],
   ["/clear", "clear the transcript"],
   ["/help", "show this table"],
   ["/quit", "exit the TUI"],
@@ -112,11 +82,18 @@ export function buildHelpTable(): string {
   return [top, ...rows, bottom].join("\n");
 }
 
-type SlashHandler = (rest: string, context: SlashContext) => Promise<SlashOutcome>;
-
 const VERB_TABLE: Record<string, SlashHandler> = {
+  threads: async (_rest, context) => {
+    if (!context.openConversations) return { message: "Open the TUI to choose a conversation." };
+    await context.openConversations();
+    return { message: "" };
+  },
+  new: async (_rest, context) => {
+    if (!context.newConversation) return { message: "Open the TUI to start a conversation." };
+    await context.newConversation();
+    return { message: "" };
+  },
   quit: async () => ({ message: "bye.", exit: true }),
-  exit: async () => ({ message: "bye.", exit: true }),
   help: async () => ({ message: buildHelpTable() }),
   clear: async () => ({ message: "", resetTranscript: true }),
   read: async (rest, context) =>
@@ -132,220 +109,20 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   proposals: async (rest, context) => proposalsVerb(rest, context),
   "approve-edge": async (rest, context) => approveEdgeVerb(rest, context),
   "reject-edge": async (rest, context) => rejectEdgeVerb(rest, context),
-  undo: async (_rest, context) => rpcUndo(context),
+  graph: async (rest, context) => rpcGraph(context, rest),
+  sentient: async (_rest, context) => rpcSentient(context),
+  pulse: async (rest, context) =>
+    rest.length === 0 ? { message: "/pulse needs a note path" } : rpcPulse(context, rest),
+  diff: async (rest, context) => rpcDiff(context, rest.length === 0 ? undefined : rest),
+  undo: async (rest, context) => rpcUndo(context, rest.length === 0 ? undefined : rest),
   history: async (_rest, context) => rpcHistory(context),
+  jobs: async (rest, context) => listJobs(context, rest),
+  pipelines: async (_rest, context) => listPipelines(context),
+  pipeline: async (rest, context) => runPipeline(context, rest),
+  job: async (rest, context) => inspectJob(context, rest),
   copy: async (_rest, context) => copyLastAssistant(context),
   model: async (rest, context) => modelVerb(rest, context),
 };
-
-async function modelVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
-  const space = rest.indexOf(" ");
-  const sub = (space < 0 ? rest : rest.slice(0, space)).trim();
-  const arg = space < 0 ? "" : rest.slice(space + 1).trim();
-  if (sub.length === 0) return modelShow(context);
-  if (sub === "show") return modelShow(context);
-  if (sub === "list") return modelList(context);
-  if (sub === "use") {
-    if (arg.length === 0) return { message: "/model use needs <id>" };
-    return modelApplyPatch(context, buildUseModelPatch(arg), `chat model → ${arg}`);
-  }
-  if (sub === "embed") {
-    if (arg.length === 0) return { message: "/model embed needs <id>" };
-    return modelApplyPatch(context, buildUseEmbedPatch(arg), `embed model → ${arg}`);
-  }
-  if (sub === "endpoint") {
-    if (arg.length === 0) return { message: "/model endpoint needs <url>" };
-    return modelApplyPatch(context, buildEndpointPatch(arg), `endpoint → ${arg}`);
-  }
-  return { message: `/model: unknown action '${sub}' (try /help)` };
-}
-
-const PROPOSALS_PAGE_SIZE = 8;
-
-async function proposalsVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
-  const page = parseProposalPage(rest);
-  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
-  const items = await actions.list();
-  if (items.length === 0) return { message: "proposals: (empty)", proposalItems: [] };
-  const totalPages = Math.max(1, Math.ceil(items.length / PROPOSALS_PAGE_SIZE));
-  const clampedPage = Math.min(page, totalPages);
-  const offset = (clampedPage - 1) * PROPOSALS_PAGE_SIZE;
-  const pageItems = items.slice(offset, offset + PROPOSALS_PAGE_SIZE);
-  const rows = pageItems.map(
-    (item, index) =>
-      `${offset + index + 1}. ${item.id} ${item.table} ${item.source ?? "?"} -> ${
-        item.target ?? "?"
-      } agent=${item.agent ?? "?"} confidence=${item.confidence.toFixed(2)}`,
-  );
-  return {
-    message: [
-      `proposals page ${clampedPage}/${totalPages}`,
-      ...rows,
-      "keys: a approve first visible, r reject first visible, /approve-edge <id>, /reject-edge <id>",
-    ].join("\n"),
-    proposalItems: pageItems,
-  };
-}
-
-function parseProposalPage(rest: string): number {
-  if (rest.length === 0) return 1;
-  const parsed = Number(rest);
-  if (!Number.isInteger(parsed) || parsed <= 0) return 1;
-  return parsed;
-}
-
-async function approveEdgeVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
-  const id = rest.trim();
-  if (id.length === 0) return { message: "/approve-edge needs <id>" };
-  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
-  return { message: await actions.approve(id) };
-}
-
-async function rejectEdgeVerb(rest: string, context: SlashContext): Promise<SlashOutcome> {
-  const space = rest.indexOf(" ");
-  const id = space < 0 ? rest.trim() : rest.slice(0, space).trim();
-  const reason = space < 0 ? undefined : rest.slice(space + 1).trim();
-  if (id.length === 0) return { message: "/reject-edge needs <id>" };
-  const actions = context.proposals ?? defaultProposalActions(context.vaultPath);
-  return { message: await actions.reject(id, reason === "" ? undefined : reason) };
-}
-
-function defaultProposalActions(vaultPath: string): ProposalActions {
-  return {
-    list: async () => {
-      let captured = "";
-      const exitCode = await runProposalsListCommand({
-        vaultPath,
-        emitter: silentEmitter,
-        asJson: true,
-        limit: 100,
-        writeStdout: (line) => {
-          captured += line;
-        },
-      });
-      if (exitCode !== 0) return [];
-      const parsed = JSON.parse(captured) as ProposalListItem[];
-      return parsed;
-    },
-    approve: async (id) => {
-      const events = captureEvents();
-      const exitCode = await runProposalsApproveCommand({
-        vaultPath,
-        vaultRoot: vaultPath,
-        emitter: events.emitter,
-        id,
-      });
-      return proposalActionMessage(exitCode, events.events, "approved", id);
-    },
-    reject: async (id, reason) => {
-      const events = captureEvents();
-      const exitCode = await runProposalsRejectCommand({
-        vaultPath,
-        vaultRoot: vaultPath,
-        emitter: events.emitter,
-        id,
-        reason,
-      });
-      return proposalActionMessage(exitCode, events.events, "rejected", id);
-    },
-  };
-}
-
-const silentEmitter: Emitter = {
-  emit: () => {},
-};
-
-function captureEvents(): { emitter: Emitter; events: Array<Record<string, unknown>> } {
-  const events: Array<Record<string, unknown>> = [];
-  return {
-    events,
-    emitter: {
-      emit: (event) => {
-        events.push(event);
-      },
-    },
-  };
-}
-
-function proposalActionMessage(
-  exitCode: number,
-  events: ReadonlyArray<Record<string, unknown>>,
-  verb: "approved" | "rejected",
-  id: string,
-): string {
-  const error = events.find((event) => event.type === "error");
-  if (error !== undefined) return `${verb} error: ${String(error.message ?? "unknown")}`;
-  const notFound = events.find((event) => event.type === "proposals:not_found");
-  if (notFound !== undefined) return String(notFound.message ?? "proposal not found");
-  if (exitCode !== 0) return `${verb} error: exit ${exitCode}`;
-  return `edge ${verb} ${id}`;
-}
-
-async function modelShow(context: SlashContext): Promise<SlashOutcome> {
-  const settings = await fetchSettings(context);
-  if (settings === null) return { message: "/model: failed to read daemon config." };
-  return { message: formatModelView(buildModelView(settings)) };
-}
-
-async function modelList(context: SlashContext): Promise<SlashOutcome> {
-  const settings = await fetchSettings(context);
-  if (settings === null) return { message: "/model list: failed to read daemon config." };
-  const baseUrl = settings.primary.baseUrl.replace(/\/v1\/?$/, "");
-  try {
-    const response = await fetch(`${baseUrl}/api/v0/models`);
-    if (!response.ok) {
-      return { message: `/model list: endpoint returned HTTP ${response.status}` };
-    }
-    const body = (await response.json()) as { data?: ReadonlyArray<Record<string, unknown>> };
-    const models = (body.data ?? []).map(
-      (m): ModelInfo => ({
-        id: String(m.id ?? ""),
-        type: String(m.type ?? "?"),
-        state: m.state === "loaded" ? "loaded" : "not-loaded",
-        loadedContextLength:
-          typeof m.loaded_context_length === "number" ? m.loaded_context_length : undefined,
-        maxContextLength:
-          typeof m.max_context_length === "number" ? m.max_context_length : undefined,
-      }),
-    );
-    return { message: formatModelList(models) };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown";
-    return { message: `/model list: fetch failed — ${message}` };
-  }
-}
-
-async function modelApplyPatch(
-  context: SlashContext,
-  patch: Partial<NotientSettings>,
-  label: string,
-): Promise<SlashOutcome> {
-  const result = await drainResult(
-    context.client.call("daemon.config_set", patch as Record<string, unknown>),
-  );
-  if (!result || result.type === "error") {
-    return { message: `/model: config update failed — ${formatError(result)}` };
-  }
-  return { message: `/model: ${label}.` };
-}
-
-async function fetchSettings(context: SlashContext): Promise<NotientSettings | null> {
-  const result = await drainResult(context.client.call("daemon.config_get", {}));
-  if (!result || result.type !== "result") return null;
-  const detail = result as unknown as { config?: NotientSettings };
-  return detail.config ?? null;
-}
-
-async function copyLastAssistant(context: SlashContext): Promise<SlashOutcome> {
-  const text = context.getLastAssistant?.() ?? null;
-  if (text === null || text.length === 0) {
-    return { message: "/copy: no assistant reply yet to copy." };
-  }
-  const target = join(context.vaultPath, ".notient", "last.txt");
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, text);
-  return { message: `Copied ${text.length} chars → ${target}` };
-}
 
 export async function dispatchSlashCommand(
   line: string,
@@ -363,160 +140,112 @@ async function approvalVerb(
   approved: boolean,
 ): Promise<SlashOutcome> {
   const space = rest.indexOf(" ");
-  const callId = space < 0 ? rest : rest.slice(0, space);
-  const reason = space < 0 ? "" : rest.slice(space + 1).trim();
+  const callId = (space < 0 ? rest : rest.slice(0, space)).trim();
   if (callId.length === 0) {
     return { message: `/${approved ? "approve" : "deny"} needs <callId>` };
   }
-  return rpcChatApprove(context, callId, approved, reason);
+  if (approved) {
+    if (space >= 0) return { message: "/approve accepts only <callId>" };
+    return rpcChatApprove(context, { callId, approved: true });
+  }
+  const reason = space < 0 ? undefined : rest.slice(space + 1).trim();
+  return rpcChatApprove(context, {
+    callId,
+    approved: false,
+    ...(reason !== undefined && reason.length > 0 ? { reason } : {}),
+  });
+}
+
+export const READ_NOTE_MAX_CHARS = 5000;
+export const READ_NOTE_HEAD_CHARS = 3500;
+export const READ_NOTE_TAIL_CHARS = 1500;
+
+export function renderNoteBody(path: string, body: string): string {
+  if (body.length <= READ_NOTE_MAX_CHARS) {
+    return `\`\`\`md\n${body}\n\`\`\``;
+  }
+  if (body.startsWith("---\n")) {
+    const endFm = body.indexOf("\n---\n", 4);
+    if (endFm > 0) {
+      const fm = body.slice(0, endFm + 5);
+      const rest = body.slice(endFm + 5);
+      const limit = READ_NOTE_MAX_CHARS - fm.length;
+      if (limit > 0 && rest.length > limit) {
+        const elided = rest.length - limit;
+        return `\`\`\`md\n${fm}${rest.slice(0, limit)}\n[…${elided} characters elided…]\n\`\`\``;
+      }
+    }
+  }
+  const head = body.slice(0, READ_NOTE_HEAD_CHARS);
+  const tail = body.slice(body.length - READ_NOTE_TAIL_CHARS);
+  const elided = body.length - READ_NOTE_MAX_CHARS;
+  return `\`\`\`md\n${head}\n[…${elided} characters elided…]\n${tail}\n\`\`\``;
+}
+
+async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOutcome> {
+  try {
+    const result = await createRpc(context.client).noteBody(path);
+    return { message: renderNoteBody(path, result.body) };
+  } catch (error) {
+    return { message: `read error: ${formatError(error)}` };
+  }
 }
 
 async function rpcSearch(context: SlashContext, query: string): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("search.run", { query, mode: "balanced" }));
-  if (!result || result.type === "error") {
-    return { message: `search error: ${formatError(result)}` };
+  try {
+    const result = await createRpc(context.client).search(query, 5);
+    if (result.result === null) return { message: "search completed without a result." };
+    const coverage = result.result.coverage.message;
+    if (result.result.hits.length === 0)
+      return { message: coverage ? `No hits yet. ${coverage}` : "no hits." };
+    return {
+      message: [coverage, ...result.result.hits.map((hit) => `${hit.notePath} (${hit.score})`)]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  } catch (error) {
+    return { message: `search error: ${formatError(error)}` };
   }
-  const detail = result as unknown as {
-    result?: { hits?: { notePath: string; score: number }[] };
-  };
-  const hits = detail.result?.hits ?? [];
-  if (hits.length === 0) return { message: "no hits." };
-  return {
-    message: hits
-      .slice(0, 5)
-      .map((hit) => `${hit.notePath} (${hit.score.toFixed(2)})`)
-      .join("\n"),
-  };
 }
 
 async function rpcAwaken(context: SlashContext): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("awaken.run", {}));
-  if (!result || result.type === "error") {
-    return { message: `awaken error: ${formatError(result)}` };
+  try {
+    const result = await createRpc(context.client).awaken();
+    return { message: `awaken indexing started (runId: ${result.runId})` };
+  } catch (error) {
+    return { message: `awaken error: ${formatError(error)}` };
   }
-  const detail = result as unknown as { queued?: number };
-  return { message: `awaken: queued ${detail.queued ?? 0} notes` };
-}
-
-async function rpcVitals(context: SlashContext, path: string): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("vitals.get", { path }));
-  if (!result || result.type === "error") {
-    return { message: `vitals error: ${formatError(result)}` };
-  }
-  const detail = result as unknown as { snapshot?: unknown };
-  return { message: `vitals: ${JSON.stringify(detail.snapshot ?? {})}` };
-}
-
-async function rpcHealth(context: SlashContext): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("health.probe", {}));
-  if (!result || result.type === "error") {
-    return { message: `health error: ${formatError(result)}` };
-  }
-  return { message: `health: ${JSON.stringify(result)}` };
 }
 
 async function rpcChatApprove(
   context: SlashContext,
-  callId: string,
-  approved: boolean,
-  reason: string,
+  decision:
+    | { callId: string; approved: true }
+    | { callId: string; approved: false; reason?: string },
 ): Promise<SlashOutcome> {
-  const params: Record<string, unknown> = { callId, approved };
-  if (reason.length > 0) params.reason = reason;
-  const result = await drainResult(context.client.call("chat.approve", params));
-  if (!result || result.type === "error") {
-    return { message: `${approved ? "approve" : "deny"} error: ${formatError(result)}` };
+  const verb = decision.approved ? "approve" : "deny";
+  try {
+    const result = await createRpc(context.client).chatApprove(decision);
+    if (result.callId !== decision.callId || result.approved !== decision.approved) {
+      return {
+        message: `${verb} error: chat.approve answered for another decision`,
+        pendingTransition: { id: decision.callId, state: "uncertain" },
+      };
+    }
+    if (result.approved) {
+      return {
+        message: `approved ${result.callId}`,
+        pendingTransition: { id: result.callId, state: "resolved" },
+      };
+    }
+    return {
+      message: `denied ${result.callId}: ${result.reason}`,
+      pendingTransition: { id: result.callId, state: "resolved" },
+    };
+  } catch (error) {
+    return {
+      message: `${verb} error: ${formatError(error)}`,
+      pendingTransition: { id: decision.callId, state: "uncertain" },
+    };
   }
-  return { message: `${approved ? "approved" : "denied"} ${callId}` };
-}
-
-async function rpcUndo(context: SlashContext): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("notes.undo", {}));
-  if (!result || result.type === "error") return { message: `undo error: ${formatError(result)}` };
-  const detail = result as unknown as {
-    ok?: boolean;
-    error?: string;
-    reversed?: { kind?: string; target?: string };
-  };
-  if (detail.ok !== true) {
-    return { message: `undo: ${detail.error ?? "unknown"}` };
-  }
-  const reversed = detail.reversed;
-  return { message: `undone: ${reversed?.kind ?? "?"} ${reversed?.target ?? ""}` };
-}
-
-async function rpcHistory(context: SlashContext): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("notes.history", { limit: 10 }));
-  if (!result || result.type === "error")
-    return { message: `history error: ${formatError(result)}` };
-  const detail = result as unknown as {
-    entries?: { kind: string; target: string; createdAt: number }[];
-  };
-  const entries = detail.entries ?? [];
-  if (entries.length === 0) return { message: "history: (empty)" };
-  return {
-    message: entries
-      .map((entry) => `${entry.kind} ${entry.target} ${new Date(entry.createdAt).toISOString()}`)
-      .join("\n"),
-  };
-}
-
-async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOutcome> {
-  const result = await drainResult(context.client.call("notes.read", { path }));
-  if (!result || result.type === "error") return { message: `read error: ${formatError(result)}` };
-  const detail = result as unknown as { body?: string };
-  const body = detail.body ?? "";
-  return { message: renderNoteBody(path, body) };
-}
-
-const RENDER_LIMIT = 5000;
-
-/**
- * Format a vault note body inside a fenced markdown block, head/tail
- * truncated to ~5000 characters. When the body opens with a YAML
- * frontmatter block (`---\n...\n---\n`), the entire block is preserved
- * verbatim and only the body content after it is truncated; otherwise the
- * head/tail split runs over the whole body. The truncation marker carries
- * the elided character count so the operator knows how much was dropped.
- */
-export function renderNoteBody(_path: string, body: string): string {
-  if (body.length <= RENDER_LIMIT) return `\`\`\`md\n${body}\n\`\`\``;
-  const frontmatter = extractFrontmatter(body);
-  if (frontmatter) {
-    const remaining = Math.max(RENDER_LIMIT - frontmatter.block.length, 800);
-    const truncatedRest = truncateMiddle(frontmatter.rest, remaining);
-    return `\`\`\`md\n${frontmatter.block}${truncatedRest}\n\`\`\``;
-  }
-  return `\`\`\`md\n${truncateMiddle(body, RENDER_LIMIT)}\n\`\`\``;
-}
-
-function extractFrontmatter(body: string): { block: string; rest: string } | null {
-  if (!body.startsWith("---\n")) return null;
-  const closeMarker = "\n---\n";
-  const closeIndex = body.indexOf(closeMarker, 4);
-  if (closeIndex < 0) return null;
-  const blockEnd = closeIndex + closeMarker.length;
-  return { block: body.slice(0, blockEnd), rest: body.slice(blockEnd) };
-}
-
-function truncateMiddle(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const head = text.slice(0, Math.floor(limit * 0.7));
-  const tail = text.slice(text.length - Math.floor(limit * 0.3));
-  const elided = text.length - head.length - tail.length;
-  return `${head}\n[…${elided} characters elided…]\n${tail}`;
-}
-
-async function drainResult(
-  stream: AsyncIterable<RpcResponseFrame>,
-): Promise<RpcResponseFrame | null> {
-  for await (const frame of stream) {
-    if (frame.type === "result" || frame.type === "error") return frame;
-  }
-  return null;
-}
-
-function formatError(frame: RpcResponseFrame | null): string {
-  if (frame === null) return "no response";
-  return (frame as { message?: string }).message ?? "unknown";
 }

@@ -1,0 +1,26 @@
+diff --git a/dist/surrealdb.cjs b/dist/surrealdb.cjs
+index cabd45241e54d1db32e767622e35a367a3d8c75d..9e6a223928b604ffefe6a486b12a4b24a0343b99 100644
+--- a/dist/surrealdb.cjs
++++ b/dist/surrealdb.cjs
+@@ -5760,7 +5760,7 @@ function infiniteBytes(r$1, forMajor) {
+ 	}
+ 	return w.buffer.buffer;
+ }
+-var textDecoder = new TextDecoder();
++var textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+ function decode(input, options = {}) {
+ 	let r$1 = input instanceof Reader ? input : new Reader(input);
+ 	return decodeValue(r$1, options);
+diff --git a/dist/surrealdb.mjs b/dist/surrealdb.mjs
+index f52b73013bcbb61536e98158ddd58b0408705a0e..62d34e30efd79cb2f0442c1a191485fa2c51e835 100644
+--- a/dist/surrealdb.mjs
++++ b/dist/surrealdb.mjs
+@@ -5759,7 +5759,7 @@ function infiniteBytes(r$1, forMajor) {
+ 	}
+ 	return w.buffer.buffer;
+ }
+-var textDecoder = new TextDecoder();
++var textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+ function decode(input, options = {}) {
+ 	let r$1 = input instanceof Reader ? input : new Reader(input);
+ 	return decodeValue(r$1, options);

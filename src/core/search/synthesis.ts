@@ -1,3 +1,4 @@
+import type { ReasoningScheduler } from "../coordinator/reasoningScheduler";
 import type { LLMProvider } from "../llm/provider";
 import { deepSynthesizePrompt } from "./prompts/deepSynthesize";
 import type { SearchHit, SynthesisBullet, SynthesisCard } from "./types";
@@ -10,6 +11,7 @@ export interface SynthesizerOptions {
   query: string;
   hits: SearchHit[];
   signal: AbortSignal;
+  scheduler: ReasoningScheduler;
   /** Optional cap on response tokens. Undefined lets the local server decide. */
   maxTokens?: number;
   /** Optional callback invoked for each streamed delta. */
@@ -33,22 +35,29 @@ export async function synthesize(options: SynthesizerOptions): Promise<Synthesis
   const messages = deepSynthesizePrompt({ query: options.query, hits: options.hits });
   let buffer = "";
   try {
-    const stream = options.provider.chatStream(messages, {
-      model: options.model,
-      signal: options.signal,
-      temperature: 0.2,
-      maxTokens: options.maxTokens,
-    });
-    for await (const token of stream) {
-      if (options.signal.aborted) {
-        const abortError = new Error("aborted");
-        abortError.name = "AbortError";
-        throw abortError;
-      }
-      if (token.length === 0) continue;
-      buffer += token;
-      options.onToken?.(token);
-    }
+    await options.scheduler.run(
+      "search:synthesis",
+      async (scheduledSignal) => {
+        const stream = options.provider.chatStream(messages, {
+          model: options.model,
+          signal: scheduledSignal,
+          temperature: 0.2,
+          maxTokens: options.maxTokens,
+          enableThinking: false,
+        });
+        for await (const token of stream) {
+          if (scheduledSignal.aborted) {
+            const abortError = new Error("aborted");
+            abortError.name = "AbortError";
+            throw abortError;
+          }
+          if (token.length === 0) continue;
+          buffer += token;
+          options.onToken?.(token);
+        }
+      },
+      { signal: options.signal },
+    );
   } catch (error) {
     if (isAbortError(error)) throw error;
     const message = error instanceof Error ? error.message : String(error);
@@ -100,7 +109,7 @@ function citationsAllowed(
 function allowedCitationsForHits(hits: SearchHit[]): ReadonlySet<string> {
   const out = new Set<string>();
   for (const hit of hits) {
-    const sourcePath = resolveSourcePath(hit);
+    const sourcePath = hit.notePath;
     if (sourcePath.length === 0) continue;
     const cleanPath = sourcePath.replace(/^\/+/, "");
     const withoutExtension = cleanPath.replace(/\.md$/i, "");
@@ -116,14 +125,6 @@ function wikiTitleFor(notePath: string): string {
   if (notePath.length === 0) return "unknown";
   const fileName = notePath.split("/").pop() ?? notePath;
   return fileName.replace(/\.md$/i, "");
-}
-
-function resolveSourcePath(hit: SearchHit): string {
-  const candidate = (hit as { notePath?: string; viaPath?: string }).notePath;
-  if (typeof candidate === "string" && candidate.length > 0) return candidate;
-  const fallback = (hit as { viaPath?: string }).viaPath;
-  if (typeof fallback === "string" && fallback.length > 0) return fallback;
-  return "";
 }
 
 function isAbortError(error: unknown): boolean {

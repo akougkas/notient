@@ -8,105 +8,141 @@ describe("AwakenBackgroundRegistry", () => {
     expect(registry.pendingPromises()).toHaveLength(0);
   });
 
-  test("track adds the promise to the snapshot until it resolves", async () => {
+  test("start tracks the canonical completion until it resolves", async () => {
     const registry = new AwakenBackgroundRegistry();
-    let resolveFn: (value: number) => void = () => {
-      throw new Error("resolveFn not assigned");
+    let resolveWorker: (value: number) => void = () => {
+      throw new Error("resolveWorker not assigned");
     };
-    const promise = new Promise<number>((resolve) => {
-      resolveFn = resolve;
-    });
-    registry.track(promise);
-    expect(registry.size()).toBe(1);
-    expect(registry.pendingPromises()).toHaveLength(1);
+    const completion = registry.start(
+      () =>
+        new Promise<number>((resolve) => {
+          resolveWorker = resolve;
+        }),
+    );
+    if (completion === null) throw new Error("worker was unexpectedly refused");
 
-    resolveFn(42);
-    await promise;
-    // The `.finally` cleanup runs on a microtask boundary; flush it.
+    expect(registry.size()).toBe(1);
+    expect(registry.pendingPromises()).toEqual([completion]);
+
+    await Promise.resolve();
+    resolveWorker(42);
+    await completion;
     await Promise.resolve();
     expect(registry.size()).toBe(0);
     expect(registry.pendingPromises()).toHaveLength(0);
   });
 
-  test("track removes the entry when the tracked promise rejects", async () => {
+  test("a rejected completion is removed without changing its rejection", async () => {
     const registry = new AwakenBackgroundRegistry();
     const failure = new Error("boom");
-    let rejectFn: (error: unknown) => void = () => {
-      throw new Error("rejectFn not assigned");
+    let rejectWorker: (error: unknown) => void = () => {
+      throw new Error("rejectWorker not assigned");
     };
-    const promise = new Promise<never>((_resolve, reject) => {
-      rejectFn = reject;
-    });
-    // Attach the caller-side catch BEFORE `track` so the registry's
-    // own `.finally` does not look like the only handler. Bun's
-    // unhandled-rejection guard checks at the next microtask; we
-    // must have a handler chain before then.
-    const observed: unknown[] = [];
-    promise.catch((error) => {
-      observed.push(error);
-    });
-    registry.track(promise);
-    rejectFn(failure);
-    // Allow the rejection to propagate through the registry's cleanup
-    // and the caller's catch.
+    const completion = registry.start(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectWorker = reject;
+        }),
+    );
+    if (completion === null) throw new Error("worker was unexpectedly refused");
+    const observed = completion.catch((error) => error);
+
     await Promise.resolve();
+    rejectWorker(failure);
+    expect(await observed).toBe(failure);
     await Promise.resolve();
     expect(registry.size()).toBe(0);
-    expect(observed).toEqual([failure]);
+  });
+
+  test("a synchronous worker factory throw becomes the tracked rejection", async () => {
+    const registry = new AwakenBackgroundRegistry();
+    const failure = new Error("factory boom");
+    const completion = registry.start(() => {
+      throw failure;
+    });
+    if (completion === null) throw new Error("worker was unexpectedly refused");
+
+    expect(registry.pendingPromises()).toEqual([completion]);
+    await expect(completion).rejects.toBe(failure);
+    await registry.drain();
+    expect(registry.size()).toBe(0);
   });
 
   test("pendingPromises returns a defensive snapshot", async () => {
     const registry = new AwakenBackgroundRegistry();
-    let resolveA: () => void = () => {
-      throw new Error("resolveA not assigned");
-    };
-    let resolveB: () => void = () => {
-      throw new Error("resolveB not assigned");
-    };
-    const promiseA = new Promise<void>((resolve) => {
-      resolveA = resolve;
-    });
-    const promiseB = new Promise<void>((resolve) => {
-      resolveB = resolve;
-    });
-    registry.track(promiseA);
-    registry.track(promiseB);
+    const resolvers: Array<() => void> = [];
+    const first = registry.start(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const second = registry.start(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    if (first === null || second === null) throw new Error("worker was unexpectedly refused");
 
     const snapshot = registry.pendingPromises();
     expect(snapshot).toHaveLength(2);
-
-    resolveA();
-    resolveB();
-    await Promise.all(snapshot);
     await Promise.resolve();
-    // The earlier snapshot is still length 2 even though the registry
-    // emptied; mutating the registry must not retroactively shrink it.
+    for (const resolve of resolvers) resolve();
+    await Promise.all([first, second]);
+    await Promise.resolve();
+
     expect(snapshot).toHaveLength(2);
     expect(registry.size()).toBe(0);
   });
 
-  test("multiple tracks of distinct promises accumulate and settle independently", async () => {
+  test("stop aborts and drain awaits every worker before refusing new admission", async () => {
     const registry = new AwakenBackgroundRegistry();
-    const resolvers: Array<() => void> = [];
-    const promises: Promise<void>[] = [];
-    for (let index = 0; index < 3; index += 1) {
-      const promise = new Promise<void>((resolve) => {
-        resolvers.push(resolve);
-      });
-      promises.push(promise);
-      registry.track(promise);
-    }
-    expect(registry.size()).toBe(3);
+    const order: string[] = [];
+    const completion = registry.start(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              order.push("worker.abort");
+              queueMicrotask(() => {
+                order.push("worker.settle");
+                resolve();
+              });
+            },
+            { once: true },
+          );
+        }),
+    );
+    if (completion === null) throw new Error("worker was unexpectedly refused");
 
-    resolvers[0]?.();
-    await promises[0];
     await Promise.resolve();
-    expect(registry.size()).toBe(2);
+    registry.stop();
+    const draining = registry.drain().then(() => {
+      order.push("registry.drained");
+    });
+    expect(registry.start(async () => {})).toBeNull();
+    expect(order).toEqual(["worker.abort"]);
 
-    resolvers[1]?.();
-    resolvers[2]?.();
-    await Promise.all([promises[1], promises[2]]);
-    await Promise.resolve();
+    await Promise.all([completion, draining]);
+    expect(order).toEqual(["worker.abort", "worker.settle", "registry.drained"]);
+    expect(registry.size()).toBe(0);
+  });
+
+  test("stop before the factory microtask prevents the worker from starting", async () => {
+    const registry = new AwakenBackgroundRegistry();
+    let invoked = false;
+    const completion = registry.start(async () => {
+      invoked = true;
+    });
+    if (completion === null) throw new Error("worker was unexpectedly refused");
+
+    registry.stop();
+    await Promise.allSettled([completion]);
+    await registry.drain();
+
+    expect(invoked).toBe(false);
     expect(registry.size()).toBe(0);
   });
 });

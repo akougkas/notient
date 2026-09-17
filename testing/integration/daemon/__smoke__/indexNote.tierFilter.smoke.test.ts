@@ -22,8 +22,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RecordId } from "surrealdb";
+import { type RecordId, StringRecordId } from "surrealdb";
 import { Linker } from "../../../../src/core/agents/linker";
+import { AgentRunExecutor } from "../../../../src/core/coordinator/agentRunExecutor";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -36,7 +38,6 @@ import { EventBus } from "../../../../src/core/events/eventBus";
 import { Embedder } from "../../../../src/core/indexer/embedder";
 import { Extractor } from "../../../../src/core/indexer/extractor";
 import { indexNote } from "../../../../src/core/indexer/indexNote";
-import { EMBED_MODEL } from "../../../../src/core/indexer/tier2";
 import type {
   ChatMessage,
   ChatOptions,
@@ -48,6 +49,10 @@ import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/s
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
+const EMBEDDING_IDENTITY = {
+  model: "tier-filter-smoke-embedding",
+  dimension: VECTOR_DIM,
+} as const;
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
@@ -80,15 +85,15 @@ function makeEmbedder(): Embedder {
   const provider = fakeProvider({
     embed: async (input: string[]) => input.map((text) => deterministicVector(text)),
   });
-  return new Embedder(provider, { model: EMBED_MODEL });
+  return new Embedder(provider, { identity: EMBEDDING_IDENTITY, concurrency: 1 });
 }
 
-function makeExtractor(): Extractor {
+function makeExtractor(scheduler: ReasoningScheduler): Extractor {
   const provider = fakeProvider({
     chatJson: async <T>(_messages: ChatMessage[], _opts: ChatOptions, _schema: JsonSchema) =>
       ({ entities: [], claims: [], questions: [] }) as T,
   });
-  return new Extractor(provider, { model: "test-extractor-model" });
+  return new Extractor(provider, { model: "test-extractor-model", scheduler, concurrency: 1 });
 }
 
 function makeLinker(connection: SurrealConnection): Linker {
@@ -105,6 +110,15 @@ function makeLinker(connection: SurrealConnection): Linker {
     provider,
     reasoningModel: "test-linker-model",
   });
+}
+
+function makeTier3Deps(connection: SurrealConnection, bus: EventBus) {
+  const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
+  const executor = new AgentRunExecutor({ db: connection.db, bus, scheduler, now: Date.now });
+  return {
+    extractor: makeExtractor(scheduler),
+    runLinker: executor.bind(makeLinker(connection)),
+  };
 }
 
 async function countWhereNote(
@@ -143,6 +157,7 @@ async function clearAllNoteTables(connection: SurrealConnection): Promise<void> 
     "concept",
     "claim",
     "question",
+    "agent_run",
     "note",
   ];
   for (const table of tables) {
@@ -174,6 +189,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -182,7 +198,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterAll(async () => {
@@ -195,7 +211,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("[A] fresh DB + tierFilter=[2] runs Tier 1 transparently then Tier 2", async () => {
     await clearAllNoteTables(connection);
@@ -204,11 +220,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
       tierFilter: [2],
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     expect(result.notePath).toBe(notePath);
@@ -237,11 +254,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
       tierFilter: [3],
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     expect(result.chunkCount).toBeGreaterThan(0);
@@ -270,10 +288,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     const noteId = await lookupNoteByPath(connection.db, notePath);
@@ -301,11 +320,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
       tierFilter: [2],
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     expect(tier1DoneSeen).toBe(0);
@@ -319,9 +339,51 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
     expect(state.tier3Done).toBe(true);
   });
 
+  test("an unchanged note with an older structural version runs the current parser without AI", async () => {
+    await clearAllNoteTables(connection);
+    const bus = new EventBus();
+    const args = {
+      notePath,
+      noteBody: noteSource,
+      embedder: makeEmbedder(),
+      ...makeTier3Deps(connection, bus),
+      bus,
+      surrealDb: connection,
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
+      tierFilter: [1] as const,
+    };
+    await indexNote({ ...args, tierFilter: [1] });
+    await connection.db
+      .query("UPDATE note SET structural_version = NONE WHERE path = $path;", { path: notePath })
+      .collect();
+    expect((await fetchNoteTierState(connection.db, notePath)).tier1Done).toBe(false);
+    let parsed = 0;
+    let reused = 0;
+    bus.on("indexer:tier1-done", () => {
+      parsed++;
+    });
+    bus.on("indexer:tier1-reused", () => {
+      reused++;
+    });
+    const never = async (): Promise<never> => {
+      throw new Error("Structural repair must not call inference");
+    };
+    await indexNote({
+      ...args,
+      tierFilter: [1],
+      embedder: new Embedder(fakeProvider({ embed: never }), {
+        identity: EMBEDDING_IDENTITY,
+        concurrency: 1,
+      }),
+    });
+    expect(parsed).toBe(1);
+    expect(reused).toBe(0);
+    expect((await fetchNoteTierState(connection.db, notePath)).tier1Done).toBe(true);
+  });
+
   test("[E] body sha drift forces a full re-run of all three tiers", async () => {
-    // M2: a watcher edit lands new bytes on disk while the previously
-    // indexed `note` row still carries the old `sha` and stamped
+    // A watcher edit lands new bytes on disk while the indexed `note` row
+    // still carries the prior `sha` and stamped
     // `tier{1,2,3}_at`. Without the sha-drift gate `indexNote` would
     // short-circuit (chunkCount=0, no events) and search would keep the
     // pre-edit chunks. With the gate the orchestrator clears all three
@@ -334,10 +396,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     const noteId = await lookupNoteByPath(connection.db, notePath);
@@ -358,6 +421,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
     let tier1DoneSeen = 0;
     let tier2DoneSeen = 0;
     let tier3DoneSeen = 0;
+    let watcherRunId: string | null = null;
     bus.on("indexer:tier1-done", () => {
       tier1DoneSeen += 1;
     });
@@ -367,21 +431,38 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
     bus.on("indexer:tier3-done", () => {
       tier3DoneSeen += 1;
     });
+    bus.on("agent:run-started", (event) => {
+      watcherRunId = event.runId;
+    });
 
     const result = await indexNote({
       notePath,
       noteBody: editedSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     expect(tier1DoneSeen).toBe(1);
     expect(tier2DoneSeen).toBe(1);
     expect(tier3DoneSeen).toBe(1);
     expect(result.chunkCount).toBeGreaterThan(0);
+    expect(watcherRunId).not.toBeNull();
+    if (watcherRunId === null) return;
+    expect(watcherRunId).toMatch(/^agent_run:u"[0-9a-f-]{36}"$/);
+    const [watcherRuns] = await connection.db
+      .query<[Array<{ id: RecordId<"agent_run">; trigger: string; ok: boolean }>]>(
+        "SELECT id, trigger, ok FROM agent_run WHERE id = $runId;",
+        { runId: new StringRecordId(watcherRunId) },
+      )
+      .collect<[Array<{ id: RecordId<"agent_run">; trigger: string; ok: boolean }>]>();
+    expect(watcherRuns).toHaveLength(1);
+    expect(watcherRuns[0].id.toString()).toBe(watcherRunId);
+    expect(watcherRuns[0].trigger).toBe("vault-save");
+    expect(watcherRuns[0].ok).toBe(true);
 
     const stateAfter = await fetchNoteTierState(connection.db, notePath);
     expect(stateAfter.tier1Done).toBe(true);
@@ -397,10 +478,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     const noteId = await lookupNoteByPath(connection.db, notePath);
@@ -427,10 +509,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] indexNote upper-bound tier filter", () 
       notePath,
       noteBody: noteSource,
       embedder: makeEmbedder(),
-      extractor: makeExtractor(),
+      ...makeTier3Deps(connection, bus),
       bus,
       surrealDb: connection,
-      linker: makeLinker(connection),
+
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     expect(tier1DoneSeen).toBe(0);

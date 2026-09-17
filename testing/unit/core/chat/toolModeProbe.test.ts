@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { probeToolMode, tryParseToolJson } from "../../../../src/core/chat/toolModeProbe";
+import { probeToolMode } from "../../../../src/core/chat/toolModeProbe";
 import type { ToolMode } from "../../../../src/core/chat/toolModeProbe";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type { EventOf } from "../../../../src/core/events/types";
+import {
+  IncompleteCompletionError,
+  completionMetadata,
+  decodeUsage,
+} from "../../../../src/core/llm/completion";
 import type {
   ChatMessage,
   ChatOptions,
@@ -18,10 +23,12 @@ interface ProbeOutcome {
   result: ChatWithToolsResult;
   /** When true the probe call throws instead of returning. */
   fail?: boolean;
+  error?: Error;
 }
 
 class StubProvider implements LLMProvider {
   public calls = 0;
+  public ceilings: number[] = [];
   public chatCalls = 0;
   /** When true the warmup chat() call throws so the probe sees a cold start. */
   public warmupFails = false;
@@ -44,9 +51,11 @@ class StubProvider implements LLMProvider {
     return [];
   }
   async chatWithTools(_request: ChatWithToolsRequest): Promise<ChatWithToolsHandle> {
+    this.ceilings.push(_request.maxTokens ?? 0);
     const callIndex = this.calls;
     this.calls += 1;
     const outcome = this.outcomes[callIndex] ?? this.outcomes[this.outcomes.length - 1];
+    if (outcome.error) throw outcome.error;
     if (outcome.fail) throw new Error("probe simulated failure");
     return {
       events: emptyEvents(),
@@ -82,32 +91,6 @@ function makeCache(initial: Record<string, ToolMode> = {}): {
   };
 }
 
-describe("tryParseToolJson", () => {
-  test("parses {tool, args} JSON", () => {
-    expect(tryParseToolJson('{"tool":"echo","args":{"value":"ping"}}')).toEqual({
-      tool: "echo",
-      args: { value: "ping" },
-    });
-  });
-
-  test("strips ```json fences", () => {
-    const wrapped = '```json\n{"tool":"echo","args":{}}\n```';
-    expect(tryParseToolJson(wrapped)).toEqual({ tool: "echo", args: {} });
-  });
-
-  test("returns args={} when args is missing", () => {
-    expect(tryParseToolJson('{"tool":"echo"}')).toEqual({ tool: "echo", args: {} });
-  });
-
-  test("returns null for plain prose", () => {
-    expect(tryParseToolJson("I do not call tools.")).toBeNull();
-  });
-
-  test("returns null when tool field is missing", () => {
-    expect(tryParseToolJson('{"value":"ping"}')).toBeNull();
-  });
-});
-
 describe("probeToolMode", () => {
   test("returns native when the model emits tool_calls and caches the result", async () => {
     const provider = new StubProvider([
@@ -125,13 +108,22 @@ describe("probeToolMode", () => {
       model: "Test-Model-Mixed-Case",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
     expect(cache.writes).toEqual([{ model: "Test-Model-Mixed-Case", mode: "native" }]);
   });
 
-  test("returns json-fallback when content carries a {tool, args} JSON object", async () => {
+  test("classifies JSON-in-prose tool narration as disabled", async () => {
     const provider = new StubProvider([
+      {
+        result: {
+          content: '{"tool":"echo","args":{"value":"ping"}}',
+          reasoningContent: "",
+          toolCalls: [],
+        },
+      },
       {
         result: {
           content: '{"tool":"echo","args":{"value":"ping"}}',
@@ -146,9 +138,12 @@ describe("probeToolMode", () => {
       model: "json-only",
       signal: new AbortController().signal,
       cache: cache.cache,
+      retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
-    expect(mode).toBe("json-fallback");
-    expect(cache.store["json-only"]).toBe("json-fallback");
+    expect(mode).toBe("disabled");
+    expect(cache.store["json-only"]).toBe("disabled");
   });
 
   test("retries once before locking disabled and respects the retry timeout option", async () => {
@@ -163,6 +158,8 @@ describe("probeToolMode", () => {
       signal: new AbortController().signal,
       cache: cache.cache,
       retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("disabled");
     expect(provider.calls).toBe(2);
@@ -187,46 +184,73 @@ describe("probeToolMode", () => {
       signal: new AbortController().signal,
       cache: cache.cache,
       retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
     expect(provider.calls).toBe(2);
   });
 
-  test("returns disabled when the provider throws on both attempts", async () => {
+  test("an outage remains retryable and does not poison the capability cache", async () => {
     const provider = new StubProvider([{ fail: true, result: blankResult() }]);
     const cache = makeCache();
-    const mode = await probeToolMode({
-      provider,
-      model: "throws",
-      signal: new AbortController().signal,
-      cache: cache.cache,
-      retryTimeoutMs: 50,
-    });
-    expect(mode).toBe("disabled");
-    expect(cache.store.throws).toBe("disabled");
+    await expect(
+      probeToolMode({
+        provider,
+        model: "offline",
+        signal: new AbortController().signal,
+        cache: cache.cache,
+        bus: new EventBus(),
+      }),
+    ).rejects.toThrow("probe simulated failure");
+    expect(provider.calls).toBe(1);
+    expect(cache.writes).toEqual([]);
   });
-
-  test("provider throwing on the first attempt terminates and writes cache EXACTLY ONCE", async () => {
-    // Hardening: regression guard against double-writing the disabled cache
-    // entry (or skipping it). Per locked decision 11, an `errored` first
-    // attempt terminates with `disabled`; the probe does not retry on
-    // exceptions, only on `no-calls`.
+  test("one bounded recovery gives truncated reasoning room to emit a real call", async () => {
+    const error = new IncompleteCompletionError(
+      "reasoning exhausted the ceiling",
+      completionMetadata(
+        "length",
+        decodeUsage({
+          completion_tokens: 4096,
+          completion_tokens_details: { reasoning_tokens: 4096 },
+        }),
+      ),
+    );
     const provider = new StubProvider([
-      { fail: true, result: blankResult() },
-      { fail: true, result: blankResult() },
+      { error, result: blankResult() },
+      {
+        result: {
+          ...blankResult(),
+          toolCalls: [{ id: "echo-1", name: "echo", args: { value: "ping" } }],
+        },
+      },
     ]);
     const cache = makeCache();
-    const mode = await probeToolMode({
-      provider,
-      model: "double-throws",
-      signal: new AbortController().signal,
-      cache: cache.cache,
-      retryTimeoutMs: 50,
-    });
-    expect(mode).toBe("disabled");
-    expect(provider.calls).toBe(1);
-    expect(cache.writes).toEqual([{ model: "double-throws", mode: "disabled" }]);
-    expect(cache.writes).toHaveLength(1);
+    expect(
+      await probeToolMode({
+        provider,
+        model: "reasoning",
+        signal: new AbortController().signal,
+        cache: cache.cache,
+        bus: new EventBus(),
+      }),
+    ).toBe("native");
+    expect(provider.ceilings).toEqual([4096, 8192]);
+    expect(provider.chatCalls).toBe(0);
+    const unfinished = new StubProvider([{ error, result: blankResult() }]);
+    const failedCache = makeCache();
+    await expect(
+      probeToolMode({
+        provider: unfinished,
+        model: "reasoning",
+        signal: new AbortController().signal,
+        cache: failedCache.cache,
+        bus: new EventBus(),
+      }),
+    ).rejects.toBe(error);
+    expect(unfinished.calls).toBe(2);
+    expect(failedCache.writes).toEqual([]);
   });
 
   test("uses cached value without invoking the provider", async () => {
@@ -237,13 +261,15 @@ describe("probeToolMode", () => {
       model: "cached",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
     expect(provider.calls).toBe(0);
     expect(cache.writes).toEqual([]);
   });
 
-  test("calls provider.chat to warm the model before the first probe attempt", async () => {
+  test("probes tools directly without wasting a separate warmup generation", async () => {
     const provider = new StubProvider([
       {
         result: {
@@ -259,13 +285,15 @@ describe("probeToolMode", () => {
       model: "cold-start",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
-    expect(provider.chatCalls).toBe(1);
+    expect(provider.chatCalls).toBe(0);
     expect(provider.calls).toBe(1);
   });
 
-  test("warmup throwing does not abort the probe", async () => {
+  test("a provider without ordinary chat can still prove native tool support", async () => {
     const provider = new StubProvider([
       {
         result: {
@@ -282,9 +310,11 @@ describe("probeToolMode", () => {
       model: "warmup-rejects",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
-    expect(provider.chatCalls).toBe(1);
+    expect(provider.chatCalls).toBe(0);
     expect(provider.calls).toBe(1);
   });
 
@@ -296,6 +326,8 @@ describe("probeToolMode", () => {
       model: "warm-cache",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(provider.chatCalls).toBe(0);
     expect(provider.calls).toBe(0);
@@ -326,6 +358,8 @@ describe("probeToolMode", () => {
         signal: controller.signal,
         cache: cache.cache,
         retryTimeoutMs: 50,
+
+        bus: new EventBus(),
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(cache.writes).toEqual([]);
@@ -342,16 +376,18 @@ describe("probeToolMode", () => {
         },
       },
     ]);
-    const cache = makeCache({ "test-model-mixed-case": "json-fallback" });
+    const cache = makeCache({ "test-model-mixed-case": "disabled" });
     const mode = await probeToolMode({
       provider,
       model: "Test-Model-Mixed-Case",
       signal: new AbortController().signal,
       cache: cache.cache,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
     expect(cache.store["Test-Model-Mixed-Case"]).toBe("native");
-    expect(cache.store["test-model-mixed-case"]).toBe("json-fallback");
+    expect(cache.store["test-model-mixed-case"]).toBe("disabled");
   });
 
   test("returns native after the second attempt yields a parseable tool call", async () => {
@@ -361,7 +397,7 @@ describe("probeToolMode", () => {
         result: {
           content: "",
           reasoningContent: "",
-          toolCalls: [{ id: "c", name: "echo", args: { value: "hello" } }],
+          toolCalls: [{ id: "c", name: "echo", args: { value: "ping" } }],
         },
       },
     ]);
@@ -372,6 +408,8 @@ describe("probeToolMode", () => {
       signal: new AbortController().signal,
       cache: cache.cache,
       retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("native");
     expect(provider.calls).toBe(2);
@@ -389,6 +427,8 @@ describe("probeToolMode", () => {
       signal: new AbortController().signal,
       cache: cache.cache,
       retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("disabled");
   });
@@ -411,6 +451,8 @@ describe("probeToolMode", () => {
       signal: new AbortController().signal,
       cache: cache.cache,
       retryTimeoutMs: 50,
+
+      bus: new EventBus(),
     });
     expect(mode).toBe("disabled");
   });

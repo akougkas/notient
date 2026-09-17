@@ -1,5 +1,5 @@
 /**
- * Phase 4 Task 11 deepSearch smoke harness.
+ * Deep-search smoke harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
@@ -14,6 +14,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { ReasoningScheduler } from "../../../../../src/core/coordinator/reasoningScheduler";
 import { applySchema } from "../../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -22,6 +23,7 @@ import {
   replaceChunks,
   upsertNoteByPath,
 } from "../../../../../src/core/db/surreal";
+import { EventBus } from "../../../../../src/core/events/eventBus";
 import type {
   ChatMessage,
   ChatOptions,
@@ -36,10 +38,11 @@ import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemo
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "deep-search-fixture", dimension: VECTOR_DIM } as const;
+const REASONING_SCHEDULER = new ReasoningScheduler({ maxConcurrent: 1 });
 
 interface ProviderStub {
-  rerankRanking?: string[];
+  rerankRanking?: number[];
   synthesisTokens?: string[];
   failSynthesis?: () => Error;
 }
@@ -80,13 +83,12 @@ async function seedNote(
     sha: `sha-${notePath}`,
     wordCount: 10,
   });
-  await replaceChunks(connection.db, noteId, [
+  await replaceChunks(connection.db, noteId, EMBEDDING_IDENTITY, [
     {
       ord: 0,
       text,
       tokenEstimate: 4,
       vector,
-      embedModel: EMBED_MODEL,
     },
   ]);
   return noteId;
@@ -137,6 +139,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -145,8 +148,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -158,7 +161,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearChunksAndEdges(connection);
@@ -183,10 +186,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
     await relateApprovedWikilink(connection, alphaId, gammaId);
 
     const provider = fakeProvider({
-      rerankRanking: ["unused"],
+      rerankRanking: [1],
       synthesisTokens: ["- Alpha is foundational [[notes/Alpha]]\n"],
     });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const events = await collectEvents(
       deepSearch({
         db: connection.db,
@@ -197,9 +200,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
         query: "alpha",
         topK: 1,
         rerankTopN: 1,
-        graphDepth: 1,
         synthesisEnabled: true,
         signal: new AbortController().signal,
+        scheduler: REASONING_SCHEDULER,
       }),
     );
     const order = events.map((event) => event.type);
@@ -229,8 +232,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
   test("skips synthesis stage when synthesisEnabled is false", async () => {
     await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
 
-    const provider = fakeProvider({ rerankRanking: ["unused"] });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const provider = fakeProvider({ rerankRanking: [1] });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const events = await collectEvents(
       deepSearch({
         db: connection.db,
@@ -241,9 +244,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
         query: "alpha",
         topK: 5,
         rerankTopN: 5,
-        graphDepth: 1,
         synthesisEnabled: false,
         signal: new AbortController().signal,
+        scheduler: REASONING_SCHEDULER,
       }),
     );
     const types = events.map((event) => event.type);
@@ -255,59 +258,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
     }
   });
 
-  test("graphDepth=0 skips graph expansion but still emits the stage event", async () => {
-    const alphaId = await seedNote(
-      connection,
-      "notes/Alpha.md",
-      "alpha",
-      unitVector({ index: 0, value: 1 }),
-    );
-    const gammaId = await seedNote(
-      connection,
-      "notes/Gamma.md",
-      "completely unrelated content",
-      unitVector({ index: 100, value: 1 }),
-    );
-    await relateApprovedWikilink(connection, alphaId, gammaId);
-
-    const provider = fakeProvider({ rerankRanking: ["unused"] });
-    const reranker = new Reranker({ provider, model: "rerank" });
-    const events = await collectEvents(
-      deepSearch({
-        db: connection.db,
-        provider,
-        embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
-        reranker,
-        reasoningModel: "reasoning",
-        query: "alpha",
-        topK: 1,
-        rerankTopN: 1,
-        graphDepth: 0,
-        synthesisEnabled: false,
-        signal: new AbortController().signal,
-      }),
-    );
-    const expansion = events.find((event) => event.type === "search:graph-expansion");
-    if (expansion?.type === "search:graph-expansion") {
-      expect(expansion.addedHitCount).toBe(0);
-    }
-    const result = events[events.length - 1];
-    if (result.type === "deep:result") {
-      // graphDepth=0 means Gamma must NOT be expanded in even though A->Gamma
-      // is a wikilink edge. The kNN/BM25 retrieval also misses Gamma so the
-      // final hits collapse to just Alpha.
-      expect(result.output.hits.map((hit) => hit.notePath)).toEqual(["notes/Alpha.md"]);
-    }
-  });
-
   test("synthesis transport failure produces a stub card with error and reaches deep:result", async () => {
     await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
 
     const provider = fakeProvider({
-      rerankRanking: ["unused"],
+      rerankRanking: [1],
       failSynthesis: () => new Error("llama-server 500"),
     });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const events = await collectEvents(
       deepSearch({
         db: connection.db,
@@ -318,9 +276,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
         query: "alpha",
         topK: 5,
         rerankTopN: 5,
-        graphDepth: 1,
         synthesisEnabled: true,
         signal: new AbortController().signal,
+        scheduler: REASONING_SCHEDULER,
       }),
     );
     const synthesisDone = events.find((event) => event.type === "search:synthesis-done");
@@ -338,14 +296,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
     await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
 
     const provider = fakeProvider({
-      rerankRanking: ["unused"],
+      rerankRanking: [1],
       failSynthesis: () => {
         const aborted = new Error("aborted");
         aborted.name = "AbortError";
         return aborted;
       },
     });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const controller = new AbortController();
 
     const events: DeepSearchEvent[] = [];
@@ -358,9 +316,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
       query: "alpha",
       topK: 5,
       rerankTopN: 5,
-      graphDepth: 1,
       synthesisEnabled: true,
       signal: controller.signal,
+      scheduler: REASONING_SCHEDULER,
     });
     for await (const event of generator) {
       events.push(event);
@@ -377,7 +335,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
   test("aborted signal before retrieval short-circuits with search:error", async () => {
     await seedNote(connection, "notes/Alpha.md", "alpha", unitVector({ index: 0, value: 1 }));
     const provider = fakeProvider({});
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const controller = new AbortController();
     controller.abort();
 
@@ -391,9 +349,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] deepSearch", () => {
         query: "alpha",
         topK: 5,
         rerankTopN: 5,
-        graphDepth: 1,
         synthesisEnabled: true,
         signal: controller.signal,
+        scheduler: REASONING_SCHEDULER,
       }),
     );
     const types = events.map((event) => (event as SearchEvent).type);

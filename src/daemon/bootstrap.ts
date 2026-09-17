@@ -1,197 +1,211 @@
-import { readFile as readFileFs, rename, unlink, writeFile } from "node:fs/promises";
 import { FsVault } from "../adapters/fsVault";
-import { TIER_1_IDENTITY } from "../agent/identity";
-import { buildNotientAgent } from "../agent/notientAgent";
 import { buildAgentToolRegistry } from "../agent/toolBundle";
 import { probeVisionRoute } from "../agent/visionProbe";
 import { Linker } from "../core/agents/linker";
-import { MaturityAdvancer } from "../core/agents/maturityAdvancer";
+import { NoteAnalysis } from "../core/analysis/noteAnalysis";
 import { ApprovalService } from "../core/approvals/approvalService";
+import { reviewsForEdge } from "../core/approvals/reviewStorage";
 import { AwakenBackgroundRegistry } from "../core/awaken/backgroundRegistry";
-import { reconcileAwakenOrphans } from "../core/awaken/reconcileAwakenOrphans";
 import { ApprovalGate } from "../core/chat/approvalGate";
 import { type ChatRuntimeSettings, ChatService } from "../core/chat/chatService";
 import { ContextManager } from "../core/chat/contextManager";
 import { ConversationIndex } from "../core/chat/conversationIndex";
 import { ConversationStore } from "../core/chat/conversationStore";
 import type { ToolMode, ToolModeCache } from "../core/chat/toolModeProbe";
-import { InMemoryClusterCache } from "../core/chat/tools/graph";
 import type { ToolCall } from "../core/chat/types";
-import { loadVaultConfig } from "../core/config/configFile";
-import { Coordinator } from "../core/coordinator/coordinator";
-import { ReasoningMutex } from "../core/coordinator/reasoningMutex";
-import type { Agent, AgentRunResult } from "../core/coordinator/types";
+import { AgentRunExecutor } from "../core/coordinator/agentRunExecutor";
+import type { Coordinator } from "../core/coordinator/coordinator";
+import { ReasoningScheduler } from "../core/coordinator/reasoningScheduler";
+import type { AgentRunCapability } from "../core/coordinator/types";
+import { WRITEBACK_EDGE_TABLES } from "../core/db/edgeTables";
+import { parseSurrealRelationRecordId } from "../core/db/recordId";
 import { applySchema } from "../core/db/schemaApplier";
 import { type SurrealConnection, connect as connectSurreal } from "../core/db/surreal";
 import { createTranscriptDistiller } from "../core/distill/transcriptDistiller";
 import { EventBus } from "../core/events/eventBus";
+import { GraphService } from "../core/graph/graphService";
+import { DurableNoteWriter } from "../core/history/durableNoteWriter";
+import { HistoryOperationError, historyConflict } from "../core/history/errors";
 import { HistoryService } from "../core/history/historyService";
-import { makeNoteAppendSectionInverter } from "../core/history/inverters/noteAppendSection";
-import { makeNoteCreateInverter } from "../core/history/inverters/noteCreate";
-import { makeNoteFrontmatterInverter } from "../core/history/inverters/noteFrontmatter";
-import { makeNoteMaturityInverter } from "../core/history/inverters/noteMaturity";
-import type { InverterRegistry } from "../core/history/types";
+import { makeNoteBodyInverter } from "../core/history/inverters/noteBody";
+import type { HistoryRow, InverterRegistry } from "../core/history/types";
 import { Embedder } from "../core/indexer/embedder";
+import { runEmbeddingRepair } from "../core/indexer/embeddingRepair";
+import { makeExclusionPredicate } from "../core/indexer/excludePaths";
 import { Extractor } from "../core/indexer/extractor";
 import { indexNote } from "../core/indexer/indexNote";
+import { IndexReadiness } from "../core/indexer/indexReadiness";
 import { IndexerQueue } from "../core/indexer/indexerQueue";
+import { purgeExcludedNotes } from "../core/indexer/purgeNote";
 import { Kernel } from "../core/kernel";
+import {
+  type ResolvedEmbeddingIdentity,
+  createEmbeddingIdentity,
+} from "../core/llm/embeddingIdentity";
+import { probeEmbedding } from "../core/llm/embeddingProbe";
 import { LMStudioProvider } from "../core/llm/lmStudioProvider";
+import {
+  type EndpointModelCatalog,
+  applyResolvedModels,
+  fetchEndpointModelCatalog,
+  resolveEndpointModels,
+} from "../core/llm/modelSelection";
 import { Reranker } from "../core/search/reranker";
-import { SavedQueries } from "../core/search/savedQueries";
-import { SearchHistory } from "../core/search/searchHistory";
 import { SearchPipeline } from "../core/search/searchPipeline";
 import { AgentEventStore } from "../core/services/agentEventStore";
 import { HealthMonitor } from "../core/services/healthMonitor";
-import { IdleDetector } from "../core/services/idleDetector";
-import { ProbeCache } from "../core/services/probeCache";
+import {
+  DAEMON_RESTART_ORPHAN_REASON,
+  reconcileRunOrphans,
+} from "../core/services/reconcileRunOrphans";
+import { SentienceActivity } from "../core/services/sentienceActivity";
 import { SessionGrants } from "../core/services/sessionGrants";
-import { runStartupProbe } from "../core/services/startupProbe";
-import { VaultBootstrap } from "../core/services/vaultBootstrap";
-import { VaultLock, type VaultLockHandle } from "../core/services/vaultLock";
-import { parseEnvFile } from "../core/settings/envFile";
-import type { EnvSource } from "../core/settings/envOverrides";
-import { type ConfigStore, SettingsService } from "../core/settings/settingsService";
+import type { VaultLockHandle } from "../core/services/vaultLock";
+import { type ConfigSource, loadNotientConfig } from "../core/settings/configSchema";
+import { readEnvSource, readOptionalVaultFile } from "../core/settings/envFile";
+import {
+  type ProviderCredentials,
+  resolveProviderCredentials,
+  resolveSettings,
+} from "../core/settings/envOverrides";
+import { SettingsService } from "../core/settings/settingsService";
+import type { NotientSettings } from "../core/settings/types";
+import { sha256Hex } from "../core/utils/sha256";
+import { DaemonMutationJournal } from "../core/vault/daemonMutationJournal";
 import { vaultDataDir, vaultPidPath, vaultPortPath, vaultSecretPath } from "../core/vault/identity";
 import { readOrGenerateSecret } from "../core/vault/secret";
 import { VitalsService } from "../core/vitals/vitalsService";
+import { makePipelineServices } from "./pipelines";
 import { type SurrealServerHandle, startSurreal } from "./surrealServer";
+
+import {
+  type ToolAuthorityChecks,
+  assertToolApproval,
+  assertToolTarget,
+} from "../core/chat/toolAuthority";
+import { EffectAuthorityRevoked } from "../core/history/effectAuthority";
 
 export interface BootstrapOptions {
   vaultPath: string;
-  /** Override for LM Studio base URL when testing. Defaults to settings. */
-  baseUrlOverride?: string;
-  /** When true, seal kernel with phase: "A" (probe-only, no DB or indexer). */
-  phaseA?: boolean;
-  /**
-   * When true, skip the SurrealDB child-process bootstrap (start, connect,
-   * applySchema, register). Tests that exercise the full Phase C bootstrap
-   * without a `surreal` binary on PATH set this. The Phase A early-exit path
-   * already skips the SurrealDB block; this flag covers Phase C tests.
-   */
-  skipSurreal?: boolean;
+  /** Lock acquired by the daemon's boot ownership transaction. */
+  lockHandle: VaultLockHandle;
+  deferMutationRecovery?: boolean;
+  beforeVaultMutation?: (paths: string[]) => Promise<undefined | (() => void)>;
+  authorizeIdentity?: ToolAuthorityChecks["authorizeIdentity"];
+  authorizeCaller?: Parameters<typeof makePipelineServices>[0]["authorizeCaller"];
 }
 
 export interface BootstrapResult {
   kernel: Kernel;
+  mutationsReady: () => boolean;
+  resumeMutationRecovery: () => Promise<boolean>;
+  /** Authenticated catalog capability; endpoint credentials stay in closure scope. */
+  fetchPrimaryModelCatalog: (timeoutMs?: number) => Promise<EndpointModelCatalog>;
+  /** Fence process-owned startup writers before exclusive graph maintenance. */
+  settleMaintenanceBackground: () => Promise<void>;
   close: () => Promise<void>;
 }
 
 const NOTIENT_DIR = ".notient";
-const LOCK_PATH = `${NOTIENT_DIR}/notient.lock`;
 const CONFIG_PATH = `${NOTIENT_DIR}/config.json`;
 
 const NOTIENT_FOLDER = "Notient";
 const CONVERSATIONS_FOLDER = `${NOTIENT_FOLDER}/conversations`;
-const PROPOSALS_FOLDER = `${NOTIENT_FOLDER}/proposals`;
-const SAVED_QUERIES_FOLDER = `${NOTIENT_FOLDER}/searches`;
-const SIDECAR_PATH = `${NOTIENT_FOLDER}/.index.json`;
-const ENV_PATH = `${NOTIENT_DIR}/.env`;
-const ENV_KEYS: ReadonlyArray<keyof EnvSource> = [
-  "NOTIENT_LLM_BASE_URL",
-  "NOTIENT_LLM_MODEL",
-  "NOTIENT_EMBED_MODEL",
-  "NOTIENT_CONTEXT_TOKENS",
-  "NOTIENT_REASONING_SLOTS",
-];
 
-/**
- * Refuse to seal the daemon if the operator hasn't pointed it at a real
- * LM Studio endpoint and a real chat model. The DEFAULT_SETTINGS values
- * are empty strings so that no model name is ever pinned in source code;
- * the configuration must come from <vault>/.notient/config.json or the
- * NOTIENT_LLM_BASE_URL / NOTIENT_LLM_MODEL / NOTIENT_EMBED_MODEL env vars
- * (read from <vault>/.notient/.env or process.env).
- */
-function assertEndpointConfigured(settings: {
-  primary: { baseUrl: string; reasoningModel: string };
-  embedding: { model: string };
-}): void {
-  const missing: string[] = [];
-  if (settings.primary.baseUrl.trim().length === 0) missing.push("primary.baseUrl");
-  if (settings.primary.reasoningModel.trim().length === 0) missing.push("primary.reasoningModel");
-  if (settings.embedding.model.trim().length === 0) missing.push("embedding.model");
-  if (missing.length === 0) return;
-  throw new Error(
-    `notient: required configuration missing: ${missing.join(", ")}. Set values in <vault>/.notient/config.json or define NOTIENT_LLM_BASE_URL, NOTIENT_LLM_MODEL, NOTIENT_EMBED_MODEL in <vault>/.notient/.env (or process env).`,
+/** Without a pairing store, no paired credential can be shown to be live. */
+function identityAuthorizer(options: BootstrapOptions): ToolAuthorityChecks["authorizeIdentity"] {
+  return (
+    options.authorizeIdentity ??
+    ((id) => {
+      if (id.startsWith("paired-"))
+        throw new EffectAuthorityRevoked("paired caller cannot be validated");
+    })
   );
-}
-
-/**
- * Build an EnvSource by overlaying the vault's <vault>/.notient/.env file
- * on top of process.env. Vault `.env` wins; process env is the fallback so
- * operators with no vault `.env` still work. Notient is a per-vault local
- * tool, so the operator-visible rule is that pinning a model in the vault
- * file binds the daemon to that model regardless of the inherited shell
- * environment. Only NOTIENT_-prefixed keys we explicitly recognize are
- * carried through.
- */
-export async function readEnvSource(
-  vault: FsVault,
-  processEnv: NodeJS.ProcessEnv,
-): Promise<EnvSource> {
-  const fileEnv = await vault
-    .read(ENV_PATH)
-    .then((text) => (text === null ? {} : parseEnvFile(text)))
-    .catch(() => ({}) as Record<string, string>);
-  const result: Record<string, string> = {};
-  for (const key of ENV_KEYS) {
-    const fileValue = fileEnv[key];
-    const processValue = processEnv[key];
-    // Vault `.env` wins; process env is the fallback so operators with no
-    // vault `.env` still work. See the readEnvSource doc-comment above.
-    const chosen = fileValue ?? processValue;
-    if (typeof chosen === "string" && chosen.length > 0) result[key] = chosen;
-  }
-  return result as EnvSource;
 }
 
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
-  const vault = new FsVault(options.vaultPath);
+  const daemonMutationJournal = new DaemonMutationJournal();
+  const vault = new FsVault(options.vaultPath, {
+    reserveMutation: (mutation) => daemonMutationJournal.reserve(mutation),
+    beforeMutation: options.beforeVaultMutation,
+  });
+  // The daemon owns `.notient/.env` and `.notient/config.json`. `vault`
+  // refuses dot-prefixed segments so no RPC handler or chat tool can read
+  // them; configuration goes through a hidden-capable adapter that is never
+  // handed to a handler or tool facade.
+  const internalVault = new FsVault(options.vaultPath, { allowHiddenPaths: true });
+  // A killed atomic write can leave only Notient's strict UUID-tagged temp
+  // files behind. Recover them before reading any operator configuration.
+  await internalVault.cleanupInterruptedWrites();
   const bus = new EventBus();
 
-  // Read the per-vault TOML config once. Missing file falls back to the
-  // built-in defaults silently; malformed TOML logs a warning and falls back.
-  // No live reload; daemon restart picks up changes (Phase 4 Task 10).
-  const vaultConfig = await loadVaultConfig(options.vaultPath);
-
-  const configStore: ConfigStore = {
-    load: async () => {
-      const raw = await vault.read(CONFIG_PATH).catch(() => null);
-      if (raw === null) return null;
-      try {
-        return JSON.parse(raw) as unknown;
-      } catch {
-        return null;
-      }
-    },
-    save: async (value) => {
-      await vault.write(CONFIG_PATH, JSON.stringify(value, null, 2));
-    },
+  const configSource: ConfigSource = {
+    path: `${options.vaultPath}/${CONFIG_PATH}`,
+    load: () => readOptionalVaultFile(internalVault, CONFIG_PATH),
   };
-  const settings = new SettingsService(configStore, bus);
-  const envSource = await readEnvSource(vault, process.env);
-  await settings.load(envSource);
+  const config = await loadNotientConfig(configSource);
+  const envSource = await readEnvSource(internalVault, process.env);
+  const configured = resolveSettings(config, envSource);
+  const providerCredentials = resolveProviderCredentials(envSource);
+  const selection = await resolveStartupModels(configured, providerCredentials);
+  const settings = new SettingsService(applyResolvedModels(configured, selection), {
+    config,
+    load: configSource.load,
+    compareAndSwap: (before, after, authorize) =>
+      before === null
+        ? internalVault.createIfAbsent(CONFIG_PATH, after, async () => {
+            await authorize?.();
+          })
+        : internalVault.writeIfUnchanged(CONFIG_PATH, before, after, async () => {
+            await authorize?.();
+          }),
+  });
   const current = settings.get();
-  assertEndpointConfigured(current);
 
-  const lockFs = {
-    exists: (path: string) => vault.exists(path),
-    read: (path: string) => vault.read(path),
-    writeBinary: (path: string, data: ArrayBuffer) => vault.writeBinary(path, data),
-    remove: (path: string) => vault.remove(path),
-  };
-  const lock = new VaultLock(
-    lockFs,
-    LOCK_PATH,
-    `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  );
-  const lockHandle: VaultLockHandle = await lock.acquire();
+  // `settings.indexer.excludePaths` / `excludeGlobs` shipped as declared
+  // but unconsumed config, so the daemon indexed Notient's own
+  // conversation transcripts and proposals and served them back as top
+  // search hits. One predicate is compiled here and
+  // threaded through every entry point that can put a path into the
+  // graph: the vault listing, the indexer queue, the watcher and the
+  // awaken/reindex handlers.
+  const indexExclusion = makeExclusionPredicate({
+    excludePaths: current.indexer.excludePaths,
+    excludeGlobs: current.indexer.excludeGlobs,
+  });
+  vault.setExclusion(indexExclusion);
+  for (const warning of selection.warnings) {
+    process.stderr.write(
+      `${JSON.stringify({ type: "daemon:model_selection_warning", warning })}\n`,
+    );
+  }
+  if (selection.warnings.length > 0 || selection.reason.length > 0) {
+    process.stderr.write(
+      `${JSON.stringify({ type: "daemon:model_selection", reason: selection.reason })}\n`,
+    );
+  }
 
-  const baseUrl = options.baseUrlOverride ?? current.primary.baseUrl;
-  const primaryLLM = new LMStudioProvider({ baseUrl });
-  const deepLLM = new LMStudioProvider({ baseUrl: current.deep.baseUrl });
-  const embeddingLLM = new LMStudioProvider({ baseUrl: current.embedding.baseUrl });
+  const lockHandle = options.lockHandle;
+
+  const baseUrl = current.primary.baseUrl;
+  const primaryLLM = new LMStudioProvider({
+    baseUrl,
+    ...(providerCredentials.chatApiKey === undefined
+      ? {}
+      : { apiKey: providerCredentials.chatApiKey }),
+  });
+  const deepLLM = new LMStudioProvider({
+    baseUrl: current.deep.baseUrl,
+    ...(providerCredentials.chatApiKey === undefined
+      ? {}
+      : { apiKey: providerCredentials.chatApiKey }),
+  });
+  const embeddingLLM = new LMStudioProvider({
+    baseUrl: current.embedding.baseUrl,
+    ...(providerCredentials.embeddingApiKey === undefined
+      ? {}
+      : { apiKey: providerCredentials.embeddingApiKey }),
+  });
 
   const health = new HealthMonitor(
     [
@@ -203,59 +217,68 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     { intervalMs: 30_000 },
   );
 
-  const phaseA = options.phaseA === true;
-
-  // SurrealDB bootstrap runs ahead of kernel registration so the Phase A
-  // services (AgentEventStore, SessionGrants) that Phase 4 Task 12 migrated
-  // off SQLite can read the live connection at construction. Order:
-  // secret -> start server -> SDK connect -> applySchema -> kernel registers.
-  // The `skipSurreal` opt-out wires nothing here; downstream sites that
-  // require SurrealDB (SearchPipeline, HistoryService, AgentEventStore,
-  // SessionGrants) refuse to construct without it, so the only remaining
-  // skipSurreal path is the daemon shutdown contract test that never reaches
-  // those services.
-  let surrealHandle: SurrealServerHandle | null = null;
-  let surrealConnection: SurrealConnection | null = null;
-  if (!options.skipSurreal) {
-    const surrealSecret = await readOrGenerateSecret(vaultSecretPath(options.vaultPath));
-    surrealHandle = await startSurreal({
-      dataDir: vaultDataDir(options.vaultPath),
-      secret: surrealSecret,
-      portFile: vaultPortPath(options.vaultPath),
-      pidFile: vaultPidPath(options.vaultPath),
-      logLevel: vaultConfig.surrealdb.logLevel,
-      hnswCacheMib: vaultConfig.surrealdb.hnswCacheMib,
-      onUnexpectedExit: (code) => {
-        // The AppEvent union does not include a SurrealDB failure variant in
-        // Phase 1. Mirror the `daemon:vector_persist_failed` pattern from
-        // makeClose and surface the failure as a structured stderr line so
-        // the daemon supervisor can detect it without widening the union.
-        process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
-      },
+  // SurrealDB bootstrap runs ahead of kernel registration so every service
+  // receives one live, non-optional connection. Order: secret, server, SDK,
+  // schema, then kernel registration.
+  let embeddingProbe: ResolvedEmbeddingIdentity | null = null;
+  const surrealSecret = await readOrGenerateSecret(vaultSecretPath(options.vaultPath));
+  const surrealHandle = await startSurreal({
+    dataDir: vaultDataDir(options.vaultPath),
+    secret: surrealSecret,
+    portFile: vaultPortPath(options.vaultPath),
+    pidFile: vaultPidPath(options.vaultPath),
+    logLevel: current.surrealdb.logLevel,
+    hnswCacheMib: current.surrealdb.hnswCacheMib,
+    onUnexpectedExit: (code) => {
+      process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
+    },
+  });
+  const surrealConnection = await connectSurreal({
+    url: surrealHandle.url,
+    user: "root",
+    pass: surrealSecret,
+    namespace: "notient",
+    database: "vault",
+  });
+  try {
+    embeddingProbe = await probeEmbedding({
+      provider: embeddingLLM,
+      model: current.embedding.model,
+      signal: AbortSignal.timeout(2000),
     });
-    surrealConnection = await connectSurreal({
-      url: surrealHandle.url,
-      user: "root",
-      pass: surrealSecret,
-      namespace: "notient",
-      database: "vault",
-    });
-    await applySchema(surrealConnection.db, surrealSecret);
-    const awakenOrphans = await reconcileAwakenOrphans(surrealConnection.db);
+  } catch (error) {
     process.stderr.write(
       `${JSON.stringify({
-        type: "daemon:awaken_orphans_reconciled",
-        reconciled: awakenOrphans.reconciled,
+        type: "daemon:embedding_probe_failed",
+        model: current.embedding.model,
+        baseUrl: current.embedding.baseUrl,
+        error: error instanceof Error ? error.message : String(error),
       })}\n`,
     );
   }
-  if (surrealConnection === null) {
-    throw new Error(
-      "bootstrap: AgentEventStore and SessionGrants require a SurrealDB connection (Phase 4 Task 12); skipSurreal is incompatible with Phase A wiring",
-    );
-  }
+  await applySchema(
+    surrealConnection.db,
+    surrealSecret,
+    embeddingProbe === null
+      ? { embedDim: null, embedModel: null }
+      : { embedDim: embeddingProbe.dimension, embedModel: embeddingProbe.model },
+  );
+  const embeddingIdentity = createEmbeddingIdentity(
+    current.embedding.model,
+    embeddingProbe?.dimension ?? null,
+  );
+  const runOrphans = await reconcileRunOrphans(surrealConnection.db, {
+    reason: DAEMON_RESTART_ORPHAN_REASON,
+  });
+  process.stderr.write(
+    `${JSON.stringify({
+      type: "daemon:run_orphans_reconciled",
+      awakenRuns: runOrphans.awakenRuns,
+      agentRuns: runOrphans.agentRuns,
+    })}\n`,
+  );
 
-  // Phase A registers and seals here.
+  // Register substrate services before higher-level indexing and chat wiring.
   const kernel = new Kernel();
   kernel.register("bus", bus);
   kernel.register("settings", settings);
@@ -265,90 +288,58 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("embeddingLLM", embeddingLLM);
   kernel.register("health", health);
   kernel.register("lock", lockHandle);
-  kernel.register("probeCache", new ProbeCache(bus));
-  kernel.register(
-    "agentEventStore",
-    new AgentEventStore({
-      db: surrealConnection.db,
-      bus,
-      maxRows: vaultConfig.agentEvents.maxRows,
-    }),
-  );
-  const sessionGrants = new SessionGrants({ db: surrealConnection.db });
+  const agentEventStore = new AgentEventStore({
+    db: surrealConnection.db,
+    bus,
+    maxRows: current.agentEvents.maxRows,
+  });
+  kernel.register("agentEventStore", agentEventStore);
+  const sessionGrants = new SessionGrants({ db: surrealConnection.db, now: Date.now });
   kernel.register("sessionGrants", sessionGrants);
   kernel.register("awakenBackgroundRegistry", new AwakenBackgroundRegistry());
+  kernel.register("indexExclusion", indexExclusion);
   kernel.register("surrealDb", surrealConnection);
-  kernel.register("vaultConfig", vaultConfig);
 
-  if (phaseA) {
-    kernel.seal({ phase: "A" });
-    health.start();
-    return {
-      kernel,
-      close: makeClose({
-        lockHandle,
-        health,
-      }),
-    };
-  }
-
-  // Phase B additions.
+  // Indexing and retrieval services.
+  const reasoningScheduler = new ReasoningScheduler({
+    maxConcurrent: current.chat.reasoningSlots,
+  });
   const embedder = new Embedder(embeddingLLM, {
-    model: current.embedding.model,
-    concurrency: vaultConfig.indexer.concurrency.embed,
+    identity: embeddingIdentity,
+    concurrency: current.indexer.concurrency.embed,
+    resolveIdentity: async (signal) => {
+      const identity = await probeEmbedding({
+        provider: embeddingLLM,
+        model: current.embedding.model,
+        signal,
+      });
+      await applySchema(surrealConnection.db, surrealSecret, {
+        embedDim: identity.dimension,
+        embedModel: identity.model,
+      });
+      return identity;
+    },
   });
   const extractor = new Extractor(deepLLM, {
     model: current.deep.reasoningModel,
-    concurrency: vaultConfig.indexer.concurrency.extract,
+    concurrency: current.indexer.concurrency.extract,
+    scheduler: reasoningScheduler,
   });
 
-  const vaultBootstrap = new VaultBootstrap({
-    facade: {
-      exists: (path) => vault.exists(path),
-      createFolder: (path) => vault.createFolder(path),
+  const sentienceActivity = new SentienceActivity(bus, {
+    loadActiveNote: async () => {
+      const [rows] = await surrealConnection.db
+        .query<[Array<{ path: string }>]>(
+          "SELECT path, last_user_edit_at FROM note WHERE last_user_edit_at != NONE AND tombstoned_at = NONE ORDER BY last_user_edit_at DESC LIMIT 1;",
+        )
+        .collect<[Array<{ path: string }>]>();
+      return rows[0]?.path ?? null;
     },
   });
-  await vaultBootstrap.run({
-    conversationsFolder: CONVERSATIONS_FOLDER,
-    proposalsFolder: PROPOSALS_FOLDER,
-    savedQueriesFolder: SAVED_QUERIES_FOLDER,
-  });
-
-  const idleDetector = new IdleDetector(bus, {});
-  const reasoningMutex = new ReasoningMutex({ maxConcurrent: current.chat.reasoningSlots });
-
   const reranker = new Reranker({
     provider: deepLLM,
     model: current.deep.rerankerModel,
-  });
-
-  const savedQueries = new SavedQueries({
-    facade: {
-      list: (folder) => vault.list(folder).then((listing) => listing.files),
-      read: (path) => vault.read(path),
-      write: (path, content) => vault.write(path, content),
-      delete: (path) => vault.remove(path),
-    },
-    folder: SAVED_QUERIES_FOLDER,
-    now: () => Date.now(),
-  });
-
-  const searchHistory = new SearchHistory({
-    facade: {
-      readSidecar: async () => {
-        const raw = await vault.read(SIDECAR_PATH).catch(() => null);
-        if (raw === null) return null;
-        try {
-          return JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          return null;
-        }
-      },
-      writeSidecar: async (value) => {
-        await vault.write(SIDECAR_PATH, JSON.stringify(value, null, 2));
-      },
-    },
-    maxQueries: current.search.history.maxQueries,
+    bus,
   });
 
   const vitalsService = new VitalsService({
@@ -360,17 +351,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   });
 
-  // SearchPipeline (Phase 4 Task 11) reads kNN, BM25, and graph expansion
-  // directly through SurrealDB. The connection was opened ahead of Phase A
-  // registration above; the null guard here is defense-in-depth for any
-  // future change that re-introduces a path through bootstrap which leaves
-  // the connection unset.
-  if (surrealConnection === null) {
-    throw new Error(
-      "bootstrap: SearchPipeline requires a SurrealDB connection (Phase 4 Task 11); skipSurreal is incompatible with Phase B wiring",
-    );
-  }
+  // SearchPipeline reads kNN, BM25, and approved graph expansion directly
+  // through the required SurrealDB connection.
+  const indexReadiness = new IndexReadiness(bus, indexExclusion);
+  const graph = new GraphService({
+    db: surrealConnection.db,
+    vault,
+    indexing: () => indexReadiness.snapshot(),
+    isExcluded: indexExclusion,
+  });
+  kernel.register("graph", graph);
   const searchPipeline = new SearchPipeline({
+    indexing: () => indexReadiness.snapshot(),
+    vault,
     db: surrealConnection.db,
     reranker,
     embed: async (text, signal) => {
@@ -379,31 +372,43 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
     provider: deepLLM,
     reasoningModel: current.deep.reasoningModel,
+    scheduler: reasoningScheduler,
     settings: () => current.search,
   });
 
-  // The Linker (Phase 3) requires a live SurrealDB connection. When the
-  // operator skipped SurrealDB or a Phase 3 deploy has not yet provisioned
-  // it, fall back to a no-op linker so the Coordinator's agents map stays
-  // populated and the swarm dispatch loop runs unchanged for the other
-  // three agents.
-  const concreteLinker: Linker | null =
-    surrealConnection !== null
-      ? new Linker({
-          db: surrealConnection.db,
-          provider: deepLLM,
-          reasoningModel: current.deep.reasoningModel,
-        })
-      : null;
-  const linker: Agent = concreteLinker ?? {
-    name: "linker" as const,
-    usesReasoningModel: false,
-    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
-  };
+  kernel.register(
+    "analysis",
+    new NoteAnalysis({
+      vault,
+      search: searchPipeline,
+      provider: primaryLLM,
+      scheduler: reasoningScheduler,
+      settings: () => ({
+        model: settings.get().primary.reasoningModel,
+        contextTokens: settings.get().chat.modelContextTokens,
+      }),
+      indexing: () => indexReadiness.snapshot(),
+    }),
+  );
+
+  const linker = new Linker({
+    db: surrealConnection.db,
+    provider: deepLLM,
+    reasoningModel: current.deep.reasoningModel,
+  });
+  const agentRunExecutor = new AgentRunExecutor({
+    db: surrealConnection.db,
+    bus,
+    scheduler: reasoningScheduler,
+    now: Date.now,
+  });
+  const runLinker = agentRunExecutor.bind(linker);
 
   const indexer = new IndexerQueue({
+    readiness: indexReadiness,
     bus,
-    debounceMs: vaultConfig.indexer.debounceMs,
+    debounceMs: current.indexer.debounceMs,
+    isExcluded: indexExclusion,
     indexNote: async (path, context) => {
       const body = await vault.read(path);
       return await indexNote({
@@ -412,119 +417,79 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         embedder,
         extractor,
         bus,
-        chunkSizes: vaultConfig.indexer.chunk,
-        ...(surrealConnection !== null ? { surrealDb: surrealConnection } : {}),
-        ...(concreteLinker !== null ? { linker: concreteLinker } : {}),
-        ...(context.tierFilter !== undefined ? { tierFilter: context.tierFilter } : {}),
+        chunkSizes: current.indexer.chunk,
+        surrealDb: surrealConnection,
+        runLinker,
+        // Watching grants structural indexing only. Model work is scheduled
+        // by explicit pipeline policy or a deliberate live tier request.
+        tierFilter: context.tierFilter ?? [1],
       });
-    },
-  });
-
-  // Phase 5 Locked Decision 11: Synthesizer and ContradictionHunter are
-  // stripped from production wiring rather than migrated. Both have read
-  // frozen/empty SQLite state since Phase 3 (Synthesizer clusters embeddings
-  // via SQL against tables Phase 3 stopped writing to; ContradictionHunter
-  // already runs with an empty `neighbors` closure since Phase 3 Task 10).
-  // Migrating them onto SurrealDB is feature work, not a Phase 5 cutover
-  // obligation. The agent .ts files stay on disk so a future feature task
-  // can re-introduce SurrealDB-backed implementations. The Coordinator's
-  // agents map keeps both keys with the same no-op fallback shape Linker
-  // uses when SurrealDB is absent, so the swarm dispatch loop still records
-  // four agent_run rows per cycle (each with proposals_count=0).
-  const synthesizer: Agent = {
-    name: "synthesizer" as const,
-    usesReasoningModel: false,
-    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
-  };
-  const contradictionHunter: Agent = {
-    name: "contradictionHunter" as const,
-    usesReasoningModel: false,
-    run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
-  };
-  const maturityAdvancer = new MaturityAdvancer({
-    db: surrealConnection.db,
-    facade: {
-      read: (path) => vault.read(path),
-      write: (path, content) => vault.write(path, content),
-    },
-  });
-
-  const coordinator = new Coordinator({
-    bus,
-    db: surrealConnection.db,
-    mutex: reasoningMutex,
-    agents: {
-      linker,
-      synthesizer,
-      contradictionHunter,
-      maturityAdvancer,
     },
   });
 
   kernel.register("indexer", indexer);
   kernel.register("embedder", embedder);
   kernel.register("extractor", extractor);
-  kernel.register("vaultBootstrap", vaultBootstrap);
-  kernel.register("idleDetector", idleDetector);
-  kernel.register("reasoningMutex", reasoningMutex);
+  kernel.register("sentienceActivity", sentienceActivity);
+  kernel.register("daemonMutationJournal", daemonMutationJournal);
+  kernel.register("reasoningScheduler", reasoningScheduler);
+  kernel.register("agentRunExecutor", agentRunExecutor);
   kernel.register("searchPipeline", searchPipeline);
-  kernel.register("savedQueries", savedQueries);
-  kernel.register("searchHistory", searchHistory);
   kernel.register("vitalsService", vitalsService);
-  kernel.register("coordinator", coordinator);
 
-  // Phase C additions: chat surface.
+  // Conversation and write-approval services.
 
   const conversationStore = new ConversationStore({
     facade: {
       list: async (folder) => (await vault.list(folder)).files,
       read: (path) => vault.read(path),
-      write: (path, content) => vault.write(path, content),
-      delete: (path) => vault.remove(path),
+      createIfAbsent: (path, content) => vault.createIfAbsent(path, content),
+      writeIfUnchanged: (path, expected, content) =>
+        vault.writeIfUnchanged(path, expected, content),
+      removeIfUnchanged: (path, expected) => vault.removeIfUnchanged(path, expected),
     },
     folder: CONVERSATIONS_FOLDER,
     now: () => Date.now(),
   });
 
   const conversationIndex = new ConversationIndex({
-    facade: {
-      read: async (path) => vault.read(path).catch(() => null),
-      write: (path, content) => vault.write(path, content),
-    },
-    indexPath: SIDECAR_PATH,
+    db: surrealConnection.db,
+    identity: embeddingIdentity,
   });
-  await conversationIndex.load();
+  await conversationIndex.reconcile(await conversationStore.list());
 
   const notesFacade = {
     readNote: (path: string) => vault.read(path),
-    writeNote: (path: string, content: string) => vault.write(path, content),
     exists: (path: string) => vault.exists(path),
   };
 
-  // Phase 4 Task 4: HistoryService is SurrealDB-backed. The bootstrap
-  // requires a live SurrealDB connection; the only path that produces a
-  // null connection is the test-only `skipSurreal` opt-out, which exits
-  // earlier in the production fast path because it has no consumers.
-  if (surrealConnection === null) {
-    throw new Error(
-      "bootstrap: HistoryService requires a SurrealDB connection (Phase 4 Task 4); skipSurreal is incompatible with Phase C wiring",
-    );
-  }
+  // History is backed by the same required SurrealDB connection.
   const surrealDbConnection = surrealConnection;
   const updateNoteSha = async (notePath: string, sha: string): Promise<void> => {
     await surrealDbConnection.db
-      .query("UPDATE note SET sha = $sha WHERE path = $path;", { path: notePath, sha })
+      .query(
+        "UPDATE note SET sha = $sha, tier1_at = NONE, tier2_at = NONE, tier3_at = NONE WHERE path = $path AND sha != $sha;",
+        { path: notePath, sha },
+      )
       .collect();
   };
   const inverters = buildHistoryInverters({
-    writeNote: notesFacade.writeNote,
-    removeNote: (path) => vault.remove(path),
+    readNote: notesFacade.readNote,
+    writeNoteIfUnchanged: (path, expected, content, authorize) =>
+      vault.writeIfUnchanged(path, expected, content, authorize),
+    removeNoteIfUnchanged: (path, expected, authorize) =>
+      vault.removeIfUnchanged(path, expected, authorize),
+    moveNoteIfUnchanged: (from, to, expected, authorize) =>
+      vault.moveIfUnchanged(from, to, expected, authorize),
     noteExists: notesFacade.exists,
-    hash: simpleHash,
+    hash: sha256Hex,
     updateNoteSha,
+    validateTargetIdentity: (row) => validateProposalHistoryTarget(surrealDbConnection, row),
   });
   const historyService = new HistoryService({
     db: surrealDbConnection.db,
+    vault,
+    authorizeCaller: options.authorizeCaller,
     inverters,
     retention: {
       max: current.chat.history.maxEntries,
@@ -532,71 +497,125 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   });
 
-  // ApprovalService writes to absolute filesystem paths (vaultRoot joined
-  // with the SurrealDB `note.path` value). FsVault's internal AtomicFs
-  // treats paths as relative-to-root, so the production wiring constructs
-  // a separate adapter that operates on absolute paths via node:fs/promises.
-  // The smoke harness in approvalService.test.ts uses the same shape.
+  const authorizeIdentity = identityAuthorizer(options);
+  const authorizeTool = (proof: Parameters<typeof assertToolApproval>[0]) =>
+    assertToolApproval(proof, {
+      authorizeIdentity,
+      grant: (id) => sessionGrants.get(id),
+      policy: () => settings.refreshToolPolicy(),
+    });
+  const durableNoteWriter = new DurableNoteWriter({
+    db: surrealDbConnection.db,
+    vault,
+    hash: sha256Hex,
+    authorizeRecovery: async (intent) => {
+      if (intent.previewId)
+        await changes.authorizeRecoveredEffect({ previewId: intent.previewId }, intent);
+      else {
+        if (!intent.toolApproval)
+          throw new EffectAuthorityRevoked("interrupted tool write requires a fresh approval");
+        assertToolTarget(intent.toolApproval, intent.clientIdentity, { path: intent.target });
+        await authorizeTool(intent.toolApproval);
+      }
+    },
+    pruneHistory: () => historyService.prune(),
+    onMaintenanceError: (error) => {
+      process.stderr.write(
+        `${JSON.stringify({ type: "daemon:history_prune_failed", error: String(error) })}\n`,
+      );
+    },
+  });
+  // Close the crash window between any terminal receipt and its post-commit
+  // retention maintenance before accepting another write.
+  await historyService.prune();
+  let mutationRecoveryComplete = !options.deferMutationRecovery;
+  const reconcileNotes = async (): Promise<boolean> => {
+    const result = await durableNoteWriter.reconcilePendingWrites();
+    if (result.replayed || result.abandoned || result.failed || result.deferred)
+      process.stderr.write(
+        `${JSON.stringify({ type: "daemon:note_write_reconcile_summary", ...result })}\n`,
+      );
+    assertMutationReconciliationSucceeded("ordinary note write", result.failed);
+    return result.deferred === 0;
+  };
+
   const approvalService = new ApprovalService({
     db: surrealDbConnection.db,
     bus,
-    vaultRoot: options.vaultPath,
-    fs: {
-      writeBinary: async (filePath, data) => {
-        await writeFile(filePath, new Uint8Array(data));
-      },
-      rename: async (from, to) => {
-        await rename(from, to);
-      },
-      remove: async (filePath) => {
-        await unlink(filePath).catch(() => {
-          // missing-file is not an error for cleanup
-        });
-      },
+    vault,
+    hash: sha256Hex,
+    pruneHistory: () => historyService.prune(),
+    authorizeRecovery: async (edgeId, transition) => {
+      if ((await reviewsForEdge(surrealDbConnection.db, edgeId)).length)
+        await changes.authorizeRecoveredEffect({ edgeId }, transition);
+      else {
+        if (!transition.toolApproval)
+          throw new EffectAuthorityRevoked("interrupted relationship needs a fresh approval");
+        assertToolTarget(transition.toolApproval, transition.clientIdentity, { edgeId });
+        await authorizeTool(transition.toolApproval);
+      }
     },
-    readFile: (filePath) => readFileFs(filePath, "utf8"),
   });
 
+  const { changes, jobs, coordinator } = makePipelineServices({
+    db: surrealDbConnection.db,
+    vault,
+    settings,
+    bus,
+    writer: durableNoteWriter,
+    approvals: approvalService,
+    embedder,
+    extractor,
+    scheduler: reasoningScheduler,
+    search: searchPipeline,
+    provider: primaryLLM,
+    activity: sentienceActivity,
+    authorizeCaller: options.authorizeCaller,
+  });
+  jobs.suspend();
+  await jobs.recover();
+  kernel.register("changes", changes);
+  kernel.register("jobs", jobs);
+  kernel.register("coordinator", coordinator);
+
+  // Exclusions are a startup privacy invariant. Once a path becomes private,
+  // no stale non-tombstoned chunks or semantic rows may remain searchable
+  // until the operator happens to run awaken/reindex.
+  const bootPurgedPaths = await purgeExcludedNotes(
+    surrealDbConnection,
+    indexExclusion,
+    approvalService,
+  );
+  if (bootPurgedPaths.length > 0) {
+    process.stderr.write(
+      `${JSON.stringify({ type: "daemon:excluded_notes_purged", paths: bootPurgedPaths })}\n`,
+    );
+  }
+
   const approvalGate = new ApprovalGate({
-    events: {
-      onPending: () => {
-        // Bootstrap registers a noop hook; the daemon's chat handler
-        // (Task 13) re-binds onPending/onResolved per turn so wire frames
-        // get emitted with a turn-scoped envelopeId.
-      },
-      onResolved: () => {
-        // See above.
-      },
-    },
     recordHistoryAutoApprove: buildRecordHistoryAutoApprove(historyService),
-    perToolPolicy: current.chat.perTool,
+    perToolPolicy: () => settings.get().chat.perTool,
+    authorize: authorizeTool,
     sessionGrants,
   });
 
-  const clusterCache = new InMemoryClusterCache();
-
   const toolRegistry = buildAgentToolRegistry({
+    analysis: kernel.get("analysis"),
+    graph: kernel.get("graph"),
     db: surrealDbConnection.db,
     searchPipeline,
     vitalsService,
-    vaultFacade: { readNote: (path) => vault.read(path) },
+    vaultFacade: vault,
     notesFacade,
     approvalGate,
     approvalService,
-    hash: simpleHash,
-    approvalMode: () => current.chat.approvalMode,
-    recordHistory: async (record) => historyService.record(record),
+    changes,
+    authorizeIdentity,
+    hash: sha256Hex,
+    approvalMode: () => settings.get().chat.approvalMode,
+    applyWrite: (record) => durableNoteWriter.apply(record),
     generateCallId: () =>
       `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    // Phase 5 Locked Decision 11: the production agents are no-op `Agent`
-    // shells. Task 7 migrated the chat-tool factories onto SurrealDB and
-    // converted `agents.contradiction_check` / `agents.synthesize` into
-    // explicit no-ops, so the toolbundle accepts the `Agent`-typed
-    // placeholders directly without the transitional cast.
-    contradictionHunter,
-    synthesizer,
-    clusterCache,
-    bus,
   });
 
   const embedSingle = async (text: string, signal: AbortSignal): Promise<Float32Array | null> => {
@@ -618,15 +637,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         modelContextTokens: live.modelContextTokens,
       };
     },
-    workspace: {
-      getActiveNotePath: () => null,
-      getOpenNotePaths: () => [],
-      getRecentNotePaths: () => [],
-      getRecentSearchQueries: () => [],
-    },
+    engagedNotePath: () => sentienceActivity.snapshot().activeNotePath,
     facade: { readNote: (path) => vault.read(path) },
-    voiceProfile: () => "",
-    approvalMode: () => current.chat.approvalMode,
+    approvalMode: () => settings.get().chat.approvalMode,
     toolCatalog: () =>
       toolRegistry.list().map((entry) => ({
         name: entry.name,
@@ -634,50 +647,41 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       })),
     estimateTokens: (text) => Math.ceil(text.length / 4),
     summaryModel: current.primary.reasoningModel,
-    identity: TIER_1_IDENTITY,
   });
 
-  // Tool-mode cache reads first from chat.toolModeByModel in settings (so an
-  // operator can pin a known-good mode for a model that fails the auto-probe),
-  // then from the in-memory store populated by previous probes this session.
-  // Writes go through SettingsService.update so the setting persists across
-  // daemon restarts.
+  // Tool-mode detection is learned process state, not product configuration.
+  // A restart deliberately probes again against the currently deployed model.
   const toolModeStore = new Map<string, ToolMode>();
   const toolModeCache: ToolModeCache = {
-    read: (model) => {
-      const fromSettings = settings.get().chat.toolModeByModel[model];
-      if (fromSettings) return fromSettings;
-      return toolModeStore.get(model) ?? null;
-    },
+    read: (model) => toolModeStore.get(model) ?? null,
     write: async (model, mode) => {
       toolModeStore.set(model, mode);
-      const next = { ...settings.get().chat.toolModeByModel, [model]: mode };
-      await settings.update({ chat: { ...settings.get().chat, toolModeByModel: next } });
     },
   };
 
-  const chatService = buildNotientAgent({
+  const chatService = new ChatService({
     provider: primaryLLM,
     contextManager,
     conversationStore,
     conversationIndex,
     toolRegistry,
-    approvalGate,
-    mutex: reasoningMutex,
+    scheduler: reasoningScheduler,
     toolModeCache,
     embed: embedSingle,
     bus,
     settings: (): ChatRuntimeSettings => ({
-      model: current.primary.reasoningModel,
-      maxRoundsPerTurn: current.chat.maxRoundsPerTurn,
-      approvalMode: current.chat.approvalMode,
-      persistReasoning: current.chat.persistReasoning,
+      model: settings.get().primary.reasoningModel,
+      maxRoundsPerTurn: settings.get().chat.maxRoundsPerTurn,
+      budget: settings.get().chat.budget,
+      approvalMode: settings.get().chat.approvalMode,
+      persistReasoning: settings.get().chat.persistReasoning,
     }),
   });
 
   const transcriptDistiller = createTranscriptDistiller({
     provider: primaryLLM,
     model: current.primary.reasoningModel,
+    scheduler: reasoningScheduler,
   });
 
   kernel.register("conversationStore", conversationStore);
@@ -688,82 +692,154 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   kernel.register("contextManager", contextManager);
   kernel.register("chatService", chatService);
   kernel.register("historyService", historyService);
+  kernel.register("durableNoteWriter", durableNoteWriter);
   kernel.register("approvalService", approvalService);
   kernel.register("transcriptDistiller", transcriptDistiller);
 
-  // Optional vision routing: probe primary first; fall back to
-  // chat.vision when configured. Bootstrap omits the slot when neither
-  // path is viable; chat.send refuses image attachments with
-  // VISION_UNAVAILABLE in that case.
-  const visionConfig = current.chat.vision ?? {
-    enabled: false,
-    baseUrl: "",
-    model: "",
-  };
-  const visionRouter = await probeVisionRoute({
+  // Vision is a capability of the deployed primary model, not a second
+  // persisted model/endpoint authority. Bootstrap omits the slot when the
+  // primary probe fails; chat.send then returns VISION_UNAVAILABLE.
+  const visionConfig = { enabled: false, baseUrl: "", model: "" };
+  const visionRouter = await optionalVisionProbe({
+    enabled: canProbeVision(current, selection.warnings),
     primaryLLM,
     primaryModel: current.primary.reasoningModel,
     visionConfig,
-    makeFallback: () => new LMStudioProvider({ baseUrl: visionConfig.baseUrl }),
-  }).catch(() => null);
+    scheduler: reasoningScheduler,
+    makeFallback: () => primaryLLM,
+  });
   if (visionRouter !== null) {
     kernel.register("visionLLM", visionRouter);
   }
 
   kernel.seal({ phase: "C" });
+  if (mutationRecoveryComplete) await reconcileNotes();
   health.start();
-  idleDetector.start();
-
-  // Phase 5 Task 2: replay any approve-and-write rows that landed in
-  // state 2 of the pending-state contract (approved=true, applied=false)
-  // before a previous daemon crashed. The call is fire-and-forget so
-  // boot stays fast; the supervisor reads the structured stderr summary.
-  // A reconciliation crash MUST NOT take down the daemon.
-  void approvalService
-    .reconcilePendingApplications()
-    .then((result) => {
-      process.stderr.write(
-        `${JSON.stringify({
-          type: "daemon:reconcile_summary",
-          replayed: result.replayed,
-          failed: result.failed,
-        })}\n`,
-      );
-    })
-    .catch((error) => {
-      process.stderr.write(
-        `${JSON.stringify({ type: "daemon:reconcile_failed", error: String(error) })}\n`,
-      );
+  // Replay approve-and-write rows that landed in state 2 of the pending-state
+  // contract (approved=true, applied=false) before a daemon crashed. Mutation
+  // admission stays closed until every row reconciles successfully; logging a
+  // failure and continuing would admit a competing proposal application.
+  const reconcileApprovals = async (): Promise<boolean> => {
+    const result = await approvalService.reconcilePendingApplications();
+    process.stderr.write(`${JSON.stringify({ type: "daemon:reconcile_summary", ...result })}\n`);
+    assertMutationReconciliationSucceeded("approved proposal", result.failed);
+    return result.deferred === 0;
+  };
+  const approvalReconciliation = mutationRecoveryComplete
+    ? reconcileApprovals().then(() => {})
+    : Promise.resolve();
+  await approvalReconciliation;
+  let recoveryFlight: Promise<boolean> | null = null;
+  const resumeMutationRecovery = (): Promise<boolean> => {
+    if (mutationRecoveryComplete) return Promise.resolve(true);
+    if (recoveryFlight) return recoveryFlight;
+    recoveryFlight = (async () => {
+      const notesReady = await reconcileNotes();
+      const approvalsReady = await reconcileApprovals();
+      mutationRecoveryComplete = notesReady && approvalsReady;
+      return mutationRecoveryComplete;
+    })().finally(() => {
+      recoveryFlight = null;
     });
+    return recoveryFlight;
+  };
 
-  // Fire-and-forget startup probe so boot stays fast (network roundtrip
-  // bounded by AbortController in runStartupProbe).
-  void runStartupProbe({
-    endpoint: current.primary.baseUrl,
-    modelId: current.primary.reasoningModel,
-    configuredContextTokens: current.chat.modelContextTokens,
-    parallelSlots: current.chat.reasoningSlots,
-  }).then((event) => {
-    bus.emit({ type: "daemon:startup_probe", ...event });
-  });
+  // Model repair now runs only through the explicitly enabled index/extract
+  // policy; migration flags remain durable through disabled periods.
 
   return {
     kernel,
-    close: makeClose({
-      lockHandle,
-      health,
-      surrealConnection,
-      surrealHandle,
-    }),
+    mutationsReady: () => mutationRecoveryComplete,
+    resumeMutationRecovery,
+    fetchPrimaryModelCatalog: (timeoutMs) =>
+      fetchEndpointModelCatalog({
+        baseUrl: current.primary.baseUrl,
+        ...(providerCredentials.chatApiKey === undefined
+          ? {}
+          : { apiKey: providerCredentials.chatApiKey }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      }),
+    settleMaintenanceBackground: async () => {
+      await approvalReconciliation;
+      await recoveryFlight;
+    },
+    close: async () => {
+      await recoveryFlight?.catch(() => {});
+      await shutdownBootstrap({
+        agentEventStore,
+        approvalReconciliation,
+        chatService,
+        coordinator,
+        health,
+        sentienceActivity,
+        indexer,
+        lockHandle,
+        surrealConnection,
+        surrealHandle,
+      });
+    },
   };
 }
 
-async function simpleHash(content: string): Promise<string> {
-  const buffer = new TextEncoder().encode(content);
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+export function assertMutationReconciliationSucceeded(
+  authority: "ordinary note write" | "approved proposal",
+  failed: number,
+): void {
+  if (!Number.isSafeInteger(failed) || failed < 0) {
+    throw new Error(`${authority} reconciliation returned an invalid failed count`);
+  }
+  if (failed === 0) return;
+  throw new Error(
+    `notient: ${authority} reconciliation failed for ${failed} durable operation(s); mutation admission remains closed`,
+  );
+}
+
+async function optionalVisionProbe(
+  input: Parameters<typeof probeVisionRoute>[0] & { enabled: boolean },
+) {
+  return input.enabled ? await probeVisionRoute(input).catch(() => null) : null;
+}
+
+function canProbeVision(settings: NotientSettings, warnings: string[]): boolean {
+  return Boolean(
+    settings.primary.baseUrl && settings.primary.reasoningModel && warnings.length === 0,
+  );
+}
+
+export async function resolveStartupModels(
+  current: NotientSettings,
+  credentials: ProviderCredentials,
+) {
+  const unavailable = {
+    chatModel: current.primary.reasoningModel,
+    embeddingModel: current.embedding.model,
+    reason: "Core local operation is available; model discovery is unavailable or unconfigured.",
+    warnings: [
+      "Inference capabilities are unavailable until a model endpoint is configured and reachable.",
+    ],
+  };
+  if (!current.primary.baseUrl) return unavailable;
+  try {
+    const catalog = await fetchEndpointModelCatalog({
+      baseUrl: current.primary.baseUrl,
+      timeoutMs: 2000,
+      ...(credentials.chatApiKey === undefined ? {} : { apiKey: credentials.chatApiKey }),
+    });
+    const embeddingCatalog =
+      current.embedding.baseUrl === current.primary.baseUrl &&
+      credentials.embeddingApiKey === credentials.chatApiKey
+        ? catalog
+        : await fetchEndpointModelCatalog({
+            baseUrl: current.embedding.baseUrl,
+            timeoutMs: 2000,
+            ...(credentials.embeddingApiKey === undefined
+              ? {}
+              : { apiKey: credentials.embeddingApiKey }),
+          });
+    return resolveEndpointModels({ settings: current, catalog, embeddingCatalog });
+  } catch {
+    return unavailable;
+  }
 }
 
 /**
@@ -789,93 +865,221 @@ export function buildRecordHistoryAutoApprove(
 }
 
 export interface BuildHistoryInvertersOptions {
-  writeNote: (path: string, content: string) => Promise<void>;
-  removeNote: (path: string) => Promise<void>;
+  moveNoteIfUnchanged?: (
+    from: string,
+    to: string,
+    expected: string,
+    beforeEffect?: () => Promise<void>,
+  ) => Promise<boolean>;
+  readNote: (path: string) => Promise<string>;
+  writeNoteIfUnchanged: (
+    path: string,
+    expected: string,
+    content: string,
+    beforeEffect?: () => Promise<void>,
+  ) => Promise<boolean>;
+  removeNoteIfUnchanged: (
+    path: string,
+    expected: string,
+    beforeEffect?: () => Promise<void>,
+  ) => Promise<boolean>;
   noteExists: (path: string) => Promise<boolean>;
   hash: (content: string) => Promise<string>;
-  /**
-   * Refreshes the SurrealDB `note.sha` field after a body-restoring
-   * inverter writes the prior body back to disk. Phase 4 Task 4
-   * replaced the SQLite `notes` table write with this closure; the
-   * production wiring issues `UPDATE note SET sha = $sha WHERE path = $path;`.
-   */
+  /** Refreshes `note.sha` after restoring a prior body. */
   updateNoteSha: (path: string, sha: string) => Promise<void>;
+  /** Verifies an approval receipt still names the note at this path. */
+  validateTargetIdentity: (row: HistoryRow) => Promise<boolean>;
+}
+
+/** Build the canonical body inverter for every reversible note mutation. */
+export function buildHistoryInverters(options: BuildHistoryInvertersOptions): InverterRegistry {
+  const noteBody = makeNoteBodyInverter({
+    facade: {
+      exists: options.noteExists,
+      read: options.readNote,
+      writeIfUnchanged: options.writeNoteIfUnchanged,
+      removeIfUnchanged: options.removeNoteIfUnchanged,
+    },
+    hash: options.hash,
+    updateNoteSha: options.updateNoteSha,
+    validateTargetIdentity: options.validateTargetIdentity,
+  });
+  return {
+    "notes.move": async (row, context) => {
+      const after = row.after as { path?: unknown; body?: unknown } | null;
+      if (
+        !options.moveNoteIfUnchanged ||
+        !after ||
+        typeof after.path !== "string" ||
+        typeof after.body !== "string" ||
+        typeof row.before !== "string"
+      )
+        throw new HistoryOperationError(
+          "HISTORY_INVALID_PAYLOAD",
+          "move receipt is missing its exact path/body snapshot",
+        );
+      if (
+        !(await options.noteExists(after.path)) &&
+        (await options.noteExists(row.target)) &&
+        (await options.readNote(row.target)) === row.before
+      )
+        return;
+      if (
+        !(await options.moveNoteIfUnchanged(after.path, row.target, after.body, context?.authorize))
+      )
+        throw historyConflict(row.id);
+    },
+    "notes.create": noteBody,
+    "notes.append": noteBody,
+    "notes.replace_section": noteBody,
+    "notes.update_frontmatter": noteBody,
+    "note.append_section": noteBody,
+    "note.frontmatter": noteBody,
+  };
+}
+
+export async function validateProposalHistoryTarget(
+  connection: SurrealConnection,
+  row: HistoryRow,
+): Promise<boolean> {
+  if (row.proposalEdge === null) return row.proposalCreatedAt === null;
+  if (row.proposalCreatedAt === null) return false;
+  const edge = parseSurrealRelationRecordId(
+    row.proposalEdge,
+    WRITEBACK_EDGE_TABLES,
+    "history proposal edge",
+  ).recordId;
+  const [rows] = await connection.db
+    .query<[Array<{ id: typeof edge }>]>(
+      "SELECT id FROM $edge WHERE created_at = <datetime>$createdAt AND in.path = $target AND in.tombstoned_at IS NONE;",
+      {
+        edge,
+        createdAt: row.proposalCreatedAt,
+        target: row.target,
+      },
+    )
+    .collect<[Array<{ id: typeof edge }>]>();
+  if (rows.length === 0) return false;
+  if (rows.length !== 1 || rows[0]?.id.toString() !== edge.toString()) {
+    throw new Error("history storage integrity: proposal target validation returned invalid rows");
+  }
+  return true;
+}
+
+export interface EmbeddingRepairHandle {
+  abort(): void;
+  completion: Promise<void>;
+}
+
+function startEmbeddingRepairTask(options: {
+  db: SurrealConnection["db"];
+  indexer: IndexerQueue;
+  runLinker: AgentRunCapability<"linker">;
+}): EmbeddingRepairHandle {
+  const controller = new AbortController();
+
+  const completion = runEmbeddingRepair({
+    db: options.db,
+    indexer: options.indexer,
+    runLinker: options.runLinker,
+    signal: controller.signal,
+  })
+    .then((result) => {
+      process.stderr.write(
+        `${JSON.stringify({ type: "daemon:embedding_repair_complete", ...result })}\n`,
+      );
+    })
+    .catch((error) => {
+      process.stderr.write(
+        `${JSON.stringify({
+          type: "daemon:embedding_repair_failed",
+          error: error instanceof Error ? error.message : String(error),
+        })}\n`,
+      );
+    });
+
+  return { abort: () => controller.abort(), completion };
+}
+
+export interface BootstrapShutdownDeps {
+  lockHandle: Pick<VaultLockHandle, "release">;
+  health: Pick<HealthMonitor, "stop">;
+  sentienceActivity: Pick<SentienceActivity, "stop">;
+  coordinator: Pick<Coordinator, "stop" | "idle">;
+  indexer: Pick<IndexerQueue, "stopAccepting" | "drain" | "dispose">;
+  agentEventStore: Pick<AgentEventStore, "dispose" | "drain">;
+  chatService: Pick<ChatService, "drain">;
+  /** Fire-and-forget boot reconciliation that uses the SurrealDB SDK. */
+  approvalReconciliation?: Promise<void>;
+  /**
+   * Canonical SurrealDB SDK connection. Closed after service drains so the
+   * server sees a clean client disconnect before its child process stops.
+   */
+  surrealConnection: { close(): Promise<void> };
+  /**
+   * Canonical SurrealDB child-process handle. Stopped after the SDK has been
+   * closed. Order is fixed: SDK close, then child stop, never the reverse.
+   */
+  surrealHandle: { stop(): Promise<void> };
+  /**
+   * Boot-time embedding repair. Abort and await it before closing SurrealDB so
+   * an in-flight linker cannot race a torn-down SDK connection. Any unfinished
+   * note keeps its durable pending flag and resumes on the next boot.
+   */
+  embeddingRepair?: EmbeddingRepairHandle;
 }
 
 /**
- * Build the InverterRegistry the daemon installs into HistoryService. Covers
- * the body-edit kinds and the maturity advancer's body+column write. Phase 4
- * Task 3 retired the `edge.*` and `node.*` inverters because the staging
- * tables they reverted no longer exist; rejections in the new SurrealDB
- * approval flow are total deletes with no `history` row. Task 4 swapped the
- * SQLite-backed sha update on `noteMaturity`/`noteAppendSection`/
- * `noteFrontmatter` for the injected `updateNoteSha` closure that hits
- * SurrealDB. Task 6 dropped the self-write mark; the indexer now
- * cross-references the SurrealDB `daemon_write` table to skip daemon writes.
- *
- * The body-edit kinds (`note.append_section`, `note.frontmatter`) reuse the
- * chat-side append/frontmatter inverters because they share the same payload
- * shape: prior body in `before`, written back through the vault facade.
+ * Tear down bootstrap-owned services without allowing queued indexing or
+ * tracked ledger writes to outlive the SDK connection. The daemon closes RPC
+ * admission, drains active RPC handlers, stops the watcher, and applies its
+ * awaken-worker fence before calling this function. This closes the remaining
+ * internal producers and applies one strict drain order.
  */
-export function buildHistoryInverters(options: BuildHistoryInvertersOptions): InverterRegistry {
-  const writeFacade = { writeNote: options.writeNote };
-  const removeFacade = { exists: options.noteExists, remove: options.removeNote };
-  const noteAppendInverter = makeNoteAppendSectionInverter({
-    facade: writeFacade,
-    hash: options.hash,
-    updateNoteSha: options.updateNoteSha,
-  });
-  const noteFrontmatterInverter = makeNoteFrontmatterInverter({
-    facade: writeFacade,
-    hash: options.hash,
-    updateNoteSha: options.updateNoteSha,
-  });
-  return {
-    "notes.create": makeNoteCreateInverter({
-      facade: removeFacade,
-    }),
-    "notes.append": noteAppendInverter,
-    "notes.replace_section": noteAppendInverter,
-    "notes.update_frontmatter": noteFrontmatterInverter,
-    "note.append_section": noteAppendInverter,
-    "note.frontmatter": noteFrontmatterInverter,
-    "note.maturity": makeNoteMaturityInverter({
-      facade: writeFacade,
-      hash: options.hash,
-      updateNoteSha: options.updateNoteSha,
-    }),
-  };
-}
+export async function shutdownBootstrap(deps: BootstrapShutdownDeps): Promise<void> {
+  // Stop every bootstrap-owned source that can enqueue indexing or emit a
+  // persisted ledger event. Already-accepted work remains drainable.
+  deps.health.stop();
+  deps.sentienceActivity.stop();
+  deps.coordinator.stop();
+  deps.indexer.stopAccepting();
 
-interface CloseDeps {
-  lockHandle: VaultLockHandle;
-  health: HealthMonitor;
-  /**
-   * Optional SurrealDB SDK connection. Closed first during shutdown so the
-   * server sees a clean client disconnect before its child process is asked
-   * to stop.
-   */
-  surrealConnection?: { close(): Promise<void> } | null;
-  /**
-   * Optional SurrealDB child-process handle. Stopped after the SDK has been
-   * closed. Order is fixed: SDK close, then child stop, never the reverse.
-   */
-  surrealHandle?: { stop(): Promise<void> } | null;
-}
+  if (deps.embeddingRepair) {
+    deps.embeddingRepair.abort();
+    await deps.embeddingRepair.completion.catch(() => {
+      // The startup wrapper already reports repair failures. Shutdown must
+      // continue so the durable pending flags can drive the next boot.
+    });
+  }
 
-function makeClose(deps: CloseDeps): () => Promise<void> {
-  return async (): Promise<void> => {
-    deps.health.stop();
-    if (deps.surrealConnection) {
-      await deps.surrealConnection.close().catch(() => {
-        // SDK close errors are swallowed so subsequent shutdown steps run.
-      });
-    }
-    if (deps.surrealHandle) {
-      await deps.surrealHandle.stop().catch(() => {
-        // Child stop errors are swallowed so subsequent shutdown steps run.
-      });
-    }
-    await deps.lockHandle.release();
-  };
+  if (deps.approvalReconciliation) {
+    await deps.approvalReconciliation.catch(() => {
+      // The startup wrapper already reports reconciliation failures.
+    });
+  }
+
+  // Post-turn summary jobs can still persist Markdown and conversation-memory
+  // rows. RPC admission is already closed by the caller, so drain every
+  // accepted refresh before the SurrealDB connection can be torn down.
+  await deps.chatService.drain();
+
+  // A stopped coordinator can still have runs in flight. Let them finish
+  // while the event ledger and SDK are live, then finish all accepted index
+  // work before disposing the queue.
+  await deps.coordinator.idle();
+  await deps.indexer.drain();
+  deps.indexer.dispose();
+
+  // Unsubscribe only after the last producer is quiescent, then await every
+  // ledger write whose bus callback already started.
+  deps.agentEventStore.dispose();
+  await deps.agentEventStore.drain();
+
+  await deps.surrealConnection.close().catch(() => {
+    // SDK close errors are swallowed so subsequent shutdown steps run.
+  });
+  await deps.surrealHandle.stop().catch(() => {
+    // Child stop errors are swallowed so subsequent shutdown steps run.
+  });
+  await deps.lockHandle.release();
 }

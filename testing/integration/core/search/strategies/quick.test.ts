@@ -26,7 +26,7 @@ import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemo
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "quick-search-fixture", dimension: VECTOR_DIM } as const;
 
 function vectorOf(seed: number): number[] {
   const vector = new Array<number>(VECTOR_DIM);
@@ -51,12 +51,12 @@ async function seedChunks(
   await replaceChunks(
     connection.db,
     noteId,
+    EMBEDDING_IDENTITY,
     texts.map((text, index) => ({
       ord: index,
       text,
       tokenEstimate: 4,
       vector: vectorOf(vectorSeed + index),
-      embedModel: EMBED_MODEL,
     })),
   );
 }
@@ -75,6 +75,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] quickSearch", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -83,8 +84,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] quickSearch", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -96,7 +97,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] quickSearch", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("returns [] when there are no documents", async () => {
     const hits = await quickSearch({ db: connection.db, query: "anything", limit: 5 });
@@ -109,9 +110,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] quickSearch", () => {
     expect(hits).toEqual([]);
   });
 
-  test("returns [] when the limit is zero", async () => {
-    const hits = await quickSearch({ db: connection.db, query: "graph", limit: 0 });
-    expect(hits).toEqual([]);
+  test("rejects a zero limit", async () => {
+    await expect(quickSearch({ db: connection.db, query: "graph", limit: 0 })).rejects.toThrow(
+      "positive safe integer",
+    );
   });
 
   test("BM25 search surfaces matching notes", async () => {
@@ -127,6 +129,72 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] quickSearch", () => {
     expect(hits[0].snippet.toLowerCase()).toContain("graph");
     expect(hits[0].matchedText).toBe("graph");
     expect(hits[0].score).toBeGreaterThan(0);
+  });
+
+  test("falls back to significant terms for a multi-word natural-language query", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    await seedChunks(
+      connection,
+      "research/parallel-hdf5.md",
+      ["Parallel HDF5 supports multi threaded IO through a collective metadata path."],
+      40,
+    );
+    await seedChunks(
+      connection,
+      "research/thread-pools.md",
+      ["Thread pools schedule independent compute work."],
+      50,
+    );
+    await seedChunks(connection, "notes/unrelated.md", ["Garden planning and soil."], 60);
+
+    const hits = await quickSearch({
+      db: connection.db,
+      query: "Find my notes about multi threaded HDF5",
+      limit: 5,
+    });
+
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].notePath).toBe("research/parallel-hdf5.md");
+    expect(hits[0].matchedText.split(" ")).toEqual(
+      expect.arrayContaining(["multi", "threaded", "hdf5"]),
+    );
+    expect(hits[0].snippet.toLowerCase()).toContain("hdf5");
+    expect(new Set(hits.map((hit) => hit.notePath)).size).toBe(hits.length);
+  });
+
+  test("quoted subjects stay binding when keyword fallback broadens other terms", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    await seedChunks(
+      connection,
+      "research/hdf5.md",
+      ["Parallel HDF5 supports collective metadata operations."],
+      40,
+    );
+    await seedChunks(
+      connection,
+      "agents.md",
+      ["Parallel independent agents share a collective data view."],
+      50,
+    );
+    const hits = await quickSearch({
+      db: connection.db,
+      query: '"Parallel HDF5" collective independent data view',
+      limit: 5,
+    });
+    expect(hits.map((hit) => hit.notePath)).toEqual(["research/hdf5.md"]);
+    const missing = await quickSearch({
+      db: connection.db,
+      query: '"Nonexistent subject" parallel collective',
+      limit: 5,
+    });
+    expect(missing).toEqual([]);
+    const scoped = await quickSearch({
+      db: connection.db,
+      query: '"Parallel HDF5" collective',
+      filters: { folders: ["elsewhere"] },
+      limit: 5,
+    });
+    expect(scoped).toEqual([]);
   });
 
   test("respects limit", async () => {

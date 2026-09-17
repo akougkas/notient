@@ -15,8 +15,6 @@ import { SKIP, visit } from "unist-util-visit";
  * Produces phrasing-content nodes of type `wikiLink` (regular) or
  * `wikiEmbed` (embed). Both carry: `target`, `alias`, `heading`, `block`
  * (any unset → `null`).
- *
- * Spec: §8.1, Phase 2 plan §Task 4.
  */
 
 export interface WikiLinkNode extends Node {
@@ -50,14 +48,15 @@ declare module "mdast" {
 
 const WIKILINK_PATTERN = /(!)?\[\[([^\]\n]+?)\]\]/g;
 
-interface ParsedTarget {
+export interface ParsedWikilinkTarget {
   target: string;
   alias: string | null;
   heading: string | null;
   block: string | null;
 }
 
-function parseInner(inner: string): ParsedTarget {
+/** Parse the contents between a wikilink's `[[` and `]]` delimiters. */
+export function parseWikilinkInner(inner: string): ParsedWikilinkTarget {
   let target = inner;
   let alias: string | null = null;
   let heading: string | null = null;
@@ -83,48 +82,45 @@ function parseInner(inner: string): ParsedTarget {
   return { target: target.trim(), alias, heading, block };
 }
 
+function wikiNode(inner: string, isEmbed: boolean): WikiLinkNode | WikiEmbedNode {
+  const parsed = parseWikilinkInner(inner);
+  return {
+    type: isEmbed ? "wikiEmbed" : "wikiLink",
+    target: parsed.target,
+    alias: parsed.alias,
+    heading: parsed.heading,
+    block: parsed.block,
+    data: {
+      hName: "span",
+      hProperties: { className: [isEmbed ? "wiki-embed" : "wiki-link"] },
+    },
+  };
+}
+
+function replacementsFor(value: string): PhrasingContent[] | null {
+  if (!value.includes("[[")) return null;
+  WIKILINK_PATTERN.lastIndex = 0;
+  const matches = [...value.matchAll(WIKILINK_PATTERN)];
+  if (matches.length === 0) return null;
+
+  const replacements: PhrasingContent[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    const [full, bang, inner] = match;
+    const start = match.index ?? 0;
+    if (start > cursor) replacements.push({ type: "text", value: value.slice(cursor, start) });
+    replacements.push(wikiNode(inner, bang === "!") as unknown as PhrasingContent);
+    cursor = start + full.length;
+  }
+  if (cursor < value.length) replacements.push({ type: "text", value: value.slice(cursor) });
+  return replacements;
+}
+
 const remarkWikilink: Plugin<[], Root> = () => (tree) => {
   visit(tree, "text", (node: Text, indexInParent, parent: Parent | undefined) => {
-    if (parent === undefined || indexInParent === undefined) {
-      return;
-    }
-    const value = node.value;
-    if (!value.includes("[[")) {
-      return;
-    }
-    WIKILINK_PATTERN.lastIndex = 0;
-    const matches = [...value.matchAll(WIKILINK_PATTERN)];
-    if (matches.length === 0) {
-      return;
-    }
-
-    const replacements: PhrasingContent[] = [];
-    let cursor = 0;
-    for (const match of matches) {
-      const [full, bang, inner] = match;
-      const start = match.index ?? 0;
-      if (start > cursor) {
-        replacements.push({ type: "text", value: value.slice(cursor, start) });
-      }
-      const parsed = parseInner(inner);
-      const isEmbed = bang === "!";
-      const node: WikiLinkNode | WikiEmbedNode = {
-        type: isEmbed ? "wikiEmbed" : "wikiLink",
-        target: parsed.target,
-        alias: parsed.alias,
-        heading: parsed.heading,
-        block: parsed.block,
-        data: {
-          hName: "span",
-          hProperties: { className: [isEmbed ? "wiki-embed" : "wiki-link"] },
-        },
-      };
-      replacements.push(node as unknown as PhrasingContent);
-      cursor = start + full.length;
-    }
-    if (cursor < value.length) {
-      replacements.push({ type: "text", value: value.slice(cursor) });
-    }
+    if (parent === undefined || indexInParent === undefined) return;
+    const replacements = replacementsFor(node.value);
+    if (replacements === null) return;
 
     parent.children.splice(indexInParent, 1, ...(replacements as Nodes[]));
     return [SKIP, indexInParent + replacements.length];

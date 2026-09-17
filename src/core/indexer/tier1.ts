@@ -8,18 +8,19 @@ import {
   lookupBlockByExplicitId,
   lookupBlockByHeading,
   lookupNoteByPath,
+  lookupNoteIdsByPaths,
 } from "../db/surreal";
-import type { EventBus } from "../events/eventBus";
+import { type EventBus, assertEventBus } from "../events/eventBus";
 import { extract } from "../markdown/extractor";
 import { processAst } from "../markdown/pipeline";
-import { resolveTargets } from "../markdown/resolver";
+import { resolveMarkdownTarget, resolveTargets } from "../markdown/resolver";
 import { headingSlug } from "../markdown/slug";
-import type { FrontmatterRefSpec, MarkdownExtraction, WikilinkSpec } from "../markdown/types";
+import { STRUCTURAL_INDEX_VERSION } from "../markdown/types";
+import type { FrontmatterRefSpec, MarkdownExtraction, NoteLinkSpec } from "../markdown/types";
+import { type ReferenceTarget, referenceTargets } from "./referenceTargets";
 
 /**
  * Tier 1 indexer: turns a saved note into deterministic SurrealDB edges.
- *
- * Spec: §5.2, Phase 2 plan §Task 12.
  *
  * Atomicity is delivered via a single SurrealQL script that begins with
  * `BEGIN TRANSACTION;` and ends with `COMMIT TRANSACTION;`. SurrealDB
@@ -38,15 +39,13 @@ import type { FrontmatterRefSpec, MarkdownExtraction, WikilinkSpec } from "../ma
  */
 
 export interface Tier1Input {
+  /** Orchestrated indexing completes Tier 1 only after lexical chunks commit. */
+  deferCompletion?: boolean;
   notePath: string;
   source: string;
   vaultPaths: string[];
-  /**
-   * Optional event bus for diagnostic notifications. Tier 1 emits
-   * `indexer:warn` once per dropped frontmatter ref whose target does
-   * not resolve (Phase 2 plan locked decision 7).
-   */
-  bus?: EventBus;
+  /** Receives an `indexer:warn` for each unresolved frontmatter reference. */
+  bus: EventBus;
 }
 
 export interface Tier1Output {
@@ -66,9 +65,10 @@ type FrontmatterTarget =
 
 async function resolveWikilinkTarget(
   db: Surreal,
-  link: WikilinkSpec,
+  link: NoteLinkSpec,
   resolvedTargetPath: string | null,
   activeNotePath: string,
+  noteIdsByPath: ReadonlyMap<string, RecordId<"note">>,
 ): Promise<WikilinkTarget> {
   if (resolvedTargetPath === null) {
     return { kind: "unresolved" };
@@ -76,7 +76,7 @@ async function resolveWikilinkTarget(
   if (resolvedTargetPath === activeNotePath) {
     return { kind: "selfNote" };
   }
-  const noteId = await lookupNoteByPath(db, resolvedTargetPath);
+  const noteId = noteIdsByPath.get(resolvedTargetPath) ?? null;
   if (noteId === null) {
     return { kind: "unresolved" };
   }
@@ -97,18 +97,18 @@ async function resolveWikilinkTarget(
   return { kind: "other", recordId: noteId };
 }
 
-async function resolveFrontmatterTarget(
-  db: Surreal,
+function resolveFrontmatterTarget(
   resolvedTargetPath: string | null,
   activeNotePath: string,
-): Promise<FrontmatterTarget> {
+  noteIdsByPath: ReadonlyMap<string, RecordId<"note">>,
+): FrontmatterTarget {
   if (resolvedTargetPath === null) {
     return { kind: "unresolved" };
   }
   if (resolvedTargetPath === activeNotePath) {
     return { kind: "selfNote" };
   }
-  const noteId = await lookupNoteByPath(db, resolvedTargetPath);
+  const noteId = noteIdsByPath.get(resolvedTargetPath) ?? null;
   if (noteId === null) {
     return { kind: "unresolved" };
   }
@@ -116,14 +116,11 @@ async function resolveFrontmatterTarget(
 }
 
 function emitFrontmatterWarnings(
-  bus: EventBus | undefined,
+  bus: EventBus,
   notePath: string,
   refs: FrontmatterRefSpec[],
   targets: FrontmatterTarget[],
 ): void {
-  if (bus === undefined) {
-    return;
-  }
   for (let index = 0; index < refs.length; index += 1) {
     if (targets[index].kind !== "unresolved") {
       continue;
@@ -132,7 +129,7 @@ function emitFrontmatterWarnings(
     bus.emit({
       type: "indexer:warn",
       phase: "tier1",
-      message: `frontmatter ref dropped: key='${ref.key}' raw='${ref.rawTarget}' note='${notePath}'`,
+      message: `frontmatter ref unresolved: key='${ref.key}' raw='${ref.rawTarget}' note='${notePath}'`,
     });
   }
 }
@@ -185,11 +182,10 @@ interface DaemonWriteOverride {
   targets: Set<string>;
 }
 
-function resolveWikilinkSourceLabel(
-  defaultSourceLabel: string,
+function resolveDaemonAttribution(
   resolvedTargetKey: string | null,
   daemonOverride: DaemonWriteOverride | null,
-): string {
+): string | null {
   if (
     daemonOverride !== null &&
     resolvedTargetKey !== null &&
@@ -197,54 +193,87 @@ function resolveWikilinkSourceLabel(
   ) {
     return daemonOverride.agent;
   }
-  return defaultSourceLabel;
+  return null;
 }
 
-function buildTier1Transaction(
-  notePath: string,
-  extraction: MarkdownExtraction,
+interface Tier1TransactionState {
+  statements: string[];
+  bindings: Record<string, unknown>;
+}
+
+function appendNoteWrite(
+  state: Tier1TransactionState,
   existingNoteId: RecordId<"note"> | null,
-  existingBlockIds: Array<RecordId<"block">>,
-  existingTagIds: Array<RecordId<"tag"> | null>,
-  wikilinkTargets: WikilinkTarget[],
-  frontmatterTargets: FrontmatterTarget[],
-  daemonOverride: DaemonWriteOverride | null,
-): TransactionScript {
-  const statements: string[] = [];
-  const bindings: Record<string, unknown> = {
-    notePath,
-    sha: extraction.bodySha,
-    wordCount: extraction.wordCount,
-    tier1Class: TIER1_EDGE_CLASS,
-  };
-
-  statements.push("BEGIN TRANSACTION;");
-
+): void {
   if (existingNoteId !== null) {
-    bindings.existingNoteId = existingNoteId;
-    statements.push("UPDATE $existingNoteId SET sha = $sha, word_count = $wordCount;");
-    statements.push("LET $noteId = $existingNoteId;");
-  } else {
-    statements.push(
-      "LET $noteId = (CREATE ONLY note CONTENT { path: $notePath, sha: $sha, word_count: $wordCount }).id;",
-    );
+    state.bindings.existingNoteId = existingNoteId;
+    state.statements.push("UPDATE $existingNoteId SET sha = $sha, word_count = $wordCount;");
+    state.statements.push("LET $noteId = $existingNoteId;");
+    return;
   }
+  state.statements.push(
+    "LET $noteId = (CREATE ONLY note CONTENT { path: $notePath, sha: $sha, word_count: $wordCount }).id;",
+  );
+}
 
+function appendTier1EdgeCleanup(
+  state: Tier1TransactionState,
+  existingBlockIds: Array<RecordId<"block">>,
+): void {
   // Bind the pre-fetched block-id snapshot once. Edge cleanup targets the
   // set explicitly so the per-table DELETE never walks `in.note` through
   // the very rows we are about to mutate; the graph-walk variant tripped
   // a SurrealDB 2.x quirk where DELETE+CREATE on the same table inside one
   // transaction left a subset of the original rows on disk. Filtering on
   // `class` keeps Tier 3 edges (class = 'INFERRED') safe.
-  bindings.oldBlockIds = existingBlockIds;
+  state.bindings.oldBlockIds = existingBlockIds;
   for (const table of TIER1_EDGE_TABLES) {
-    statements.push(
+    state.statements.push(
       `DELETE ${table} WHERE class = $tier1Class AND (in = $noteId OR in IN $oldBlockIds);`,
     );
   }
-  statements.push("DELETE wikilink_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
-  statements.push("DELETE embed_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
+  state.statements.push("DELETE wikilink_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
+  state.statements.push("DELETE embed_unresolved WHERE in = $noteId OR in IN $oldBlockIds;");
+}
 
+function blockContentFields(
+  state: Tier1TransactionState,
+  block: MarkdownExtraction["blocks"][number],
+  index: number,
+): string[] {
+  const fields = [
+    "note: $noteId",
+    `ord: $block${index}_ord`,
+    `start_line: $block${index}_startLine`,
+    `end_line: $block${index}_endLine`,
+    `text: $block${index}_text`,
+    `heading_path: $block${index}_headingPath`,
+  ];
+  state.bindings[`block${index}_ord`] = block.ord;
+  state.bindings[`block${index}_startLine`] = block.startLine;
+  state.bindings[`block${index}_endLine`] = block.endLine;
+  state.bindings[`block${index}_text`] = block.text;
+  state.bindings[`block${index}_headingPath`] = block.headingPath;
+  // `block_id`, `heading_slug`, and `heading_level` are `option<...>` in
+  // the schema; we always set them so reused rows shed stale values when
+  // the new extraction has none for that slot. JavaScript `undefined`
+  // serializes to SurrealQL `NONE`, which is the empty branch of an
+  // `option<T>` and satisfies every relevant ASSERT. JavaScript `null`
+  // would be sent as a typed null and trip the ASSERT for option<string>.
+  fields.push(`block_id: $block${index}_blockId`);
+  state.bindings[`block${index}_blockId`] = block.blockId ?? undefined;
+  fields.push(`heading_slug: $block${index}_headingSlug`);
+  state.bindings[`block${index}_headingSlug`] = block.headingSlug ?? undefined;
+  fields.push(`heading_level: $block${index}_headingLevel`);
+  state.bindings[`block${index}_headingLevel`] = block.headingLevel ?? undefined;
+  return fields;
+}
+
+function appendBlockWrites(
+  state: Tier1TransactionState,
+  blocks: MarkdownExtraction["blocks"],
+  existingBlockIds: Array<RecordId<"block">>,
+): void {
   // Block reuse strategy. SurrealDB 2.x reorders same-table DELETE+CREATE
   // pairs inside a single transaction, so the original "DELETE block /
   // CREATE block" pattern silently leaked the un-uniquely-keyed rows
@@ -255,61 +284,33 @@ function buildTier1Transaction(
   // only DELETE-ing rows when it is shorter. UPDATE and CREATE coexist
   // without engine reordering; DELETE-only-the-surplus has no CREATE on
   // the same table after it.
-  const blocks = extraction.blocks;
   const reuseCount = Math.min(blocks.length, existingBlockIds.length);
   for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index];
-    const fields: string[] = [
-      "note: $noteId",
-      `ord: $block${index}_ord`,
-      `start_line: $block${index}_startLine`,
-      `end_line: $block${index}_endLine`,
-      `text: $block${index}_text`,
-      `heading_path: $block${index}_headingPath`,
-    ];
-    bindings[`block${index}_ord`] = block.ord;
-    bindings[`block${index}_startLine`] = block.startLine;
-    bindings[`block${index}_endLine`] = block.endLine;
-    bindings[`block${index}_text`] = block.text;
-    bindings[`block${index}_headingPath`] = block.headingPath;
-    // `block_id`, `heading_slug`, and `heading_level` are `option<...>` in
-    // the schema; we always set them so reused rows shed stale values when
-    // the new extraction has none for that slot. JavaScript `undefined`
-    // serializes to SurrealQL `NONE`, which is the empty branch of an
-    // `option<T>` and satisfies every relevant ASSERT. JavaScript `null`
-    // would be sent as a typed null and trip the ASSERT for option<string>.
-    fields.push(`block_id: $block${index}_blockId`);
-    bindings[`block${index}_blockId`] = block.blockId ?? undefined;
-    fields.push(`heading_slug: $block${index}_headingSlug`);
-    bindings[`block${index}_headingSlug`] = block.headingSlug ?? undefined;
-    fields.push(`heading_level: $block${index}_headingLevel`);
-    bindings[`block${index}_headingLevel`] = block.headingLevel ?? undefined;
-
+    const fields = blockContentFields(state, blocks[index], index);
     if (index < reuseCount) {
-      const reusedId = existingBlockIds[index];
-      bindings[`block${index}_existingId`] = reusedId;
-      statements.push(`UPDATE $block${index}_existingId CONTENT { ${fields.join(", ")} };`);
-      statements.push(`LET $block${index} = $block${index}_existingId;`);
-    } else {
-      statements.push(
-        `LET $block${index} = (CREATE ONLY block CONTENT { ${fields.join(", ")} }).id;`,
-      );
+      state.bindings[`block${index}_existingId`] = existingBlockIds[index];
+      state.statements.push(`UPDATE $block${index}_existingId CONTENT { ${fields.join(", ")} };`);
+      state.statements.push(`LET $block${index} = $block${index}_existingId;`);
+      continue;
     }
+    state.statements.push(
+      `LET $block${index} = (CREATE ONLY block CONTENT { ${fields.join(", ")} }).id;`,
+    );
   }
 
   if (existingBlockIds.length > blocks.length) {
-    const surplus = existingBlockIds.slice(blocks.length);
-    bindings.surplusBlockIds = surplus;
-    statements.push("DELETE block WHERE id IN $surplusBlockIds;");
+    state.bindings.surplusBlockIds = existingBlockIds.slice(blocks.length);
+    state.statements.push("DELETE block WHERE id IN $surplusBlockIds;");
   }
+}
 
+function appendBlockRelations(statements: string[], blocks: MarkdownExtraction["blocks"]): void {
   let currentHeadingIndex: number | null = null;
   for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index];
     statements.push(
       `RELATE $block${index} -> contained_in -> $noteId SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
     );
-    if (block.headingLevel !== null) {
+    if (blocks[index].headingLevel !== null) {
       currentHeadingIndex = index;
       continue;
     }
@@ -319,106 +320,186 @@ function buildTier1Transaction(
       );
     }
   }
+}
 
-  for (let index = 0; index < extraction.wikilinks.length; index += 1) {
-    const link = extraction.wikilinks[index];
-    const target = wikilinkTargets[index];
-    const fromExpr = fromExpression(link.fromBlockOrd, blocks.length);
-    const isEmbed = link.isEmbed;
-    const defaultSourceLabel = isEmbed ? "embed" : "wikilink";
+type ResolvedEdgeTarget = Exclude<WikilinkTarget | FrontmatterTarget, { kind: "unresolved" }>;
 
-    if (target.kind === "unresolved") {
-      const unresolvedTable = isEmbed ? "embed_unresolved" : "wikilink_unresolved";
-      bindings[`wl${index}_rawTarget`] = link.rawTarget;
-      bindings[`wl${index}_source`] = defaultSourceLabel;
-      statements.push(
-        `CREATE ${unresolvedTable} CONTENT { in: ${fromExpr}, raw_target: $wl${index}_rawTarget, source: $wl${index}_source };`,
-      );
-      continue;
-    }
+function bindResolvedTarget(
+  state: Tier1TransactionState,
+  target: ResolvedEdgeTarget,
+  bindingPrefix: string,
+): { toExpr: string; resolvedTargetKey: string | null } {
+  if (target.kind === "selfNote") {
+    return { toExpr: "$noteId", resolvedTargetKey: null };
+  }
+  state.bindings[`${bindingPrefix}_target`] = target.recordId;
+  return {
+    toExpr: `$${bindingPrefix}_target`,
+    resolvedTargetKey: target.recordId.toString(),
+  };
+}
 
-    let toExpr: string;
-    let resolvedTargetKey: string | null;
-    if (target.kind === "selfNote") {
-      toExpr = "$noteId";
-      // Self-note edges (resolved back to the active note) do not have a
-      // pre-known record-id string to match against `daemon_write.targets`,
-      // so we leave them with the default source. Phase 4 writebacks never
-      // record the active note as a self-target.
-      resolvedTargetKey = null;
-    } else {
-      bindings[`wl${index}_target`] = target.recordId;
-      toExpr = `$wl${index}_target`;
-      resolvedTargetKey = target.recordId.toString();
-    }
-    const edgeTable = isEmbed ? "embed" : "wikilink";
-    bindings[`wl${index}_source`] = resolveWikilinkSourceLabel(
-      defaultSourceLabel,
-      resolvedTargetKey,
+function appendWikilink(
+  state: Tier1TransactionState,
+  link: NoteLinkSpec,
+  target: WikilinkTarget,
+  index: number,
+  blockCount: number,
+  daemonOverride: DaemonWriteOverride | null,
+): void {
+  const fromExpr = fromExpression(link.fromBlockOrd, blockCount);
+  // The existing structural relation table also stores Markdown destinations;
+  // provenance preserves the authored syntax without migrating stable edges.
+  const defaultSourceLabel =
+    link.syntax === "markdown" ? "markdown" : link.isEmbed ? "embed" : "wikilink";
+  if (target.kind === "unresolved") {
+    const unresolvedTable = link.isEmbed ? "embed_unresolved" : "wikilink_unresolved";
+    state.bindings[`wl${index}_rawTarget`] = link.rawTarget;
+    state.bindings[`wl${index}_source`] = defaultSourceLabel;
+    state.statements.push(
+      `CREATE ${unresolvedTable} CONTENT { in: ${fromExpr}, raw_target: $wl${index}_rawTarget, source: $wl${index}_source };`,
+    );
+    return;
+  }
+  const { toExpr, resolvedTargetKey } = bindResolvedTarget(state, target, `wl${index}`);
+  const edgeTable = link.isEmbed ? "embed" : "wikilink";
+  state.bindings[`wl${index}_source`] = defaultSourceLabel;
+  const attributedAgent = resolveDaemonAttribution(resolvedTargetKey, daemonOverride);
+  const agentClause = attributedAgent === null ? "" : `, agent = $wl${index}_agent`;
+  if (attributedAgent !== null) state.bindings[`wl${index}_agent`] = attributedAgent;
+  state.statements.push(
+    `RELATE ${fromExpr} -> ${edgeTable} -> ${toExpr} SET source = $wl${index}_source, class = 'EXTRACTED', confidence = 1${agentClause};`,
+  );
+}
+
+function appendWikilinks(
+  state: Tier1TransactionState,
+  extraction: MarkdownExtraction,
+  targets: WikilinkTarget[],
+  daemonOverride: DaemonWriteOverride | null,
+): void {
+  for (let index = 0; index < extraction.links.length; index += 1) {
+    appendWikilink(
+      state,
+      extraction.links[index],
+      targets[index],
+      index,
+      extraction.blocks.length,
       daemonOverride,
     );
-    statements.push(
-      `RELATE ${fromExpr} -> ${edgeTable} -> ${toExpr} SET source = $wl${index}_source, class = 'EXTRACTED', confidence = 1;`,
-    );
   }
+}
 
-  for (let index = 0; index < extraction.frontmatterRefs.length; index += 1) {
-    const target = frontmatterTargets[index];
-    if (target.kind === "unresolved") {
-      continue;
-    }
-    let toExpr: string;
-    let resolvedTargetKey: string | null;
-    if (target.kind === "selfNote") {
-      toExpr = "$noteId";
-      // Self-note frontmatter refs (resolved back to the active note) do
-      // not have a pre-known record-id string to match against
-      // `daemon_write.targets`, so we leave them with the default source.
-      // Phase 4 writebacks never record the active note as a self-target.
-      resolvedTargetKey = null;
-    } else {
-      bindings[`fm${index}_target`] = target.recordId;
-      toExpr = `$fm${index}_target`;
-      resolvedTargetKey = target.recordId.toString();
-    }
-    bindings[`fm${index}_source`] = resolveWikilinkSourceLabel(
-      "frontmatter",
-      resolvedTargetKey,
-      daemonOverride,
-    );
-    statements.push(
-      `RELATE $noteId -> frontmatter_ref -> ${toExpr} SET source = $fm${index}_source, class = 'EXTRACTED', confidence = 1;`,
-    );
+function appendFrontmatterRef(
+  state: Tier1TransactionState,
+  target: FrontmatterTarget,
+  index: number,
+  daemonOverride: DaemonWriteOverride | null,
+): void {
+  if (target.kind === "unresolved") return;
+  const { toExpr, resolvedTargetKey } = bindResolvedTarget(state, target, `fm${index}`);
+  state.bindings[`fm${index}_source`] = "frontmatter";
+  const attributedAgent = resolveDaemonAttribution(resolvedTargetKey, daemonOverride);
+  const agentClause = attributedAgent === null ? "" : `, agent = $fm${index}_agent`;
+  if (attributedAgent !== null) state.bindings[`fm${index}_agent`] = attributedAgent;
+  state.statements.push(
+    `RELATE $noteId -> frontmatter_ref -> ${toExpr} SET source = $fm${index}_source, class = 'EXTRACTED', confidence = 1${agentClause};`,
+  );
+}
+
+function appendFrontmatterRefs(
+  state: Tier1TransactionState,
+  refCount: number,
+  targets: FrontmatterTarget[],
+  daemonOverride: DaemonWriteOverride | null,
+): void {
+  for (let index = 0; index < refCount; index += 1) {
+    appendFrontmatterRef(state, targets[index], index, daemonOverride);
   }
+}
 
+function bindTagVariable(
+  state: Tier1TransactionState,
+  path: string,
+  existingTagId: RecordId<"tag"> | null,
+  index: number,
+  tagVarByPath: Map<string, string>,
+): string {
+  const existingTagVar = tagVarByPath.get(path);
+  if (existingTagVar !== undefined) return existingTagVar;
+  const tagVar = `$tag${index}`;
+  tagVarByPath.set(path, tagVar);
+  if (existingTagId !== null) {
+    state.bindings[`tag${index}_existingId`] = existingTagId;
+    state.statements.push(`LET $tag${index} = $tag${index}_existingId;`);
+    return tagVar;
+  }
+  state.bindings[`tag${index}_path`] = path;
+  state.statements.push(
+    `LET $tag${index} = (CREATE ONLY tag CONTENT { path: $tag${index}_path }).id;`,
+  );
+  return tagVar;
+}
+
+function appendTags(
+  state: Tier1TransactionState,
+  extraction: MarkdownExtraction,
+  existingTagIds: Array<RecordId<"tag"> | null>,
+): void {
   const tagVarByPath = new Map<string, string>();
   for (let index = 0; index < extraction.tags.length; index += 1) {
     const tag = extraction.tags[index];
-    const existingTagId = existingTagIds[index];
-    const existingTagVar = tagVarByPath.get(tag.path);
-    const tagVar = existingTagVar ?? `$tag${index}`;
-    if (existingTagVar === undefined) {
-      tagVarByPath.set(tag.path, tagVar);
-      if (existingTagId !== null) {
-        bindings[`tag${index}_existingId`] = existingTagId;
-        statements.push(`LET $tag${index} = $tag${index}_existingId;`);
-      } else {
-        bindings[`tag${index}_path`] = tag.path;
-        statements.push(
-          `LET $tag${index} = (CREATE ONLY tag CONTENT { path: $tag${index}_path }).id;`,
-        );
-      }
-    }
-    const fromExpr = fromExpression(tag.fromBlockOrd, blocks.length);
-    statements.push(
+    const tagVar = bindTagVariable(state, tag.path, existingTagIds[index], index, tagVarByPath);
+    const fromExpr = fromExpression(tag.fromBlockOrd, extraction.blocks.length);
+    state.statements.push(
       `RELATE ${fromExpr} -> tagged -> ${tagVar} SET source = 'structure', class = 'EXTRACTED', confidence = 1;`,
     );
   }
+}
 
-  statements.push("UPDATE $noteId SET tier1_at = time::now();");
-  statements.push("COMMIT TRANSACTION;");
-
-  return { sql: statements.join("\n"), bindings };
+function buildTier1Transaction(
+  notePath: string,
+  extraction: MarkdownExtraction,
+  existingNoteId: RecordId<"note"> | null,
+  existingBlockIds: Array<RecordId<"block">>,
+  existingTagIds: Array<RecordId<"tag"> | null>,
+  wikilinkTargets: WikilinkTarget[],
+  frontmatterTargets: FrontmatterTarget[],
+  references: ReferenceTarget[],
+  daemonOverride: DaemonWriteOverride | null,
+  deferCompletion = false,
+): TransactionScript {
+  const state: Tier1TransactionState = {
+    statements: ["BEGIN TRANSACTION;"],
+    bindings: {
+      notePath,
+      sha: extraction.bodySha,
+      wordCount: extraction.wordCount,
+      tier1Class: TIER1_EDGE_CLASS,
+      structuralVersion: STRUCTURAL_INDEX_VERSION,
+      referenceTargets: JSON.stringify(references),
+    },
+  };
+  appendNoteWrite(state, existingNoteId);
+  state.statements.push("UPDATE $noteId SET reference_targets = $referenceTargets;");
+  appendTier1EdgeCleanup(state, existingBlockIds);
+  appendBlockWrites(state, extraction.blocks, existingBlockIds);
+  appendBlockRelations(state.statements, extraction.blocks);
+  appendWikilinks(state, extraction, wikilinkTargets, daemonOverride);
+  appendFrontmatterRefs(
+    state,
+    extraction.frontmatterRefs.length,
+    frontmatterTargets,
+    daemonOverride,
+  );
+  appendTags(state, extraction, existingTagIds);
+  state.statements.push(
+    deferCompletion
+      ? "UPDATE $noteId SET tier1_at = NONE, structural_version = $structuralVersion;"
+      : "UPDATE $noteId SET tier1_at = time::now(), structural_version = $structuralVersion;",
+  );
+  state.statements.push("COMMIT TRANSACTION;");
+  return { sql: state.statements.join("\n"), bindings: state.bindings };
 }
 
 export interface PrepareNoteRowInput {
@@ -469,17 +550,25 @@ export async function prepareNoteRow(db: Surreal, input: PrepareNoteRowInput): P
 }
 
 export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Output> {
+  assertEventBus(input.bus, "runTier1");
   const ast = processAst(input.source);
   const extraction = extract(ast, input.notePath, input.source);
 
   const wikilinkResolutions = resolveTargets(
     input.notePath,
-    extraction.wikilinks.map((wikilink) => ({
+    extraction.links.map((wikilink) => ({
       rawTarget: wikilink.rawTarget,
       targetHeading: wikilink.targetHeading,
       targetBlockId: wikilink.targetBlockId,
     })),
     input.vaultPaths,
+  ).map((resolution, index) =>
+    extraction.links[index].syntax === "markdown"
+      ? {
+          ...resolution,
+          targetPath: resolveMarkdownTarget(input.notePath, resolution.rawTarget, input.vaultPaths),
+        }
+      : resolution,
   );
   const frontmatterResolutions = resolveTargets(
     input.notePath,
@@ -491,20 +580,37 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     input.vaultPaths,
   );
 
-  const [existingNoteId, wikilinkTargets, frontmatterTargets, existingTagIds] = await Promise.all([
+  // One batched `path -> note id` resolution for every link target on this
+  // note (wikilinks + frontmatter refs) instead of one round-trip per link.
+  const targetPaths: string[] = [];
+  for (const resolution of wikilinkResolutions) {
+    if (resolution.targetPath !== null) targetPaths.push(resolution.targetPath);
+  }
+  for (const resolution of frontmatterResolutions) {
+    if (resolution.targetPath !== null) targetPaths.push(resolution.targetPath);
+  }
+  const noteIdsByPath = await lookupNoteIdsByPaths(db, targetPaths);
+
+  const [existingNoteId, wikilinkTargets, existingTagIds] = await Promise.all([
     lookupNoteByPath(db, input.notePath),
+    // Block-anchored wikilinks still need a per-link `block` lookup; plain
+    // note targets are served entirely from `noteIdsByPath`.
     Promise.all(
-      extraction.wikilinks.map((link, index) =>
-        resolveWikilinkTarget(db, link, wikilinkResolutions[index].targetPath, input.notePath),
-      ),
-    ),
-    Promise.all(
-      frontmatterResolutions.map((resolution) =>
-        resolveFrontmatterTarget(db, resolution.targetPath, input.notePath),
+      extraction.links.map((link, index) =>
+        resolveWikilinkTarget(
+          db,
+          link,
+          wikilinkResolutions[index].targetPath,
+          input.notePath,
+          noteIdsByPath,
+        ),
       ),
     ),
     Promise.all(extraction.tags.map((tag) => lookupTagId(db, tag.path))),
   ]);
+  const frontmatterTargets = frontmatterResolutions.map((resolution) =>
+    resolveFrontmatterTarget(resolution.targetPath, input.notePath, noteIdsByPath),
+  );
 
   // Fetching block ids is sequential after `existingNoteId` resolves
   // because the lookup needs the note record id. First-time-seen notes
@@ -539,7 +645,18 @@ export async function runTier1(db: Surreal, input: Tier1Input): Promise<Tier1Out
     existingTagIds,
     wikilinkTargets,
     frontmatterTargets,
+    referenceTargets(input.notePath, extraction, input.vaultPaths).map((ref, index) => ({
+      ...ref,
+      resolved:
+        (index < wikilinkTargets.length
+          ? wikilinkTargets[index]
+          : frontmatterTargets[index - wikilinkTargets.length]
+        ).kind === "unresolved"
+          ? null
+          : ref.resolved,
+    })),
     daemonOverride,
+    input.deferCompletion,
   );
 
   await db.query(sql, bindings).collect();

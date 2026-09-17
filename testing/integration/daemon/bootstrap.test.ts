@@ -1,3 +1,4 @@
+import { readEnvSource } from "../../../src/core/settings/envFile";
 /**
  * Phase 4 Task 4 bootstrap-wiring smoke harness for HistoryService.
  *
@@ -18,15 +19,15 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FsVault } from "../../../src/adapters/fsVault";
 import { ApprovalService } from "../../../src/core/approvals/approvalService";
 import type { NotesHistoryRecord } from "../../../src/core/chat/tools/notes";
 import type { ToolCall } from "../../../src/core/chat/types";
-import { Coordinator } from "../../../src/core/coordinator/coordinator";
-import { ReasoningMutex } from "../../../src/core/coordinator/reasoningMutex";
+import { AgentRunExecutor } from "../../../src/core/coordinator/agentRunExecutor";
+import { ReasoningScheduler } from "../../../src/core/coordinator/reasoningScheduler";
 import type { Agent, AgentRunResult } from "../../../src/core/coordinator/types";
 import { applySchema } from "../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../src/core/db/surreal";
@@ -34,10 +35,10 @@ import { EventBus } from "../../../src/core/events/eventBus";
 import { HistoryService } from "../../../src/core/history/historyService";
 import type { HistoryKind } from "../../../src/core/history/types";
 import { Kernel } from "../../../src/core/kernel";
+import { sha256Hex } from "../../../src/core/utils/sha256";
 import {
   buildHistoryInverters,
   buildRecordHistoryAutoApprove,
-  readEnvSource,
 } from "../../../src/daemon/bootstrap";
 import { type SurrealServerHandle, startSurreal } from "../../../src/daemon/surrealServer";
 
@@ -57,6 +58,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap recordHistory wiring", () => 
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -65,8 +67,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap recordHistory wiring", () => 
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -78,7 +80,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap recordHistory wiring", () => 
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await connection.db.query("DELETE history;").collect();
@@ -100,6 +102,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap recordHistory wiring", () => 
       target: "scratch.md",
       before: null,
       after: "hello world",
+      clientIdentity: "human",
     });
 
     expect(id.startsWith("history:")).toBe(true);
@@ -126,6 +129,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap buildRecordHistoryAutoApprove
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -134,8 +138,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap buildRecordHistoryAutoApprove
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -147,7 +151,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap buildRecordHistoryAutoApprove
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await connection.db.query("DELETE history;").collect();
@@ -209,20 +213,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
   let connection: SurrealConnection;
   const secret = "phase5-bootstrap-approvals-smoke";
 
-  const bootstrapFs = {
-    writeBinary: async (filePath: string, data: ArrayBuffer): Promise<void> => {
-      await writeFile(filePath, new Uint8Array(data));
-    },
-    rename: async (from: string, to: string): Promise<void> => {
-      await rename(from, to);
-    },
-    remove: async (filePath: string): Promise<void> => {
-      await unlink(filePath).catch(() => {
-        // missing-file is not an error for cleanup
-      });
-    },
-  };
-
   beforeAll(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "notient-bootstrap-approvals-smoke-"));
     vaultRoot = path.join(tempDir, "vault");
@@ -233,6 +223,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -241,8 +232,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -254,16 +245,16 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test('[smoke] kernel.get("approvalService") returns an ApprovalService instance', () => {
     const kernel = new Kernel();
     const approvalService = new ApprovalService({
       db: connection.db,
       bus: new EventBus(),
-      vaultRoot,
-      fs: bootstrapFs,
-      readFile: (filePath) => readFile(filePath, "utf8"),
+      vault: new FsVault(vaultRoot),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
     });
     kernel.register("approvalService", approvalService);
     expect(kernel.has("approvalService")).toBe(true);
@@ -280,9 +271,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
     const approvalService = new ApprovalService({
       db: connection.db,
       bus: new EventBus(),
-      vaultRoot,
-      fs: bootstrapFs,
-      readFile: (filePath) => readFile(filePath, "utf8"),
+      vault: new FsVault(vaultRoot),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
     });
 
     let invocations = 0;
@@ -338,14 +329,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap ApprovalService wiring", () =
   });
 });
 
-describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap swarm dispatch with no-op agents", () => {
+describe.skipIf(!SMOKE_ENABLED)("[smoke] explicit worker execution records", () => {
   /**
-   * Phase 5 Task 6 / Locked Decision 11: Synthesizer and ContradictionHunter
-   * are stripped from production wiring. The bootstrap assigns the same no-op
-   * Agent shape Linker uses when SurrealDB is absent. This smoke proves the
-   * Coordinator dispatches with all four agent slots filled and writes four
-   * agent_run rows on a single user-action deepen cycle, each with
-   * proposals_count=0 and ok=true.
+   * Explicit invocations of the retained focused workers each
+   * gives each invocation its own durable UUID-addressed `agent_run` row.
    */
   let tempDir: string;
   let handle: SurrealServerHandle;
@@ -360,6 +347,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap swarm dispatch with no-op age
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -368,8 +356,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap swarm dispatch with no-op age
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -381,50 +369,63 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] bootstrap swarm dispatch with no-op age
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await connection.db.query("DELETE agent_run;").collect();
   });
 
-  test("[smoke] user-action deepen records four agent_run rows with no-op Synthesizer + ContradictionHunter", async () => {
+  test("[smoke] explicit worker invocations retain their durable run records", async () => {
     const bus = new EventBus();
-    const noopAgent = (name: Agent["name"]): Agent => ({
+    const noopAgent = <Name extends Agent["name"]>(
+      name: Name,
+    ): Agent & { readonly name: Name } => ({
       name,
       usesReasoningModel: false,
       run: async (): Promise<AgentRunResult> => ({ proposals: 0 }),
     });
-    const coord = new Coordinator({
-      bus,
+    const executor = new AgentRunExecutor({
       db: connection.db,
-      mutex: new ReasoningMutex(),
-      agents: {
-        linker: noopAgent("linker"),
-        synthesizer: noopAgent("synthesizer"),
-        contradictionHunter: noopAgent("contradictionHunter"),
-        maturityAdvancer: noopAgent("maturityAdvancer"),
-      },
+      bus,
+      scheduler: new ReasoningScheduler({ maxConcurrent: 1 }),
+      now: Date.now,
     });
-    coord.start();
-    bus.emit({ type: "user:action", kind: "deepen", notePath: "/x.md" });
-    await coord.idle();
-    coord.stop();
-
-    const [rows] = await connection.db
-      .query<[Array<{ agent: string; ok: boolean | null; proposals_count: number; seq: number }>]>(
-        "SELECT agent, ok, proposals_count, seq FROM agent_run ORDER BY seq ASC;",
-      )
-      .collect<
-        [Array<{ agent: string; ok: boolean | null; proposals_count: number; seq: number }>]
-      >();
-    expect(rows).toHaveLength(4);
-    expect(rows.map((row) => row.agent)).toEqual([
+    for (const name of [
       "linker",
       "synthesizer",
       "contradictionHunter",
       "maturityAdvancer",
-    ]);
+    ] as const) {
+      await executor.bind(noopAgent(name)).execute({ trigger: "vault-save", notePath: "x.md" });
+    }
+
+    const [rows] = await connection.db
+      .query<
+        [
+          Array<{
+            id: { toString(): string };
+            agent: string;
+            ok: boolean | null;
+            proposals_count: number;
+          }>,
+        ]
+      >("SELECT id, agent, ok, proposals_count FROM agent_run;")
+      .collect<
+        [
+          Array<{
+            id: { toString(): string };
+            agent: string;
+            ok: boolean | null;
+            proposals_count: number;
+          }>,
+        ]
+      >();
+    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => row.agent).sort()).toEqual(
+      ["linker", "synthesizer", "contradictionHunter", "maturityAdvancer"].sort(),
+    );
     for (const row of rows) {
+      expect(row.id.toString()).toMatch(/^agent_run:u"[0-9a-f-]{36}"$/);
       expect(row.ok).toBe(true);
       expect(row.proposals_count).toBe(0);
     }

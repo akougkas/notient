@@ -1,24 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildEndpointPatch,
   buildModelView,
-  buildUseEmbedPatch,
-  buildUseModelPatch,
   formatModelList,
   formatModelView,
 } from "../../../../src/cli/tui/modelVerb";
-import { DEFAULT_SETTINGS } from "../../../../src/core/settings/types";
+import { resolveSettings } from "../../../../src/core/settings/envOverrides";
+import { DEFAULT_NOTIENT_CONFIG } from "../../../../src/core/settings/types";
+
+const SETTINGS = resolveSettings(DEFAULT_NOTIENT_CONFIG, {});
 
 describe("buildModelView", () => {
-  test("projects the relevant slots out of the persisted settings", () => {
-    const view = buildModelView(DEFAULT_SETTINGS);
-    expect(view.endpoint).toBe(DEFAULT_SETTINGS.primary.baseUrl);
-    expect(view.chatModel).toBe(DEFAULT_SETTINGS.primary.reasoningModel);
-    expect(view.embedModel).toBe(DEFAULT_SETTINGS.embedding.model);
-    expect(view.contextTokens).toBe(DEFAULT_SETTINGS.chat.modelContextTokens);
-    expect(view.reasoningSlots).toBe(DEFAULT_SETTINGS.chat.reasoningSlots);
+  test("projects the relevant slots out of resolved boot settings", () => {
+    const view = buildModelView(SETTINGS);
+    expect(view.endpoint).toBe(SETTINGS.primary.baseUrl);
+    expect(view.chatModel).toBe(SETTINGS.primary.reasoningModel);
+    expect(view.embedModel).toBe(SETTINGS.embedding.model);
+    expect(view.contextTokens).toBe(SETTINGS.chat.modelContextTokens);
+    expect(view.reasoningSlots).toBe(SETTINGS.chat.reasoningSlots);
     expect(view.requestedTotalContextTokens).toBe(
-      DEFAULT_SETTINGS.chat.modelContextTokens * DEFAULT_SETTINGS.chat.reasoningSlots,
+      SETTINGS.chat.modelContextTokens * SETTINGS.chat.reasoningSlots,
     );
   });
 });
@@ -42,49 +42,6 @@ describe("formatModelView", () => {
   });
 });
 
-describe("buildUseModelPatch", () => {
-  test("touches every reasoning slot and the co-author model", () => {
-    const patch = buildUseModelPatch("test-model");
-    expect(patch.primary).toEqual({
-      reasoningModel: "test-model",
-      fastModel: "test-model",
-      rerankerModel: "test-model",
-    } as never);
-    expect(patch.deep).toEqual({
-      reasoningModel: "test-model",
-      fastModel: "test-model",
-      rerankerModel: "test-model",
-    } as never);
-    expect(patch.coAuthor).toEqual({ model: "test-model" } as never);
-  });
-
-  test("does not touch endpoint or embedding", () => {
-    const patch = buildUseModelPatch("test-model");
-    expect(patch.embedding).toBeUndefined();
-    expect((patch.primary as Record<string, unknown> | undefined)?.baseUrl).toBeUndefined();
-  });
-});
-
-describe("buildUseEmbedPatch", () => {
-  test("sets the embed model in all three blocks", () => {
-    const patch = buildUseEmbedPatch("text-e1");
-    expect((patch.primary as Record<string, unknown> | undefined)?.embeddingModel).toBe("text-e1");
-    expect((patch.deep as Record<string, unknown> | undefined)?.embeddingModel).toBe("text-e1");
-    expect(patch.embedding).toEqual({ model: "text-e1" } as never);
-  });
-});
-
-describe("buildEndpointPatch", () => {
-  test("sets baseUrl on primary, deep, and embedding", () => {
-    const patch = buildEndpointPatch("http://new:1/v1");
-    expect((patch.primary as Record<string, unknown> | undefined)?.baseUrl).toBe("http://new:1/v1");
-    expect((patch.deep as Record<string, unknown> | undefined)?.baseUrl).toBe("http://new:1/v1");
-    expect((patch.embedding as Record<string, unknown> | undefined)?.baseUrl).toBe(
-      "http://new:1/v1",
-    );
-  });
-});
-
 describe("formatModelList", () => {
   test("returns a friendly string when no models reported", () => {
     expect(formatModelList([])).toBe("no models reported by endpoint.");
@@ -99,6 +56,18 @@ describe("formatModelList", () => {
     expect(lines[0]).toContain("id");
     expect(lines[2]).toContain("a-loaded");
     expect(lines[3]).toContain("z-not-loaded");
+  });
+
+  test("orders unknown load state between loaded and unavailable models", () => {
+    const text = formatModelList([
+      { id: "cold", type: "llm", state: "not-loaded" },
+      { id: "opaque", type: "unknown", state: "unknown" },
+      { id: "hot", type: "llm", state: "loaded", loadedContextLength: 8192 },
+    ]);
+    const lines = text.split("\n");
+    expect(lines[2]).toContain("hot");
+    expect(lines[3]).toContain("opaque");
+    expect(lines[4]).toContain("cold");
   });
 
   test("renders loaded context as humanized k-tokens", () => {

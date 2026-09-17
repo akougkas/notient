@@ -3,11 +3,13 @@
  *
  * Bootstrap calls `probeVisionRoute` once at startup. The probe attempts a
  * 1x1 PNG round-trip against the primary LM Studio model first. If the
- * primary lacks vision support, the probe falls through to the configured
- * `chat.vision` endpoint (when enabled). Returns null when neither path is
- * viable; chat.send then refuses image attachments with VISION_UNAVAILABLE.
+ * primary lacks vision support, an optional caller-supplied fallback may be
+ * probed. Production bootstrap has one deployment authority and disables that
+ * fallback. Returns null when no route is viable; chat.send then refuses image
+ * attachments with VISION_UNAVAILABLE.
  */
 
+import type { ReasoningScheduler } from "../core/coordinator/reasoningScheduler";
 import type { LLMProvider } from "../core/llm/provider";
 
 export interface VisionImage {
@@ -30,6 +32,7 @@ export interface ProbeVisionRouteOptions {
   primaryLLM: LLMProvider;
   primaryModel: string;
   visionConfig: VisionConfig;
+  scheduler: ReasoningScheduler;
   /**
    * Factory for the fallback provider. Bootstrap supplies a closure that
    * constructs a fresh LMStudioProvider against `visionConfig.baseUrl`.
@@ -45,32 +48,12 @@ const PROBE_IMAGE = makeProbeDataUrl();
 export async function probeVisionRoute(
   options: ProbeVisionRouteOptions,
 ): Promise<VisionRouter | null> {
-  if (typeof options.primaryLLM.chatVision === "function") {
+  const primaryChatVision = options.primaryLLM.chatVision;
+  if (typeof primaryChatVision === "function") {
     try {
-      await options.primaryLLM.chatVision({
-        model: options.primaryModel,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "respond with the single word: ok" },
-              { type: "image_url", image_url: { url: PROBE_IMAGE } },
-            ],
-          },
-        ],
-        maxTokens: 8,
-      });
-      return makeRouter(options.primaryLLM, options.primaryModel);
-    } catch {
-      // Primary lacks vision; fall through to the configured fallback.
-    }
-  }
-  if (options.visionConfig.enabled && options.visionConfig.baseUrl.length > 0) {
-    const fallback = options.makeFallback();
-    if (typeof fallback.chatVision === "function") {
-      try {
-        await fallback.chatVision({
-          model: options.visionConfig.model,
+      await options.scheduler.run("vision:probe", (signal) =>
+        primaryChatVision.call(options.primaryLLM, {
+          model: options.primaryModel,
           messages: [
             {
               role: "user",
@@ -81,8 +64,36 @@ export async function probeVisionRoute(
             },
           ],
           maxTokens: 8,
-        });
-        return makeRouter(fallback, options.visionConfig.model);
+          signal,
+        }),
+      );
+      return makeRouter(options.primaryLLM, options.primaryModel, options.scheduler);
+    } catch {
+      // Primary lacks vision; fall through to the configured fallback.
+    }
+  }
+  if (options.visionConfig.enabled && options.visionConfig.baseUrl.length > 0) {
+    const fallback = options.makeFallback();
+    const fallbackChatVision = fallback.chatVision;
+    if (typeof fallbackChatVision === "function") {
+      try {
+        await options.scheduler.run("vision:probe", (signal) =>
+          fallbackChatVision.call(fallback, {
+            model: options.visionConfig.model,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "respond with the single word: ok" },
+                  { type: "image_url", image_url: { url: PROBE_IMAGE } },
+                ],
+              },
+            ],
+            maxTokens: 8,
+            signal,
+          }),
+        );
+        return makeRouter(fallback, options.visionConfig.model, options.scheduler);
       } catch {
         return null;
       }
@@ -91,29 +102,37 @@ export async function probeVisionRoute(
   return null;
 }
 
-function makeRouter(provider: LLMProvider, model: string): VisionRouter {
+function makeRouter(
+  provider: LLMProvider,
+  model: string,
+  scheduler: ReasoningScheduler,
+): VisionRouter {
+  const chatVision = provider.chatVision;
+  if (typeof chatVision !== "function") {
+    throw new Error("makeRouter requires a vision-capable provider");
+  }
   return {
     async describe(image) {
-      if (typeof provider.chatVision !== "function") {
-        throw new Error("VISION_UNAVAILABLE: provider does not implement chatVision");
-      }
       const dataUrl = bytesToDataUrl(image.bytes, image.mediaType);
-      const result = await provider.chatVision({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Describe the image at ${image.path} in 2-3 sentences. Be concrete; avoid value judgements.`,
-              },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        maxTokens: 256,
-      });
+      const result = await scheduler.run("vision:describe", (signal) =>
+        chatVision.call(provider, {
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Describe the image at ${image.path} in 2-3 sentences. Be concrete; avoid value judgements.`,
+                },
+                { type: "image_url", image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          maxTokens: 256,
+          signal,
+        }),
+      );
       return result.content;
     },
   };

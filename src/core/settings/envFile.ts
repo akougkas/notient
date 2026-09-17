@@ -1,3 +1,6 @@
+import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import { type EnvSource, mergeEnvSources } from "./envOverrides";
+
 /**
  * Tiny dotenv-style parser. No dependency, no quoting beyond single and
  * double quotes, no variable expansion. Lines that do not match KEY=value
@@ -39,4 +42,26 @@ function stripQuotes(value: string): string {
     return value.slice(1, -1);
   }
   return value;
+}
+
+/** Shared private deployment authority: saved vault keys win, including explicit
+ * emptiness. The caller supplies a hidden-capable vault adapter, never an agent's. */
+export async function readEnvSource(
+  vault: Pick<VaultAdapter, "read">,
+  processEnv: NodeJS.ProcessEnv,
+): Promise<EnvSource> {
+  const raw = await readOptionalVaultFile(vault, ".notient/.env");
+  return mergeEnvSources(raw === null ? {} : parseEnvFile(raw), processEnv);
+}
+
+export async function readOptionalVaultFile(
+  vault: Pick<VaultAdapter, "read">,
+  path: string,
+): Promise<string | null> {
+  try {
+    return await vault.read(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }

@@ -17,18 +17,30 @@ export interface SurrealFilterFragment {
   bindings: Record<string, unknown>;
 }
 
+/** Explicit quoted subjects constrain every retrieval path, including fallback. */
+export function withQueryPhrases(
+  query: string,
+  filter: SurrealFilterFragment,
+): SurrealFilterFragment {
+  const phrases = [...query.matchAll(/"([^"\r\n]+)"/g)].map((match) => match[1].toLowerCase());
+  if (phrases.length > 8) throw new Error("Search supports at most eight quoted phrases.");
+  const bindings = { ...filter.bindings };
+  const clauses = phrases.map((phrase, index) => {
+    bindings[`f_phrase_${index}`] = phrase;
+    return ` AND string::contains(string::lowercase(text), $f_phrase_${index})`;
+  });
+  return { where: filter.where + clauses.join(""), bindings };
+}
+
 /**
  * Build a SurrealQL WHERE fragment for the path/maturity/date filters that can
  * be pushed down into the chunk → note join. Always returns a fragment that
  * begins with `AND` when non-empty so callers can append it after a base
  * predicate; an empty fragment is `{ where: "", bindings: {} }`.
  *
- * `note.path` and `note.last_user_edit_at` are referenced via the FETCH-style
- * dotted-field accessor which SurrealDB resolves through the `record<note>`
- * link defined on `chunk.note`. `note.maturity` is reserved for a future
- * Phase 4 enrichment field; until that field lands the maturity filter
- * matches a literal `NONE` and therefore returns no rows when set, which is
- * the conservative choice while the schema catches up.
+ * `note.path`, `note.maturity`, and `note.last_user_edit_at` use dotted-field
+ * access, which SurrealDB resolves through the `record<note>` link on
+ * `chunk.note`.
  */
 export function buildChunkNoteFilter(filters: SearchFilters | undefined): SurrealFilterFragment {
   if (!filters) return { where: "", bindings: {} };

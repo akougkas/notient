@@ -15,13 +15,18 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { StringRecordId } from "surrealdb";
+import { defaultPipelinePolicy } from "../../../../src/api/background";
+import type { PipelineJob } from "../../../../src/api/pipelines";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
+import { JobStore, stableJobId } from "../../../../src/core/pipelines/jobStore";
 import { AgentEventStore } from "../../../../src/core/services/agentEventStore";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const AGENT_RUN_ID = 'agent_run:u"00000000-0000-4000-8000-000000000007"';
 
 async function clearLedger(connection: SurrealConnection): Promise<void> {
   await connection.db.query("DELETE agent_event;").collect();
@@ -49,6 +54,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -57,7 +63,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterAll(async () => {
@@ -70,7 +76,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearLedger(connection);
@@ -78,24 +84,122 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
 
   test("[smoke] record persists a row and returns id + ts", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     const before = Date.now();
     const result = await store.record("swarm:link_proposed", {
       edgeId: "edge:a",
       confidence: 0.9,
     });
-    expect(result.id).toBeGreaterThan(0);
+    expect(result.id).toStartWith("agent_event:");
     expect(result.ts).toBeGreaterThanOrEqual(before);
-    const rows = await store.since(0, 10);
+    const rows = await store.since(null, 10);
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(result.id);
     expect(rows[0].type).toBe("swarm:link_proposed");
     store.dispose();
   });
 
+  test("[smoke] schema rejects unsupported event kinds", async () => {
+    const create = connection.db
+      .query(
+        `CREATE ONLY agent_event:u"0198f4f0-1234-7000-8000-000000000002" CONTENT {
+          kind: 'swarm:imagined',
+          payload: { data: {} },
+          ts_ms: 1800000000000
+        };`,
+      )
+      .collect();
+    await expect(create).rejects.toThrow();
+  });
+
+  test("durable job state preserves reserved usage and rejects stale controls", async () => {
+    const store = new JobStore(connection.db);
+    const at = Date.now();
+    const input: PipelineJob = {
+      id: stableJobId("human", `test-${at}`),
+      revision: "0".repeat(64),
+      pipeline: "enrich",
+      state: "queued",
+      caller: { id: "human", kind: "human", scopes: ["read", "write"] },
+      background: false,
+      preview: false,
+      reason: "integration test",
+      createdAt: at,
+      updatedAt: at,
+      sourceRevisions: [],
+      configurationRevision: "a".repeat(64),
+      policy: defaultPipelinePolicy("enrich"),
+      attempts: [],
+      runAttempts: 0,
+      activeDurationMs: 0,
+      stage: "queued",
+      progress: { completed: 0, total: 0 },
+      plan: null,
+      previewId: null,
+      previewRevision: null,
+      proposalIds: [],
+      effects: null,
+      failure: null,
+      nextAttemptAt: null,
+    };
+    const created = await store.create(input);
+    const running = await store.update(
+      created.id,
+      (job) => {
+        job.state = "running";
+        job.attempts.push({
+          sequence: 1,
+          inputTokenEstimate: 100,
+          generationCeiling: 8192,
+          chargedTokens: 8292,
+          accounting: "reserved-estimate",
+          completion: null,
+        });
+      },
+      created.revision,
+    );
+    expect(running.revision).not.toBe(created.revision);
+    await expect(
+      store.update(
+        created.id,
+        (job) => {
+          job.state = "cancelled";
+        },
+        created.revision,
+      ),
+    ).rejects.toThrow("changed");
+    const restarted = new JobStore(connection.db);
+    expect(await restarted.get(created.id)).toEqual(running);
+    await connection.db.query("DELETE pipeline_job;").collect();
+  });
+
+  test("resumes concurrent writes across restart and rejects expired cursors", async () => {
+    const bus = new EventBus();
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 3 });
+    const written = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        store.record("indexer:note-indexed", { path: `${index}.md` }),
+      ),
+    );
+    expect((await store.resume(written[0].id, 100)).map((event) => event.id)).toEqual(
+      written.slice(1).map((entry) => entry.id),
+    );
+    store.dispose();
+    await store.drain();
+    const restarted = new AgentEventStore({ db: connection.db, bus, maxRows: 3 });
+    const next = await restarted.record("indexer:note-indexed", { path: "next.md" });
+    expect(next.id > written[2].id).toBe(true);
+    expect((await restarted.resume(written[2].id, 100)).map((event) => event.id)).toEqual([
+      next.id,
+    ]);
+    await expect(restarted.resume(written[0].id, 100)).rejects.toThrow("expired");
+    restarted.dispose();
+    await restarted.drain();
+  });
+
   test("[smoke] since returns rows with id strictly greater than cursor", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     const a = await store.record("swarm:link_proposed", { tag: "a" });
     const b = await store.record("swarm:link_proposed", { tag: "b" });
     const c = await store.record("swarm:link_proposed", { tag: "c" });
@@ -108,47 +212,69 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
 
   test("[smoke] since respects the limit and returns ascending order", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     for (let index = 0; index < 5; index++) {
       await store.record("swarm:link_proposed", { index });
     }
-    const rows = await store.since(0, 3);
+    const rows = await store.since(null, 3);
     expect(rows).toHaveLength(3);
     for (let index = 1; index < rows.length; index++) {
-      expect(rows[index].id).toBeGreaterThan(rows[index - 1].id);
+      expect(rows[index].id.localeCompare(rows[index - 1].id)).toBeGreaterThan(0);
     }
     store.dispose();
   });
 
-  test("[smoke] since parses JSON payloads back to structured objects", async () => {
+  test("[smoke] snapshot returns newest matching window rows and a global cursor", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
+    const old = await store.record("swarm:link_proposed", { tag: "old" });
+    await connection.db
+      .query("UPDATE $id SET ts_ms = $oldTs;", {
+        id: new StringRecordId(old.id),
+        oldTs: Date.now() - 2 * 60 * 60 * 1000,
+      })
+      .collect();
+    await store.record("swarm:link_proposed", { tag: "recent-a" });
+    const newestMatch = await store.record("swarm:link_proposed", { tag: "recent-b" });
+    const globalLatest = await store.record("indexer:note-indexed", { path: "x.md" });
+
+    const snapshot = await store.snapshot(Date.now() - 60 * 60 * 1000, ["swarm:link_proposed"], 1);
+
+    expect(snapshot.events.map((event) => event.id)).toEqual([newestMatch.id]);
+    expect(snapshot.events[0]?.payload).toEqual({ tag: "recent-b" });
+    expect(snapshot.cursor).toBe(globalLatest.id);
+    store.dispose();
+  });
+
+  test("[smoke] since returns native structured payloads", async () => {
+    const bus = new EventBus();
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     const payload = { edgeId: "edge:42", members: ["a", "b"], score: 0.77 };
-    await store.record("swarm:cluster_emerged", payload);
-    const rows = await store.since(0, 1);
+    await store.record("swarm:link_proposed", payload);
+    const rows = await store.since(null, 1);
     expect(rows[0].payload).toEqual(payload);
     store.dispose();
   });
 
-  test("[smoke] latestId returns 0 when empty and the max id after rows", async () => {
+  test("[smoke] latestId returns null when empty and the newest record id after rows", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
-    expect(await store.latestId()).toBe(0);
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
+    expect(await store.latestId()).toBeNull();
     const first = await store.record("swarm:link_proposed", {});
     const second = await store.record("swarm:link_proposed", {});
     expect(await store.latestId()).toBe(second.id);
-    expect(await store.latestId()).toBeGreaterThan(first.id);
+    expect((await store.latestId())?.localeCompare(first.id)).toBeGreaterThan(0);
     store.dispose();
   });
 
   test("[smoke] countSince returns the count of rows after the cursor", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
-    expect(await store.countSince(0)).toBe(0);
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
+    expect(await store.countSince(null)).toBe(0);
     const a = await store.record("swarm:link_proposed", {});
     await store.record("swarm:link_proposed", {});
     await store.record("swarm:link_proposed", {});
-    expect(await store.countSince(0)).toBe(3);
+    expect(await store.countSince(null)).toBe(3);
     expect(await store.countSince(a.id)).toBe(2);
     expect(await store.countSince(await store.latestId())).toBe(0);
     store.dispose();
@@ -156,31 +282,31 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
 
   test("[smoke] emits a row when swarm:contradiction_discovered fires on the bus", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     const payload = {
       type: "swarm:contradiction_discovered" as const,
       pair: ["claim:a", "claim:b"] as [string, string],
       severity: 0.82,
       notePaths: ["/a.md", "/b.md"] as [string, string],
-      runId: 7,
+      runId: AGENT_RUN_ID,
     };
     bus.emit(payload);
     await flush();
-    const rows = await store.since(0, 10);
+    const rows = await store.since(null, 10);
     expect(rows).toHaveLength(1);
     expect(rows[0].type).toBe("swarm:contradiction_discovered");
     expect(rows[0].payload).toEqual({
       pair: ["claim:a", "claim:b"],
       severity: 0.82,
       notePaths: ["/a.md", "/b.md"],
-      runId: 7,
+      runId: AGENT_RUN_ID,
     });
     store.dispose();
   });
 
-  test("[smoke] subscribes to all four swarm:* event types", async () => {
+  test("[smoke] subscribes to every produced swarm:* event type", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     bus.emit({
       type: "swarm:link_proposed",
       edgeId: "e1",
@@ -188,15 +314,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       targetId: "n2",
       edgeType: "supports",
       confidence: 0.7,
-      runId: 1,
-    });
-    await flush();
-    bus.emit({
-      type: "swarm:cluster_emerged",
-      clusterId: "c1",
-      memberNodeIds: ["n1", "n2"],
-      centroidLabel: "Topic",
-      runId: 1,
+      runId: AGENT_RUN_ID,
     });
     await flush();
     bus.emit({
@@ -204,7 +322,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       pair: ["a", "b"],
       severity: 0.9,
       notePaths: ["/a", "/b"],
-      runId: 1,
+      runId: AGENT_RUN_ID,
     });
     await flush();
     bus.emit({
@@ -213,13 +331,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       notePath: "/n.md",
       fromMaturity: "raw",
       toMaturity: "adolescent",
-      runId: 1,
+      runId: AGENT_RUN_ID,
     });
     await flush();
-    const rows = await store.since(0, 10);
+    const rows = await store.since(null, 10);
     expect(rows.map((row) => row.type)).toEqual([
       "swarm:link_proposed",
-      "swarm:cluster_emerged",
       "swarm:contradiction_discovered",
       "swarm:claim_advanced",
     ]);
@@ -228,16 +345,16 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
 
   test("[smoke] subscribes to indexer:note-indexed, indexer:error, indexer:warn", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     bus.emit({
       type: "indexer:note-indexed",
       path: "01-introduction.md",
       result: {
         chunkCount: 3,
         embedCount: 3,
-        nodeCount: 1,
-        edgeCount: 0,
         durationMs: 12,
+        llmCalls: 1,
+        extractionWindows: 1,
       },
     });
     await flush();
@@ -250,7 +367,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
     await flush();
     bus.emit({ type: "indexer:warn", message: "ref dropped", phase: "tier1" });
     await flush();
-    const rows = await store.since(0, 10);
+    const rows = await store.since(null, 10);
     expect(rows.map((row) => row.type)).toEqual([
       "indexer:note-indexed",
       "indexer:error",
@@ -261,7 +378,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
 
   test("[smoke] does not subscribe to indexer:tier1-done, tier2-done, tier3-done, progress", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     bus.emit({ type: "indexer:tier1-done", path: "x.md", bodySha: "deadbeef" });
     await flush();
     bus.emit({ type: "indexer:tier2-done", path: "x.md", chunkCount: 2 });
@@ -270,29 +387,30 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
     await flush();
     bus.emit({ type: "indexer:progress", processed: 1, total: 10 });
     await flush();
-    expect(await store.countSince(0)).toBe(0);
+    expect(await store.countSince(null)).toBe(0);
     store.dispose();
   });
 
   test("[smoke] maxRows caps the ledger via per-write sweep past the cap", async () => {
     const bus = new EventBus();
     const store = new AgentEventStore({ db: connection.db, bus, maxRows: 5 });
+    const createdIds: string[] = [];
     for (let index = 0; index < 12; index++) {
-      await store.record("swarm:link_proposed", { index });
+      createdIds.push((await store.record("swarm:link_proposed", { index })).id);
     }
-    const count = await store.countSince(0);
+    const count = await store.countSince(null);
     expect(count).toBe(5);
     const latest = await store.latestId();
-    expect(latest).toBe(12);
-    const rows = await store.since(0, 100);
+    expect(latest).toBe(createdIds.at(-1) ?? null);
+    const rows = await store.since(null, 100);
     expect(rows).toHaveLength(5);
-    expect(rows.map((row) => row.id)).toEqual([8, 9, 10, 11, 12]);
+    expect(rows.map((row) => row.id)).toEqual(createdIds.slice(-5));
     store.dispose();
   });
 
   test("[smoke] dispose detaches listeners so further events do not produce rows", async () => {
     const bus = new EventBus();
-    const store = new AgentEventStore({ db: connection.db, bus });
+    const store = new AgentEventStore({ db: connection.db, bus, maxRows: 50_000 });
     bus.emit({
       type: "swarm:link_proposed",
       edgeId: "e1",
@@ -300,10 +418,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       targetId: "n2",
       edgeType: "supports",
       confidence: 0.7,
-      runId: 1,
+      runId: AGENT_RUN_ID,
     });
     await flush();
-    expect(await store.countSince(0)).toBe(1);
+    expect(await store.countSince(null)).toBe(1);
     store.dispose();
     bus.emit({
       type: "swarm:link_proposed",
@@ -312,9 +430,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] AgentEventStore", () => {
       targetId: "n3",
       edgeType: "supports",
       confidence: 0.7,
-      runId: 1,
+      runId: AGENT_RUN_ID,
     });
     await flush();
-    expect(await store.countSince(0)).toBe(1);
+    expect(await store.countSince(null)).toBe(1);
   });
 });

@@ -1,4 +1,8 @@
 import type { VaultAdapter } from "../adapters/vaultAdapter";
+import {
+  isCanonicalPublicVaultFilePath,
+  isNotientOwnedArtifactPath,
+} from "../core/vault/publicPath";
 
 const MENTION_PATTERN = /(?<![\w@.])@(?:"([^"]+)"|(\S+))/g;
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
@@ -53,6 +57,10 @@ export async function resolveAttachments(
   const visionImages: VisionAttachment[] = [];
 
   for (const path of mentions) {
+    if (!isCanonicalPublicVaultFilePath(path) || isNotientOwnedArtifactPath(path)) {
+      pinnedContext.push(`[attachment: ${path}] (not accessible)`);
+      continue;
+    }
     const exists = await options.vault.exists(path).catch(() => false);
     if (!exists) {
       pinnedContext.push(`[attachment: ${path}] (not found)`);

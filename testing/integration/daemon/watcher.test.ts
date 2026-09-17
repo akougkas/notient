@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RecordId } from "surrealdb";
+import { RecordId, type Surreal } from "surrealdb";
 import { applySchema } from "../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -16,11 +16,44 @@ import {
   upsertQuestion,
 } from "../../../src/core/db/surreal";
 import { EventBus } from "../../../src/core/events/eventBus";
+import { runTier1 } from "../../../src/core/indexer/tier1";
+import { STRUCTURAL_INDEX_VERSION } from "../../../src/core/markdown/types";
+import { DaemonMutationJournal } from "../../../src/core/vault/daemonMutationJournal";
 import { type SurrealServerHandle, startSurreal } from "../../../src/daemon/surrealServer";
 import { VaultWatcher, isWslPath } from "../../../src/daemon/watcher";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 const VECTOR_DIM = 768;
+const EMBEDDING_IDENTITY = { model: "watcher-fixture", dimension: VECTOR_DIM } as const;
+const INCLUDE_ALL = (): boolean => false;
+const WATCHER_ACTIVITY = {
+  recordHumanActivity: () => {},
+  recordDeletion: () => {},
+};
+
+function watcherRuntimeDeps() {
+  return {
+    activity: WATCHER_ACTIVITY,
+    mutationJournal: new DaemonMutationJournal(),
+    approvalIntents: {
+      cancelForNoteDeletion: async () => ({ cancelled: 0, failed: 0 }),
+    },
+  };
+}
+
+function makeSurrealStub(): SurrealConnection {
+  return {
+    db: {
+      create: () => ({
+        content: async (input: Record<string, unknown>) => [
+          { ...input, id: new RecordId("note", String(input.path)) },
+        ],
+      }),
+      query: () => ({ collect: async () => [[]] }),
+    } as unknown as Surreal,
+    close: async () => {},
+  };
+}
 
 async function waitFor<T>(
   predicate: () => Promise<T | null>,
@@ -56,6 +89,10 @@ describe("VaultWatcher", () => {
       enqueue: (path) => {
         enqueued.push(path);
       },
+      surrealDb: makeSurrealStub(),
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
       pollingInterval: 50,
       forcePolling: true,
     });
@@ -66,7 +103,7 @@ describe("VaultWatcher", () => {
     expect(enqueued).toContain("new.md");
   });
 
-  test("ignoreInitial: existing files are not enqueued on start", async () => {
+  test("startup reconciliation enqueues existing files absent from the index", async () => {
     await writeFile(join(root, "existing.md"), "x");
     const enqueued: string[] = [];
     const watcher = new VaultWatcher({
@@ -74,13 +111,62 @@ describe("VaultWatcher", () => {
       enqueue: (path) => {
         enqueued.push(path);
       },
+      surrealDb: makeSurrealStub(),
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
       pollingInterval: 50,
       forcePolling: true,
     });
     await watcher.start();
     await new Promise((resolve) => setTimeout(resolve, 150));
     await watcher.stop();
-    expect(enqueued).toEqual([]);
+    expect(enqueued).toEqual(["existing.md"]);
+  });
+
+  test("maintenance snapshot replay cannot silently miss add, edit, or delete", async () => {
+    await writeFile(join(root, "edited.md"), "before");
+    await writeFile(join(root, "deleted.md"), "deleted");
+    const enqueued: string[] = [];
+    const deleted: string[] = [];
+    const watcher = new VaultWatcher({
+      root,
+      enqueue: (path) => enqueued.push(path),
+      surrealDb: makeSurrealStub(),
+      bus: new EventBus(),
+      activity: {
+        recordHumanActivity: () => {},
+        recordDeletion: (path) => deleted.push(path),
+      },
+      mutationJournal: new DaemonMutationJournal(),
+      approvalIntents: {
+        cancelForNoteDeletion: async () => ({ cancelled: 0, failed: 0 }),
+      },
+      isExcluded: INCLUDE_ALL,
+      pollingInterval: 50,
+      forcePolling: true,
+    });
+    await watcher.start();
+    const before = await watcher.capturePublicSnapshot();
+    await watcher.stop();
+
+    await writeFile(join(root, "edited.md"), "after");
+    await writeFile(join(root, "added.md"), "added");
+    await unlink(join(root, "deleted.md"));
+    const after = await watcher.capturePublicSnapshot();
+
+    // Startup reconciles stored identities; maintenance also replays its
+    // captured snapshot to preserve its explicit consistency boundary.
+    await watcher.start();
+    await watcher.reconcileSnapshotChanges(before, after);
+    await watcher.drain();
+    await watcher.stop();
+
+    expect(before.get("edited.md")).toBe(createHash("sha256").update("before").digest("hex"));
+    expect(after.get("edited.md")).toBe(createHash("sha256").update("after").digest("hex"));
+    expect(enqueued).toContain("edited.md");
+    expect(enqueued).toContain("added.md");
+    expect(deleted).toContain("deleted.md");
   });
 });
 
@@ -103,6 +189,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       portFile: join(tempDir, "port"),
       pidFile: join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -111,8 +198,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, {
+      embedDim: EMBEDDING_IDENTITY.dimension,
+      embedModel: EMBEDDING_IDENTITY.model,
+    });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -124,9 +214,157 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
+  }, 30_000);
+
+  test("startup reconciles offline add/edit/delete/exclusion and preserves unchanged bytes", async () => {
+    const old = "old body\r\n";
+    const unchanged = "\ufeff# Keep\r\nAuthored bytes.\r\n";
+    for (const [path, body] of [
+      ["edited.md", old],
+      ["deleted.md", old],
+      ["excluded.md", old],
+      ["unchanged.md", unchanged],
+    ]) {
+      await upsertNoteByPath(connection.db, {
+        path,
+        sha: createHash("sha256").update(body).digest("hex"),
+        wordCount: 2,
+      });
+    }
+    await writeFile(join(vaultRoot, "edited.md"), "new body\r\n");
+    await writeFile(join(vaultRoot, "added.md"), "# New\n");
+    await writeFile(join(vaultRoot, "excluded.md"), old);
+    await writeFile(join(vaultRoot, "unchanged.md"), unchanged);
+    await connection.db
+      .query(
+        "UPDATE note SET tier1_at = time::now(), structural_version = $version, reference_targets = '[]';",
+        {
+          version: STRUCTURAL_INDEX_VERSION,
+        },
+      )
+      .collect();
+    const enqueued: string[] = [];
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: (path) => path === "excluded.md",
+      tombstoneWindowMs: 10000,
+    });
+    try {
+      await watcher.start();
+      await watcher.drain();
+      expect(new Set(enqueued)).toEqual(new Set(["edited.md", "added.md"]));
+      const [rows] = await connection.db
+        .query<[Array<{ path: string }>]>("SELECT path FROM note WHERE tombstoned_at != NONE;")
+        .collect<[Array<{ path: string }>]>();
+      expect(rows.map((row) => row.path).sort()).toEqual(["deleted.md", "excluded.md"]);
+      expect(await readFile(join(vaultRoot, "unchanged.md"), "utf8")).toBe(unchanged);
+      expect(await readFile(join(vaultRoot, "excluded.md"), "utf8")).toBe(old);
+    } finally {
+      await watcher.stop();
+    }
   });
 
-  test("unlink sets tombstoned_at within 200ms", async () => {
+  test("a parser upgrade repairs unchanged structure without inventing a human edit", async () => {
+    const path = "parser-upgrade.md";
+    const body = "# Existing knowledge\n\n[An authored reference](unchanged.md)\n";
+    const bus = new EventBus();
+    await writeFile(join(vaultRoot, path), body);
+    await runTier1(connection.db, {
+      notePath: path,
+      source: body,
+      vaultPaths: [path, "unchanged.md"],
+      bus,
+    });
+    await connection.db
+      .query(
+        "UPDATE note SET structural_version = NONE, last_user_edit_at = d'2026-01-01T00:00:00Z' WHERE path = $path;",
+        { path },
+      )
+      .collect();
+    const enqueued: string[] = [];
+    const human: string[] = [];
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      surrealDb: connection,
+      bus,
+      ...watcherRuntimeDeps(),
+      activity: {
+        recordDeletion() {},
+        recordHumanActivity(event) {
+          if (event.notePath) human.push(event.notePath);
+        },
+      },
+      isExcluded: INCLUDE_ALL,
+    });
+    try {
+      await watcher.start();
+      await watcher.drain();
+      expect(enqueued).toContain(path);
+      expect(human).not.toContain(path);
+      await runTier1(connection.db, {
+        notePath: path,
+        source: body,
+        vaultPaths: [path, "unchanged.md"],
+        bus,
+      });
+      const [rows] = await connection.db
+        .query<[Array<{ structural_version: number; edited: string }>]>(
+          "SELECT structural_version, <string>last_user_edit_at AS edited FROM note WHERE path = $path;",
+          { path },
+        )
+        .collect<[Array<{ structural_version: number; edited: string }>]>();
+      expect(rows).toEqual([
+        { structural_version: STRUCTURAL_INDEX_VERSION, edited: "2026-01-01T00:00:00Z" },
+      ]);
+      expect(await readFile(join(vaultRoot, path), "utf8")).toBe(body);
+      await watcher.stop();
+      enqueued.length = 0;
+      await watcher.start();
+      expect(enqueued).not.toContain(path);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  test("an edit arriving during startup reconciliation is enqueued", async () => {
+    await writeFile(join(vaultRoot, "during.md"), "before");
+    await upsertNoteByPath(connection.db, {
+      path: "during.md",
+      sha: createHash("sha256").update("before").digest("hex"),
+      wordCount: 1,
+    });
+    const enqueued: string[] = [];
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
+      forcePolling: true,
+      pollingInterval: 20,
+    });
+    const snapshot = watcher.capturePublicSnapshot.bind(watcher);
+    watcher.capturePublicSnapshot = async () => {
+      const captured = await snapshot();
+      await writeFile(join(vaultRoot, "during.md"), "changed during scan");
+      return captured;
+    };
+    try {
+      await watcher.start();
+      const seen = await waitFor(async () => (enqueued.includes("during.md") ? true : null), 1500);
+      expect(seen).toBe(true);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  test("unlink eventually sets tombstoned_at", async () => {
     const filePath = join(vaultRoot, "to-delete.md");
     await writeFile(filePath, "deletable body");
     await upsertNoteByPath(connection.db, {
@@ -140,21 +378,66 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       pollingInterval: 30,
       forcePolling: true,
       surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
     });
     await watcher.start();
     await unlink(filePath);
-    const tombstoned = await waitFor(async () => {
-      const [rows] = await connection.db
-        .query<[Array<{ tombstoned_at: string | null }>]>(
-          "SELECT tombstoned_at FROM note WHERE path = $path;",
-          { path: "to-delete.md" },
-        )
-        .collect<[Array<{ tombstoned_at: string | null }>]>();
-      const value = rows[0]?.tombstoned_at;
-      return value !== null && value !== undefined ? value : null;
-    }, 1500);
+    const tombstoned = await waitFor(
+      async () => {
+        const [rows] = await connection.db
+          .query<[Array<{ tombstoned_at: string | null }>]>(
+            "SELECT tombstoned_at FROM note WHERE path = $path;",
+            { path: "to-delete.md" },
+          )
+          .collect<[Array<{ tombstoned_at: string | null }>]>();
+        const value = rows[0]?.tombstoned_at;
+        return value !== null && value !== undefined ? value : null;
+      },
+      5000,
+      50,
+    );
     await watcher.stop();
     expect(tombstoned).not.toBeNull();
+  });
+
+  test("a save stamps last_user_edit_at", async () => {
+    const filePath = join(vaultRoot, "edited.md");
+    await writeFile(filePath, "original body");
+    await upsertNoteByPath(connection.db, {
+      path: "edited.md",
+      sha: "edited-sha",
+      wordCount: 2,
+    });
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 30,
+      forcePolling: true,
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
+    });
+    await watcher.start();
+    await writeFile(filePath, "edited body with more words");
+    const stamped = await waitFor(
+      async () => {
+        const [rows] = await connection.db
+          .query<[Array<{ last_user_edit_at: string | null }>]>(
+            "SELECT last_user_edit_at FROM note WHERE path = $path;",
+            { path: "edited.md" },
+          )
+          .collect<[Array<{ last_user_edit_at: string | null }>]>();
+        const value = rows[0]?.last_user_edit_at;
+        return value !== null && value !== undefined ? value : null;
+      },
+      5000,
+      50,
+    );
+    await watcher.stop();
+    expect(stamped).not.toBeNull();
   });
 
   test("rename within 60s SHA-match window preserves note id and clears tombstone", async () => {
@@ -174,6 +457,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       pollingInterval: 30,
       forcePolling: true,
       surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
       tombstoneWindowMs: 60_000,
     });
     await watcher.start();
@@ -196,6 +482,171 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
     expect(renamed?.tombstoned_at ?? null).toBeNull();
   });
 
+  test("same-path recreation clears its tombstone before the cascade can purge it", async () => {
+    const vaultPath = "atomic-save.md";
+    const filePath = join(vaultRoot, vaultPath);
+    const originalBody = "before atomic save";
+    const replacementBody = "after atomic save";
+    await writeFile(filePath, originalBody);
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: vaultPath,
+      sha: createHash("sha256").update(originalBody).digest("hex"),
+      wordCount: 3,
+    });
+    const enqueued: string[] = [];
+    let targetCancellationCalls = 0;
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      approvalIntents: {
+        cancelForNoteDeletion: async (candidate) => {
+          if (candidate.toString() === noteId.toString()) targetCancellationCalls += 1;
+          return { cancelled: 0, failed: 0 };
+        },
+      },
+      isExcluded: INCLUDE_ALL,
+      tombstoneWindowMs: 500,
+    });
+    await watcher.start();
+    await unlink(filePath);
+    const tombstoned = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ tombstoned_at?: unknown }>]>(
+          "SELECT tombstoned_at FROM note WHERE id = $id;",
+          { id: noteId },
+        )
+        .collect<[Array<{ tombstoned_at?: unknown }>]>();
+      return rows[0]?.tombstoned_at !== undefined ? true : null;
+    }, 1_500);
+    expect(tombstoned).toBe(true);
+
+    await writeFile(filePath, replacementBody);
+    const revived = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>(
+          "SELECT id, tombstoned_at FROM note WHERE id = $id;",
+          { id: noteId },
+        )
+        .collect<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>();
+      const row = rows[0];
+      return row !== undefined && row.tombstoned_at === undefined ? row : null;
+    }, 1_500);
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    await watcher.stop();
+
+    expect(revived?.id.toString()).toBe(noteId.toString());
+    expect(enqueued).toContain(vaultPath);
+    expect(targetCancellationCalls).toBe(0);
+    const [survivors] = await connection.db
+      .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE id = $id;", {
+        id: noteId,
+      })
+      .collect<[Array<{ id: RecordId<"note"> }>]>();
+    expect(survivors).toHaveLength(1);
+  });
+
+  test("startup recovery revives a tombstone when its Markdown file reappeared offline", async () => {
+    const vaultPath = "offline-recreated.md";
+    const filePath = join(vaultRoot, vaultPath);
+    const body = "present before watcher startup";
+    await writeFile(filePath, body);
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: vaultPath,
+      sha: createHash("sha256").update(body).digest("hex"),
+      wordCount: 4,
+    });
+    await connection.db
+      .query("UPDATE $id SET tombstoned_at = d'2000-01-01T00:00:00Z';", { id: noteId })
+      .collect();
+    const [beforeStartRows] = await connection.db
+      .query<[Array<{ tombstoned_at?: unknown }>]>(
+        "SELECT tombstoned_at FROM note WHERE id = $id;",
+        { id: noteId },
+      )
+      .collect<[Array<{ tombstoned_at?: unknown }>]>();
+    expect(beforeStartRows[0]?.tombstoned_at).toBeDefined();
+    const enqueued: string[] = [];
+    const failures: string[] = [];
+    const bus = new EventBus();
+    bus.on("indexer:error", (event) => failures.push(`${event.phase}: ${event.message}`));
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus,
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
+      tombstoneWindowMs: 50,
+    });
+    await watcher.start();
+    const revived = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>(
+          "SELECT id, tombstoned_at FROM note WHERE id = $id;",
+          { id: noteId },
+        )
+        .collect<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>();
+      const row = rows[0];
+      return row !== undefined && row.tombstoned_at === undefined ? row : null;
+    }, 1_500);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await watcher.stop();
+
+    expect(revived?.id.toString()).toBe(noteId.toString());
+    expect(failures).toEqual([]);
+    expect(enqueued).toContain(vaultPath);
+  });
+
+  test("startup recovery purges a newly excluded note even when its Markdown still exists", async () => {
+    const vaultPath = "private/newly-excluded.md";
+    const filePath = join(vaultRoot, vaultPath);
+    await mkdir(join(vaultRoot, "private"), { recursive: true });
+    await writeFile(filePath, "private body");
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: vaultPath,
+      sha: "private-sha",
+      wordCount: 2,
+    });
+    await connection.db
+      .query("UPDATE $id SET tombstoned_at = d'2000-01-01T00:00:00Z';", { id: noteId })
+      .collect();
+    const enqueued: string[] = [];
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: (path) => enqueued.push(path),
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: (path) => path === vaultPath,
+      tombstoneWindowMs: 50,
+    });
+    await watcher.start();
+    const deleted = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE id = $id;", {
+          id: noteId,
+        })
+        .collect<[Array<{ id: RecordId<"note"> }>]>();
+      return rows.length === 0 ? true : null;
+    }, 1_500);
+    await watcher.stop();
+
+    expect(deleted).toBe(true);
+    // Other notes in this shared fixture may require startup reconciliation.
+    // The excluded note itself must never be admitted.
+    expect(enqueued).not.toContain(vaultPath);
+    expect(await readFile(filePath, "utf8")).toBe("private body");
+  });
+
   test("rename window enforced server-side: stale tombstone rejected by threshold filter", async () => {
     const body = "stale-tombstone-body";
     const bodySha = createHash("sha256").update(body).digest("hex");
@@ -204,11 +655,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       sha: bodySha,
       wordCount: 2,
     });
-    await connection.db
-      .query("UPDATE note SET tombstoned_at = d'2000-01-01T00:00:00Z' WHERE path = $path;", {
-        path: "stale.md",
-      })
-      .collect();
 
     const enqueued: string[] = [];
     const renameEvents: Array<{ from: string; to: string }> = [];
@@ -227,8 +673,17 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       surrealDb: connection,
       tombstoneWindowMs: 60_000,
       bus,
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
     });
     await watcher.start();
+    // Stamp after startup so this test isolates the server-side rename
+    // threshold. Startup recovery intentionally purges old tombstones.
+    await connection.db
+      .query("UPDATE note SET tombstoned_at = d'2000-01-01T00:00:00Z' WHERE path = $path;", {
+        path: "stale.md",
+      })
+      .collect();
     await writeFile(join(vaultRoot, "renamed-stale.md"), body);
     const observed = await waitFor(async () => {
       if (enqueued.includes("renamed-stale.md") || renameEvents.length > 0) {
@@ -264,15 +719,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       sha: "target-sha",
       wordCount: 1,
     });
-    await replaceChunks(connection.db, sourceId, [
+    const [evidenceId] = await replaceChunks(connection.db, sourceId, EMBEDDING_IDENTITY, [
       {
         ord: 0,
         text: "cascade body",
         tokenEstimate: 3,
         vector: new Array<number>(VECTOR_DIM).fill(0.1),
-        embedModel: "text-embedding-nomic-embed-text-v2-moe",
       },
     ]);
+    if (evidenceId === undefined) throw new Error("expected cascade evidence chunk");
     const conceptId = await upsertConcept(connection.db, "Cascade Concept");
     const claimId = await upsertClaim(connection.db, "Cascade claim.");
     const questionId = await upsertQuestion(connection.db, "Cascade question?");
@@ -285,6 +740,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       confidence: 0.7,
       agent: "extractor",
       approved: true,
+      evidence: [evidenceId],
     });
     await relateEdge(connection.db, {
       table: "asserts",
@@ -295,6 +751,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       confidence: 0.7,
       agent: "extractor",
       approved: true,
+      evidence: [evidenceId],
     });
     await relateEdge(connection.db, {
       table: "asks",
@@ -305,6 +762,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       confidence: 0.7,
       agent: "extractor",
       approved: true,
+      evidence: [evidenceId],
     });
     await relateEdge(connection.db, {
       table: "supports",
@@ -332,6 +790,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       pollingInterval: 30,
       forcePolling: true,
       surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
       tombstoneWindowMs: 50,
     });
     await watcher.start();
@@ -374,5 +835,188 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VaultWatcher with SurrealDB", () => {
       })
       .collect<[Array<{ id: RecordId }>]>();
     expect(questionRows).toHaveLength(0);
+  });
+
+  test("an old cascade cannot consume a newer deletion generation's grace window", async () => {
+    const vaultPath = "generation-aba.md";
+    const filePath = join(vaultRoot, vaultPath);
+    await writeFile(filePath, "generation one");
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: vaultPath,
+      sha: "generation-aba-sha",
+      wordCount: 2,
+    });
+    let observeFirstCancellation = (): void => {};
+    const firstCancellationObserved = new Promise<void>((resolve) => {
+      observeFirstCancellation = resolve;
+    });
+    let releaseFirstCancellation = (): void => {};
+    const firstCancellationReleased = new Promise<void>((resolve) => {
+      releaseFirstCancellation = resolve;
+    });
+    const cancellationTokens: string[] = [];
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus: new EventBus(),
+      activity: WATCHER_ACTIVITY,
+      mutationJournal: new DaemonMutationJournal(),
+      approvalIntents: {
+        cancelForNoteDeletion: async (_candidate, tombstonedAt) => {
+          cancellationTokens.push(tombstonedAt.toString());
+          if (cancellationTokens.length === 1) {
+            observeFirstCancellation();
+            await firstCancellationReleased;
+          }
+          return { cancelled: 0, failed: 0 };
+        },
+      },
+      isExcluded: INCLUDE_ALL,
+      tombstoneWindowMs: 180,
+      cascadeRetryMs: 40,
+    });
+
+    try {
+      await watcher.start();
+      await unlink(filePath);
+      await firstCancellationObserved;
+
+      await writeFile(filePath, "recreated between generations");
+      const revived = await waitFor(async () => {
+        const [rows] = await connection.db
+          .query<[Array<{ tombstoned_at?: unknown }>]>(
+            "SELECT tombstoned_at FROM note WHERE id = $id;",
+            { id: noteId },
+          )
+          .collect<[Array<{ tombstoned_at?: unknown }>]>();
+        return rows[0]?.tombstoned_at === undefined ? true : null;
+      }, 1_500);
+      expect(revived).toBe(true);
+
+      await unlink(filePath);
+      const secondGeneration = await waitFor(async () => {
+        const [rows] = await connection.db
+          .query<[Array<{ tombstoned_at?: unknown }>]>(
+            "SELECT tombstoned_at FROM note WHERE id = $id;",
+            { id: noteId },
+          )
+          .collect<[Array<{ tombstoned_at?: unknown }>]>();
+        const token = rows[0]?.tombstoned_at;
+        return token !== undefined && String(token) !== cancellationTokens[0]
+          ? String(token)
+          : null;
+      }, 1_500);
+      if (secondGeneration === null) {
+        throw new Error("same-path deletion did not receive a second tombstone generation");
+      }
+
+      releaseFirstCancellation();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const [survivors] = await connection.db
+        .query<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>(
+          "SELECT id, tombstoned_at FROM note WHERE id = $id;",
+          { id: noteId },
+        )
+        .collect<[Array<{ id: RecordId<"note">; tombstoned_at?: unknown }>]>();
+      expect(survivors).toHaveLength(1);
+      expect(String(survivors[0]?.tombstoned_at)).toBe(secondGeneration);
+      expect(cancellationTokens).toHaveLength(1);
+    } finally {
+      releaseFirstCancellation();
+      await watcher.stop();
+    }
+  });
+
+  test("a cancellation exception cannot strand a tombstone without a cascade retry", async () => {
+    const vaultPath = "retry-cascade.md";
+    const filePath = join(vaultRoot, vaultPath);
+    await writeFile(filePath, "retry cascade body");
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: vaultPath,
+      sha: "retry-cascade-sha",
+      wordCount: 3,
+    });
+    let cancellationCalls = 0;
+    const bus = new EventBus();
+    const failures: string[] = [];
+    bus.on("indexer:error", (event) => failures.push(event.phase ?? ""));
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus,
+      activity: WATCHER_ACTIVITY,
+      mutationJournal: new DaemonMutationJournal(),
+      approvalIntents: {
+        cancelForNoteDeletion: async (candidate) => {
+          if (candidate.toString() !== noteId.toString()) {
+            return { cancelled: 0, failed: 0 };
+          }
+          cancellationCalls += 1;
+          if (cancellationCalls === 1) throw new Error("synthetic cancellation outage");
+          return { cancelled: 0, failed: 0 };
+        },
+      },
+      isExcluded: INCLUDE_ALL,
+      tombstoneWindowMs: 40,
+      cascadeRetryMs: 40,
+    });
+    await watcher.start();
+    await unlink(filePath);
+    const deleted = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE id = $id;", {
+          id: noteId,
+        })
+        .collect<[Array<{ id: RecordId<"note"> }>]>();
+      return rows.length === 0 ? true : null;
+    }, 2_000);
+    await watcher.stop();
+
+    expect(deleted).toBe(true);
+    expect(cancellationCalls).toBeGreaterThanOrEqual(2);
+    expect(failures).toContain("watcher-cascade");
+  });
+
+  test("startup reconstructs and completes a cascade whose process-local timer was lost", async () => {
+    const noteId = await upsertNoteByPath(connection.db, {
+      path: "orphaned-tombstone.md",
+      sha: "orphaned-tombstone-sha",
+      wordCount: 2,
+    });
+    await connection.db
+      .query(
+        "UPDATE $id SET tombstoned_at = d'2000-01-01T00:00:00Z' WHERE tombstoned_at IS NONE;",
+        { id: noteId },
+      )
+      .collect();
+    const watcher = new VaultWatcher({
+      root: vaultRoot,
+      enqueue: () => {},
+      pollingInterval: 20,
+      forcePolling: true,
+      surrealDb: connection,
+      bus: new EventBus(),
+      ...watcherRuntimeDeps(),
+      isExcluded: INCLUDE_ALL,
+      tombstoneWindowMs: 100,
+      cascadeRetryMs: 40,
+    });
+    await watcher.start();
+    const deleted = await waitFor(async () => {
+      const [rows] = await connection.db
+        .query<[Array<{ id: RecordId<"note"> }>]>("SELECT id FROM note WHERE id = $id;", {
+          id: noteId,
+        })
+        .collect<[Array<{ id: RecordId<"note"> }>]>();
+      return rows.length === 0 ? true : null;
+    }, 2_000);
+    await watcher.stop();
+    expect(deleted).toBe(true);
   });
 });

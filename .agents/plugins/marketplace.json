@@ -1,0 +1,20 @@
+{
+  "name": "notient",
+  "interface": {
+    "displayName": "Notient"
+  },
+  "plugins": [
+    {
+      "name": "notient",
+      "source": {
+        "source": "local",
+        "path": "./plugins/notient"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -28,7 +28,8 @@
  *      `related_to` proposal is approved end-to-end; the source note picks
  *      up `[[beta]]` under a `## Related` section, a `daemon_write` row
  *      lands with the post-write body SHA, and re-running Tier 1 over the
- *      new body attributes the wikilink edge to `source = 'linker'`.
+ *      new body keeps canonical `source = 'wikilink'` while attributing
+ *      its producer through `agent = 'linker'`.
  *   6. ApprovalService.reconcilePendingApplications replays
  *      `approved = true, applied = false` rows on simulated daemon restart.
  *
@@ -46,6 +47,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { FsVault } from "../../../../src/adapters/fsVault";
 import { runBackupCommand } from "../../../../src/cli/commands/backup";
 import { type DumpedGraph, runGraphDumpCommand } from "../../../../src/cli/commands/graphDump";
 import { runLinksAuditCommand } from "../../../../src/cli/commands/linksAudit";
@@ -67,8 +69,9 @@ import {
 import { EventBus } from "../../../../src/core/events/eventBus";
 import { Embedder } from "../../../../src/core/indexer/embedder";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
-import { EMBED_MODEL, runTier2 } from "../../../../src/core/indexer/tier2";
+import { runTier2 } from "../../../../src/core/indexer/tier2";
 import type { EmbedOptions, LLMProvider } from "../../../../src/core/llm/provider";
+import { sha256Hex } from "../../../../src/core/utils/sha256";
 import {
   vaultDataDir,
   vaultPortPath,
@@ -76,14 +79,20 @@ import {
   vaultStateDir,
 } from "../../../../src/core/vault/identity";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { acquireNoopMaintenanceLease } from "../../../helpers/maintenanceLease";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
+const EMBEDDING_IDENTITY = {
+  model: "phase5-smoke-embedding",
+  dimension: VECTOR_DIM,
+} as const;
 
 const ENTITY_TABLES = ["note", "block", "chunk", "tag", "concept", "claim", "question"] as const;
 const UNRESOLVED_TABLES = ["wikilink_unresolved", "embed_unresolved"] as const;
 const OPS_TABLES = [
+  "approval_intent",
   "daemon_write",
   "history",
   "awaken_run",
@@ -112,14 +121,6 @@ async function countTable(connection: SurrealConnection, table: string): Promise
   return rows[0]?.count ?? 0;
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const buffer = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
     isAvailable: async () => true,
@@ -146,24 +147,8 @@ function makeDeterministicEmbedder(seed: number): Embedder {
     embed: async (input: string[], _opts: EmbedOptions) =>
       input.map((_text, index) => vectorOf(seed + index)),
   });
-  return new Embedder(provider, { model: EMBED_MODEL });
+  return new Embedder(provider, { identity: EMBEDDING_IDENTITY, concurrency: 1 });
 }
-
-const realFs = {
-  writeBinary: async (filePath: string, data: ArrayBuffer): Promise<void> => {
-    await writeFile(filePath, new Uint8Array(data));
-  },
-  rename: async (from: string, to: string): Promise<void> => {
-    const { rename } = await import("node:fs/promises");
-    await rename(from, to);
-  },
-  remove: async (filePath: string): Promise<void> => {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(filePath).catch(() => {
-      // missing-file is not an error for cleanup
-    });
-  },
-};
 
 interface HarnessContext {
   tempDir: string;
@@ -195,6 +180,7 @@ async function bootHarness(prefix: string, secret: string): Promise<HarnessConte
     portFile: path.join(tempDir, "surreal.port"),
     pidFile: path.join(tempDir, "surreal.pid"),
     logLevel: "warn",
+    hnswCacheMib: 64,
   });
   const connection = await connect({
     url: handle.url,
@@ -203,10 +189,10 @@ async function bootHarness(prefix: string, secret: string): Promise<HarnessConte
     namespace: "notient",
     database: "vault",
   });
-  await applySchema(connection.db, secret);
+  await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
   const port = new URL(handle.url).port;
-  await writeFile(vaultPortPath(vaultPath), port, "utf8");
+  await writeFile(vaultPortPath(vaultPath), `${port}\n`, "utf8");
   await writeFile(vaultSecretPath(vaultPath), secret, { mode: 0o600 });
 
   return { tempDir, vaultPath, handle, connection, originalHome, secret };
@@ -233,11 +219,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 substrate cutover", () => {
 
   afterAll(async () => {
     await tearDownHarness(context);
-  });
+  }, 30_000);
 
   beforeEach(async () => {
     await clearAllTrackedTables(context.connection);
-  });
+  }, 30_000);
 
   test("[smoke] graph dump emits deterministic JSON whose counts match SurrealDB", async () => {
     const vaultPaths = ["alpha.md", "beta.md", "gamma.md"];
@@ -251,6 +237,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 substrate cutover", () => {
         notePath,
         source: sources[notePath] ?? "",
         vaultPaths,
+        bus: new EventBus(),
       });
     }
 
@@ -300,6 +287,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 substrate cutover", () => {
       notePath: "delta.md",
       source: noteSource,
       vaultPaths,
+      bus: new EventBus(),
     });
 
     const lines: string[] = [];
@@ -338,7 +326,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
 
   afterAll(async () => {
     await tearDownHarness(context);
-  });
+  }, 30_000);
 
   test("[smoke] backup, in-process nuke, and restore round-trip note/wikilink/daemon_write counts", async () => {
     // Seed a small graph: two notes, an alpha->beta wikilink (from Tier 1),
@@ -346,16 +334,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
     const vaultPaths = ["alpha.md", "beta.md"];
     const alphaSource = "# Alpha\n\nAlpha links to [[beta]].\n";
     const betaSource = "# Beta\n\nBeta is the target.\n";
+    await writeFile(path.join(context.vaultPath, "alpha.md"), alphaSource, "utf8");
+    await writeFile(path.join(context.vaultPath, "beta.md"), betaSource, "utf8");
     await runTier1(context.connection.db, {
       notePath: "beta.md",
       source: betaSource,
       vaultPaths,
+      bus: new EventBus(),
     });
     await runTier1(context.connection.db, {
       notePath: "alpha.md",
       source: alphaSource,
       vaultPaths,
+      bus: new EventBus(),
     });
+    await context.connection.db
+      .query(
+        "UPDATE note SET tier2_at = time::now(), tier3_at = time::now(), linker_refresh_pending = false;",
+      )
+      .collect();
     const alphaId = await lookupNoteByPath(context.connection.db, "alpha.md");
     const betaId = await lookupNoteByPath(context.connection.db, "beta.md");
     if (alphaId === null || betaId === null) {
@@ -376,11 +373,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
     expect(daemonWriteCountBefore).toBeGreaterThan(0);
 
     const dumpFile = path.join(context.tempDir, `phase5-dump-${Date.now()}.surql`);
-    const backupExit = await runBackupCommand({
-      vaultPath: context.vaultPath,
-      outPath: dumpFile,
-      emitter: makeEmitter({ mode: "json", write: () => {} }),
-    });
+    const backupExit = await runBackupCommand(
+      {
+        vaultPath: context.vaultPath,
+        outPath: dumpFile,
+        emitter: makeEmitter({ mode: "json", write: () => {} }),
+      },
+      { acquireMaintenance: acquireNoopMaintenanceLease },
+    );
     expect(backupExit).toBe(0);
     const dumpText = await Bun.file(dumpFile).text();
     expect(dumpText.length).toBeGreaterThan(0);
@@ -400,6 +400,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
         portFile: path.join(context.tempDir, "surreal.port"),
         pidFile: path.join(context.tempDir, "surreal.pid"),
         logLevel: "warn",
+        hnswCacheMib: 64,
       });
       const newConnection = await connect({
         url: newHandle.url,
@@ -408,9 +409,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
         namespace: "notient",
         database: "vault",
       });
-      await applySchema(newConnection.db, secret);
+      await applySchema(newConnection.db, secret, {
+        embedDim: 768,
+        embedModel: "fixture-embedding",
+      });
       const newPort = new URL(newHandle.url).port;
-      await writeFile(vaultPortPath(context.vaultPath), newPort, "utf8");
+      await writeFile(vaultPortPath(context.vaultPath), `${newPort}\n`, "utf8");
       context.handle = newHandle;
       context.connection = newConnection;
     };
@@ -431,12 +435,24 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 backup-nuke-restore", () => {
       }
     }
 
-    const restoreExit = await runRestoreCommand({
-      vaultPath: context.vaultPath,
-      inputPath: dumpFile,
-      emitter: makeEmitter({ mode: "json", write: () => {} }),
-    });
+    let postImportSyncCalls = 0;
+    const restoreExit = await runRestoreCommand(
+      {
+        vaultPath: context.vaultPath,
+        inputPath: dumpFile,
+        emitter: makeEmitter({ mode: "json", write: () => {} }),
+      },
+      {
+        acquireMaintenance: acquireNoopMaintenanceLease,
+        syncLinks: async (options) => {
+          expect(options.vaultPath).toBe(context.vaultPath);
+          postImportSyncCalls += 1;
+          return 0;
+        },
+      },
+    );
     expect(restoreExit).toBe(0);
+    expect(postImportSyncCalls).toBe(1);
 
     const noteCountAfter = await countTable(context.connection, "note");
     const wikilinkCountAfter = await countTable(context.connection, "wikilink");
@@ -457,7 +473,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
 
   afterAll(async () => {
     await tearDownHarness(context);
-  });
+  }, 30_000);
 
   test("[smoke] reindex --tier 2 re-embeds chunks without disturbing Tier 3 entity rows", async () => {
     const notePath = "epsilon.md";
@@ -468,6 +484,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
       notePath,
       source: noteSource,
       vaultPaths,
+      bus: new EventBus(),
     });
 
     // Tier 2: deterministic embedder.
@@ -476,6 +493,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
       notePath,
       blocks: tier1Output.extraction.blocks,
       embedder: initialEmbedder,
+      bus: new EventBus(),
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
     expect(tier2Initial.chunkCount).toBeGreaterThan(0);
 
@@ -493,10 +512,20 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
     if (conceptId === undefined) {
       throw new Error("phase5 smoke: failed to create concept node");
     }
+    const [chunkRows] = await context.connection.db
+      .query<[Array<{ id: RecordId<"chunk"> }>]>(
+        "SELECT id FROM chunk WHERE note = $note LIMIT 1;",
+        { note: noteId },
+      )
+      .collect<[Array<{ id: RecordId<"chunk"> }>]>();
+    const evidence = chunkRows[0]?.id;
+    if (evidence === undefined) {
+      throw new Error("phase5 smoke: failed to resolve Tier 2 evidence");
+    }
     await context.connection.db
       .query<[Array<{ id: RecordId }>]>(
-        "RELATE $note->mentions->$concept SET source = 'extractor', class = 'INFERRED', confidence = 0.9, agent = 'extractor', approved = true RETURN id;",
-        { note: noteId, concept: conceptId },
+        "RELATE $note->mentions->$concept SET source = 'extractor', class = 'INFERRED', confidence = 0.9, agent = 'extractor', approved = true, applied = true, evidence = [$evidence] RETURN id;",
+        { note: noteId, concept: conceptId, evidence },
       )
       .collect<[Array<{ id: RecordId }>]>();
     await context.connection.db
@@ -535,6 +564,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 reindex tier filter", () => {
       notePath,
       blocks: tier1Output.extraction.blocks,
       embedder: reembedEmbedder,
+      bus: new EventBus(),
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
     expect(tier2Replay.chunkCount).toBe(tier2Initial.chunkCount);
 
@@ -574,9 +605,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
 
   afterAll(async () => {
     await tearDownHarness(context);
-  });
+  }, 30_000);
 
-  test("[smoke] approveEdge writes the wikilink, records daemon_write, and re-Tier1 attributes the new edge to the linker", async () => {
+  test("[smoke] approveEdge writes the wikilink and re-Tier1 preserves source plus proposer provenance", async () => {
     // Per-test fixture vault rooted under the harness tempdir. Two notes
     // (A and B); A will accept a `supports` proposal pointing at B.
     const vaultRoot = path.join(context.tempDir, "approve-vault");
@@ -596,11 +627,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
       notePath: "beta.md",
       source: betaBody,
       vaultPaths,
+      bus: new EventBus(),
     });
     await runTier1(context.connection.db, {
       notePath: "alpha.md",
       source: alphaBody,
       vaultPaths,
+      bus: new EventBus(),
     });
     const alphaId = await lookupNoteByPath(context.connection.db, "alpha.md");
     const betaId = await lookupNoteByPath(context.connection.db, "beta.md");
@@ -631,11 +664,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
     const approvalService = new ApprovalService({
       db: context.connection.db,
       bus,
-      vaultRoot,
-      fs: realFs,
-      readFile: (filePath) => readFile(filePath, "utf8"),
+      vault: new FsVault(vaultRoot),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
     });
-    await approvalService.approveEdge({ id: seedEdge.id, table: "related_to" });
+    await approvalService.approveEdge({
+      id: seedEdge.id,
+      table: "related_to",
+      approvedBy: "human",
+    });
     expect(decisions).toEqual(["edge:accepted"]);
 
     // Body writeback: alpha now contains a `## Related` section with `[[beta]]`.
@@ -646,13 +683,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
 
     // Edge row landed in pending-state-contract terminal state.
     const [edgeRows] = await context.connection.db
-      .query<[Array<{ approved: boolean; applied: boolean }>]>(
-        "SELECT approved, applied FROM related_to WHERE id = $id;",
+      .query<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>(
+        "SELECT approved, applied, approved_by FROM related_to WHERE id = $id;",
         { id: seedEdge.id },
       )
-      .collect<[Array<{ approved: boolean; applied: boolean }>]>();
+      .collect<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>();
     expect(edgeRows[0]?.approved).toBe(true);
     expect(edgeRows[0]?.applied).toBe(true);
+    expect(edgeRows[0]?.approved_by).toBe("human");
 
     // daemon_write row carries the post-write body SHA.
     const expectedSha = await sha256Hex(alphaAfter);
@@ -672,24 +710,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 5 approval flow with Task 1 SHA p
     expect(daemonRows[0].targets.map((target) => target.toString())).toContain(betaId.toString());
 
     // Re-run Tier 1 over the new body. `findRecentDaemonWrite` matches the
-    // body SHA recorded in the `daemon_write` row above; Tier 1 then
-    // rewrites the new wikilink edge's `source` from the default
-    // `wikilink` to `linker` (Locked Decision 3 attribution contract).
+    // body SHA recorded in the `daemon_write` row above; Tier 1 keeps the
+    // extraction source canonical and records the producer separately.
     const tier1Replay = await runTier1(context.connection.db, {
       notePath: "alpha.md",
       source: alphaAfter,
       vaultPaths,
+      bus: new EventBus(),
     });
     expect(tier1Replay.noteId.toString()).toBe(alphaId.toString());
 
     const [wikilinkRows] = await context.connection.db
-      .query<[Array<{ source: string; class: string }>]>(
-        "SELECT source, class FROM wikilink WHERE in.note = $note AND out = $target;",
+      .query<[Array<{ source: string; agent: string; class: string }>]>(
+        "SELECT source, agent, class FROM wikilink WHERE in.note = $note AND out = $target;",
         { note: alphaId, target: betaId },
       )
-      .collect<[Array<{ source: string; class: string }>]>();
+      .collect<[Array<{ source: string; agent: string; class: string }>]>();
     expect(wikilinkRows.length).toBeGreaterThan(0);
-    expect(wikilinkRows[0].source).toBe("linker");
+    expect(wikilinkRows[0].source).toBe("wikilink");
+    expect(wikilinkRows[0].agent).toBe("linker");
     expect(wikilinkRows[0].class).toBe("EXTRACTED");
   }, 60_000);
 });
@@ -706,7 +745,7 @@ describe.skipIf(!SMOKE_ENABLED)(
 
     afterAll(async () => {
       await tearDownHarness(context);
-    });
+    }, 30_000);
 
     test("[smoke] a fresh ApprovalService instance replays approved=true,applied=false rows on simulated daemon restart", async () => {
       const vaultRoot = path.join(context.tempDir, "reconcile-vault");
@@ -719,9 +758,9 @@ describe.skipIf(!SMOKE_ENABLED)(
       await writeFile(alphaPath, alphaBody);
       await writeFile(betaPath, betaBody);
 
-      // Seed the note rows directly so we can plant a `related_to` edge in
-      // the writeback-in-flight state without first running the full
-      // `approveEdge` (the test is the recovery path, not the happy path).
+      // Seed the note rows and a genuine pending proposal. A failed first
+      // filesystem attempt below leaves the production state-2 edge and its
+      // immutable write-ahead intent for the fresh service to recover.
       const alphaId = await upsertNoteByPath(context.connection.db, {
         path: "alpha.md",
         sha: await sha256Hex(alphaBody),
@@ -733,11 +772,8 @@ describe.skipIf(!SMOKE_ENABLED)(
         wordCount: 5,
       });
 
-      // Plant the row in state 2: `approved = true, applied = false`. This is
-      // exactly what a daemon crash between the approved-flip and the closing
-      // history transaction would leave behind.
       const seedSql =
-        "RELATE $from->related_to->$to SET source = 'linker', class = 'INFERRED', confidence = 0.7, agent = 'linker', approved = true, applied = false RETURN id;";
+        "RELATE $from->related_to->$to SET source = 'linker', class = 'INFERRED', confidence = 0.7, agent = 'linker', approved = false RETURN id;";
       const [seedRows] = await context.connection.db
         .query<[Array<{ id: RecordId }>]>(seedSql, { from: alphaId, to: betaId })
         .collect<[Array<{ id: RecordId }>]>();
@@ -745,6 +781,27 @@ describe.skipIf(!SMOKE_ENABLED)(
       if (seedEdge === undefined) {
         throw new Error("phase5 smoke: seed RELATE produced no related_to edge");
       }
+
+      const durableVault = new FsVault(vaultRoot);
+      const crashingApproval = new ApprovalService({
+        db: context.connection.db,
+        bus: new EventBus(),
+        vault: {
+          read: (notePath) => durableVault.read(notePath),
+          writeIfUnchanged: async () => {
+            throw new Error("synthetic crash before vault rename");
+          },
+        },
+        hash: sha256Hex,
+        pruneHistory: async () => {},
+      });
+      await expect(
+        crashingApproval.approveEdge({
+          id: seedEdge.id,
+          table: "related_to",
+          approvedBy: "human",
+        }),
+      ).rejects.toThrow("synthetic crash");
 
       // Sanity: the file on disk does not yet contain `[[beta]]`.
       const beforeBody = await readFile(alphaPath, "utf8");
@@ -756,9 +813,9 @@ describe.skipIf(!SMOKE_ENABLED)(
       const reconciler = new ApprovalService({
         db: context.connection.db,
         bus,
-        vaultRoot,
-        fs: realFs,
-        readFile: (filePath) => readFile(filePath, "utf8"),
+        vault: new FsVault(vaultRoot),
+        hash: sha256Hex,
+        pruneHistory: async () => {},
       });
       const result = await reconciler.reconcilePendingApplications();
       expect(result.replayed).toBe(1);
@@ -766,13 +823,14 @@ describe.skipIf(!SMOKE_ENABLED)(
 
       // Edge row reaches `applied = true`.
       const [edgeRows] = await context.connection.db
-        .query<[Array<{ approved: boolean; applied: boolean }>]>(
-          "SELECT approved, applied FROM related_to WHERE id = $id;",
+        .query<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>(
+          "SELECT approved, applied, approved_by FROM related_to WHERE id = $id;",
           { id: seedEdge.id },
         )
-        .collect<[Array<{ approved: boolean; applied: boolean }>]>();
+        .collect<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>();
       expect(edgeRows[0]?.approved).toBe(true);
       expect(edgeRows[0]?.applied).toBe(true);
+      expect(edgeRows[0]?.approved_by).toBe("human");
 
       // File on disk now carries the wikilink under `## Related`.
       const afterBody = await readFile(alphaPath, "utf8");

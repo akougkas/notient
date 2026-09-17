@@ -158,6 +158,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -166,8 +167,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -179,7 +180,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearVault(connection);
@@ -189,7 +190,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
     const noteId = await seedNote(connection, {
       path: "a.md",
       words: 600,
-      maturity: "draft",
+      maturity: "adolescent",
     });
     await seedChunk(connection, noteId, 0);
     await seedWikilinkOutbound(connection, noteId, 3);
@@ -201,7 +202,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] VitalsService", () => {
     });
     const snapshot = await service.computeSnapshot("a.md");
     if (snapshot === null) throw new Error("expected snapshot for /a.md");
-    expect(snapshot.maturity).toBe("draft");
+    expect(snapshot.maturity).toBe("adolescent");
     expect(snapshot.wordCount).toBe(600);
     expect(snapshot.connectivityCount).toBe(3);
     expect(snapshot.connectivityTier).toBe("sparse");

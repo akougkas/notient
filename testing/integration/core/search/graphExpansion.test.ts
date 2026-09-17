@@ -1,12 +1,12 @@
 /**
- * Phase 4 Task 11 graphExpansion smoke harness.
+ * Graph-expansion smoke harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
  *
  * Boots a real SurrealDB, applies the schema, seeds notes plus wikilink edges
- * with varying approved/applied state, and exercises the SurrealDB-backed
- * graph expansion that replaces the legacy SQLite recursive-CTE.
+ * with varying approved/applied state, and exercises one-hop expansion over
+ * committed relationships.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -14,6 +14,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { WRITEBACK_EDGE_TABLES } from "../../../../src/core/db/edgeTables";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -106,6 +107,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -114,8 +116,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -127,22 +129,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await connection.db.query("DELETE wikilink;").collect();
+    for (const table of WRITEBACK_EDGE_TABLES) {
+      await connection.db.query(`DELETE ${table};`).collect();
+    }
+    await connection.db.query("DELETE chunk;").collect();
     await connection.db.query("DELETE note;").collect();
-  });
-
-  test("depth=0 returns no expansion regardless of edges present", async () => {
-    const notes = await seedNotes(connection, ["notes/a.md", "notes/b.md"]);
-    await seedEdge(connection, notes, { fromPath: "notes/a.md", toPath: "notes/b.md" });
-    const expanded = await expandViaApprovedEdges({
-      db: connection.db,
-      baseHits: [makeHit("notes/a.md")],
-      depth: 0,
-    });
-    expect(expanded).toEqual([]);
   });
 
   test("returns empty list when there are no base hits", async () => {
@@ -151,12 +146,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [],
-      depth: 1,
     });
     expect(expanded).toEqual([]);
   });
 
-  test("adds approved-edge neighbours of base hits at depth=1", async () => {
+  test("adds direct approved-edge neighbours of base hits", async () => {
     const notes = await seedNotes(connection, ["notes/a.md", "notes/b.md", "notes/c.md"]);
     await seedEdge(connection, notes, {
       fromPath: "notes/a.md",
@@ -171,7 +165,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [makeHit("notes/a.md")],
-      depth: 1,
     });
     const paths = expanded.map((hit) => hit.notePath).sort();
     expect(paths).toEqual(["notes/b.md", "notes/c.md"]);
@@ -192,7 +185,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [makeHit("notes/a.md")],
-      depth: 1,
     });
     expect(expanded).toEqual([]);
   });
@@ -208,7 +200,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [makeHit("notes/a.md")],
-      depth: 1,
     });
     expect(expanded).toEqual([]);
   });
@@ -219,9 +210,71 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [makeHit("notes/a.md"), makeHit("notes/b.md")],
-      depth: 1,
     });
     expect(expanded).toEqual([]);
+  });
+
+  test("expands approved linker edges with type, confidence and a real score", async () => {
+    const notes = await seedNotes(connection, ["notes/a.md", "notes/b.md"]);
+    await relateEdge(connection.db, {
+      table: "supports",
+      from: notes.get("notes/a.md") as RecordId<"note">,
+      to: notes.get("notes/b.md") as RecordId<"note">,
+      source: "linker",
+      confidenceClass: "INFERRED",
+      confidence: 0.8,
+      agent: "linker",
+      approved: true,
+    });
+    const seed = makeHit("notes/a.md");
+    seed.score = 0.5;
+    const expanded = await expandViaApprovedEdges({
+      db: connection.db,
+      baseHits: [seed],
+    });
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0].notePath).toBe("notes/b.md");
+    expect(expanded[0].edgeType).toBe("supports");
+    expect(expanded[0].confidence).toBeCloseTo(0.8, 5);
+    expect(expanded[0].score).toBeCloseTo(0.5 * 0.8, 5);
+  });
+
+  test("excludes pending linker proposals from trusted retrieval", async () => {
+    const notes = await seedNotes(connection, ["notes/a.md", "notes/b.md"]);
+    await relateEdge(connection.db, {
+      table: "contradicts",
+      from: notes.get("notes/a.md") as RecordId<"note">,
+      to: notes.get("notes/b.md") as RecordId<"note">,
+      source: "linker",
+      confidenceClass: "INFERRED",
+      confidence: 0.6,
+      agent: "linker",
+      approved: false,
+    });
+    const seed = makeHit("notes/a.md");
+    seed.score = 1;
+    const expanded = await expandViaApprovedEdges({
+      db: connection.db,
+      baseHits: [seed],
+    });
+    expect(expanded).toEqual([]);
+  });
+
+  test("uses the target note's first chunk as the snippet", async () => {
+    const notes = await seedNotes(connection, ["notes/a.md", "notes/b.md"]);
+    await connection.db
+      .query("CREATE chunk CONTENT { note: $note, ord: 0, text: $text, token_estimate: 5 };", {
+        note: notes.get("notes/b.md") as RecordId<"note">,
+        text: "the real body of note b",
+      })
+      .collect();
+    await seedEdge(connection, notes, { fromPath: "notes/a.md", toPath: "notes/b.md" });
+    const expanded = await expandViaApprovedEdges({
+      db: connection.db,
+      baseHits: [makeHit("notes/a.md")],
+    });
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0].snippet).toBe("the real body of note b");
   });
 
   test("collapses parallel edges to the same neighbour", async () => {
@@ -239,7 +292,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] expandViaApprovedEdges", () => {
     const expanded = await expandViaApprovedEdges({
       db: connection.db,
       baseHits: [makeHit("notes/a.md")],
-      depth: 1,
     });
     expect(expanded.length).toBe(1);
     expect(expanded[0].notePath).toBe("notes/b.md");

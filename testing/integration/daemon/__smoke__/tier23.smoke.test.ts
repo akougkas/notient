@@ -1,14 +1,10 @@
 /**
- * Phase 3 Tier 2 + Tier 3 end-to-end smoke harness.
- *
- * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1).
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, seeds three notes
+ * Tier 2 + Tier 3 end-to-end smoke harness. Boots a real SurrealDB, seeds three notes
  * via `runTier1`, embeds each via `runTier2` with a deterministic mock
  * embedder, then runs `runTier3` on the active note with a mock LLM that
  * returns one extractor finding per kind and one linker proposal. Asserts:
  *   - Chunk rows exist for every note with the expected vectors and the
- *     locked `EMBED_MODEL` literal.
+ *     one explicit model-and-dimension identity.
  *   - kNN against `chunk.vector` finds the seeded chunks.
  *   - `mentions`, `asserts`, `asks` rows exist with `approved = true`.
  *   - The linker `supports` row exists with `approved = false`.
@@ -23,6 +19,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { Linker } from "../../../../src/core/agents/linker";
+import { AgentRunExecutor } from "../../../../src/core/coordinator/agentRunExecutor";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -33,10 +31,11 @@ import {
   relateEdge,
   searchVector,
 } from "../../../../src/core/db/surreal";
+import { EventBus } from "../../../../src/core/events/eventBus";
 import { Embedder } from "../../../../src/core/indexer/embedder";
 import { Extractor } from "../../../../src/core/indexer/extractor";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
-import { EMBED_MODEL, runTier2 } from "../../../../src/core/indexer/tier2";
+import { runTier2 } from "../../../../src/core/indexer/tier2";
 import { type Tier3Chunk, runTier3 } from "../../../../src/core/indexer/tier3";
 import type {
   ChatMessage,
@@ -50,6 +49,10 @@ import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/s
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
+const EMBEDDING_IDENTITY = {
+  model: "tier23-smoke-embedding",
+  dimension: VECTOR_DIM,
+} as const;
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
@@ -83,7 +86,7 @@ function makeEmbedder(seedFor: (text: string) => number): {
     embed: async (input: string[], _opts: EmbedOptions) =>
       input.map((text) => vectorOf(seedFor(text))),
   });
-  const embedder = new Embedder(provider, { model: EMBED_MODEL });
+  const embedder = new Embedder(provider, { identity: EMBEDDING_IDENTITY, concurrency: 1 });
   return { embedder };
 }
 
@@ -104,7 +107,7 @@ const noteCSource = `# Note C
 A paragraph about POSIX limits in distributed file systems with similar wording.
 `;
 
-describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
+describe.skipIf(!SMOKE_ENABLED)("[smoke] Tier 2/3 end-to-end", () => {
   let tempDir: string;
   let handle: SurrealServerHandle;
   let connection: SurrealConnection;
@@ -126,6 +129,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -134,7 +138,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     const seedFor = (text: string): number => {
       if (text.includes("gardening")) return SEED_B;
@@ -152,12 +156,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
         notePath,
         source: sourcesByPath[notePath],
         vaultPaths,
+        bus: new EventBus(),
       });
       const { embedder } = makeEmbedder(seedFor);
       await runTier2(connection.db, {
         notePath,
         blocks: extraction.blocks,
         embedder,
+        bus: new EventBus(),
+        chunkSizes: { targetTokens: 320, maxTokens: 480 },
       });
     }
 
@@ -199,9 +206,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  test("[smoke] chunk rows exist for all three notes with EMBED_MODEL and 768-dim vectors", async () => {
+  test("[smoke] chunk rows use one resolved embedding identity", async () => {
     interface ChunkRow {
       ord: number;
       vector: number[];
@@ -217,7 +224,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
       expect(rows.length).toBeGreaterThan(0);
       for (const row of rows) {
         expect(row.vector.length).toBe(VECTOR_DIM);
-        expect(row.embed_model).toBe(EMBED_MODEL);
+        expect(row.embed_model).toBe(EMBEDDING_IDENTITY.model);
       }
     }
   });
@@ -262,12 +269,24 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
     const extractorProvider = fakeProvider({
       chatJson: async <T>() =>
         ({
-          entities: ["POSIX"],
-          claims: ["POSIX is leaky in distributed file systems."],
-          questions: ["How do leaky abstractions affect throughput?"],
+          entities: [{ label: "POSIX", kind: "system", chunkRefs: [0] }],
+          claims: [
+            {
+              text: "POSIX is leaky in distributed file systems.",
+              kind: "assertion",
+              chunkRefs: [0],
+            },
+          ],
+          questions: [{ text: "How do leaky abstractions affect throughput?", chunkRefs: [0] }],
         }) as T,
     });
-    const extractor = new Extractor(extractorProvider, { model: "test-extractor-model" });
+    const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
+    const extractor = new Extractor(extractorProvider, {
+      model: "test-extractor-model",
+      scheduler,
+
+      concurrency: 1,
+    });
 
     // The linker mock only proposes C. B is excluded by `linkerNeighbors`
     // before the LLM is called, so a real linker would never see B as a
@@ -283,9 +302,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
             {
               targetNotePath: pathC,
               type: "supports",
-              confidence: 0.85,
               rationale: "C echoes A's POSIX argument.",
-              evidenceChunkIds: ["chunk-0"],
             },
           ],
         } as T;
@@ -296,18 +313,28 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
       provider: linkerProvider,
       reasoningModel: "test-linker-model",
     });
+    const bus = new EventBus();
+    const runLinker = new AgentRunExecutor({
+      db: connection.db,
+      bus,
+      scheduler,
+      now: Date.now,
+    }).bind(linker);
 
     interface ChunkRow {
+      id: RecordId<"chunk">;
       ord: number;
       text: string;
       vector: number[];
     }
     const [activeChunkRows] = await connection.db
-      .query<[ChunkRow[]]>("SELECT ord, text, vector FROM chunk WHERE note = $note ORDER BY ord;", {
-        note: noteAId,
-      })
+      .query<[ChunkRow[]]>(
+        "SELECT id, ord, text, vector FROM chunk WHERE note = $note ORDER BY ord;",
+        { note: noteAId },
+      )
       .collect<[ChunkRow[]]>();
     const inputChunks: Tier3Chunk[] = activeChunkRows.map((row) => ({
+      id: row.id,
       ord: row.ord,
       text: row.text,
       vector: row.vector,
@@ -317,7 +344,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 3 Tier 2/3 end-to-end", () => {
       notePath: pathA,
       chunks: inputChunks,
       extractor,
-      linker,
+      runLinker,
     });
     expect(result.noteId.toString()).toBe(noteAId.toString());
 

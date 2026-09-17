@@ -1,13 +1,37 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { processAst, stringify } from "../../../../src/core/markdown/pipeline";
+import { readFrontmatter } from "../../../../src/core/markdown/frontmatter";
 import { applyApprovedLink, applyApprovedRelation } from "../../../../src/core/markdown/writeback";
 
-const fixturePath = join(import.meta.dir, "../../../fixtures/markdown", "writeback-input.md");
+const fixtureDir = join(import.meta.dir, "../../../fixtures/markdown");
+const fixturePath = join(fixtureDir, "writeback-input.md");
 
 function loadFixture(): string {
   return readFileSync(fixturePath, "utf8");
+}
+
+function load(name: string): string {
+  return readFileSync(join(fixtureDir, name), "utf8");
+}
+
+/**
+ * Assert that `after` is `before` with exactly one contiguous insertion:
+ * every byte before the insertion point and every byte after it is
+ * unchanged. This is the whole point of splicing over re-serializing.
+ */
+function expectSingleInsertion(before: string, after: string): string {
+  let head = 0;
+  while (head < before.length && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < before.length - head &&
+    before[before.length - 1 - tail] === after[after.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  expect(head + tail).toBe(before.length);
+  return after.slice(head, after.length - tail);
 }
 
 describe("applyApprovedLink", () => {
@@ -154,6 +178,94 @@ describe("applyApprovedLink", () => {
     const secondResultTail = result.slice(secondResultStart);
     expect(secondResultTail).toBe(secondSourceTail);
   });
+
+  test("ignores a Related heading inside a frontmatter block scalar", () => {
+    const source = [
+      "---",
+      "desc: |",
+      "  ## Related",
+      "  This is YAML, not a body section.",
+      "---",
+      "# Doc",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+    const result = applyApprovedLink(source, { target: "Fresh" });
+    const bodyStart = readFrontmatter(source).end;
+
+    expect(result.startsWith(source)).toBe(true);
+    expect(result.indexOf("## Related", bodyStart)).toBeGreaterThan(bodyStart);
+    expect(result.slice(0, bodyStart)).toBe(source.slice(0, bodyStart));
+    expect(result).toContain("## Related\n\n- [[Fresh]]\n");
+  });
+
+  test("closes an unterminated body fence before creating Related", () => {
+    const source = [
+      "---",
+      "desc: |",
+      "  ## Related",
+      "---",
+      "# Probe",
+      "",
+      "```ts",
+      "const open = true;",
+    ].join("\n");
+    const result = applyApprovedLink(source, { target: "IOWarp" });
+
+    expect(result).toBe(`${source}\n\`\`\`\n\n## Related\n\n- [[IOWarp]]`);
+  });
+
+  test("uses the matching fence character and length when repairing EOF", () => {
+    const source = "# Probe\n\n~~~~text\ninside\n";
+    const result = applyApprovedLink(source, { target: "Fresh" });
+    expect(result).toBe("# Probe\n\n~~~~text\ninside\n~~~~\n\n## Related\n\n- [[Fresh]]\n");
+  });
+
+  test("inserts after the first list before a nested heading", () => {
+    const source = [
+      "## Related",
+      "",
+      "- [[One]]",
+      "- [[Two]]",
+      "  - nested context",
+      "",
+      "### Commentary",
+      "",
+      "The new link must not land here.",
+      "",
+    ].join("\n");
+    const result = applyApprovedLink(source, { target: "Fresh" });
+
+    expect(result).toContain(
+      "- [[One]]\n- [[Two]]\n  - nested context\n- [[Fresh]]\n\n### Commentary",
+    );
+    expect(result.indexOf("- [[Fresh]]")).toBeLessThan(result.indexOf("### Commentary"));
+  });
+
+  test("a link shown only inside code does not suppress the real bullet", () => {
+    const source = "## Related\n\n```md\n- [[Fresh]]\n```\n";
+    const result = applyApprovedLink(source, { target: "Fresh" });
+    expect(result).toBe("## Related\n\n- [[Fresh]]\n\n```md\n- [[Fresh]]\n```\n");
+  });
+
+  test("an existing link remains a byte-identical no-op with a later open fence", () => {
+    const source = "## Related\n\n- [[Fresh]]\n\n```ts\nopen";
+    expect(applyApprovedLink(source, { target: "Fresh" })).toBe(source);
+  });
+
+  test("recognizes a Related heading on a BOM-prefixed first line", () => {
+    const source = "﻿## Related\n\n- [[One]]\n";
+    const result = applyApprovedLink(source, { target: "Two" });
+    expect(result).toBe("﻿## Related\n\n- [[One]]\n- [[Two]]\n");
+  });
+
+  test("skips malformed but fenced frontmatter without parsing it", () => {
+    const source = "---\ndesc: [broken\n  ## Related\n---\n# Body\n";
+    const result = applyApprovedLink(source, { target: "Fresh" });
+    expect(result.startsWith(source)).toBe(true);
+    expect(result).toContain("# Body\n\n## Related\n\n- [[Fresh]]\n");
+  });
 });
 
 describe("applyApprovedRelation", () => {
@@ -211,6 +323,39 @@ describe("applyApprovedRelation", () => {
     expect(result).toBe(source);
   });
 
+  test("is a byte-identical no-op when an aliased wikilink targets the same note", () => {
+    const source = [
+      "---",
+      "notient:",
+      "  supports:",
+      '    - "[[Target|A useful display label]]"',
+      "---",
+      "# Body",
+      "",
+    ].join("\n");
+
+    const once = applyApprovedRelation(source, { key: "supports", target: "Target" });
+    const twice = applyApprovedRelation(once, { key: "supports", target: "Target" });
+
+    expect(once).toBe(source);
+    expect(twice).toBe(source);
+    expect(once.match(/\[\[Target(?:\|[^\]]+)?\]\]/g)).toHaveLength(1);
+  });
+
+  test("recognizes an aliased qualified link as the same note relation", () => {
+    const source = [
+      "---",
+      "notient:",
+      "  supports:",
+      '    - "[[Target#Section|A useful display label]]"',
+      "---",
+      "# Body",
+      "",
+    ].join("\n");
+
+    expect(applyApprovedRelation(source, { key: "supports", target: "Target" })).toBe(source);
+  });
+
   test("two consecutive applications produce the same output as one", () => {
     const source = loadFixture();
     const once = applyApprovedRelation(source, {
@@ -243,20 +388,93 @@ describe("round-trip determinism", () => {
     expect(secondRelation).toBe(firstRelation);
   });
 
-  test("applyApprovedLink output is fixpoint-stable through the pipeline", () => {
-    const source = loadFixture();
-    const result = applyApprovedLink(source, { target: "FreshTarget" });
-    const restringified = stringify(processAst(result));
-    expect(restringified).toBe(result);
+  test("applyApprovedLink inserts one contiguous range and touches nothing else", () => {
+    for (const name of ["writeback-input.md", "golden.md", "edge-cases.md", "obsidian-syntax.md"]) {
+      const source = load(name);
+      const result = applyApprovedLink(source, { target: "FreshTarget" });
+      const inserted = expectSingleInsertion(source, result);
+      expect(inserted).toContain("[[FreshTarget]]");
+    }
   });
 
-  test("applyApprovedRelation output is fixpoint-stable through the pipeline", () => {
-    const source = loadFixture();
-    const result = applyApprovedRelation(source, {
-      key: "contradicts",
-      target: "another-note",
-    });
-    const restringified = stringify(processAst(result));
-    expect(restringified).toBe(result);
+  test("applyApprovedRelation leaves the body bytes untouched", () => {
+    for (const name of ["writeback-input.md", "golden.md", "edge-cases.md", "obsidian-syntax.md"]) {
+      const source = load(name);
+      const result = applyApprovedRelation(source, { key: "contradicts", target: "fresh-note" });
+      const beforeBody = source.slice(readFrontmatter(source).end);
+      const afterBody = result.slice(readFrontmatter(result).end);
+      expect(afterBody).toBe(beforeBody);
+    }
+  });
+});
+
+describe("no re-serialization of user syntax", () => {
+  const hostile = [
+    "# Notes",
+    "",
+    "- [ ] buy milk",
+    "- [x] ship it",
+    "",
+    "> [!note] Heads up",
+    "> Careful.",
+    "",
+    "Math $a_i$ and arithmetic 5 * 3 and an escaped \\* star.",
+    "",
+    "## Related",
+    "",
+    "- [[ExistingOne]]",
+    "",
+    "## Tail",
+    "",
+    "Trailing.",
+    "",
+  ].join("\n");
+
+  test("applyApprovedLink preserves checkboxes, callouts, math and escapes", () => {
+    const result = applyApprovedLink(hostile, { target: "New" });
+    expect(result).toContain("- [ ] buy milk");
+    expect(result).toContain("- [x] ship it");
+    expect(result).toContain("> [!note] Heads up");
+    expect(result).toContain("$a_i$");
+    expect(result).toContain("5 * 3");
+    expect(result).toContain("escaped \\* star");
+    expect(result).toContain("- [[ExistingOne]]\n- [[New]]\n");
+    expect(result).toContain("## Tail\n\nTrailing.\n");
+  });
+
+  test("applyApprovedRelation preserves the same body byte-for-byte", () => {
+    const withFm = `---\ntitle: Hostile\naliases:\n  - h\n---\n${hostile}`;
+    const result = applyApprovedRelation(withFm, { key: "supports", target: "New" });
+    expect(result.slice(readFrontmatter(result).end)).toBe(hostile);
+    expect(result).toContain("aliases:\n  - h\n");
+  });
+
+  test("CRLF documents keep CRLF on the inserted bullet", () => {
+    const source = "# Doc\r\n\r\n## Related\r\n\r\n- [[One]]\r\n";
+    const result = applyApprovedLink(source, { target: "Two" });
+    expect(result).toBe("# Doc\r\n\r\n## Related\r\n\r\n- [[One]]\r\n- [[Two]]\r\n");
+  });
+
+  test("a file with no trailing newline keeps having none", () => {
+    const source = "## Related\n\n- [[One]]";
+    expect(applyApprovedLink(source, { target: "Two" })).toBe("## Related\n\n- [[One]]\n- [[Two]]");
+  });
+
+  test("`## related` matches case-insensitively with trailing whitespace", () => {
+    const source = "## related   \n\n- [[One]]\n";
+    const result = applyApprovedLink(source, { target: "Two" });
+    expect(result).toBe("## related   \n\n- [[One]]\n- [[Two]]\n");
+  });
+
+  test("a `## Related` heading inside a fenced code block is ignored", () => {
+    const source = "# Doc\n\n```\n## Related\n```\n";
+    const result = applyApprovedLink(source, { target: "One" });
+    expect(result.startsWith(source)).toBe(true);
+    expect(result.endsWith("## Related\n\n- [[One]]\n")).toBe(true);
+  });
+
+  test("an aliased link already present blocks a duplicate", () => {
+    const source = "## Related\n\n- [[Note|Display]]\n";
+    expect(applyApprovedLink(source, { target: "Note" })).toBe(source);
   });
 });

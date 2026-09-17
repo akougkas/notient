@@ -7,9 +7,9 @@
  * Boots a real SurrealDB, applies the Phase 1 schema, seeds two notes
  * (active + neighbour) plus their chunk vectors via the DAL, then exercises
  * the new Linker against a mocked LLM provider. The smoke asserts the
- * acceptance contract from Phase 3 plan §Task 8: zero-neighbour short
- * circuit, one-neighbour proposal-write path, type allowlist filter,
- * unresolvable target path filter.
+ * acceptance contract: zero-neighbour short circuit, one-neighbour
+ * proposal-write path, strict model schema enforcement, and unresolvable
+ * target path filtering.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -17,25 +17,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
-import {
-  Linker,
-  type LinkerJsonResponse,
-  MAX_PROPOSALS_PER_NOTE,
-  RANK_TO_CONFIDENCE,
-  filterProposals,
-  filterProposalsForCandidates,
-} from "../../../../src/core/agents/linker";
+import { Linker, RANK_TO_CONFIDENCE } from "../../../../src/core/agents/linker";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
   connect,
   lookupNoteByPath,
+  markTier2Done,
   markTier3Done,
   relateEdge,
   replaceChunks,
   upsertNoteByPath,
 } from "../../../../src/core/db/surreal";
 import { EventBus } from "../../../../src/core/events/eventBus";
+import { LINKER } from "../../../../src/core/indexer/concurrencyDefaults";
 import type {
   ChatMessage,
   ChatOptions,
@@ -47,7 +42,8 @@ import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/s
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "linker-fixture", dimension: VECTOR_DIM } as const;
+const AGENT_RUN_ID = 'agent_run:u"00000000-0000-4000-8000-000000000001"';
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
@@ -63,11 +59,8 @@ function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
 }
 
 function vectorOf(seed: number): number[] {
-  const vector = new Array<number>(VECTOR_DIM);
-  vector[0] = seed;
-  for (let index = 1; index < VECTOR_DIM; index += 1) {
-    vector[index] = 0.1;
-  }
+  const vector = new Array<number>(VECTOR_DIM).fill(0);
+  vector[Math.round(seed * 10_000) % VECTOR_DIM] = 1;
   return vector;
 }
 
@@ -82,15 +75,17 @@ async function seedNote(
     sha: `sha-${notePath}`,
     wordCount: 10,
   });
-  await replaceChunks(connection.db, noteId, [
+  await replaceChunks(connection.db, noteId, EMBEDDING_IDENTITY, [
     {
       ord: 0,
       text: `body of ${notePath}`,
       tokenEstimate: 4,
       vector: vectorOf(vectorSeed),
-      embedModel: EMBED_MODEL,
     },
   ]);
+  // Real Tier 2 stamps tier2_at after replaceChunks; linkerNeighbors gates
+  // candidates on it.
+  await markTier2Done(connection.db, noteId);
   if (options.tier3Done) {
     await markTier3Done(connection.db, noteId);
   }
@@ -124,6 +119,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -132,8 +128,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -145,7 +141,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearTier3Edges(connection);
@@ -163,7 +159,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save",
       notePath: "active.md",
       signal: new AbortController().signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
@@ -180,9 +176,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
             {
               targetNotePath: "neighbor.md",
               type: "supports",
-              confidence: 0.85,
               rationale: "Both notes discuss the same topic.",
-              evidenceChunkIds: ["chunk-0"],
             },
           ],
         }) as T,
@@ -192,7 +186,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save",
       notePath: "active.md",
       signal: new AbortController().signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     });
     expect(result.proposals).toBe(1);
@@ -249,7 +243,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save" as const,
       notePath: "active.md",
       signal: new AbortController().signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     };
 
@@ -262,7 +256,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
     expect(rows[0]?.count ?? 0).toBe(1);
   });
 
-  test("[smoke] silently skips proposals with unknown edge types", async () => {
+  test("[smoke] rejects proposals with unknown edge types", async () => {
     await seedNote(connection, "active.md", 0.42, { tier3Done: false });
     await seedNote(connection, "neighbor.md", 0.42, { tier3Done: true });
 
@@ -273,22 +267,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
             {
               targetNotePath: "neighbor.md",
               type: "definitely-not-allowed",
-              confidence: 0.95,
               rationale: "ignored",
-              evidenceChunkIds: [],
             },
           ],
         }) as T,
     });
     const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
-    const result = await linker.run({
-      trigger: "vault-save",
-      notePath: "active.md",
-      signal: new AbortController().signal,
-      runId: 1,
-      bus: new EventBus(),
-    });
-    expect(result.proposals).toBe(0);
+    await expect(
+      linker.run({
+        trigger: "vault-save",
+        notePath: "active.md",
+        signal: new AbortController().signal,
+        runId: AGENT_RUN_ID,
+        bus: new EventBus(),
+      }),
+    ).rejects.toThrow("edge 0 is invalid");
 
     const [rows] = await connection.db
       .query<[Array<{ count: number }>]>("SELECT count() AS count FROM supports GROUP ALL;")
@@ -307,9 +300,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
             {
               targetNotePath: "ghost.md",
               type: "supports",
-              confidence: 0.9,
               rationale: "ghost target",
-              evidenceChunkIds: [],
             },
           ],
         }) as T,
@@ -319,7 +310,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save",
       notePath: "active.md",
       signal: new AbortController().signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
@@ -354,7 +345,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save",
       notePath: "active.md",
       signal: new AbortController().signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     });
     expect(result.proposals).toBe(0);
@@ -380,9 +371,91 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Linker", () => {
       trigger: "vault-save",
       notePath: "active.md",
       signal: controller.signal,
-      runId: 1,
+      runId: AGENT_RUN_ID,
       bus: new EventBus(),
     });
     expect(observed).toBe(controller.signal);
+  });
+
+  test("[smoke] caps candidates, evidence per candidate, and active-note chunks in the prompt", async () => {
+    // 30 neighbours and a 12-chunk active note. Four kNN probes of k=20 would
+    // otherwise put every reachable chunk into a single prompt.
+    const activeId = await upsertNoteByPath(connection.db, {
+      path: "active.md",
+      sha: "sha-active",
+      wordCount: 500,
+    });
+    await replaceChunks(
+      connection.db,
+      activeId,
+      EMBEDDING_IDENTITY,
+      Array.from({ length: 12 }, (_unused, index) => ({
+        ord: index,
+        text: `active chunk ${index} `.padEnd(400, "a"),
+        tokenEstimate: 100,
+        vector: vectorOf(0.4 + index * 0.001),
+      })),
+    );
+    await markTier2Done(connection.db, activeId);
+    for (let index = 0; index < 30; index += 1) {
+      const neighborId = await upsertNoteByPath(connection.db, {
+        path: `n${index}.md`,
+        sha: `sha-n${index}`,
+        wordCount: 200,
+      });
+      await replaceChunks(
+        connection.db,
+        neighborId,
+        EMBEDDING_IDENTITY,
+        // Three chunks each, so the evidence cap has something to cut.
+        Array.from({ length: 3 }, (_unused, chunkOrd) => ({
+          ord: chunkOrd,
+          text: `neighbour ${index} chunk ${chunkOrd} `.padEnd(2000, "b"),
+          tokenEstimate: 500,
+          vector: vectorOf(0.4 + index * 0.002 + chunkOrd * 0.0001),
+        })),
+      );
+      await markTier2Done(connection.db, neighborId);
+    }
+
+    interface LinkerPrompt {
+      activeNote: { chunks: unknown[]; omitted?: string };
+      neighbors: Array<{ notePath: string; evidence: string[] }>;
+    }
+    const prompts: LinkerPrompt[] = [];
+    const provider = fakeProvider({
+      chatJson: async <T>(messages: ChatMessage[]) => {
+        const user = messages.find((message) => message.role === "user");
+        const content = typeof user?.content === "string" ? user.content : "{}";
+        prompts.push(JSON.parse(content) as LinkerPrompt);
+        return { edges: [] } as T;
+      },
+    });
+    const linker = new Linker({ db: connection.db, provider, reasoningModel: "test-model" });
+    await linker.run({
+      trigger: "vault-save",
+      notePath: "active.md",
+      signal: new AbortController().signal,
+      runId: AGENT_RUN_ID,
+      bus: new EventBus(),
+    });
+
+    expect(prompts).toHaveLength(1);
+    const payload = prompts[0];
+    expect(payload.neighbors.length).toBeLessThanOrEqual(LINKER.maxCandidates);
+    expect(payload.neighbors.length).toBeGreaterThan(1);
+    // Distinct notes only; the merge groups a note's chunks into one candidate.
+    expect(new Set(payload.neighbors.map((n) => n.notePath)).size).toBe(payload.neighbors.length);
+    for (const neighbor of payload.neighbors) {
+      expect(neighbor.evidence.length).toBeLessThanOrEqual(LINKER.maxEvidencePerNote);
+      for (const snippet of neighbor.evidence) {
+        // 600-char slice plus the single-character ellipsis marker.
+        expect(snippet.length).toBeLessThanOrEqual(LINKER.evidenceSnippetChars + 1);
+      }
+    }
+    expect(payload.activeNote.chunks).toHaveLength(LINKER.maxActiveChunksInPrompt);
+    expect(payload.activeNote.omitted).toBe(
+      `[... ${12 - LINKER.maxActiveChunksInPrompt} more chunks]`,
+    );
   });
 });

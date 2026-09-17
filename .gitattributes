@@ -1,0 +1,4 @@
+# Preserve authored BOM/CRLF bytes in the fidelity fixture.
+testing/fixtures/v0.1.0/Formats.md -text whitespace=cr-at-eol
+# Unified-diff context prefixes legitimately precede upstream tab indentation.
+patches/*.patch -text whitespace=-space-before-tab

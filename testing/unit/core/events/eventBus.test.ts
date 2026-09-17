@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { EventBus } from "../../../../src/core/events/eventBus";
+import { EventBus, assertEventBus } from "../../../../src/core/events/eventBus";
 
 describe("EventBus", () => {
+  test("required observability rejects missing or structural impostor buses", () => {
+    expect(() => assertEventBus(undefined, "runtime service")).toThrow(
+      "runtime service requires an EventBus",
+    );
+    expect(() => assertEventBus({ emit: () => {} }, "runtime service")).toThrow(
+      "runtime service requires an EventBus",
+    );
+    expect(() => assertEventBus(new EventBus(), "runtime service")).not.toThrow();
+  });
+
   test("subscribers receive emitted events of matching type", () => {
     const bus = new EventBus();
     const received: { value: { processed: number; total: number } | null } = {

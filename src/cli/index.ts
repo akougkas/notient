@@ -1,11 +1,22 @@
-import { parseAskFormat, parseAskMaxRounds, runAskCommand } from "./commands/ask";
-import { type AwakenControlMode, parseTierCsv, runAwakenCommand } from "./commands/awaken";
+import { createInterface } from "node:readline/promises";
+import { normalizeAgentId } from "../core/auth/agentIdentity";
+import { VERSION } from "../version";
+import { runAnalysisCommand } from "./commands/analysis";
+import { runApiCommand } from "./commands/api";
+import { parseAskFormat, parseAskMaxRounds, parseAskScope, runAskCommand } from "./commands/ask";
+import {
+  type AwakenControlMode,
+  parseAwakenSince,
+  parseTierCsv,
+  runAwakenCommand,
+} from "./commands/awaken";
 import { runBackupCommand } from "./commands/backup";
 import { parseBriefMaxField, runBriefCommand } from "./commands/brief";
 import { runChatSingleShot, runChatTui } from "./commands/chat";
 import { runDaemonCommand } from "./commands/daemon";
 import { runDbSqlCommand } from "./commands/dbSql";
 import { parseDistillFormat, runDistillCommand } from "./commands/distill";
+import { runDoctorCommand } from "./commands/doctor";
 import {
   parseEventsLongPollMs,
   parseEventsPositiveInt,
@@ -20,10 +31,11 @@ import {
 } from "./commands/graphDump";
 import { runGraphStatsCommand } from "./commands/graphStats";
 import { runHealthCommand } from "./commands/health";
+import { parseHistoryLimit, runHistoryCommand } from "./commands/history";
 import { runInit } from "./commands/init";
 import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit";
 import { runLinksSyncCommand } from "./commands/linksSync";
-import { runMigrateVaultCommand } from "./commands/migrateVault";
+import { MCP_DEFAULT_AGENT_ID, runMcpCommand } from "./commands/mcp";
 import { runNukeCommand } from "./commands/nuke";
 import {
   runProposalsApproveCommand,
@@ -32,7 +44,8 @@ import {
 } from "./commands/proposalsCli";
 import { ReindexPatternError, resolveReindexPattern, runReindexCommand } from "./commands/reindex";
 import { runRestoreCommand } from "./commands/restore";
-import { runSearchCommand } from "./commands/search";
+import { parseSearchMode, runSearchCommand } from "./commands/search";
+import { runServiceCommand } from "./commands/service";
 import {
   type SessionSubcommand,
   parseSessionFolders,
@@ -42,10 +55,11 @@ import {
   parseSessionTools,
   runSessionCommand,
 } from "./commands/session";
+import { runSetupCommand } from "./commands/setup";
 import { runVitalsCommand } from "./commands/vitals";
 import { defaultStateLoader, resolveVault } from "./env";
-import { normalizeAgentId } from "./identity";
 import { type Emitter, type EmitterMode, defaultMode, makeEmitter } from "./output";
+import { selectRootEntry } from "./rootEntry";
 
 interface ParsedArgs {
   command: string | null;
@@ -82,82 +96,159 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function selectMode(parsed: ParsedArgs): EmitterMode {
-  const modeFlag =
-    (parsed.flags.json && "json") ||
-    (parsed.flags.ndjson && "ndjson") ||
-    (parsed.flags.pretty && "pretty");
-  return (modeFlag as EmitterMode) ?? defaultMode(process.stdout.isTTY === true);
+  const selected: EmitterMode[] = [];
+  for (const mode of ["json", "ndjson", "pretty"] as const) {
+    const value = parsed.flags[mode];
+    if (value === undefined) continue;
+    if (value !== true) throw new Error(`INVALID_PARAMS: --${mode} does not accept a value`);
+    selected.push(mode);
+  }
+  if (selected.length > 1) {
+    throw new Error("INVALID_PARAMS: output mode flags are mutually exclusive");
+  }
+  return selected[0] ?? defaultMode(process.stdout.isTTY === true);
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat command routing table is clearer than indirection
+const COMMAND_NAMES = [
+  "api",
+  "jobs",
+  "pipelines",
+  "pair",
+  "init",
+  "setup",
+  "daemon",
+  "db",
+  "awaken",
+  "reindex",
+  "search",
+  "vitals",
+  "health",
+  "doctor",
+  "history",
+  "undo",
+  "chat",
+  "ask",
+  "brief",
+  "compare",
+  "correlate",
+  "distill",
+  "events",
+  "session",
+  "mcp",
+  "graph",
+  "links",
+  "proposals",
+  "backup",
+  "restore",
+  "nuke",
+] as const;
+
+type CommandName = (typeof COMMAND_NAMES)[number];
+
+interface DispatchContext {
+  parsed: ParsedArgs;
+  emitter: Emitter;
+  clientIdentity: string | undefined;
+}
+
+type CommandDispatcher = (context: DispatchContext) => Promise<number>;
+
+const COMMAND_DISPATCHERS = {
+  compare: ({ parsed, emitter, clientIdentity }) =>
+    dispatchAnalysis(parsed, emitter, clientIdentity, "compare"),
+  correlate: ({ parsed, emitter, clientIdentity }) =>
+    dispatchAnalysis(parsed, emitter, clientIdentity, "correlate"),
+  init: ({ parsed, emitter }) => dispatchInit(parsed, emitter),
+  setup: ({ parsed, emitter }) => dispatchSetup(parsed, emitter),
+  daemon: ({ parsed, emitter, clientIdentity }) => dispatchDaemon(parsed, emitter, clientIdentity),
+  api: ({ parsed, emitter, clientIdentity }) => dispatchApi(parsed, emitter, clientIdentity),
+  jobs: ({ parsed, emitter, clientIdentity }) => dispatchJobs(parsed, emitter, clientIdentity),
+  pipelines: ({ parsed, emitter, clientIdentity }) =>
+    dispatchPipelines(parsed, emitter, clientIdentity),
+  pair: ({ parsed, emitter, clientIdentity }) => dispatchPair(parsed, emitter, clientIdentity),
+  db: ({ parsed, emitter }) => dispatchDbSql(parsed, emitter),
+  awaken: ({ parsed, emitter, clientIdentity }) => dispatchAwaken(parsed, emitter, clientIdentity),
+  reindex: ({ parsed, emitter, clientIdentity }) =>
+    dispatchReindex(parsed, emitter, clientIdentity),
+  search: ({ parsed, emitter, clientIdentity }) => dispatchSearch(parsed, emitter, clientIdentity),
+  vitals: ({ parsed, emitter, clientIdentity }) => dispatchVitals(parsed, emitter, clientIdentity),
+  health: ({ parsed, emitter, clientIdentity }) => dispatchHealth(parsed, emitter, clientIdentity),
+  doctor: ({ parsed, emitter, clientIdentity }) => dispatchDoctor(parsed, emitter, clientIdentity),
+  history: ({ parsed, emitter, clientIdentity }) =>
+    dispatchHistory(parsed, emitter, clientIdentity),
+  undo: ({ parsed, emitter, clientIdentity }) => dispatchUndo(parsed, emitter, clientIdentity),
+  chat: ({ parsed, emitter, clientIdentity }) => dispatchChat(parsed, emitter, clientIdentity),
+  ask: ({ parsed, emitter, clientIdentity }) => dispatchAsk(parsed, emitter, clientIdentity),
+  brief: ({ parsed, emitter, clientIdentity }) => dispatchBrief(parsed, emitter, clientIdentity),
+  distill: ({ parsed, emitter, clientIdentity }) =>
+    dispatchDistill(parsed, emitter, clientIdentity),
+  events: ({ parsed, emitter, clientIdentity }) => dispatchEvents(parsed, emitter, clientIdentity),
+  session: ({ parsed, emitter, clientIdentity }) =>
+    dispatchSession(parsed, emitter, clientIdentity),
+  mcp: ({ parsed }) => dispatchMcp(parsed),
+  graph: ({ parsed, emitter, clientIdentity }) => dispatchGraph(parsed, emitter, clientIdentity),
+  links: ({ parsed, emitter, clientIdentity }) => dispatchLinks(parsed, emitter, clientIdentity),
+  proposals: ({ parsed, emitter, clientIdentity }) =>
+    dispatchProposals(parsed, emitter, clientIdentity),
+  backup: ({ parsed, emitter, clientIdentity }) => dispatchBackup(parsed, emitter, clientIdentity),
+  restore: ({ parsed, emitter, clientIdentity }) =>
+    dispatchRestore(parsed, emitter, clientIdentity),
+  nuke: ({ parsed, emitter, clientIdentity }) => dispatchNuke(parsed, emitter, clientIdentity),
+} satisfies Record<CommandName, CommandDispatcher>;
+
+const COMMAND_NAME_SET: ReadonlySet<string> = new Set(COMMAND_NAMES);
+
+function isCommandName(command: string): command is CommandName {
+  return COMMAND_NAME_SET.has(command);
+}
+
 async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
-  if (!parsed.command || parsed.command === "help") {
-    emitter.emit({
-      type: "help",
-      commands: [
-        "init",
-        "daemon",
-        "db sql",
-        "awaken",
-        "reindex",
-        "search",
-        "vitals",
-        "health",
-        "chat",
-        "ask",
-        "brief",
-        "distill",
-        "events",
-        "session",
-        "graph",
-        "links",
-        "proposals",
-        "backup",
-        "restore",
-        "nuke",
-        "migrate-vault",
-      ],
-      note: "Phase C surface plus Phase D1 agent.ask + agent.brief + agent.distill + agent.events + session grants and Phase 5 graph/links/backup/restore/nuke/migrate-vault operator verbs; richer surface lands in Phases D-E.",
-    });
-    return 0;
+  const rootEntry = selectRootEntry({
+    command: parsed.command,
+    helpRequested: parsed.flags.help === true,
+    versionRequested: parsed.flags.version === true,
+    outputModeRequested: ["json", "ndjson", "pretty"].some(
+      (mode) => parsed.flags[mode] !== undefined,
+    ),
+    stdinIsTty: process.stdin.isTTY === true,
+    stdoutIsTty: process.stdout.isTTY === true,
+  });
+  if (rootEntry === "help") return emitRootHelp(emitter);
+  if (rootEntry === "version") return emitVersion(emitter);
+  if (rootEntry === "tui") {
+    return await dispatchChat({ ...parsed, command: "chat" }, emitter, undefined);
   }
+  const command = parsed.command;
+  if (command === null) throw new Error("INTERNAL: command root entry did not select a command");
+  if (parsed.flags.help === true) return printVerbHelp(command, emitter);
 
-  if (parsed.flags.help === true) {
-    return printVerbHelp(parsed.command, emitter);
-  }
-
+  // Preserve identity validation before command lookup: an invalid global
+  // principal is invalid even when the command token is unknown.
   const clientIdentity = resolveClientIdentity(parsed);
+  if (!isCommandName(command)) return emitUnknownCommand(command, emitter);
 
-  if (parsed.command === "init") return await dispatchInit(parsed, emitter);
-  if (parsed.command === "daemon") return await dispatchDaemon(parsed, emitter, clientIdentity);
-  if (parsed.command === "db") return await dispatchDbSql(parsed, emitter);
-  if (parsed.command === "awaken") return await dispatchAwaken(parsed, emitter, clientIdentity);
-  if (parsed.command === "reindex") return await dispatchReindex(parsed, emitter, clientIdentity);
-  if (parsed.command === "search") return await dispatchSearch(parsed, emitter, clientIdentity);
-  if (parsed.command === "vitals") return await dispatchVitals(parsed, emitter, clientIdentity);
-  if (parsed.command === "health") return await dispatchHealth(parsed, emitter, clientIdentity);
-  if (parsed.command === "chat") return await dispatchChat(parsed, emitter, clientIdentity);
-  if (parsed.command === "ask") return await dispatchAsk(parsed, emitter, clientIdentity);
-  if (parsed.command === "brief") return await dispatchBrief(parsed, emitter, clientIdentity);
-  if (parsed.command === "distill") return await dispatchDistill(parsed, emitter, clientIdentity);
-  if (parsed.command === "events") return await dispatchEvents(parsed, emitter, clientIdentity);
-  if (parsed.command === "session") return await dispatchSession(parsed, emitter, clientIdentity);
-  if (parsed.command === "graph") return await dispatchGraph(parsed, emitter, clientIdentity);
-  if (parsed.command === "links") return await dispatchLinks(parsed, emitter, clientIdentity);
-  if (parsed.command === "proposals") {
-    return await dispatchProposals(parsed, emitter, clientIdentity);
-  }
-  if (parsed.command === "backup") return await dispatchBackup(parsed, emitter, clientIdentity);
-  if (parsed.command === "restore") return await dispatchRestore(parsed, emitter, clientIdentity);
-  if (parsed.command === "nuke") return await dispatchNuke(parsed, emitter, clientIdentity);
-  if (parsed.command === "migrate-vault") {
-    return await dispatchMigrateVault(parsed, emitter, clientIdentity);
-  }
+  return await COMMAND_DISPATCHERS[command]({ parsed, emitter, clientIdentity });
+}
 
+function emitVersion(emitter: Emitter): number {
+  emitter.emit({ type: "version", version: VERSION });
+  return 0;
+}
+
+function emitRootHelp(emitter: Emitter): number {
+  emitter.emit({
+    type: "help",
+    commands: COMMAND_NAMES.map((command) => (command === "db" ? "db sql" : command)),
+    note: "Local-first CLI where the notes become sentient: search, converse, awaken, and inspect their graph over one vault daemon.",
+  });
+  return 0;
+}
+
+function emitUnknownCommand(command: string, emitter: Emitter): number {
   emitter.emit({
     type: "error",
     code: "INVALID_PARAMS",
-    message: `Unknown command: ${parsed.command}`,
+    message: `Unknown command: ${command}`,
   });
   return 2;
 }
@@ -168,12 +259,54 @@ interface VerbHelp {
 }
 
 const VERB_HELP: Record<string, VerbHelp> = {
+  compare: {
+    usage:
+      'notient compare "First note.md" "Second note.md" --question "What differs?" --vault <path>',
+    flags: ["--question <focus>", "--vault <path>", "--as <agent>", "--pretty|--json"],
+  },
+  correlate: {
+    usage: 'notient correlate "Source note.md" --vault <path>',
+    flags: [
+      "--folder <scope including the source>",
+      "--vault <path>",
+      "--as <agent>",
+      "--pretty|--json",
+    ],
+  },
+  api: {
+    usage: "notient api <operation> --input <JSON> --vault <path>",
+    flags: ["--input <JSON>", "--vault <path>", "--as <agent>"],
+  },
+  pair: {
+    usage: "notient pair create|list|revoke --vault <path>",
+    flags: [
+      "--label <client name>",
+      "--kind human|agent",
+      "--scopes read,write,host",
+      "--id <credential id>",
+      "--vault <path>",
+    ],
+  },
   init: {
     usage: "notient init <vault>",
     flags: [],
   },
+  setup: {
+    usage:
+      "notient setup [vault] [--endpoint <url>] [--model <id>] [--embed-endpoint <url>] [--embed-model <id>] [--yes]",
+    flags: [
+      "--endpoint <OpenAI-compatible base URL>",
+      "--model <id>",
+      "--embed-endpoint <url>",
+      "--embed-model <id>",
+      "--yes (never prompt)",
+      "--json",
+      "--pretty",
+    ],
+  },
   daemon: {
-    usage: "notient daemon start|stop|status|list --vault <path>",
+    usage:
+      "notient daemon start|stop|status|list --vault <path>; notient daemon service install|status|uninstall --vault <path>",
     flags: ["--vault <path>", "--as <agent>"],
   },
   db: {
@@ -181,10 +314,9 @@ const VERB_HELP: Record<string, VerbHelp> = {
     flags: ["--vault <path>"],
   },
   awaken: {
-    usage: "notient awaken --vault <path> [--batch N] [--since ISO] [--tier 1,2,3]",
+    usage: "notient awaken --vault <path> [--since ISO] [--tier 1,2,3]",
     flags: [
       "--vault <path>",
-      "--batch <number>",
       "--since <datetime>",
       "--tier <csv>",
       "--background",
@@ -210,33 +342,46 @@ const VERB_HELP: Record<string, VerbHelp> = {
     usage: "notient health --vault <path>",
     flags: ["--vault <path>"],
   },
+  doctor: {
+    usage: "notient doctor --vault <path> [--json]",
+    flags: ["--vault <path>", "--json", "--pretty"],
+  },
+  history: {
+    usage: "notient history --vault <path> [--limit N]",
+    flags: ["--vault <path>", "--limit <number>"],
+  },
+  undo: {
+    usage: "notient undo [historyId] --vault <path>",
+    flags: ["--vault <path>"],
+  },
   chat: {
     usage: "notient chat [prompt] --vault <path> [--approve auto|ask]",
     flags: ["--vault <path>", "--prompt <text>", "--approve <mode>"],
   },
   ask: {
-    usage: "notient ask <intent> --vault <path> [--format structured|text] [--max-rounds N]",
-    flags: ["--vault <path>", "--format <format>", "--max-rounds <number>"],
-  },
-  brief: {
-    usage: "notient brief <topic> --vault <path> [--file <path>]",
+    usage:
+      "notient ask <intent> --vault <path> [--format structured|text] [--max-rounds N] [--folder path] [--note path.md]",
     flags: [
       "--vault <path>",
-      "--file <path>",
-      "--max-notes <number>",
-      "--max-questions <number>",
-      "--max-decisions <number>",
+      "--format <format>",
+      "--max-rounds <number>",
+      "--folder <path>",
+      "--note <path>",
     ],
   },
+  brief: {
+    usage: "notient brief <topic> | --file <path> --vault <path>",
+    flags: ["--vault <path>", "--file <path>", "--max-notes <number>", "--folder <path>"],
+  },
   distill: {
-    usage: "notient distill --from <transcript> --vault <path> [--dry-run]",
+    usage: "notient distill --from <transcript.md> --vault <path> [--dry-run]",
     flags: ["--vault <path>", "--from <path>", "--format <format>", "--dry-run"],
   },
   events: {
-    usage: "notient events --vault <path> [--since N] [--no-poll]",
+    usage: 'notient events --vault <path> [--since <agent_event:u"uuid">] [--no-poll]',
     flags: [
       "--vault <path>",
-      "--since <number>",
+      '--since <agent_event:u"uuid">',
       "--limit <number>",
       "--long-poll-ms <ms>",
       "--no-poll",
@@ -253,6 +398,38 @@ const VERB_HELP: Record<string, VerbHelp> = {
       "--max-writes <number>",
       "--session-id <id>",
     ],
+  },
+  jobs: {
+    usage:
+      "notient jobs list|get|pause|resume|cancel|retry [id] [--revision <sha256> --idempotency-key <key>] --vault <path>",
+    flags: [
+      "--vault <path>",
+      "--pipeline <name>",
+      "--state <state>",
+      "--limit <number>",
+      "--cursor <cursor>",
+      "--revision <sha256>",
+      "--idempotency-key <key>",
+      "--as <agent-id>",
+      "--json",
+      "--ndjson",
+    ],
+  },
+  pipelines: {
+    usage:
+      "notient pipelines list | run <pipeline> --sources <json-array> --idempotency-key <key> [--preview] --vault <path>",
+    flags: [
+      "--vault <path>",
+      "--sources <json-array>",
+      "--idempotency-key <key>",
+      "--preview",
+      "--as <agent-id>",
+      "--ndjson",
+    ],
+  },
+  mcp: {
+    usage: "notient mcp --vault <path> [--as <agent-id>]",
+    flags: ["--vault <path>", "--as <agent-id>"],
   },
   graph: {
     usage: "notient graph dump|stats --vault <path>",
@@ -284,10 +461,6 @@ const VERB_HELP: Record<string, VerbHelp> = {
   nuke: {
     usage: "notient nuke --vault <path> --yes",
     flags: ["--vault <path>", "--yes"],
-  },
-  "migrate-vault": {
-    usage: "notient migrate-vault <target-vault> --vault <source-vault>",
-    flags: ["--vault <path>"],
   },
 };
 
@@ -328,11 +501,158 @@ async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<numbe
   return 0;
 }
 
+async function dispatchSetup(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+  const text = (name: string) =>
+    typeof parsed.flags[name] === "string" ? (parsed.flags[name] as string) : undefined;
+  // `--yes <vault>` parses the folder as the flag's value; accept it as the vault.
+  const vaultPathArg = parsed.positional[0] ?? text("vault") ?? text("yes");
+  const prompts = process.stdin.isTTY === true && parsed.flags.yes === undefined;
+  const terminal = prompts
+    ? createInterface({ input: process.stdin, output: process.stderr })
+    : null;
+  try {
+    return await runSetupCommand({
+      vaultPathArg,
+      cwd: process.cwd(),
+      emitter,
+      endpoint: text("endpoint"),
+      model: text("model"),
+      embedEndpoint: text("embed-endpoint"),
+      embedModel: text("embed-model"),
+      ask: terminal ? (question) => terminal.question(question) : undefined,
+    });
+  } finally {
+    terminal?.close();
+  }
+}
+
+async function dispatchJobs(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const verb = parsed.positional[0] ?? "list";
+  const control = ["pause", "resume", "cancel", "retry"].includes(verb);
+  if (!["list", "get", "pause", "resume", "cancel", "retry"].includes(verb))
+    throw new Error("INVALID_PARAMS: jobs expects list, get, pause, resume, cancel or retry");
+  const input: Record<string, unknown> = verb === "list" ? {} : { id: parsed.positional[1] };
+  if (control)
+    Object.assign(input, {
+      action: verb,
+      revision: parsed.flags.revision,
+      idempotencyKey: parsed.flags["idempotency-key"],
+    });
+  if (parsed.positional.length > (verb === "list" ? 1 : 2))
+    throw new Error("INVALID_PARAMS: unexpected jobs argument");
+  for (const key of ["pipeline", "state", "limit", "cursor"] as const) {
+    const value = parsed.flags[key];
+    if (value === undefined) continue;
+    if (verb !== "list" || typeof value !== "string")
+      throw new Error(`INVALID_PARAMS: --${key} requires a value for jobs list`);
+    input[key] = key === "limit" ? Number(value) : value;
+  }
+  return runApiCommand({
+    method: control ? "jobs.control" : `jobs.${verb}`,
+    input,
+    emitter,
+    clientIdentity,
+    vaultPath: await requireVault(parsed),
+  });
+}
+
+async function dispatchPipelines(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const verb = parsed.positional[0] ?? "list";
+  if (!["list", "run"].includes(verb))
+    throw new Error("INVALID_PARAMS: pipelines expects list or run");
+  if (parsed.positional.length > (verb === "list" ? 1 : 2))
+    throw new Error("INVALID_PARAMS: unexpected pipelines argument");
+  let input: Record<string, unknown> = {};
+  if (verb === "run") {
+    if (typeof parsed.flags.sources !== "string")
+      throw new Error("INVALID_PARAMS: --sources requires a JSON array of {path, revision}");
+    if (parsed.flags.preview !== undefined && parsed.flags.preview !== true)
+      throw new Error("INVALID_PARAMS: --preview does not accept a value");
+    input = {
+      pipeline: parsed.positional[1],
+      sources: JSON.parse(parsed.flags.sources),
+      idempotencyKey: parsed.flags["idempotency-key"],
+      preview: parsed.flags.preview === true,
+    };
+  }
+  return runApiCommand({
+    method: `pipelines.${verb}`,
+    input,
+    emitter,
+    clientIdentity,
+    vaultPath: await requireVault(parsed),
+  });
+}
+
+async function dispatchApi(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const method = parsed.positional[0];
+  if (!method) throw new Error("INVALID_PARAMS: API operation required");
+  const input = typeof parsed.flags.input === "string" ? JSON.parse(parsed.flags.input) : {};
+  return runApiCommand({
+    method,
+    input,
+    emitter,
+    clientIdentity,
+    vaultPath: await requireVault(parsed),
+  });
+}
+async function dispatchPair(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const action = parsed.positional[0];
+  if (action !== "create" && action !== "list" && action !== "revoke")
+    throw new Error("INVALID_PARAMS: pair requires create | list | revoke");
+  const kind = parsed.flags.kind ?? "human";
+  const scopes =
+    typeof parsed.flags.scopes === "string"
+      ? parsed.flags.scopes.split(",")
+      : kind === "human"
+        ? ["read", "write", "host"]
+        : ["read", "write"];
+  const input =
+    action === "create"
+      ? { label: parsed.flags.label ?? "Obsidian desktop", kind, scopes }
+      : action === "revoke"
+        ? { id: parsed.flags.id }
+        : {};
+  return runApiCommand({
+    method: `pairing.${action}`,
+    input,
+    emitter,
+    clientIdentity,
+    vaultPath: await requireVault(parsed),
+    pairing: true,
+  });
+}
+
 async function dispatchDaemon(
   parsed: ParsedArgs,
   emitter: Emitter,
   clientIdentity: string | undefined,
 ): Promise<number> {
+  if (parsed.positional[0] === "service") {
+    const action = parsed.positional[1];
+    if (action !== "install" && action !== "status" && action !== "uninstall")
+      throw new Error("daemon service requires install | status | uninstall");
+    const vaultPath = await resolveVaultForDaemon(parsed);
+    if (!vaultPath) throw new Error("daemon service requires --vault");
+    await runServiceCommand({ action, vaultPath, emitter, clientIdentity });
+    return 0;
+  }
   const verb = parsed.positional[0] as "start" | "stop" | "status" | "list" | undefined;
   if (!verb) throw new Error("daemon requires a verb: start | stop | status | list");
   const vaultPath = await resolveVaultForDaemon(parsed);
@@ -359,18 +679,17 @@ async function dispatchAwaken(
   emitter: Emitter,
   clientIdentity: string | undefined,
 ): Promise<number> {
+  assertAwakenInvocation(parsed);
   const vaultPath = await requireVault(parsed);
   const mode = selectAwakenMode(parsed);
   if (mode !== undefined) {
     return await runAwakenCommand({ vaultPath, mode, emitter, clientIdentity });
   }
-  const batch = typeof parsed.flags.batch === "string" ? Number(parsed.flags.batch) : undefined;
-  const since = typeof parsed.flags.since === "string" ? Date.parse(parsed.flags.since) : undefined;
+  const since = parseAwakenSince(parsed.flags.since);
   const tier = parsed.flags.tier === undefined ? undefined : parseTierCsv(parsed.flags.tier);
-  const background = parsed.flags.background === true;
+  const background = parsed.flags.background === true ? true : undefined;
   return await runAwakenCommand({
     vaultPath,
-    batch,
     since,
     tier,
     background,
@@ -380,16 +699,54 @@ async function dispatchAwaken(
 }
 
 function selectAwakenMode(parsed: ParsedArgs): AwakenControlMode | undefined {
-  // Mutually exclusive control flags. When more than one is set the first
-  // match in this priority order wins; the alternatives are silently
-  // ignored. The CLI does not validate combinations because control flags
-  // and the default fresh-run flags (`--batch`, `--since`) are themselves
-  // disjoint and the daemon would reject an unknown combination upstream.
-  if (parsed.flags.pause === true) return "pause";
-  if (parsed.flags.resume === true) return "resume";
-  if (parsed.flags.cancel === true) return "cancel";
-  if (parsed.flags.status === true) return "status";
-  return undefined;
+  const selected = (["pause", "resume", "cancel", "status"] as const).filter(
+    (mode) => parsed.flags[mode] === true,
+  );
+  if (selected.length > 1) {
+    throw new Error("INVALID_PARAMS: awaken control flags are mutually exclusive");
+  }
+  return selected[0];
+}
+
+const AWAKEN_ALLOWED_FLAGS = new Set([
+  "vault",
+  "as",
+  "json",
+  "ndjson",
+  "pretty",
+  "help",
+  "since",
+  "tier",
+  "background",
+  "pause",
+  "resume",
+  "cancel",
+  "status",
+]);
+
+function assertAwakenInvocation(parsed: ParsedArgs): void {
+  if (parsed.positional.length > 0) {
+    throw new Error("INVALID_PARAMS: awaken does not accept positional arguments");
+  }
+  const unsupported = Object.keys(parsed.flags).find((key) => !AWAKEN_ALLOWED_FLAGS.has(key));
+  if (unsupported !== undefined) {
+    throw new Error(`INVALID_PARAMS: awaken does not support --${unsupported}`);
+  }
+  for (const flag of ["background", "pause", "resume", "cancel", "status"] as const) {
+    const value = parsed.flags[flag];
+    if (value !== undefined && value !== true) {
+      throw new Error(`INVALID_PARAMS: --${flag} does not accept a value`);
+    }
+  }
+  const mode = selectAwakenMode(parsed);
+  if (
+    mode !== undefined &&
+    (parsed.flags.since !== undefined ||
+      parsed.flags.tier !== undefined ||
+      parsed.flags.background !== undefined)
+  ) {
+    throw new Error("INVALID_PARAMS: awaken control flags cannot be combined with run options");
+  }
 }
 
 async function dispatchReindex(
@@ -429,7 +786,7 @@ async function dispatchSearch(
   const query =
     parsed.positional[0] ?? (typeof parsed.flags.query === "string" ? parsed.flags.query : "");
   if (!query) throw new Error("search requires a query positional or --query flag");
-  const mode = (parsed.flags.mode as "quick" | "balanced" | "deep") ?? "balanced";
+  const mode = parseSearchMode(parsed.flags.mode);
   const limit = typeof parsed.flags.limit === "string" ? Number(parsed.flags.limit) : undefined;
   await runSearchCommand({ vaultPath, query, mode, limit, emitter, clientIdentity });
   return 0;
@@ -447,6 +804,14 @@ async function dispatchVitals(
   return 0;
 }
 
+async function dispatchDoctor(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  return runDoctorCommand({ vaultPath: await requireVault(parsed), emitter, clientIdentity });
+}
+
 async function dispatchHealth(
   parsed: ParsedArgs,
   emitter: Emitter,
@@ -455,6 +820,37 @@ async function dispatchHealth(
   const vaultPath = await requireVault(parsed);
   await runHealthCommand({ vaultPath, emitter, clientIdentity });
   return 0;
+}
+
+async function dispatchHistory(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  return await runHistoryCommand({
+    action: "list",
+    vaultPath,
+    limit: parseHistoryLimit(parsed.flags.limit),
+    emitter,
+    clientIdentity,
+  });
+}
+
+async function dispatchUndo(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const historyId = parsed.positional[0];
+  return await runHistoryCommand({
+    action: "undo",
+    vaultPath,
+    historyId,
+    emitter,
+    clientIdentity,
+  });
 }
 
 async function dispatchChat(
@@ -480,6 +876,29 @@ async function dispatchChat(
   return 0;
 }
 
+async function dispatchAnalysis(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+  kind: "compare" | "correlate",
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  if (
+    (parsed.flags.question !== undefined && typeof parsed.flags.question !== "string") ||
+    (parsed.flags.folder !== undefined && typeof parsed.flags.folder !== "string")
+  )
+    throw new Error("INVALID_PARAMS: question and folder require values");
+  return runAnalysisCommand({
+    vaultPath,
+    paths: parsed.positional,
+    kind,
+    question: parsed.flags.question as string | undefined,
+    folder: parsed.flags.folder as string | undefined,
+    clientIdentity,
+    emitter,
+  });
+}
+
 async function dispatchAsk(
   parsed: ParsedArgs,
   emitter: Emitter,
@@ -497,6 +916,7 @@ async function dispatchAsk(
     intent,
     format,
     maxRoundsPerTurn,
+    scope: parseAskScope(parsed.flags.folder, parsed.flags.note),
     emitter,
     clientIdentity,
   });
@@ -509,6 +929,8 @@ async function dispatchBrief(
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const fileFlag = parsed.flags.file;
+  if (fileFlag !== undefined && typeof fileFlag !== "string")
+    throw new Error("INVALID_PARAMS: --file requires a saved note path");
   const filePath = typeof fileFlag === "string" ? fileFlag : undefined;
   const positionalTopic = parsed.positional.join(" ").trim();
   const topic = positionalTopic.length > 0 ? positionalTopic : undefined;
@@ -519,15 +941,20 @@ async function dispatchBrief(
     throw new Error('INVALID_PARAMS: brief requires a topic or --file (e.g. notient brief "auth")');
   }
   const maxNotes = parseBriefMaxField(parsed.flags["max-notes"], "max-notes");
-  const maxQuestions = parseBriefMaxField(parsed.flags["max-questions"], "max-questions");
-  const maxDecisions = parseBriefMaxField(parsed.flags["max-decisions"], "max-decisions");
+  for (const flag of ["max-questions", "max-claims"])
+    if (parsed.flags[flag] !== undefined)
+      throw new Error(
+        `INVALID_PARAMS: --${flag} is no longer supported; brief findings are selected by evidence.`,
+      );
+  if (parsed.flags.folder !== undefined && typeof parsed.flags.folder !== "string")
+    throw new Error("INVALID_PARAMS: --folder requires a path");
+  const folder = typeof parsed.flags.folder === "string" ? parsed.flags.folder : undefined;
   return await runBriefCommand({
     vaultPath,
     topic,
     filePath,
     maxNotes,
-    maxQuestions,
-    maxDecisions,
+    folder,
     emitter,
     clientIdentity,
   });
@@ -564,8 +991,7 @@ async function dispatchEvents(
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const noPoll = parsed.flags["no-poll"] === true;
-  const since =
-    noPoll && parsed.flags.since === undefined ? 0 : parseEventsSince(parsed.flags.since);
+  const since = parseEventsSince(parsed.flags.since);
   const limit = parseEventsPositiveInt(parsed.flags.limit, "limit");
   const longPollMs = parseEventsLongPollMs(parsed.flags["long-poll-ms"]);
   return await runEventsCommand({
@@ -676,7 +1102,6 @@ async function dispatchLinks(
     const vaultPath = await requireVault(parsed);
     return await runLinksSyncCommand({
       vaultPath,
-      vaultRoot: vaultPath,
       emitter,
       clientIdentity,
     });
@@ -776,7 +1201,6 @@ async function dispatchProposalsApprove(
   const vaultPath = await requireVault(parsed);
   return await runProposalsApproveCommand({
     vaultPath,
-    vaultRoot: vaultPath,
     emitter,
     id,
     clientIdentity,
@@ -804,7 +1228,6 @@ async function dispatchProposalsReject(
       : undefined;
   return await runProposalsRejectCommand({
     vaultPath,
-    vaultRoot: vaultPath,
     emitter,
     id,
     reason,
@@ -846,24 +1269,18 @@ async function dispatchNuke(
   return await runNukeCommand({ vaultPath, yes, emitter, clientIdentity });
 }
 
-async function dispatchMigrateVault(
-  parsed: ParsedArgs,
-  emitter: Emitter,
-  clientIdentity: string | undefined,
-): Promise<number> {
-  const sourceVaultPath = await requireVault(parsed);
-  const targetVaultPath = parsed.positional[0];
-  if (typeof targetVaultPath !== "string" || targetVaultPath.length === 0) {
-    throw new Error(
-      "INVALID_PARAMS: migrate-vault requires a positional new-absolute-path argument",
-    );
-  }
-  return await runMigrateVaultCommand({
-    sourceVaultPath,
-    targetVaultPath,
-    emitter,
-    clientIdentity,
-  });
+/**
+ * `notient mcp` runs the MCP stdio server. stdout is the JSON-RPC channel,
+ * so this dispatch deliberately bypasses the emitter and never prints there.
+ * Identity defaults to `mcp-client` rather than `human`: the adapter is an
+ * agent principal, so an absent `--as` must not fall through to the daemon's
+ * human default.
+ */
+async function dispatchMcp(parsed: ParsedArgs): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const raw = parsed.flags.as;
+  const clientIdentity = typeof raw === "string" ? normalizeAgentId(raw) : MCP_DEFAULT_AGENT_ID;
+  return await runMcpCommand({ vaultPath, clientIdentity });
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {
@@ -878,15 +1295,21 @@ async function requireVault(parsed: ParsedArgs): Promise<string> {
 
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
-  const emitter = makeEmitter({ mode: selectMode(parsed) });
+  let emitter = makeEmitter({ mode: defaultMode(process.stdout.isTTY === true) });
   try {
+    emitter = makeEmitter({ mode: selectMode(parsed) });
     return await dispatch(parsed, emitter);
   } catch (error) {
-    emitter.emit({
+    const event = {
       type: "error",
       code: "INTERNAL",
       message: error instanceof Error ? error.message : String(error),
-    });
+    };
+    if (parsed.command === "mcp") {
+      process.stderr.write(`${JSON.stringify(event)}\n`);
+    } else {
+      emitter.emit(event);
+    }
     return 1;
   }
 }

@@ -17,15 +17,20 @@ import * as path from "node:path";
 import type { RecordId } from "surrealdb";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect, lookupNoteByPath } from "../../../../src/core/db/surreal";
+import { EventBus } from "../../../../src/core/events/eventBus";
 import { Embedder } from "../../../../src/core/indexer/embedder";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
-import { EMBED_MODEL, runTier2 } from "../../../../src/core/indexer/tier2";
+import { runTier2 } from "../../../../src/core/indexer/tier2";
 import type { EmbedOptions, LLMProvider } from "../../../../src/core/llm/provider";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
+const EMBEDDING_IDENTITY = {
+  model: "headingless-smoke-embedding",
+  dimension: VECTOR_DIM,
+} as const;
 
 function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
   return {
@@ -67,6 +72,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] heading-less note indexing", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -75,22 +81,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] heading-less note indexing", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     const { extraction } = await runTier1(connection.db, {
       notePath: letterPath,
       source: letterSource,
       vaultPaths: [letterPath],
+      bus: new EventBus(),
     });
 
     const provider = fakeProvider({
       embed: async (input: string[], _opts: EmbedOptions) => input.map(() => vectorOf(0.42)),
     });
-    const embedder = new Embedder(provider, { model: EMBED_MODEL });
+    const embedder = new Embedder(provider, { identity: EMBEDDING_IDENTITY, concurrency: 1 });
     await runTier2(connection.db, {
       notePath: letterPath,
       blocks: extraction.blocks,
       embedder,
+      bus: new EventBus(),
+      chunkSizes: { targetTokens: 320, maxTokens: 480 },
     });
 
     const id = await lookupNoteByPath(connection.db, letterPath);
@@ -110,9 +119,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] heading-less note indexing", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  test("[smoke] heading-less note yields >=1 chunk row with a 768-dim vector and EMBED_MODEL", async () => {
+  test("[smoke] heading-less note yields chunks in its resolved embedding space", async () => {
     interface ChunkRow {
       ord: number;
       vector: number[];
@@ -127,7 +136,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] heading-less note indexing", () => {
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const row of rows) {
       expect(row.vector.length).toBe(VECTOR_DIM);
-      expect(row.embed_model).toBe(EMBED_MODEL);
+      expect(row.embed_model).toBe(EMBEDDING_IDENTITY.model);
     }
   });
 });

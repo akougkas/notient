@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notient"
+  short_description: "Consult and cultivate living Markdown notes"
+  default_prompt: "Use $notient to find grounded context in my notes and propose any durable change for review."

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "inlineSourceMap": false,
+    "inlineSources": false,
+    "rootDir": "src",
+    "outDir": "dist/sdk/types"
+  },
+  "include": ["src/api/sdk.ts"]
+}

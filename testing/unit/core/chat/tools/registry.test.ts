@@ -6,7 +6,6 @@ import {
   UnknownToolError,
   isObject,
   optionalPositiveInt,
-  optionalStringArray,
   requireString,
 } from "../../../../../src/core/chat/tools/registry";
 
@@ -14,6 +13,8 @@ interface DemoArgs {
   name: string;
   count?: number;
 }
+
+const TEST_CONTEXT = { clientIdentity: "human" } as const;
 
 function makeDemoTool(record: { invocations: DemoArgs[] }): ToolDefinition<DemoArgs, string> {
   return {
@@ -55,6 +56,13 @@ describe("ToolRegistry", () => {
     expect(list[0].schema.required).toEqual(["name"]);
   });
 
+  test("rejects duplicate tool registration", () => {
+    const registry = new ToolRegistry();
+    const record = { invocations: [] as DemoArgs[] };
+    registry.register(makeDemoTool(record));
+    expect(() => registry.register(makeDemoTool(record))).toThrow("already contains demo.echo");
+  });
+
   test("exports OpenAI function-calling shape", () => {
     const registry = new ToolRegistry();
     const record = { invocations: [] as DemoArgs[] };
@@ -80,6 +88,7 @@ describe("ToolRegistry", () => {
       "demo.echo",
       { name: "alpha", count: 3 },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
     expect(result).toBe("alpha:3");
     expect(record.invocations).toEqual([{ name: "alpha", count: 3 }]);
@@ -91,7 +100,7 @@ describe("ToolRegistry", () => {
     registry.register(makeDemoTool(record));
     let error: unknown;
     try {
-      await registry.invoke("demo.echo", { name: "" }, new AbortController().signal);
+      await registry.invoke("demo.echo", { name: "" }, new AbortController().signal, TEST_CONTEXT);
     } catch (caught) {
       error = caught;
     }
@@ -104,12 +113,30 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry();
     let error: unknown;
     try {
-      await registry.invoke("missing.tool", {}, new AbortController().signal);
+      await registry.invoke("missing.tool", {}, new AbortController().signal, TEST_CONTEXT);
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(UnknownToolError);
     expect((error as UnknownToolError).toolName).toBe("missing.tool");
+  });
+
+  test("invoke rejects an empty client identity before dispatch", async () => {
+    const registry = new ToolRegistry();
+    const record = { invocations: [] as DemoArgs[] };
+    registry.register(makeDemoTool(record));
+
+    await expect(
+      registry.invoke("demo.echo", { name: "alpha" }, new AbortController().signal, {
+        clientIdentity: "",
+      }),
+    ).rejects.toThrow("authenticated clientIdentity");
+    await expect(
+      registry.invoke("demo.echo", { name: "alpha" }, new AbortController().signal, {
+        clientIdentity: " padded ",
+      }),
+    ).rejects.toThrow("authenticated clientIdentity");
+    expect(record.invocations).toEqual([]);
   });
 
   test("isWriteGated reflects the tool flag", () => {
@@ -134,16 +161,11 @@ describe("registry helpers", () => {
     expect(requireString("ok", "x")).toBe("ok");
   });
 
-  test("optionalPositiveInt floors and rejects non-positive", () => {
+  test("optionalPositiveInt accepts only canonical positive safe integers", () => {
     expect(optionalPositiveInt(undefined, "n")).toBeUndefined();
-    expect(optionalPositiveInt(3.7, "n")).toBe(3);
-    expect(() => optionalPositiveInt(0, "n")).toThrow();
-    expect(() => optionalPositiveInt(-1, "n")).toThrow();
-  });
-
-  test("optionalStringArray validates element types", () => {
-    expect(optionalStringArray(undefined, "x")).toBeUndefined();
-    expect(optionalStringArray(["a", "b"], "x")).toEqual(["a", "b"]);
-    expect(() => optionalStringArray(["a", 1], "x")).toThrow();
+    expect(optionalPositiveInt(3, "n")).toBe(3);
+    for (const invalid of [null, 3.7, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+      expect(() => optionalPositiveInt(invalid, "n")).toThrow("positive safe integer");
+    }
   });
 });

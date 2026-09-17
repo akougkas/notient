@@ -1,7 +1,8 @@
 import type { Surreal } from "surrealdb";
+import type { ReasoningScheduler } from "../../coordinator/reasoningScheduler";
 import { type SearchChunkRow, searchBm25, searchVectorWithPath } from "../../db/surreal";
 import type { LLMProvider } from "../../llm/provider";
-import { buildChunkNoteFilter } from "../filters";
+import { buildChunkNoteFilter, withQueryPhrases } from "../filters";
 import { expandViaApprovedEdges } from "../graphExpansion";
 import type { Reranker } from "../reranker";
 import { synthesize } from "../synthesis";
@@ -17,9 +18,9 @@ export interface DeepSearchOptions {
   filters?: SearchFilters;
   topK: number;
   rerankTopN: number;
-  graphDepth: number;
   synthesisEnabled: boolean;
   signal: AbortSignal;
+  scheduler: ReasoningScheduler;
   /** Optional ef forwarded to the HNSW search operator. */
   ef?: number;
 }
@@ -31,6 +32,13 @@ export interface DeepSearchOutput {
 
 export type DeepSearchEvent = SearchEvent | { type: "deep:result"; output: DeepSearchOutput };
 
+/**
+ * Reciprocal-rank-fusion constant. The two retrieval arms produce scores on
+ * incomparable scales (cosine distance vs BM25). RRF fuses rank lists instead
+ * of scores, avoiding scale-sensitive normalization. k = 60 is the standard
+ * value from Cormack et al. 2009.
+ */
+const RRF_K = 60;
 const KNN_WEIGHT = 0.7;
 const BM25_WEIGHT = 0.3;
 
@@ -43,8 +51,8 @@ const BM25_WEIGHT = 0.3;
  * returned on the result event and the pipeline still emits `search:done`.
  *
  * The hybrid retrieval issues two SurrealQL queries (kNN and BM25) against the
- * same `chunk` table and fuses the candidate sets in JS using the
- * `0.7 * (1 - distance) + 0.3 * normalisedBm25` weighting. Filters compose as
+ * same `chunk` table and fuses the candidate sets in JS with weighted
+ * reciprocal rank fusion (k = 60, 0.7 kNN / 0.3 BM25). Filters compose as
  * additional WHERE predicates inside both queries so date/folder/maturity
  * constraints are pushed down server-side.
  */
@@ -63,7 +71,6 @@ export async function* deepSearch(
   const expandedHits = await expandViaApprovedEdges({
     db: options.db,
     baseHits,
-    depth: options.graphDepth,
   });
   yield { type: "search:graph-expansion", addedHitCount: expandedHits.length };
   const allHits: SearchHit[] = [...baseHits, ...expandedHits];
@@ -81,6 +88,7 @@ export async function* deepSearch(
         query: options.query,
         hits: baseHits,
         signal: options.signal,
+        scheduler: options.scheduler,
       });
       yield { type: "search:synthesis-done", card: synthesis };
     } catch (error) {
@@ -100,7 +108,7 @@ export async function* deepSearch(
 async function retrieveBaseHits(options: DeepSearchOptions): Promise<SearchHit[]> {
   if (options.rerankTopN <= 0) return [];
   const embedding = await options.embed(options.query, options.signal);
-  const fragment = buildChunkNoteFilter(options.filters);
+  const fragment = withQueryPhrases(options.query, buildChunkNoteFilter(options.filters));
   const knnRows: SearchChunkRow[] = embedding
     ? await searchVectorWithPath(options.db, {
         vector: Array.from(embedding),
@@ -117,7 +125,7 @@ async function retrieveBaseHits(options: DeepSearchOptions): Promise<SearchHit[]
     extraBindings: fragment.bindings,
   });
   if (knnRows.length === 0 && bm25Rows.length === 0) return [];
-  const fused = fuseHybridRows(knnRows, bm25Rows);
+  const fused = dedupeByNote(fuseHybridRows(knnRows, bm25Rows));
   const initial: SearchHit[] = fused.slice(0, options.topK).map((entry) => ({
     notePath: entry.notePath,
     chunkId: entry.chunkId.toString(),
@@ -126,37 +134,71 @@ async function retrieveBaseHits(options: DeepSearchOptions): Promise<SearchHit[]
     matchedText: options.query,
   }));
   if (initial.length === 0) return [];
-  return options.reranker.rerank(options.query, initial, options.rerankTopN, options.signal);
+  return options.reranker.rerank(
+    options.query,
+    initial,
+    options.rerankTopN,
+    options.signal,
+    options.scheduler,
+  );
 }
 
-interface FusedRow extends SearchChunkRow {
-  /** Composite score in [0, ~1] used for sorting before the rerank pass. */
+export interface FusedRow extends SearchChunkRow {
+  /** RRF score used for sorting before the rerank pass. */
   score: number;
 }
 
-function fuseHybridRows(knn: SearchChunkRow[], bm25: SearchChunkRow[]): FusedRow[] {
-  const maxBm25 = bm25.reduce((acc, row) => {
-    const score = row.bm25Score ?? 0;
-    return score > acc ? score : acc;
-  }, 0);
+/**
+ * Weighted reciprocal rank fusion over the kNN and BM25 rank lists.
+ *
+ * `score(d) = 0.7 / (k + rank_knn(d)) + 0.3 / (k + rank_bm25(d))`, ranks
+ * 1-based, a missing arm contributing nothing. Exported for unit tests.
+ */
+export function fuseHybridRows(knn: SearchChunkRow[], bm25: SearchChunkRow[]): FusedRow[] {
   const merged = new Map<string, FusedRow>();
-  for (const row of knn) {
+  for (let index = 0; index < knn.length; index += 1) {
+    const row = knn[index];
     const key = row.chunkId.toString();
-    const knnComponent = row.distance === null ? 0 : Math.max(0, 1 - row.distance);
-    merged.set(key, { ...row, score: KNN_WEIGHT * knnComponent });
+    const existing = merged.get(key);
+    const contribution = KNN_WEIGHT / (RRF_K + index + 1);
+    if (existing === undefined) {
+      merged.set(key, { ...row, score: contribution });
+      continue;
+    }
+    existing.score += contribution;
   }
-  for (const row of bm25) {
+  for (let index = 0; index < bm25.length; index += 1) {
+    const row = bm25[index];
     const key = row.chunkId.toString();
-    const bm25Component = maxBm25 === 0 ? 0 : (row.bm25Score ?? 0) / maxBm25;
+    const contribution = BM25_WEIGHT / (RRF_K + index + 1);
     const existing = merged.get(key);
     if (existing === undefined) {
-      merged.set(key, { ...row, score: BM25_WEIGHT * bm25Component });
+      merged.set(key, { ...row, score: contribution });
       continue;
     }
     existing.bm25Score = row.bm25Score;
-    existing.score += BM25_WEIGHT * bm25Component;
+    existing.score += contribution;
   }
   return Array.from(merged.values()).sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Keeps the best-scoring chunk per note. RRF dedupes by chunk id, so a single
+ * long note could contribute every candidate in the topK window and hide the
+ * rest of the vault behind its own paragraphs. Quick search dedupes per note
+ * for the same reason; this is the deep-mode equivalent, applied after fusion
+ * so ranking still sees every chunk. Input must be sorted by score descending,
+ * which is what `fuseHybridRows` returns.
+ */
+export function dedupeByNote(rows: FusedRow[]): FusedRow[] {
+  const seen = new Set<string>();
+  const out: FusedRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.notePath)) continue;
+    seen.add(row.notePath);
+    out.push(row);
+  }
+  return out;
 }
 
 function isAbortError(error: unknown): boolean {

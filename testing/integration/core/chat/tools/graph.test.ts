@@ -1,3 +1,6 @@
+import { contentRevision } from "../../../../../src/api/notes";
+import { GraphService } from "../../../../../src/core/graph/graphService";
+import { STRUCTURAL_INDEX_VERSION } from "../../../../../src/core/markdown/types";
 /**
  * Phase 5 Task 7 graph chat-tool smoke harness.
  *
@@ -8,21 +11,13 @@
  * deterministic `wikilink` relation, filtered by `approved = true AND
  * applied = true`. The smoke seeds wikilink edges so the BFS exercises a
  * realistic Tier-1 graph.
- *
- * `graph.list_clusters` is a pure in-memory cache reader; its tests are
- * unit-style and run unconditionally.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  type ClusterEntry,
-  InMemoryClusterCache,
-  makeFindPathTool,
-  makeListClustersTool,
-} from "../../../../../src/core/chat/tools/graph";
+import { makeFindPathTool } from "../../../../../src/core/chat/tools/graph";
 import { applySchema } from "../../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -33,6 +28,7 @@ import {
 import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const TEST_CONTEXT = { clientIdentity: "human" } as const;
 
 async function seedWikilink(
   connection: SurrealConnection,
@@ -41,14 +37,19 @@ async function seedWikilink(
 ): Promise<void> {
   const fromId = await upsertNoteByPath(connection.db, {
     path: fromPath,
-    sha: `sha-${fromPath}`,
+    sha: contentRevision(fromPath),
     wordCount: 10,
   });
   const toId = await upsertNoteByPath(connection.db, {
     path: toPath,
-    sha: `sha-${toPath}`,
+    sha: contentRevision(toPath),
     wordCount: 10,
   });
+  await connection.db
+    .query("UPDATE note SET tier1_at = time::now(), structural_version = $version;", {
+      version: STRUCTURAL_INDEX_VERSION,
+    })
+    .collect();
   await relateEdge(connection.db, {
     table: "wikilink",
     from: fromId,
@@ -90,6 +91,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph.find_path", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -98,8 +100,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph.find_path", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -111,7 +113,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph.find_path", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearVault(connection);
@@ -121,46 +123,63 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] graph.find_path", () => {
     await seedWikilink(connection, "a.md", "b.md");
     await seedWikilink(connection, "b.md", "c.md");
     await seedWikilink(connection, "c.md", "d.md");
-    const tool = makeFindPathTool(connection.db);
+    const tool = makeFindPathTool(
+      new GraphService({ db: connection.db, vault: { readBounded: async (path) => path } }),
+    );
     const result = await tool.invoke(
       { fromNotePath: "a.md", toNotePath: "d.md" },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
-    expect(result.path).toEqual(["a.md", "b.md", "c.md", "d.md"]);
-    expect(result.hops).toBe(3);
+    expect(result.path.map((note) => note.path)).toEqual(["a.md", "b.md", "c.md", "d.md"]);
+    expect(result.steps.length).toBe(3);
   });
 
   test("respects the maxHops cap", async () => {
     await seedWikilink(connection, "a.md", "b.md");
     await seedWikilink(connection, "b.md", "c.md");
     await seedWikilink(connection, "c.md", "d.md");
-    const tool = makeFindPathTool(connection.db);
+    const tool = makeFindPathTool(
+      new GraphService({ db: connection.db, vault: { readBounded: async (path) => path } }),
+    );
     const result = await tool.invoke(
       { fromNotePath: "a.md", toNotePath: "d.md", maxHops: 2 },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
-    expect(result.path).toEqual([]);
-    expect(result.hops).toBe(0);
+    expect(result.path.map((note) => note.path)).toEqual([]);
+    expect(result.steps.length).toBe(0);
   });
 
   test("returns empty path when nodes are disconnected", async () => {
     await seedWikilink(connection, "a.md", "b.md");
     await seedWikilink(connection, "c.md", "d.md");
-    const tool = makeFindPathTool(connection.db);
+    const tool = makeFindPathTool(
+      new GraphService({ db: connection.db, vault: { readBounded: async (path) => path } }),
+    );
     const result = await tool.invoke(
       { fromNotePath: "a.md", toNotePath: "d.md" },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
-    expect(result.path).toEqual([]);
+    expect(result.path.map((note) => note.path)).toEqual([]);
   });
 
   test("handles same-note query as a 0-hop path", async () => {
-    const tool = makeFindPathTool(connection.db);
+    await upsertNoteByPath(connection.db, {
+      path: "a.md",
+      sha: contentRevision("a.md"),
+      wordCount: 10,
+    });
+    const tool = makeFindPathTool(
+      new GraphService({ db: connection.db, vault: { readBounded: async (path) => path } }),
+    );
     const result = await tool.invoke(
       { fromNotePath: "a.md", toNotePath: "a.md" },
       new AbortController().signal,
+      TEST_CONTEXT,
     );
-    expect(result.path).toEqual(["a.md"]);
-    expect(result.hops).toBe(0);
+    expect(result.path.map((note) => note.path)).toEqual(["a.md"]);
+    expect(result.steps.length).toBe(0);
   });
 });

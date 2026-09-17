@@ -20,12 +20,12 @@ import {
   findCurrent,
   updateStatus,
 } from "../../../../src/core/awaken/awakenRun";
-import {
-  DAEMON_RESTART_ORPHAN_REASON,
-  reconcileAwakenOrphans,
-} from "../../../../src/core/awaken/reconcileAwakenOrphans";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
+import {
+  DAEMON_RESTART_ORPHAN_REASON,
+  reconcileRunOrphans,
+} from "../../../../src/core/services/reconcileRunOrphans";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
@@ -48,6 +48,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken SIGKILL recovery", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -56,7 +57,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken SIGKILL recovery", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterEach(async () => {
@@ -73,18 +74,20 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken SIGKILL recovery", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("[smoke] boot reconciliation releases a running orphan so a fresh awaken can start", async () => {
     const orphanId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: ["orphan.md"],
     });
 
-    const result = await reconcileAwakenOrphans(connection.db);
+    const result = await reconcileRunOrphans(connection.db, {
+      reason: DAEMON_RESTART_ORPHAN_REASON,
+    });
 
-    expect(result.reconciled).toBe(1);
+    expect(result).toEqual({ awakenRuns: 1, agentRuns: 0 });
     const orphan = await findById(connection.db, orphanId);
     expect(orphan?.status).toBe("failed");
     expect(orphan?.failure_reason).toBe(DAEMON_RESTART_ORPHAN_REASON);
@@ -94,7 +97,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken SIGKILL recovery", () => {
     const nextId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: ["next.md"],
     });
     expect(nextId.toString().startsWith("awaken_run:")).toBe(true);
   });
@@ -103,13 +106,15 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken SIGKILL recovery", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: ["a.md"],
     });
     await updateStatus(connection.db, runId, "paused", { cursor: "a.md" });
 
-    const result = await reconcileAwakenOrphans(connection.db);
+    const result = await reconcileRunOrphans(connection.db, {
+      reason: DAEMON_RESTART_ORPHAN_REASON,
+    });
 
-    expect(result.reconciled).toBe(0);
+    expect(result).toEqual({ awakenRuns: 0, agentRuns: 0 });
     const paused = await findById(connection.db, runId);
     expect(paused?.status).toBe("paused");
     expect(paused?.cursor).toBe("a.md");

@@ -1,5 +1,5 @@
 /**
- * Phase 4 Task 11 SearchPipeline smoke harness.
+ * SearchPipeline smoke harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/core/search/`.
@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -19,6 +20,7 @@ import {
   replaceChunks,
   upsertNoteByPath,
 } from "../../../../src/core/db/surreal";
+import { EventBus } from "../../../../src/core/events/eventBus";
 import type {
   ChatMessage,
   ChatOptions,
@@ -33,7 +35,8 @@ import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/s
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "search-pipeline-fixture", dimension: VECTOR_DIM } as const;
+const REASONING_SCHEDULER = new ReasoningScheduler({ maxConcurrent: 1 });
 
 function unitVector(...nonZero: Array<{ index: number; value: number }>): number[] {
   const vector = new Array<number>(VECTOR_DIM).fill(0);
@@ -43,7 +46,7 @@ function unitVector(...nonZero: Array<{ index: number; value: number }>): number
   return vector;
 }
 
-function fakeProvider(ranking: string[]): LLMProvider {
+function fakeProvider(ranking: number[]): LLMProvider {
   return {
     isAvailable: async () => true,
     chat: async () => "",
@@ -70,13 +73,12 @@ async function seedNote(
     sha: `sha-${notePath}`,
     wordCount: 1,
   });
-  await replaceChunks(connection.db, noteId, [
+  await replaceChunks(connection.db, noteId, EMBEDDING_IDENTITY, [
     {
       ord: 0,
       text,
       tokenEstimate: 4,
       vector,
-      embedModel: EMBED_MODEL,
     },
   ]);
 }
@@ -92,18 +94,19 @@ async function collect(iterable: AsyncIterable<SearchEvent>): Promise<SearchEven
   return events;
 }
 
-function buildPipeline(connection: SurrealConnection, ranking: string[]): SearchPipeline {
+function buildPipeline(connection: SurrealConnection, ranking: number[]): SearchPipeline {
   const provider = fakeProvider(ranking);
-  const reranker = new Reranker({ provider, model: "rerank" });
+  const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
   return new SearchPipeline({
     db: connection.db,
     reranker,
     embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
     provider,
     reasoningModel: "reasoning",
+    scheduler: REASONING_SCHEDULER,
     settings: () => ({
       balanced: { topK: 10, rerankTopN: 5 },
-      deep: { graphExpansionDepth: 1, synthesisEnabled: false },
+      deep: { synthesisEnabled: false },
     }),
     now: () => 100,
   });
@@ -123,6 +126,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -131,8 +135,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -144,7 +148,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("Quick mode emits retrieving, hits, then done", async () => {
     await clearGraph(connection);
@@ -154,7 +158,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
       "Graph reasoning is interesting.",
       unitVector({ index: 0, value: 1 }),
     );
-    const pipeline = buildPipeline(connection, ["a1"]);
+    const pipeline = buildPipeline(connection, [1]);
     const events = await collect(
       pipeline.run({ query: "graph", mode: "quick" }, new AbortController().signal),
     );
@@ -172,7 +176,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
     await clearGraph(connection);
     await seedNote(connection, "notes/a.md", "alpha snippet", unitVector({ index: 0, value: 1 }));
     await seedNote(connection, "notes/b.md", "beta snippet", unitVector({ index: 1, value: 1 }));
-    const pipeline = buildPipeline(connection, ["unused"]);
+    const pipeline = buildPipeline(connection, [1, 2]);
     const events = await collect(
       pipeline.run({ query: "alpha", mode: "balanced" }, new AbortController().signal),
     );
@@ -187,7 +191,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
   test("Deep mode reaches search:done with synthesis disabled", async () => {
     await clearGraph(connection);
     await seedNote(connection, "notes/a.md", "alpha snippet", unitVector({ index: 0, value: 1 }));
-    const pipeline = buildPipeline(connection, ["unused"]);
+    const pipeline = buildPipeline(connection, [1]);
     const events = await collect(
       pipeline.run({ query: "alpha", mode: "deep" }, new AbortController().signal),
     );
@@ -216,6 +220,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
 
     const controller = new AbortController();
     let observedSignalAborted = false;
+    let providerSignal: AbortSignal | undefined;
+    const providerCall: { label: string | null } = { label: null };
+    let markProviderStarted: (() => void) | undefined;
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve;
+    });
     const slowProvider: LLMProvider = {
       isAvailable: async () => true,
       chat: async () => "",
@@ -234,6 +244,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
             reject(new Error("missing signal in chatJson options"));
             return;
           }
+          providerSignal = signal;
+          providerCall.label = REASONING_SCHEDULER.currentLabel();
+          markProviderStarted?.();
           const onAbort = (): void => {
             observedSignalAborted = true;
             const error = new Error("aborted");
@@ -249,16 +262,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
         });
       },
     };
-    const reranker = new Reranker({ provider: slowProvider, model: "rerank" });
+    const reranker = new Reranker({
+      provider: slowProvider,
+      model: "rerank",
+      bus: new EventBus(),
+    });
     const pipeline = new SearchPipeline({
       db: connection.db,
       reranker,
       embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
       provider: slowProvider,
       reasoningModel: "reasoning",
+      scheduler: REASONING_SCHEDULER,
       settings: () => ({
         balanced: { topK: 10, rerankTopN: 5 },
-        deep: { graphExpansionDepth: 1, synthesisEnabled: false },
+        deep: { synthesisEnabled: false },
       }),
       now: () => 100,
     });
@@ -269,7 +287,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SearchPipeline", () => {
     const collected: SearchEvent[] = [];
     const first = await iterator.next();
     if (!first.done) collected.push(first.value);
-    queueMicrotask(() => controller.abort());
+    const pending = iterator.next();
+    await providerStarted;
+    expect(providerCall.label).toBe("search:rerank");
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal).not.toBe(controller.signal);
+    controller.abort();
+    const afterAbort = await pending;
+    if (!afterAbort.done) collected.push(afterAbort.value);
     while (true) {
       const next = await iterator.next();
       if (next.done) break;

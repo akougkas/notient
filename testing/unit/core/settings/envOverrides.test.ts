@@ -1,119 +1,161 @@
 import { describe, expect, test } from "bun:test";
-import { applyEnvOverrides } from "../../../../src/core/settings/envOverrides";
-import { DEFAULT_SETTINGS } from "../../../../src/core/settings/types";
+import {
+  mergeEnvSources,
+  resolveProviderCredentials,
+  resolveSettings,
+} from "../../../../src/core/settings/envOverrides";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_NOTIENT_CONFIG,
+  DEFAULT_REASONING_SLOTS,
+} from "../../../../src/core/settings/types";
 
-describe("applyEnvOverrides", () => {
-  test("returns the same reference when no env keys are present", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {});
-    expect(result).toBe(DEFAULT_SETTINGS);
-  });
-
-  test("NOTIENT_LLM_BASE_URL overrides primary, deep, and embedding base URLs", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
-      NOTIENT_LLM_BASE_URL: "http://192.168.86.143:1234/v1",
-    });
-    expect(result.primary.baseUrl).toBe("http://192.168.86.143:1234/v1");
-    expect(result.deep.baseUrl).toBe("http://192.168.86.143:1234/v1");
-    expect(result.embedding.baseUrl).toBe("http://192.168.86.143:1234/v1");
-  });
-
-  test("NOTIENT_LLM_MODEL overrides every chat-style model slot", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_LLM_MODEL: "test-model" });
-    expect(result.primary.reasoningModel).toBe("test-model");
-    expect(result.primary.fastModel).toBe("test-model");
-    expect(result.primary.rerankerModel).toBe("test-model");
-    expect(result.deep.reasoningModel).toBe("test-model");
-    expect(result.deep.fastModel).toBe("test-model");
-    expect(result.deep.rerankerModel).toBe("test-model");
-    expect(result.coAuthor.model).toBe("test-model");
-  });
-
-  test("NOTIENT_EMBED_MODEL overrides embedding slots", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
-      NOTIENT_EMBED_MODEL: "text-embed",
-    });
-    expect(result.embedding.model).toBe("text-embed");
-    expect(result.primary.embeddingModel).toBe("text-embed");
-    expect(result.deep.embeddingModel).toBe("text-embed");
-  });
-
-  test("NOTIENT_CONTEXT_TOKENS sets chat.modelContextTokens when a positive integer", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
+describe("deployment environment authority", () => {
+  test("resolves every deployment field from env without persisted overlap", () => {
+    const result = resolveSettings(DEFAULT_NOTIENT_CONFIG, {
+      NOTIENT_LLM_BASE_URL: "http://reasoning:1234/v1",
+      NOTIENT_EMBED_BASE_URL: "http://embedding:8080/v1",
+      NOTIENT_LLM_MODEL: "reasoning-model",
+      NOTIENT_EMBED_MODEL: "embedding-model",
       NOTIENT_CONTEXT_TOKENS: "800000",
-    });
-    expect(result.chat.modelContextTokens).toBe(800000);
-  });
-
-  test("NOTIENT_REASONING_SLOTS sets chat.reasoningSlots when a positive integer", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
-      NOTIENT_REASONING_SLOTS: "4",
-    });
-    expect(result.chat.reasoningSlots).toBe(4);
-  });
-
-  test("NOTIENT_CONTEXT_TOKENS leaves the persisted value alone when not a positive integer", () => {
-    const original = DEFAULT_SETTINGS.chat.modelContextTokens;
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_CONTEXT_TOKENS: "" }).chat.modelContextTokens,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_CONTEXT_TOKENS: "abc" }).chat
-        .modelContextTokens,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_CONTEXT_TOKENS: "0" }).chat.modelContextTokens,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_CONTEXT_TOKENS: "-5" }).chat.modelContextTokens,
-    ).toBe(original);
-  });
-
-  test("NOTIENT_REASONING_SLOTS leaves the persisted value alone when not a positive integer", () => {
-    const original = DEFAULT_SETTINGS.chat.reasoningSlots;
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "" }).chat.reasoningSlots,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "abc" }).chat.reasoningSlots,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "0" }).chat.reasoningSlots,
-    ).toBe(original);
-    expect(
-      applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_REASONING_SLOTS: "-5" }).chat.reasoningSlots,
-    ).toBe(original);
-  });
-
-  test("ignores empty-string env values", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
-      NOTIENT_LLM_BASE_URL: "   ",
-      NOTIENT_LLM_MODEL: "",
-    });
-    expect(result.primary.baseUrl).toBe(DEFAULT_SETTINGS.primary.baseUrl);
-    expect(result.primary.reasoningModel).toBe(DEFAULT_SETTINGS.primary.reasoningModel);
-  });
-
-  test("multiple overrides compose without losing fields", () => {
-    const result = applyEnvOverrides(DEFAULT_SETTINGS, {
-      NOTIENT_LLM_BASE_URL: "http://h:1/v1",
-      NOTIENT_LLM_MODEL: "m1",
-      NOTIENT_EMBED_MODEL: "e1",
-      NOTIENT_CONTEXT_TOKENS: "12345",
       NOTIENT_REASONING_SLOTS: "3",
     });
-    expect(result.primary.baseUrl).toBe("http://h:1/v1");
-    expect(result.primary.reasoningModel).toBe("m1");
-    expect(result.embedding.model).toBe("e1");
-    expect(result.chat.modelContextTokens).toBe(12345);
+
+    expect(result.primary).toEqual({
+      baseUrl: "http://reasoning:1234/v1",
+      reasoningModel: "reasoning-model",
+    });
+    expect(result.deep).toEqual({
+      baseUrl: "http://reasoning:1234/v1",
+      reasoningModel: "reasoning-model",
+      rerankerModel: "reasoning-model",
+    });
+    expect(result.embedding).toEqual({
+      baseUrl: "http://embedding:8080/v1",
+      model: "embedding-model",
+    });
+    expect(result.chat.modelContextTokens).toBe(800000);
     expect(result.chat.reasoningSlots).toBe(3);
-    // Untouched fields survive.
-    expect(result.chat.maxRoundsPerTurn).toBe(DEFAULT_SETTINGS.chat.maxRoundsPerTurn);
-    expect(result.search.defaultMode).toBe(DEFAULT_SETTINGS.search.defaultMode);
   });
 
-  test("does not mutate the input settings", () => {
-    const before = JSON.stringify(DEFAULT_SETTINGS);
-    applyEnvOverrides(DEFAULT_SETTINGS, { NOTIENT_LLM_MODEL: "x" });
-    expect(JSON.stringify(DEFAULT_SETTINGS)).toBe(before);
+  test("embedding endpoint falls back to the reasoning endpoint", () => {
+    const result = resolveSettings(DEFAULT_NOTIENT_CONFIG, {
+      NOTIENT_LLM_BASE_URL: "http://one-endpoint/v1",
+    });
+    expect(result.embedding.baseUrl).toBe("http://one-endpoint/v1");
+  });
+
+  test("context and slot capacity use canonical deployment defaults when absent", () => {
+    const result = resolveSettings(DEFAULT_NOTIENT_CONFIG, {});
+    expect(result.chat.modelContextTokens).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(result.chat.reasoningSlots).toBe(DEFAULT_REASONING_SLOTS);
+  });
+
+  test("resolves private chat and embedding bearer credentials outside public settings", () => {
+    const env = {
+      NOTIENT_LLM_BASE_URL: "https://compatible.example/v1",
+      NOTIENT_LLM_API_KEY: "sk-chat_123",
+      NOTIENT_EMBED_API_KEY: "embed-token_456",
+    };
+    expect(resolveProviderCredentials(env)).toEqual({
+      chatApiKey: "sk-chat_123",
+      embeddingApiKey: "embed-token_456",
+    });
+    expect(JSON.stringify(resolveSettings(DEFAULT_NOTIENT_CONFIG, env))).not.toContain("sk-chat");
+    expect(JSON.stringify(resolveSettings(DEFAULT_NOTIENT_CONFIG, env))).not.toContain(
+      "embed-token",
+    );
+  });
+
+  test("embedding auth inherits chat auth only when its own key is absent", () => {
+    expect(resolveProviderCredentials({ NOTIENT_LLM_API_KEY: "shared-token" })).toEqual({
+      chatApiKey: "shared-token",
+      embeddingApiKey: "shared-token",
+    });
+    expect(
+      resolveProviderCredentials({
+        NOTIENT_LLM_API_KEY: "cloud-token",
+        NOTIENT_EMBED_API_KEY: "",
+      }),
+    ).toEqual({ chatApiKey: "cloud-token" });
+  });
+
+  test("rejects malformed bearer credentials without echoing the secret", () => {
+    const malformed = "secret with spaces";
+    let thrown: unknown;
+    try {
+      resolveProviderCredentials({ NOTIENT_LLM_API_KEY: malformed });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("NOTIENT_LLM_API_KEY");
+    expect((thrown as Error).message).not.toContain(malformed);
+  });
+
+  test("vault file values win and process env fills only absent keys", () => {
+    const result = mergeEnvSources(
+      {
+        NOTIENT_LLM_BASE_URL: "http://vault/v1",
+        NOTIENT_LLM_MODEL: "vault-model",
+      },
+      {
+        NOTIENT_LLM_BASE_URL: "http://process/v1",
+        NOTIENT_LLM_MODEL: "process-model",
+        NOTIENT_EMBED_MODEL: "process-embed",
+      },
+    );
+    expect(result).toEqual({
+      NOTIENT_LLM_BASE_URL: "http://vault/v1",
+      NOTIENT_LLM_MODEL: "vault-model",
+      NOTIENT_EMBED_MODEL: "process-embed",
+    });
+  });
+
+  test("an explicit empty vault value masks ambient process configuration", () => {
+    const result = mergeEnvSources(
+      { NOTIENT_LLM_MODEL: "" },
+      { NOTIENT_LLM_MODEL: "ambient-model", NOTIENT_EMBED_MODEL: "ambient-embed" },
+    );
+    expect(result.NOTIENT_LLM_MODEL).toBeUndefined();
+    expect(result.NOTIENT_EMBED_MODEL).toBe("ambient-embed");
+  });
+
+  test("an explicit empty vault embedding key masks ambient auth and disables inheritance", () => {
+    const result = mergeEnvSources(
+      { NOTIENT_EMBED_API_KEY: "" },
+      {
+        NOTIENT_LLM_API_KEY: "chat-token",
+        NOTIENT_EMBED_API_KEY: "ambient-embed-token",
+      },
+    );
+    expect(result.NOTIENT_EMBED_API_KEY).toBe("");
+    expect(resolveProviderCredentials(result)).toEqual({
+      chatApiKey: "chat-token",
+    });
+  });
+
+  test.each(["4junk", "4.5", "+4", "04", "0", "-5", "NaN"])(
+    "rejects non-canonical NOTIENT_REASONING_SLOTS value %s",
+    (value) => {
+      expect(() =>
+        resolveSettings(DEFAULT_NOTIENT_CONFIG, { NOTIENT_REASONING_SLOTS: value }),
+      ).toThrow("NOTIENT_REASONING_SLOTS");
+    },
+  );
+
+  test.each(["800000junk", "1.25", "0", "-1", "10000001"])(
+    "rejects invalid NOTIENT_CONTEXT_TOKENS value %s",
+    (value) => {
+      expect(() =>
+        resolveSettings(DEFAULT_NOTIENT_CONFIG, { NOTIENT_CONTEXT_TOKENS: value }),
+      ).toThrow("NOTIENT_CONTEXT_TOKENS");
+    },
+  );
+
+  test("does not mutate validated product config", () => {
+    const before = JSON.stringify(DEFAULT_NOTIENT_CONFIG);
+    resolveSettings(DEFAULT_NOTIENT_CONFIG, { NOTIENT_LLM_MODEL: "x" });
+    expect(JSON.stringify(DEFAULT_NOTIENT_CONFIG)).toBe(before);
   });
 });

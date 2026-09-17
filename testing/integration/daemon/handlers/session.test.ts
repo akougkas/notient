@@ -1,20 +1,18 @@
 /**
- * Phase 4 Task 12 session.{grant,revoke,list} handler smoke harness.
+ * session.{grant,revoke,list} handler smoke harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/daemon/handlers/`.
  *
  * Boots a real SurrealDB, applies the Phase 1 schema, and exercises the
  * three RPC handlers against the SurrealDB-backed SessionGrants service.
- * The wire shape (sessionId / client / expiresAt / allowedFolders /
- * allowedTools / maxWrites) is preserved end-to-end; only the storage
- * backend changes from the SQLite-era harness.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import { SessionGrants } from "../../../../src/core/services/sessionGrants";
@@ -24,7 +22,9 @@ import {
   makeSessionListHandler,
 } from "../../../../src/daemon/handlers/sessionList";
 import { makeSessionRevokeHandler } from "../../../../src/daemon/handlers/sessionRevoke";
+import { RpcError } from "../../../../src/daemon/rpc";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { rpcRequest } from "../../../rpcRequest";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -47,6 +47,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -55,9 +56,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-    service = new SessionGrants({ db: connection.db });
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+    service = new SessionGrants({ db: connection.db, now: Date.now });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -69,7 +70,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearAgentSessions(connection);
@@ -79,19 +80,17 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
     test("happy path: returns the row the storage layer wrote", async () => {
       const handler = makeSessionGrantHandler({ sessionGrants: service });
       const result = await handler(
-        {
+        rpcRequest({
           client: "claude-code",
           allowedFolders: ["Inbox/"],
           allowedTools: ["notes.create"],
           maxWrites: 20,
           ttlMinutes: 60,
-        },
-        () => {},
-        "req-grant-1",
-        "human",
+        }),
       );
       expect(result.ok).toBe(true);
-      expect(typeof result.sessionId).toBe("number");
+      expect(typeof result.sessionId).toBe("string");
+      expect(result.sessionId).toStartWith("agent_session:");
       expect(result.client).toBe("claude-code");
       expect(result.allowedFolders).toEqual(["Inbox/"]);
       expect(result.allowedTools).toEqual(["notes.create"]);
@@ -99,31 +98,24 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       expect(typeof result.expiresAt).toBe("number");
     });
 
-    test("normalizes folder entries on the way back out", async () => {
+    test("rejects a non-canonical folder prefix", async () => {
       const handler = makeSessionGrantHandler({ sessionGrants: service });
-      const result = await handler(
-        {
-          client: "claude-code",
-          allowedFolders: ["Inbox", "Notient/agent-asks/"],
-          ttlMinutes: 30,
-        },
-        () => {},
-        "req-grant-norm",
-        "human",
-      );
-      expect(result.allowedFolders).toEqual(["Inbox/", "Notient/agent-asks/"]);
+      await expect(
+        handler(
+          rpcRequest({
+            client: "claude-code",
+            allowedFolders: ["Inbox", "Notient/agent-asks/"],
+            ttlMinutes: 30,
+          }),
+        ),
+      ).rejects.toThrow(/ending in/);
     });
 
     test("rejects missing client", async () => {
       const handler = makeSessionGrantHandler({ sessionGrants: service });
       let thrown: unknown = null;
       try {
-        await handler(
-          { allowedFolders: ["Inbox/"], ttlMinutes: 30 },
-          () => {},
-          "req-grant-noclient",
-          "human",
-        );
+        await handler(rpcRequest({ allowedFolders: ["Inbox/"], ttlMinutes: 30 }));
       } catch (error) {
         thrown = error;
       }
@@ -135,12 +127,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       const handler = makeSessionGrantHandler({ sessionGrants: service });
       let thrown: unknown = null;
       try {
-        await handler(
-          { client: "claude-code", allowedFolders: [], ttlMinutes: 30 },
-          () => {},
-          "req-grant-empty",
-          "human",
-        );
+        await handler(rpcRequest({ client: "claude-code", allowedFolders: [], ttlMinutes: 30 }));
       } catch (error) {
         thrown = error;
       }
@@ -153,10 +140,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       let thrown: unknown = null;
       try {
         await handler(
-          { client: "claude-code", allowedFolders: "Inbox/", ttlMinutes: 30 },
-          () => {},
-          "req-grant-string",
-          "human",
+          rpcRequest({ client: "claude-code", allowedFolders: "Inbox/", ttlMinutes: 30 }),
         );
       } catch (error) {
         thrown = error;
@@ -170,10 +154,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       let thrown: unknown = null;
       try {
         await handler(
-          { client: "claude-code", allowedFolders: ["Inbox/"], ttlMinutes: 0 },
-          () => {},
-          "req-grant-zero",
-          "human",
+          rpcRequest({ client: "claude-code", allowedFolders: ["Inbox/"], ttlMinutes: 0 }),
         );
       } catch (error) {
         thrown = error;
@@ -187,15 +168,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       let thrown: unknown = null;
       try {
         await handler(
-          {
+          rpcRequest({
             client: "claude-code",
             allowedFolders: ["Inbox/"],
             maxWrites: 3.5,
             ttlMinutes: 30,
-          },
-          () => {},
-          "req-grant-frac",
-          "human",
+          }),
         );
       } catch (error) {
         thrown = error;
@@ -213,7 +191,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
         ttlMinutes: 30,
       });
       const handler = makeSessionRevokeHandler({ sessionGrants: service });
-      const result = await handler({ sessionId: grant.id }, () => {}, "req-revoke-1", "human");
+      const result = await handler(rpcRequest({ sessionId: grant.id }));
       expect(result.ok).toBe(true);
       expect(result.sessionId).toBe(grant.id);
       expect(typeof result.revokedAt).toBe("number");
@@ -223,25 +201,28 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       const handler = makeSessionRevokeHandler({ sessionGrants: service });
       let thrown: unknown = null;
       try {
-        await handler({ sessionId: 9_999 }, () => {}, "req-revoke-missing", "human");
+        await handler(
+          rpcRequest({
+            sessionId: createUuidRecordId(
+              "agent_session",
+              "018f05cd-3f7b-7000-8000-999999999999",
+            ).toString(),
+          }),
+        );
       } catch (error) {
         thrown = error;
       }
       expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as Error).message).toContain("SESSION_NOT_FOUND");
+      expect(thrown).toBeInstanceOf(RpcError);
+      expect((thrown as RpcError).code).toBe("SESSION_NOT_FOUND");
     });
 
-    test("rejects missing or non-integer sessionId", async () => {
+    test("rejects malformed or non-session record ids", async () => {
       const handler = makeSessionRevokeHandler({ sessionGrants: service });
-      for (const bad of [undefined, "abc", -1, 0, 3.5]) {
+      for (const bad of [undefined, "abc", "note:wrong-table", -1, 0, 3.5]) {
         let thrown: unknown = null;
         try {
-          await handler(
-            { sessionId: bad as unknown as number },
-            () => {},
-            "req-revoke-bad",
-            "human",
-          );
+          await handler(rpcRequest({ sessionId: bad }));
         } catch (error) {
           thrown = error;
         }
@@ -266,7 +247,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       await service.revoke(revoked.id);
 
       const handler = makeSessionListHandler({ sessionGrants: service });
-      const result = await handler({}, () => {}, "req-list-default", "human");
+      const result = await handler(rpcRequest());
       expect(result.ok).toBe(true);
       const sessions = result.sessions as SessionListEntry[];
       expect(sessions.map((entry) => entry.sessionId)).toEqual([live.id]);
@@ -286,7 +267,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       await service.revoke(revoked.id);
 
       const handler = makeSessionListHandler({ sessionGrants: service });
-      const result = await handler({ activeOnly: false }, () => {}, "req-list-all", "human");
+      const result = await handler(rpcRequest({ activeOnly: false }));
       const sessions = result.sessions as SessionListEntry[];
       expect(sessions).toHaveLength(2);
     });
@@ -295,7 +276,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       await service.grant({ client: "claude-code", allowedFolders: ["Inbox/"], ttlMinutes: 30 });
       await service.grant({ client: "cursor", allowedFolders: ["Inbox/"], ttlMinutes: 30 });
       const handler = makeSessionListHandler({ sessionGrants: service });
-      const result = await handler({ client: "claude-code" }, () => {}, "req-list-client", "human");
+      const result = await handler(rpcRequest({ client: "claude-code" }));
       const sessions = result.sessions as SessionListEntry[];
       expect(sessions.map((entry) => entry.client)).toEqual(["claude-code"]);
     });
@@ -304,7 +285,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       const handler = makeSessionListHandler({ sessionGrants: service });
       let thrown: unknown = null;
       try {
-        await handler({ client: 7 as unknown as string }, () => {}, "req-list-bad-client", "human");
+        await handler(rpcRequest({ client: 7 as unknown as string }));
       } catch (error) {
         thrown = error;
       }
@@ -316,12 +297,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] session.* handlers", () => {
       const handler = makeSessionListHandler({ sessionGrants: service });
       let thrown: unknown = null;
       try {
-        await handler(
-          { activeOnly: "true" as unknown as boolean },
-          () => {},
-          "req-list-bad-active",
-          "human",
-        );
+        await handler(rpcRequest({ activeOnly: "true" as unknown as boolean }));
       } catch (error) {
         thrown = error;
       }

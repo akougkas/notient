@@ -1,224 +1,89 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { type Server, type Socket, createServer } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { parseBriefMaxField, runBriefCommand } from "../../../../src/cli/commands/brief";
+import { expect, test } from "bun:test";
+import { briefResultFor, briefResultSchema } from "../../../../src/api/brief";
+import { briefNotes, parseBriefMaxField } from "../../../../src/cli/commands/brief";
 import { makeEmitter } from "../../../../src/cli/output";
-import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
+import { currentCoverageFixture } from "../../../indexingFixture";
 
-interface FakeDaemon {
-  server: Server;
-  socketPath: string;
-  setReply: (reply: Record<string, unknown>) => void;
-  framesReceived: Record<string, unknown>[];
-  close: () => Promise<void>;
-}
-
-async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
-  const socketPath = resolveSocketPath(rootDir, currentPlatform());
-  await mkdir(join(rootDir, ".notient"), { recursive: true });
-  const sockets = new Set<Socket>();
-  const framesReceived: Record<string, unknown>[] = [];
-  let pendingReply: Record<string, unknown> = { type: "result", ok: true };
-
-  const server = createServer((socket) => {
-    sockets.add(socket);
-    socket.on("close", () => {
-      sockets.delete(socket);
-    });
-    let buffer = "";
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf-8");
-      let newlineIndex = buffer.indexOf("\n");
-      while (newlineIndex !== -1) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          framesReceived.push(frame);
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          socket.write(`${JSON.stringify({ id, ...pendingReply })}\n`);
-        }
-        newlineIndex = buffer.indexOf("\n");
-      }
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, resolve);
-  });
-
-  return {
-    server,
-    socketPath,
-    framesReceived,
-    setReply: (reply) => {
-      pendingReply = reply;
-    },
-    close: async () => {
-      for (const socket of sockets) socket.end();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-}
-
-const STRUCTURED_REPLY: Record<string, unknown> = {
-  type: "result",
-  ok: true,
-  topic: "authentication",
-  summary: "Auth uses OAuth+PKCE with rotating JWTs.",
-  relevantNotes: [{ path: "auth/oauth.md", score: 0.9, snippet: "OAuth", lastTouchedAt: 100 }],
-  recentDecisions: [{ id: "claim:1", text: "We use PKCE.", notePath: "auth/oauth.md", ts: 200 }],
-  openQuestions: [
-    { id: "question:1", text: "What is the refresh window?", notePath: "auth/jwt.md" },
-  ],
-  openContradictions: [],
-  durationMs: 12,
+const source = { path: "Notes/Storage café.md", revision: "a".repeat(64) };
+const result = {
+  ok: true as const,
+  topic: "Storage",
+  summary: {
+    text: "A **durable** service.",
+    evidence: [
+      {
+        ...source,
+        quote: "Three replicas.",
+        range: { start: 0, end: 15, startLine: 1, endLine: 1 },
+      },
+    ],
+  },
+  findings: [],
+  sources: [source],
+  abstained: false,
+  reason: null,
+  coverage: currentCoverageFixture(),
+  limitations: [],
+  attempts: [],
+  durationMs: 10,
 };
-
-describe("notient brief CLI", () => {
-  let rootDir: string;
-  let daemon: FakeDaemon;
-
-  beforeEach(async () => {
-    rootDir = await mkdtemp(join(tmpdir(), "notient-brief-"));
-    daemon = await startFakeDaemon(rootDir);
-  });
-  afterEach(async () => {
-    await daemon.close();
-    await rm(rootDir, { recursive: true, force: true });
-  });
-
-  test("topic mode pretty-prints the structured payload to stdout", async () => {
-    daemon.setReply(STRUCTURED_REPLY);
-    const stdoutLines: string[] = [];
-    const stderrLines: string[] = [];
-    const exitCode = await runBriefCommand({
-      vaultPath: rootDir,
-      topic: "authentication",
-      emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
-      writeStdout: (line) => stdoutLines.push(line),
-      writeStderr: (line) => stderrLines.push(line),
-    });
-    expect(exitCode).toBe(0);
-    expect(stderrLines).toHaveLength(0);
-    expect(stdoutLines).toHaveLength(1);
-    const parsed = JSON.parse(stdoutLines[0]) as Record<string, unknown>;
-    expect(parsed.topic).toBe(STRUCTURED_REPLY.topic);
-    expect(parsed.summary).toBe(STRUCTURED_REPLY.summary);
-    expect(parsed.relevantNotes).toEqual(STRUCTURED_REPLY.relevantNotes);
-    expect(parsed.recentDecisions).toEqual(STRUCTURED_REPLY.recentDecisions);
-    expect(parsed.openQuestions).toEqual(STRUCTURED_REPLY.openQuestions);
-    expect(parsed.openContradictions).toEqual(STRUCTURED_REPLY.openContradictions);
-    expect(parsed.durationMs).toBe(STRUCTURED_REPLY.durationMs);
-    const sent = daemon.framesReceived[0];
-    expect(sent.method).toBe("agent.brief");
-    expect((sent.params as Record<string, unknown>).topic).toBe("authentication");
-  });
-
-  test("file mode forwards filePath into the daemon params", async () => {
-    daemon.setReply(STRUCTURED_REPLY);
-    await runBriefCommand({
-      vaultPath: rootDir,
-      filePath: "src/auth/oauth.ts",
-      emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
-      writeStdout: () => {},
-      writeStderr: () => {},
-    });
-    const sent = daemon.framesReceived[0];
-    const params = sent.params as Record<string, unknown>;
-    expect(params.filePath).toBe("src/auth/oauth.ts");
-    expect(params.topic).toBeUndefined();
-  });
-
-  test("forwards max caps into the daemon params", async () => {
-    daemon.setReply(STRUCTURED_REPLY);
-    await runBriefCommand({
-      vaultPath: rootDir,
-      topic: "auth",
-      maxNotes: 4,
-      maxQuestions: 2,
-      maxDecisions: 1,
-      emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
-      writeStdout: () => {},
-      writeStderr: () => {},
-    });
-    const sent = daemon.framesReceived[0];
-    const params = sent.params as Record<string, unknown>;
-    expect(params.maxNotes).toBe(4);
-    expect(params.maxQuestions).toBe(2);
-    expect(params.maxDecisions).toBe(1);
-  });
-
-  test("rejects when neither topic nor filePath is supplied", async () => {
-    let thrown: unknown = null;
-    try {
-      await runBriefCommand({
-        vaultPath: rootDir,
-        emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
-        writeStdout: () => {},
-        writeStderr: () => {},
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("topic or --file");
-  });
-
-  test("rejects when both topic and filePath are supplied", async () => {
-    let thrown: unknown = null;
-    try {
-      await runBriefCommand({
-        vaultPath: rootDir,
-        topic: "auth",
-        filePath: "src/auth.ts",
-        emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
-        writeStdout: () => {},
-        writeStderr: () => {},
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("not both");
-  });
-
-  test("error frame prints to stderr and returns non-zero exit code", async () => {
-    daemon.setReply({ type: "error", code: "INTERNAL", message: "boom" });
-    const stdoutLines: string[] = [];
-    const stderrLines: string[] = [];
-    const emitterLines: string[] = [];
-    const exitCode = await runBriefCommand({
-      vaultPath: rootDir,
-      topic: "auth",
-      emitter: makeEmitter({
-        mode: "ndjson",
-        write: (line) => emitterLines.push(line),
-      }),
-      writeStdout: (line) => stdoutLines.push(line),
-      writeStderr: (line) => stderrLines.push(line),
-    });
-    expect(exitCode).toBe(1);
-    expect(stdoutLines).toHaveLength(0);
-    expect(stderrLines).toHaveLength(1);
-    const parsed = JSON.parse(stderrLines[0]) as Record<string, unknown>;
-    expect(parsed.code).toBe("INTERNAL");
-    expect(parsed.message).toBe("boom");
-  });
+test("brief renders readable Markdown or exact structured JSON through the ordinary emitter", () => {
+  const pretty: string[] = [];
+  const json: string[] = [];
+  const event = { type: "brief:done", ...result };
+  makeEmitter({ mode: "pretty", write: (line) => pretty.push(line) }).emit(event);
+  expect(pretty.join("\n")).toContain("A **durable** service.");
+  expect(pretty.join("\n")).toContain("Storage%20caf%C3%A9.md");
+  expect(pretty.join("\n")).toContain("> Three replicas.");
+  makeEmitter({ mode: "json", write: (line) => json.push(line) }).emit(event);
+  expect(briefResultSchema.parse(JSON.parse(json[0]))).toEqual(result);
+});
+test("brief outcomes cannot detach evidence from revisions or pretend an abstention is a finding", () => {
+  expect(briefResultSchema.safeParse({ ...result, sources: [] }).success).toBe(false);
+  expect(briefResultSchema.safeParse({ ...result, abstained: true }).success).toBe(false);
+  expect(briefResultSchema.safeParse({ ...result, summary: null }).success).toBe(false);
+  expect(
+    briefResultSchema.safeParse({
+      ...result,
+      summary: null,
+      abstained: true,
+      reason: "No current evidence.",
+    }).success,
+  ).toBe(true);
+  expect(
+    briefResultSchema.safeParse({ ...result, findings: [{ ...result.summary, kind: "tension" }] })
+      .success,
+  ).toBe(false);
+});
+test("brief validates mode, paths, limits and scope before connecting", async () => {
+  for (const input of [
+    {},
+    { topic: "storage", filePath: "A.md" },
+    { topic: " " },
+    { filePath: "../escape.md" },
+    { filePath: ".notient/.env" },
+    { topic: "storage", maxNotes: 9 },
+    { topic: "storage", folder: "../private" },
+  ])
+    await expect(
+      briefNotes({ vaultPath: "/no-daemon-should-start", ...input }),
+    ).rejects.toBeDefined();
+  expect(parseBriefMaxField(undefined)).toBeUndefined();
+  expect(parseBriefMaxField("8")).toBe(8);
+  for (const value of ["0", "9", "1.5", "1e0", true, ""])
+    expect(() => parseBriefMaxField(value)).toThrow("between 1 and 8");
 });
 
-describe("brief flag parsing", () => {
-  test("parseBriefMaxField floors numbers and rejects non-positive", () => {
-    expect(parseBriefMaxField(undefined, "max-notes")).toBeUndefined();
-    expect(parseBriefMaxField("8", "max-notes")).toBe(8);
-    expect(parseBriefMaxField(7, "max-notes")).toBe(7);
-    expect(parseBriefMaxField(3.7, "max-notes")).toBe(3);
-    expect(() => parseBriefMaxField("0", "max-notes")).toThrow();
-    expect(() => parseBriefMaxField("abc", "max-notes")).toThrow();
-    expect(() => parseBriefMaxField(-1, "max-notes")).toThrow();
-    expect(() => parseBriefMaxField(true, "max-notes")).toThrow();
-  });
+test("brief responses are bound to the topic, saved revision and note cap", () => {
+  expect(briefResultFor({ query: "another topic" }).safeParse(result).success).toBe(false);
+  expect(
+    briefResultFor({ source: { ...source, revision: "b".repeat(64) } }).safeParse(result).success,
+  ).toBe(false);
+  expect(briefResultFor({ source, limit: 1 }).safeParse(result).success).toBe(true);
+  expect(
+    briefResultFor({ query: "Storage", limit: 1 }).safeParse({
+      ...result,
+      sources: [source, { ...source, path: "Another.md" }],
+    }).success,
+  ).toBe(false);
 });

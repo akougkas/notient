@@ -1,13 +1,10 @@
 /**
  * Awaken worker: drives a vault-wide enrichment run.
  *
- * Spec: docs/superpowers/specs/2026-04-29-vault-enrichment-data-model-design.md
- * §3.5 (operational tables) and the Phase 4 plan task 8. Sits on top of the
- * Task 7 awaken_run DAL: either creates a new run or resumes the latest
- * resumable one, walks the vault sorted by priority globs, enqueues each
- * path into the indexer queue, awaits per-path completion, and checkpoints
- * progress every 10 notes. Pause / cancel are signalled through SurrealDB
- * via the live-query subscription returned by `subscribeToStatus`.
+ * Uses the `awaken_run` store to create a run or resume the latest resumable
+ * one, walks the vault by priority, enqueues each path, awaits per-path
+ * completion, and checkpoints progress every 10 notes. Pause and cancel are
+ * signalled through the live subscription returned by `subscribeToStatus`.
  *
  * Key invariants enforced here:
  *   - Status checks happen between notes, never mid-note. Tier 2 and Tier 3
@@ -22,10 +19,11 @@
  *     with `completed`. Only natural completion writes `completed`.
  */
 
-import type { RecordId, Surreal } from "surrealdb";
+import { DateTime, type RecordId, type Surreal } from "surrealdb";
 import type { EventBus } from "../events/eventBus";
+import { invalidateVaultPathUniverse } from "../indexer/indexNote";
+import { isFullTierFilter, maxRequestedTier } from "../indexer/tierFilter";
 import {
-  AwakenRunAlreadyActiveError,
   type AwakenRunRow,
   type AwakenStatus,
   createRun,
@@ -35,21 +33,10 @@ import {
   subscribeToStatus,
   updateStatus,
 } from "./awakenRun";
+import { compareVaultPaths, createPriorityComparator, sortByPriorityGlobs } from "./priorityGlob";
 
 const CHECKPOINT_EVERY = 10;
 const AWAKEN_PRIORITY = 2;
-const FULL_TIER_FILTER_LENGTH = 3;
-const MAX_TIER = 3;
-
-function isFullTierFilter(filter: ReadonlyArray<number>): boolean {
-  return filter.length === FULL_TIER_FILTER_LENGTH;
-}
-
-function maxRequestedTier(filter: ReadonlyArray<number>): 1 | 2 | 3 {
-  const valid = filter.filter((tier) => tier === 1 || tier === 2 || tier === 3);
-  if (valid.length === 0) return MAX_TIER;
-  return Math.max(...valid) as 1 | 2 | 3;
-}
 
 export interface AwakenWorkerVaultFacade {
   listMarkdownPaths(): Promise<string[]>;
@@ -63,21 +50,17 @@ export interface AwakenWorkerOptions {
   db: Surreal;
   vaultFacade: AwakenWorkerVaultFacade;
   indexerQueue: AwakenWorkerIndexerQueue;
+  /**
+   * Canonical index lifecycle. Every queued note must terminate with either
+   * `indexer:note-indexed` or a path-scoped `indexer:error` before the worker
+   * advances its counters.
+   */
+  bus: EventBus;
   tierFilter: number[];
   priorityGlobs: string[];
   resume: boolean;
-  /**
-   * Optional event bus used to await per-note completion via
-   * `indexer:tier3-done`. Ignored when `onNoteIndexed` is provided. When
-   * neither is supplied, the worker falls back to a synchronous enqueue
-   * (the indexer queue itself will eventually drive the work).
-   */
-  bus?: EventBus;
-  /**
-   * Optional override for waiting on per-note completion. Tests inject a
-   * faster mechanism here; production wires up the bus path.
-   */
-  onNoteIndexed?: (path: string) => Promise<void>;
+  /** Lifecycle cancellation. The background registry owns this in production. */
+  signal: AbortSignal;
   /**
    * Optional pre-created `awaken_run` id. The background `awaken --run`
    * path creates the row in the daemon handler before kicking off the
@@ -101,32 +84,30 @@ interface ResolvedStart {
   runId: RecordId<"awaken_run">;
   processed: number;
   failed: number;
+  attempted: number;
   resumeCursor: string | null;
+  failurePaths: string[];
+  paths: string[];
+  tierFilter: number[];
+  priorityGlobs: string[];
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: status-aware run loop with checkpointing reads cleaner inline than split into helpers; complexity comes from interleaving live-query status checks with the per-note enqueue/wait cycle.
 export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<AwakenWorkerResult> {
-  const allPaths = await options.vaultFacade.listMarkdownPaths();
-  const orderedPaths = sortByPriorityGlobs(allPaths, options.priorityGlobs);
-
-  const start = await resolveStart(options, orderedPaths.length);
+  throwIfAborted(options.signal);
+  invalidateVaultPathUniverse();
+  const start = await resolveStart(options);
+  throwIfAborted(options.signal);
+  const comparator = createPriorityComparator(start.priorityGlobs);
+  const orderedPaths = [...start.paths].sort(comparator);
   let processed = start.processed;
   let failed = start.failed;
+  let attempted = start.attempted;
   let lastProcessedPath: string | null = start.resumeCursor;
-  // Vault-relative paths whose indexing did not complete during this run.
-  // Capped to keep the awaken_run row small even on pathological vaults.
-  const failurePaths: string[] = [];
-  const FAILURE_PATHS_CAP = 200;
-  const recordFailure = (notePath: string): void => {
-    if (failurePaths.length >= FAILURE_PATHS_CAP) return;
-    failurePaths.push(notePath);
-  };
+  const failurePaths = [...start.failurePaths];
 
-  // Drop already-processed paths when resuming. The cursor records the
-  // last successfully checkpointed path; we resume from the entry strictly
-  // after it.
-  const remainingPaths = sliceAfterCursor(orderedPaths, start.resumeCursor);
-  const attemptedPaths = pathsThroughCursor(orderedPaths, start.resumeCursor);
+  const remainingPaths = sliceAfterCursor(orderedPaths, start.resumeCursor, comparator);
+  const outcomesThisRun: AwakenTerminalOutcome[] = [];
+  let checkpointOutcomes: AwakenTerminalOutcome[] = [];
 
   // The live-query callback mutates `current` from another microtask; we
   // wrap it in an object so TypeScript does not narrow the field to its
@@ -137,46 +118,52 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   });
 
   try {
+    throwIfAborted(options.signal);
     for (const notePath of remainingPaths) {
       // Status check between notes only. Mid-note pause would leave Tier 2
       // / Tier 3 inconsistent for `notePath`, so we never interrupt while
       // an enqueue is in-flight.
-      if (statusRef.current === "paused" || statusRef.current === "cancelled") {
+      if (isInterruptedStatus(statusRef.current)) {
         break;
       }
+      throwIfAborted(options.signal);
 
-      const waitForDone = waitForNoteIndexed(options, notePath);
-      attemptedPaths.push(notePath);
+      // Subscribe before enqueueing. Test queues and lightweight adapters can
+      // emit synchronously, so registering afterward would lose the terminal
+      // event and leave the run stuck forever.
+      const waitForDone = waitForNoteIndexed(options.bus, notePath, options.signal);
+      attempted += 1;
       try {
         // Forward the run's tier filter so per-note Tier 1/2/3 execution
         // honours the operator's `--tier` scope. A full filter (`[1, 2, 3]`)
         // is forwarded as `undefined` so the indexer's default
         // (run every tier) code path is preserved for default runs.
-        const enqueueFilter = isFullTierFilter(options.tierFilter) ? undefined : options.tierFilter;
+        const enqueueFilter = isFullTierFilter(start.tierFilter) ? undefined : start.tierFilter;
         options.indexerQueue.enqueue(notePath, AWAKEN_PRIORITY, enqueueFilter);
         await waitForDone;
-        processed += 1;
-      } catch {
-        recordFailure(notePath);
-        const requiredTier = maxRequestedTier(options.tierFilter);
-        const counters =
-          options.onNoteIndexed === undefined
-            ? await reconcileCountersFromTierState(
-                options.db,
-                attemptedPaths,
-                {
-                  processed,
-                  failed: failed + 1,
-                },
-                requiredTier,
-              )
-            : { processed, failed: failed + 1 };
-        processed = counters.processed;
-        failed = counters.failed;
+        throwIfAborted(options.signal);
+        const outcome: AwakenTerminalOutcome = { path: notePath, terminal: "indexed" };
+        outcomesThisRun.push(outcome);
+        checkpointOutcomes.push(outcome);
+      } catch (error) {
+        throwIfCancellation(error, options.signal);
+        appendFailurePath(failurePaths, notePath);
+        const outcome: AwakenTerminalOutcome = { path: notePath, terminal: "failed" };
+        outcomesThisRun.push(outcome);
+        checkpointOutcomes.push(outcome);
       }
       lastProcessedPath = notePath;
 
-      if ((processed + failed) % CHECKPOINT_EVERY === 0) {
+      if (attempted % CHECKPOINT_EVERY === 0) {
+        const checkpoint = await reconcileWorkerCounters(
+          options,
+          checkpointOutcomes,
+          maxRequestedTier(start.tierFilter),
+        );
+        throwIfAborted(options.signal);
+        processed += checkpoint.processed;
+        failed += checkpoint.failed;
+        checkpointOutcomes = [];
         // Re-read the live status just before persisting so we don't
         // accidentally overwrite a `paused` / `cancelled` status the user
         // flipped during the just-finished note.
@@ -184,6 +171,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
           await updateStatus(options.db, start.runId, "running", {
             processed,
             failed,
+            attempted,
             cursor: lastProcessedPath,
             failurePaths: [...failurePaths],
           });
@@ -194,28 +182,24 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
     await subscription.close();
   }
 
+  throwIfAborted(options.signal);
   const finalStatus = statusRef.current;
-  const requiredTier = maxRequestedTier(options.tierFilter);
-  if (options.onNoteIndexed === undefined) {
-    const finalCounters = await reconcileCountersFromTierState(
-      options.db,
-      attemptedPaths,
-      {
-        processed,
-        failed,
-      },
-      requiredTier,
-    );
-    processed = finalCounters.processed;
-    failed = finalCounters.failed;
-  }
-  if (finalStatus === "paused" || finalStatus === "cancelled") {
+  const finalCounters = await reconcileWorkerCounters(
+    options,
+    outcomesThisRun,
+    maxRequestedTier(start.tierFilter),
+  );
+  throwIfAborted(options.signal);
+  processed = start.processed + finalCounters.processed;
+  failed = start.failed + finalCounters.failed;
+  if (isInterruptedStatus(finalStatus)) {
     // Preserve the user's terminal status. Persist final counters and the
     // last processed path so a future `resume` picks up exactly where we
     // stopped.
     await updateStatus(options.db, start.runId, finalStatus, {
       processed,
       failed,
+      attempted,
       cursor: lastProcessedPath,
       failurePaths: [...failurePaths],
     });
@@ -227,30 +211,54 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   await updateStatus(options.db, start.runId, "completed", {
     processed,
     failed,
+    attempted,
     cursor: null,
     failurePaths: [...failurePaths],
   });
   return { runId: start.runId, status: "completed", processed, failed };
 }
 
-async function resolveStart(
-  options: AwakenWorkerOptions,
-  totalPaths: number,
-): Promise<ResolvedStart> {
+function isInterruptedStatus(status: AwakenStatus): status is "paused" | "cancelled" {
+  return status === "paused" || status === "cancelled";
+}
+
+function createAbortError(): Error {
+  const error = new Error("runAwakenWorker: aborted during daemon shutdown");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw createAbortError();
+}
+
+function throwIfCancellation(error: unknown, signal: AbortSignal): void {
+  if (signal.aborted || isAbortError(error)) throw error;
+}
+
+function appendFailurePath(failurePaths: string[], notePath: string): void {
+  const failurePathsCap = 200;
+  if (failurePaths.length >= failurePathsCap || failurePaths.includes(notePath)) return;
+  failurePaths.push(notePath);
+}
+
+async function resolveStart(options: AwakenWorkerOptions): Promise<ResolvedStart> {
   if (options.resume) {
     // When the daemon's `awaken.resume` RPC handler picked the row, it
     // forwards the id via `existingRunId`. Prefer that exact row over
     // re-querying for the latest resumable so the worker targets the
-    // same row the handler already validated. The handler also flips
-    // the status to `running` before kicking the worker off; calling
-    // `updateStatus` again here is idempotent and keeps the foreground
-    // resume path (no `existingRunId`) in sync.
+    // same row the handler already validated. The handler flips the row
+    // to `running` before dispatch; a foreground resume without an id does
+    // that transition here after selecting its row.
     if (options.existingRunId !== undefined) {
       const row = await findById(options.db, options.existingRunId);
       if (row === null) {
         throw new Error("runAwakenWorker: existingRunId not found");
       }
-      await updateStatus(options.db, row.id, "running");
       return startFromRow(row);
     }
     const resumable = await findLatestResumable(options.db);
@@ -277,49 +285,83 @@ async function resolveStart(
   if (active !== null) {
     throw new Error("runAwakenWorker: a run is already active");
   }
+  // A fresh run captures one immutable, canonically ordered plan. Resume
+  // never re-lists the vault, so filtering and priority decisions cannot
+  // drift while a run is paused.
+  const allPaths = await options.vaultFacade.listMarkdownPaths();
+  const orderedPaths = sortByPriorityGlobs(
+    validatePlannedPaths(allPaths, "runAwakenWorker vault listing"),
+    options.priorityGlobs,
+  );
   // The `findCurrent` check above is an early guard, but two concurrent
   // worker invocations can both observe `null` before either calls
   // `createRun`. The `awaken_run_active_unique` index serializes the
-  // race; translate its typed error into the same `INVALID_PARAMS` wire
-  // string the daemon's RPC handlers emit so the foreground path's
-  // failure reads identically to the background path's failure.
-  let runId: RecordId<"awaken_run">;
-  try {
-    runId = await createRun(options.db, {
-      tierFilter: options.tierFilter,
-      priorityGlobs: options.priorityGlobs,
-      total: totalPaths,
-    });
-  } catch (error) {
-    if (error instanceof AwakenRunAlreadyActiveError) {
-      throw new Error("INVALID_PARAMS: a different run is already active");
-    }
-    throw error;
-  }
-  return { runId, processed: 0, failed: 0, resumeCursor: null };
+  // race. Keep the DAL's typed domain error intact; the daemon handler owns
+  // the translation to its typed RPC boundary.
+  const runId: RecordId<"awaken_run"> = await createRun(options.db, {
+    tierFilter: options.tierFilter,
+    priorityGlobs: options.priorityGlobs,
+    paths: orderedPaths,
+  });
+  return {
+    runId,
+    processed: 0,
+    failed: 0,
+    attempted: 0,
+    resumeCursor: null,
+    failurePaths: [],
+    paths: orderedPaths,
+    tierFilter: [...options.tierFilter],
+    priorityGlobs: [...options.priorityGlobs],
+  };
 }
 
 function startFromRow(row: AwakenRunRow): ResolvedStart {
+  if (row.paths.length !== row.total) {
+    throw new Error("runAwakenWorker: persisted path plan does not match total");
+  }
+  if (row.processed + row.failed !== row.attempted) {
+    throw new Error("runAwakenWorker: persisted counters do not match attempted");
+  }
+  const paths = validatePlannedPaths(row.paths, "runAwakenWorker persisted path plan");
+  if (row.cursor !== null) {
+    assertCanonicalMarkdownPath(row.cursor, "runAwakenWorker persisted cursor");
+  }
+  const failurePaths = validatePlannedPaths(
+    row.failures,
+    "runAwakenWorker persisted failure paths",
+  );
   return {
     runId: row.id,
     processed: row.processed,
     failed: row.failed,
+    attempted: row.attempted,
     resumeCursor: row.cursor,
+    failurePaths: failurePaths.slice(0, 200),
+    paths,
+    tierFilter: [...row.tier_filter],
+    priorityGlobs: [...row.priority_globs],
   };
 }
 
-function sliceAfterCursor(paths: string[], cursor: string | null): string[] {
+export function sliceAfterCursor(
+  paths: string[],
+  cursor: string | null,
+  comparator: (left: string, right: string) => number = compareVaultPaths,
+): string[] {
   if (cursor === null) return paths;
   const index = paths.indexOf(cursor);
-  if (index === -1) return paths;
-  return paths.slice(index + 1);
+  if (index !== -1) return paths.slice(index + 1);
+  const upperBound = paths.findIndex((path) => comparator(path, cursor) > 0);
+  return upperBound === -1 ? [] : paths.slice(upperBound);
 }
 
-function pathsThroughCursor(paths: string[], cursor: string | null): string[] {
-  if (cursor === null) return [];
-  const index = paths.indexOf(cursor);
-  if (index === -1) return [];
-  return paths.slice(0, index + 1);
+async function reconcileWorkerCounters(
+  options: AwakenWorkerOptions,
+  outcomes: ReadonlyArray<AwakenTerminalOutcome>,
+  requiredTier: 1 | 2 | 3,
+): Promise<AwakenCounters> {
+  return reconcileCountersFromTierState(options.db, outcomes, requiredTier);
 }
 
 interface AwakenCounters {
@@ -327,204 +369,255 @@ interface AwakenCounters {
   failed: number;
 }
 
-interface AwakenTier1State {
-  rowExists: boolean;
-  tier1Done: boolean;
-  tier2Done: boolean;
-  tier3Done: boolean;
+export interface AwakenTerminalOutcome {
+  path: string;
+  terminal: "indexed" | "failed";
+}
+
+interface AwakenTierState {
+  tier1At: number | null;
+  tier2At: number | null;
+  tier3At: number | null;
 }
 
 export async function reconcileCountersFromTierState(
   db: Surreal,
-  attemptedPaths: ReadonlyArray<string>,
-  fallback: AwakenCounters,
-  requiredTier: 1 | 2 | 3 = 1,
+  outcomes: ReadonlyArray<AwakenTerminalOutcome>,
+  requiredTier: 1 | 2 | 3,
 ): Promise<AwakenCounters> {
-  if (attemptedPaths.length === 0) return fallback;
-  try {
-    let failed = 0;
-    let observedRows = 0;
-    for (const notePath of attemptedPaths) {
-      const tierState = await fetchAwakenTier1State(db, notePath);
-      if (tierState.rowExists) observedRows += 1;
-      if (!isRequiredTierDone(tierState, requiredTier)) failed += 1;
+  if (requiredTier !== 1 && requiredTier !== 2 && requiredTier !== 3) {
+    throw new Error("awaken reconciliation: required tier must be 1, 2, or 3");
+  }
+  const validatedOutcomes = validateTerminalOutcomes(outcomes);
+  if (validatedOutcomes.length === 0) return { processed: 0, failed: 0 };
+
+  const states = await fetchAwakenTierStates(
+    db,
+    validatedOutcomes.map((outcome) => outcome.path),
+  );
+  let processed = 0;
+  let failed = 0;
+  for (const outcome of validatedOutcomes) {
+    if (outcome.terminal === "failed") {
+      failed += 1;
+      continue;
     }
-    if (observedRows === 0 && fallback.failed === 0) {
-      return fallback;
+    const tierState = states.get(outcome.path);
+    if (tierState === undefined || !isRequiredTierDone(tierState, requiredTier)) {
+      throw new Error(
+        `awaken reconciliation: indexer reported success for '${outcome.path}' without persisted Tier ${requiredTier} completion`,
+      );
     }
-    return {
-      processed: attemptedPaths.length - failed,
-      failed,
-    };
-  } catch {
-    return fallback;
+    processed += 1;
+  }
+  return { processed, failed };
+}
+
+async function fetchAwakenTierStates(
+  db: Surreal,
+  paths: ReadonlyArray<string>,
+): Promise<Map<string, AwakenTierState>> {
+  const envelope: unknown = await db
+    .query("SELECT path, tier1_at, tier2_at, tier3_at FROM note WHERE path IN $paths;", {
+      paths: [...paths],
+    })
+    .collect();
+  if (!Array.isArray(envelope) || envelope.length !== 1 || !Array.isArray(envelope[0])) {
+    throw new Error(
+      "awaken reconciliation: tier-state query returned an invalid statement envelope",
+    );
+  }
+
+  const requested = new Set(paths);
+  const states = new Map<string, AwakenTierState>();
+  for (const rawRow of envelope[0]) {
+    const row = readTierStateRow(rawRow);
+    if (!requested.has(row.path)) {
+      throw new Error(
+        `awaken reconciliation: tier-state query returned unrequested path '${row.path}'`,
+      );
+    }
+    if (states.has(row.path)) {
+      throw new Error(
+        `awaken reconciliation: tier-state query returned duplicate path '${row.path}'`,
+      );
+    }
+    states.set(row.path, row.state);
+  }
+  return states;
+}
+
+function validateTerminalOutcomes(
+  outcomes: ReadonlyArray<AwakenTerminalOutcome>,
+): AwakenTerminalOutcome[] {
+  if (!Array.isArray(outcomes)) {
+    throw new Error("awaken reconciliation: terminal outcomes must be an array");
+  }
+  const paths = new Set<string>();
+  return outcomes.map((outcome, index) => {
+    if (typeof outcome !== "object" || outcome === null || Array.isArray(outcome)) {
+      throw new Error(`awaken reconciliation: outcome ${index} must be an object`);
+    }
+    const keys = Object.keys(outcome);
+    if (keys.length !== 2 || !keys.includes("path") || !keys.includes("terminal")) {
+      throw new Error(
+        `awaken reconciliation: outcome ${index} must contain only path and terminal`,
+      );
+    }
+    assertCanonicalMarkdownPath(outcome.path, `awaken reconciliation outcome ${index} path`);
+    if (outcome.terminal !== "indexed" && outcome.terminal !== "failed") {
+      throw new Error(`awaken reconciliation: outcome ${index} has an invalid terminal state`);
+    }
+    if (paths.has(outcome.path)) {
+      throw new Error(`awaken reconciliation: duplicate outcome path '${outcome.path}'`);
+    }
+    paths.add(outcome.path);
+    return { path: outcome.path, terminal: outcome.terminal };
+  });
+}
+
+function readTierStateRow(raw: unknown): { path: string; state: AwakenTierState } {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("awaken reconciliation: tier-state row must be an object");
+  }
+  const row = raw as Record<string, unknown>;
+  const allowed = new Set(["path", "tier1_at", "tier2_at", "tier3_at"]);
+  for (const key of Object.keys(row)) {
+    if (!allowed.has(key)) {
+      throw new Error(`awaken reconciliation: tier-state row has unsupported field '${key}'`);
+    }
+  }
+  assertCanonicalMarkdownPath(row.path, "awaken reconciliation tier-state path");
+  const tier1At = readOptionalTierTimestamp(row.tier1_at, "tier1_at");
+  const tier2At = readOptionalTierTimestamp(row.tier2_at, "tier2_at");
+  const tier3At = readOptionalTierTimestamp(row.tier3_at, "tier3_at");
+  if (tier2At !== null && tier1At === null) {
+    throw new Error("awaken reconciliation: tier2_at exists without tier1_at");
+  }
+  if (tier3At !== null && tier2At === null) {
+    throw new Error("awaken reconciliation: tier3_at exists without tier2_at");
+  }
+  if (tier1At !== null && tier2At !== null && tier2At < tier1At) {
+    throw new Error("awaken reconciliation: tier2_at precedes tier1_at");
+  }
+  if (tier2At !== null && tier3At !== null && tier3At < tier2At) {
+    throw new Error("awaken reconciliation: tier3_at precedes tier2_at");
+  }
+  return { path: row.path, state: { tier1At, tier2At, tier3At } };
+}
+
+function readOptionalTierTimestamp(raw: unknown, label: string): number | null {
+  if (raw === undefined) return null;
+  if (raw === null) {
+    throw new Error(`awaken reconciliation: ${label} uses null instead of SurrealDB NONE`);
+  }
+  if (!(raw instanceof DateTime)) {
+    throw new Error(`awaken reconciliation: ${label} must be a native SurrealDB datetime`);
+  }
+  const epoch = raw.toDate().getTime();
+  if (!Number.isSafeInteger(epoch) || epoch < 0) {
+    throw new Error(`awaken reconciliation: ${label} must be a valid non-negative datetime`);
+  }
+  return epoch;
+}
+
+function isRequiredTierDone(state: AwakenTierState, requiredTier: 1 | 2 | 3): boolean {
+  if (requiredTier === 1) return state.tier1At !== null;
+  if (requiredTier === 2) return state.tier1At !== null && state.tier2At !== null;
+  return state.tier1At !== null && state.tier2At !== null && state.tier3At !== null;
+}
+
+function assertCanonicalMarkdownPath(raw: unknown, label: string): asserts raw is string {
+  if (
+    typeof raw !== "string" ||
+    raw.length === 0 ||
+    raw.trim() !== raw ||
+    raw.startsWith("/") ||
+    raw.endsWith("/") ||
+    raw.includes("\\") ||
+    !raw.endsWith(".md") ||
+    hasControlCharacter(raw)
+  ) {
+    throw new Error(`${label} must be a canonical vault-relative Markdown path`);
+  }
+  const segments = raw.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error(`${label} must be a canonical vault-relative Markdown path`);
   }
 }
 
-async function fetchAwakenTier1State(db: Surreal, path: string): Promise<AwakenTier1State> {
-  const [rows] = await db
-    .query<
-      [
-        Array<{
-          tier1_at: string | Date | null | undefined;
-          tier2_at: string | Date | null | undefined;
-          tier3_at: string | Date | null | undefined;
-        }>,
-      ]
-    >("SELECT tier1_at, tier2_at, tier3_at FROM note WHERE path = $path LIMIT 1;", { path })
-    .collect<
-      [
-        Array<{
-          tier1_at: string | Date | null | undefined;
-          tier2_at: string | Date | null | undefined;
-          tier3_at: string | Date | null | undefined;
-        }>,
-      ]
-    >();
-  const row = rows[0];
-  if (row === undefined) {
-    return { rowExists: false, tier1Done: false, tier2Done: false, tier3Done: false };
-  }
-  return {
-    rowExists: true,
-    tier1Done: row.tier1_at !== null && row.tier1_at !== undefined,
-    tier2Done: row.tier2_at !== null && row.tier2_at !== undefined,
-    tier3Done: row.tier3_at !== null && row.tier3_at !== undefined,
-  };
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
 }
 
-function isRequiredTierDone(state: AwakenTier1State, requiredTier: 1 | 2 | 3): boolean {
-  if (requiredTier === 1) return state.tier1Done;
-  if (requiredTier === 2) return state.tier1Done && state.tier2Done;
-  return state.tier1Done && state.tier2Done && state.tier3Done;
+function validatePlannedPaths(raw: unknown, label: string): string[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`${label} must be an array`);
+  }
+  const seen = new Set<string>();
+  return raw.map((path, index) => {
+    assertCanonicalMarkdownPath(path, `${label}[${index}]`);
+    if (seen.has(path)) {
+      throw new Error(`${label} must not contain duplicate paths`);
+    }
+    seen.add(path);
+    return path;
+  });
 }
 
 export async function waitForNoteIndexed(
-  options: AwakenWorkerOptions,
+  bus: EventBus,
   notePath: string,
+  signal: AbortSignal,
 ): Promise<void> {
-  if (options.onNoteIndexed) {
-    await options.onNoteIndexed(notePath);
-    return;
-  }
-  const bus = options.bus;
-  if (bus === undefined) return;
+  throwIfAborted(signal);
   await new Promise<void>((resolve, reject) => {
-    // The indexer emits one of three terminal events per note:
-    //   - `indexer:note-indexed` after the orchestrator finishes
-    //     (Tier 3 success, Tier 3 failure with partial result, or a
-    //     filtered run that stops short of Tier 3 but still reaches
-    //     the end of `indexNote`).
-    //   - `indexer:tier3-done` immediately before `indexer:note-indexed`
-    //     when Tier 3 succeeds; included as a defensive resolve path
-    //     so a future indexer rewrite that drops the trailing
-    //     `note-indexed` still satisfies the per-note wait.
-    //   - `indexer:error` for Tier 1 / Tier 2 failures, where the
-    //     orchestrator returns before emitting `note-indexed`. Treat
-    //     it as a per-note completion (the run continues with the
-    //     `failed` counter incremented) instead of leaking a hung
-    //     listener.
+    // The first path-scoped terminal outcome wins:
+    //   - `indexer:note-indexed` after a successful or filtered pipeline.
+    //   - `indexer:error` after any tier failure. Tier 3 emits a trailing
+    //     partial `note-indexed` event as telemetry, but this listener is
+    //     already detached and the awaken run correctly counts the failure.
     let settled = false;
+    const cleanup = (): void => {
+      offNoteIndexed();
+      offError();
+      signal.removeEventListener("abort", onAbort);
+    };
+    const resolveOnce = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const rejectOnce = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      rejectOnce(createAbortError());
+    };
     const offNoteIndexed = bus.on("indexer:note-indexed", (event) => {
-      if (event.path !== notePath || settled) return;
-      settled = true;
-      offNoteIndexed();
-      offTier3();
-      offError();
-      resolve();
-    });
-    const offTier3 = bus.on("indexer:tier3-done", (event) => {
-      if (event.path !== notePath || settled) return;
-      settled = true;
-      offNoteIndexed();
-      offTier3();
-      offError();
-      resolve();
+      if (event.path !== notePath) return;
+      resolveOnce();
     });
     const offError = bus.on("indexer:error", (event) => {
-      if (settled) return;
       // Scope the rejection to the currently-waited note. Errors for other
       // paths (watcher-driven reindexes that race with the awaken cycle,
       // or the awaken-background worker-level emit with an empty path) are
       // intentionally ignored so the awaken counter reflects only the
       // outcome of `notePath`.
       if (event.path !== notePath) return;
-      settled = true;
-      offNoteIndexed();
-      offTier3();
-      offError();
-      reject(new Error(event.message));
+      rejectOnce(new Error(event.message));
     });
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
-}
-
-/**
- * Sort `paths` so entries matching the first glob come first, the second
- * glob next, and so on; remaining paths come last. Ties inside a bucket
- * break alphabetically. A path matching multiple globs lands in the
- * earliest bucket.
- */
-export function sortByPriorityGlobs(paths: string[], globs: string[]): string[] {
-  if (globs.length === 0) return [...paths].sort(compareStrings);
-  const matchers = globs.map((pattern) => compileGlob(pattern));
-  const buckets: string[][] = matchers.map(() => []);
-  const tail: string[] = [];
-  for (const path of paths) {
-    let placed = false;
-    for (let index = 0; index < matchers.length; index += 1) {
-      const matcher = matchers[index];
-      if (matcher?.(path)) {
-        buckets[index]?.push(path);
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) tail.push(path);
-  }
-  const out: string[] = [];
-  for (const bucket of buckets) {
-    bucket.sort(compareStrings);
-    out.push(...bucket);
-  }
-  tail.sort(compareStrings);
-  out.push(...tail);
-  return out;
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
-// Minimal glob matcher. Supports `*` (any non-slash chars), `**` (any
-// chars including slashes), and literal segments. Mirrors the matcher in
-// `daemon/handlers/awaken.ts` and is sufficient for the priority-glob use
-// case (daily, MOCs, projects/.../*.md).
-function compileGlob(pattern: string): (path: string) => boolean {
-  const regex = patternToRegExp(pattern);
-  return (path) => regex.test(path);
-}
-
-function patternToRegExp(pattern: string): RegExp {
-  let source = "^";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        source += ".*";
-        index += 1;
-      } else {
-        source += "[^/]*";
-      }
-    } else if (character === "?") {
-      source += "[^/]";
-    } else if (character !== undefined && ".+()|^$[]{}\\".includes(character)) {
-      source += `\\${character}`;
-    } else if (character !== undefined) {
-      source += character;
-    }
-  }
-  source += "$";
-  return new RegExp(source);
 }

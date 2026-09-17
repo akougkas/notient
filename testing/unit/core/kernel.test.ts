@@ -10,21 +10,22 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "embeddingLLM",
   "health",
   "lock",
-  "probeCache",
   "agentEventStore",
   "sessionGrants",
   "awakenBackgroundRegistry",
+  "indexExclusion",
+  "surrealDb",
   "indexer",
   "embedder",
   "extractor",
-  "reasoningMutex",
-  "idleDetector",
+  "reasoningScheduler",
+  "agentRunExecutor",
+  "sentienceActivity",
+  "daemonMutationJournal",
   "coordinator",
   "approvalService",
   "vitalsService",
   "searchPipeline",
-  "savedQueries",
-  "searchHistory",
   "conversationStore",
   "conversationIndex",
   "toolRegistry",
@@ -33,8 +34,8 @@ const ALL_SERVICE_KEYS: readonly ServiceKey[] = [
   "contextManager",
   "chatService",
   "historyService",
+  "durableNoteWriter",
   "transcriptDistiller",
-  "vaultBootstrap",
 ];
 
 describe("Kernel", () => {
@@ -47,6 +48,14 @@ describe("Kernel", () => {
     const k = new Kernel();
     k.register("bus", {} as never);
     expect(() => k.seal()).toThrow(/missing required services/);
+  });
+
+  test("phase A refuses to seal without the SurrealDB substrate", () => {
+    const k = new Kernel();
+    for (const key of ALL_SERVICE_KEYS) {
+      if (key !== "surrealDb") k.register(key, {} as never);
+    }
+    expect(() => k.seal({ phase: "A" })).toThrow(/surrealDb/);
   });
 
   test("seal succeeds when all required services registered", () => {

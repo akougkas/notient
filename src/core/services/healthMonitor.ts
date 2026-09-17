@@ -43,14 +43,6 @@ export class HealthMonitor {
     }));
   }
 
-  /**
-   * Returns the set of in-flight probe controllers. Test-only accessor; the
-   * production code paths should treat this as opaque internal state.
-   */
-  inflightControllers(): ReadonlySet<AbortController> {
-    return this.inflight;
-  }
-
   private async probeAll(): Promise<void> {
     const timeoutMs = Math.max(500, Math.floor(this.config.intervalMs / 2));
     await Promise.all(
@@ -58,7 +50,7 @@ export class HealthMonitor {
         const controller = new AbortController();
         this.inflight.add(controller);
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const start = Date.now();
+        const start = performance.now();
         let ok = false;
         try {
           ok = await endpoint.provider.isAvailable(controller.signal);
@@ -68,7 +60,7 @@ export class HealthMonitor {
           clearTimeout(timer);
           this.inflight.delete(controller);
         }
-        const latencyMs = Date.now() - start;
+        const latencyMs = Math.max(0, Math.round(performance.now() - start));
         this.lastResults.set(endpoint.label, ok);
         this.bus.emit({ type: "llm:health", endpoint: endpoint.label, ok, latencyMs });
       }),

@@ -1,9 +1,41 @@
-import { dirname } from "node:path/posix";
+import { dirname, normalize } from "node:path/posix";
+
+/** Parse only local Markdown destinations. Decode path and fragment separately
+ * so an encoded # in a filename cannot become a heading delimiter. */
+export function parseMarkdownDestination(url: string): ResolveInput | null {
+  if (!url || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(url)) return null;
+  const hash = url.indexOf("#");
+  try {
+    const rawTarget = decodeURIComponent(hash < 0 ? url : url.slice(0, hash));
+    const fragment = hash < 0 ? "" : decodeURIComponent(url.slice(hash + 1));
+    if (/[\p{Cc}\p{Cf}\\]/u.test(rawTarget) || /[\p{Cc}\p{Cf}]/u.test(fragment)) return null;
+    return {
+      rawTarget,
+      targetHeading: fragment && !fragment.startsWith("^") ? fragment : null,
+      targetBlockId: fragment.startsWith("^") ? fragment.slice(1) || null : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Relative Markdown destinations resolve relative to their containing note;
+ * they never fall back to another directory's matching basename. */
+export function resolveMarkdownTarget(
+  fromNotePath: string,
+  target: string,
+  vaultPaths: readonly string[],
+): string | null {
+  if (!target) return vaultPaths.includes(fromNotePath) ? fromNotePath : null;
+  const path = normalize(
+    target.startsWith("/") ? target.slice(1) : `${dirname(fromNotePath)}/${target}`,
+  );
+  if (path.startsWith("../") || path === ".." || path.startsWith("/")) return null;
+  return vaultPaths.includes(path) ? path : vaultPaths.includes(`${path}.md`) ? `${path}.md` : null;
+}
 
 /**
  * Wikilink target resolver. Best-effort: never throws on unresolved.
- *
- * Spec: §8.3, Phase 2 plan §Task 10.
  *
  * Resolution order for a raw target string:
  *   1. Exact vault-relative path match, with or without the `.md` suffix.
@@ -12,8 +44,7 @@ import { dirname } from "node:path/posix";
  *      has the smallest edit distance to the active note's folder.
  *
  * Unresolved targets get `targetPath = null`. Persisting the original raw
- * target on the edge as `target_unresolved` is the caller's responsibility
- * (see Tier 1 indexer, Task 12).
+ * target in the unresolved ancillary table is the caller's responsibility.
  */
 
 export interface ResolveInput {

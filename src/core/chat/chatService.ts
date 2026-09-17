@@ -1,32 +1,35 @@
+import {
+  type InferenceAttempt,
+  InferenceBudget,
+  type InferenceBudgetLimits,
+} from "../llm/executionBudget";
 /**
- * Chat orchestration facade for Phase 4.
+ * Chat orchestration facade for the awakened vault.
  *
  * The ChatService is the single entry point exposed to the UI layer. It:
  *
- *   1. Probes tool-mode once per chat model id and caches via the settings
- *      writer so subsequent turns skip the round-trip.
- *   2. Runs every turn under `mutex.runPriority("chat", ...)` so chat preempts
- *      background agents (last-priority-wins with co-author).
- *   3. Composes the eight-layer system prompt via {@link ContextManager}.
+ *   1. Probes tool-mode once per chat model id and caches it in process-local
+ *      learned state so subsequent turns skip the round-trip.
+ *   2. Runs every turn under `scheduler.runPriority("chat", ...)` so chat preempts
+ *      background reasoning work.
+ *   3. Composes the sentient-notes context via {@link ContextManager}.
  *   4. Streams agent-loop events to the UI while also accumulating the
  *      assistant message and any tool exchanges into a working ChatMessage
  *      list.
  *   5. Persists the conversation via {@link ConversationStore} and refreshes
- *      the cross-session memory index via {@link ConversationIndex}.
+ *      the cross-session memory index via the SurrealDB conversation memory.
  *
  * Reasoning persistence is honoured at persist time: when
  * `chat.persistReasoning` is false the assistant's `reasoningContent` is
  * stripped before the conversation is written to disk.
  */
 
-import type { ReasoningMutex } from "../coordinator/reasoningMutex";
-import type { EventBus } from "../events/eventBus";
+import type { ReasoningScheduler } from "../coordinator/reasoningScheduler";
+import { type EventBus, assertEventBus } from "../events/eventBus";
 import type { LLMProvider } from "../llm/provider";
 import { type AgentLoopEvent, runAgentTurn } from "./agentLoop";
-import type { ApprovalGate } from "./approvalGate";
 import type { ContextManager } from "./contextManager";
-import type { ConversationIndex } from "./conversationIndex";
-import { encodeBase64Float32 } from "./conversationIndex";
+import type { ConversationMemory } from "./conversationIndex";
 import type { ConversationStore } from "./conversationStore";
 import { SUMMARY_JSON_SCHEMA, summarizePrompt } from "./prompts/summarize";
 import { type ToolMode, type ToolModeCache, probeToolMode } from "./toolModeProbe";
@@ -37,16 +40,15 @@ export interface ChatServiceOptions {
   provider: LLMProvider;
   contextManager: ContextManager;
   conversationStore: ConversationStore;
-  conversationIndex: ConversationIndex;
+  conversationIndex: ConversationMemory;
   toolRegistry: ToolRegistry;
-  approvalGate: ApprovalGate;
-  mutex: ReasoningMutex;
+  scheduler: ReasoningScheduler;
   toolModeCache: ToolModeCache;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
   settings: () => ChatRuntimeSettings;
   generateId?: () => string;
   now?: () => number;
-  bus?: EventBus;
+  bus: EventBus;
 }
 
 export interface ChatRuntimeSettings {
@@ -54,10 +56,12 @@ export interface ChatRuntimeSettings {
   maxRoundsPerTurn: number;
   approvalMode: ApprovalMode;
   persistReasoning: boolean;
+  budget: InferenceBudgetLimits;
 }
 
 export type ChatStreamEvent =
   | AgentLoopEvent
+  | { type: "turn:usage"; attempts: InferenceAttempt[]; durationMs: number }
   | { type: "turn:start"; conversationId: string; userMessage: ChatMessage }
   | { type: "turn:complete"; conversation: Conversation }
   | { type: "turn:aborted"; reason: string };
@@ -65,17 +69,30 @@ export type ChatStreamEvent =
 export interface SendMessageInput {
   conversation: Conversation;
   userMessage: string;
+  /** RPC connection that owns this turn and may cancel it. */
+  connectionId: string;
+  /** Resolved attachment bodies visible to this turn only; never persisted as note paths. */
+  ephemeralContext?: readonly string[];
 }
 
 export class ChatService {
-  private readonly probedModels = new Set<string>();
+  /** Prevent an older post-turn summary from overwriting a newer transcript. */
+  private readonly summaryRefreshTails = new Map<string, Promise<void>>();
+  /**
+   * In-flight turns grouped by abort scope. The scheduler label stays `"chat"`
+   * for every turn so scheduling and the priority preemption rule are
+   * unchanged; only cancellation is scoped.
+   */
+  private readonly turnControllers = new Map<string, Set<AbortController>>();
 
-  constructor(private readonly options: ChatServiceOptions) {}
+  constructor(private readonly options: ChatServiceOptions) {
+    assertEventBus(options.bus, "ChatService");
+  }
 
   async startConversation(input: {
     topic: string;
     pinnedContext?: string[];
-    clientIdentity?: string;
+    clientIdentity: string;
   }): Promise<Conversation> {
     const settings = this.options.settings();
     const generateId = this.options.generateId ?? defaultGenerateId;
@@ -97,125 +114,178 @@ export class ChatService {
     return this.options.conversationStore.load(notePath);
   }
 
-  abort(): void {
-    this.options.mutex.abort("chat");
+  /** Wait for every accepted post-turn summary/index refresh to settle. */
+  async drain(): Promise<void> {
+    while (this.summaryRefreshTails.size > 0) {
+      await Promise.all(this.summaryRefreshTails.values());
+    }
+  }
+
+  /** Cancel only turns owned by one RPC connection. */
+  abortConnection(connectionId: string): void {
+    const controllers = this.turnControllers.get(connectionId);
+    if (controllers === undefined) return;
+    for (const controller of controllers) controller.abort();
+  }
+
+  /** Cancel every chat turn, reached only through the human-only RPC branch. */
+  abortAllConnections(): void {
+    for (const controllers of this.turnControllers.values()) {
+      for (const controller of controllers) controller.abort();
+    }
+  }
+
+  private registerTurn(connectionId: string, controller: AbortController): void {
+    const existing = this.turnControllers.get(connectionId);
+    if (existing === undefined) this.turnControllers.set(connectionId, new Set([controller]));
+    else existing.add(controller);
+  }
+
+  private releaseTurn(connectionId: string, controller: AbortController): void {
+    const existing = this.turnControllers.get(connectionId);
+    if (existing === undefined) return;
+    existing.delete(controller);
+    if (existing.size === 0) this.turnControllers.delete(connectionId);
   }
 
   async *sendMessage(input: SendMessageInput): AsyncGenerator<ChatStreamEvent> {
     const generateId = this.options.generateId ?? defaultGenerateId;
     const now = this.options.now ?? Date.now;
     const settings = this.options.settings();
+    const conversation = input.conversation;
     const userMessage: ChatMessage = {
       id: generateId(),
       role: "user",
       content: input.userMessage,
       createdAt: now(),
     };
-    yield {
-      type: "turn:start",
-      conversationId: input.conversation.id,
-      userMessage,
-    };
 
-    const queue = new EventQueue<ChatStreamEvent>();
-    let finalAssistant: ChatMessage | null = null;
-    let toolExchange: ChatMessage[] = [];
-    let aborted = false;
-    let abortReason = "aborted";
+    // Register before exposing turn:start so an abort cannot land in a gap
+    // where the handler sees an owned turn but ChatService cannot cancel it.
+    const turnController = new AbortController();
+    this.registerTurn(input.connectionId, turnController);
+    try {
+      yield {
+        type: "turn:start",
+        conversationId: conversation.id,
+        userMessage,
+      };
 
-    const runPromise = this.options.mutex
-      .runPriority("chat", async (mutexSignal) => {
-        const toolMode = await this.ensureToolMode(settings.model, mutexSignal);
-        const composed = await this.options.contextManager.compose(
-          input.conversation,
-          userMessage,
-          mutexSignal,
-        );
-        const generator = runAgentTurn(
-          {
-            provider: this.options.provider,
-            toolRegistry: this.options.toolRegistry,
-            approvalGate: this.options.approvalGate,
-            maxRoundsPerTurn: settings.maxRoundsPerTurn,
-            toolMode: () => toolMode,
-            generateId,
-            now,
-          },
-          {
-            conversation: input.conversation,
-            systemAndHistory: composed.messages,
-            model: settings.model,
-            signal: mutexSignal,
-          },
-        );
-        for await (const event of generator) {
-          queue.push(event);
-          if (event.type === "loop:done") {
-            finalAssistant = event.finalMessage;
-            toolExchange = event.toolMessages;
-          }
-          if (event.type === "loop:error") {
-            aborted = true;
-            abortReason = event.message;
-          }
-        }
-      })
-      .catch((error) => {
-        aborted = true;
-        abortReason = error instanceof Error ? error.message : String(error);
-      })
-      .finally(() => {
-        queue.close();
+      const queue = new EventQueue<ChatStreamEvent>();
+      let finalAssistant: ChatMessage | null = null;
+      let toolExchange: ChatMessage[] = [];
+      let aborted = false;
+      let abortReason = "aborted";
+
+      const budget = new InferenceBudget(settings.budget);
+      const started = performance.now();
+      const runPromise = this.options.scheduler
+        .runPriority(
+          "chat",
+          (scheduledSignal) =>
+            budget.run(async () => {
+              const signal = AbortSignal.any([scheduledSignal, budget.signal]);
+              if (signal.aborted) throw abortError();
+              const toolMode = await this.ensureToolMode(settings.model, signal);
+              const composed = await this.options.contextManager.compose(
+                conversation,
+                userMessage,
+                signal,
+                input.ephemeralContext,
+              );
+              const generator = runAgentTurn(
+                {
+                  provider: this.options.provider,
+                  toolRegistry: this.options.toolRegistry,
+                  maxRoundsPerTurn: settings.maxRoundsPerTurn,
+                  generationTokens: settings.budget.generationTokens,
+                  toolMode: () => toolMode,
+                  contextBudgetTokens: this.options.contextManager.contextBudgetTokens(),
+                  generateId,
+                  now,
+                },
+                {
+                  conversation,
+                  systemAndHistory: composed.messages,
+                  model: settings.model,
+                  signal,
+                },
+              );
+              for await (const event of generator) {
+                queue.push(event);
+                if (event.type === "loop:done") {
+                  finalAssistant = event.finalMessage;
+                  toolExchange = event.toolMessages;
+                }
+                if (event.type === "loop:error") {
+                  aborted = true;
+                  abortReason = event.message;
+                }
+              }
+              await budget.flush();
+              budget.assertAvailable();
+            }),
+          { signal: AbortSignal.any([budget.signal, turnController.signal]) },
+        )
+        .catch((error) => {
+          aborted = true;
+          abortReason = error instanceof Error ? error.message : String(error);
+        })
+        .finally(() => {
+          this.releaseTurn(input.connectionId, turnController);
+          queue.close();
+        });
+
+      for await (const event of queue.drain()) {
+        yield event;
+      }
+      await runPromise;
+      await budget.flush();
+      const usage = {
+        attempts: structuredClone(budget.attempts),
+        durationMs: Math.round(performance.now() - started),
+      };
+      yield { type: "turn:usage", ...usage };
+      this.options.bus.emit({
+        type: "chat:usage",
+        runId: userMessage.id,
+        phase: "answer",
+        state: aborted || finalAssistant === null ? "incomplete" : "complete",
+        ...usage,
       });
 
-    for await (const event of queue.drain()) {
-      yield event;
+      if (aborted || finalAssistant === null) {
+        yield { type: "turn:aborted", reason: abortReason };
+        return;
+      }
+
+      const persistedAssistant = settings.persistReasoning
+        ? finalAssistant
+        : stripReasoning(finalAssistant);
+      const updated: Conversation = {
+        ...conversation,
+        messages: [...conversation.messages, userMessage, ...toolExchange, persistedAssistant],
+      };
+
+      // Persist the conversation immediately and yield turn:complete so the UI
+      // releases its busy state. The cross-session summary refresh runs in the
+      // background; failure is non-fatal and a stale summary just means the
+      // next turn's cross-session memory lags by one round.
+      const saved = await this.options.conversationStore.save(input.conversation, updated);
+      yield { type: "turn:complete", conversation: saved };
+      this.queueSummaryRefresh(saved, budget, userMessage.id, started);
+    } finally {
+      // Async-generator consumers may leave immediately after any yielded
+      // event. Cancel and release in that path as well as the run promise's
+      // normal completion path.
+      turnController.abort();
+      this.releaseTurn(input.connectionId, turnController);
     }
-    await runPromise;
-
-    if (aborted || finalAssistant === null) {
-      yield { type: "turn:aborted", reason: abortReason };
-      return;
-    }
-
-    const persistedAssistant = settings.persistReasoning
-      ? finalAssistant
-      : stripReasoning(finalAssistant);
-    const updated: Conversation = {
-      ...input.conversation,
-      messages: [...input.conversation.messages, userMessage, ...toolExchange, persistedAssistant],
-      updatedAt: now(),
-    };
-
-    // Persist the conversation immediately and yield turn:complete so the UI
-    // releases its busy state. The cross-session summary refresh runs in the
-    // background; failure is non-fatal and a stale summary just means the
-    // next turn's cross-session memory lags by one round.
-    const saved = await this.options.conversationStore.save(updated);
-    yield { type: "turn:complete", conversation: saved };
-    void this.refreshSummaryAndIndex(saved).then(
-      async (refreshed) => {
-        if (refreshed === saved) return;
-        try {
-          await this.options.conversationStore.save(refreshed);
-        } catch {
-          // Background save failures are non-fatal; the conversation still
-          // exists with the pre-refresh summary on disk.
-        }
-      },
-      () => {
-        // Summary refresh failures are non-fatal; the prior summary stays.
-      },
-    );
   }
 
   private async ensureToolMode(model: string, signal: AbortSignal): Promise<ToolMode> {
     const cached = this.options.toolModeCache.read(model);
     if (cached) return cached;
-    if (this.probedModels.has(model)) {
-      return this.options.toolModeCache.read(model) ?? "disabled";
-    }
-    this.probedModels.add(model);
     const mode = await probeToolMode({
       provider: this.options.provider,
       model,
@@ -226,47 +296,103 @@ export class ChatService {
     return mode;
   }
 
-  private async refreshSummaryAndIndex(conversation: Conversation): Promise<Conversation> {
+  private queueSummaryRefresh(
+    conversation: Conversation,
+    budget: InferenceBudget,
+    runId: string,
+    started: number,
+  ): void {
+    const prior = this.summaryRefreshTails.get(conversation.id) ?? Promise.resolve();
+    let complete = false;
+    const refresh = prior
+      .then(() =>
+        budget.run(async () => {
+          budget.assertAvailable();
+          complete = await this.refreshSummaryAndIndex(conversation, budget);
+          await budget.flush();
+          budget.assertAvailable();
+        }),
+      )
+      .catch(() => {
+        // The completed turn is already durable. Summary memory is derived,
+        // so an isolated refresh failure must not fail the user's turn.
+      });
+    this.summaryRefreshTails.set(conversation.id, refresh);
+    void refresh.finally(() => {
+      this.options.bus.emit({
+        type: "chat:usage",
+        runId,
+        phase: "memory",
+        state: complete ? "complete" : "incomplete",
+        attempts: structuredClone(budget.attempts),
+        durationMs: Math.round(performance.now() - started),
+      });
+      if (this.summaryRefreshTails.get(conversation.id) === refresh) {
+        this.summaryRefreshTails.delete(conversation.id);
+      }
+    });
+  }
+
+  private async refreshSummaryAndIndex(
+    conversation: Conversation,
+    budget: InferenceBudget,
+  ): Promise<boolean> {
     if (conversation.messages.length === 0) {
-      await this.options.conversationIndex.record(conversation);
-      return conversation;
+      await this.options.conversationIndex.record(conversation, null);
+      return false;
     }
     const settings = this.options.settings();
-    const controller = new AbortController();
     let summary = conversation.summary;
+    let summarized = false;
     try {
-      const result = await this.options.provider.chatJson<{ summary: string }>(
-        summarizePrompt(conversation.messages),
-        { model: settings.model, signal: controller.signal },
-        SUMMARY_JSON_SCHEMA,
+      const result = await this.options.scheduler.run(
+        "chat:summary",
+        (signal) =>
+          this.options.provider.chatJson<{ summary: string }>(
+            summarizePrompt(conversation.messages),
+            { model: settings.model, signal, maxTokens: settings.budget.generationTokens },
+            SUMMARY_JSON_SCHEMA,
+          ),
+        { signal: budget.signal },
       );
       if (typeof result.summary === "string" && result.summary.length > 0) {
         summary = result.summary;
+        summarized = true;
       }
     } catch {
-      // Summary refresh failure is non-fatal; keep the previous summary so
-      // we still record the index entry with whatever embedding we have.
+      // Summary refresh failure keeps the canonical summary unchanged.
     }
-    let summaryEmbeddingB64: string | null = conversation.summaryEmbeddingB64;
+    let embedding: Float32Array | null = null;
     if (summary.length > 0) {
       try {
-        const embedding = await this.options.embed(summary, controller.signal);
-        if (embedding) {
-          summaryEmbeddingB64 = encodeBase64Float32(embedding);
-        }
+        embedding = await this.options.embed(summary, budget.signal);
       } catch {
-        // Keep previous embedding on failure.
+        // Null means the index may retain a row only when its exact model,
+        // width, and summary hash still match.
       }
     }
-    const next: Conversation = { ...conversation, summary, summaryEmbeddingB64 };
-    await this.options.conversationIndex.record(next);
-    return next;
+
+    await budget.flush();
+    budget.assertAvailable();
+    // Invalidate a changed summary first. If embedding or persistence fails,
+    // a semantic row for the old summary can never masquerade as memory for
+    // the new Markdown.
+    if (summary !== conversation.summary) {
+      await this.options.conversationIndex.remove(conversation.id);
+    }
+    const persisted = await this.options.conversationStore.updateSummary(
+      conversation.notePath,
+      conversation.id,
+      summary,
+    );
+    await this.options.conversationIndex.record(persisted, embedding);
+    return summarized && embedding !== null;
   }
 }
 
 /**
  * Single-producer/single-consumer event queue used to bridge the agent loop
- * generator (which runs inside the mutex callback) to the public async
+ * generator (which runs inside the scheduler callback) to the public async
  * generator returned by sendMessage. The producer pushes events; the consumer
  * drains them via an async iterator that resolves immediately when items are
  * waiting and parks on a promise when the queue is empty.
@@ -305,6 +431,13 @@ class EventQueue<T> {
     this.resolveWaiter = null;
     resolver();
   }
+}
+
+function abortError(): Error {
+  if (typeof DOMException !== "undefined") return new DOMException("aborted", "AbortError");
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function stripReasoning(message: ChatMessage): ChatMessage {

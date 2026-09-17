@@ -13,7 +13,7 @@ describe("buildChunkNoteFilter", () => {
   test("emits folder + date range + maturity clauses with parameters", () => {
     const fragment = buildChunkNoteFilter({
       folders: ["Projects", "Notes/"],
-      maturity: ["draft", "review"],
+      maturity: ["adolescent", "mature"],
       fromDate: 1_000,
       toDate: 2_000,
     });
@@ -25,19 +25,17 @@ describe("buildChunkNoteFilter", () => {
     expect(fragment.where.startsWith(" AND ")).toBe(true);
     expect(fragment.bindings.f_folder_0).toBe("Projects/");
     expect(fragment.bindings.f_folder_1).toBe("Notes/");
-    expect(fragment.bindings.f_maturity).toEqual(["draft", "review"]);
+    expect(fragment.bindings.f_maturity).toEqual(["adolescent", "mature"]);
     expect(fragment.bindings.f_from).toBeInstanceOf(Date);
     expect(fragment.bindings.f_to).toBeInstanceOf(Date);
     expect((fragment.bindings.f_from as Date).getTime()).toBe(1_000);
     expect((fragment.bindings.f_to as Date).getTime()).toBe(2_000);
   });
 
-  test("ignores unrelated filter keys", () => {
+  test("leaves post-query filters out of the chunk query", () => {
     const fragment = buildChunkNoteFilter({
       connectivityTiers: ["hub"],
       hasPendingProposals: true,
-      minConfidence: 0.7,
-      agents: ["linker"],
     });
     expect(fragment.where).toBe("");
     expect(fragment.bindings).toEqual({});

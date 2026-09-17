@@ -1,11 +1,7 @@
 /**
- * Phase 4 chat type set. These types form the contract every later chat task
- * (parser, store, index, agent loop, UI) builds on. They live in the chat
- * module so non-chat code can keep its own narrower types.
- *
- * Conversations persist as markdown inside the vault under
- * `<vault>/Notient/conversations/`. The shapes here mirror what the parser
- * roundtrips, so test fixtures and runtime objects stay aligned.
+ * Conversation contracts shared by the parser, store, agent loop, and UI.
+ * Conversations persist as markdown under `<vault>/Notient/conversations/`,
+ * and these shapes match the parser's round-trip format.
  */
 
 export type ChatRole = "user" | "assistant" | "system" | "tool";
@@ -31,9 +27,8 @@ export interface ApprovalRecord {
   reason?: string;
 }
 
-export interface ChatMessage {
+interface ChatMessageBase {
   id: string;
-  role: ChatRole;
   content: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
@@ -41,6 +36,23 @@ export interface ChatMessage {
   reasoningContent?: string;
   createdAt: number;
 }
+
+export interface ToolChatMessage extends ChatMessageBase {
+  role: "tool";
+  /** Assistant tool-call id this persisted result answers. */
+  toolCallId: string;
+  toolCalls?: never;
+  toolResults?: never;
+  approvals?: never;
+  reasoningContent?: never;
+}
+
+export interface ConversationChatMessage extends ChatMessageBase {
+  role: Exclude<ChatRole, "tool">;
+  toolCallId?: never;
+}
+
+export type ChatMessage = ConversationChatMessage | ToolChatMessage;
 
 export type ApprovalMode = "safe" | "yolo";
 
@@ -52,19 +64,7 @@ export interface Conversation {
   approvalMode: ApprovalMode;
   topic: string;
   summary: string;
-  /**
-   * Base64-encoded Float32Array carrying the summary embedding produced by
-   * the cross-session memory pipeline (Task 13). The store roundtrips the
-   * string verbatim and never computes it.
-   */
-  summaryEmbeddingB64: string | null;
-  /**
-   * Per-invocation client identity that started the conversation (Phase D1
-   * LD-5). Persists in the markdown frontmatter as `client_identity`. Older
-   * conversation files written before this field existed parse as `human`
-   * via the parser's default frontmatter; new write paths plumb it from the
-   * RPC envelope.
-   */
+  /** Client identity that started the conversation, stored as `client_identity`. */
   clientIdentity: string;
   messageCount: number;
   createdAt: number;

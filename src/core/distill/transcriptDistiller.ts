@@ -10,6 +10,7 @@
  * and Extractor entirely so the handler stays thin.
  */
 
+import type { ReasoningScheduler } from "../coordinator/reasoningScheduler";
 import type { LLMProvider, ChatMessage as ProviderChatMessage } from "../llm/provider";
 import type { TranscriptMessage } from "./transcriptParser";
 
@@ -27,6 +28,7 @@ export interface TranscriptDistiller {
 
 export interface TranscriptDistillerDeps {
   provider: LLMProvider;
+  scheduler: ReasoningScheduler;
   /** Optional override for the chat model. Defaults to a single-shot temp 0.2 call. */
   model?: string;
 }
@@ -76,13 +78,18 @@ async function distillImpl(
 
   let raw: string;
   try {
-    raw = await deps.provider.chat(chatMessages, {
-      model: deps.model ?? DEFAULT_MODEL,
-      temperature: 0.2,
-      maxTokens: DISTILLER_MAX_TOKENS,
-      signal,
-      enableThinking: false,
-    });
+    raw = await deps.scheduler.run(
+      "agent.distill",
+      (scheduledSignal) =>
+        deps.provider.chat(chatMessages, {
+          model: deps.model ?? DEFAULT_MODEL,
+          temperature: 0.2,
+          maxTokens: DISTILLER_MAX_TOKENS,
+          signal: scheduledSignal,
+          enableThinking: false,
+        }),
+      signal === undefined ? {} : { signal },
+    );
   } catch {
     // Provider failures surface as an empty candidate list. The handler
     // still emits a structured response with proposalsCreated = 0 so the

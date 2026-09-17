@@ -1,32 +1,37 @@
 /**
- * Phase 4 Task 9 awaken control-plane CLI smoke harness.
+ * Awaken control-plane CLI integration harness.
  *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/cli/commands/awaken.test.ts`.
+ * Skipped by default. Run with
+ * `NOTIENT_SMOKE=1 bun test testing/integration/cli/commands/awaken.test.ts`.
  *
- * Boots a real SurrealDB, applies the Phase 1 schema, hand-writes a per-vault
- * state directory under a tempdir-rooted `HOME`, and exercises the four
- * control-plane handlers (`runAwakenPause`, `runAwakenCancel`,
- * `runAwakenResume`, `runAwakenStatus`) end-to-end against the Task 7 DAL.
+ * Boots a real SurrealDB for control-plane state assertions and exercises the
+ * four CLI handlers over the daemon RPC transport.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_TIER_FILTER, parseTierCsv } from "../../../../src/cli/commands/awaken";
 import { runAwakenCancel } from "../../../../src/cli/commands/awakenCancel";
 import { runAwakenPause } from "../../../../src/cli/commands/awakenPause";
 import { runAwakenResume } from "../../../../src/cli/commands/awakenResume";
 import { runAwakenStatus } from "../../../../src/cli/commands/awakenStatus";
 import { createRun, updateStatus } from "../../../../src/core/awaken/awakenRun";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
-import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
+import { makeAwakenStatusHandler } from "../../../../src/daemon/handlers/awaken";
 import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { installFakeDaemonAuth, replyToAuthenticatedHello } from "../../../helpers/fakeDaemonAuth";
+import { startTestRpcDaemon } from "../rpcTestDaemon";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+function makeRunPaths(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `note-${index}.md`);
+}
 
 interface Captured {
   stdout: string[];
@@ -59,20 +64,41 @@ interface FakeDaemon {
   close: () => Promise<void>;
 }
 
+type FakeDaemonResponder = (
+  frame: Record<string, unknown>,
+) => FakeDaemonResponse | Promise<FakeDaemonResponse>;
+
+async function replyFrame(
+  frame: Record<string, unknown>,
+  respond: FakeDaemonResponder,
+): Promise<Record<string, unknown>> {
+  const id = typeof frame.id === "string" ? frame.id : "unknown";
+  const reply = await respond(frame);
+  return { id, type: reply.type, ...reply.payload };
+}
+
+async function writeFakeDaemonReply(
+  socket: Socket,
+  line: string,
+  respond: FakeDaemonResponder,
+): Promise<void> {
+  const frame = JSON.parse(line) as Record<string, unknown>;
+  const id = typeof frame.id === "string" ? frame.id : "unknown";
+  const method = typeof frame.method === "string" ? frame.method : "unknown";
+  socket.write(`${JSON.stringify({ id, type: "ack", method })}\n`);
+  if (replyToAuthenticatedHello(socket, frame)) return;
+  socket.write(`${JSON.stringify(await replyFrame(frame, respond))}\n`);
+}
+
 /**
- * Minimal Unix-socket daemon stub for the `awaken --resume` CLI tests.
- *
- * `awaken --resume` is a thin client over the daemon's `awaken.resume` RPC,
- * so this fixture lets the smoke tests assert what the CLI does with a
- * canned daemon reply without standing up a real daemon (and a second
- * SurrealDB child) inside an in-process test. The fixture mirrors the
- * shape of the helper in `src/cli/client.test.ts` but is duplicated here
- * to keep each test file self-contained.
+ * Minimal Unix-socket daemon stub for awaken control-result rendering tests.
  */
 async function startFakeDaemon(
-  socketPath: string,
-  respond: (frame: Record<string, unknown>) => FakeDaemonResponse,
+  vaultPath: string,
+  respond: FakeDaemonResponder,
 ): Promise<FakeDaemon> {
+  const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+  const cleanupAuth = await installFakeDaemonAuth(vaultPath);
   await mkdir(path.dirname(socketPath), { recursive: true });
   // A previous run may have left an orphan socket file behind. `listen`
   // would otherwise fail with EADDRINUSE; unlink first and ignore ENOENT.
@@ -91,10 +117,9 @@ async function startFakeDaemon(
         const line = buffer.slice(0, newlineIndex).trim();
         buffer = buffer.slice(newlineIndex + 1);
         if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          const reply = respond(frame);
-          socket.write(`${JSON.stringify({ id, type: reply.type, ...reply.payload })}\n`);
+          void writeFakeDaemonReply(socket, line, respond).catch((error: unknown) => {
+            socket.destroy(error instanceof Error ? error : new Error(String(error)));
+          });
         }
         newlineIndex = buffer.indexOf("\n");
       }
@@ -112,6 +137,7 @@ async function startFakeDaemon(
       for (const socket of sockets) socket.end();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await unlink(socketPath).catch(() => {});
+      await cleanupAuth();
     },
   };
 }
@@ -141,6 +167,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
       portFile: path.join(tempDir, "surreal.port"),
       pidFile: path.join(tempDir, "surreal.pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -149,15 +176,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-
-    // Hand-write the per-vault state directory the CLI helpers expect.
-    const stateDir = vaultStateDir(vaultPath);
-    await mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const port = new URL(handle.url).port;
-    await writeFile(vaultPortPath(vaultPath), port, "utf8");
-    await writeFile(vaultSecretPath(vaultPath), secret, { mode: 0o600 });
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) await connection.close().catch(() => {});
@@ -170,42 +190,66 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await connection.db.query("DELETE awaken_run;").collect();
   });
 
   test("[smoke] --pause with no current run writes stderr message and exits 1", async () => {
-    const captured = makeCaptured();
-    const exitCode = await runAwakenPause({
-      vaultPath,
-      stderr: makeStderrWriter(captured),
+    const fake = await startFakeDaemon(vaultPath, (frame) => {
+      expect(frame.method).toBe("awaken.pause");
+      return {
+        type: "error",
+        payload: {
+          code: "INVALID_PARAMS",
+          message: "nothing to pause",
+          detail: {},
+        },
+      };
     });
-    expect(exitCode).toBe(1);
-    expect(captured.stderr.length).toBeGreaterThan(0);
-    expect(captured.stderr[0]).toContain("nothing to pause");
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenPause({
+        vaultPath,
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(1);
+      expect(captured.stderr.length).toBeGreaterThan(0);
+      expect(captured.stderr[0]).toContain("nothing to pause");
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --cancel with no current run writes stderr message and exits 1", async () => {
-    const captured = makeCaptured();
-    const exitCode = await runAwakenCancel({
-      vaultPath,
-      stderr: makeStderrWriter(captured),
+    const fake = await startFakeDaemon(vaultPath, (frame) => {
+      expect(frame.method).toBe("awaken.cancel");
+      return {
+        type: "error",
+        payload: {
+          code: "INVALID_PARAMS",
+          message: "nothing to cancel",
+          detail: {},
+        },
+      };
     });
-    expect(exitCode).toBe(1);
-    expect(captured.stderr.length).toBeGreaterThan(0);
-    expect(captured.stderr[0]).toContain("nothing to cancel");
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenCancel({
+        vaultPath,
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(1);
+      expect(captured.stderr.length).toBeGreaterThan(0);
+      expect(captured.stderr[0]).toContain("nothing to cancel");
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --resume forwards an error frame from the daemon to stderr and exits 1", async () => {
-    // The daemon owns the awaken_run flip and worker spawn (see cf9d490),
-    // so the CLI is a thin client over `awaken.resume`. The fake daemon
-    // here replies with the same INVALID_PARAMS frame the real handler
-    // emits when no `paused`/`failed` row exists, and the test asserts
-    // the CLI surfaces that message verbatim.
-    const socketPath = resolveSocketPath(vaultPath, currentPlatform());
-    const fake = await startFakeDaemon(socketPath, (frame) => {
+    const fake = await startFakeDaemon(vaultPath, (frame) => {
       expect(frame.method).toBe("awaken.resume");
       return {
         type: "error",
@@ -233,73 +277,121 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
   });
 
   test("[smoke] --status with no run emits a single none frame and exits 0", async () => {
-    const captured = makeCaptured();
-    const exitCode = await runAwakenStatus({
-      vaultPath,
-      stdout: makeStdoutWriter(captured),
-      stderr: makeStderrWriter(captured),
-      pollIntervalMs: 0,
-    });
-    expect(exitCode).toBe(0);
-    expect(captured.stdout.length).toBe(1);
-    const parsed = JSON.parse(captured.stdout[0] ?? "");
-    expect(parsed).toEqual({ type: "awaken:status", status: "none" });
+    const daemon = await startTestRpcDaemon(vaultPath, [
+      {
+        method: "awaken.status",
+        handler: makeAwakenStatusHandler({ surreal: connection }),
+        kind: "read",
+      },
+    ]);
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenStatus({
+        vaultPath,
+        stdout: makeStdoutWriter(captured),
+        stderr: makeStderrWriter(captured),
+        pollIntervalMs: 0,
+      });
+      expect(exitCode).toBe(0);
+      expect(captured.stdout.length).toBe(1);
+      const parsed = JSON.parse(captured.stdout[0] ?? "");
+      expect(parsed).toEqual({ type: "awaken:status", status: "none" });
+    } finally {
+      await daemon.close();
+    }
   });
 
   test("[smoke] --pause flips a running row to paused", async () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
-    const captured = makeCaptured();
-    const exitCode = await runAwakenPause({
-      vaultPath,
-      stderr: makeStderrWriter(captured),
+    const fake = await startFakeDaemon(vaultPath, async (frame) => {
+      expect(frame.method).toBe("awaken.pause");
+      await updateStatus(connection.db, runId, "paused");
+      return {
+        type: "result",
+        payload: {
+          ok: true,
+          runId: runId.toString(),
+          processed: 0,
+          failed: 0,
+          total: 5,
+          status: "paused",
+          draining: false,
+        },
+      };
     });
-    expect(exitCode).toBe(0);
-    expect(captured.stderr.length).toBe(0);
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenPause({
+        vaultPath,
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(0);
+      expect(captured.stderr.length).toBe(0);
 
-    const [rows] = await connection.db
-      .query<[Array<{ status: string }>]>("SELECT status FROM awaken_run WHERE id = $id;", {
-        id: runId,
-      })
-      .collect<[Array<{ status: string }>]>();
-    expect(rows[0]?.status).toBe("paused");
+      const [rows] = await connection.db
+        .query<[Array<{ status: string }>]>("SELECT status FROM awaken_run WHERE id = $id;", {
+          id: runId,
+        })
+        .collect<[Array<{ status: string }>]>();
+      expect(rows[0]?.status).toBe("paused");
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --cancel flips a running row to cancelled", async () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
-    const captured = makeCaptured();
-    const exitCode = await runAwakenCancel({
-      vaultPath,
-      stderr: makeStderrWriter(captured),
+    const fake = await startFakeDaemon(vaultPath, async (frame) => {
+      expect(frame.method).toBe("awaken.cancel");
+      await updateStatus(connection.db, runId, "cancelled");
+      return {
+        type: "result",
+        payload: {
+          ok: true,
+          runId: runId.toString(),
+          processed: 0,
+          failed: 0,
+          total: 5,
+          status: "cancelled",
+          draining: false,
+        },
+      };
     });
-    expect(exitCode).toBe(0);
+    try {
+      const captured = makeCaptured();
+      const exitCode = await runAwakenCancel({
+        vaultPath,
+        stderr: makeStderrWriter(captured),
+      });
+      expect(exitCode).toBe(0);
 
-    const [rows] = await connection.db
-      .query<[Array<{ status: string; finished_at: string | null }>]>(
-        "SELECT status, finished_at FROM awaken_run WHERE id = $id;",
-        { id: runId },
-      )
-      .collect<[Array<{ status: string; finished_at: string | null }>]>();
-    expect(rows[0]?.status).toBe("cancelled");
-    expect(rows[0]?.finished_at).not.toBeNull();
+      const [rows] = await connection.db
+        .query<[Array<{ status: string; finished_at: string | null }>]>(
+          "SELECT status, finished_at FROM awaken_run WHERE id = $id;",
+          { id: runId },
+        )
+        .collect<[Array<{ status: string; finished_at: string | null }>]>();
+      expect(rows[0]?.status).toBe("cancelled");
+      expect(rows[0]?.finished_at).not.toBeNull();
+    } finally {
+      await fake.close();
+    }
   });
 
   test("[smoke] --resume emits an awaken:resumed frame on a successful daemon response", async () => {
-    // Daemon-side row flip plus worker spawn live in
-    // src/daemon/__smoke__/phase4.smoke.test.ts (resume scenario) and the
-    // unique-active index test in awakenRun.unique.smoke.test.ts. This
-    // test's only job is to verify the CLI translates the
-    // `awaken.resume` `result` frame into the right NDJSON shape on stdout.
-    const fakeRunId = "awaken_run:abc";
-    const socketPath = resolveSocketPath(vaultPath, currentPlatform());
-    const fake = await startFakeDaemon(socketPath, (frame) => {
+    const fakeRunId = createUuidRecordId(
+      "awaken_run",
+      "018f05cd-3f7b-7000-8000-000000000001",
+    ).toString();
+    const fake = await startFakeDaemon(vaultPath, (frame) => {
       expect(frame.method).toBe("awaken.resume");
       return {
         type: "result",
@@ -338,37 +430,41 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken control-plane CLI", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 4,
+      paths: makeRunPaths(4),
     });
-    await updateStatus(connection.db, runId, "running", { processed: 1 });
-
-    const captured = makeCaptured();
-    // Drive two ticks: first sees running, second sees completed.
-    const flipPromise = (async () => {
-      // Wait until the first frame has been emitted, then flip the row.
-      while (captured.stdout.length === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      await updateStatus(connection.db, runId, "completed", { processed: 4 });
-    })();
-
-    const exitCode = await runAwakenStatus({
-      vaultPath,
-      stdout: makeStdoutWriter(captured),
-      stderr: makeStderrWriter(captured),
-      pollIntervalMs: 25,
-    });
-    await flipPromise;
-
-    expect(exitCode).toBe(0);
-    expect(captured.stdout.length).toBeGreaterThanOrEqual(2);
-    const last = JSON.parse(captured.stdout[captured.stdout.length - 1] ?? "") as Record<
-      string,
-      unknown
-    >;
-    expect(last.type).toBe("awaken:status");
-    expect(last.status).toBe("completed");
-    expect(last.processed).toBe(4);
-    expect(last.total).toBe(4);
+    await updateStatus(connection.db, runId, "running", { processed: 1, attempted: 1 });
+    const daemon = await startTestRpcDaemon(vaultPath, [
+      {
+        method: "awaken.status",
+        handler: makeAwakenStatusHandler({ surreal: connection }),
+        kind: "read",
+      },
+    ]);
+    try {
+      const captured = makeCaptured();
+      const flipPromise = (async () => {
+        while (captured.stdout.length === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        await updateStatus(connection.db, runId, "completed", { processed: 4, attempted: 4 });
+      })();
+      const exitCode = await runAwakenStatus({
+        vaultPath,
+        stdout: makeStdoutWriter(captured),
+        stderr: makeStderrWriter(captured),
+        pollIntervalMs: 25,
+        follow: true,
+      });
+      await flipPromise;
+      expect(exitCode).toBe(0);
+      expect(captured.stdout.length).toBe(2);
+      const last = JSON.parse(captured.stdout.at(-1) ?? "") as Record<string, unknown>;
+      expect(last.type).toBe("awaken:status");
+      expect(last.status).toBe("completed");
+      expect(last.processed).toBe(4);
+      expect(last.total).toBe(4);
+    } finally {
+      await daemon.close();
+    }
   });
 });

@@ -1,20 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_AGENT_ID,
-  RESERVED_AGENT_IDS,
+  isCanonicalAgentId,
   normalizeAgentId,
   validateAgentId,
-} from "../../../src/cli/identity";
+} from "../../../src/core/auth/agentIdentity";
 
 describe("validateAgentId", () => {
-  test("every reserved id passes validation", () => {
-    for (const reserved of RESERVED_AGENT_IDS) {
-      const result = validateAgentId(reserved);
-      expect(result.valid).toBe(true);
-      if (result.valid) expect(result.id).toBe(reserved);
-    }
-  });
-
   test("custom ids matching the regex pass", () => {
     const samples = [
       "my-agent",
@@ -32,11 +24,11 @@ describe("validateAgentId", () => {
     }
   });
 
-  test("empty and whitespace-only inputs default to human", () => {
+  test("empty and whitespace-only inputs are invalid", () => {
     for (const blank of ["", "   ", "\t\n"]) {
       const result = validateAgentId(blank);
-      expect(result.valid).toBe(true);
-      if (result.valid) expect(result.id).toBe(DEFAULT_AGENT_ID);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toContain("blank");
     }
   });
 
@@ -62,14 +54,24 @@ describe("validateAgentId", () => {
   });
 });
 
+describe("isCanonicalAgentId", () => {
+  test("accepts only exact canonical persisted identities", () => {
+    expect(isCanonicalAgentId("codex")).toBe(true);
+    expect(isCanonicalAgentId("claude-code")).toBe(true);
+    expect(isCanonicalAgentId(" codex ")).toBe(false);
+    expect(isCanonicalAgentId("Codex")).toBe(false);
+    expect(isCanonicalAgentId(null)).toBe(false);
+  });
+});
+
 describe("normalizeAgentId", () => {
-  test("undefined, empty, and whitespace return DEFAULT_AGENT_ID", () => {
+  test("only undefined defaults to DEFAULT_AGENT_ID", () => {
     expect(normalizeAgentId(undefined)).toBe(DEFAULT_AGENT_ID);
-    expect(normalizeAgentId("")).toBe(DEFAULT_AGENT_ID);
-    expect(normalizeAgentId("   ")).toBe(DEFAULT_AGENT_ID);
+    expect(() => normalizeAgentId("")).toThrow(/blank/);
+    expect(() => normalizeAgentId("   ")).toThrow(/blank/);
   });
 
-  test("returns reserved ids verbatim", () => {
+  test("returns valid ids verbatim", () => {
     expect(normalizeAgentId("claude-code")).toBe("claude-code");
     expect(normalizeAgentId("human")).toBe("human");
   });

@@ -1,81 +1,99 @@
-/**
- * `notient links sync` CLI verb.
- *
- * Spec: docs/superpowers/specs/2026-04-29-vault-enrichment-data-model-design.md §11.1.
- *
- * Replays any linker writebacks the daemon left in the pending state
- * (`approved = true AND applied = false`). Mirrors the daemon's
- * boot-time call to `ApprovalService.reconcilePendingApplications`.
- *
- * Construction strategy: short-lived SurrealDB connection plus an
- * inline `ApprovalService` instance. The CLI never wires the kernel,
- * so the constructor receives a no-op `EventBus` and a node-fs-backed
- * `AtomicFs`. The reconcile path is idempotent (Locked Decision 2 in
- * `writeback.ts`), so racing the daemon is safe.
- */
+/** Human CLI for replaying approved link writebacks through the vault daemon. */
 
-import { rename, unlink, writeFile } from "node:fs/promises";
-import type { Surreal } from "surrealdb";
-import { ApprovalService } from "../../core/approvals/approvalService";
-import { EventBus } from "../../core/events/eventBus";
-import type { AtomicFs } from "../../core/utils/atomicWrite";
+import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
+import type { LinksSyncResult } from "../../daemon/wire";
+import type { ClientHandle, ClientOptions, RpcResponseFrame } from "../client";
+import { connectClient } from "../client";
 import type { Emitter } from "../output";
-import { connectVaultSurreal } from "./awakenSurrealClient";
 
 export interface LinksSyncOptions {
   vaultPath: string;
-  vaultRoot: string;
   emitter: Emitter;
   clientIdentity?: string;
+  connect?: (options: ClientOptions) => Promise<ClientHandle>;
 }
 
-const cliFs: AtomicFs = {
-  writeBinary: async (path: string, data: ArrayBuffer): Promise<void> => {
-    await writeFile(path, new Uint8Array(data));
-  },
-  rename: async (from: string, to: string): Promise<void> => {
-    await rename(from, to);
-  },
-  remove: async (path: string): Promise<void> => {
-    await unlink(path).catch(() => {
-      // missing-file is not an error for cleanup
-    });
-  },
-};
+class LinksSyncCommandError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LinksSyncCommandError";
+  }
+}
 
-async function readFileText(path: string): Promise<string> {
-  return await Bun.file(path).text();
+async function requestSync(client: ClientHandle): Promise<LinksSyncResult> {
+  for await (const frame of client.call("links.sync", {})) {
+    if (frame.type === "error") throw commandErrorFromFrame(frame);
+    if (frame.type === "result") return parseResult(frame);
+  }
+  throw new Error("links.sync returned no result");
+}
+
+function commandErrorFromFrame(frame: RpcResponseFrame): LinksSyncCommandError {
+  const code = typeof frame.code === "string" ? frame.code : "INTERNAL";
+  const message = typeof frame.message === "string" ? frame.message : "unknown daemon error";
+  return new LinksSyncCommandError(code, message);
+}
+
+function parseResult(frame: RpcResponseFrame): LinksSyncResult {
+  if (
+    ![frame.replayed, frame.abandoned, frame.failed].every(
+      (value) => typeof value === "number" && Number.isInteger(value) && value >= 0,
+    )
+  ) {
+    throw new Error("links.sync returned invalid replay counters");
+  }
+  return {
+    ok: true,
+    replayed: frame.replayed as number,
+    abandoned: frame.abandoned as number,
+    failed: frame.failed as number,
+  };
+}
+
+function failure(error: unknown): { code: string; message: string; exitCode: number } {
+  if (error instanceof LinksSyncCommandError) {
+    return {
+      code: error.code,
+      message: error.message,
+      exitCode: error.code === "INVALID_PARAMS" ? 2 : 1,
+    };
+  }
+  return {
+    code: "INTERNAL",
+    message: error instanceof Error ? error.message : String(error),
+    exitCode: 1,
+  };
 }
 
 export async function runLinksSyncCommand(options: LinksSyncOptions): Promise<number> {
-  let connection: { db: Surreal; close: () => Promise<void> } | undefined;
+  let client: ClientHandle | undefined;
   try {
-    const opened = await connectVaultSurreal(options.vaultPath);
-    connection = opened;
-    const service = new ApprovalService({
-      db: opened.db,
-      bus: new EventBus(),
-      vaultRoot: options.vaultRoot,
-      fs: cliFs,
-      readFile: readFileText,
+    const connector = options.connect ?? connectClient;
+    client = await connector({
+      socketPath: resolveSocketPath(options.vaultPath, currentPlatform()),
+      vaultPath: options.vaultPath,
+      ...(options.clientIdentity !== undefined ? { clientIdentity: options.clientIdentity } : {}),
     });
-    const result = await service.reconcilePendingApplications();
+    const result = await requestSync(client);
     options.emitter.emit({
       type: "links:sync",
       replayed: result.replayed,
+      abandoned: result.abandoned,
       failed: result.failed,
     });
-    return 0;
+    return result.failed === 0 ? 0 : 1;
   } catch (error) {
+    const detail = failure(error);
     options.emitter.emit({
       type: "error",
-      code: "INTERNAL",
-      message: `links sync failed: ${error instanceof Error ? error.message : String(error)}`,
+      code: detail.code,
+      message: `links sync failed: ${detail.message}`,
     });
-    return 1;
+    return detail.exitCode;
   } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
+    await client?.close().catch(() => {});
   }
 }

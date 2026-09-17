@@ -1,12 +1,9 @@
 /**
- * Per-vault SurrealDB client helper for the awaken CLI control plane.
+ * Per-vault SurrealDB client for direct operator graph inspection.
  *
- * Spec: Phase 4 plan §Task 9. Reads the daemon's port file
- * (`~/.notient/<vault-id>/surreal.port`) and the matching secret
- * (`secret.key`), then opens a SurrealDB websocket session against
- * `notient/vault`. The four awaken control commands (--pause, --resume,
- * --cancel, --status) share this helper so they remain thin clients over
- * the Task 7 DAL.
+ * Reads the daemon's port file and matching secret, then opens a SurrealDB
+ * WebSocket session against `notient/vault`. Graph audit, dump, and stats
+ * commands share this helper.
  *
  * Failure model: a missing or empty port file means the daemon is not
  * running. Callers surface a stderr message and exit 1; nothing about the
@@ -18,6 +15,7 @@ import { connect } from "../../core/db/surreal";
 import type { SurrealConnection } from "../../core/db/surreal";
 import { vaultPortPath, vaultSecretPath } from "../../core/vault/identity";
 import { readOrGenerateSecret } from "../../core/vault/secret";
+import { parseDaemonPortFile } from "./surrealCli";
 
 export async function connectVaultSurreal(vaultPath: string): Promise<SurrealConnection> {
   const portFile = vaultPortPath(vaultPath);
@@ -29,10 +27,12 @@ export async function connectVaultSurreal(vaultPath: string): Promise<SurrealCon
       `daemon is not running (no port file at ${portFile}). Run 'notient daemon start' first.`,
     );
   }
-  const port = Number(portText.trim());
-  if (!Number.isFinite(port) || port <= 0) {
+  let port: number;
+  try {
+    port = parseDaemonPortFile(portText);
+  } catch {
     throw new Error(
-      `daemon is not running (no port file at ${portFile}). Run 'notient daemon start' first.`,
+      `daemon is not running (invalid port file at ${portFile}). Run 'notient daemon start' first.`,
     );
   }
   const secret = await readOrGenerateSecret(vaultSecretPath(vaultPath));

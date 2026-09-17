@@ -1,90 +1,16 @@
-/**
- * Phase 4 Task 8 awaken worker smoke harness.
- *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/core/awaken/`.
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, and exercises the
- * worker run loop end-to-end against a mocked vault facade and a mocked
- * indexer queue. Coverage targets the three transitions the worker is
- * responsible for honoring: pause-mid-flight, resume-from-paused, and
- * cancel-mid-flight, plus the two start-time guards (already-active and
- * no-resumable).
- */
-
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import type { RecordId } from "surrealdb";
-import { findCurrent, updateStatus } from "../../../../src/core/awaken/awakenRun";
+import { describe, expect, test } from "bun:test";
+import { DateTime } from "surrealdb";
 import {
-  type AwakenWorkerIndexerQueue,
-  type AwakenWorkerVaultFacade,
   reconcileCountersFromTierState,
   runAwakenWorker,
-  sortByPriorityGlobs,
+  sliceAfterCursor,
   waitForNoteIndexed,
 } from "../../../../src/core/awaken/awakenWorker";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
+import {
+  createPriorityComparator,
+  sortByPriorityGlobs,
+} from "../../../../src/core/awaken/priorityGlob";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
-
-interface FetchedRow {
-  id: RecordId<"awaken_run">;
-  status: string;
-  processed: number;
-  failed: number;
-  cursor: string | null | undefined;
-  finished_at: string | Date | null;
-}
-
-async function clearAwakenRuns(connection: SurrealConnection): Promise<void> {
-  await connection.db.query("DELETE awaken_run;").collect();
-}
-
-async function fetchRow(
-  connection: SurrealConnection,
-  runId: RecordId<"awaken_run">,
-): Promise<FetchedRow | undefined> {
-  const [rows] = await connection.db
-    .query<[FetchedRow[]]>(
-      "SELECT id, status, processed, failed, cursor, finished_at FROM awaken_run WHERE id = $id;",
-      { id: runId },
-    )
-    .collect<[FetchedRow[]]>();
-  return rows[0];
-}
-
-interface RecordedEnqueue {
-  path: string;
-  priority: number;
-}
-
-function makeIndexerQueue(records: RecordedEnqueue[]): AwakenWorkerIndexerQueue {
-  return {
-    enqueue(path: string, priority?: number): void {
-      records.push({ path, priority: priority ?? 2 });
-    },
-  };
-}
-
-function makeVaultFacade(paths: string[]): AwakenWorkerVaultFacade {
-  return {
-    listMarkdownPaths: async () => [...paths],
-  };
-}
-
-const PROPAGATION_DELAY_MS = 250;
-
-// Wait long enough for the SurrealDB live-query notification to land in
-// the worker's status closure. The Task 7 smoke uses 250ms as the upper
-// bound for local roundtrip; we mirror it here.
-function waitForLiveQueryDelivery(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, PROPAGATION_DELAY_MS));
-}
 
 describe("awaken worker module shape", () => {
   test("sortByPriorityGlobs orders by glob bucket then alphabetically", () => {
@@ -112,6 +38,19 @@ describe("awaken worker module shape", () => {
     expect(sorted).toEqual(["a.md", "b.md", "c.md"]);
   });
 
+  test("a missing cursor resumes at its strict priority-order successor", () => {
+    const comparator = createPriorityComparator(["daily/**", "MOCs/**"]);
+    const ordered = ["daily/a.md", "daily/c.md", "MOCs/a.md", "notes/a.md"];
+
+    expect(sliceAfterCursor(ordered, "daily/b.md", comparator)).toEqual([
+      "daily/c.md",
+      "MOCs/a.md",
+      "notes/a.md",
+    ]);
+    expect(sliceAfterCursor(ordered, "MOCs/z.md", comparator)).toEqual(["notes/a.md"]);
+    expect(sliceAfterCursor(ordered, "z.md", comparator)).toEqual([]);
+  });
+
   test("module exports the public worker surface", () => {
     expect(typeof runAwakenWorker).toBe("function");
     expect(typeof sortByPriorityGlobs).toBe("function");
@@ -126,8 +65,7 @@ describe("waitForNoteIndexed listener scoping", () => {
   // other notes must be ignored here.
   test("ignores indexer:error for a different note and resolves on note-indexed", async () => {
     const bus = new EventBus();
-    const options = { bus } as unknown as Parameters<typeof waitForNoteIndexed>[0];
-    const pending = waitForNoteIndexed(options, "a.md");
+    const pending = waitForNoteIndexed(bus, "a.md", new AbortController().signal);
 
     const state: { value: "resolved" | "rejected" | "pending" } = { value: "pending" };
     pending.then(
@@ -153,7 +91,13 @@ describe("waitForNoteIndexed listener scoping", () => {
     bus.emit({
       type: "indexer:note-indexed",
       path: "a.md",
-      result: { chunkCount: 0, embedCount: 0, nodeCount: 0, edgeCount: 0, durationMs: 1 },
+      result: {
+        chunkCount: 0,
+        embedCount: 0,
+        durationMs: 1,
+        llmCalls: 0,
+        extractionWindows: 0,
+      },
     });
     await pending;
     expect(state.value).toBe("resolved");
@@ -161,8 +105,7 @@ describe("waitForNoteIndexed listener scoping", () => {
 
   test("rejects when indexer:error matches the awaited note path", async () => {
     const bus = new EventBus();
-    const options = { bus } as unknown as Parameters<typeof waitForNoteIndexed>[0];
-    const pending = waitForNoteIndexed(options, "a.md");
+    const pending = waitForNoteIndexed(bus, "a.md", new AbortController().signal);
 
     bus.emit({
       type: "indexer:error",
@@ -172,89 +115,156 @@ describe("waitForNoteIndexed listener scoping", () => {
     });
     await expect(pending).rejects.toThrow("tier1 boom");
   });
+
+  test("shutdown cancellation rejects a held note wait and detaches its listeners", async () => {
+    const bus = new EventBus();
+    const controller = new AbortController();
+    const pending = waitForNoteIndexed(bus, "held.md", controller.signal);
+
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    // These terminal events arrive after cancellation in the production
+    // shutdown race. The removed listeners must not revive the settled wait.
+    bus.emit({
+      type: "indexer:note-indexed",
+      path: "held.md",
+      result: {
+        chunkCount: 0,
+        embedCount: 0,
+        durationMs: 1,
+        llmCalls: 0,
+        extractionWindows: 0,
+      },
+    });
+    bus.emit({ type: "indexer:error", path: "held.md", message: "late" });
+    await Promise.resolve();
+  });
+
+  test("does not accept tier progress as canonical note completion", async () => {
+    const bus = new EventBus();
+    const pending = waitForNoteIndexed(bus, "a.md", new AbortController().signal);
+    let settled = false;
+    void pending.finally(() => {
+      settled = true;
+    });
+
+    bus.emit({ type: "indexer:tier3-done", path: "a.md" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    bus.emit({
+      type: "indexer:note-indexed",
+      path: "a.md",
+      result: {
+        chunkCount: 0,
+        embedCount: 0,
+        durationMs: 1,
+        llmCalls: 0,
+        extractionWindows: 0,
+      },
+    });
+    await pending;
+    expect(settled).toBe(true);
+  });
 });
 
 describe("reconcileCountersFromTierState", () => {
-  test("counts only attempted notes whose tier1_at is still missing as failed", async () => {
-    const byPath = new Map<string, { tier1_at: string | null }>([
-      ["done.md", { tier1_at: "2026-04-30T00:00:00Z" }],
-      ["missing.md", { tier1_at: null }],
-      ["retried.md", { tier1_at: "2026-04-30T00:00:01Z" }],
-    ]);
+  const TIER_1 = new DateTime("2026-08-29T00:00:00Z");
+  const TIER_2 = new DateTime("2026-08-29T00:00:01Z");
+  const TIER_3 = new DateTime("2026-08-29T00:00:02Z");
+
+  function mockDb(result: unknown): Parameters<typeof reconcileCountersFromTierState>[0] {
+    return {
+      query: () => ({ collect: async () => result }),
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+  }
+
+  test("reads every attempted path in one batched query", async () => {
+    const calls: Array<{ sql: string; paths: string[] }> = [];
     const db = {
-      query: (_sql: string, bindings: { path?: string }) => ({
+      query: (sql: string, bindings: { paths: string[] }) => ({
         collect: async () => {
-          const row = bindings.path === undefined ? undefined : byPath.get(bindings.path);
-          if (row === undefined) return [[]];
-          return [[{ tier1_at: row.tier1_at, tier2_at: null, tier3_at: null }]];
+          calls.push({ sql, paths: bindings.paths });
+          return [
+            bindings.paths.map((path) => ({
+              path,
+              tier1_at: TIER_1,
+            })),
+          ];
         },
       }),
     } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
 
     const counters = await reconcileCountersFromTierState(
       db,
-      ["done.md", "missing.md", "retried.md"],
-      { processed: 0, failed: 3 },
+      ["a.md", "b.md", "c.md"].map((path) => ({ path, terminal: "indexed" as const })),
+      1,
     );
 
-    expect(counters).toEqual({ processed: 2, failed: 1 });
+    expect(counters).toEqual({ processed: 3, failed: 0 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain("path IN $paths");
+    expect(calls[0]?.paths).toEqual(["a.md", "b.md", "c.md"]);
   });
 
-  test("counts a note as failed when the requested upper tier is missing", async () => {
-    const byPath = new Map<
-      string,
-      {
-        tier1_at: string | null;
-        tier2_at: string | null;
-        tier3_at: string | null;
-      }
-    >([
+  test("surfaces a successful terminal event without its persisted tier stamp", async () => {
+    const db = mockDb([[{ path: "done.md", tier1_at: TIER_1 }]]);
+    await expect(
+      reconcileCountersFromTierState(
+        db,
+        [
+          { path: "done.md", terminal: "indexed" },
+          { path: "missing.md", terminal: "indexed" },
+        ],
+        1,
+      ),
+    ).rejects.toThrow("without persisted Tier 1 completion");
+  });
+
+  test("requires the requested upper tier for every successful outcome", async () => {
+    const db = mockDb([
       [
-        "done.md",
-        {
-          tier1_at: "2026-04-30T00:00:00Z",
-          tier2_at: "2026-04-30T00:00:01Z",
-          tier3_at: "2026-04-30T00:00:02Z",
-        },
-      ],
-      [
-        "tier2-failed.md",
-        {
-          tier1_at: "2026-04-30T00:00:00Z",
-          tier2_at: null,
-          tier3_at: null,
-        },
-      ],
-      [
-        "tier3-failed.md",
-        {
-          tier1_at: "2026-04-30T00:00:00Z",
-          tier2_at: "2026-04-30T00:00:01Z",
-          tier3_at: null,
-        },
+        { path: "done.md", tier1_at: TIER_1, tier2_at: TIER_2, tier3_at: TIER_3 },
+        { path: "tier3-missing.md", tier1_at: TIER_1, tier2_at: TIER_2 },
       ],
     ]);
-    const db = {
-      query: (_sql: string, bindings: { path?: string }) => ({
-        collect: async () => {
-          const row = bindings.path === undefined ? undefined : byPath.get(bindings.path);
-          if (row === undefined) return [[]];
-          return [[row]];
-        },
-      }),
-    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
-
-    const counters = await reconcileCountersFromTierState(
-      db,
-      ["done.md", "tier2-failed.md", "tier3-failed.md"],
-      { processed: 0, failed: 3 },
-      3,
-    );
-
-    expect(counters).toEqual({ processed: 1, failed: 2 });
+    await expect(
+      reconcileCountersFromTierState(
+        db,
+        [
+          { path: "done.md", terminal: "indexed" },
+          { path: "tier3-missing.md", terminal: "indexed" },
+        ],
+        3,
+      ),
+    ).rejects.toThrow("without persisted Tier 3 completion");
   });
 
-  test("falls back to existing counters if the tier-state query fails", async () => {
+  test("counts explicit terminal failures even when no note row was created", async () => {
+    const db = mockDb([[{ path: "done.md", tier1_at: TIER_1 }]]);
+    const counters = await reconcileCountersFromTierState(
+      db,
+      [
+        { path: "done.md", terminal: "indexed" },
+        { path: "failed-before-tier1.md", terminal: "failed" },
+      ],
+      1,
+    );
+    expect(counters).toEqual({ processed: 1, failed: 1 });
+  });
+
+  test("an indexer failure remains failed even if an old tier stamp exists", async () => {
+    const db = mockDb([[{ path: "stale.md", tier1_at: TIER_1 }]]);
+    const counters = await reconcileCountersFromTierState(
+      db,
+      [{ path: "stale.md", terminal: "failed" }],
+      1,
+    );
+    expect(counters).toEqual({ processed: 0, failed: 1 });
+  });
+
+  test("surfaces the tier-state query error instead of returning event counters", async () => {
     const db = {
       query: () => ({
         collect: async () => {
@@ -263,41 +273,94 @@ describe("reconcileCountersFromTierState", () => {
       }),
     } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
 
-    const counters = await reconcileCountersFromTierState(db, ["a.md"], {
-      processed: 7,
-      failed: 2,
-    });
-
-    expect(counters).toEqual({ processed: 7, failed: 2 });
+    await expect(
+      reconcileCountersFromTierState(db, [{ path: "a.md", terminal: "indexed" }], 1),
+    ).rejects.toThrow("db unavailable");
   });
 
-  test("keeps successful fallback counters when no note rows are observable", async () => {
-    const db = {
-      query: () => ({
-        collect: async () => [[]],
-      }),
-    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+  for (const [label, envelope] of [
+    ["empty", []],
+    ["multiple statements", [[], []]],
+    ["non-array statement", [{ path: "a.md" }]],
+  ] as const) {
+    test(`rejects ${label} query envelope`, async () => {
+      await expect(
+        reconcileCountersFromTierState(
+          mockDb(envelope),
+          [{ path: "a.md", terminal: "indexed" }],
+          1,
+        ),
+      ).rejects.toThrow("invalid statement envelope");
+    });
+  }
 
-    const counters = await reconcileCountersFromTierState(db, ["a.md", "b.md"], {
-      processed: 2,
+  test.each([
+    [42, "row must be an object"],
+    [{ path: 42, tier1_at: TIER_1 }, "canonical vault-relative Markdown path"],
+    [{ path: "../a.md", tier1_at: TIER_1 }, "canonical vault-relative Markdown path"],
+    [{ path: "a.md", tier1_at: "2026-08-29T00:00:00Z" }, "native SurrealDB datetime"],
+    [{ path: "a.md", tier1_at: null }, "null instead of SurrealDB NONE"],
+    [{ path: "a.md", tier2_at: TIER_2 }, "tier2_at exists without tier1_at"],
+    [{ path: "a.md", tier1_at: TIER_2, tier2_at: TIER_1 }, "tier2_at precedes tier1_at"],
+    [{ path: "a.md", tier1_at: TIER_1, surprise: true }, "unsupported field"],
+  ])("rejects corrupt tier-state row %#", async (row, message) => {
+    await expect(
+      reconcileCountersFromTierState(mockDb([[row]]), [{ path: "a.md", terminal: "indexed" }], 1),
+    ).rejects.toThrow(String(message));
+  });
+
+  test("rejects duplicate and unrequested query rows", async () => {
+    await expect(
+      reconcileCountersFromTierState(
+        mockDb([
+          [
+            { path: "a.md", tier1_at: TIER_1 },
+            { path: "a.md", tier1_at: TIER_1 },
+          ],
+        ]),
+        [{ path: "a.md", terminal: "indexed" }],
+        1,
+      ),
+    ).rejects.toThrow("duplicate path");
+
+    await expect(
+      reconcileCountersFromTierState(
+        mockDb([[{ path: "other.md", tier1_at: TIER_1 }]]),
+        [{ path: "a.md", terminal: "indexed" }],
+        1,
+      ),
+    ).rejects.toThrow("unrequested path");
+  });
+
+  test("rejects malformed and duplicate terminal outcomes before querying", async () => {
+    const db = mockDb([[]]);
+    await expect(
+      reconcileCountersFromTierState(db, [{ path: "../a.md", terminal: "indexed" }], 1),
+    ).rejects.toThrow("canonical vault-relative Markdown path");
+    await expect(
+      reconcileCountersFromTierState(
+        db,
+        [
+          { path: "a.md", terminal: "indexed" },
+          { path: "a.md", terminal: "failed" },
+        ],
+        1,
+      ),
+    ).rejects.toThrow("duplicate outcome path");
+  });
+
+  test("an empty reconciliation is an exact zero without a database query", async () => {
+    let queried = false;
+    const db = {
+      query: () => {
+        queried = true;
+        throw new Error("must not query");
+      },
+    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
+    await expect(reconcileCountersFromTierState(db, [], 3)).resolves.toEqual({
+      processed: 0,
       failed: 0,
     });
-
-    expect(counters).toEqual({ processed: 2, failed: 0 });
-  });
-
-  test("counts missing note rows as failed after an indexer error", async () => {
-    const db = {
-      query: () => ({
-        collect: async () => [[]],
-      }),
-    } as unknown as Parameters<typeof reconcileCountersFromTierState>[0];
-
-    const counters = await reconcileCountersFromTierState(db, ["a.md", "b.md"], {
-      processed: 1,
-      failed: 1,
-    });
-
-    expect(counters).toEqual({ processed: 0, failed: 2 });
+    expect(queried).toBe(false);
   });
 });

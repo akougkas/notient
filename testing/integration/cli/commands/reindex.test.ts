@@ -22,6 +22,7 @@ import {
   runReindexCommand,
 } from "../../../../src/cli/commands/reindex";
 import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
+import { installFakeDaemonAuth, replyToAuthenticatedHello } from "../../../helpers/fakeDaemonAuth";
 
 interface FakeDaemon {
   framesReceived: Record<string, unknown>[];
@@ -52,7 +53,9 @@ afterEach(async () => {
   }
 });
 
-async function startFakeDaemon(socketPath: string): Promise<FakeDaemon> {
+async function startFakeDaemon(vaultPath: string): Promise<FakeDaemon> {
+  const socketPath = resolveSocketPath(vaultPath, currentPlatform());
+  const cleanupAuth = await installFakeDaemonAuth(vaultPath);
   await mkdir(path.dirname(socketPath), { recursive: true });
   await unlink(socketPath).catch(() => {});
   const framesReceived: Record<string, unknown>[] = [];
@@ -71,10 +74,10 @@ async function startFakeDaemon(socketPath: string): Promise<FakeDaemon> {
         const line = buffer.slice(0, newlineIndex).trim();
         buffer = buffer.slice(newlineIndex + 1);
         if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          framesReceived.push(frame);
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          socket.write(`${JSON.stringify({ id, type: "result", ok: true })}\n`);
+          replyToFrame(socket, JSON.parse(line) as Record<string, unknown>, framesReceived, () => ({
+            type: "result",
+            ok: true,
+          }));
         }
         newlineIndex = buffer.indexOf("\n");
       }
@@ -95,6 +98,7 @@ async function startFakeDaemon(socketPath: string): Promise<FakeDaemon> {
       for (const socket of sockets) socket.end();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await unlink(socketPath).catch(() => {});
+      await cleanupAuth();
     },
   };
 }
@@ -120,7 +124,7 @@ async function runCli(args: string[]): Promise<CliResult> {
 
 describe("reindex CLI pattern dispatch", () => {
   test("forwards --pattern to reindex.glob", async () => {
-    const fakeDaemon = await startFakeDaemon(resolveSocketPath(vaultPath, currentPlatform()));
+    const fakeDaemon = await startFakeDaemon(vaultPath);
     try {
       const result = await runCli([
         "reindex",
@@ -145,7 +149,7 @@ describe("reindex CLI pattern dispatch", () => {
   });
 
   test("still forwards the positional glob to reindex.glob", async () => {
-    const fakeDaemon = await startFakeDaemon(resolveSocketPath(vaultPath, currentPlatform()));
+    const fakeDaemon = await startFakeDaemon(vaultPath);
     try {
       const result = await runCli(["reindex", "notes/**", "--vault", vaultPath, "--tier", "2"]);
       expect(result.exitCode).toBe(0);
@@ -162,7 +166,7 @@ describe("reindex CLI pattern dispatch", () => {
   });
 
   test("rejects mismatched positional and --pattern values before RPC", async () => {
-    const fakeDaemon = await startFakeDaemon(resolveSocketPath(vaultPath, currentPlatform()));
+    const fakeDaemon = await startFakeDaemon(vaultPath);
     try {
       const result = await runCli([
         "reindex",
@@ -184,3 +188,22 @@ describe("reindex CLI pattern dispatch", () => {
     }
   });
 });
+
+/**
+ * Answer one client frame. `session.hello` (which every client now opens
+ * with) is authenticated by the production protocol and kept out of `framesReceived`
+ * so assertions still address the command's own frame.
+ */
+function replyToFrame(
+  socket: Socket,
+  frame: Record<string, unknown>,
+  framesReceived: Record<string, unknown>[],
+  reply: () => Record<string, unknown>,
+): void {
+  const id = typeof frame.id === "string" ? frame.id : "unknown";
+  const method = typeof frame.method === "string" ? frame.method : "unknown";
+  socket.write(`${JSON.stringify({ id, type: "ack", method })}\n`);
+  if (replyToAuthenticatedHello(socket, frame)) return;
+  framesReceived.push(frame);
+  socket.write(`${JSON.stringify({ id, ...reply() })}\n`);
+}

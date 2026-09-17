@@ -10,11 +10,57 @@ const tree = processAst(fixtureSource);
 const extraction = extract(tree, "notes/edge-cases.md", fixtureSource);
 
 describe("markdown extractor", () => {
-  test("only H1/H2/H3 produce heading blocks", () => {
+  test("indexes Markdown destinations in headings, paragraphs, reference links and embeds", () => {
+    const source =
+      '# [Plan](../Design%20Notes.md#Trade%20offs)\n\n[block][B] and ![excerpt](./Reference.md#^key).\n\n[B]: /Archive/Decision.md#^choice "Decision"\n\n[external](https://example.com/note.md) [mail](mailto:a@b.com) [bad](%ZZ) `[[code]]`\n';
+    const result = extractFromSource(source);
+    expect(result.links).toEqual([
+      {
+        syntax: "markdown",
+        fromBlockOrd: 0,
+        rawTarget: "../Design Notes.md",
+        targetHeading: "Trade offs",
+        targetBlockId: null,
+        isEmbed: false,
+      },
+      {
+        syntax: "markdown",
+        fromBlockOrd: 0,
+        rawTarget: "/Archive/Decision.md",
+        targetHeading: null,
+        targetBlockId: "choice",
+        isEmbed: false,
+      },
+      {
+        syntax: "markdown",
+        fromBlockOrd: 0,
+        rawTarget: "./Reference.md",
+        targetHeading: null,
+        targetBlockId: "key",
+        isEmbed: true,
+      },
+    ]);
+    expect(result.bodySha).toBe(extract(processAst(source), "other.md", source).bodySha);
+  });
+
+  test("wiki links in headings participate in the same structural graph", () => {
+    const result = extractFromSource("# See [[Destination]]\n\nBody.");
+    expect(result.links).toEqual([
+      {
+        syntax: "wiki",
+        fromBlockOrd: 0,
+        rawTarget: "Destination",
+        targetHeading: null,
+        targetBlockId: null,
+        isEmbed: false,
+      },
+    ]);
+  });
+  test("preserves each Markdown heading level exactly", () => {
     const headingBlocks = extraction.blocks.filter((b) => b.headingLevel !== null);
     for (const block of headingBlocks) {
       expect(block.headingLevel).toBeGreaterThanOrEqual(1);
-      expect(block.headingLevel).toBeLessThanOrEqual(3);
+      expect(block.headingLevel).toBeLessThanOrEqual(6);
     }
     expect(
       headingBlocks.find((b) => b.headingLevel === 1 && b.headingPath.includes("H1 Heading")),
@@ -25,17 +71,33 @@ describe("markdown extractor", () => {
     expect(
       headingBlocks.find((b) => b.headingLevel === 3 && b.headingPath.includes("H3 Heading")),
     ).toBeDefined();
-    const h4Path = headingBlocks.find((b) => b.headingPath.includes("H4 (rolls into H3)"));
-    expect(h4Path?.headingLevel).toBe(3);
+    expect(
+      headingBlocks.find((b) => b.headingLevel === 4 && b.headingPath.includes("H4 Heading")),
+    ).toBeDefined();
+    expect(
+      headingBlocks.find((b) => b.headingLevel === 5 && b.headingPath.includes("H5 Heading")),
+    ).toBeDefined();
   });
 
-  test("H4-H6 text rolls into the nearest H3 block via headingPath", () => {
+  test("H4 and H5 are their own blocks with honest ancestry", () => {
+    const h4 = extraction.blocks.find((b) => b.headingPath.includes("H4 Heading"));
+    const h5 = extraction.blocks.find((b) => b.headingPath.includes("H5 Heading"));
+    expect(h4?.headingLevel).toBe(4);
+    expect(h5?.headingLevel).toBe(5);
+    // The H3 block no longer swallows deeper headings.
     const h3 = extraction.blocks.find(
       (b) => b.headingLevel === 3 && b.headingPath.includes("H3 Heading"),
     );
-    expect(h3).toBeDefined();
-    expect(h3?.headingPath).toContain("H4 (rolls into H3)");
-    expect(h3?.headingPath).toContain("H5 (also rolls in)");
+    expect(h3?.headingPath).not.toContain("H4 Heading");
+    // Ancestry still threads through headingPath.
+    expect(h4?.headingPath).toEqual(["H1 Heading", "H2 Heading", "H3 Heading", "H4 Heading"]);
+    expect(h5?.headingPath).toEqual([
+      "H1 Heading",
+      "H2 Heading",
+      "H3 Heading",
+      "H4 Heading",
+      "H5 Heading",
+    ]);
   });
 
   test("paragraphs with ^block-id produce standalone blocks", () => {
@@ -47,13 +109,13 @@ describe("markdown extractor", () => {
   });
 
   test("wikilinks carry targetHeading and targetBlockId correctly", () => {
-    const headingLink = extraction.wikilinks.find((w) => w.targetHeading === "Heading Two");
+    const headingLink = extraction.links.find((w) => w.targetHeading === "Heading Two");
     expect(headingLink?.rawTarget).toBe("note");
 
-    const blockLink = extraction.wikilinks.find((w) => w.targetBlockId === "block-x");
+    const blockLink = extraction.links.find((w) => w.targetBlockId === "block-x");
     expect(blockLink?.rawTarget).toBe("note");
 
-    const embed = extraction.wikilinks.find((w) => w.isEmbed);
+    const embed = extraction.links.find((w) => w.isEmbed);
     expect(embed?.rawTarget).toBe("asset.png");
   });
 
@@ -84,7 +146,7 @@ describe("markdown extractor", () => {
   });
 
   test("inline-code and fenced-code wikilinks/tags are excluded", () => {
-    const allRaw = extraction.wikilinks.map((w) => w.rawTarget);
+    const allRaw = extraction.links.map((w) => w.rawTarget);
     expect(allRaw).not.toContain("skipped");
     expect(extraction.tags.map((tag) => tag.path)).not.toContain("skipped");
   });
@@ -213,5 +275,81 @@ describe("frontmatter wikilink enumeration", () => {
     );
     const authorRef = result.frontmatterRefs.find((ref) => ref.key === "notient.author");
     expect(authorRef).toBeUndefined();
+  });
+
+  test("uses canonical wikilink parsing for aliases and qualifiers", () => {
+    const source = [
+      "---",
+      "notient:",
+      "  related:",
+      '    - "[[target#Section|Display label]]"',
+      '    - "[[block-target#^anchor|Block label]]"',
+      "---",
+      "",
+      "body.",
+    ].join("\n");
+    const result = extractFromSource(source);
+    expect(result.frontmatterRefs.map((ref) => ref.rawTarget)).toEqual(["target", "block-target"]);
+  });
+});
+
+describe("Obsidian syntax fidelity", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../../fixtures/markdown", "obsidian-syntax.md"),
+    "utf8",
+  );
+  const result = extract(processAst(source), "notes/obsidian-syntax.md", source);
+
+  test("callout markers remain semantic indexed text", () => {
+    const note = result.blocks.find((block) => block.text.startsWith("[!note]"));
+    const warning = result.blocks.find((block) => block.text.startsWith("[!warning]"));
+    expect(note?.text).toBe("[!note] Plain note\nBody of the note callout.");
+    expect(warning?.text).toContain("[!warning]- Collapsed warning");
+    expect(warning?.text).toContain("Careful with");
+  });
+
+  test("a plain blockquote is not a callout", () => {
+    const joined = result.blocks.map((b) => b.text).join("\n");
+    expect(joined).toContain("Not a callout, just a quotation.");
+    expect(
+      result.blocks.some(
+        (block) => block.text.startsWith("[!") && block.text.includes("just a quotation"),
+      ),
+    ).toBe(false);
+  });
+
+  test("task list items keep their checkbox state in block text", () => {
+    const joined = result.blocks.map((b) => b.text).join("\n");
+    expect(joined).toContain("- [ ] buy milk");
+    expect(joined).toContain("- [x] ship the writeback");
+    expect(joined).not.toContain("- buy milk");
+  });
+
+  test("H4/H5/H6 persist their native levels", () => {
+    const levels = result.blocks
+      .filter((block) => (block.headingLevel ?? 0) > 3)
+      .map((block) => block.headingLevel);
+    expect(levels).toEqual([4, 5, 6]);
+  });
+
+  test("extraction exposes only fields consumed by the indexing substrate", () => {
+    expect(Object.keys(result).sort()).toEqual([
+      "blocks",
+      "bodySha",
+      "frontmatterRefs",
+      "links",
+      "tags",
+      "wordCount",
+    ]);
+    expect(Object.keys(result.blocks[0]).sort()).toEqual([
+      "blockId",
+      "endLine",
+      "headingLevel",
+      "headingPath",
+      "headingSlug",
+      "ord",
+      "startLine",
+      "text",
+    ]);
   });
 });

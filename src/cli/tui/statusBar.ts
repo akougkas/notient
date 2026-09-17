@@ -22,7 +22,9 @@ const SEPARATOR = " · ";
  * Left: brand, vault basename, conversation topic.
  * Right: state, pending approvals, token estimate, model name. Each piece is
  * dropped quietly when its source value is missing so the bar never shows
- * "model:?" or "pending:0" noise.
+ * "model:?" or "pending:0" noise. Note telemetry lives in the sidebar drawer
+ * (Ctrl+B) rather than here, because it needs a substrate poll the bar should
+ * not be paying for on every render.
  */
 export function buildStatusBar(fields: StatusBarFields): StatusSegments {
   const vaultLabel = fields.vaultPath.split("/").pop() ?? fields.vaultPath;

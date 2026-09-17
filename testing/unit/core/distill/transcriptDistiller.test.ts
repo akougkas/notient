@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
 import { createTranscriptDistiller } from "../../../../src/core/distill/transcriptDistiller";
+import type { TranscriptDistiller } from "../../../../src/core/distill/transcriptDistiller";
 import type { TranscriptMessage } from "../../../../src/core/distill/transcriptParser";
 import type {
   ChatOptions,
@@ -11,12 +13,15 @@ import type {
 
 class StubProvider implements LLMProvider {
   public readonly chatCalls: ProviderChatMessage[][] = [];
-  constructor(private readonly behavior: { reply: string; throwError?: boolean }) {}
+  constructor(
+    private readonly behavior: { reply: string; throwError?: boolean; onChat?: () => void },
+  ) {}
   async isAvailable(): Promise<boolean> {
     return true;
   }
   async chat(messages: ProviderChatMessage[], _options: ChatOptions): Promise<string> {
     this.chatCalls.push(messages);
+    this.behavior.onChat?.();
     if (this.behavior.throwError === true) throw new Error("provider unavailable");
     return this.behavior.reply;
   }
@@ -54,6 +59,12 @@ function fixtureMessages(): TranscriptMessage[] {
   ];
 }
 
+const REASONING_SCHEDULER = new ReasoningScheduler({ maxConcurrent: 1 });
+
+function makeDistiller(provider: LLMProvider): TranscriptDistiller {
+  return createTranscriptDistiller({ provider, scheduler: REASONING_SCHEDULER });
+}
+
 describe("createTranscriptDistiller", () => {
   test("happy path returns parsed candidates from canned JSON reply", async () => {
     const reply = JSON.stringify([
@@ -68,18 +79,23 @@ describe("createTranscriptDistiller", () => {
         sourceMessageIds: ["msg-2-ccc"],
       },
     ]);
-    const provider = new StubProvider({ reply });
-    const distiller = createTranscriptDistiller({ provider });
+    const scheduledLabels: Array<string | null> = [];
+    const provider = new StubProvider({
+      reply,
+      onChat: () => scheduledLabels.push(REASONING_SCHEDULER.currentLabel()),
+    });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates).toHaveLength(2);
     expect(candidates[0].kind).toBe("decision");
     expect(candidates[0].sourceMessageIds).toEqual(["msg-1-bbb"]);
     expect(candidates[1].kind).toBe("question");
+    expect(scheduledLabels).toEqual(["agent.distill"]);
   });
 
   test("malformed JSON reply returns empty candidate list", async () => {
     const provider = new StubProvider({ reply: "not json" });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates).toEqual([]);
   });
@@ -92,7 +108,7 @@ describe("createTranscriptDistiller", () => {
       { kind: "question", text: "Valid question.", sourceMessageIds: [] },
     ]);
     const provider = new StubProvider({ reply });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates.map((entry) => entry.kind)).toEqual(["claim", "question"]);
   });
@@ -106,14 +122,14 @@ describe("createTranscriptDistiller", () => {
       },
     ]);
     const provider = new StubProvider({ reply });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates[0].sourceMessageIds).toEqual(["msg-1-bbb"]);
   });
 
   test("empty transcript returns [] without calling provider", async () => {
     const provider = new StubProvider({ reply: "[]" });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill([]);
     expect(candidates).toEqual([]);
     expect(provider.chatCalls).toHaveLength(0);
@@ -121,7 +137,7 @@ describe("createTranscriptDistiller", () => {
 
   test("provider error returns []", async () => {
     const provider = new StubProvider({ reply: "ignored", throwError: true });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates).toEqual([]);
   });
@@ -130,7 +146,7 @@ describe("createTranscriptDistiller", () => {
     const reply =
       '```json\n[{"kind":"note","text":"Wrapped in fence.","sourceMessageIds":["msg-0-aaa"]}]\n```';
     const provider = new StubProvider({ reply });
-    const distiller = createTranscriptDistiller({ provider });
+    const distiller = makeDistiller(provider);
     const candidates = await distiller.distill(fixtureMessages());
     expect(candidates).toHaveLength(1);
     expect(candidates[0].kind).toBe("note");

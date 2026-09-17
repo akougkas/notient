@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ReasoningScheduler } from "../../../../../src/core/coordinator/reasoningScheduler";
 import { applySchema } from "../../../../../src/core/db/schemaApplier";
 import {
   type SurrealConnection,
@@ -20,6 +21,7 @@ import {
   replaceChunks,
   upsertNoteByPath,
 } from "../../../../../src/core/db/surreal";
+import { EventBus } from "../../../../../src/core/events/eventBus";
 import type {
   ChatMessage,
   ChatOptions,
@@ -33,10 +35,11 @@ import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemo
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
+const EMBEDDING_IDENTITY = { model: "balanced-search-fixture", dimension: VECTOR_DIM } as const;
+const REASONING_SCHEDULER = new ReasoningScheduler({ maxConcurrent: 1 });
 
 interface FakeProviderOptions {
-  ranking?: string[];
+  ranking?: number[];
   fail?: () => Error;
   capture?: { signal: AbortSignal | null };
 }
@@ -80,13 +83,12 @@ async function seedChunk(
     sha: `sha-${notePath}`,
     wordCount: 10,
   });
-  await replaceChunks(connection.db, noteId, [
+  await replaceChunks(connection.db, noteId, EMBEDDING_IDENTITY, [
     {
       ord: 0,
       text,
       tokenEstimate: 4,
       vector,
-      embedModel: EMBED_MODEL,
     },
   ]);
 }
@@ -105,6 +107,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -113,8 +116,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -126,7 +129,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("kNN returns top-K candidates which are reranked to top-N", async () => {
     await connection.db.query("DELETE chunk; DELETE note;").collect();
@@ -150,13 +153,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
     );
 
     const queryVector = Float32Array.from(unitVector({ index: 0, value: 1 }));
-    const candidateChunkIds = await connection.db
-      .query<[Array<{ id: string }>]>("SELECT id FROM chunk;")
-      .collect<[Array<{ id: string }>]>();
-    const ids = candidateChunkIds[0].map((row) => row.id.toString());
-
-    const provider = fakeProvider({ ranking: ids });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const provider = fakeProvider({ ranking: [1, 2, 3] });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const result = await balancedSearch({
       db: connection.db,
       embed: async () => queryVector,
@@ -165,15 +163,63 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       topK: 3,
       rerankTopN: 2,
       signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
     });
     expect(result).toHaveLength(2);
     expect(result.map((hit) => hit.notePath).sort()).not.toContain(undefined);
   });
 
+  test("reranks only the closest chunk from each note", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    const longNoteId = await upsertNoteByPath(connection.db, {
+      path: "notes/long.md",
+      sha: "sha-notes/long.md",
+      wordCount: 20,
+    });
+    const [, closestChunkId] = await replaceChunks(connection.db, longNoteId, EMBEDDING_IDENTITY, [
+      {
+        ord: 0,
+        text: "a weaker paragraph from the long note",
+        tokenEstimate: 8,
+        vector: unitVector({ index: 0, value: 0.5 }, { index: 1, value: 0.5 }),
+      },
+      {
+        ord: 1,
+        text: "the strongest paragraph from the long note",
+        tokenEstimate: 8,
+        vector: unitVector({ index: 0, value: 1 }),
+      },
+    ]);
+    await seedChunk(
+      connection,
+      "notes/other.md",
+      "another relevant note",
+      unitVector({ index: 0, value: 0.8 }, { index: 1, value: 0.2 }),
+    );
+
+    const provider = fakeProvider({ ranking: [1, 2] });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
+    const result = await balancedSearch({
+      db: connection.db,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+      reranker,
+      query: "semantic retrieval",
+      topK: 3,
+      rerankTopN: 3,
+      signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
+    });
+
+    expect(result.map((hit) => hit.notePath)).toEqual(["notes/long.md", "notes/other.md"]);
+    expect(result.find((hit) => hit.notePath === "notes/long.md")?.chunkId).toBe(
+      closestChunkId.toString(),
+    );
+  });
+
   test("returns [] when no chunks match the kNN window", async () => {
     await connection.db.query("DELETE chunk; DELETE note;").collect();
     const provider = fakeProvider({ ranking: [] });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const result = await balancedSearch({
       db: connection.db,
       embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
@@ -182,8 +228,83 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       topK: 5,
       rerankTopN: 3,
       signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
     });
     expect(result).toEqual([]);
+  });
+
+  test("an empty semantic window still finds structurally indexed notes without reranking", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    const note = await upsertNoteByPath(connection.db, {
+      path: "notes/SWMR.md",
+      sha: "lexical",
+      wordCount: 10,
+    });
+    await connection.db
+      .query(
+        "CREATE chunk CONTENT { note: $note, ord: 0, text: 'SWMR supports a single writer with multiple readers.', sha: 'lexical', token_estimate: 12 };",
+        { note },
+      )
+      .collect();
+    const reranker = new Reranker({
+      provider: fakeProvider({ fail: () => new Error("lexical fallback must not call the model") }),
+      model: "rerank",
+      bus: new EventBus(),
+    });
+    const input = {
+      db: connection.db,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+      reranker,
+      query: "SWMR",
+      topK: 5,
+      rerankTopN: 3,
+      signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
+    };
+    expect((await balancedSearch(input)).map((hit) => hit.notePath)).toEqual(["notes/SWMR.md"]);
+    expect(await balancedSearch({ ...input, filters: { folders: ["elsewhere"] } })).toEqual([]);
+    expect(await balancedSearch({ ...input, query: '"Parallel HDF5" SWMR' })).toEqual([]);
+  });
+
+  test("excludes a preexisting blank vector chunk from citation candidates", async () => {
+    await connection.db.query("DELETE chunk; DELETE note;").collect();
+    const blankNoteId = await upsertNoteByPath(connection.db, {
+      path: "notes/blank.md",
+      sha: "sha-notes/blank.md",
+      wordCount: 0,
+    });
+    await connection.db
+      .query(
+        "CREATE chunk CONTENT { note: $note, ord: 0, text: '   ', sha: 'blank', token_estimate: 0, vector: $vector, embed_model: $model, embedded_at: time::now() };",
+        {
+          note: blankNoteId,
+          vector: unitVector({ index: 0, value: 1 }),
+          model: EMBEDDING_IDENTITY.model,
+        },
+      )
+      .collect();
+    await seedChunk(
+      connection,
+      "notes/evidence.md",
+      "searchable evidence survives retrieval",
+      unitVector({ index: 0, value: 0.9 }, { index: 1, value: 0.1 }),
+    );
+
+    const provider = fakeProvider({ ranking: [1] });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
+    const result = await balancedSearch({
+      db: connection.db,
+      embed: async () => Float32Array.from(unitVector({ index: 0, value: 1 })),
+      reranker,
+      query: "evidence",
+      topK: 2,
+      rerankTopN: 2,
+      signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
+    });
+
+    expect(result.map((hit) => hit.notePath)).toEqual(["notes/evidence.md"]);
+    expect(result[0]?.snippet.trim().length).toBeGreaterThan(0);
   });
 
   test("falls back to quick search when no embedding is produced", async () => {
@@ -195,7 +316,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       unitVector({ index: 0, value: 1 }),
     );
     const provider = fakeProvider({ ranking: [] });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const result = await balancedSearch({
       db: connection.db,
       embed: async () => null,
@@ -204,6 +325,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       topK: 5,
       rerankTopN: 3,
       signal: new AbortController().signal,
+      scheduler: REASONING_SCHEDULER,
     });
     expect(result.length).toBeGreaterThan(0);
     expect(result[0].notePath).toBe("notes/Graph Reasoning.md");
@@ -220,8 +342,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
     );
 
     const captured: { signal: AbortSignal | null } = { signal: null };
-    const provider = fakeProvider({ ranking: ["irrelevant"], capture: captured });
-    const reranker = new Reranker({ provider, model: "rerank" });
+    const provider = fakeProvider({ ranking: [1, 2], capture: captured });
+    const reranker = new Reranker({ provider, model: "rerank", bus: new EventBus() });
     const controller = new AbortController();
     await balancedSearch({
       db: connection.db,
@@ -231,7 +353,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] balancedSearch", () => {
       topK: 2,
       rerankTopN: 2,
       signal: controller.signal,
+      scheduler: REASONING_SCHEDULER,
     });
-    expect(captured.signal).toBe(controller.signal);
+    expect(captured.signal).toBeInstanceOf(AbortSignal);
+    expect(captured.signal).not.toBe(controller.signal);
   });
 });

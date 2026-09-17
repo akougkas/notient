@@ -9,7 +9,7 @@ import {
 import type { ToolCall } from "../../../../src/core/chat/types";
 import type {
   SessionGrant,
-  SessionGrantFindQuery,
+  SessionGrantClaimQuery,
 } from "../../../../src/core/services/sessionGrants";
 
 function makeCall(id = "call-1", name = "notes.create"): ToolCall {
@@ -18,49 +18,67 @@ function makeCall(id = "call-1", name = "notes.create"): ToolCall {
 
 interface Recorder {
   pending: PendingApproval[];
-  resolved: { callId: string; approved: boolean; reason?: string; sessionId?: number }[];
+  resolved: { callId: string; approved: boolean; reason?: string; sessionId?: string }[];
   autoApproved: ToolCall[];
 }
 
 function nullGrants(): SessionGrantLookup {
-  return { find: () => null, incrementWriteCount: () => {} };
+  return { claim: async () => null };
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function advanceGrantLookup(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 interface RecordingGrants extends SessionGrantLookup {
-  findQueries: SessionGrantFindQuery[];
-  incrementCalls: number[];
+  claimQueries: SessionGrantClaimQuery[];
 }
 
 function recordingGrants(grant: SessionGrant | null): RecordingGrants {
-  const findQueries: SessionGrantFindQuery[] = [];
-  const incrementCalls: number[] = [];
+  const claimQueries: SessionGrantClaimQuery[] = [];
   return {
-    findQueries,
-    incrementCalls,
-    find: (query) => {
-      findQueries.push(query);
+    claimQueries,
+    claim: async (query) => {
+      claimQueries.push(query);
       return grant;
-    },
-    incrementWriteCount: (id) => {
-      incrementCalls.push(id);
     },
   };
 }
 
 function makeStubGrant(overrides: Partial<SessionGrant> = {}): SessionGrant {
   return {
-    id: 7,
+    id: sessionId(7),
     client: "claude-code",
     grantedAt: 1_000,
     expiresAt: 99_999_999_999_999,
     allowedFolders: ["Inbox/"],
-    allowedTools: [],
+    allowedTools: ["*"],
     maxWrites: null,
-    usedWrites: 0,
+    usedWrites: 1,
     revokedAt: null,
     ...overrides,
   };
 }
+
+function sessionId(value: number): string {
+  return `agent_session:fixture${value}`;
+}
+
+const HUMAN_CONTEXT = { clientIdentity: "human" } as const;
 
 function makeGate(
   recorder: Recorder,
@@ -77,28 +95,57 @@ function makeGate(
         sessionId: decision.sessionId,
       }),
   };
-  return new ApprovalGate({
-    events,
+  const gate = new ApprovalGate({
     recordHistoryAutoApprove: async (call) => {
       if (autoFails) throw new Error("history write failed");
       recorder.autoApproved.push(call);
     },
+    perToolPolicy: () => ({}),
     sessionGrants: grants,
   });
+  gate.subscribe(events);
+  return gate;
 }
 
 describe("ApprovalGate", () => {
+  test("a pending boolean decision cannot confer human approval", async () => {
+    const gate = new ApprovalGate({
+      perToolPolicy: () => ({}),
+      sessionGrants: nullGrants(),
+      recordHistoryAutoApprove: async () => {},
+    });
+    const pending = gate.request(
+      { id: "unattributed", name: "notes.create", args: { notePath: "Inbox/test.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "codex" },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(() => gate.resolve("unattributed", { approved: true })).toThrow("authenticated human");
+    expect(gate.listPending()).toHaveLength(1);
+    gate.resolve("unattributed", { approved: false, reason: "cancelled" });
+    expect((await pending).approved).toBe(false);
+  });
+
   test("safe mode resolves with approved=true on user.approve", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
     const call = makeCall();
-    const promise = gate.request(call, "safe", "preview body", controller.signal);
+    const promise = gate.request(call, "safe", "preview body", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
     expect(gate.hasPending()).toBe(true);
     expect(recorder.pending).toHaveLength(1);
     expect(recorder.pending[0].callId).toBe("call-1");
     expect(recorder.pending[0].preview).toBe("preview body");
-    gate.resolve("call-1", { approved: true });
+    gate.resolve(
+      "call-1",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
     const decision = await promise;
     expect(decision.approved).toBe(true);
     expect(recorder.resolved).toEqual([
@@ -111,7 +158,8 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
+    const promise = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
     gate.resolve("call-1", { approved: false, reason: "wrong path" });
     const decision = await promise;
     expect(decision.approved).toBe(false);
@@ -125,7 +173,13 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const decision = await gate.request(makeCall(), "yolo", "preview", controller.signal);
+    const decision = await gate.request(
+      makeCall(),
+      "yolo",
+      "preview",
+      controller.signal,
+      HUMAN_CONTEXT,
+    );
     expect(decision.approved).toBe(true);
     expect(recorder.pending).toHaveLength(0);
     expect(recorder.autoApproved).toHaveLength(1);
@@ -140,7 +194,8 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
+    const promise = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
     controller.abort();
     let caught: unknown = null;
     try {
@@ -161,7 +216,7 @@ describe("ApprovalGate", () => {
     controller.abort();
     let caught: unknown = null;
     try {
-      await gate.request(makeCall(), "safe", "preview", controller.signal);
+      await gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
     } catch (error) {
       caught = error;
     }
@@ -169,12 +224,80 @@ describe("ApprovalGate", () => {
     expect(gate.hasPending()).toBe(false);
   });
 
+  test("abort during grant lookup cannot create a pending approval", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const lookup = deferred<SessionGrant | null>();
+    const gate = makeGate(recorder, false, {
+      claim: () => lookup.promise,
+    });
+    const controller = new AbortController();
+
+    const request = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    controller.abort();
+
+    let caught: unknown = null;
+    try {
+      await request;
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error).name).toBe("AbortError");
+    expect(gate.hasPending()).toBe(false);
+    expect(
+      gate.resolve(
+        "call-1",
+        { approved: true },
+        { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+      ),
+    ).toBe(false);
+    expect(recorder.pending).toEqual([]);
+    expect(recorder.resolved).toEqual([]);
+    lookup.resolve(null);
+  });
+
+  test("abort during atomic grant claim cannot return an approved decision", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const claim = deferred<SessionGrant | null>();
+    let claimStarted = false;
+    const gate = makeGate(recorder, false, {
+      claim: () => {
+        claimStarted = true;
+        return claim.promise;
+      },
+    });
+    const controller = new AbortController();
+
+    const request = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
+    expect(claimStarted).toBe(true);
+    controller.abort();
+
+    let caught: unknown = null;
+    try {
+      await request;
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error).name).toBe("AbortError");
+    expect(gate.hasPending()).toBe(false);
+    expect(recorder.pending).toEqual([]);
+    expect(recorder.resolved).toEqual([]);
+    claim.resolve(makeStubGrant({ id: sessionId(41) }));
+  });
+
   test("resolve cleans up handler so further resolves are no-ops", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
-    expect(gate.resolve("call-1", { approved: true })).toBe(true);
+    const promise = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
+    expect(
+      gate.resolve(
+        "call-1",
+        { approved: true },
+        { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+      ),
+    ).toBe(true);
     await promise;
     expect(gate.resolve("call-1", { approved: false, reason: "ignored" })).toBe(false);
     expect(recorder.resolved).toHaveLength(1);
@@ -183,7 +306,13 @@ describe("ApprovalGate", () => {
   test("resolve reports false for unknown call ids", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
-    expect(gate.resolve("missing", { approved: true })).toBe(false);
+    expect(
+      gate.resolve(
+        "missing",
+        { approved: true },
+        { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+      ),
+    ).toBe(false);
     expect(recorder.resolved).toHaveLength(0);
   });
 
@@ -191,8 +320,9 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const p1 = gate.request(makeCall("a"), "safe", "p1", controller.signal);
-    const p2 = gate.request(makeCall("b"), "safe", "p2", controller.signal);
+    const p1 = gate.request(makeCall("a"), "safe", "p1", controller.signal, HUMAN_CONTEXT);
+    const p2 = gate.request(makeCall("b"), "safe", "p2", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
     expect(gate.hasPending()).toBe(true);
     gate.cancelAll("turn-aborted");
     const [d1, d2] = await Promise.all([p1, p2]);
@@ -210,7 +340,8 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    const promise = gate.request(makeCall(), "safe", "preview", controller.signal);
+    const promise = gate.request(makeCall(), "safe", "preview", controller.signal, HUMAN_CONTEXT);
+    await advanceGrantLookup();
     gate.cancelAll();
     const decision = await promise;
     expect(decision).toEqual({ approved: false, reason: "cancelled" });
@@ -228,8 +359,13 @@ describe("ApprovalGate", () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const gate = makeGate(recorder);
     const controller = new AbortController();
-    void gate.request(makeCall("a"), "safe", "p1", controller.signal).catch(() => {});
-    void gate.request(makeCall("b"), "safe", "p2", controller.signal).catch(() => {});
+    void gate
+      .request(makeCall("a"), "safe", "p1", controller.signal, HUMAN_CONTEXT)
+      .catch(() => {});
+    void gate
+      .request(makeCall("b"), "safe", "p2", controller.signal, HUMAN_CONTEXT)
+      .catch(() => {});
+    await advanceGrantLookup();
     expect(
       gate
         .list()
@@ -252,19 +388,20 @@ describe("ApprovalGate", () => {
         }),
     };
     const gate = new ApprovalGate({
-      events,
       recordHistoryAutoApprove: async (call) => {
         recorder.autoApproved.push(call);
       },
-      perToolPolicy: { "vault.read_note": "auto" },
+      perToolPolicy: () => ({ "vault.read_note": "auto" }),
       sessionGrants: nullGrants(),
     });
+    gate.subscribe(events);
     const controller = new AbortController();
     const decision = await gate.request(
       { id: "c1", name: "vault.read_note", args: {} },
       "safe",
       "preview",
       controller.signal,
+      HUMAN_CONTEXT,
     );
     expect(decision.approved).toBe(true);
     expect(recorder.pending).toHaveLength(0);
@@ -284,20 +421,26 @@ describe("ApprovalGate", () => {
         }),
     };
     const gate = new ApprovalGate({
-      events,
       recordHistoryAutoApprove: async () => {},
-      perToolPolicy: { "obsidian.eval": "ask" },
+      perToolPolicy: () => ({ "obsidian.eval": "ask" }),
       sessionGrants: nullGrants(),
     });
+    gate.subscribe(events);
     const controller = new AbortController();
     const promise = gate.request(
       { id: "c2", name: "obsidian.eval", args: { code: "1" } },
       "yolo",
       "preview",
       controller.signal,
+      HUMAN_CONTEXT,
     );
+    await advanceGrantLookup();
     expect(gate.hasPending()).toBe(true);
-    gate.resolve("c2", { approved: true });
+    gate.resolve(
+      "c2",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
     const decision = await promise;
     expect(decision.approved).toBe(true);
     expect(recorder.autoApproved).toHaveLength(0);
@@ -312,9 +455,27 @@ describe("ApprovalGate", () => {
 });
 
 describe("ApprovalGate session grants", () => {
-  test("active grant yields auto decision with session-grant reason and sessionId", async () => {
+  test("rejects an empty client identity before consulting grants", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
-    const grants = recordingGrants(makeStubGrant({ id: 42 }));
+    const grants = recordingGrants(null);
+    const gate = makeGate(recorder, false, grants);
+
+    await expect(
+      gate.request(
+        { id: "c1", name: "notes.create", args: { notePath: "Inbox/today.md" } },
+        "safe",
+        "preview",
+        new AbortController().signal,
+        { clientIdentity: "" },
+      ),
+    ).rejects.toThrow("authenticated clientIdentity");
+    expect(grants.claimQueries).toEqual([]);
+    expect(gate.hasPending()).toBe(false);
+  });
+
+  test("active grant yields an accepted decision with its typed sessionId", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(makeStubGrant({ id: sessionId(42) }));
     const gate = makeGate(recorder, false, grants);
     const decision = await gate.request(
       { id: "c1", name: "notes.create", args: { notePath: "Inbox/today.md" } },
@@ -324,46 +485,72 @@ describe("ApprovalGate session grants", () => {
       { clientIdentity: "claude-code" },
     );
     expect(decision.approved).toBe(true);
-    expect(decision.reason).toBe("session-grant#42");
-    expect(decision.sessionId).toBe(42);
-    expect(grants.findQueries).toHaveLength(1);
-    expect(grants.findQueries[0]).toMatchObject({
+    expect(decision.reason).toBeUndefined();
+    expect(decision.sessionId).toBe(sessionId(42));
+    expect(grants.claimQueries).toHaveLength(1);
+    expect(grants.claimQueries[0]).toMatchObject({
       client: "claude-code",
       tool: "notes.create",
       folder: "Inbox/",
     });
-    expect(grants.incrementCalls).toEqual([42]);
     // Session-grant approvals do NOT invoke recordHistoryAutoApprove; that
-    // hook is reserved for yolo-mode auto decisions so /history can show the
+    // recorder is reserved for yolo-mode auto decisions so /history can show the
     // distinct kinds.
     expect(recorder.autoApproved).toHaveLength(0);
     expect(recorder.pending).toHaveLength(0);
     expect(recorder.resolved).toEqual([
-      { callId: "c1", approved: true, reason: "session-grant#42", sessionId: 42 },
+      { callId: "c1", approved: true, reason: undefined, sessionId: sessionId(42) },
     ]);
   });
 
-  test("missing clientIdentity in context defaults to 'human' for the grant lookup", async () => {
+  test("grant lookup uses full parent folder for narrow scratch scopes", async () => {
+    const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
+    const grants = recordingGrants(makeStubGrant({ id: sessionId(43) }));
+    const gate = makeGate(recorder, false, grants);
+    await gate.request(
+      {
+        id: "c1",
+        name: "notes.create",
+        args: { notePath: "Notient/live-battle-test/scratch.md" },
+      },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "codex-battle" },
+    );
+    expect(grants.claimQueries[0]).toMatchObject({
+      client: "codex-battle",
+      tool: "notes.create",
+      folder: "Notient/live-battle-test/",
+    });
+  });
+
+  test("uses the required authenticated identity for the grant lookup", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const grants = recordingGrants(null);
     const gate = makeGate(recorder, false, grants);
-    // No context arg at all.
     const promise = gate.request(
       { id: "c1", name: "notes.create", args: { notePath: "Inbox/today.md" } },
       "safe",
       "preview",
       new AbortController().signal,
+      HUMAN_CONTEXT,
     );
+    await advanceGrantLookup();
     // Resolve so we don't leak the pending entry; the assertion below is on
-    // the find query the gate already submitted.
-    gate.resolve("c1", { approved: true });
+    // the claim query the gate already submitted.
+    gate.resolve(
+      "c1",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
     await promise;
-    expect(grants.findQueries[0].client).toBe("human");
+    expect(grants.claimQueries[0].client).toBe(HUMAN_CONTEXT.clientIdentity);
   });
 
   test("grant excludes call.name via allowedTools -> falls through to per-tool policy", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
-    // `find` returns null because the SessionGrants service filters allowedTools
+    // `claim` returns null because the SessionGrants service filters allowedTools
     // server-side; that's the same reality we model here.
     const grants = recordingGrants(null);
     const gate = makeGate(recorder, false, grants);
@@ -377,11 +564,10 @@ describe("ApprovalGate session grants", () => {
     expect(decision.approved).toBe(true);
     // Falls through to yolo-mode auto, which records via recordHistoryAutoApprove.
     expect(recorder.autoApproved).toHaveLength(1);
-    expect(grants.incrementCalls).toEqual([]);
     expect(decision.sessionId).toBeUndefined();
   });
 
-  test("exhausted grant -> find returns null -> falls through", async () => {
+  test("exhausted grant -> claim returns null -> falls through", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const grants = recordingGrants(null);
     const gate = makeGate(recorder, false, grants);
@@ -394,11 +580,10 @@ describe("ApprovalGate session grants", () => {
     );
     expect(decision.approved).toBe(true);
     expect(decision.sessionId).toBeUndefined();
-    expect(grants.incrementCalls).toEqual([]);
     expect(recorder.autoApproved).toHaveLength(1);
   });
 
-  test("expired grant -> find returns null -> falls through", async () => {
+  test("expired grant -> claim returns null -> falls through", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const grants = recordingGrants(null);
     const gate = makeGate(recorder, false, grants);
@@ -411,10 +596,9 @@ describe("ApprovalGate session grants", () => {
     );
     expect(decision.approved).toBe(true);
     expect(decision.sessionId).toBeUndefined();
-    expect(grants.incrementCalls).toEqual([]);
   });
 
-  test("revoked grant -> find returns null -> falls through", async () => {
+  test("revoked grant -> claim returns null -> falls through", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
     const grants = recordingGrants(null);
     const gate = makeGate(recorder, false, grants);
@@ -427,7 +611,6 @@ describe("ApprovalGate session grants", () => {
     );
     expect(decision.approved).toBe(true);
     expect(decision.sessionId).toBeUndefined();
-    expect(grants.incrementCalls).toEqual([]);
   });
 
   test("no grant for client -> existing per-tool behavior unchanged", async () => {
@@ -442,17 +625,21 @@ describe("ApprovalGate session grants", () => {
       new AbortController().signal,
       { clientIdentity: "claude-code" },
     );
+    await advanceGrantLookup();
     expect(gate.hasPending()).toBe(true);
-    gate.resolve("c1", { approved: true });
+    gate.resolve(
+      "c1",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
     const decision = await promise;
     expect(decision.approved).toBe(true);
     expect(decision.sessionId).toBeUndefined();
-    expect(grants.incrementCalls).toEqual([]);
   });
 
-  test("incrementWriteCount fires exactly once per auto-approved call", async () => {
+  test("performs exactly one atomic claim per auto-approved call", async () => {
     const recorder: Recorder = { pending: [], resolved: [], autoApproved: [] };
-    const grants = recordingGrants(makeStubGrant({ id: 99 }));
+    const grants = recordingGrants(makeStubGrant({ id: sessionId(99) }));
     const gate = makeGate(recorder, false, grants);
     await gate.request(
       { id: "c1", name: "notes.create", args: { notePath: "Inbox/a.md" } },
@@ -461,7 +648,7 @@ describe("ApprovalGate session grants", () => {
       new AbortController().signal,
       { clientIdentity: "claude-code" },
     );
-    expect(grants.incrementCalls).toEqual([99]);
+    expect(grants.claimQueries).toHaveLength(1);
   });
 
   test("uses options.now for grant expiry checks when provided", async () => {
@@ -478,11 +665,12 @@ describe("ApprovalGate session grants", () => {
         }),
     };
     const gate = new ApprovalGate({
-      events,
       recordHistoryAutoApprove: async () => {},
+      perToolPolicy: () => ({}),
       sessionGrants: grants,
       now: () => 1_234_567,
     });
+    gate.subscribe(events);
     const promise = gate.request(
       { id: "c1", name: "notes.create", args: { notePath: "Inbox/a.md" } },
       "safe",
@@ -490,16 +678,22 @@ describe("ApprovalGate session grants", () => {
       new AbortController().signal,
       { clientIdentity: "claude-code" },
     );
-    gate.resolve("c1", { approved: true });
+    await advanceGrantLookup();
+    gate.resolve(
+      "c1",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
     await promise;
-    expect(grants.findQueries[0].now).toBe(1_234_567);
+    expect(grants.claimQueries[0].now).toBe(1_234_567);
   });
 });
 
 describe("extractFolder", () => {
-  test("returns leading folder segment with trailing slash for nested paths", () => {
+  test("returns parent folder with trailing slash for nested paths", () => {
     expect(extractFolder("Inbox/today.md")).toBe("Inbox/");
-    expect(extractFolder("Notient/agent-asks/auth.md")).toBe("Notient/");
+    expect(extractFolder("Notient/agent-asks/auth.md")).toBe("Notient/agent-asks/");
+    expect(extractFolder("Notient/live-battle-test/scratch.md")).toBe("Notient/live-battle-test/");
   });
 
   test("returns empty string for files at the vault root", () => {

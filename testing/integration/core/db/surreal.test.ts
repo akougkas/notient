@@ -41,6 +41,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] daemon_write DAL", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -49,7 +50,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] daemon_write DAL", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     noteIdA = await upsertNoteByPath(connection.db, {
       path: "notes/a.md",
@@ -66,7 +67,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] daemon_write DAL", () => {
       sha: "sha-target",
       wordCount: 1,
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -78,7 +79,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] daemon_write DAL", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("recordDaemonWrite returns a RecordId<'daemon_write'>", async () => {
     const id = await recordDaemonWrite(connection.db, {

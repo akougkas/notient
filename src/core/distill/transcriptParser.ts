@@ -55,6 +55,13 @@ export function parseTranscript(content: string, format: TranscriptFormat): Tran
   const resolved: Exclude<TranscriptFormat, "auto"> =
     format === "auto" ? formatFromContent(content) : format;
   const raw = parseByFormat(content, resolved);
+  return buildTranscriptMessages(raw);
+}
+
+/** Canonicalize an already-authenticated native transcript without reparsing text. */
+export function buildTranscriptMessages(
+  raw: readonly { role: TranscriptRole; content: string }[],
+): TranscriptMessage[] {
   return raw.map((entry, index) => ({
     role: entry.role,
     content: entry.content,
@@ -117,7 +124,8 @@ function parseMarkdown(content: string): RawMessage[] {
     const headerMatch = line.match(MARKDOWN_HEADER_PATTERN);
     if (headerMatch) {
       flushMarkdownBlock(active, messages);
-      const role = normalizeRole(headerMatch[1].toLowerCase());
+      const role = parseTranscriptRole(headerMatch[1] ?? "");
+      if (role === null) continue;
       active = { role, lines: [headerMatch[2]] };
       continue;
     }
@@ -204,7 +212,8 @@ function handleClaudeCodeMessage(
 
 function handleGenericRoleEntry(entry: Record<string, unknown>, messages: RawMessage[]): void {
   if (typeof entry.role !== "string" || typeof entry.content !== "string") return;
-  const role = normalizeRole(entry.role);
+  const role = parseTranscriptRole(entry.role);
+  if (role === null) return;
   messages.push({ role, content: entry.content.trim() });
 }
 
@@ -263,15 +272,15 @@ function parseJsonRoot(content: string): Record<string, unknown> {
 
 function pickMessageList(root: Record<string, unknown>): unknown[] {
   if (Array.isArray(root.messages)) return root.messages;
-  if (Array.isArray(root.transcript)) return root.transcript;
-  throw new Error("unrecognized JSON shape: expected 'messages' or 'transcript' array at root");
+  throw new Error("unrecognized JSON shape: expected 'messages' array at root");
 }
 
 function toRawJsonMessage(entry: unknown): RawMessage | null {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
   const record = entry as Record<string, unknown>;
   if (typeof record.role !== "string") return null;
-  const role = normalizeRole(record.role);
+  const role = parseTranscriptRole(record.role);
+  if (role === null) return null;
   const flatContent = extractJsonContent(record.content);
   if (flatContent === null) return null;
   return { role, content: flatContent };
@@ -290,14 +299,12 @@ function extractJsonContent(content: unknown): string | null {
   return null;
 }
 
-function normalizeRole(input: string): TranscriptRole {
+function parseTranscriptRole(input: string): TranscriptRole | null {
   const lowered = input.toLowerCase();
   if (lowered === "user" || lowered === "assistant" || lowered === "system" || lowered === "tool") {
     return lowered;
   }
-  // Unknown roles fall back to "user" so external transcripts with custom
-  // labels (e.g. "human") still surface their text into the distiller input.
-  return "user";
+  return null;
 }
 
 function safeParseObject(line: string): Record<string, unknown> | null {

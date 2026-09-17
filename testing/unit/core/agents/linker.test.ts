@@ -1,113 +1,37 @@
-/**
- * Phase 3 Linker smoke harness.
- *
- * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
- * or directly via `NOTIENT_SMOKE=1 bun test src/core/agents/linker.test.ts`.
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, seeds two notes
- * (active + neighbour) plus their chunk vectors via the DAL, then exercises
- * the new Linker against a mocked LLM provider. The smoke asserts the
- * acceptance contract from Phase 3 plan §Task 8: zero-neighbour short
- * circuit, one-neighbour proposal-write path, type allowlist filter,
- * unresolvable target path filter.
- */
-
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import type { RecordId } from "surrealdb";
+import { describe, expect, test } from "bun:test";
+import type { RecordId, Surreal } from "surrealdb";
 import {
   Linker,
   type LinkerJsonResponse,
   MAX_PROPOSALS_PER_NOTE,
   RANK_TO_CONFIDENCE,
+  buildActiveNotePrompt,
   filterProposals,
-  filterProposalsForCandidates,
 } from "../../../../src/core/agents/linker";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import {
-  type SurrealConnection,
-  connect,
-  lookupNoteByPath,
-  markTier3Done,
-  relateEdge,
-  replaceChunks,
-  upsertNoteByPath,
-} from "../../../../src/core/db/surreal";
-import { EventBus } from "../../../../src/core/events/eventBus";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
+import { LINKER } from "../../../../src/core/indexer/concurrencyDefaults";
 import type {
   ChatMessage,
   ChatOptions,
   JsonSchema,
   LLMProvider,
 } from "../../../../src/core/llm/provider";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const NOOP_PROVIDER: LLMProvider = {
+  isAvailable: async () => true,
+  chat: async () => "",
+  chatStream: async function* () {
+    yield "";
+  },
+  chatJson: async <T>() => ({ edges: [] }) as T,
+  embed: async () => [],
+};
 
-const VECTOR_DIM = 768;
-const EMBED_MODEL = "text-embedding-nomic-embed-text-v2-moe";
-
-function fakeProvider(impl: Partial<LLMProvider>): LLMProvider {
-  return {
-    isAvailable: async () => true,
-    chat: async () => "",
-    chatStream: async function* () {
-      yield "";
-    },
-    chatJson: async <T>() => ({}) as T,
-    embed: async () => [],
-    ...impl,
-  };
-}
-
-function vectorOf(seed: number): number[] {
-  const vector = new Array<number>(VECTOR_DIM);
-  vector[0] = seed;
-  for (let index = 1; index < VECTOR_DIM; index += 1) {
-    vector[index] = 0.1;
-  }
-  return vector;
-}
-
-async function seedNote(
-  connection: SurrealConnection,
-  notePath: string,
-  vectorSeed: number,
-  options: { tier3Done: boolean },
-): Promise<RecordId<"note">> {
-  const noteId = await upsertNoteByPath(connection.db, {
-    path: notePath,
-    sha: `sha-${notePath}`,
-    wordCount: 10,
-  });
-  await replaceChunks(connection.db, noteId, [
-    {
-      ord: 0,
-      text: `body of ${notePath}`,
-      tokenEstimate: 4,
-      vector: vectorOf(vectorSeed),
-      embedModel: EMBED_MODEL,
-    },
-  ]);
-  if (options.tier3Done) {
-    await markTier3Done(connection.db, noteId);
-  }
-  return noteId;
-}
-
-async function clearTier3Edges(connection: SurrealConnection): Promise<void> {
-  for (const table of [
-    "supports",
-    "contradicts",
-    "extends",
-    "exemplifies",
-    "synthesizes",
-    "related_to",
-  ]) {
-    await connection.db.query(`DELETE ${table};`).collect();
-  }
+function filterRetrieved(response: LinkerJsonResponse, distance = 0) {
+  return filterProposals(
+    response,
+    new Map(response.edges.map((edge) => [edge.targetNotePath, distance])),
+  );
 }
 
 describe("Linker rank-to-confidence mapping", () => {
@@ -131,7 +55,7 @@ describe("Linker rank-to-confidence mapping", () => {
         { targetNotePath: "d.md", type: "related_to", rationale: "r4" },
       ],
     };
-    const proposals = filterProposals(response);
+    const proposals = filterRetrieved(response);
     expect(proposals.length).toBe(MAX_PROPOSALS_PER_NOTE);
     for (let index = 0; index < proposals.length; index += 1) {
       expect(proposals[index].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[index]);
@@ -146,14 +70,10 @@ describe("Linker rank-to-confidence mapping", () => {
   });
 
   test("empty model output produces zero proposals", () => {
-    expect(filterProposals({ edges: [] })).toEqual([]);
+    expect(filterRetrieved({ edges: [] })).toEqual([]);
   });
 
-  test("truncates >MAX_PROPOSALS_PER_NOTE input to the ladder length", () => {
-    // Defence in depth even though the JSON schema's maxItems already caps
-    // the model output. If the provider misbehaves we still honour the
-    // ceiling rather than producing rank-position confidences past the end
-    // of the ladder (which would be undefined).
+  test("rejects model output beyond the schema's proposal limit", () => {
     const overflow: LinkerJsonResponse = {
       edges: Array.from({ length: MAX_PROPOSALS_PER_NOTE + 3 }, (_unused, index) => ({
         targetNotePath: `note-${index}.md`,
@@ -161,42 +81,27 @@ describe("Linker rank-to-confidence mapping", () => {
         rationale: `r${index}`,
       })),
     };
-    const proposals = filterProposals(overflow);
-    expect(proposals.length).toBe(MAX_PROPOSALS_PER_NOTE);
-    expect(proposals[proposals.length - 1].confidence).toBeCloseTo(
-      RANK_TO_CONFIDENCE[RANK_TO_CONFIDENCE.length - 1],
-    );
-    expect(proposals[proposals.length - 1].targetNotePath).toBe(
-      `note-${MAX_PROPOSALS_PER_NOTE - 1}.md`,
-    );
+    expect(() => filterRetrieved(overflow)).toThrow("exceeds");
   });
 
-  test("drops invalid edge types without consuming a rank slot", () => {
+  test("rejects an invalid model edge instead of silently dropping it", () => {
     const response: LinkerJsonResponse = {
       edges: [
         { targetNotePath: "a.md", type: "definitely-not-allowed", rationale: "skip" },
         { targetNotePath: "b.md", type: "supports", rationale: "keep" },
       ],
     };
-    const proposals = filterProposals(response);
-    expect(proposals.length).toBe(1);
-    // The kept edge is at rank 0 because the invalid edge never entered the
-    // accepted list. The rank ladder is anchored to accepted-array index, not
-    // to the model's input position.
-    expect(proposals[0].targetNotePath).toBe("b.md");
-    expect(proposals[0].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[0]);
+    expect(() => filterRetrieved(response)).toThrow("edge 0 is invalid");
   });
 
-  test("drops edges with empty or missing targetNotePath", () => {
+  test("rejects edges with an empty targetNotePath", () => {
     const response = {
       edges: [
         { targetNotePath: "", type: "supports", rationale: "skip empty" },
         { targetNotePath: "ok.md", type: "supports", rationale: "keep" },
       ],
     } as unknown as LinkerJsonResponse;
-    const proposals = filterProposals(response);
-    expect(proposals.length).toBe(1);
-    expect(proposals[0].targetNotePath).toBe("ok.md");
+    expect(() => filterRetrieved(response)).toThrow("edge 0 is invalid");
   });
 
   test("drops model paths outside the candidate set without consuming a rank slot", () => {
@@ -206,10 +111,73 @@ describe("Linker rank-to-confidence mapping", () => {
         { targetNotePath: "candidate.md", type: "extends", rationale: "keep" },
       ],
     };
-    const proposals = filterProposalsForCandidates(response, new Set(["candidate.md"]));
+    const proposals = filterProposals(response, new Map([["candidate.md", 0]]));
     expect(proposals).toHaveLength(1);
     expect(proposals[0].targetNotePath).toBe("candidate.md");
     expect(proposals[0].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[0]);
+  });
+
+  test("caps positional confidence by vector similarity", () => {
+    const response: LinkerJsonResponse = {
+      edges: [
+        { targetNotePath: "distant.md", type: "related_to", rationale: "weak retrieval" },
+        { targetNotePath: "near.md", type: "supports", rationale: "strong retrieval" },
+      ],
+    };
+
+    const proposals = filterProposals(
+      response,
+      new Map([
+        ["distant.md", 0.62],
+        ["near.md", 0.05],
+      ]),
+    );
+
+    expect(proposals[0].confidence).toBeCloseTo(0.38);
+    expect(proposals[1].confidence).toBeCloseTo(RANK_TO_CONFIDENCE[1]);
+  });
+
+  test("drops a structurally valid model path without retrieval provenance", () => {
+    const response: LinkerJsonResponse = {
+      edges: [{ targetNotePath: "invented.md", type: "supports", rationale: "not retrieved" }],
+    };
+
+    expect(filterProposals(response, new Map())).toEqual([]);
+  });
+
+  test("rejects corrupt retrieval distances instead of clamping them", () => {
+    const response: LinkerJsonResponse = {
+      edges: [{ targetNotePath: "candidate.md", type: "supports", rationale: "retrieved" }],
+    };
+
+    for (const distance of [Number.NaN, Number.POSITIVE_INFINITY, -0.01, 2.01]) {
+      expect(() => filterProposals(response, new Map([["candidate.md", distance]]))).toThrow(
+        "candidate distance is invalid",
+      );
+    }
+  });
+
+  test("rejects malformed response envelopes, blank rationales, and duplicate targets", () => {
+    expect(() => filterProposals(null, new Map())).toThrow("edges array");
+    expect(() => filterProposals({}, new Map())).toThrow("edges array");
+    expect(() => filterProposals({ edges: [], extra: true }, new Map())).toThrow("edges array");
+    expect(() =>
+      filterProposals(
+        { edges: [{ targetNotePath: "a.md", type: "supports", rationale: "" }] },
+        new Map([["a.md", 0.1]]),
+      ),
+    ).toThrow("edge 0 is invalid");
+    expect(() =>
+      filterProposals(
+        {
+          edges: [
+            { targetNotePath: "a.md", type: "supports", rationale: "first" },
+            { targetNotePath: "a.md", type: "extends", rationale: "duplicate" },
+          ],
+        },
+        new Map([["a.md", 0.1]]),
+      ),
+    ).toThrow("duplicate target path");
   });
 });
 
@@ -245,7 +213,7 @@ describe("Linker end-to-end with fake provider", () => {
       { model: "fake", signal: undefined },
       { name: "noop", schema: {} },
     )) as LinkerJsonResponse;
-    const proposals = filterProposals(response);
+    const proposals = filterRetrieved(response);
     for (const proposal of proposals) {
       observedConfidences.push(proposal.confidence);
       observedTypes.push(proposal.type);
@@ -253,4 +221,100 @@ describe("Linker end-to-end with fake provider", () => {
     expect(observedConfidences).toEqual([...RANK_TO_CONFIDENCE]);
     expect(observedTypes).toEqual(["supports", "extends", "exemplifies", "related_to"]);
   });
+});
+
+describe("Linker prompt caps (W8)", () => {
+  test("keeps only the first LINKER.maxActiveChunksInPrompt active chunks plus a marker", () => {
+    const chunks = Array.from({ length: 20 }, (_unused, index) => ({
+      ord: index,
+      text: `body ${index}`,
+      vector: [0.1],
+    }));
+    const built = buildActiveNotePrompt(chunks);
+    expect(built.chunks).toHaveLength(LINKER.maxActiveChunksInPrompt);
+    expect(built.chunks.map((c) => c.ord)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(built.omitted).toBe(`[... ${20 - LINKER.maxActiveChunksInPrompt} more chunks]`);
+  });
+
+  test("emits no marker when the note fits under the cap", () => {
+    const chunks = Array.from({ length: 3 }, (_unused, index) => ({
+      ord: index,
+      text: `body ${index}`,
+      vector: [0.1],
+    }));
+    const built = buildActiveNotePrompt(chunks);
+    expect(built.chunks).toHaveLength(3);
+    expect(built.omitted).toBeUndefined();
+  });
+
+  test("caps bound the prompt regardless of note length", () => {
+    // Prompt size is candidates x evidence x snippet chars, plus the active
+    // note's first few chunks. Before W8 a long note could put 60-80 chunks of
+    // full text into a single call.
+    expect(LINKER.maxCandidates).toBe(12);
+    expect(LINKER.maxEvidencePerNote).toBe(2);
+    expect(LINKER.evidenceSnippetChars).toBe(600);
+    expect(LINKER.maxActiveChunksInPrompt).toBe(6);
+  });
+});
+
+describe("Linker storage and numeric integrity", () => {
+  function linkerForResult(result: unknown): Linker {
+    const db = {
+      query: () => ({ collect: async () => result }),
+    } as unknown as Surreal;
+    return new Linker({ db, provider: NOOP_PROVIDER, reasoningModel: "reasoning" });
+  }
+
+  async function readChunks(linker: Linker): Promise<unknown> {
+    const noteId = createUuidRecordId("note", "00000000-0000-4000-8000-000000000001");
+    const reader = linker as unknown as {
+      fetchActiveChunks(noteId: RecordId<"note">): Promise<unknown>;
+    };
+    return reader.fetchActiveChunks(noteId);
+  }
+
+  test.each([
+    ["invalid envelope", [{ ord: 0, text: "a", vector: [1] }], "statement envelope"],
+    ["fractional ord", [[{ ord: 0.5, text: "a", vector: [1] }]], "chunk row"],
+    ["empty vector", [[{ ord: 0, text: "a", vector: [] }]], "chunk row"],
+    ["non-finite vector", [[{ ord: 0, text: "a", vector: [Number.NaN] }]], "chunk row"],
+    [
+      "dimension mismatch",
+      [
+        [
+          { ord: 0, text: "a", vector: [1] },
+          { ord: 1, text: "b", vector: [1, 2] },
+        ],
+      ],
+      "dimensions disagree",
+    ],
+    [
+      "duplicate ord",
+      [
+        [
+          { ord: 0, text: "a", vector: [1] },
+          { ord: 0, text: "b", vector: [2] },
+        ],
+      ],
+      "strictly increasing",
+    ],
+  ])("rejects %s", async (_label, result, message) => {
+    await expect(readChunks(linkerForResult(result))).rejects.toThrow(message);
+  });
+
+  test.each([{ topK: 1.5 }, { topK: 0 }, { topK: Number.NaN }, { ef: Number.POSITIVE_INFINITY }])(
+    "rejects invalid retrieval options",
+    (options) => {
+      expect(
+        () =>
+          new Linker({
+            db: {} as Surreal,
+            provider: NOOP_PROVIDER,
+            reasoningModel: "reasoning",
+            ...options,
+          }),
+      ).toThrow("positive safe integer");
+    },
+  );
 });

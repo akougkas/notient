@@ -58,7 +58,10 @@ class ScriptedProvider implements LLMProvider {
   }
 
   async chatWithTools(request: ChatWithToolsRequest): Promise<ChatWithToolsHandle> {
-    this.requests.push(request);
+    // Snapshot the message array: the loop keeps appending to (and rewriting
+    // slots of) the same array across rounds, so holding the live reference
+    // would make every recorded request look like the last one.
+    this.requests.push({ ...request, messages: [...request.messages] });
     const turn = this.script[this.requests.length - 1];
     if (!turn) throw new Error(`unexpected provider call #${this.requests.length}`);
     const events = turn.throwOnEvents ? throwingEvents(turn.throwOnEvents()) : scriptedEvents(turn);
@@ -138,15 +141,16 @@ function makeApprovalGate(): {
 } {
   const pending: ToolCall[] = [];
   const approvalGate = new ApprovalGate({
-    events: {
-      onPending: (entry) =>
-        pending.push({ id: entry.callId, name: entry.toolName, args: entry.args }),
-      onResolved: () => {
-        // unused in tests
-      },
-    },
-    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
+    sessionGrants: { claim: async () => null },
+    perToolPolicy: () => ({}),
     recordHistoryAutoApprove: async () => {
+      // unused in tests
+    },
+  });
+  approvalGate.subscribe({
+    onPending: (entry) =>
+      pending.push({ id: entry.callId, name: entry.toolName, args: entry.args }),
+    onResolved: () => {
       // unused in tests
     },
   });
@@ -162,7 +166,6 @@ function makeConversation(approvalMode: Conversation["approvalMode"] = "yolo"): 
     approvalMode,
     topic: "T",
     summary: "",
-    summaryEmbeddingB64: null,
     clientIdentity: "human",
     messageCount: 0,
     createdAt: 0,
@@ -183,13 +186,11 @@ describe("runAgentTurn", () => {
       { contentChunks: ["Hello", " world"], finalContent: "Hello world" },
     ]);
     const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
-    const { approvalGate } = makeApprovalGate();
     const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
           maxRoundsPerTurn: 4,
           toolMode: () => "native",
           generateId: () => "message-1",
@@ -211,10 +212,49 @@ describe("runAgentTurn", () => {
     expect(provider.requests.length).toBe(1);
   });
 
-  test("passes responseSchema through to provider chatWithTools", async () => {
-    const provider = new ScriptedProvider([{ finalContent: "{}" }]);
+  test("unexecuted Qwen tool markup is an invalid answer and never an effect", async () => {
+    const provider = new ScriptedProvider([
+      {
+        finalContent:
+          "<tool_call><function=vault.read><parameter=path>A</parameter></function></tool_call>",
+      },
+    ]);
+    let effects = 0;
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: makeRegistry([
+            readTool(async () => {
+              effects++;
+              return {};
+            }),
+          ]),
+          maxRoundsPerTurn: 1,
+          toolMode: () => "native",
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "answer" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    expect(events.some((event) => event.type === "loop:done")).toBe(false);
+    expect(events.some((event) => event.type === "loop:assistant-token")).toBe(false);
+    expect(events.find((event) => event.type === "loop:error")).toMatchObject({
+      kind: "invalid-model-output",
+    });
+    expect(effects).toBe(0);
+  });
+
+  test("never sends responseSchema on a tool round; finalizes with tools disabled", async () => {
+    const provider = new ScriptedProvider([
+      { finalContent: "The answer is four." },
+      { finalContent: '{"answer":"four"}' },
+    ]);
     const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
-    const { approvalGate } = makeApprovalGate();
     const responseSchema: JsonSchema = {
       name: "answer_shape",
       schema: {
@@ -224,13 +264,12 @@ describe("runAgentTurn", () => {
       },
     };
 
-    await collect(
+    const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
-          maxRoundsPerTurn: 1,
+          maxRoundsPerTurn: 2,
           toolMode: () => "native",
           responseSchema,
         },
@@ -243,7 +282,108 @@ describe("runAgentTurn", () => {
       ),
     );
 
-    expect(provider.requests[0]?.responseSchema).toEqual(responseSchema);
+    expect(provider.requests.length).toBe(2);
+    expect(provider.requests[0]?.responseSchema).toBeUndefined();
+    expect(provider.requests[0]?.tools.length).toBeGreaterThan(0);
+    expect(provider.requests[1]?.responseSchema).toEqual(responseSchema);
+    expect(provider.requests[1]?.tools).toEqual([]);
+    expect(provider.requests[1]?.toolChoice).toBe("none");
+    const draft = provider.requests[1]?.messages.at(-2);
+    expect(draft).toEqual({ role: "assistant", content: "The answer is four." });
+    const done = events.find((event) => event.type === "loop:done");
+    expect(done && done.type === "loop:done" ? done.finalMessage.content : "").toBe(
+      '{"answer":"four"}',
+    );
+  });
+
+  test("skips the finalize pass when the draft already parses as a JSON object", async () => {
+    const provider = new ScriptedProvider([{ finalContent: '{"answer":"four"}' }]);
+    const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
+    const responseSchema: JsonSchema = {
+      name: "answer_shape",
+      schema: { type: "object", properties: { answer: { type: "string" } } },
+    };
+    await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 1,
+          toolMode: () => "native",
+          responseSchema,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "hi" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    expect(provider.requests.length).toBe(1);
+  });
+
+  test("finalizes when the draft is JSON but lacks a required key", async () => {
+    const provider = new ScriptedProvider([
+      { finalContent: '{"answer":"four"}' },
+      { finalContent: '{"answer":"four","citations":[]}' },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
+    const responseSchema: JsonSchema = {
+      name: "answer_shape",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string" }, citations: { type: "array" } },
+        required: ["answer", "citations"],
+      },
+    };
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 2,
+          toolMode: () => "native",
+          responseSchema,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "hi" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    expect(provider.requests.length).toBe(2);
+    const done = events.find((event) => event.type === "loop:done");
+    expect(done && done.type === "loop:done" ? done.finalMessage.content : "").toBe(
+      '{"answer":"four","citations":[]}',
+    );
+  });
+
+  test("after-tool-call mode does not finalize when no tool ran", async () => {
+    const provider = new ScriptedProvider([{ finalContent: "plain prose" }]);
+    const registry = makeRegistry([readTool(async () => ({ ok: true }))]);
+    const responseSchema: JsonSchema = { name: "s", schema: { type: "object" } };
+    await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 1,
+          toolMode: () => "native",
+          responseSchema,
+          responseSchemaMode: "after-tool-call",
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "hi" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    expect(provider.requests.length).toBe(1);
   });
 
   test("executes a read-only tool call and resumes the loop", async () => {
@@ -261,13 +401,11 @@ describe("runAgentTurn", () => {
         return { content: "body" };
       }),
     ]);
-    const { approvalGate } = makeApprovalGate();
     const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
           maxRoundsPerTurn: 4,
           toolMode: () => "native",
           generateId: () => "id",
@@ -291,21 +429,115 @@ describe("runAgentTurn", () => {
     expect(done && done.type === "loop:done" ? done.finalMessage.content : "").toBe("Done.");
   });
 
-  test("hits the round cap and emits the apology message", async () => {
+  test("turns a blank thrown diagnostic into a canonical tool error", async () => {
     const provider = new ScriptedProvider([
-      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
-      { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
+      {
+        toolCalls: [{ id: "call-blank", name: "vault.read", args: { path: "Notes/A.md" } }],
+      },
+      { finalContent: "Done." },
     ]);
-    const registry = makeRegistry([readTool(async () => ({}))]);
-    const { approvalGate } = makeApprovalGate();
+    const registry = makeRegistry([
+      readTool(async () => {
+        throw new Error("   ");
+      }),
+    ]);
     const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
           maxRoundsPerTurn: 2,
           toolMode: () => "native",
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "read Notes/A" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    const result = events.find((event) => event.type === "loop:tool-result");
+    expect(result).toEqual({
+      type: "loop:tool-result",
+      result: {
+        callId: "call-blank",
+        status: "error",
+        error: "tool failed without a diagnostic",
+        durationMs: 0,
+      },
+    });
+  });
+
+  test("reserves the last generation for an answer within the configured budget", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
+      { finalContent: "Source A supports the answer." },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({}))]);
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 2,
+          toolMode: () => "native",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [
+            { role: "system", content: "Original authority." },
+            { role: "user", content: "loop" },
+          ],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    const done = events.find((event) => event.type === "loop:done");
+    expect(done).toBeDefined();
+    if (done && done.type === "loop:done") {
+      expect(done.finalMessage.content).toBe("Source A supports the answer.");
+      expect(done.truncated).toBeUndefined();
+    }
+    expect(provider.requests.length).toBe(2);
+    expect(provider.requests[1].tools).toEqual([]);
+    expect(provider.requests[1].toolChoice).toBe("none");
+    expect(provider.requests[1].messages[0].content).toContain("Original authority.");
+    expect(provider.requests[1].messages[0].content).toContain("final generation");
+    expect(
+      provider.requests[1].messages.slice(1).some((message) => message.role === "system"),
+    ).toBe(false);
+    expect(provider.requests[0].messages[0].content).toBe("Original authority.");
+  });
+
+  test("structured finalization also fits inside the total generation budget", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
+      { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
+      { finalContent: '{"answer":"forced answer","citations":[]}' },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({}))]);
+    const schema: JsonSchema = {
+      name: "forced",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+    };
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 3,
+          toolMode: () => "native",
+          responseSchema: schema,
+          responseSchemaMode: "after-tool-call",
           generateId: () => "id",
           now: () => 0,
         },
@@ -317,12 +549,88 @@ describe("runAgentTurn", () => {
         },
       ),
     );
+    expect(provider.requests.length).toBe(3);
+    const forcedRequest = provider.requests[2];
+    expect(forcedRequest?.tools).toEqual([]);
+    expect(forcedRequest?.toolChoice).toBe("none");
+    expect(forcedRequest?.responseSchema).toBe(schema);
     const done = events.find((event) => event.type === "loop:done");
     expect(done).toBeDefined();
     if (done && done.type === "loop:done") {
-      expect(done.finalMessage.content).toContain("all available tool rounds");
+      expect(done.truncated).toBeUndefined();
+      expect(done.finalMessage.content).toBe('{"answer":"forced answer","citations":[]}');
     }
-    expect(provider.requests.length).toBe(2);
+  });
+
+  test("an empty final generation is a failure, never a fabricated completed answer", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
+      { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
+      { finalContent: "" },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({}))]);
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 3,
+          toolMode: () => "native",
+          responseSchema: {
+            name: "forced",
+            schema: { type: "object", properties: {}, required: [], additionalProperties: false },
+          },
+          responseSchemaMode: "after-tool-call",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "loop" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    expect(provider.requests).toHaveLength(3);
+    expect(events.some((event) => event.type === "loop:done")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      type: "loop:error",
+      message: expect.stringContaining("no visible answer"),
+    });
+  });
+
+  test("think tags leaked into the content channel are stripped from the final message", async () => {
+    const provider = new ScriptedProvider([
+      {
+        contentChunks: ["<think>plan", " some more</think>", "Answer"],
+        finalContent: "Answer",
+      },
+    ]);
+    const registry = makeRegistry([readTool(async () => ({}))]);
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 2,
+          toolMode: () => "native",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "think" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+    const done = events.find((event) => event.type === "loop:done");
+    expect(done).toBeDefined();
+    if (done && done.type === "loop:done") {
+      expect(done.finalMessage.content).toBe("Answer");
+    }
   });
 
   test("abort during a tool call propagates to the loop", async () => {
@@ -341,13 +649,11 @@ describe("runAgentTurn", () => {
         return {};
       }),
     ]);
-    const { approvalGate } = makeApprovalGate();
     const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
           maxRoundsPerTurn: 4,
           toolMode: () => "native",
           generateId: () => "id",
@@ -368,20 +674,18 @@ describe("runAgentTurn", () => {
     }
   });
 
-  test("hits round cap and emits truncated:true flag with marker in final message", async () => {
+  test("refuses provider tool calls in the reserved answer round", async () => {
     const provider = new ScriptedProvider([
       { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
       { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
       { toolCalls: [{ id: "c3", name: "vault.read", args: { path: "C" } }] },
     ]);
     const registry = makeRegistry([readTool(async () => ({}))]);
-    const { approvalGate } = makeApprovalGate();
     const events = await collect(
       runAgentTurn(
         {
           provider,
           toolRegistry: registry,
-          approvalGate,
           maxRoundsPerTurn: 2,
           toolMode: () => "native",
           generateId: () => "id",
@@ -395,16 +699,11 @@ describe("runAgentTurn", () => {
         },
       ),
     );
-    // Loop must NOT throw; it must emit a clean truncated done event.
-    const errorEvent = events.find((event) => event.type === "loop:error");
-    expect(errorEvent).toBeUndefined();
-    const done = events.find((event) => event.type === "loop:done");
-    expect(done).toBeDefined();
-    if (done && done.type === "loop:done") {
-      expect(done.truncated).toBe(true);
-      expect(done.finalMessage.content.toLowerCase()).toContain("truncated");
-    }
-    // Provider was called exactly maxRoundsPerTurn times.
+    expect(events.filter((event) => event.type === "loop:tool-call")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({
+      type: "loop:error",
+      message: expect.stringContaining("No additional calls were executed"),
+    });
     expect(provider.requests.length).toBe(2);
   });
 
@@ -428,12 +727,11 @@ describe("runAgentTurn", () => {
         return { created: true };
       }),
     ]);
-    const { approvalGate, pending } = makeApprovalGate();
+    const { pending } = makeApprovalGate();
     const generator = runAgentTurn(
       {
         provider,
         toolRegistry: registry,
-        approvalGate,
         maxRoundsPerTurn: 4,
         toolMode: () => "native",
         generateId: () => "id",
@@ -487,12 +785,10 @@ describe("runAgentTurn", () => {
           }),
       ),
     ]);
-    const { approvalGate } = makeApprovalGate();
     const generator = runAgentTurn(
       {
         provider,
         toolRegistry: registry,
-        approvalGate,
         maxRoundsPerTurn: 4,
         toolMode: () => "native",
         generateId: () => "id",
@@ -533,5 +829,155 @@ describe("runAgentTurn", () => {
       "c2",
       "c3",
     ]);
+  });
+
+  test("rejects a duplicate provider tool-call id before events or invocations", async () => {
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          { id: "duplicate", name: "vault.read", args: { path: "A" } },
+          { id: "duplicate", name: "vault.read", args: { path: "B" } },
+        ],
+      },
+    ]);
+    let invocations = 0;
+    const registry = makeRegistry([
+      readTool(async () => {
+        invocations += 1;
+        return { ok: true };
+      }),
+    ]);
+
+    const events = await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 4,
+          toolMode: () => "native",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "read both" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+
+    expect(invocations).toBe(0);
+    expect(events.some((event) => event.type === "loop:tool-call")).toBe(false);
+    expect(events).toEqual([
+      {
+        type: "loop:error",
+        kind: "invalid-model-output",
+        message: "duplicate tool call id in one assistant batch",
+      },
+    ]);
+  });
+
+  test("sends the OpenAI tool-call protocol across a two-round tool turn", async () => {
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          { id: "call-1", name: "vault.read", args: { path: "A.md" } },
+          { id: "call-2", name: "vault.read", args: { path: "B.md" } },
+        ],
+        contentChunks: ["looking"],
+        finalContent: "looking",
+      },
+      { contentChunks: ["Done."], finalContent: "Done." },
+    ]);
+    const registry = makeRegistry([readTool(async (args) => args)]);
+
+    await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 4,
+          toolMode: () => "native",
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [
+            { role: "system", content: "sys" },
+            { role: "user", content: "read both" },
+          ],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+
+    expect(provider.requests[0]?.messages).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: "read both" },
+    ]);
+    // Round two replays the assistant turn with its tool_calls intact and one
+    // role:"tool" message per result, keyed by tool_call_id.
+    expect(provider.requests[1]?.messages).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: "read both" },
+      {
+        role: "assistant",
+        content: "looking",
+        tool_calls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "vault.read", arguments: '{"path":"A.md"}' },
+          },
+          {
+            id: "call-2",
+            type: "function",
+            function: { name: "vault.read", arguments: '{"path":"B.md"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call-1", content: '{"path":"A.md"}' },
+      { role: "tool", tool_call_id: "call-2", content: '{"path":"B.md"}' },
+    ]);
+  });
+
+  test("truncates the oldest tool results when the buffer exceeds contextBudgetTokens", async () => {
+    const bulk = "x".repeat(4000);
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "c1", name: "vault.read", args: { path: "A" } }] },
+      { toolCalls: [{ id: "c2", name: "vault.read", args: { path: "B" } }] },
+      { contentChunks: ["Done."], finalContent: "Done." },
+    ]);
+    const registry = makeRegistry([readTool(async () => bulk)]);
+
+    await collect(
+      runAgentTurn(
+        {
+          provider,
+          toolRegistry: registry,
+          maxRoundsPerTurn: 4,
+          toolMode: () => "native",
+          contextBudgetTokens: 1200,
+          generateId: () => "id",
+          now: () => 0,
+        },
+        {
+          conversation: makeConversation(),
+          systemAndHistory: [{ role: "user", content: "read" }],
+          model: "model",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
+
+    const third = provider.requests[2]?.messages ?? [];
+    const toolMessages = third.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages[0]?.content).toBe(`[truncated ${JSON.stringify(bulk).length} chars]`);
+    // The newest result survives; only the oldest was blanked.
+    expect(toolMessages[1]?.content).toBe(JSON.stringify(bulk));
   });
 });

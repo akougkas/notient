@@ -42,6 +42,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -50,7 +51,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     noteA = await createNote(connection.db, {
       path: "smoke/test1.md",
@@ -69,9 +70,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  test("[smoke] INFO FOR DB reports all 30 expected tables", async () => {
+  test("[smoke] INFO FOR DB reports all 31 expected tables", async () => {
     const [info] = await connection.db
       .query<[{ tables: Record<string, string> }]>("INFO FOR DB;")
       .collect<[{ tables: Record<string, string> }]>();
@@ -80,6 +81,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
 
     const entityTables = ["note", "block", "chunk", "tag", "concept", "claim", "question"];
     const opsTables = [
+      "approval_intent",
       "daemon_write",
       "awaken_run",
       "history",
@@ -93,7 +95,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SurrealDB end-to-end", () => {
     for (const name of expected) {
       expect(present.has(name)).toBe(true);
     }
-    expect(expected.length).toBe(30);
+    expect(expected.length).toBe(31);
   });
 
   test("[smoke] createNote round-trips path/sha/word_count", async () => {

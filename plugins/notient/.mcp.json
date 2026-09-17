@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "notient": {
+      "command": "notient",
+      "args": ["mcp", "--as", "claude-code"]
+    }
+  }
+}

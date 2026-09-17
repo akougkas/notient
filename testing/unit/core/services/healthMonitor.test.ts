@@ -153,11 +153,10 @@ describe("HealthMonitor abort paths", () => {
     });
     monitor.start();
 
-    // Wait for probeAll() to register the in-flight controller.
+    // Wait for the provider to capture the probe's production abort signal.
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const inflightBeforeStop = monitor.inflightControllers().size;
     const capturedSignal = provider.lastSignal;
-    expect(inflightBeforeStop).toBe(1);
+    expect(capturedSignal).toBeDefined();
     expect(capturedSignal?.aborted).toBe(false);
 
     monitor.stop();
@@ -167,6 +166,5 @@ describe("HealthMonitor abort paths", () => {
 
     expect(capturedSignal?.aborted).toBe(true);
     expect(provider.abortObserved).toBe(true);
-    expect(monitor.inflightControllers().size).toBe(0);
   }, 3000);
 });

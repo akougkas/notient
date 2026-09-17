@@ -57,6 +57,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links audit CLI", () => {
       portFile: path.join(tempDir, "surreal.port"),
       pidFile: path.join(tempDir, "surreal.pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -65,14 +66,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links audit CLI", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
     const stateDir = vaultStateDir(vaultPath);
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
     const port = new URL(handle.url).port;
-    await writeFile(vaultPortPath(vaultPath), port, "utf8");
+    await writeFile(vaultPortPath(vaultPath), `${port}\n`, "utf8");
     await writeFile(vaultSecretPath(vaultPath), secret, { mode: 0o600 });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) await connection.close().catch(() => {});
@@ -85,7 +86,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links audit CLI", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     const tables = ["wikilink_unresolved", "embed_unresolved", "tagged", "note", "tag"];

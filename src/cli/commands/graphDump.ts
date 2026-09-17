@@ -9,7 +9,7 @@
  *
  * Tier filter semantics:
  *   - Tier 1 keeps deterministic edges only (`class = 'EXTRACTED'` AND
- *     `source IN ['wikilink','embed','frontmatter','structure']`).
+ *     `source IN ['wikilink','markdown','embed','frontmatter','structure']`).
  *   - Tier 2 is Tier 1 with chunk-derived metadata folded into node
  *     attributes (token estimates, embedded model). Edges are unchanged.
  *   - Tier 3 is the full graph including `class = 'INFERRED'` edges.
@@ -17,8 +17,14 @@
  * Determinism: nodes are sorted by id, edges by (created_at, id).
  */
 
-import type { Surreal } from "surrealdb";
-import { EDGE_TABLES } from "../../core/db/edgeTables";
+import { DateTime, RecordId, type Surreal } from "surrealdb";
+import {
+  EDGE_TABLES,
+  type EdgeTable,
+  isEdgeSource,
+  isExtractorEdgeTable,
+} from "../../core/db/edgeTables";
+import { readSingleStatementRows } from "../../core/db/queryResult";
 import type { Emitter } from "../output";
 import { connectVaultSurreal } from "./awakenSurrealClient";
 
@@ -42,10 +48,11 @@ interface DumpedNode {
 
 interface DumpedEdge {
   id: string;
-  table: string;
+  table: EdgeTable;
   in: string;
   out: string;
   source: string;
+  confidenceClass: "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
   attributes: Record<string, unknown>;
   createdAt: string;
 }
@@ -58,19 +65,44 @@ export interface DumpedGraph {
 
 const ENTITY_TABLES = ["note", "block", "chunk", "tag", "concept", "claim", "question"] as const;
 
-const TIER1_SOURCES: ReadonlyArray<string> = ["wikilink", "embed", "frontmatter", "structure"];
+const TIER1_SOURCES = ["wikilink", "markdown", "embed", "frontmatter", "structure"] as const;
 
 export async function runGraphDumpCommand(options: GraphDumpOptions): Promise<number> {
   const tier = options.tier ?? 3;
   const format = options.format ?? "json";
 
   let connection: { db: Surreal; close: () => Promise<void> } | undefined;
+  let graph: DumpedGraph | undefined;
+  let failure: unknown;
   try {
     const opened = await connectVaultSurreal(options.vaultPath);
     connection = opened;
-    const graph = await collectGraph(opened.db, tier);
+    graph = await collectGraph(opened.db, tier);
+  } catch (error) {
+    failure = error;
+  }
+  if (connection !== undefined) {
+    try {
+      await connection.close();
+    } catch (error) {
+      failure = combineErrors(failure, error);
+    }
+  }
+  if (failure !== undefined || graph === undefined) {
+    const error = failure ?? new Error("graph dump completed without a graph");
+    options.emitter.emit({
+      type: "error",
+      code: "INTERNAL",
+      message: `graph dump failed: ${formatError(error)}`,
+    });
+    return 1;
+  }
+  try {
     const serialised = serialise(graph, format);
-    if (typeof options.outPath === "string" && options.outPath.length > 0) {
+    if (options.outPath !== undefined) {
+      if (options.outPath.length === 0) {
+        throw new Error("graph dump output path must not be empty");
+      }
       await Bun.write(options.outPath, serialised);
       options.emitter.emit({
         type: "graph:dump",
@@ -89,19 +121,21 @@ export async function runGraphDumpCommand(options: GraphDumpOptions): Promise<nu
     options.emitter.emit({
       type: "error",
       code: "INTERNAL",
-      message: `graph dump failed: ${error instanceof Error ? error.message : String(error)}`,
+      message: `graph dump failed: ${formatError(error)}`,
     });
     return 1;
-  } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
   }
 }
 
 async function collectGraph(db: Surreal, tier: DumpTier): Promise<DumpedGraph> {
   const nodes = await collectNodes(db, tier);
   const edges = await collectEdges(db, tier);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.in) || !nodeIds.has(edge.out)) {
+      throw new Error(`graph dump storage integrity: edge ${edge.id} has a missing endpoint`);
+    }
+  }
   return { tier, nodes, edges };
 }
 
@@ -109,9 +143,8 @@ async function collectNodes(db: Surreal, tier: DumpTier): Promise<DumpedNode[]> 
   const nodes: DumpedNode[] = [];
   for (const table of ENTITY_TABLES) {
     if (tier === 1 && table === "chunk") continue;
-    const [rows] = await db
-      .query<[Array<Record<string, unknown>>]>(`SELECT * FROM ${table};`)
-      .collect<[Array<Record<string, unknown>>]>();
+    const result: unknown = await db.query(`SELECT * FROM ${table};`).collect();
+    const rows = readSingleStatementRows(result, `graph dump ${table}`);
     for (const row of rows) {
       nodes.push(toNode(row, table));
     }
@@ -123,12 +156,12 @@ async function collectNodes(db: Surreal, tier: DumpTier): Promise<DumpedNode[]> 
 async function collectEdges(db: Surreal, tier: DumpTier): Promise<DumpedEdge[]> {
   const edges: DumpedEdge[] = [];
   for (const table of EDGE_TABLES) {
-    const [rows] = await db
-      .query<[Array<Record<string, unknown>>]>(`SELECT * FROM ${table};`)
-      .collect<[Array<Record<string, unknown>>]>();
+    const result: unknown = await db.query(`SELECT * FROM ${table};`).collect();
+    const rows = readSingleStatementRows(result, `graph dump ${table}`);
     for (const row of rows) {
-      if (!includeEdge(row, tier)) continue;
-      edges.push(toEdge(row, table));
+      const edge = toEdge(row, table);
+      if (!includeEdge(edge, tier)) continue;
+      edges.push(edge);
     }
   }
   edges.sort((a, b) => {
@@ -138,76 +171,202 @@ async function collectEdges(db: Surreal, tier: DumpTier): Promise<DumpedEdge[]> 
   return edges;
 }
 
-function toNode(row: Record<string, unknown>, table: string): DumpedNode {
-  const idString = stringifyValue(row.id);
-  const { id: _omitId, ...rest } = row;
-  return { id: idString, table, attributes: stripUndefined(rest) };
+export function decodeDumpNode(row: unknown, table: (typeof ENTITY_TABLES)[number]): DumpedNode {
+  const record = requireRecord(row, `graph dump ${table} row`);
+  const id = requireRecordId(record.id, table, `graph dump ${table} id`).toString();
+  const { id: _omitId, ...attributes } = record;
+  return { id, table, attributes: encodeAttributes(attributes, `graph dump ${id}`) };
 }
 
-function toEdge(row: Record<string, unknown>, table: string): DumpedEdge {
-  const idString = stringifyValue(row.id);
-  const inString = stringifyValue(row.in);
-  const outString = stringifyValue(row.out);
-  const source = typeof row.source === "string" ? row.source : "";
-  const createdAt = formatDate(row.created_at);
-  const { id: _id, in: _in, out: _out, source: _source, ...rest } = row;
+function toNode(row: unknown, table: (typeof ENTITY_TABLES)[number]): DumpedNode {
+  return decodeDumpNode(row, table);
+}
+
+export function decodeDumpEdge(row: unknown, table: EdgeTable): DumpedEdge {
+  const record = requireRecord(row, `graph dump ${table} row`);
+  const allowedFields = [
+    "id",
+    "in",
+    "out",
+    "source",
+    "class",
+    "confidence",
+    "evidence",
+    "agent",
+    "approved",
+    "applied",
+    "created_at",
+  ];
+  if (Object.keys(record).some((key) => !allowedFields.includes(key))) {
+    throw new Error(`graph dump ${table} storage integrity: edge row has unknown fields`);
+  }
+  for (const field of [
+    "id",
+    "in",
+    "out",
+    "source",
+    "class",
+    "confidence",
+    "approved",
+    "applied",
+    "created_at",
+  ]) {
+    if (!(field in record)) {
+      throw new Error(`graph dump ${table} storage integrity: edge row is missing ${field}`);
+    }
+  }
+  const id = requireRecordId(record.id, table, `graph dump ${table} id`).toString();
+  const from = requireEntityRecordId(record.in, `graph dump ${id} source`).toString();
+  const to = requireEntityRecordId(record.out, `graph dump ${id} target`).toString();
+  if (!isEdgeSource(record.source)) {
+    throw new Error(`graph dump ${table} storage integrity: invalid provenance source`);
+  }
+  if (record.class !== "EXTRACTED" && record.class !== "INFERRED" && record.class !== "AMBIGUOUS") {
+    throw new Error(`graph dump ${table} storage integrity: invalid confidence class`);
+  }
+  if (
+    typeof record.confidence !== "number" ||
+    !Number.isFinite(record.confidence) ||
+    record.confidence < 0 ||
+    record.confidence > 1
+  ) {
+    throw new Error(`graph dump ${table} storage integrity: invalid confidence`);
+  }
+  if (typeof record.approved !== "boolean" || typeof record.applied !== "boolean") {
+    throw new Error(`graph dump ${table} storage integrity: invalid decision state`);
+  }
+  validateOptionalAgent(record.agent, table);
+  validateEvidence(record.evidence, table);
+  const createdAt = requireDateTime(record.created_at, `graph dump ${id} created_at`);
+  const {
+    id: _id,
+    in: _in,
+    out: _out,
+    source: _source,
+    class: _class,
+    created_at: _createdAt,
+    ...attributes
+  } = record;
   return {
-    id: idString,
+    id,
     table,
-    in: inString,
-    out: outString,
-    source,
+    in: from,
+    out: to,
+    source: record.source,
+    confidenceClass: record.class,
     createdAt,
-    attributes: stripUndefined(rest),
+    attributes: encodeAttributes(attributes, `graph dump ${id}`),
   };
 }
 
-function stringifyValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object" && "toString" in value) return value.toString();
-  return String(value);
+function toEdge(row: unknown, table: EdgeTable): DumpedEdge {
+  return decodeDumpEdge(row, table);
 }
 
-function includeEdge(row: Record<string, unknown>, tier: DumpTier): boolean {
-  const klass = typeof row.class === "string" ? row.class : "";
-  const source = typeof row.source === "string" ? row.source : "";
+function includeEdge(edge: DumpedEdge, tier: DumpTier): boolean {
   if (tier === 3) return true;
   // Tier 1 and Tier 2 share the same edge filter; Tier 2 enrichment is on
   // the node side (chunk attributes) rather than on the edge side.
-  return klass === "EXTRACTED" && TIER1_SOURCES.includes(source);
+  return (
+    edge.confidenceClass === "EXTRACTED" &&
+    TIER1_SOURCES.includes(edge.source as (typeof TIER1_SOURCES)[number])
+  );
 }
 
-function stripUndefined(record: Record<string, unknown>): Record<string, unknown> {
+function encodeAttributes(record: Record<string, unknown>, label: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    if (value === undefined) continue;
-    if (value instanceof Date) {
-      out[key] = value.toISOString();
-      continue;
-    }
-    if (value !== null && typeof value === "object" && "toString" in value) {
-      // SurrealDB DateTime / RecordId / Decimal all carry a toString().
-      // Records that fall through here are plain objects, which JSON
-      // handles natively.
-      const proto = Object.getPrototypeOf(value);
-      const isPlain = proto === null || proto === Object.prototype;
-      if (!isPlain) {
-        out[key] = value.toString();
-        continue;
-      }
-    }
-    out[key] = value;
+    out[key] = encodeAttribute(value, `${label}.${key}`);
   }
   return out;
 }
 
-function formatDate(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "string") return value;
-  if (value !== null && typeof value === "object" && "toString" in value) {
-    return value.toString();
+function encodeAttribute(value: unknown, label: string): unknown {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${label} storage integrity: numeric attribute is not finite`);
+    }
+    return value;
   }
-  return "";
+  if (value instanceof DateTime) return requireDateTime(value, label);
+  if (value instanceof RecordId) return value.toString();
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => encodeAttribute(entry, `${label}[${index}]`));
+  }
+  const record = requireRecord(value, label);
+  return encodeAttributes(record, label);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} storage integrity: expected an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) {
+    throw new Error(`${label} storage integrity: unsupported native value`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireRecordId<TableName extends string>(
+  value: unknown,
+  table: TableName,
+  label: string,
+): RecordId<TableName> {
+  if (!(value instanceof RecordId) || value.table.name !== table) {
+    throw new Error(`${label} storage integrity: expected a native ${table} record id`);
+  }
+  return value as RecordId<TableName>;
+}
+
+function requireEntityRecordId(value: unknown, label: string): RecordId {
+  if (
+    !(value instanceof RecordId) ||
+    !ENTITY_TABLES.includes(value.table.name as (typeof ENTITY_TABLES)[number])
+  ) {
+    throw new Error(`${label} storage integrity: expected a native entity record id`);
+  }
+  return value;
+}
+
+function requireDateTime(value: unknown, label: string): string {
+  if (!(value instanceof DateTime)) {
+    throw new Error(`${label} storage integrity: expected a native datetime`);
+  }
+  const date = value.toDate();
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error(`${label} storage integrity: datetime is invalid`);
+  }
+  return date.toISOString();
+}
+
+function validateOptionalAgent(value: unknown, table: EdgeTable): void {
+  if (value === undefined) return;
+  if (value === null || typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new Error(`graph dump ${table} storage integrity: invalid agent`);
+  }
+}
+
+function validateEvidence(value: unknown, table: EdgeTable): void {
+  if (value === undefined) {
+    if (isExtractorEdgeTable(table)) {
+      throw new Error(`graph dump ${table} storage integrity: extractor edge lacks evidence`);
+    }
+    return;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`graph dump ${table} storage integrity: invalid evidence`);
+  }
+  const ids = new Set<string>();
+  for (const entry of value) {
+    const id = requireRecordId(entry, "chunk", `graph dump ${table} evidence`).toString();
+    if (ids.has(id)) {
+      throw new Error(`graph dump ${table} storage integrity: duplicate evidence`);
+    }
+    ids.add(id);
+  }
 }
 
 function serialise(graph: DumpedGraph, format: DumpFormat): string {
@@ -218,18 +377,19 @@ function serialise(graph: DumpedGraph, format: DumpFormat): string {
 
 function serialiseJson(graph: DumpedGraph): string {
   const nodes = graph.nodes.map((node) => ({
+    ...node.attributes,
     id: node.id,
     table: node.table,
-    ...node.attributes,
   }));
   const edges = graph.edges.map((edge) => ({
+    ...edge.attributes,
     id: edge.id,
     table: edge.table,
     in: edge.in,
     out: edge.out,
     source: edge.source,
+    class: edge.confidenceClass,
     created_at: edge.createdAt,
-    ...edge.attributes,
   }));
   return JSON.stringify({ tier: graph.tier, nodes, edges }, null, 2);
 }
@@ -287,12 +447,17 @@ function escapeXml(value: string): string {
 }
 
 function cypherIdentifier(value: string): string {
-  // Replace backticks so they can not break out of the quoted identifier.
-  return value.replace(/`/g, "");
+  if (value.includes("`")) {
+    throw new Error("graph dump cannot encode a record id containing a backtick");
+  }
+  return value;
 }
 
 function cypherLabel(value: string): string {
-  return value.replace(/[^A-Za-z0-9_]/g, "_");
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error("graph dump cannot encode a non-canonical table name");
+  }
+  return value;
 }
 
 function cypherString(value: string): string {
@@ -301,12 +466,26 @@ function cypherString(value: string): string {
 
 export function parseDumpTier(value: unknown): DumpTier | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" && typeof value !== "number") {
+  if (typeof value !== "string") {
     throw new Error("INVALID_PARAMS: --tier must be 1, 2, or 3");
   }
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (parsed === 1 || parsed === 2 || parsed === 3) return parsed;
+  if (value === "1") return 1;
+  if (value === "2") return 2;
+  if (value === "3") return 3;
   throw new Error("INVALID_PARAMS: --tier must be 1, 2, or 3");
+}
+
+function combineErrors(primary: unknown, closeError: unknown): Error {
+  if (primary === undefined) {
+    return new Error(`database connection close failed: ${formatError(closeError)}`);
+  }
+  return new Error(
+    `${formatError(primary)}; database connection close also failed: ${formatError(closeError)}`,
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function parseDumpFormat(value: unknown): DumpFormat {

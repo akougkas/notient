@@ -1,293 +1,237 @@
 # Notient
 
-> Note + Sentient. An agentic system that reads everything you write down, and remembers.
+**A terminal home for your notes, knowledge and ideas.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Bun](https://img.shields.io/badge/Bun-1.3.10-black.svg)](https://bun.sh)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg)](https://www.typescriptlang.org/)
-[![SurrealDB](https://img.shields.io/badge/SurrealDB-3.0.5-ff00aa.svg)](https://surrealdb.com)
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange.svg)](#status)
+Notient helps you find what you know, understand how it connects, and turn new
+thoughts into useful notes. Your Markdown stays in your own folders. You choose
+the models. Your agents can work with the same knowledge through CLI and MCP.
 
-Notient is an agentic system, not a single tool. A daemon lives alongside your notes; inside, a watcher catches every save, an indexer parses and embeds, a linker proposes connections between notes, and a chat loop fields your questions. The Markdown vault is the substrate. A local SurrealDB is the memory. Whichever LLM you have reachable over an OpenAI-compatible endpoint is the reasoning engine. Drop a note in the vault and Notient reads it. Ask Notient a question and it answers with citations to the notes that justified the answer. Notient itself ships no hosted service; if you point it at a local server, nothing about your work leaves the machine. Every write Notient proposes passes through you first.
+The terminal workspace is the main experience. Obsidian remains a companion
+editor, with a native desktop sidebar for grounded answers, capture, source
+navigation and reviewed changes.
 
-Notient has two kinds of users. Humans, who hand it a vault and query it when their own memory gives out. And other AI agents (Claude Code, Codex, Cursor, whatever you're using next month) who can hand Notient a vault of their *own* and use it as the persistent memory they don't otherwise get to have.
+**Current version: 0.1.0**, the first public release. It is early software with
+honest gaps: read [what was verified and what was not](docs/release-v0.1.0.md)
+before trusting it with a vault you care about. Your Markdown is never changed
+without a review you approve, and every applied change has a guarded undo.
 
-> Status: **0.1.0-alpha**, pre-1.0. Surfaces and storage may shift between versions. Read the [status section](#status) before relying on it.
+## Make yourself at home
 
----
+- **Ask and explore.** Search saved notes, ask grounded questions, open exact
+  source passages and return to your conversation.
+- **Get your bearings.** Prepare a brief on a topic or note, compare ideas, and
+  follow links, backlinks and evidence-backed relationships.
+- **Write and capture.** Save a thought, keep a recoverable draft, preview Markdown,
+  edit a note or save a useful answer. Review the change before it reaches disk.
+- **Review and recover.** Inspect suggestions, source evidence and saved versions.
+  Guarded undo refuses to overwrite newer edits.
+- **Choose your automation.** Seven built-in workflows can extract, enrich, relate,
+  find contradictions, synthesize, process an inbox or review for archive.
+  Background AI is disabled on fresh installations. Explicit scopes, permitted
+  effects and resource budgets govern enabled work.
 
-## For humans
+In the TUI, **Ctrl+P** opens the menu, **Ctrl+B** captures a thought, **Ctrl+O**
+switches conversations and **Ctrl+S** saves an answer. Contextual shortcuts appear
+at the bottom of the workspace. **Esc** stops an active chat turn.
 
-You point Notient at a folder of Markdown and the watcher picks it up. Anything you save gets parsed, chunked, and embedded. The extractor pulls out concepts, claims, and questions; the linker proposes connections between notes that seem related. Then Notient sits idle, waiting for you to ask something.
+## Install
 
-```bash
-bun dist/notient.js ask "what did I decide about vector search last month?" --vault ~/MyVault
-bun dist/notient.js brief "vector search" --vault ~/MyVault
-bun dist/notient.js chat --vault ~/MyVault            # opens the TUI
+Requires **Bun 1.4.2 or newer** and **SurrealDB 3.0.5** on `PATH`. Notient manages
+its own per-vault database process. Linux and WSL are the exercised daemon
+platforms. macOS is implemented and covered by deterministic tests, and has not
+been validated on a real host. A native Windows daemon is unsupported; Windows
+Obsidian connects to a WSL daemon through explicitly paired localhost HTTP.
+
+From the GitHub release:
+
+```sh
+curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/notient-0.1.0.tgz
+curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+bun add --global ./notient-0.1.0.tgz
+notient --version
 ```
 
-`ask` returns a one-shot answer with `[[wikilink]]` citations and a confidence score. `brief` synthesises a capped set of top relevant notes (default 8, tunable via `--max-notes`, `--max-questions`, `--max-decisions`); it's a ranked evidence brief, not an exhaustive topic page. `chat` opens an interactive TUI where you converse with the chat agent, attach notes with `@`, and approve any change Notient wants to make to the vault.
+From source:
 
-Notient never silently mutates your files. When the chat agent wants to write, whether that's creating a note, appending to one, swapping out a section, or editing frontmatter, you see the proposed call along with a preview of what would change, then you type `/approve` or `/deny`. If you want to skip confirming for a stretch, you can grant a scoped session that covers a specific tool list.
-
----
-
-## For the AI agents reading this
-
-If you're a coding agent reading this README because your human pointed you at it: hello. Notient is a memory primitive you can use.
-
-You're brilliant for an hour and forgetful tomorrow. You learned something about this codebase last week, a convention you agreed to, a decision about an API shape, a workaround for a flaky test, and by the next session it's gone. Notient closes that gap. Give it a vault somewhere on disk and treat it as your long-term store. The system runs as a per-vault daemon over a Unix Domain Socket, so RPC into it is fast. It returns structured JSON with citations, so you can verify what it tells you. It calls whichever OpenAI-compatible endpoint your human configures; point it at a local server and nothing about your work leaves the machine.
-
-```bash
-# Recall against your own memory vault.
-bun dist/notient.js ask \
-  "what convention did we settle on for error handling in the indexer?" \
-  --vault ~/.claude/notient-memory \
-  --as claude-code \
-  --format structured
+```sh
+git clone https://github.com/akougkas/notient.git && cd notient
+bun install --frozen-lockfile
+bun run build
+bun link
 ```
 
-```json
-{
-  "answer": "Errors at tier boundaries are caught per tier; the failing notePath is appended to awaken_run.failures (capped at 200) so a restart can skip paths that already failed.",
-  "citations": [
-    {
-      "path": "decisions/2026-04-12-indexer-error-handling.md",
-      "score": 8.41,
-      "snippet": "Tier 1 / Tier 2 / Tier 3 each catch their own exceptions and append the failing notePath to awaken_run.failures…"
-    },
-    {
-      "path": "architecture/awaken-resumability.md",
-      "score": 6.18,
-      "snippet": "On restart the awaken worker reads awaken_run.failures and skips any path that previously failed past the retry budget…"
-    }
-  ],
-  "openQuestions": [],
-  "confidence": 0.93,
-  "toolCalls": [
-    {
-      "name": "vault.search_notes",
-      "args": { "query": "indexer error handling convention", "mode": "balanced", "limit": 5 },
-      "durationMs": 612
-    }
-  ],
-  "durationMs": 1204
-}
+Notient is not published to npm.
+
+## First run
+
+```sh
+notient setup /absolute/path/to/vault
+notient --vault /absolute/path/to/vault
 ```
 
-```bash
-# Look something up in the human's shared vault, on their behalf.
-bun dist/notient.js ask "where is the chunker config?" \
-  --vault ~/MyVault --as claude-code --format structured
+`notient setup` writes default settings, records one model endpoint in the vault's
+private `.notient/.env` when you give it one, and ends in the same read-only report
+as `notient doctor`. It never sends a generation request and never enables
+background work. A real run on a fresh two-note vault, with the home directory
+shortened:
+
+```console
+$ notient --version
+version version=0.1.0
+
+$ notient setup ~/MyVault --yes
+Notient setup · /home/you/MyVault
+
+✓ Settings are in .notient/config.json. Reading and lexical search need nothing else.
+✓ No model endpoint yet. Add one later by running notient setup again.
+
+Notient · Some features need attention
+/home/you/MyVault
+
+✓ Bun — Running 1.4.2; requires 1.4.2 or newer.
+✓ Platform — linux supports local daemon IPC.
+✓ SurrealDB — 3.0.5 is available on PATH.
+✓ Vault — Directory is accessible; no Markdown was read or changed.
+✓ Configuration — Saved product configuration is valid. Vault deployment values take precedence over shell values.
+· Daemon — No daemon is listening for this vault.
+  Use notient daemon list to inspect ownership, or launch notient --vault <path>. Doctor does not start or stop services.
+· Answers — No reasoning model configured. Reading, writing and lexical search remain available.
+  Check NOTIENT_LLM_BASE_URL, NOTIENT_LLM_MODEL and context/slot settings in .notient/.env. Saved deployment changes take effect after a deliberate daemon restart.
+· Semantic search — No embedding model is configured. Lexical search and grounded answers can still use the structural index.
+  For semantic retrieval, configure NOTIENT_EMBED_BASE_URL and NOTIENT_EMBED_MODEL in .notient/.env.
+
+Read-only checks. Saved model catalogs establish advertised availability, not answer quality or tool support. No generation requests, file changes, or service changes were made.
+
+Next
+  Open your workspace: notient --vault "/home/you/MyVault"
+  Pair Obsidian: notient pair create --vault "/home/you/MyVault" --label "Obsidian desktop" --kind human --scopes read,write,host
+  Background work is off. Enable a workflow in the workspace with Ctrl+P → Preferences.
+  An endpoint credential belongs in .notient/.env as NOTIENT_LLM_API_KEY; never pass it on a command line.
+
+$ notient search "replicas" --vault ~/MyVault | tail -1 | jq ".result.hits"
+[
+  {
+    "notePath": "Projects/Storage.md",
+    "chunkId": "chunk:8aegrfjko8yuxn20om5m",
+    "snippet": "We decided to keep three replicas and acknowledge a write only after two persist it.",
+    "score": 0.4774763882160187,
+    "matchedText": "replicas"
+  }
+]
 ```
 
-The `--as <agent>` identity is a self-declared client id carried on every RPC frame to the daemon. It is not authenticated, so a human reviewing your output can see what you claimed to be, but the trust boundary is the approval gate, not the identity field. Successful note writes are attributed to your `--as` value in the `history` ledger; selected swarm and indexer events land in `agent_event`. Write-side tools are gated by the same approval flow that applies to humans; if you want to record something, you can either propose a write and let the human approve it interactively, or run under a `session grant` they've explicitly issued you.
+No model is needed to read notes, build the structural index or search lexically
+(`notient search` defaults to `--mode quick`, which is lexical; `balanced` and
+`deep` need an embedding model). Answers and analysis need a tool-capable
+OpenAI-compatible model. [Getting started](docs/getting-started.md) covers model
+setup, configuration, backups and service lifecycle.
 
-What you get out of it:
-
-- A long-lived daemon over UDS. No cloud round-trip, no auth dance.
-- Structured JSON in, citation-grounded JSON out. Hallucinations are cheap to detect because every claim points to a note.
-- An embedded vector store with hybrid retrieval (BM25 + HNSW + rerank + 1-hop graph expansion).
-- An approval gate that means the human stays in the steering wheel even when you're driving fast.
-
-Two patterns are worth knowing. **Personal memory:** point at a vault under your own home (`~/.claude/notient-memory/`), append decisions and learnings as Markdown files, and recall them next session. **Shared lookup:** when the human asks you to find something in their notes, RPC into *their* vault with `--as <your-agent-id>`. They see the call in the event ledger.
-
----
-
-## Quick start
-
-You need Bun 1.3.10, a local OpenAI-compatible LLM server (LM Studio, llama.cpp `server`, or compatible) with a chat model and an embedding model loaded, and SurrealDB 3.0.5's `surreal` binary on `PATH` (the daemon spawns it).
-
-Configure the AI endpoint in vault `.notient/.env`, project `.env`, or process env (vault wins, then project, then process):
-
-```bash
-NOTIENT_LLM_BASE_URL=http://192.168.86.143:1234/v1
-NOTIENT_LLM_MODEL=nvidia-nemotron-3-nano-omni-30b-a3b-reasoning
-NOTIENT_EMBED_MODEL=text-embedding-nomic-embed-text-v2-moe
-NOTIENT_CONTEXT_TOKENS=200000
-NOTIENT_REASONING_SLOTS=4
+```sh
+notient doctor --vault /absolute/path/to/vault --pretty
+notient ask "What did I decide about storage?" --vault /absolute/path/to/vault --format text
+notient brief "storage" --vault /absolute/path/to/vault
+notient brief --file "Projects/Storage.md" --vault /absolute/path/to/vault
+notient history --vault /absolute/path/to/vault --pretty
 ```
 
-`NOTIENT_REASONING_SLOTS` should match your server's `-np` / `--parallel` slot count.
+## Bring your agents
 
-Build and bring up a vault:
+Agents use the same daemon, note evidence and mutation authorities. A named agent
+has its own attribution and cannot grant itself human approval or administration.
+Ordinary agent writes ask for review by default; scoped grants or explicit operator
+policies can authorize unattended effects.
 
-```bash
-git clone https://github.com/akougkas/notient.git
-cd notient
-bun install
-bun run build                                              # → dist/notient.js, dist/daemon.js, dist/schema.surql
+```sh
+notient ask "What constraints apply to this project?" \
+  --vault /absolute/path/to/vault --as codex --format structured
 
-bun dist/notient.js init ~/MyVault
-bun dist/notient.js daemon start --vault ~/MyVault
-bun dist/notient.js awaken --vault ~/MyVault --background
-bun dist/notient.js awaken --vault ~/MyVault --status      # NDJSON until terminal
-bun dist/notient.js chat --vault ~/MyVault                 # opens the TUI
+notient mcp --vault /absolute/path/to/vault --as claude-code
 ```
 
-The bundle is Bun-native (`Bun.file`, Bun module resolution). Always invoke it as `bun dist/notient.js …`; running under `node` will fail.
+Structured answers include exact source revisions, ranges and quotations,
+retrieval coverage and inference accounting. Missing evidence causes abstention.
+Reasoning tokens remain separate from answers and tool arguments; aggregate
+completion usage is not labelled as visible-answer usage.
 
----
+See [agent setup](docs/agents.md), [MCP tools](docs/mcp.md) and the
+[note-centered HTTP API](docs/api-v1.md). The runtime-validated TypeScript client
+ships as the `notient/sdk` package export.
 
-## CLI verbs
+## Use Obsidian alongside it
 
-Top-level dispatch lives in `src/cli/index.ts`. Global flags: `--vault <path>`, `--as <agent>`, output mode `--json|--ndjson|--pretty`. Every verb supports `--help` for the full flag set.
+The desktop plugin provides a right-sidebar workspace with native Markdown
+rendering, active-note context, source navigation, capture, comparison, briefs,
+review, history, jobs and workflow settings. Select a passage in a saved note to
+ask about it, brief from it, find its connections or propose an edit, from the
+command palette or the editor menu. Attached editors veto daemon writes to dirty
+buffers. Source navigation checks saved revisions.
 
-| Verb | Purpose |
-|---|---|
-| `init <vault>` | Create `<vault>/.notient/` and record `lastVault`. |
-| `daemon start\|stop\|status\|list` | Lifecycle of the per-vault daemon. |
-| `awaken` | Run the full vault enrichment pipeline. `--batch`, `--since`, `--tier`, `--background`, `--pause`, `--resume`, `--cancel`, `--status`. |
-| `reindex [<glob>]` | Re-index a subset by pattern and/or tier. |
-| `search <query>` | Streaming search. `--mode quick\|balanced\|deep` (default balanced), `--limit`. |
-| `ask <intent>` | Read-only citation-grounded agent ask. `--format structured\|text`, `--max-rounds`. |
-| `brief <topic\|--file>` | Synthesised topic brief. `--max-notes`, `--max-questions`, `--max-decisions`. |
-| `distill --from <transcript>` | Extract proposed notes/edges from a Markdown transcript. |
-| `chat [prompt]` | Single-shot if `prompt` is given, else launches the TUI. `--approve auto\|ask`. |
-| `vitals <note-path>` | Health/freshness/connectivity snapshot for one note. |
-| `health` | Substrate + bridge probes. |
-| `events` | Drain the `agent_event` ledger. `--since`, `--limit`, `--long-poll-ms`, `--no-poll`. |
-| `session list\|grant\|revoke` | Manage scoped trust grants for unattended writes. |
-| `graph dump\|stats` | Export nodes/edges or print counts. |
-| `links sync\|audit` | Resolve wikilinks/embeds or report unresolved targets. |
-| `proposals list\|approve\|reject` | Operator queue for linker edge proposals. |
-| `db sql` | Interactive SurrealQL REPL bound to the daemon's connection. |
-| `backup` / `restore <file>` | SurrealQL dump / replay. |
-| `nuke --yes` | Delete `<vault>/.notient/db/` and reset graph state. |
-| `migrate-vault <new-path>` | Relocate a vault and rewrite `lastVault`. |
+Download `notient-obsidian-0.1.0.zip` from the
+[release](https://github.com/akougkas/notient/releases/tag/v0.1.0), extract its
+`notient/` folder into `.obsidian/plugins/`, enable Notient, and pair that vault
+from the terminal:
 
----
-
-## TUI reference
-
-`notient chat` (no positional prompt) starts the `@opentui/react` TUI in `src/cli/tui/runtime.tsx`.
-
-**Slash commands.** `/read <path>`, `/search <query>`, `/awaken`, `/vitals <path>`, `/health`, `/model` (no-arg show), `/model list`, `/model use <id>`, `/model embed <id>`, `/model endpoint <url>`, `/approve <callId> [reason]`, `/deny <callId> [reason]`, `/proposals [page]`, `/approve-edge <id>`, `/reject-edge <id> [reason]`, `/undo`, `/history`, `/copy` (saves last reply to `<vault>/.notient/last.txt`), `/clear`, `/help`, `/quit` (alias `/exit`). The proposals view also accepts `a` and `r` to approve or reject the first visible row.
-
-**Keys.** Enter submits; Shift+Enter / Alt+Enter insert a newline; Ctrl+C exits; Ctrl+U cuts to start of line; Ctrl+W kills the previous word; Tab triggers `@`-completion against vault paths; Up/Down walk persistent input history; PgUp/PgDn scroll the chat viewport.
-
-**Tools (`src/agent/toolBundle.ts`).** Read-only: `vault.search_notes`, `vault.read_note`, `vault.list_neighbors`, `vault.get_vitals`, `proposals.list_pending`, `proposals.get`, `graph.find_path`, `graph.list_clusters`. (`agents.contradiction_check` and `agents.synthesize` are wired but currently no-op shells.) Write-gated, requiring `/approve` or a session grant: `notes.create`, `notes.append`, `notes.replace_section`, `notes.update_frontmatter`, `proposals.approve`, `proposals.reject`.
-
-When a write-gated tool fires, the agent loop pauses, the status bar shows `pending:N`, and the TUI prints the call id. Type `/approve <callId>` to apply or `/deny <callId>` to abort.
-
----
-
-## Configuration
-
-Environment (vault `.notient/.env` > project `.env` > process env):
-
-| Var | Purpose | Default |
-|---|---|---|
-| `NOTIENT_LLM_BASE_URL` | OpenAI-compatible base URL. | required |
-| `NOTIENT_LLM_MODEL` | Chat / reasoning / extraction model id. | required |
-| `NOTIENT_EMBED_MODEL` | Embedding model id. | required |
-| `NOTIENT_CONTEXT_TOKENS` | Per-request/slot budget. | `200000` |
-| `NOTIENT_REASONING_SLOTS` | Concurrent reasoning calls. Match server `-np`. | `4` |
-
-`<vault>/.notient/config.toml` (loaded once at boot; restart to apply):
-
-```toml
-[indexer]
-debounce_ms = 500
-[indexer.concurrency]
-embed = 4
-extract = 2
-[indexer.chunk]
-target_tokens = 400
-max_tokens = 800
-
-[awaken]
-default_tier_filter = [1, 2, 3]
-default_priority_globs = []
-
-[surrealdb]
-hnsw_cache_mib = 512
-log_level = "warn"     # trace|debug|info|warn|error
-
-[agent_events]
-max_rows = 50000
+```sh
+notient pair create --vault /absolute/path/to/vault \
+  --label "Obsidian desktop" --kind human --scopes read,write,host
 ```
 
-`<vault>/.notient/config.json` carries the richer `NotientSettings`: primary/deep `LLMEndpointConfig`, embedding endpoint, agent toggles, approvals, search defaults, vitals weights, chat policy (`approvalMode safe|yolo`, `modelContextTokens`, `reasoningSlots`, `perTool` map, `conversationsFolder`, `proposalsFolder`, `maxRoundsPerTurn`, `contextBudgetFraction`), history retention, and `indexer.excludePaths` (defaults: `Notient/conversations`, `Notient/proposals`, `Notient/searches`).
+Enter the printed endpoint, vault identity and single-use code in the plugin
+settings. Configuration changes and undo require an explicitly granted `admin`
+scope. Pairing the same vault again leaves the earlier pairing's editor
+protection in force until you remove it with `notient pair revoke`. See
+[Obsidian setup](integrations/obsidian/README.md) and
+[vault compatibility](docs/obsidian.md). The plugin is not in the Obsidian
+community directory.
 
----
+## Where your data goes
 
-## Under the hood
+Markdown is the source of truth. Derived data and credentials stay in private
+per-vault state on your machine. Notient ships no hosted service, no telemetry and
+no account. Prompts and the note excerpts they need go to the model endpoint you
+configure, and nowhere else: a loopback endpoint keeps them on this machine, a LAN
+endpoint keeps them on your network, and a cloud endpoint receives them. An
+external MCP host also receives the content its tools request. Existing
+exclusions remain authoritative.
 
-```
-  notient CLI / TUI
-        │  Unix Domain Socket (envelope codec, MethodDispatcher,
-        │                      AsyncIterable<RpcResponseFrame>)
-        ▼
-   notient daemon  ────────►  SurrealDB 3.0.5 child process
-   (one per vault)            (namespace=notient, database=vault)
-        │  HTTP (OpenAI-compatible)
-        ▼
-   LM Studio / llama.cpp  (chat, structured JSON, vision, embeddings)
-```
+## Status and known limits
 
-**Watcher.** `src/daemon/watcher.ts` runs chokidar with `usePolling=true` auto-detected for WSL paths and a 1000 ms interval. Markdown only. `unlink` writes a `tombstoned_at` marker and schedules a 60-second cascade-delete; an `add` whose body sha matches a tombstoned row inside that window is treated as a rename and the tombstone is reverted in place.
+0.1.0 was verified with the full deterministic suites, a clean install of the
+release tarball, a real 27B local model, and the plugin ZIP in a real Obsidian
+1.13.7 desktop host. The [release notes](docs/release-v0.1.0.md) give the numbers.
+The limits that matter:
 
-**Awaken pipeline.** `src/core/awaken/awakenWorker.ts` walks every Markdown file and runs three tiers inside a single SurrealQL transaction per note. Tier 1 (`src/core/indexer/tier1.ts`): unified/remark parse, structure extraction, deterministic edges (`wikilink`, `embed`, `frontmatter_ref`, `tagged`, `contained_in`, `under_heading`). Tier 2 (`tier2.ts`): chunker (target 400 tokens, max 800) plus embedder, writing 768-dim vectors. Tier 3 (`tier3.ts`): concurrent extractor (concepts, claims, questions, plus `mentions` / `asserts` / `asks`) and rank-based linker (kNN cosine + DBSCAN) producing semantic edges; linker edges land with `approved = false` for operator review. Failures are persisted to `awaken_run.failures` (capped at 200) so a restart resumes where the last run stopped.
-
-**Three search strategies.** `src/core/search/searchPipeline.ts` orchestrates retrieval; mode is selected per query.
-
-- `quick`: SurrealDB BM25 over `chunk.text` via the `chunk_text` FULLTEXT index. Note: the daemon `search` RPC currently gates `quick` behind an Obsidian bridge probe and returns `BRIDGE_DOWN` without it. The agent loop's internal quick path runs against SurrealDB directly.
-- `balanced` (default): HNSW kNN over `chunk.vector` (dim 768, COSINE, EFC 200, M 16) plus a Jaccard path-token boost (cubic, +0.30 cap) plus LLM rerank. Falls back to `quick` if embedding fails.
-- `deep`: Hybrid kNN+BM25 fusion (`0.7·sim + 0.3·bm25`), LLM rerank, 1-hop graph expansion over approved edges, grounded LLM synthesis with `[[wikilink]]` citations.
-
-**Data model.** Namespace `notient`, database `vault`, 28 tables in `src/core/db/schema.surql` + `src/core/db/edgeTables.ts`. Core entities: `note`, `block`, `chunk`, `tag`, `concept`, `claim`, `question`. Operational: `awaken_run`, `agent_run`, `agent_event`, `agent_session`, `daemon_write`, `history`. Deterministic edges (class `EXTRACTED`): `wikilink`, `embed`, `frontmatter_ref`, `tagged`, `contained_in`, `under_heading`. Auto-approved inferred edges: `mentions`, `asserts`, `asks`. Proposed inferred edges (`approved = false` until operator review): `supports`, `contradicts`, `extends`, `exemplifies`, `synthesizes`, `related_to`. Every edge carries the same eight provenance fields: `source`, `class`, `confidence`, `evidence`, `agent`, `approved`, `applied`, `created_at`. There is no dedicated `proposal` table; linker proposals live in their target edge table filtered by `approved = false`.
-
-**Coordinator.** `src/core/coordinator/` and `src/daemon/coordinatorRunner.ts` bridge `EventBus` signals (`note:indexed`, `indexer:tier3-done`) to swarm agents (Linker, MaturityAdvancer; ContradictionHunter and Synthesizer are Phase 5 no-op shells). Reasoning-model concurrency is bounded by `chat.reasoningSlots` so it never silently oversubscribes a multi-slot local server.
-
-**Approval gate.** `src/core/chat/approvalGate.ts` blocks every write-gated tool until you `/approve <callId>` (or grant a session that covers it). `src/core/approvals/approvalService.ts` reconciles and applies pending edge writebacks at boot. Successful chat-tool writes flow into the `history` ledger with the calling `--as` identity attached; the `agent_event` ledger captures selected swarm and indexer events. The `--as <agent>` field is self-declared on the RPC frame and not authenticated; the trust boundary is the approval gate itself, not the identity claim.
-
----
-
-## Status
-
-**v0.1.0-alpha.** Pre-1.0. Surfaces and storage layout may change.
-
-**Verified working** (most recent 100-note dogfood pass):
-
-- Full awaken pipeline completes in ~3 minutes on 100 notes.
-- Citation-grounded `ask` answers across 5 question classes with confidence ~0.94.
-- Real LLM 4-slot parallel chatJson under the reasoning-slot mutex.
-- Watcher round-trips for create / edit / burst-edit / delete / rename, 60-second tombstone window honoured.
-- 890 / 890 unit tests passing across 110 unit test files.
-
-**Known incomplete or partial:**
-
-- No dedicated `proposal` table. Linker proposals live in their target edge table with `approved = false`. The `ApprovalService` linker writeback path is not exercised end-to-end yet.
-- `notient search --mode quick` from the CLI requires the Obsidian bridge and returns `BRIDGE_DOWN` without it. Only `balanced` and `deep` work without Obsidian. The internal agent-loop quick path is unaffected.
-- Vision attachment path (`src/agent/visionProbe.ts`, `LMStudioProvider.vision`) is wired but untested in the dogfood pass.
-- No `notes.delete` and no `notes.rename` chat tools. `notes.*` exposes only `create`, `append`, `replace_section`, `update_frontmatter`. Renames happen through filesystem + watcher's tombstone-window heuristic.
-- `agents.contradiction_check` and `agents.synthesize` chat tools are Phase 5 no-op shells; the underlying agents do not yet write back.
-- The Obsidian bridge (`src/bridge/`) is a vestige of the pre-pivot plugin era. It is only required by the quick-search guard above.
-- Integration tests (`bun run test:integration`, `NOTIENT_SMOKE=1`) were not run in the most recent dogfood pass.
-
----
+- **Latency.** With a local 27B model a grounded answer takes 15 to 30 seconds, a
+  brief 30 to 70 seconds, and relationship analysis up to 3.5 minutes. Complex
+  comparisons can still time out or abstain despite relevant sources.
+- **Platforms.** Linux and WSL only in practice. No native Windows daemon. macOS
+  is unverified on a real host.
+- **Obsidian.** Installs from the release ZIP, not the community directory.
+  Obsidian rewrites a note with a byte-order mark or CRLF line endings as plain LF
+  when it saves; Notient then treats earlier reviews and undo for that note as
+  stale instead of guessing.
+- **Acceptance.** The cross-surface scenarios were exercised separately, not as
+  one acceptance pass. Background throughput and resource use are unmeasured.
+- A vault reached through a symlinked directory fails its configuration check;
+  use the real path.
 
 ## Development
 
-```bash
-bun run typecheck          # tsc --noEmit (covers src/, testing/, tools/)
-bun run lint               # biome check src/ testing/
-bun run lint:fix           # biome check --write src/ testing/
-bun run format             # biome format --write src/ testing/
-bun run build              # alias for build:cli
-bun run build:cli          # bun tools/build-cli.ts → dist/notient.js
-bun run test               # bun test testing/unit (fast, no external deps)
-bun run test:integration   # NOTIENT_SMOKE=1 bun test testing/integration (spawns SurrealDB)
-bun run test:all           # test then test:integration
+```sh
+bun install --cwd integrations/obsidian --frozen-lockfile
+bun run typecheck
+bun run typecheck:obsidian
+bun run lint
+bun test testing/unit
+bun run test:integration
 ```
 
-No tests live under `src/`. Unit tests are in `testing/unit/<mirror>` and run on every CI push. Integration tests are in `testing/integration/<mirror>`, gated on `process.env.NOTIENT_SMOKE === "1"` via `describe.skipIf(...)`, and require the `surreal` binary on `PATH`. Shared markdown samples live in `testing/fixtures/markdown/`. Standalone live-LM-Studio harnesses in `tools/smoke-cli-phase{A,B,C,D,D1}.ts` exercise the daemon end-to-end and are not part of `bun test`.
+After committing, `bun run release:prepare` builds the tarball, Obsidian ZIP, OpenAPI
+document, installation notes, source manifest and checksums under ignored
+`artifacts/` (it needs the `zip` command), and
+`bun run release:check /absolute/path/to/notient-0.1.0.tgz` installs that package
+into a disposable directory and exercises the daemon, CLI, SDK and MCP without a
+model. See [CONTRIBUTING](CONTRIBUTING.md) and [SECURITY](SECURITY.md).
 
-To add a test, mirror the source path under `testing/unit/` (or `testing/integration/` if it spawns SurrealDB, a subprocess, or real chokidar). Imports traverse back to source via `../../../../src/...`. Path aliases are `@/*` → `src/*` and `@core/*` → `src/core/*`.
-
----
-
-## License
-
-MIT. See `LICENSE`.
+[MIT](LICENSE) · [Execution ledger](docs/sprints/v0.1.0.md)

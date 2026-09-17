@@ -1,5 +1,16 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
+import { dirname } from "node:path";
 
 export interface SurrealVersion {
   major: number;
@@ -48,15 +59,20 @@ export async function checkSurrealBinary(): Promise<SurrealVersion> {
   let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
     proc = Bun.spawn(["surreal", "--version"], {
+      env: { PATH: process.env.PATH ?? "" },
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 5000,
     });
   } catch {
     throw new Error(INSTALL_HINT);
   }
 
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
+  const [stdout, , exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
 
   if (exitCode !== 0) {
     throw new Error(INSTALL_HINT);
@@ -74,14 +90,13 @@ export interface SurrealServerOptions {
   secret: string;
   portFile: string;
   pidFile: string;
-  logLevel?: "trace" | "debug" | "info" | "warn" | "error" | "none";
+  logLevel: "trace" | "debug" | "info" | "warn" | "error" | "none";
   onUnexpectedExit?: (code: number | null) => void;
   /**
-   * HNSW vector-index cache size in MiB, forwarded to the surreal child as
-   * `SURREAL_HNSW_CACHE_SIZE`. Phase 4 Task 10 sources this from the
-   * per-vault TOML config; bootstrap defaults it to 512 when omitted.
+   * HNSW vector-index cache size in MiB, forwarded to the SurrealDB child as
+   * `SURREAL_HNSW_CACHE_SIZE`. Bootstrap supplies the strict per-vault config.
    */
-  hnswCacheMib?: number;
+  hnswCacheMib: number;
 }
 
 export interface SurrealServerHandle {
@@ -91,10 +106,108 @@ export interface SurrealServerHandle {
   stop(): Promise<void>;
 }
 
+export interface SurrealStartInvocation {
+  argv: string[];
+  env: Record<string, string>;
+}
+
+interface SurrealOwnershipBase {
+  format: "notient-surreal-process";
+  version: 2;
+  instanceId: string;
+  dataDir: string;
+  expectedExecutable: string;
+}
+
+interface SurrealOwnershipIntent extends SurrealOwnershipBase {
+  state: "starting";
+  port: number;
+  ownerPid: number;
+  ownerProof: SurrealProcessProof;
+}
+
+interface SurrealOwnershipRecord extends SurrealOwnershipBase {
+  state: "running";
+  pid: number;
+  port: number;
+  proof: SurrealProcessProof;
+}
+
+type SurrealOwnership = SurrealOwnershipIntent | SurrealOwnershipRecord;
+
+interface LinuxProcessIdentity {
+  bootId: string;
+  processStartTicks: string;
+  executable: string;
+  argv: string[];
+  environment: string[];
+}
+
+interface DarwinProcessIdentity {
+  bootTime: string;
+  processStartedAt: string;
+  executable: string;
+  commandWithEnvironment: string;
+}
+
+export type SurrealProcessProof =
+  | {
+      kind: "linux-procfs";
+      bootId: string;
+      processStartTicks: string;
+      executable: string;
+    }
+  | {
+      kind: "darwin-process";
+      bootTime: string;
+      processStartedAt: string;
+      executable: string;
+    }
+  | {
+      kind: "unavailable";
+      executable: string;
+    };
+
 export const STARTUP_TIMEOUT_MS = 5000;
 export const STOP_TIMEOUT_MS = 10000;
-export const RESTART_BUDGET = { maxRestarts: 3, windowMs: 60_000 } as const;
 const STALE_PROCESS_POLL_MS = 100;
+const FRESH_PROCESS_PROOF_TIMEOUT_MS = 1000;
+
+/** Build the embedded server boundary without exposing its root secret in argv. */
+export function buildSurrealStartInvocation(
+  options: SurrealServerOptions,
+  port: number,
+  instanceId: string,
+  executablePath: string | undefined = process.env.PATH,
+): SurrealStartInvocation {
+  assertSurrealRuntimeOptions(options);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("startSurreal: port must be an integer between 1 and 65535");
+  }
+  if (instanceId.length === 0) {
+    throw new Error("startSurreal: instanceId must be non-empty");
+  }
+  const env: Record<string, string> = {
+    NOTIENT_SURREAL_INSTANCE_ID: instanceId,
+    SURREAL_PASS: options.secret,
+    SURREAL_HNSW_CACHE_SIZE: String(options.hnswCacheMib),
+  };
+  if (executablePath !== undefined) env.PATH = executablePath;
+  return {
+    argv: [
+      "surreal",
+      "start",
+      "--bind",
+      `127.0.0.1:${port}`,
+      "--user",
+      "root",
+      "--log",
+      options.logLevel,
+      `rocksdb://${options.dataDir}`,
+    ],
+    env,
+  };
+}
 
 /**
  * Reserve a free TCP port on 127.0.0.1 by binding a temporary listener to
@@ -172,33 +285,42 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
  * write port/pid handoff files, and return a handle for graceful shutdown.
  */
 export async function startSurreal(options: SurrealServerOptions): Promise<SurrealServerHandle> {
+  assertSurrealRuntimeOptions(options);
   await checkSurrealBinary();
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
-  await stopStaleSurrealProcess(options);
+  const canonicalDataDir = await realpath(options.dataDir);
+  const runtimeOptions = { ...options, dataDir: canonicalDataDir };
+  await stopStaleSurrealProcess(runtimeOptions);
 
   const port = await reserveLocalPort();
+  const instanceId = randomUUID();
+  const invocation = buildSurrealStartInvocation(runtimeOptions, port, instanceId);
+  const locatedExecutable = Bun.which(invocation.argv[0]) ?? invocation.argv[0];
+  const expectedExecutable = await realpath(locatedExecutable).catch(() => locatedExecutable);
+  const ownerProof = await captureFreshSurrealProof(process.pid, process.execPath);
+  await claimSurrealOwnership(options.pidFile, {
+    format: "notient-surreal-process",
+    version: 2,
+    state: "starting",
+    instanceId,
+    dataDir: canonicalDataDir,
+    expectedExecutable,
+    port,
+    ownerPid: process.pid,
+    ownerProof,
+  });
 
-  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
-  if (options.hnswCacheMib !== undefined) {
-    childEnv.SURREAL_HNSW_CACHE_SIZE = String(options.hnswCacheMib);
+  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    child = Bun.spawn(invocation.argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: invocation.env,
+    });
+  } catch (error) {
+    await removeOwnedSurrealHandoff(options, instanceId);
+    throw error;
   }
-
-  const child = Bun.spawn(
-    [
-      "surreal",
-      "start",
-      "--bind",
-      `127.0.0.1:${port}`,
-      "--user",
-      "root",
-      "--pass",
-      options.secret,
-      "--log",
-      options.logLevel ?? "warn",
-      `rocksdb://${options.dataDir}`,
-    ],
-    { stdout: "pipe", stderr: "pipe", env: childEnv },
-  );
 
   const stdoutStream = child.stdout as ReadableStream<Uint8Array>;
   const stderrStream = child.stderr as ReadableStream<Uint8Array>;
@@ -206,6 +328,29 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
   // Drain output immediately so pipe buffers never block the child.
   void drainStream(stdoutStream);
   void drainStream(stderrStream);
+
+  try {
+    const proof = await captureFreshSurrealProof(child.pid, expectedExecutable);
+    const record: SurrealOwnershipRecord = {
+      format: "notient-surreal-process",
+      version: 2,
+      state: "running",
+      instanceId,
+      dataDir: canonicalDataDir,
+      expectedExecutable,
+      pid: child.pid,
+      port,
+      proof,
+    };
+    if (proof.kind !== "unavailable" && !(await processMatchesOwnership(record))) {
+      throw new Error("startSurreal: could not establish child process ownership");
+    }
+    await publishSurrealOwnership(options.pidFile, instanceId, record);
+  } catch (error) {
+    await stopSpawnedChild(child);
+    await removeOwnedSurrealHandoff(options, instanceId);
+    throw error;
+  }
 
   // Wait for the child to either accept a TCP connection on the chosen port
   // or exit prematurely, racing against STARTUP_TIMEOUT_MS.
@@ -219,6 +364,7 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
   while (Date.now() < deadline) {
     const exited = exitedDuringStartup.value;
     if (exited !== null) {
+      await removeOwnedSurrealHandoff(options, instanceId);
       throw new Error(`startSurreal: child exited before binding (code=${exited.code ?? "null"})`);
     }
     if (await probePort(port)) {
@@ -232,39 +378,24 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
   void exitWatch;
 
   if (!ready) {
-    try {
-      child.kill();
-    } catch {
-      // ignore
-    }
-    try {
-      await child.exited;
-    } catch {
-      // ignore
-    }
+    await stopSpawnedChild(child);
+    await removeOwnedSurrealHandoff(options, instanceId);
     throw new Error("startSurreal: timed out waiting for bound port");
   }
 
-  await writeFile(options.portFile, `${port}\n`);
-  await writeFile(options.pidFile, `${child.pid}\n`);
+  try {
+    await writeFile(options.portFile, `${port}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (error) {
+    await stopSpawnedChild(child);
+    await removeOwnedSurrealHandoff(options, instanceId);
+    throw error;
+  }
 
   let stopping = false;
-  const restartTimestamps: number[] = [];
 
   void child.exited.then((code) => {
-    if (stopping) {
-      return;
-    }
-    const now = Date.now();
-    restartTimestamps.push(now);
-    while (restartTimestamps.length > 0 && now - restartTimestamps[0] > RESTART_BUDGET.windowMs) {
-      restartTimestamps.shift();
-    }
+    if (stopping) return;
     options.onUnexpectedExit?.(code ?? null);
-    // Phase 1: notification only; respawn is deferred to a later phase.
-    if (restartTimestamps.length > RESTART_BUDGET.maxRestarts) {
-      return;
-    }
   });
 
   const stop = async (): Promise<void> => {
@@ -294,8 +425,7 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
       await child.exited;
     }
 
-    await unlink(options.portFile).catch(() => {});
-    await unlink(options.pidFile).catch(() => {});
+    await removeOwnedSurrealHandoff(options, instanceId);
   };
 
   return {
@@ -306,23 +436,55 @@ export async function startSurreal(options: SurrealServerOptions): Promise<Surre
   };
 }
 
-export async function stopStaleSurrealProcess(
-  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
-): Promise<void> {
-  const pid = await readPositiveInt(options.pidFile);
-  if (pid !== null && processIsAlive(pid)) {
-    await terminateProcess(pid);
+function assertSurrealRuntimeOptions(options: SurrealServerOptions): void {
+  const logLevels = new Set(["trace", "debug", "info", "warn", "error", "none"]);
+  if (!logLevels.has(options.logLevel)) {
+    throw new Error("startSurreal: logLevel must be a supported SurrealDB log level");
   }
-  await unlink(options.portFile).catch(() => {});
-  await unlink(options.pidFile).catch(() => {});
+  if (
+    !Number.isInteger(options.hnswCacheMib) ||
+    options.hnswCacheMib < 1 ||
+    options.hnswCacheMib > 1_048_576
+  ) {
+    throw new Error("startSurreal: hnswCacheMib must be an integer between 1 and 1048576");
+  }
 }
 
-async function readPositiveInt(path: string): Promise<number | null> {
-  const raw = await readFile(path, "utf8").catch(() => null);
-  if (raw === null) return null;
-  const value = Number(raw.trim());
-  if (!Number.isInteger(value) || value <= 0) return null;
-  return value;
+export async function stopStaleSurrealProcess(
+  options: Pick<SurrealServerOptions, "dataDir" | "pidFile" | "portFile">,
+): Promise<void> {
+  const ownership = await readSurrealOwnership(options.pidFile);
+  if (ownership === null) {
+    await unlink(options.portFile).catch(() => {});
+    return;
+  }
+  if (ownership.kind === "invalid") {
+    throw new Error(
+      `startSurreal: refusing to trust invalid ownership record at ${options.pidFile}: ${ownership.reason}`,
+    );
+  }
+
+  const canonicalDataDir = await realpath(options.dataDir);
+  if (ownership.record.dataDir !== canonicalDataDir) {
+    throw new Error("startSurreal: Surreal ownership record belongs to a different data directory");
+  }
+  if (ownership.record.state === "starting") {
+    await recoverStartingOwnership(options, ownership.record);
+    return;
+  }
+
+  const record = ownership.record;
+  if (!processIsAlive(record.pid)) {
+    await removeOwnedSurrealHandoff(options, record.instanceId);
+    return;
+  }
+  if (!(await processMatchesOwnership(record))) {
+    throw new Error(
+      "startSurreal: recorded pid is alive but is not provably this vault's SurrealDB child; refusing to signal it",
+    );
+  }
+  await terminateOwnedProcess(record);
+  await removeOwnedSurrealHandoff(options, record.instanceId);
 }
 
 function processIsAlive(pid: number): boolean {
@@ -334,26 +496,545 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function terminateProcess(pid: number): Promise<void> {
+async function terminateOwnedProcess(record: SurrealOwnershipRecord): Promise<void> {
+  if (!(await processMatchesOwnership(record))) return;
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(record.pid, "SIGTERM");
   } catch {
     return;
   }
-  if (await waitForProcessExit(pid, STOP_TIMEOUT_MS)) return;
+  if (await waitForOwnedProcessExit(record, STOP_TIMEOUT_MS)) return;
+  if (!(await processMatchesOwnership(record))) return;
   try {
-    process.kill(pid, "SIGKILL");
+    process.kill(record.pid, "SIGKILL");
   } catch {
     return;
   }
-  await waitForProcessExit(pid, STOP_TIMEOUT_MS);
+  await waitForOwnedProcessExit(record, STOP_TIMEOUT_MS);
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+async function waitForOwnedProcessExit(
+  record: SurrealOwnershipRecord,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!processIsAlive(pid)) return true;
+    if (!processIsAlive(record.pid) || !(await processMatchesOwnership(record))) return true;
     await new Promise((resolve) => setTimeout(resolve, STALE_PROCESS_POLL_MS));
   }
-  return !processIsAlive(pid);
+  return !processIsAlive(record.pid) || !(await processMatchesOwnership(record));
+}
+
+async function stopSpawnedChild(child: Bun.Subprocess): Promise<void> {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    return;
+  }
+  const timeout = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The child already exited.
+    }
+  }, STOP_TIMEOUT_MS);
+  try {
+    await child.exited;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function processMatchesOwnership(record: SurrealOwnershipRecord): Promise<boolean> {
+  if (record.proof.kind === "linux-procfs" && process.platform === "linux") {
+    return processMatchesLinuxOwnership(record, record.proof);
+  }
+  if (record.proof.kind === "darwin-process" && process.platform === "darwin") {
+    return processMatchesDarwinOwnership(record, record.proof);
+  }
+  return false;
+}
+
+async function processMatchesLinuxOwnership(
+  record: SurrealOwnershipRecord,
+  proof: Extract<SurrealProcessProof, { kind: "linux-procfs" }>,
+): Promise<boolean> {
+  const identity = await readLinuxProcessIdentity(record.pid);
+  if (identity === null) return false;
+  return (
+    linuxIdentityMatchesProof(identity, proof) &&
+    identity.executable === record.expectedExecutable &&
+    identity.argv.includes("start") &&
+    identity.argv.includes(`rocksdb://${record.dataDir}`) &&
+    identity.environment.includes(`NOTIENT_SURREAL_INSTANCE_ID=${record.instanceId}`)
+  );
+}
+
+async function processMatchesDarwinOwnership(
+  record: SurrealOwnershipRecord,
+  proof: Extract<SurrealProcessProof, { kind: "darwin-process" }>,
+): Promise<boolean> {
+  const identity = await readDarwinProcessIdentity(record.pid);
+  if (identity === null) return false;
+  return (
+    darwinIdentityMatchesProof(identity, proof) &&
+    identity.executable === record.expectedExecutable &&
+    commandContainsToken(identity.commandWithEnvironment, "start") &&
+    identity.commandWithEnvironment.includes(`rocksdb://${record.dataDir}`) &&
+    identity.commandWithEnvironment.includes(`NOTIENT_SURREAL_INSTANCE_ID=${record.instanceId}`)
+  );
+}
+
+/**
+ * A fresh child is owned through its Bun subprocess handle on every platform.
+ * Linux records procfs generation evidence for later stale-PID recovery.
+ * macOS uses its stock ps/sysctl/lsof process surfaces when all are available;
+ * otherwise it records that proof is unavailable. Fresh children remain
+ * owned through their Bun subprocess handle, but unavailable proof can never
+ * authorize signaling a stale live pid.
+ */
+export async function captureFreshSurrealProof(
+  pid: number,
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<SurrealProcessProof> {
+  if (platform === "linux") {
+    const deadline = Date.now() + FRESH_PROCESS_PROOF_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const identity = await readLinuxProcessIdentity(pid);
+      if (identity?.executable === executable) {
+        return {
+          kind: "linux-procfs",
+          bootId: identity.bootId,
+          processStartTicks: identity.processStartTicks,
+          executable: identity.executable,
+        };
+      }
+      if (!processIsAlive(pid)) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("startSurreal: Linux procfs could not capture expected process generation");
+  }
+  if (platform === "darwin" && process.platform === "darwin") {
+    const identity = await readDarwinProcessIdentity(pid);
+    if (identity !== null) return darwinProof(identity);
+  }
+  return { kind: "unavailable", executable };
+}
+
+async function readLinuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity | null> {
+  try {
+    const [bootId, stat, executable, argv, environment] = await Promise.all([
+      readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+      readFile(`/proc/${pid}/stat`, "utf8"),
+      readlink(`/proc/${pid}/exe`),
+      readNullSeparatedFile(`/proc/${pid}/cmdline`),
+      readNullSeparatedFile(`/proc/${pid}/environ`),
+    ]);
+    const commandEnd = stat.lastIndexOf(")");
+    if (commandEnd < 0) return null;
+    const statFields = stat
+      .slice(commandEnd + 1)
+      .trim()
+      .split(/\s+/);
+    const processStartTicks = statFields[19];
+    if (processStartTicks === undefined || !/^\d+$/.test(processStartTicks)) return null;
+    return {
+      bootId: bootId.trim(),
+      processStartTicks,
+      executable,
+      argv,
+      environment,
+    };
+  } catch {
+    // If the platform cannot prove identity, stale cleanup must fail closed.
+    return null;
+  }
+}
+
+function linuxIdentityMatchesProof(
+  identity: LinuxProcessIdentity,
+  proof: Extract<SurrealProcessProof, { kind: "linux-procfs" }>,
+): boolean {
+  return (
+    identity.bootId === proof.bootId &&
+    identity.processStartTicks === proof.processStartTicks &&
+    identity.executable === proof.executable
+  );
+}
+
+async function readDarwinProcessIdentity(pid: number): Promise<DarwinProcessIdentity | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    const [bootTime, processStartedAt, executableOutput, commandWithEnvironment] =
+      await Promise.all([
+        runDarwinCommand(["/usr/sbin/sysctl", "-n", "kern.boottime"]),
+        runDarwinCommand(["/bin/ps", "-p", String(pid), "-o", "lstart="]),
+        runDarwinCommand(["/usr/sbin/lsof", "-a", "-p", String(pid), "-d", "txt", "-Fn"]),
+        runDarwinCommand(["/bin/ps", "-ww", "-E", "-p", String(pid), "-o", "command="]),
+      ]);
+    const executable = parseDarwinExecutable(executableOutput);
+    if (
+      bootTime.length === 0 ||
+      processStartedAt.length === 0 ||
+      executable === null ||
+      commandWithEnvironment.length === 0
+    ) {
+      return null;
+    }
+    return { bootTime, processStartedAt, executable, commandWithEnvironment };
+  } catch {
+    return null;
+  }
+}
+
+async function runDarwinCommand(argv: string[]): Promise<string> {
+  const child = Bun.spawn(argv, {
+    env: {
+      LANG: "C",
+      LC_ALL: "C",
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, , exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) throw new Error(`Darwin process probe exited ${exitCode}`);
+  return stdout.trim();
+}
+
+function parseDarwinExecutable(output: string): string | null {
+  const paths = output
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("n") && line.length > 1)
+    .map((line) => line.slice(1));
+  return paths.length === 1 ? paths[0] : null;
+}
+
+function darwinProof(identity: DarwinProcessIdentity): SurrealProcessProof {
+  return {
+    kind: "darwin-process",
+    bootTime: identity.bootTime,
+    processStartedAt: identity.processStartedAt,
+    executable: identity.executable,
+  };
+}
+
+function darwinIdentityMatchesProof(
+  identity: DarwinProcessIdentity,
+  proof: Extract<SurrealProcessProof, { kind: "darwin-process" }>,
+): boolean {
+  return (
+    identity.bootTime === proof.bootTime &&
+    identity.processStartedAt === proof.processStartedAt &&
+    identity.executable === proof.executable
+  );
+}
+
+function commandContainsToken(command: string, token: string): boolean {
+  return command.split(/\s+/).includes(token);
+}
+
+async function recoverStartingOwnership(
+  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
+  intent: SurrealOwnershipIntent,
+): Promise<void> {
+  if (intent.ownerProof.kind === "linux-procfs" && process.platform === "linux") {
+    await recoverLinuxStartingOwnership(options, intent, intent.ownerProof);
+    return;
+  }
+  if (intent.ownerProof.kind === "darwin-process" && process.platform === "darwin") {
+    await recoverDarwinStartingOwnership(options, intent, intent.ownerProof);
+    return;
+  }
+  throw new Error(
+    "startSurreal: incomplete ownership record cannot be proved safe on this platform; refusing automatic recovery",
+  );
+}
+
+async function recoverLinuxStartingOwnership(
+  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
+  intent: SurrealOwnershipIntent,
+  ownerProof: Extract<SurrealProcessProof, { kind: "linux-procfs" }>,
+): Promise<void> {
+  const ownerIdentity = await readLinuxProcessIdentity(intent.ownerPid);
+  if (ownerIdentity !== null && linuxIdentityMatchesProof(ownerIdentity, ownerProof)) {
+    throw new Error("startSurreal: another live Notient process still owns SurrealDB startup");
+  }
+
+  const children = await findLinuxChildrenForIntent(intent);
+  if (children.length > 1) {
+    throw new Error(
+      "startSurreal: multiple processes match an incomplete ownership generation; refusing to signal any",
+    );
+  }
+  const child = children[0];
+  if (child !== undefined) await terminateOwnedProcess(child);
+  await removeOwnedSurrealHandoff(options, intent.instanceId);
+}
+
+async function recoverDarwinStartingOwnership(
+  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
+  intent: SurrealOwnershipIntent,
+  ownerProof: Extract<SurrealProcessProof, { kind: "darwin-process" }>,
+): Promise<void> {
+  const ownerIdentity = await readDarwinProcessIdentity(intent.ownerPid);
+  if (ownerIdentity !== null && darwinIdentityMatchesProof(ownerIdentity, ownerProof)) {
+    throw new Error("startSurreal: another live Notient process still owns SurrealDB startup");
+  }
+
+  const children = await findDarwinChildrenForIntent(intent);
+  if (children.length > 1) {
+    throw new Error(
+      "startSurreal: multiple processes match an incomplete ownership generation; refusing to signal any",
+    );
+  }
+  const child = children[0];
+  if (child !== undefined) await terminateOwnedProcess(child);
+  await removeOwnedSurrealHandoff(options, intent.instanceId);
+}
+
+async function findLinuxChildrenForIntent(
+  intent: SurrealOwnershipIntent,
+): Promise<SurrealOwnershipRecord[]> {
+  const entries = await readdir("/proc", { withFileTypes: true });
+  const matches: SurrealOwnershipRecord[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const pid = Number(entry.name);
+    const identity = await readLinuxProcessIdentity(pid);
+    if (identity === null) continue;
+    if (identity.executable !== intent.expectedExecutable) continue;
+    if (!identity.argv.includes("start")) continue;
+    if (!identity.argv.includes(`rocksdb://${intent.dataDir}`)) continue;
+    if (!identity.environment.includes(`NOTIENT_SURREAL_INSTANCE_ID=${intent.instanceId}`)) {
+      continue;
+    }
+    matches.push({
+      format: "notient-surreal-process",
+      version: 2,
+      state: "running",
+      instanceId: intent.instanceId,
+      dataDir: intent.dataDir,
+      expectedExecutable: intent.expectedExecutable,
+      pid,
+      port: intent.port,
+      proof: {
+        kind: "linux-procfs",
+        bootId: identity.bootId,
+        processStartTicks: identity.processStartTicks,
+        executable: identity.executable,
+      },
+    });
+  }
+  return matches;
+}
+
+async function findDarwinChildrenForIntent(
+  intent: SurrealOwnershipIntent,
+): Promise<SurrealOwnershipRecord[]> {
+  const processList = await runDarwinCommand(["/bin/ps", "-A", "-ww", "-o", "pid=,command="]);
+  const candidates = parseDarwinProcessList(processList).filter((candidate) => {
+    return (
+      commandContainsToken(candidate.command, "start") &&
+      candidate.command.includes(`rocksdb://${intent.dataDir}`)
+    );
+  });
+  const matches: SurrealOwnershipRecord[] = [];
+  for (const candidate of candidates) {
+    const identity = await readDarwinProcessIdentity(candidate.pid);
+    if (identity === null || identity.executable !== intent.expectedExecutable) continue;
+    if (
+      !identity.commandWithEnvironment.includes(`NOTIENT_SURREAL_INSTANCE_ID=${intent.instanceId}`)
+    ) {
+      continue;
+    }
+    matches.push({
+      format: "notient-surreal-process",
+      version: 2,
+      state: "running",
+      instanceId: intent.instanceId,
+      dataDir: intent.dataDir,
+      expectedExecutable: intent.expectedExecutable,
+      pid: candidate.pid,
+      port: intent.port,
+      proof: darwinProof(identity),
+    });
+  }
+  return matches;
+}
+
+function parseDarwinProcessList(output: string): Array<{ pid: number; command: string }> {
+  const processes: Array<{ pid: number; command: string }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/);
+    if (match === null) continue;
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    processes.push({ pid, command: match[2] });
+  }
+  return processes;
+}
+
+async function readNullSeparatedFile(path: string): Promise<string[]> {
+  const raw = await readFile(path);
+  return raw
+    .toString("utf8")
+    .split("\0")
+    .filter((entry) => entry.length > 0);
+}
+
+async function claimSurrealOwnership(path: string, record: SurrealOwnershipIntent): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(record)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+}
+
+async function publishSurrealOwnership(
+  path: string,
+  instanceId: string,
+  record: SurrealOwnershipRecord,
+): Promise<void> {
+  const temporaryPath = `${path}.${instanceId}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(record)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const current = await readSurrealOwnership(path);
+    if (
+      current === null ||
+      current.kind !== "record" ||
+      current.record.instanceId !== instanceId ||
+      current.record.state !== "starting"
+    ) {
+      throw new Error("startSurreal: ownership record changed while the child was starting");
+    }
+    await rename(temporaryPath, path);
+  } finally {
+    await unlink(temporaryPath).catch(() => {});
+  }
+}
+
+type SurrealOwnershipSnapshot =
+  | { kind: "record"; record: SurrealOwnership }
+  | { kind: "invalid"; reason: string };
+
+async function readSurrealOwnership(path: string): Promise<SurrealOwnershipSnapshot | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return { kind: "invalid", reason: "record is unreadable" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "invalid", reason: "record is not valid JSON" };
+  }
+  const reason = validateSurrealOwnership(parsed);
+  if (reason !== null) return { kind: "invalid", reason };
+  return { kind: "record", record: parsed as SurrealOwnership };
+}
+
+function validateSurrealOwnership(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "record is not an object";
+  }
+  const candidate = value as Record<string, unknown>;
+  const baseReason = validateSurrealOwnershipBase(candidate);
+  if (baseReason !== null) return baseReason;
+  if (candidate.state === "starting") return validateStartingOwnership(candidate);
+  if (candidate.state === "running") return validateRunningOwnership(candidate);
+  return "state must be starting or running";
+}
+
+function validateSurrealOwnershipBase(candidate: Record<string, unknown>): string | null {
+  if (candidate.format !== "notient-surreal-process" || candidate.version !== 2) {
+    return "record format is unsupported";
+  }
+  if (typeof candidate.instanceId !== "string" || candidate.instanceId.length === 0) {
+    return "instanceId must be non-empty";
+  }
+  if (typeof candidate.dataDir !== "string" || candidate.dataDir.length === 0) {
+    return "dataDir must be non-empty";
+  }
+  if (
+    typeof candidate.expectedExecutable !== "string" ||
+    candidate.expectedExecutable.length === 0
+  ) {
+    return "expectedExecutable must be non-empty";
+  }
+  const portReason = validatePort(candidate.port);
+  return portReason;
+}
+
+function validateStartingOwnership(candidate: Record<string, unknown>): string | null {
+  if (!Number.isSafeInteger(candidate.ownerPid) || (candidate.ownerPid as number) <= 0) {
+    return "ownerPid must be a positive integer";
+  }
+  const ownerProofReason = validateProcessProof(candidate.ownerProof);
+  return ownerProofReason === null ? null : `ownerProof ${ownerProofReason}`;
+}
+
+function validateRunningOwnership(candidate: Record<string, unknown>): string | null {
+  if (!Number.isSafeInteger(candidate.pid) || (candidate.pid as number) <= 0) {
+    return "pid must be a positive integer";
+  }
+  const proofReason = validateProcessProof(candidate.proof);
+  return proofReason === null ? null : `proof ${proofReason}`;
+}
+
+function validatePort(value: unknown): string | null {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 65_535) {
+    return "port must be an integer between 1 and 65535";
+  }
+  return null;
+}
+
+function validateProcessProof(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "must be an object";
+  }
+  const proof = value as Record<string, unknown>;
+  if (proof.kind === "unavailable") {
+    return typeof proof.executable === "string" && proof.executable.length > 0
+      ? null
+      : "executable must be non-empty";
+  }
+  const fields =
+    proof.kind === "linux-procfs"
+      ? (["bootId", "processStartTicks", "executable"] as const)
+      : proof.kind === "darwin-process"
+        ? (["bootTime", "processStartedAt", "executable"] as const)
+        : null;
+  if (fields === null) return "kind is unsupported";
+  for (const field of fields) {
+    if (typeof proof[field] !== "string" || proof[field].length === 0) {
+      return `${field} must be non-empty`;
+    }
+  }
+  return null;
+}
+
+async function removeOwnedSurrealHandoff(
+  options: Pick<SurrealServerOptions, "pidFile" | "portFile">,
+  instanceId: string,
+): Promise<void> {
+  const current = await readSurrealOwnership(options.pidFile);
+  if (current === null || current.kind !== "record" || current.record.instanceId !== instanceId) {
+    return;
+  }
+  await unlink(options.portFile).catch(() => {});
+  await unlink(options.pidFile).catch(() => {});
 }

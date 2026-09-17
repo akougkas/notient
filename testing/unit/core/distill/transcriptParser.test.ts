@@ -113,7 +113,7 @@ describe("parseTranscript jsonl", () => {
     expect(messages[0].content).toBe("Block one.\n\nBlock two.");
   });
 
-  test("falls back to generic role/content shape", () => {
+  test("parses the canonical generic role/content shape", () => {
     const content = [
       JSON.stringify({ role: "user", content: "hello" }),
       JSON.stringify({ role: "assistant", content: "hi" }),
@@ -138,16 +138,26 @@ describe("parseTranscript json", () => {
     expect(messages[0].content).toBe("u1");
   });
 
-  test("parses {transcript: [...]} alias", () => {
+  test("rejects the retired {transcript: [...]} root alias", () => {
     const content = JSON.stringify({
       transcript: [
         { role: "user", content: "u1" },
         { role: "assistant", content: "a1" },
       ],
     });
-    const messages = parseTranscript(content, "json");
-    expect(messages).toHaveLength(2);
-    expect(messages[1].role).toBe("assistant");
+    expect(() => parseTranscript(content, "json")).toThrow("expected 'messages' array at root");
+  });
+
+  test("drops entries whose role is outside the canonical role set", () => {
+    const content = JSON.stringify({
+      messages: [
+        { role: "human", content: "old alias" },
+        { role: "user", content: "canonical" },
+      ],
+    });
+    expect(parseTranscript(content, "json").map((message) => message.content)).toEqual([
+      "canonical",
+    ]);
   });
 
   test("throws clear error on unknown root shape", () => {

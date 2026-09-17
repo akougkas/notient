@@ -1,11 +1,12 @@
 /**
- * Phase 5 Task 9 links sync CLI smoke harness.
+ * Links sync CLI/daemon integration harness.
  *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/cli/commands/linksSync.test.ts`.
+ * Skipped by default. Run with
+ * `NOTIENT_SMOKE=1 bun test testing/integration/cli/commands/linksSync.test.ts`.
  *
- * Seeds a state-2 row (`approved = true AND applied = false`), invokes
- * `runLinksSyncCommand`, and asserts the row reaches state 3 via the
- * inline ApprovalService.
+ * Crashes after a durable state-2 intent (`approved = true AND applied = false`), invokes
+ * `runLinksSyncCommand`, and asserts the daemon's canonical approval service
+ * advances the row to state 3.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -13,13 +14,18 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { FsVault } from "../../../../src/adapters/fsVault";
 import { runLinksSyncCommand } from "../../../../src/cli/commands/linksSync";
 import type { StructuredEvent } from "../../../../src/cli/output";
 import { makeEmitter } from "../../../../src/cli/output";
+import { ApprovalService } from "../../../../src/core/approvals/approvalService";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../src/core/db/surreal";
-import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
+import { EventBus } from "../../../../src/core/events/eventBus";
+import { sha256Hex } from "../../../../src/core/utils/sha256";
+import { makeLinksSyncHandler } from "../../../../src/daemon/handlers/links";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { type TestRpcDaemon, startTestRpcDaemon } from "../rpcTestDaemon";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -30,6 +36,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
   let vaultPath: string;
   let handle: SurrealServerHandle;
   let connection: SurrealConnection;
+  let daemon: TestRpcDaemon;
   const secret = "phase5-task9-linkssync-secret";
 
   beforeAll(async () => {
@@ -48,6 +55,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
       portFile: path.join(tempDir, "surreal.port"),
       pidFile: path.join(tempDir, "surreal.pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -56,16 +64,26 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
 
-    const stateDir = vaultStateDir(vaultPath);
-    await mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const port = new URL(handle.url).port;
-    await writeFile(vaultPortPath(vaultPath), port, "utf8");
-    await writeFile(vaultSecretPath(vaultPath), secret, { mode: 0o600 });
-  });
+    const approvalService = new ApprovalService({
+      db: connection.db,
+      bus: new EventBus(),
+      vault: new FsVault(vaultPath),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
+    });
+    daemon = await startTestRpcDaemon(vaultPath, [
+      {
+        method: "links.sync",
+        handler: makeLinksSyncHandler({ approvalService }),
+        kind: "admin",
+      },
+    ]);
+  }, 30_000);
 
   afterAll(async () => {
+    if (daemon !== undefined) await daemon.close().catch(() => {});
     if (connection !== undefined) await connection.close().catch(() => {});
     if (handle !== undefined) await handle.stop().catch(() => {});
     if (originalHome === undefined) {
@@ -76,10 +94,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
-    const tables = ["supports", "history", "daemon_write", "note"];
+    const tables = ["supports", "approval_intent", "history", "daemon_write", "note"];
     for (const table of tables) {
       await connection.db.query(`DELETE ${table};`).collect();
     }
@@ -99,15 +117,37 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
       sha: "sha-beta",
       wordCount: 3,
     });
-    // Seed an edge in state 2: approved = true, applied = false.
+    // Stage a real pending proposal, then fail the first filesystem attempt.
+    // The atomic claim leaves both state 2 and its exact durable byte intent.
     const [createdRows] = await connection.db
       .query<[Array<{ id: RecordId }>]>(
-        "RELATE $from->supports->$to SET source = 'linker', class = 'INFERRED', confidence = 0.8, agent = 'linker', approved = true, applied = false RETURN id;",
+        "RELATE $from->supports->$to SET source = 'linker', class = 'INFERRED', confidence = 0.8, agent = 'linker', approved = false RETURN id;",
         { from: alpha, to: beta },
       )
       .collect<[Array<{ id: RecordId }>]>();
     const created = createdRows[0];
     expect(created).toBeDefined();
+    if (created === undefined) throw new Error("missing supports proposal seed");
+    const durableVault = new FsVault(vaultPath);
+    const crashingApproval = new ApprovalService({
+      db: connection.db,
+      bus: new EventBus(),
+      vault: {
+        read: (notePath) => durableVault.read(notePath),
+        writeIfUnchanged: async () => {
+          throw new Error("synthetic crash before vault rename");
+        },
+      },
+      hash: sha256Hex,
+      pruneHistory: async () => {},
+    });
+    await expect(
+      crashingApproval.approveEdge({
+        id: created.id,
+        table: "supports",
+        approvedBy: "human",
+      }),
+    ).rejects.toThrow("synthetic crash");
 
     const events: StructuredEvent[] = [];
     const emitter = makeEmitter({
@@ -116,7 +156,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
     });
     const exitCode = await runLinksSyncCommand({
       vaultPath,
-      vaultRoot: vaultPath,
       emitter,
     });
     expect(exitCode).toBe(0);
@@ -125,13 +164,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
     expect(summary?.failed).toBe(0);
 
     const [edgeRows] = await connection.db
-      .query<[Array<{ approved: boolean; applied: boolean }>]>(
-        "SELECT approved, applied FROM supports WHERE id = $id;",
-        { id: created?.id },
+      .query<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>(
+        "SELECT approved, applied, approved_by FROM supports WHERE id = $id;",
+        { id: created.id },
       )
-      .collect<[Array<{ approved: boolean; applied: boolean }>]>();
+      .collect<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>();
     expect(edgeRows[0]?.approved).toBe(true);
     expect(edgeRows[0]?.applied).toBe(true);
+    expect(edgeRows[0]?.approved_by).toBe("human");
   });
 
   test("[smoke] sync with no pending rows returns replayed=0", async () => {
@@ -142,7 +182,6 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] links sync CLI", () => {
     });
     const exitCode = await runLinksSyncCommand({
       vaultPath,
-      vaultRoot: vaultPath,
       emitter,
     });
     expect(exitCode).toBe(0);

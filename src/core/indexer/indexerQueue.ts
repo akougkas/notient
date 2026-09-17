@@ -1,12 +1,11 @@
-import type { EventBus } from "../events/eventBus";
+import { type EventBus, assertEventBus } from "../events/eventBus";
+import { IndexReadiness } from "./indexReadiness";
 import { PriorityQueue } from "./priorityQueue";
 
 /**
- * Per-note runtime context the queue forwards to the `indexNote` callback
- * when it dequeues. Phase 5 Task 11 introduces `tierFilter` so the
- * `awaken --tier` and `reindex --tier` flags can scope which tiers run
- * for a given path. Other callers (the watcher, ad-hoc enqueues) omit
- * the filter and the indexer runs every tier.
+ * Per-note runtime context the queue forwards to `indexNote` when it dequeues.
+ * `tierFilter` scopes `awaken --tier` and `reindex --tier`; callers that omit
+ * it run every tier.
  */
 export interface IndexNoteContext {
   tierFilter?: ReadonlyArray<number>;
@@ -15,17 +14,17 @@ export interface IndexNoteContext {
 export type IndexNoteFn = (path: string, context: IndexNoteContext) => Promise<unknown>;
 
 export interface IndexerQueueOptions {
+  readiness?: IndexReadiness;
   indexNote: IndexNoteFn;
-  debounceMs?: number;
+  debounceMs: number;
   bus: EventBus;
   /**
    * Predicate that returns `true` when a path must be skipped by the indexer.
    * The producer (main.ts vault.on("modify")) is the primary defence, but the
-   * queue keeps a defensive copy so Notient-owned folders (Notient/conversations,
-   * Notient/proposals, Notient/searches) can never be indexed even if a future
-   * caller forgets to pre-filter.
+   * queue keeps a defensive copy so Notient-owned conversation and proposal
+   * folders can never be indexed even if a future caller forgets to pre-filter.
    */
-  isExcluded?: (path: string) => boolean;
+  isExcluded: (path: string) => boolean;
 }
 
 const DEFAULT_PRIORITY = 2;
@@ -41,6 +40,7 @@ interface ReadyEntry {
 }
 
 export class IndexerQueue {
+  readonly readiness: IndexReadiness;
   private readonly indexNote: IndexNoteFn;
   private readonly debounceMs: number;
   private readonly bus: EventBus;
@@ -51,13 +51,23 @@ export class IndexerQueue {
   private readonly readySet = new Set<string>();
   private enqueueCounter = 0;
   private worker: Promise<void> | null = null;
+  private accepting = true;
+  private maintenancePaused = false;
   private disposed = false;
 
   constructor(opts: IndexerQueueOptions) {
+    if (!Number.isInteger(opts.debounceMs) || opts.debounceMs < 0 || opts.debounceMs > 600_000) {
+      throw new Error("IndexerQueue debounceMs must be an integer between 0 and 600000");
+    }
+    if (typeof opts.isExcluded !== "function") {
+      throw new Error("IndexerQueue isExcluded must be a function");
+    }
+    assertEventBus(opts.bus, "IndexerQueue");
+    this.readiness = opts.readiness ?? new IndexReadiness(opts.bus, opts.isExcluded);
     this.indexNote = opts.indexNote;
-    this.debounceMs = opts.debounceMs ?? 500;
+    this.debounceMs = opts.debounceMs;
     this.bus = opts.bus;
-    this.isExcluded = opts.isExcluded ?? (() => false);
+    this.isExcluded = opts.isExcluded;
   }
 
   enqueue(
@@ -65,7 +75,7 @@ export class IndexerQueue {
     priority: number = DEFAULT_PRIORITY,
     tierFilter?: ReadonlyArray<number>,
   ): void {
-    if (this.disposed) return;
+    if (!this.accepting || this.maintenancePaused || this.disposed) return;
     if (this.isExcluded(path)) return;
     const existing = this.pending.get(path);
     if (existing) clearTimeout(existing.timer);
@@ -89,8 +99,31 @@ export class IndexerQueue {
     this.pending.set(path, next);
   }
 
+  /**
+   * Close queue admission without discarding work already accepted. Shutdown
+   * calls this after stopping external producers, then drains and disposes in
+   * that order.
+   */
+  stopAccepting(): void {
+    this.accepting = false;
+  }
+
+  /** Temporarily reject new work while preserving and draining accepted work. */
+  pause(): void {
+    if (this.disposed) return;
+    this.maintenancePaused = true;
+  }
+
+  /** Reopen maintenance admission unless permanent shutdown already began. */
+  resume(): void {
+    if (!this.accepting || this.disposed) return;
+    this.maintenancePaused = false;
+  }
+
   dispose(): void {
+    this.stopAccepting();
     this.disposed = true;
+    this.readiness.dispose();
     for (const entry of this.pending.values()) clearTimeout(entry.timer);
     this.pending.clear();
     this.readyHeap.remove(() => true);
@@ -99,7 +132,7 @@ export class IndexerQueue {
   }
 
   async drain(): Promise<void> {
-    while (!this.disposed && (this.pending.size > 0 || this.readyHeap.size() > 0 || this.worker)) {
+    while (this.pending.size > 0 || this.readyHeap.size() > 0 || this.worker) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }

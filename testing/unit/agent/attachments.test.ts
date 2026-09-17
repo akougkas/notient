@@ -4,6 +4,7 @@ import { extractMentions, resolveAttachments } from "../../../src/agent/attachme
 
 function makeVault(files: Record<string, string>): VaultAdapter {
   return {
+    isIndexablePath: () => true,
     listMarkdown: async () =>
       Object.keys(files)
         .filter((path) => path.endsWith(".md"))
@@ -13,15 +14,18 @@ function makeVault(files: Record<string, string>): VaultAdapter {
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
       return content;
     },
-    readNote: async (path: string) => {
+    readBounded: async (path: string, maxBytes: number) => {
       const content = files[path];
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      if (Buffer.byteLength(content) > maxBytes) throw new Error("byte limit exceeded");
       return content;
     },
     write: async () => {},
-    writeNote: async () => {},
+    createIfAbsent: async () => true,
+    writeIfUnchanged: async () => true,
     updateFrontmatter: async () => {},
     remove: async () => {},
+    removeIfUnchanged: async () => true,
     exists: async (path) => path in files,
     createFolder: async () => {},
     list: async () => ({ files: Object.keys(files), folders: [] }),
@@ -100,7 +104,7 @@ describe("resolveAttachments", () => {
         message: "describe @img/cat.png",
         maxTokens: 1000,
         resolveImage: async () => {
-          throw new Error("VISION_UNAVAILABLE: configure chat.vision");
+          throw new Error("VISION_UNAVAILABLE: load a multimodal primary model");
         },
       });
     } catch (error) {
@@ -119,5 +123,34 @@ describe("resolveAttachments", () => {
       resolveImage: async () => "",
     });
     expect(result.pinnedContext[0]).toContain("not found");
+  });
+
+  test("refuses Notient-owned artifacts without probing the vault", async () => {
+    let touches = 0;
+    const vault = makeVault({
+      "Notient/conversations/private.md": "private transcript",
+      "Notient/proposals/private.md": "private proposal",
+    });
+    vault.exists = async () => {
+      touches++;
+      return true;
+    };
+    vault.read = async () => {
+      touches++;
+      return "private";
+    };
+
+    const result = await resolveAttachments({
+      vault,
+      message: "@Notient/conversations/private.md @notient/PROPOSALS/private.md",
+      maxTokens: 1000,
+      resolveImage: async () => "",
+    });
+
+    expect(result.pinnedContext).toEqual([
+      "[attachment: Notient/conversations/private.md] (not accessible)",
+      "[attachment: notient/PROPOSALS/private.md] (not accessible)",
+    ]);
+    expect(touches).toBe(0);
   });
 });

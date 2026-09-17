@@ -1,3 +1,4 @@
+import { parseSessionGrantRecordId } from "../../core/services/sessionGrants";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import { connectClient } from "../client";
 import type { Emitter } from "../output";
@@ -12,7 +13,7 @@ export interface SessionCommandOptions {
   tools?: string[];
   maxWrites?: number;
   ttlMinutes?: number;
-  sessionId?: number;
+  sessionId?: string;
   includeExpired?: boolean;
   emitter: Emitter;
   clientIdentity?: string;
@@ -99,8 +100,8 @@ function buildGrantParams(options: SessionCommandOptions): Record<string, unknow
 }
 
 function buildRevokeParams(options: SessionCommandOptions): Record<string, unknown> {
-  if (typeof options.sessionId !== "number" || options.sessionId <= 0) {
-    throw new Error("INVALID_PARAMS: session revoke requires a positive integer sessionId");
+  if (options.sessionId === undefined) {
+    throw new Error("INVALID_PARAMS: session revoke requires an agent_session record id");
   }
   return { sessionId: options.sessionId };
 }
@@ -176,10 +177,10 @@ export function parseSessionPositiveInt(value: unknown, label: string): number {
     throw new Error(`INVALID_PARAMS: --${label} must be a positive integer`);
   }
   const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`INVALID_PARAMS: --${label} must be a positive integer`);
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 export function parseSessionOptionalPositiveInt(value: unknown, label: string): number | undefined {
@@ -187,13 +188,11 @@ export function parseSessionOptionalPositiveInt(value: unknown, label: string): 
   return parseSessionPositiveInt(value, label);
 }
 
-export function parseSessionId(value: unknown): number {
-  if (typeof value !== "string" && typeof value !== "number") {
-    throw new Error("INVALID_PARAMS: session revoke requires a positive integer sessionId");
+export function parseSessionId(value: unknown): string {
+  try {
+    return parseSessionGrantRecordId(value).toString();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`INVALID_PARAMS: ${message}`);
   }
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("INVALID_PARAMS: session revoke requires a positive integer sessionId");
-  }
-  return parsed;
 }

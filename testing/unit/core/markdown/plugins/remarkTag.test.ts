@@ -8,7 +8,7 @@ import remarkTag, { type TagRefNode } from "../../../../../src/core/markdown/plu
 function process(source: string): Root {
   const processor = unified().use(remarkParse).use(remarkTag);
   const tree = processor.parse(source) as Root;
-  return processor.runSync(tree) as Root;
+  return processor.runSync(tree, source) as Root;
 }
 
 function collectTags(tree: Root): TagRefNode[] {
@@ -50,9 +50,31 @@ describe("remarkTag", () => {
     expect(collectTags(tree)).toHaveLength(0);
   });
 
-  test("does not match inside headings", () => {
-    const tree = process("# Heading with #should-not-match\n");
-    expect(collectTags(tree)).toHaveLength(0);
+  test("matches tags in heading text, as Obsidian does", () => {
+    const tree = process("# Heading with #heading-tag\n");
+    expect(collectTags(tree).map((tag) => tag.path)).toEqual(["heading-tag"]);
+  });
+
+  test("accepts Unicode letters, marks and emoji sequences", () => {
+    const tree = process("#café #日本語 #📚reading #emoji✨ #family👨‍👩‍👧 and #cafe\u0301.\n");
+    expect(collectTags(tree).map((tag) => tag.path)).toEqual([
+      "café",
+      "日本語",
+      "📚reading",
+      "emoji✨",
+      "family👨‍👩‍👧",
+      "cafe\u0301",
+    ]);
+  });
+
+  test("ignores escaped hashes, numeric-only names and punctuation boundaries", () => {
+    const tree = process('\\#escaped #123 #y2k #end. word#no #a/b-c_d, #quoted"\n');
+    expect(collectTags(tree).map((tag) => tag.path)).toEqual(["y2k", "end", "a/b-c_d", "quoted"]);
+  });
+
+  test("an escaped hash contributes no tag while an unescaped repeat still counts once", () => {
+    const tree = process("\\#same then #same\n");
+    expect(collectTags(tree).map((tag) => tag.path)).toEqual(["same"]);
   });
 
   test("parses multiple tags in one paragraph", () => {

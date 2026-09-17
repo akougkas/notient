@@ -1,3 +1,4 @@
+import type { SearchCoverage } from "../../api/indexing";
 import type { ConnectivityTier, Maturity } from "../vitals/types";
 
 export type SearchMode = "quick" | "balanced" | "deep";
@@ -21,8 +22,6 @@ export interface SynthesisCard {
 
 export interface SearchFilters {
   maturity?: Maturity[];
-  agents?: string[];
-  minConfidence?: number;
   folders?: string[];
   fromDate?: number;
   toDate?: number;
@@ -49,6 +48,7 @@ export interface SearchHit {
 }
 
 export interface SearchResult {
+  coverage: SearchCoverage;
   query: string;
   mode: SearchMode;
   hits: SearchHit[];

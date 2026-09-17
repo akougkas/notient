@@ -1,22 +1,10 @@
-/**
- * Phase 4 Task 7 awaken_run DAL smoke harness.
- *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/core/awaken/`
- * or via `bun run test:smoke` (the latter scopes to `src/daemon/__smoke__`,
- * so prefer the directly-targeted invocation for this suite).
- *
- * Boots a real SurrealDB, applies the Phase 1 schema (which already
- * contains the `awaken_run` table), and exercises the create / lookup /
- * status-transition surface end-to-end. Includes a small live-query
- * smoke covering `subscribeToStatus`; Task 8 layers a worker-level smoke
- * on top of the same primitive.
- */
+/** Real-SurrealDB integrity coverage for the awaken run control plane. */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RecordId } from "surrealdb";
+import { DateTime, type RecordId } from "surrealdb";
 import {
   type AwakenStatus,
   createRun,
@@ -30,6 +18,10 @@ import { type SurrealConnection, connect } from "../../../../src/core/db/surreal
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+
+function makeRunPaths(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `note-${index}.md`);
+}
 
 async function clearAwakenRuns(connection: SurrealConnection): Promise<void> {
   await connection.db.query("DELETE awaken_run;").collect();
@@ -72,6 +64,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -80,8 +73,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -93,7 +86,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearAwakenRuns(connection);
@@ -103,7 +96,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: ["projects/**/*.md"],
-      total: 42,
+      paths: makeRunPaths(42),
     });
     expect(runId.toString().startsWith("awaken_run:")).toBe(true);
 
@@ -112,7 +105,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
         [
           Array<{
             status: string;
-            started_at: string | Date;
+            started_at: DateTime;
             total: number;
             processed: number;
             failed: number;
@@ -136,15 +129,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     expect(row.failed).toBe(0);
     expect(row.tier_filter).toEqual([1, 2, 3]);
     expect(row.priority_globs).toEqual(["projects/**/*.md"]);
-    // option<> fields must be absent when not supplied. SurrealDB returns
-    // NONE-valued option<string> as undefined; legacy mirrors emit null.
-    // Either shape is acceptable here.
-    expect(row.cursor == null).toBe(true);
-    expect(row.error == null).toBe(true);
+    // SurrealDB 3.0.5 decodes datetime natively and omits NONE option fields.
+    expect(row.started_at).toBeInstanceOf(DateTime);
+    expect(row.cursor).toBeUndefined();
+    expect(row.error).toBeUndefined();
     // `started_at` defaults to time::now(); a freshly-stamped value is
     // within a few seconds of "now".
-    const startedMs =
-      row.started_at instanceof Date ? row.started_at.getTime() : Date.parse(row.started_at);
+    const startedMs = row.started_at.toDate().getTime();
     expect(Number.isFinite(startedMs)).toBe(true);
     expect(Math.abs(Date.now() - startedMs)).toBeLessThan(5000);
   });
@@ -158,7 +149,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2],
       priorityGlobs: [],
-      total: 7,
+      paths: makeRunPaths(7),
     });
     const result = await findCurrent(connection.db);
     expect(result).not.toBeNull();
@@ -177,19 +168,22 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const cancelledId = await createRun(connection.db, {
       tierFilter: [1],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
     await updateStatus(connection.db, cancelledId, "cancelled");
     const completedId = await createRun(connection.db, {
       tierFilter: [1],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
-    await updateStatus(connection.db, completedId, "completed");
+    await updateStatus(connection.db, completedId, "completed", {
+      processed: 1,
+      attempted: 1,
+    });
     const failedId = await createRun(connection.db, {
       tierFilter: [1],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
     await updateStatus(connection.db, failedId, "failed", { error: "boom" });
 
@@ -207,9 +201,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const olderId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 3,
+      paths: makeRunPaths(3),
     });
-    await updateStatus(connection.db, olderId, "paused", { processed: 1 });
+    await updateStatus(connection.db, olderId, "paused", { processed: 1, attempted: 1 });
     await updateStatus(connection.db, olderId, "failed", { error: "synthetic-older" });
     // Sleep 25ms to ensure server-side started_at on the second row sorts
     // strictly after the first; SurrealDB's millisecond clock can collide
@@ -218,9 +212,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const newerId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
-    await updateStatus(connection.db, newerId, "paused", { processed: 2 });
+    await updateStatus(connection.db, newerId, "paused", { processed: 2, attempted: 2 });
 
     const result = await findLatestResumable(connection.db);
     expect(result).not.toBeNull();
@@ -234,7 +228,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const pausedId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 4,
+      paths: makeRunPaths(4),
     });
     await updateStatus(connection.db, pausedId, "paused");
     // Release the active slot before the next `createRun`; the unique
@@ -247,7 +241,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const failedId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 4,
+      paths: makeRunPaths(4),
     });
     await updateStatus(connection.db, failedId, "failed", { error: "synthetic" });
 
@@ -263,9 +257,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const completedId = await createRun(connection.db, {
       tierFilter: [1],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
-    await updateStatus(connection.db, completedId, "completed");
+    await updateStatus(connection.db, completedId, "completed", {
+      processed: 1,
+      attempted: 1,
+    });
     const result = await findLatestResumable(connection.db);
     expect(result).toBeNull();
   });
@@ -274,21 +271,56 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 1,
+      paths: makeRunPaths(1),
     });
-    await updateStatus(connection.db, runId, "completed");
+    await updateStatus(connection.db, runId, "completed", { processed: 1, attempted: 1 });
     const row = await fetchRow(connection, runId);
     expect(row?.status).toBe("completed");
     expect(row?.finished_at != null).toBe(true);
+  });
+
+  test("[smoke] terminal timestamps stay monotonic across a regressive server clock", async () => {
+    const runId = await createRun(connection.db, {
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      paths: makeRunPaths(1),
+    });
+    const futureStart = new DateTime("2099-01-01T00:00:00.000Z");
+    await connection.db
+      .query("UPDATE $id SET started_at = $startedAt;", { id: runId, startedAt: futureStart })
+      .collect();
+
+    await expect(
+      connection.db
+        .query("UPDATE $id SET finished_at = d'2000-01-01T00:00:00Z';", { id: runId })
+        .collect(),
+    ).rejects.toThrow("field must conform");
+
+    await updateStatus(connection.db, runId, "completed", {
+      processed: 1,
+      attempted: 1,
+      cursor: null,
+    });
+    const [rows] = await connection.db
+      .query<[Array<{ started_at: DateTime; finished_at: DateTime }>]>(
+        "SELECT started_at, finished_at FROM awaken_run WHERE id = $id;",
+        { id: runId },
+      )
+      .collect<[Array<{ started_at: DateTime; finished_at: DateTime }>]>();
+    const row = rows[0];
+    expect(row).toBeDefined();
+    expect(row?.started_at).toBeInstanceOf(DateTime);
+    expect(row?.finished_at).toBeInstanceOf(DateTime);
+    expect(row?.finished_at.toDate().getTime()).toBe(row?.started_at.toDate().getTime());
   });
 
   test("[smoke] updateStatus paused with processed updates counter without stamping finished_at", async () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 20,
+      paths: makeRunPaths(20),
     });
-    await updateStatus(connection.db, runId, "paused", { processed: 10 });
+    await updateStatus(connection.db, runId, "paused", { processed: 10, attempted: 10 });
     const row = await fetchRow(connection, runId);
     expect(row?.status).toBe("paused");
     expect(row?.processed).toBe(10);
@@ -300,7 +332,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
     await updateStatus(connection.db, runId, "cancelled");
     const row = await fetchRow(connection, runId);
@@ -312,11 +344,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
     await updateStatus(connection.db, runId, "failed", {
       processed: 3,
       failed: 1,
+      attempted: 4,
       error: "embedding model unreachable",
     });
     const row = await fetchRow(connection, runId);
@@ -331,14 +364,63 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const runId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 5,
+      paths: makeRunPaths(5),
     });
-    await updateStatus(connection.db, runId, "paused", { cursor: "notes/foo.md" });
+    await updateStatus(connection.db, runId, "paused", { cursor: "note-1.md" });
     const afterSet = await fetchRow(connection, runId);
-    expect(afterSet?.cursor).toBe("notes/foo.md");
+    expect(afterSet?.cursor).toBe("note-1.md");
     await updateStatus(connection.db, runId, "paused", { cursor: null });
     const afterClear = await fetchRow(connection, runId);
     expect(afterClear?.cursor == null).toBe(true);
+  });
+
+  test("[smoke] invalid merged counters fail before storage is mutated", async () => {
+    const runId = await createRun(connection.db, {
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      paths: makeRunPaths(2),
+    });
+
+    await expect(
+      updateStatus(connection.db, runId, "running", { processed: 2, attempted: 1 }),
+    ).rejects.toThrow("processed cannot exceed attempted");
+
+    const current = await findCurrent(connection.db);
+    expect(current?.id.toString()).toBe(runId.toString());
+    expect(current?.processed).toBe(0);
+    expect(current?.failed).toBe(0);
+    expect(current?.attempted).toBe(0);
+  });
+
+  test("[smoke] failure diagnostics are exclusive and resume clears terminal state", async () => {
+    const runId = await createRun(connection.db, {
+      tierFilter: [2, 3],
+      priorityGlobs: ["note-*.md"],
+      paths: makeRunPaths(2),
+    });
+    await updateStatus(connection.db, runId, "failed", {
+      processed: 1,
+      failed: 1,
+      attempted: 2,
+      cursor: "note-1.md",
+      error: "one note could not be embedded",
+      failurePaths: ["note-1.md"],
+    });
+
+    const failed = await findLatestResumable(connection.db);
+    expect(failed?.status).toBe("failed");
+    expect(failed?.error).toBe("one note could not be embedded");
+    expect(failed?.failure_reason).toBeNull();
+    expect(failed?.failures).toEqual(["note-1.md"]);
+    expect(failed?.finished_at).toBeInstanceOf(Date);
+
+    await updateStatus(connection.db, runId, "running");
+    const resumed = await findCurrent(connection.db);
+    expect(resumed?.status).toBe("running");
+    expect(resumed?.finished_at).toBeNull();
+    expect(resumed?.error).toBeNull();
+    expect(resumed?.failure_reason).toBeNull();
+    expect(resumed?.failures).toEqual(["note-1.md"]);
   });
 
   test("[smoke] subscribeToStatus fires for the target run and ignores other rows", async () => {
@@ -350,13 +432,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     const otherId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 3,
+      paths: makeRunPaths(3),
     });
     await updateStatus(connection.db, otherId, "failed", { error: "synthetic-other" });
     const targetId = await createRun(connection.db, {
       tierFilter: [1, 2, 3],
       priorityGlobs: [],
-      total: 3,
+      paths: makeRunPaths(3),
     });
 
     const seen: AwakenStatus[] = [];
@@ -369,8 +451,13 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
       // The handler under test must ignore this event because its record
       // id does not match `targetId`.
       await updateStatus(connection.db, otherId, "failed", { error: "synthetic-touch" });
-      await updateStatus(connection.db, targetId, "paused", { processed: 1 });
-      await updateStatus(connection.db, targetId, "completed");
+      await updateStatus(connection.db, targetId, "paused", { processed: 1, attempted: 1 });
+      await updateStatus(connection.db, targetId, "running");
+      await updateStatus(connection.db, targetId, "completed", {
+        processed: 3,
+        attempted: 3,
+        cursor: null,
+      });
       // Allow live-query notifications to settle. The SDK delivers via the
       // websocket on the same connection; 250ms is the tested upper bound
       // on local SurrealDB roundtrip in the existing smoke harness.
@@ -385,7 +472,10 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken_run DAL", () => {
     // (e.g., a single status flip can land as one or two messages
     // depending on how the field-level delta is batched on the wire).
     expect(seen).toContain("paused");
+    expect(seen).toContain("running");
     expect(seen).toContain("completed");
-    expect(seen.every((status) => status === "paused" || status === "completed")).toBe(true);
+    expect(
+      seen.every((status) => status === "paused" || status === "running" || status === "completed"),
+    ).toBe(true);
   });
 });

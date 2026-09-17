@@ -1,0 +1,31 @@
+{
+  "name": "notient",
+  "version": "0.1.0",
+  "description": "Grounded memory and review-gated Markdown notes for Codex through Notient.",
+  "author": {
+    "name": "Anthony Kougkas"
+  },
+  "license": "MIT",
+  "keywords": ["notient", "markdown", "obsidian", "memory", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Notient",
+    "shortDescription": "Grounded memory in living Markdown notes",
+    "longDescription": "Let Codex search, read, connect, and propose review-gated changes to a local Markdown or Obsidian vault through Notient's authenticated MCP server.",
+    "developerName": "Anthony Kougkas",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Find what my notes say about this project",
+      "Brief me from the notes related to this file",
+      "Propose a durable note from this conclusion"
+    ]
+  },
+  "mcpServers": {
+    "notient": {
+      "command": "notient",
+      "args": ["mcp", "--as", "codex"],
+      "env_vars": ["NOTIENT_VAULT"]
+    }
+  }
+}

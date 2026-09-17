@@ -32,7 +32,7 @@ describe("LMStudioProvider.chatVision", () => {
       expect(userMessage.content[1].type).toBe("image_url");
       return new Response(
         JSON.stringify({
-          choices: [{ message: { content: "a cat sitting on a fence" } }],
+          choices: [{ finish_reason: "stop", message: { content: "a cat sitting on a fence" } }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -54,7 +54,7 @@ describe("LMStudioProvider.chatVision", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(calls[0].url).toBe("http://x/v1/chat/completions");
     const sent = JSON.parse(calls[0].init?.body as string);
-    expect(sent.max_tokens).toBeUndefined();
+    expect(sent.max_tokens).toBe(8192);
   });
 
   test("throws when the server returns 4xx", async () => {

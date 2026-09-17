@@ -9,7 +9,8 @@
 
 export interface BlockSpec {
   blockId: string | null;
-  headingLevel: 1 | 2 | 3 | null;
+  /** Markdown heading depth, preserved exactly from H1 through H6. */
+  headingLevel: 1 | 2 | 3 | 4 | 5 | 6 | null;
   headingPath: string[];
   headingSlug: string | null;
   ord: number;
@@ -18,16 +19,15 @@ export interface BlockSpec {
   text: string;
 }
 
-export interface WikilinkSpec {
+export const STRUCTURAL_INDEX_VERSION = 4;
+
+export interface NoteLinkSpec {
+  syntax: "wiki" | "markdown";
   fromBlockOrd: number | null;
   rawTarget: string;
-  targetPath: string | null;
   targetHeading: string | null;
   targetBlockId: string | null;
-  targetHeadingPath: string[];
-  alias: string | null;
   isEmbed: boolean;
-  targetUnresolved: string | null;
 }
 
 export interface TagSpec {
@@ -38,15 +38,13 @@ export interface TagSpec {
 export interface FrontmatterRefSpec {
   key: string;
   rawTarget: string;
-  targetPath: string | null;
 }
 
 export interface MarkdownExtraction {
   blocks: BlockSpec[];
-  wikilinks: WikilinkSpec[];
+  links: NoteLinkSpec[];
   tags: TagSpec[];
   frontmatterRefs: FrontmatterRefSpec[];
-  frontmatter: Record<string, unknown>;
   bodySha: string;
   wordCount: number;
 }

@@ -1,8 +1,119 @@
-export interface LLMEndpointConfig {
+import type { InferenceBudgetLimits } from "../llm/executionBudget";
+/**
+ * Product behaviour persisted in `<vault>/.notient/config.json`.
+ *
+ * Deployment belongs to `<vault>/.notient/.env` (with process environment as
+ * a fallback), so endpoint URLs, model ids, model context, and reasoning-slot
+ * capacity intentionally do not appear here.
+ */
+
+import { type BackgroundSettings, defaultBackgroundSettings } from "../../api/background";
+
+export type ApprovalMode = "safe" | "yolo";
+export type SearchMode = "quick" | "balanced" | "deep";
+export type ToolApprovalPolicy = "auto" | "ask";
+export type SurrealLogLevel = "trace" | "debug" | "info" | "warn" | "error";
+
+export const TOOL_POLICY_NAMES = [
+  "vault.read_note",
+  "vault.search_notes",
+  "vault.list_neighbors",
+  "vault.get_vitals",
+  "proposals.list_pending",
+  "proposals.get",
+  "proposals.approve",
+  "proposals.reject",
+  "graph.find_path",
+  "notes.create",
+  "notes.append",
+  "notes.replace_section",
+  "notes.update_frontmatter",
+] as const;
+
+export type ToolPolicyName = (typeof TOOL_POLICY_NAMES)[number];
+export type ToolPolicySettings = Record<ToolPolicyName, ToolApprovalPolicy>;
+
+export interface VitalsSettings {
+  freshnessHalfLifeDays: number;
+  healthWeights: { wordBand: number; chunkCoverage: number; hasApprovedEdges: number };
+  connectivityThresholds: { sparse: number; connected: number; hub: number };
+  writeToFrontmatter: boolean;
+}
+
+export interface SearchSettings {
+  defaultMode: SearchMode;
+  balanced: { topK: number; rerankTopN: number };
+  deep: { synthesisEnabled: boolean };
+}
+
+export interface ChatContextSettings {
+  includeVaultSnapshot: boolean;
+  includeCrossSessionMemory: boolean;
+  crossSessionTopK: number;
+  crossSessionSimThreshold: number;
+  pinnedNoteMaxTokens: number;
+}
+
+export const DEFAULT_CHAT_BUDGET = {
+  modelCalls: 12,
+  tokens: 160000,
+  durationMs: 180000,
+  generationTokens: 16384,
+} satisfies InferenceBudgetLimits;
+
+export interface ChatProductSettings {
+  budget: typeof DEFAULT_CHAT_BUDGET;
+  approvalMode: ApprovalMode;
+  persistReasoning: boolean;
+  perTool: ToolPolicySettings;
+  history: {
+    /** Maximum HistoryService rows kept globally; older rows prune on record. */
+    maxEntries: number;
+    /** Maximum HistoryService rows per target path; older rows prune on record. */
+    maxPerTarget: number;
+  };
+  maxRoundsPerTurn: number;
+  contextBudgetFraction: number;
+  context: ChatContextSettings;
+}
+
+export interface IndexerSettings {
+  excludePaths: string[];
+  /**
+   * Filename patterns skipped by the vault listing on top of
+   * `excludePaths`. Only the glob subset implemented by
+   * `src/core/indexer/excludePaths.ts` is supported.
+   */
+  excludeGlobs: string[];
+  debounceMs: number;
+  concurrency: { embed: number; extract: number };
+  chunk: { targetTokens: number; maxTokens: number };
+}
+
+export interface NotientConfig {
+  background: BackgroundSettings;
+  vitals: VitalsSettings;
+  search: SearchSettings;
+  chat: ChatProductSettings;
+  indexer: IndexerSettings;
+  surrealdb: {
+    hnswCacheMib: number;
+    logLevel: SurrealLogLevel;
+  };
+  agentEvents: {
+    /** Maximum retained rows in the internal agent-event ledger. */
+    maxRows: number;
+  };
+}
+
+export interface PrimaryEndpointConfig {
   baseUrl: string;
   reasoningModel: string;
-  embeddingModel: string;
-  fastModel: string;
+}
+
+export interface DeepEndpointConfig {
+  baseUrl: string;
+  reasoningModel: string;
   rerankerModel: string;
 }
 
@@ -11,194 +122,40 @@ export interface EmbeddingEndpointConfig {
   model: string;
 }
 
-export interface NotientSettings {
-  primary: LLMEndpointConfig;
-  deep: LLMEndpointConfig;
+/**
+ * Fully resolved, process-local boot settings. This is constructed exactly
+ * once from a validated NotientConfig plus the deployment environment and is
+ * deep-frozen before any service receives it.
+ */
+export interface NotientSettings extends Omit<NotientConfig, "chat"> {
+  primary: PrimaryEndpointConfig;
+  deep: DeepEndpointConfig;
   embedding: EmbeddingEndpointConfig;
-  agents: {
-    linker: boolean;
-    synthesizer: boolean;
-    contradictionHunter: boolean;
-    maturityAdvancer: boolean;
-  };
-  coAuthor: {
-    enabled: boolean;
-    minWords: number;
-    debounceMs: number;
-    /** Prose-friendly non-reasoning model. Reasoning models stall behind their CoT. */
-    model: string;
-  };
-  approvals: {
-    confidenceThreshold: number;
-  };
-  awakenedAt: number | null;
-
-  // Phase 4 — Stream
-  stream: {
-    recencyHalfLifeHours: number;
-    offNoteRelevanceFloor: number;
-    maxItems: number;
-  };
-
-  // Phase 4 — Vitals
-  vitals: {
-    freshnessHalfLifeDays: number;
-    healthWeights: { wordBand: number; chunkCoverage: number; hasApprovedEdges: number };
-    connectivityThresholds: { sparse: number; connected: number; hub: number };
-    writeToFrontmatter: boolean;
-  };
-
-  // Phase 4 — Editor decorations
-  decorations: {
-    enabled: boolean;
-    maxPerViewport: number;
-    debounceMs: number;
-    minWordsToDecorate: number;
-  };
-
-  // Phase 4 — Search
-  search: {
-    defaultMode: "quick" | "balanced" | "deep";
-    balanced: { topK: number; rerankTopN: number };
-    deep: { graphExpansionDepth: number; synthesisEnabled: boolean };
-    history: { maxQueries: number };
-    savedQueriesFolder: string;
-    previewEnabled: boolean;
-  };
-
-  // Phase 4 — Chat
-  chat: {
-    enabled: boolean;
-    approvalMode: "safe" | "yolo";
-    persistReasoning: boolean;
-    toolModeByModel: Record<string, "native" | "json-fallback" | "disabled">;
-    perTool: Record<string, "auto" | "ask">;
-    /**
-     * Model context window in tokens. ContextManager budgets this fraction
-     * (chat.contextBudgetFraction) before triggering history summarization.
-     * This is the per-request budget. When the local server is launched with
-     * multiple slots, total loaded context must be at least
-     * modelContextTokens * reasoningSlots.
-     */
+  chat: ChatProductSettings & {
+    /** Per-request context budget. Deployment authority: NOTIENT_CONTEXT_TOKENS. */
     modelContextTokens: number;
-    /**
-     * Maximum concurrent reasoning-model calls Notient may run. Match this to
-     * the local server's slot count (for llama.cpp, `-np` / `--parallel`).
-     */
+    /** Concurrent reasoning capacity. Deployment authority: NOTIENT_REASONING_SLOTS. */
     reasoningSlots: number;
-    history: {
-      /** Maximum HistoryService rows kept globally; older rows prune on record. */
-      maxEntries: number;
-      /** Maximum HistoryService rows per target path; older rows prune on record. */
-      maxPerTarget: number;
-    };
-    vision?: {
-      enabled: boolean;
-      baseUrl: string;
-      model: string;
-    };
-    conversationsFolder: string;
-    proposalsFolder: string;
-    maxRoundsPerTurn: number;
-    contextBudgetFraction: number;
-    context: {
-      includeUserProfile: boolean;
-      includeVaultSnapshot: boolean;
-      includeWorkspaceState: boolean;
-      includeCrossSessionMemory: boolean;
-      crossSessionTopK: number;
-      crossSessionSimThreshold: number;
-      pinnedNoteMaxTokens: number;
-    };
-  };
-
-  // Phase 4 — Universal undo
-  history: {
-    retentionMaxRows: number;
-    retentionMaxRowsPerTarget: number;
-  };
-
-  // Phase 4 — Indexer exclusion
-  indexer: {
-    excludePaths: string[];
   };
 }
 
-// DEFAULT_SETTINGS leaves every endpoint and model slot empty. The operator
-// supplies real values via either <vault>/.notient/config.json (persistent)
-// or <vault>/.notient/.env / process env (overlay). Bootstrap validates
-// the chosen values before sealing — see assertEndpointConfigured below.
-// Hardcoding any specific model name in this file is a regression: smokes,
-// tests, and production all read what the operator configured.
-const DEFAULT_BASE_URL = "";
-const DEFAULT_CHAT_MODEL = "";
-const DEFAULT_EMBEDDING_MODEL = "";
-
-export const DEFAULT_SETTINGS: NotientSettings = {
-  primary: {
-    baseUrl: DEFAULT_BASE_URL,
-    reasoningModel: DEFAULT_CHAT_MODEL,
-    embeddingModel: DEFAULT_EMBEDDING_MODEL, // legacy; embedding endpoint reads from `embedding.*` below
-    fastModel: DEFAULT_CHAT_MODEL,
-    rerankerModel: DEFAULT_CHAT_MODEL,
-  },
-  deep: {
-    baseUrl: DEFAULT_BASE_URL,
-    reasoningModel: DEFAULT_CHAT_MODEL,
-    embeddingModel: DEFAULT_EMBEDDING_MODEL,
-    fastModel: DEFAULT_CHAT_MODEL,
-    rerankerModel: DEFAULT_CHAT_MODEL,
-  },
-  embedding: {
-    baseUrl: DEFAULT_BASE_URL,
-    model: DEFAULT_EMBEDDING_MODEL,
-  },
-  agents: {
-    linker: true,
-    synthesizer: true,
-    contradictionHunter: true,
-    maturityAdvancer: true,
-  },
-  coAuthor: {
-    enabled: true,
-    minWords: 100,
-    debounceMs: 5000,
-    model: DEFAULT_CHAT_MODEL,
-  },
-  approvals: {
-    confidenceThreshold: 0.6,
-  },
-  awakenedAt: null,
-  stream: {
-    recencyHalfLifeHours: 12,
-    offNoteRelevanceFloor: 0.3,
-    maxItems: 50,
-  },
+export const DEFAULT_NOTIENT_CONFIG: NotientConfig = {
+  background: defaultBackgroundSettings(),
   vitals: {
     freshnessHalfLifeDays: 14,
     healthWeights: { wordBand: 1, chunkCoverage: 1, hasApprovedEdges: 1 },
     connectivityThresholds: { sparse: 1, connected: 4, hub: 12 },
     writeToFrontmatter: false,
   },
-  decorations: {
-    enabled: true,
-    maxPerViewport: 5,
-    debounceMs: 200,
-    minWordsToDecorate: 100,
-  },
   search: {
     defaultMode: "quick",
     balanced: { topK: 20, rerankTopN: 5 },
-    deep: { graphExpansionDepth: 1, synthesisEnabled: true },
-    history: { maxQueries: 50 },
-    savedQueriesFolder: "Notient/searches",
-    previewEnabled: true,
+    deep: { synthesisEnabled: true },
   },
   chat: {
-    enabled: true,
+    budget: { ...DEFAULT_CHAT_BUDGET },
     approvalMode: "safe",
     persistReasoning: false,
-    toolModeByModel: {},
     perTool: {
       "vault.read_note": "auto",
       "vault.search_notes": "auto",
@@ -209,37 +166,37 @@ export const DEFAULT_SETTINGS: NotientSettings = {
       "proposals.approve": "ask",
       "proposals.reject": "ask",
       "graph.find_path": "auto",
-      "graph.list_clusters": "auto",
-      "agents.contradiction_check": "auto",
-      "agents.synthesize": "auto",
       "notes.create": "ask",
       "notes.append": "ask",
       "notes.replace_section": "ask",
       "notes.update_frontmatter": "ask",
-      "proposals.upsert": "ask",
     },
-    conversationsFolder: "Notient/conversations",
-    proposalsFolder: "Notient/proposals",
+    history: { maxEntries: 200, maxPerTarget: 20 },
     maxRoundsPerTurn: 8,
     contextBudgetFraction: 0.7,
     context: {
-      includeUserProfile: true,
       includeVaultSnapshot: true,
-      includeWorkspaceState: true,
       includeCrossSessionMemory: true,
       crossSessionTopK: 2,
       crossSessionSimThreshold: 0.7,
-      pinnedNoteMaxTokens: 4000,
+      pinnedNoteMaxTokens: 4_000,
     },
-    modelContextTokens: 200_000,
-    reasoningSlots: 4,
-    history: { maxEntries: 200, maxPerTarget: 20 },
-  },
-  history: {
-    retentionMaxRows: 500,
-    retentionMaxRowsPerTarget: 50,
   },
   indexer: {
-    excludePaths: ["Notient/conversations", "Notient/proposals", "Notient/searches"],
+    excludePaths: ["Notient/conversations", "Notient/proposals"],
+    excludeGlobs: ["**/*.excalidraw.md"],
+    debounceMs: 500,
+    concurrency: { embed: 4, extract: 2 },
+    chunk: { targetTokens: 320, maxTokens: 480 },
+  },
+  surrealdb: {
+    hnswCacheMib: 512,
+    logLevel: "warn",
+  },
+  agentEvents: {
+    maxRows: 50_000,
   },
 };
+
+export const DEFAULT_CONTEXT_TOKENS = 32_768;
+export const DEFAULT_REASONING_SLOTS = 4;

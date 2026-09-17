@@ -1,17 +1,17 @@
 /**
- * agent.events RPC handler (Phase D1 T6).
+ * `agent.events` RPC handler.
  *
- * Drains the `agent_events` ledger that AgentEventStore (T2) writes when any
- * of the watched bus events fire. The wire shape is a curated, persisted,
- * long-pollable channel: a client passes the highest id it has already seen
- * as `since`, and the handler returns every newer row up to `limit`, plus a
- * fresh cursor.
+ * Drains the `agent_event` ledger that `AgentEventStore` writes for watched
+ * bus events. The wire shape is a curated, persisted, long-pollable channel:
+ * a client passes the highest id it has already seen as `since`, and the
+ * handler returns every newer row up to `limit`, plus a fresh cursor.
  *
- * Watched event set must stay aligned with AgentEventStore's subscription
- * list. The store persists rows for the four `swarm:*` discoveries plus
- * `indexer:note-indexed`, `indexer:error`, and `indexer:warn`. The
- * long-poll subscribes to that same set so an indexing run wakes the
- * waiter, not just swarm activity.
+ * The watched event set is AgentEventStore's canonical subscription list.
+ * The store persists rows for the three `swarm:*` discoveries plus
+ * `indexer:note-indexed`, `indexer:tombstoned`, `indexer:error`, and
+ * `indexer:warn`. The long-poll subscribes to the canonical persisted-event
+ * set so indexing and deletion activity wakes the waiter, not just swarm
+ * activity.
  *
  * Long-poll path: when the first read returns no rows AND `longPollMs > 0`,
  * the handler subscribes to every watched bus event. The first event to fire
@@ -25,8 +25,15 @@
  */
 
 import type { EventBus } from "../../core/events/eventBus";
-import type { EventOf, EventType } from "../../core/events/types";
-import type { AgentEventStore } from "../../core/services/agentEventStore";
+import type { EventOf } from "../../core/events/types";
+import {
+  AGENT_EVENT_TYPES,
+  type AgentEventCursor,
+  type AgentEventStore,
+  type AgentEventType,
+  parseAgentEventRecordId,
+} from "../../core/services/agentEventStore";
+import { type MethodHandler, RpcError } from "../rpc";
 
 export interface AgentEventsHandlerDeps {
   agentEventStore: AgentEventStore;
@@ -34,31 +41,27 @@ export interface AgentEventsHandlerDeps {
 }
 
 export interface AgentEventsRequest {
-  since: number;
-  clientIdentity?: string;
   limit?: number;
   longPollMs?: number;
+  since?: AgentEventCursor;
+  snapshotSinceMs?: number;
+  types?: AgentEventType[];
 }
 
 export interface AgentEventRecord {
-  id: number;
+  id: string;
   ts: number;
-  type: string;
+  type: AgentEventType;
   payload: unknown;
 }
 
 export interface AgentEventsResponse {
   events: AgentEventRecord[];
-  cursor: number;
+  cursor: AgentEventCursor;
   longPollExpired: boolean;
 }
 
-export type AgentEventsHandler = (
-  params: Record<string, unknown>,
-  emit: (line: string) => void,
-  envelopeId: string,
-  clientIdentity: string,
-) => Promise<Record<string, unknown>>;
+export type AgentEventsHandler = MethodHandler;
 
 export const AGENT_EVENTS_DEFAULT_LIMIT = 100;
 export const AGENT_EVENTS_MAX_LIMIT = 1000;
@@ -75,21 +78,21 @@ export const AGENT_EVENTS_MAX_LONG_POLL_MS = 60_000;
  */
 const FLUSH_INTERVAL_MS = 50;
 
-const WATCHED_EVENT_TYPES = [
-  "swarm:contradiction_discovered",
-  "swarm:cluster_emerged",
-  "swarm:claim_advanced",
-  "swarm:link_proposed",
-  "indexer:note-indexed",
-  "indexer:error",
-  "indexer:warn",
-] as const satisfies readonly EventType[];
-
-interface ParsedEventsParams {
-  since: number;
+interface CursorEventsParams {
+  mode: "cursor";
+  since: AgentEventCursor;
   limit: number;
   longPollMs: number;
 }
+
+interface SnapshotEventsParams {
+  mode: "snapshot";
+  sinceTs: number;
+  limit: number;
+  types: AgentEventType[];
+}
+
+type ParsedEventsParams = CursorEventsParams | SnapshotEventsParams;
 
 export interface CreateAgentEventsHandlerOptions extends AgentEventsHandlerDeps {
   /** Test seam. Defaults to the 50ms guard documented on FLUSH_INTERVAL_MS. */
@@ -100,7 +103,7 @@ export function createAgentEventsHandler(
   options: CreateAgentEventsHandlerOptions,
 ): AgentEventsHandler {
   const flushIntervalMs = options.flushIntervalMs ?? FLUSH_INTERVAL_MS;
-  return async (params) => {
+  return async ({ params }) => {
     const parsed = parseEventsParams(params);
     return await runEvents(options, parsed, flushIntervalMs);
   };
@@ -111,6 +114,19 @@ async function runEvents(
   parsed: ParsedEventsParams,
   flushIntervalMs: number,
 ): Promise<Record<string, unknown>> {
+  if (parsed.mode === "snapshot") {
+    const snapshot = await deps.agentEventStore.snapshot(
+      parsed.sinceTs,
+      parsed.types,
+      parsed.limit,
+    );
+    const response: AgentEventsResponse = {
+      events: snapshot.events,
+      cursor: snapshot.cursor,
+      longPollExpired: false,
+    };
+    return { ok: true, ...response };
+  }
   const firstRead = await deps.agentEventStore.since(parsed.since, parsed.limit);
   if (firstRead.length > 0) {
     return buildResponse({
@@ -145,15 +161,12 @@ async function runEvents(
 
 interface BuildResponseOptions {
   events: AgentEventRecord[];
-  since: number;
+  since: AgentEventCursor;
   longPollExpired: boolean;
 }
 
 function buildResponse(options: BuildResponseOptions): Record<string, unknown> {
-  const cursor =
-    options.events.length === 0
-      ? options.since
-      : options.events.reduce((highest, event) => Math.max(highest, event.id), options.since);
+  const cursor = options.events.at(-1)?.id ?? options.since;
   const response: AgentEventsResponse = {
     events: options.events,
     cursor,
@@ -180,7 +193,7 @@ async function waitForWatchedFire(bus: EventBus, longPollMs: number): Promise<bo
         settled = true;
         resolve(fired);
       };
-      for (const eventType of WATCHED_EVENT_TYPES) {
+      for (const eventType of AGENT_EVENT_TYPES) {
         const unsubscribe = bus.on(eventType, makeFireOnce(settle));
         unsubscribes.push(unsubscribe);
       }
@@ -200,45 +213,97 @@ async function waitForWatchedFire(bus: EventBus, longPollMs: number): Promise<bo
  * this handler only signals that a fresh row exists to be read.
  */
 function makeFireOnce(settle: (fired: boolean) => void) {
-  return (_event: EventOf<(typeof WATCHED_EVENT_TYPES)[number]>): void => {
+  return (_event: EventOf<AgentEventType>): void => {
     settle(true);
   };
 }
 
 function parseEventsParams(params: Record<string, unknown>): ParsedEventsParams {
+  if (params.snapshotSinceMs !== undefined) {
+    if (params.since !== undefined || params.longPollMs !== undefined) {
+      throw new RpcError(
+        "INVALID_PARAMS",
+        "snapshotSinceMs cannot be combined with since or longPollMs",
+      );
+    }
+    return {
+      mode: "snapshot",
+      sinceTs: parseSnapshotSinceMs(params.snapshotSinceMs),
+      limit: parseLimit(params.limit),
+      types: parseEventTypes(params.types),
+    };
+  }
   const since = parseSince(params.since);
   const limit = parseLimit(params.limit);
   const longPollMs = parseLongPollMs(params.longPollMs);
-  return { since, limit, longPollMs };
+  return { mode: "cursor", since, limit, longPollMs };
 }
 
-function parseSince(raw: unknown): number {
+function parseSnapshotSinceMs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || !Number.isInteger(raw)) {
-    throw new Error("INVALID_PARAMS: since must be a non-negative integer");
+    throw new RpcError("INVALID_PARAMS", "snapshotSinceMs must be a non-negative integer");
   }
   return raw;
 }
 
+function parseEventTypes(raw: unknown): AgentEventType[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new RpcError("INVALID_PARAMS", "snapshot types must be a non-empty array");
+  }
+  const allowed = new Set<string>(AGENT_EVENT_TYPES);
+  const types: AgentEventType[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string" || !allowed.has(value)) {
+      throw new RpcError("INVALID_PARAMS", `unknown agent event type ${String(value)}`);
+    }
+    const type = value as AgentEventType;
+    if (!types.includes(type)) types.push(type);
+  }
+  return types;
+}
+
+function parseSince(raw: unknown): AgentEventCursor {
+  if (raw === undefined || raw === null) return null;
+  try {
+    return parseAgentEventRecordId(raw).toString();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new RpcError("INVALID_PARAMS", `since: ${message}`);
+  }
+}
+
 function parseLimit(raw: unknown): number {
   if (raw === undefined || raw === null) return AGENT_EVENTS_DEFAULT_LIMIT;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    throw new Error("INVALID_PARAMS: limit must be a positive number");
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw <= 0 ||
+    raw > AGENT_EVENTS_MAX_LIMIT
+  ) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      `limit must be an integer between 1 and ${AGENT_EVENTS_MAX_LIMIT}`,
+    );
   }
-  return clamp(Math.floor(raw), 1, AGENT_EVENTS_MAX_LIMIT);
+  return raw;
 }
 
 function parseLongPollMs(raw: unknown): number {
   if (raw === undefined || raw === null) return AGENT_EVENTS_DEFAULT_LONG_POLL_MS;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
-    throw new Error("INVALID_PARAMS: longPollMs must be a non-negative number");
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw < 0 ||
+    raw > AGENT_EVENTS_MAX_LONG_POLL_MS
+  ) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      `longPollMs must be an integer between 0 and ${AGENT_EVENTS_MAX_LONG_POLL_MS}`,
+    );
   }
-  return clamp(Math.floor(raw), 0, AGENT_EVENTS_MAX_LONG_POLL_MS);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
+  return raw;
 }
 
 function delay(ms: number): Promise<void> {

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseDistillFormat, runDistillCommand } from "../../../../src/cli/commands/distill";
 import { makeEmitter } from "../../../../src/cli/output";
 import { currentPlatform, resolveSocketPath } from "../../../../src/daemon/socket";
+import { installFakeDaemonAuth, replyToAuthenticatedHello } from "../../../helpers/fakeDaemonAuth";
 
 interface FakeDaemon {
   server: Server;
@@ -16,7 +17,7 @@ interface FakeDaemon {
 
 async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
   const socketPath = resolveSocketPath(rootDir, currentPlatform());
-  await mkdir(join(rootDir, ".notient"), { recursive: true });
+  const cleanupAuth = await installFakeDaemonAuth(rootDir);
   const sockets = new Set<Socket>();
   const framesReceived: Record<string, unknown>[] = [];
   let pendingReply: Record<string, unknown> = { type: "result", ok: true };
@@ -33,10 +34,12 @@ async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
         const line = buffer.slice(0, newlineIndex).trim();
         buffer = buffer.slice(newlineIndex + 1);
         if (line.length > 0) {
-          const frame = JSON.parse(line) as Record<string, unknown>;
-          framesReceived.push(frame);
-          const id = typeof frame.id === "string" ? frame.id : "unknown";
-          socket.write(`${JSON.stringify({ id, ...pendingReply })}\n`);
+          replyToFrame(
+            socket,
+            JSON.parse(line) as Record<string, unknown>,
+            framesReceived,
+            () => pendingReply,
+          );
         }
         newlineIndex = buffer.indexOf("\n");
       }
@@ -55,6 +58,7 @@ async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
     close: async () => {
       for (const socket of sockets) socket.end();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await cleanupAuth();
     },
   };
 }
@@ -62,6 +66,10 @@ async function startFakeDaemon(rootDir: string): Promise<FakeDaemon> {
 const STRUCTURED_REPLY: Record<string, unknown> = {
   type: "result",
   ok: true,
+  dryRun: false,
+  applied: true,
+  pending: false,
+  denied: false,
   candidates: [
     {
       kind: "decision",
@@ -69,7 +77,15 @@ const STRUCTURED_REPLY: Record<string, unknown> = {
       sourceMessageIds: ["msg-1-bbb"],
     },
   ],
+  proposalPaths: ["Notient/proposals/distilled-1-decision-1-batch.md"],
   proposalsCreated: 1,
+  writes: [
+    {
+      path: "Notient/proposals/distilled-1-decision-1-batch.md",
+      sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      historyId: 'history:u"00000000-0000-4000-8000-000000000001"',
+    },
+  ],
   byKind: { decision: 1 },
   durationMs: 7,
 };
@@ -105,8 +121,17 @@ describe("notient distill CLI", () => {
     expect(stdoutLines).toHaveLength(1);
     const parsed = JSON.parse(stdoutLines[0]) as Record<string, unknown>;
     expect(parsed.proposalsCreated).toBe(1);
+    expect(parsed).toMatchObject({ dryRun: false, applied: true, pending: false, denied: false });
     expect(parsed.candidates).toBeDefined();
     expect(parsed.byKind).toEqual({ decision: 1 });
+    expect(parsed.proposalPaths).toEqual(["Notient/proposals/distilled-1-decision-1-batch.md"]);
+    expect(parsed.writes).toEqual([
+      {
+        path: "Notient/proposals/distilled-1-decision-1-batch.md",
+        sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        historyId: 'history:u"00000000-0000-4000-8000-000000000001"',
+      },
+    ]);
     const sent = daemon.framesReceived[0];
     expect(sent.method).toBe("agent.distill");
     const params = sent.params as Record<string, unknown>;
@@ -115,7 +140,13 @@ describe("notient distill CLI", () => {
   });
 
   test("forwards dryRun flag when set", async () => {
-    daemon.setReply({ ...STRUCTURED_REPLY, proposalsCreated: 0 });
+    daemon.setReply({
+      ...STRUCTURED_REPLY,
+      dryRun: true,
+      applied: false,
+      proposalsCreated: 0,
+      writes: [],
+    });
     await runDistillCommand({
       vaultPath: rootDir,
       transcriptPath: "session.md",
@@ -146,8 +177,41 @@ describe("notient distill CLI", () => {
     expect(params.format).toBe("jsonl");
   });
 
+  test("renders a parked batch with its call id, preview, and exact proposal paths", async () => {
+    daemon.setReply({
+      ...STRUCTURED_REPLY,
+      applied: false,
+      pending: true,
+      proposalsCreated: 0,
+      writes: [],
+      callId: "batch-parked",
+      preview: "Create one distilled proposal",
+    });
+    const stdoutLines: string[] = [];
+    const exitCode = await runDistillCommand({
+      vaultPath: rootDir,
+      transcriptPath: "session.md",
+      format: "auto",
+      dryRun: false,
+      emitter: makeEmitter({ mode: "ndjson", write: () => {} }),
+      writeStdout: (line) => stdoutLines.push(line),
+      writeStderr: () => {},
+    });
+
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdoutLines[0]) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      applied: false,
+      pending: true,
+      callId: "batch-parked",
+      preview: "Create one distilled proposal",
+      proposalsCreated: 0,
+    });
+    expect(parsed.proposalPaths).toEqual(["Notient/proposals/distilled-1-decision-1-batch.md"]);
+  });
+
   test("error frame prints to stderr and returns non-zero exit code", async () => {
-    daemon.setReply({ type: "error", code: "INTERNAL", message: "boom" });
+    daemon.setReply({ type: "error", code: "INTERNAL", message: "boom", detail: {} });
     const stdoutLines: string[] = [];
     const stderrLines: string[] = [];
     const exitCode = await runDistillCommand({
@@ -179,3 +243,22 @@ describe("distill flag parsing", () => {
     expect(() => parseDistillFormat(true)).toThrow();
   });
 });
+
+/**
+ * Answer one client frame. `session.hello` (which every client now opens
+ * with) is authenticated by the production protocol and kept out of `framesReceived`
+ * so assertions still address the command's own frame.
+ */
+function replyToFrame(
+  socket: Socket,
+  frame: Record<string, unknown>,
+  framesReceived: Record<string, unknown>[],
+  reply: () => Record<string, unknown>,
+): void {
+  const id = typeof frame.id === "string" ? frame.id : "unknown";
+  const method = typeof frame.method === "string" ? frame.method : "unknown";
+  socket.write(`${JSON.stringify({ id, type: "ack", method })}\n`);
+  if (replyToAuthenticatedHello(socket, frame)) return;
+  framesReceived.push(frame);
+  socket.write(`${JSON.stringify({ id, ...reply() })}\n`);
+}

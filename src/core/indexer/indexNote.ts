@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import type { RecordId } from "surrealdb";
-import type { Linker } from "../agents/linker";
+import type { AgentRunCapability } from "../coordinator/types";
 import {
   type SurrealConnection,
   clearTierAtByPath,
@@ -17,24 +18,20 @@ import type { ChunkBlockSizes } from "./chunker";
 import type { Embedder } from "./embedder";
 import type { Extractor } from "./extractor";
 import { runTier1 } from "./tier1";
-import { runTier2 } from "./tier2";
+import { persistLexicalChunks, runTier2 } from "./tier2";
 import { runTier3 } from "./tier3";
+import { maxRequestedTier } from "./tierFilter";
 import type { IndexResult } from "./types";
 
 /**
- * Phase 3 indexer entry point: runs Tier 1 → Tier 2 → Tier 3 sequentially
+ * Indexer entry point: runs Tier 1 → Tier 2 → Tier 3 sequentially
  * against SurrealDB. Each tier is wrapped in its own try/catch; a failure in
  * one tier short-circuits the remaining tiers for that note and emits an
  * `indexer:error` event with the appropriate `phase` field.
  *
- * Spec: Phase 3 plan §Task 9. Phase 5 Task 13 deleted the SQLite substrate;
- * the previous `database`/`graph` parameters and `vectorIndex` slot are gone.
- * Tier 1's vault-path universe now reads from SurrealDB via `listNotePaths`.
- *
- * The `IndexResult` shape is preserved for callers that still inspect its
- * fields. `chunkCount`/`embedCount` reflect Tier 2's chunk count (1:1 in
- * Phase 3 because each chunk gets exactly one embedding). `nodeCount` and
- * `edgeCount` are no longer populated and are reported as zero.
+ * The pipeline requires SurrealDB and a bound Linker run capability.
+ * `chunkCount` and `embedCount` reflect Tier 2's chunk count because every
+ * chunk gets one embedding.
  */
 
 export interface IndexNoteArgs {
@@ -43,25 +40,14 @@ export interface IndexNoteArgs {
   embedder: Embedder;
   extractor: Extractor;
   bus: EventBus;
-  /** Optional cancellation signal threaded into Tier 3's linker. */
+  /** Optional cancellation signal shared by Tier 3 extraction and linking. */
   signal?: AbortSignal;
-  /**
-   * Optional SurrealDB connection. When present, Tiers 1–3 run; when
-   * undefined (legacy/test paths) the function emits no tier events and
-   * returns a minimal IndexResult.
-   */
-  surrealDb?: SurrealConnection;
-  /**
-   * Linker required by Tier 3. Must be provided whenever `surrealDb` is
-   * provided; absent in test paths that exercise only Tiers 1 and 2.
-   */
-  linker?: Linker;
-  /**
-   * Optional chunk size overrides forwarded to Tier 2. Defaults to the
-   * in-process `CHUNK` constants when omitted; bootstrap forwards values
-   * loaded from `<vault>/.notient/config.toml`.
-   */
-  chunkSizes?: ChunkBlockSizes;
+  /** Required SurrealDB connection used by all three tiers. */
+  surrealDb: SurrealConnection;
+  /** Bound Linker execution capability used whenever Tier 3 is pending. */
+  runLinker: AgentRunCapability<"linker">;
+  /** Validated chunk sizes forwarded to Tier 2. */
+  chunkSizes: ChunkBlockSizes;
   /**
    * Optional per-note tier filter, interpreted as an UPPER BOUND on the
    * tier ladder rather than a literal subset. The indexer derives
@@ -73,78 +59,29 @@ export interface IndexNoteArgs {
    * the opt-in path for replaying a tier (it clears `tier{N}_at` before
    * enqueueing, so the corresponding column reads NONE here and the tier
    * runs again while its already-done lower tiers stay skipped).
-   *
-   * Spec: Phase 5 Task 11 (the tier filter flows from `awaken --tier`
-   * per-run scope and `reindex --tier` per-glob scope through the
-   * indexer queue into this orchestrator) plus Bug 4 (`awaken --tier N`
-   * on a fresh note must auto-run Tiers 1..N-1 instead of failing in
-   * Tier 2's `Tier 1 must run first` guard). When omitted, every tier
-   * whose `tier{N}_at` is NONE runs (preserving the pre-Phase-5
-   * behaviour on fresh notes and idempotency on already-indexed ones).
+   * When omitted, every unfinished tier runs.
    */
   tierFilter?: ReadonlyArray<number>;
+  /**
+   * Optional vault-wide path universe for Tier 1's wikilink resolver. When
+   * omitted the orchestrator reads it through {@link getVaultPathUniverse},
+   * which caches the list process-wide so a vault-wide awaken does not issue
+   * one `SELECT path FROM note` per note.
+   */
+  vaultPaths?: string[];
 }
 
-const MAX_TIER = 3;
-
-/**
- * Reduce the caller's tier filter to a single upper-bound integer in
- * `[1, MAX_TIER]`. An undefined or empty filter widens to the full ladder
- * (`MAX_TIER`); invalid entries (anything outside `1..MAX_TIER`) are
- * dropped before computing the max so a stray `0` or `5` does not collapse
- * the bound. Spec: Bug 4 reinterprets `tierFilter` as an upper bound rather
- * than a literal subset.
- */
-function maxRequestedTier(filter: ReadonlyArray<number> | undefined): number {
-  if (filter === undefined) return MAX_TIER;
-  const valid = filter.filter((tier) => tier === 1 || tier === 2 || tier === 3);
-  if (valid.length === 0) return MAX_TIER;
-  return Math.max(...valid);
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: tier-by-tier orchestration is clearer in one function than split across helpers; mirrors the per-tier try/catch pattern that has lived here since Phase 3.
 export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
-  const start = Date.now();
-  const {
-    notePath,
-    noteBody,
-    embedder,
-    extractor,
-    bus,
-    signal,
-    surrealDb,
-    linker,
-    chunkSizes,
-    tierFilter,
-  } = args;
+  const start = performance.now();
+  const { notePath, noteBody, bus, surrealDb, tierFilter } = args;
   const sha = await sha256(noteBody);
 
-  if (surrealDb === undefined) {
-    return {
-      notePath,
-      noteSha: sha,
-      chunkCount: 0,
-      embedCount: 0,
-      nodeCount: 0,
-      edgeCount: 0,
-      durationMs: Date.now() - start,
-    };
-  }
-
-  // Bug 4 fix: `tierFilter` is an upper bound, not a literal subset. We
-  // run every tier in `[1..maxRequested]` whose `tier{N}_at` is still
-  // NONE so a fresh note enqueued with `awaken --tier 2` transparently
-  // runs Tier 1 first, while a `reindex --tier 2` call (which clears
-  // only `tier2_at` upstream) re-runs Tier 2 alone because Tier 1 is
-  // already stamped and skipped here. Tiers above `maxRequested` never
-  // run regardless of their state.
+  // A filter is an upper bound: prerequisites run when unfinished, completed
+  // lower tiers stay untouched, and higher tiers never run.
   const upperBound = maxRequestedTier(tierFilter);
   const fetchedTierState = await fetchNoteTierState(surrealDb.db, notePath);
-  // M2: when the on-disk body sha drifts from the previously indexed sha,
-  // a watcher-driven edit landed but the existing `tier{N}_at` stamps still
-  // reflect the pre-edit content. Clear all three stamps and treat every
-  // tier as un-run so the new body flows through Tier 1 → Tier 2 → Tier 3
-  // regardless of the caller's filter staying within `[1..upperBound]`.
+  // Completion stamps describe specific source bytes. Clear them when the
+  // body changes so each permitted tier processes the current content.
   const storedSha = await fetchNoteShaByPath(surrealDb.db, notePath);
   const shaDrifted = storedSha !== null && storedSha !== sha;
   if (shaDrifted) {
@@ -153,105 +90,215 @@ export async function indexNote(args: IndexNoteArgs): Promise<IndexResult> {
   const tierState = shaDrifted
     ? { tier1Done: false, tier2Done: false, tier3Done: false }
     : fetchedTierState;
-  const runTier1Wanted = upperBound >= 1 && !tierState.tier1Done;
+  const runTier1Wanted = !tierState.tier1Done;
   const runTier2Wanted = upperBound >= 2 && !tierState.tier2Done;
   const runTier3Wanted = upperBound >= 3 && !tierState.tier3Done;
 
-  // Phase 5 Task 11: when Tier 1 is filtered out the orchestrator must
-  // still hand Tier 2 a `BlockSpec[]` and Tier 3 a `noteId`. Both are
-  // available as side effects of a Tier 1 run; when Tier 1 is skipped
-  // we re-derive them from the saved source (extract is a pure function)
-  // and from the existing `note` row respectively.
+  // Later tiers reuse earlier outputs from this pass. When an earlier tier is
+  // already complete, its required inputs are recovered from source or storage.
   let tier1Blocks: BlockSpec[] | null = null;
   let tier1NoteId: RecordId<"note"> | null = null;
 
   if (runTier1Wanted) {
-    try {
-      const vaultPaths = await listNotePaths(surrealDb.db);
-      if (!vaultPaths.includes(notePath)) {
-        vaultPaths.push(notePath);
-      }
-      const tier1Output = await runTier1(surrealDb.db, {
-        notePath,
-        source: noteBody,
-        vaultPaths,
-        bus,
-      });
-      tier1Blocks = tier1Output.extraction.blocks;
-      tier1NoteId = tier1Output.noteId;
-      bus.emit({
-        type: "indexer:tier1-done",
-        path: notePath,
-        bodySha: tier1Output.extraction.bodySha,
-      });
-    } catch (error) {
-      bus.emit({
-        type: "indexer:error",
-        path: notePath,
-        message: error instanceof Error ? error.message : String(error),
-        phase: "tier1",
-      });
-      return buildResult(notePath, sha, 0, start);
-    }
+    const output = await executeTier1(args);
+    if (output === null) return buildResult(notePath, sha, 0, start);
+    tier1Blocks = output.blocks;
+    tier1NoteId = output.noteId;
+  } else if (storedSha === sha) {
+    // A successful retry may reuse an existing durable receipt; report it so
+    // a transient read/database failure does not leave readiness stuck failed.
+    bus.emit({ type: "indexer:tier1-reused", path: notePath, bodySha: sha });
   }
 
   let chunkCount = 0;
+  // Tier 3 work counts ride out on the final event for per-note observability.
+  let tier3LlmCalls = 0;
+  let tier3Windows = 0;
   if (runTier2Wanted) {
-    try {
-      const blocks = tier1Blocks ?? extract(processAst(noteBody), notePath, noteBody).blocks;
-      const tier2Output = await runTier2(surrealDb.db, {
-        notePath,
-        blocks,
-        embedder,
-        ...(chunkSizes !== undefined ? { chunkSizes } : {}),
-      });
-      chunkCount = tier2Output.chunkCount;
-      tier1NoteId = tier1NoteId ?? tier2Output.noteId;
-      bus.emit({ type: "indexer:tier2-done", path: notePath, chunkCount });
-    } catch (error) {
-      bus.emit({
-        type: "indexer:error",
-        path: notePath,
-        message: error instanceof Error ? error.message : String(error),
-        phase: "tier2",
-      });
-      return buildResult(notePath, sha, 0, start);
-    }
+    const output = await executeTier2(args, tier1Blocks);
+    if (output === null) return buildResult(notePath, sha, 0, start);
+    chunkCount = output.chunkCount;
+    tier1NoteId ??= output.noteId;
   }
 
-  if (runTier3Wanted && linker !== undefined) {
-    try {
-      const noteId = tier1NoteId ?? (await lookupNoteByPath(surrealDb.db, notePath));
-      if (noteId === null) {
-        throw new Error(
-          `indexNote: cannot run Tier 3 for '${notePath}'; no note row exists (Tier 1 must run first)`,
-        );
-      }
-      const chunks = await fetchChunksForTier3(surrealDb.db, noteId);
-      await runTier3(surrealDb.db, {
-        notePath,
-        chunks,
-        extractor,
-        linker,
-        signal,
-      });
-      bus.emit({ type: "indexer:tier3-done", path: notePath });
-    } catch (error) {
-      bus.emit({
-        type: "indexer:error",
-        path: notePath,
-        message: error instanceof Error ? error.message : String(error),
-        phase: "tier3",
-      });
+  if (runTier3Wanted) {
+    const output = await executeTier3(args, tier1NoteId);
+    if (output === null) {
       const partial = buildResult(notePath, sha, chunkCount, start);
       emitNoteIndexed(bus, notePath, partial);
       return partial;
     }
+    tier3LlmCalls = output.llmCalls;
+    tier3Windows = output.extractionWindows;
   }
 
-  const result = buildResult(notePath, sha, chunkCount, start);
+  const result = buildResult(notePath, sha, chunkCount, start, {
+    llmCalls: tier3LlmCalls,
+    extractionWindows: tier3Windows,
+  });
   emitNoteIndexed(bus, notePath, result);
   return result;
+}
+
+interface Tier1Progress {
+  blocks: BlockSpec[];
+  noteId: RecordId<"note">;
+}
+
+async function executeTier1(args: IndexNoteArgs): Promise<Tier1Progress | null> {
+  try {
+    const vaultPaths =
+      args.vaultPaths ?? (await getVaultPathUniverse(args.surrealDb.db, args.bus, args.notePath));
+    if (!vaultPaths.includes(args.notePath)) vaultPaths.push(args.notePath);
+    const output = await runTier1(args.surrealDb.db, {
+      notePath: args.notePath,
+      source: args.noteBody,
+      deferCompletion: true,
+      vaultPaths,
+      bus: args.bus,
+    });
+    await persistLexicalChunks(args.surrealDb.db, {
+      noteId: output.noteId,
+      sourceRevision: await sha256(args.noteBody),
+      blocks: output.extraction.blocks,
+      chunkSizes: args.chunkSizes,
+    });
+    args.bus.emit({
+      type: "indexer:tier1-done",
+      path: args.notePath,
+      bodySha: output.extraction.bodySha,
+    });
+    return { blocks: output.extraction.blocks, noteId: output.noteId };
+  } catch (error) {
+    emitTierError(args, "tier1", error);
+    return null;
+  }
+}
+
+interface Tier2Progress {
+  chunkCount: number;
+  noteId: RecordId<"note">;
+}
+
+async function executeTier2(
+  args: IndexNoteArgs,
+  tier1Blocks: BlockSpec[] | null,
+): Promise<Tier2Progress | null> {
+  try {
+    const blocks =
+      tier1Blocks ?? extract(processAst(args.noteBody), args.notePath, args.noteBody).blocks;
+    const output = await runTier2(args.surrealDb.db, {
+      sourceRevision: await sha256(args.noteBody),
+      notePath: args.notePath,
+      signal: args.signal,
+      blocks,
+      embedder: args.embedder,
+      bus: args.bus,
+      chunkSizes: args.chunkSizes,
+    });
+    args.bus.emit({
+      type: "indexer:tier2-done",
+      path: args.notePath,
+      chunkCount: output.chunkCount,
+    });
+    return { chunkCount: output.chunkCount, noteId: output.noteId };
+  } catch (error) {
+    emitTierError(args, "tier2", error);
+    return null;
+  }
+}
+
+async function executeTier3(
+  args: IndexNoteArgs,
+  priorNoteId: RecordId<"note"> | null,
+): Promise<Tier3Telemetry | null> {
+  try {
+    const noteId = priorNoteId ?? (await lookupNoteByPath(args.surrealDb.db, args.notePath));
+    if (noteId === null) {
+      throw new Error(
+        `indexNote: cannot run Tier 3 for '${args.notePath}'; no note row exists (Tier 1 must run first)`,
+      );
+    }
+    const chunks = await fetchChunksForTier3(
+      args.surrealDb.db,
+      noteId,
+      args.embedder.getIdentity(),
+    );
+    const output = await runTier3(args.surrealDb.db, {
+      notePath: args.notePath,
+      chunks,
+      extractor: args.extractor,
+      runLinker: args.runLinker,
+      signal: args.signal,
+    });
+    args.bus.emit({ type: "indexer:tier3-done", path: args.notePath });
+    return { llmCalls: output.llmCalls, extractionWindows: output.extractionWindows };
+  } catch (error) {
+    emitTierError(args, "tier3", error);
+    return null;
+  }
+}
+
+function emitTierError(
+  args: Pick<IndexNoteArgs, "bus" | "notePath" | "noteBody">,
+  phase: "tier1" | "tier2" | "tier3",
+  error: unknown,
+): void {
+  args.bus.emit({
+    type: "indexer:error",
+    path: args.notePath,
+    message: error instanceof Error ? error.message : String(error),
+    phase,
+    sourceRevision: createHash("sha256").update(args.noteBody).digest("hex"),
+  });
+}
+
+/**
+ * Process-wide cache of the vault's `note.path` universe.
+ *
+ * Tier 1's wikilink resolver needs every known path. Fetching it per note
+ * made a vault-wide awaken quadratic (`O(notes^2)` rows shipped over the
+ * wire). The list is fetched once and then kept correct incrementally:
+ *
+ *   - every note that flows through `indexNote` is added to the cached list
+ *     (covers creates, since a create always reaches the indexer),
+ *   - `indexer:tombstoned` and `indexer:renamed` invalidate the cache
+ *     (covers deletes and renames),
+ *   - {@link invalidateVaultPathUniverse} lets the awaken worker force a
+ *     fresh read at the start of a run.
+ *
+ * The single-note watcher path needs no run-level cache: it hits the same
+ * incremental rules and pays one `listNotePaths` on a cold cache.
+ */
+let cachedVaultPaths: string[] | null = null;
+const subscribedBuses = new WeakSet<EventBus>();
+
+export function invalidateVaultPathUniverse(): void {
+  cachedVaultPaths = null;
+}
+
+/** Test/priming hook: seed the cache with a known path universe. */
+export function primeVaultPathUniverse(paths: string[]): void {
+  cachedVaultPaths = [...paths];
+}
+
+async function getVaultPathUniverse(
+  db: SurrealConnection["db"],
+  bus: EventBus,
+  notePath: string,
+): Promise<string[]> {
+  if (!subscribedBuses.has(bus)) {
+    subscribedBuses.add(bus);
+    bus.on("indexer:tombstoned", invalidateVaultPathUniverse);
+    bus.on("indexer:renamed", invalidateVaultPathUniverse);
+  }
+  if (cachedVaultPaths === null) {
+    cachedVaultPaths = await listNotePaths(db);
+  }
+  if (!cachedVaultPaths.includes(notePath)) {
+    cachedVaultPaths.push(notePath);
+  }
+  return cachedVaultPaths;
 }
 
 function emitNoteIndexed(bus: EventBus, notePath: string, result: IndexResult): void {
@@ -261,11 +308,16 @@ function emitNoteIndexed(bus: EventBus, notePath: string, result: IndexResult): 
     result: {
       chunkCount: result.chunkCount,
       embedCount: result.embedCount,
-      nodeCount: result.nodeCount,
-      edgeCount: result.edgeCount,
       durationMs: result.durationMs,
+      llmCalls: result.llmCalls,
+      extractionWindows: result.extractionWindows,
     },
   });
+}
+
+interface Tier3Telemetry {
+  llmCalls: number;
+  extractionWindows: number;
 }
 
 function buildResult(
@@ -273,15 +325,16 @@ function buildResult(
   noteSha: string,
   chunkCount: number,
   startMs: number,
+  tier3: Tier3Telemetry = { llmCalls: 0, extractionWindows: 0 },
 ): IndexResult {
   return {
     notePath,
     noteSha,
     chunkCount,
     embedCount: chunkCount,
-    nodeCount: 0,
-    edgeCount: 0,
-    durationMs: Date.now() - startMs,
+    durationMs: Math.max(0, Math.round(performance.now() - startMs)),
+    llmCalls: tier3.llmCalls,
+    extractionWindows: tier3.extractionWindows,
   };
 }
 

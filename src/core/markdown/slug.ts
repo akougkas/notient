@@ -10,8 +10,6 @@
  * collapse to single dashes, punctuation stripped except hyphens, and
  * leading/trailing dashes trimmed. Non-ASCII letters and digits are
  * preserved (Unicode property classes \p{L} and \p{N}).
- *
- * Spec: §8.3, Phase 2 plan §Task 8.
  */
 export function headingSlug(text: string): string {
   if (text.length === 0) {

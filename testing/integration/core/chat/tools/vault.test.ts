@@ -1,3 +1,6 @@
+import { contentRevision } from "../../../../../src/api/notes";
+import { GraphService } from "../../../../../src/core/graph/graphService";
+import { STRUCTURAL_INDEX_VERSION } from "../../../../../src/core/markdown/types";
 /**
  * Vault chat-tool tests.
  *
@@ -33,6 +36,7 @@ import type { VitalsService } from "../../../../../src/core/vitals/vitalsService
 import { type SurrealServerHandle, startSurreal } from "../../../../../src/daemon/surrealServer";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
+const TEST_CONTEXT = { clientIdentity: "human" } as const;
 
 class FakePipeline {
   readonly calls: { query: SearchQuery; signal: AbortSignal }[] = [];
@@ -48,8 +52,14 @@ function asPipeline(fake: FakePipeline): SearchPipeline {
 }
 
 class InMemoryFacade implements VaultFacade {
+  isIndexablePath() {
+    return true;
+  }
+  readBounded(path: string) {
+    return this.read(path);
+  }
   constructor(private readonly files: Map<string, string>) {}
-  async readNote(filePath: string): Promise<string> {
+  async read(filePath: string): Promise<string> {
     const value = this.files.get(filePath);
     if (value === undefined) throw new Error(`not found: ${filePath}`);
     return value;
@@ -70,6 +80,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] vault.list_neighbors", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -78,8 +89,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] vault.list_neighbors", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -91,7 +102,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] vault.list_neighbors", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     for (const table of [
@@ -111,22 +122,22 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] vault.list_neighbors", () => {
   test("returns approved-and-applied neighbors with direction", async () => {
     const aId = await upsertNoteByPath(connection.db, {
       path: "a.md",
-      sha: "sha-a",
+      sha: contentRevision("a.md"),
       wordCount: 5,
     });
     const bId = await upsertNoteByPath(connection.db, {
       path: "b.md",
-      sha: "sha-b",
+      sha: contentRevision("b.md"),
       wordCount: 5,
     });
     const cId = await upsertNoteByPath(connection.db, {
       path: "c.md",
-      sha: "sha-c",
+      sha: contentRevision("c.md"),
       wordCount: 5,
     });
     const dId = await upsertNoteByPath(connection.db, {
       path: "d.md",
-      sha: "sha-d",
+      sha: contentRevision("d.md"),
       wordCount: 5,
     });
     await relateEdge(connection.db, {
@@ -160,9 +171,28 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] vault.list_neighbors", () => {
       agent: "linker",
       approved: false,
     });
-    const tool = makeListNeighborsTool(connection.db);
-    const result = await tool.invoke({ notePath: "a.md" }, new AbortController().signal);
-    const sorted = result.neighbors.sort((x, y) => x.notePath.localeCompare(y.notePath));
+    await connection.db
+      .query("UPDATE note SET tier1_at = time::now(), structural_version = $version;", {
+        version: STRUCTURAL_INDEX_VERSION,
+      })
+      .collect();
+    const tool = makeListNeighborsTool(
+      new GraphService({ db: connection.db, vault: { readBounded: async (path) => path } }),
+    );
+    const result = await tool.invoke(
+      { notePath: "a.md" },
+      new AbortController().signal,
+      TEST_CONTEXT,
+    );
+    const sorted = result.connections
+      .map((row) => ({
+        notePath: row.note.path,
+        type: row.relation,
+        agent: row.author,
+        confidence: row.assessment,
+        direction: row.direction,
+      }))
+      .sort((x, y) => x.notePath.localeCompare(y.notePath));
     expect(sorted).toEqual([
       {
         notePath: "b.md",

@@ -1,0 +1,10 @@
+{
+  "name": "notient",
+  "version": "0.1.0",
+  "description": "Grounded memory and review-gated Markdown notes for Claude Code through Notient.",
+  "author": {
+    "name": "Anthony Kougkas"
+  },
+  "license": "MIT",
+  "keywords": ["notient", "markdown", "obsidian", "memory", "mcp"]
+}

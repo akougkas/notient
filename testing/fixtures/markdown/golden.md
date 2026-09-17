@@ -27,11 +27,11 @@ A list with a tag and a block id:
 - Second item ^list-item-id
 - Third item with nested #concept/auth/oauth
 
-#### Heading Four (rolls into H3)
+#### Heading Four
 
-Content under H4 belongs to the H3 ancestor block.
+Content under H4 remains attached to its own heading block.
 
-##### Heading Five (also rolls in)
+##### Heading Five
 
 ```
 Code block with [[not-a-link]] and #not-a-tag inside.

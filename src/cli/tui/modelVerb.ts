@@ -12,18 +12,15 @@ export interface ModelVerbView {
 export interface ModelInfo {
   readonly id: string;
   readonly type: string;
-  readonly state: "loaded" | "not-loaded";
+  readonly state: "loaded" | "not-loaded" | "unknown";
   readonly loadedContextLength?: number;
   readonly maxContextLength?: number;
   readonly capabilities?: ReadonlyArray<string>;
 }
 
 /**
- * Project the relevant fields out of the live settings view so /model show
- * stays small and predictable. The "chat" model is the primary reasoning
- * slot; if the operator has fanned the slots manually the bare /model
- * command may misreport — they can always run /model show or read
- * config.json directly.
+ * Project the deployment fields out of the daemon's immutable boot snapshot
+ * so /model show reports the exact env/catalog resolution in current use.
  */
 export function buildModelView(settings: NotientSettings): ModelVerbView {
   return {
@@ -47,57 +44,20 @@ export function formatModelView(view: ModelVerbView): string {
 }
 
 /**
- * Compose a settings patch that swaps the chat-model in every slot Notient
- * uses for reasoning, fast paths, reranking, and co-authoring. Tool-mode
- * pins are not touched here — the next chat turn will probe the new model
- * and write its tool-mode pin via the existing path.
- */
-export function buildUseModelPatch(modelId: string): Partial<NotientSettings> {
-  return {
-    primary: {
-      reasoningModel: modelId,
-      fastModel: modelId,
-      rerankerModel: modelId,
-    } as NotientSettings["primary"],
-    deep: {
-      reasoningModel: modelId,
-      fastModel: modelId,
-      rerankerModel: modelId,
-    } as NotientSettings["deep"],
-    coAuthor: { model: modelId } as NotientSettings["coAuthor"],
-  };
-}
-
-export function buildUseEmbedPatch(modelId: string): Partial<NotientSettings> {
-  return {
-    primary: { embeddingModel: modelId } as NotientSettings["primary"],
-    deep: { embeddingModel: modelId } as NotientSettings["deep"],
-    embedding: { model: modelId } as NotientSettings["embedding"],
-  };
-}
-
-export function buildEndpointPatch(baseUrl: string): Partial<NotientSettings> {
-  return {
-    primary: { baseUrl } as NotientSettings["primary"],
-    deep: { baseUrl } as NotientSettings["deep"],
-    embedding: { baseUrl } as NotientSettings["embedding"],
-  };
-}
-
-/**
- * Format the result of /api/v0/models as a tabular block: id, type, state,
- * loaded context length (humanized to k-tokens). Loaded models are pinned
- * to the top, then sorted by id.
+ * Format the canonical endpoint catalog as a tabular block: id, type, state,
+ * and known context length (humanized to k-tokens). Loaded models are pinned
+ * above models whose load state is unknown, then unavailable models.
  */
 export function formatModelList(models: ReadonlyArray<ModelInfo>): string {
   if (models.length === 0) return "no models reported by endpoint.";
   const sorted = [...models].sort((a, b) => {
-    if (a.state !== b.state) return a.state === "loaded" ? -1 : 1;
+    const stateOrder = { loaded: 0, unknown: 1, "not-loaded": 2 } as const;
+    if (a.state !== b.state) return stateOrder[a.state] - stateOrder[b.state];
     return a.id.localeCompare(b.id);
   });
   const idWidth = sorted.reduce((max, m) => Math.max(max, m.id.length), 2);
   const typeWidth = sorted.reduce((max, m) => Math.max(max, m.type.length), 4);
-  const stateWidth = "state".length;
+  const stateWidth = sorted.reduce((max, m) => Math.max(max, m.state.length), "state".length);
   const ctxWidth = 10;
   const header = `${pad("id", idWidth)}  ${pad("type", typeWidth)}  ${pad("state", stateWidth)}  ${pad("context", ctxWidth)}`;
   const rule = "-".repeat(header.length);

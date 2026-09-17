@@ -1,4 +1,5 @@
 import type { VaultAdapter } from "../adapters/vaultAdapter";
+import type { NoteAnalysis } from "./analysis/noteAnalysis";
 import type { ApprovalService } from "./approvals/approvalService";
 import type { BackgroundRegistry } from "./awaken/backgroundRegistry";
 import type { ApprovalGate } from "./chat/approvalGate";
@@ -8,31 +9,36 @@ import type { ConversationIndex } from "./chat/conversationIndex";
 import type { ConversationStore } from "./chat/conversationStore";
 import type { ToolModeCache } from "./chat/toolModeProbe";
 import type { ToolRegistry } from "./chat/tools/registry";
-import type { VaultConfig } from "./config/configFile";
+import type { AgentRunExecutor } from "./coordinator/agentRunExecutor";
 import type { Coordinator } from "./coordinator/coordinator";
-import type { ReasoningMutex } from "./coordinator/reasoningMutex";
+import type { ReasoningScheduler } from "./coordinator/reasoningScheduler";
 import type { SurrealConnection } from "./db/surreal";
 import type { TranscriptDistiller } from "./distill/transcriptDistiller";
 import type { EventBus } from "./events/eventBus";
+import type { GraphService } from "./graph/graphService";
+import type { ChangeService } from "./history/changeService";
+import type { DurableNoteWriter } from "./history/durableNoteWriter";
 import type { HistoryService } from "./history/historyService";
 import type { Embedder } from "./indexer/embedder";
 import type { Extractor } from "./indexer/extractor";
 import type { IndexerQueue } from "./indexer/indexerQueue";
 import type { LLMProvider } from "./llm/provider";
-import type { SavedQueries } from "./search/savedQueries";
-import type { SearchHistory } from "./search/searchHistory";
+import type { JobService } from "./pipelines/jobService";
 import type { SearchPipeline } from "./search/searchPipeline";
 import type { AgentEventStore } from "./services/agentEventStore";
 import type { HealthMonitor } from "./services/healthMonitor";
-import type { IdleDetector } from "./services/idleDetector";
-import type { ProbeCache } from "./services/probeCache";
+import type { SentienceActivity } from "./services/sentienceActivity";
 import type { SessionGrants } from "./services/sessionGrants";
-import type { VaultBootstrap } from "./services/vaultBootstrap";
 import type { VaultLockHandle } from "./services/vaultLock";
 import type { SettingsService } from "./settings/settingsService";
+import type { DaemonMutationJournal } from "./vault/daemonMutationJournal";
 import type { VitalsService } from "./vitals/vitalsService";
 
 export interface ServiceRegistry {
+  analysis: NoteAnalysis;
+  graph: GraphService;
+  changes: ChangeService;
+  jobs: JobService;
   bus: EventBus;
   settings: SettingsService;
   vault: VaultAdapter;
@@ -41,7 +47,6 @@ export interface ServiceRegistry {
   embeddingLLM: LLMProvider;
   health: HealthMonitor;
   lock: VaultLockHandle;
-  probeCache: ProbeCache;
   agentEventStore: AgentEventStore;
   sessionGrants: SessionGrants;
   /**
@@ -49,22 +54,29 @@ export interface ServiceRegistry {
    * The daemon's shutdown path reads this registry to await pending
    * workers within a bounded grace window before flipping any rows that
    * remained `running` to `failed` with `failure_reason='daemon_shutdown'`.
-   * Bootstrap registers the concrete instance during Phase A so the
-   * registry is available before the awaken handlers wire up.
+   * Bootstrap registers the concrete instance with the infrastructure
+   * services so it exists before awaken handlers wire up.
    */
   awakenBackgroundRegistry: BackgroundRegistry;
+  /**
+   * Vault-relative-path predicate compiled from
+   * `settings.indexer.excludePaths` / `excludeGlobs`. Registered in
+   * alongside the infrastructure services so the vault listing, indexer
+   * queue, watcher, and awaken/reindex handlers all consult one instance.
+   */
+  indexExclusion: (vaultPath: string) => boolean;
   indexer: IndexerQueue;
   embedder: Embedder;
   extractor: Extractor;
   coordinator: Coordinator;
-  idleDetector: IdleDetector;
-  reasoningMutex: ReasoningMutex;
+  sentienceActivity: SentienceActivity;
+  daemonMutationJournal: DaemonMutationJournal;
+  reasoningScheduler: ReasoningScheduler;
+  agentRunExecutor: AgentRunExecutor;
 
-  // Phase 4 services. Each registers in main.ts before kernel.seal().
+  // Runtime services. Each registers before the kernel is sealed.
   vitalsService: VitalsService;
   searchPipeline: SearchPipeline;
-  savedQueries: SavedQueries;
-  searchHistory: SearchHistory;
   conversationStore: ConversationStore;
   conversationIndex: ConversationIndex;
   toolRegistry: ToolRegistry;
@@ -73,33 +85,21 @@ export interface ServiceRegistry {
   contextManager: ContextManager;
   chatService: ChatService;
   historyService: HistoryService;
+  durableNoteWriter: DurableNoteWriter;
   approvalService: ApprovalService;
   transcriptDistiller: TranscriptDistiller;
-  vaultBootstrap: VaultBootstrap;
 
-  // Phase C — optional vision routing slot. Registered only when the primary
-  // LM Studio model passes the vision probe OR `chat.vision.enabled` is true
-  // and the configured fallback baseUrl probes successfully. Bootstrap omits
-  // this key when neither path is viable; chat handlers must guard with has().
+  // Vision routing is the one capability-gated slot. Bootstrap registers it
+  // only when the primary model passes its probe; chat handlers guard access
+  // with has().
   visionLLM: VisionRouterLike;
 
   /**
-   * Optional SurrealDB connection slot. Registered by bootstrap after the
-   * embedded `surreal start` server is spawned, the SDK connects, and the
-   * schema is applied. Intentionally absent from REQUIRED_KEYS and every
-   * PHASE_*_KEYS list during Phase 1; consumers must guard with
-   * `kernel.has("surrealDb")` before calling `kernel.get("surrealDb")`.
+   * Canonical SurrealDB substrate. Bootstrap registers it only after the
+   * embedded server is live, the SDK connects, and the schema is applied.
+   * Every sealed kernel phase requires this connection.
    */
   surrealDb: SurrealConnection;
-
-  /**
-   * Per-vault TOML config loaded once at boot from
-   * `<vault>/.notient/config.toml`. Bootstrap writes it before the indexer
-   * queue, embedder, extractor, and surreal start are configured; every
-   * consumer of indexer concurrency / chunk sizes / awaken defaults reads
-   * from this slot rather than re-parsing the TOML file. Phase 4 Task 10.
-   */
-  vaultConfig: VaultConfig;
 }
 
 /**
@@ -122,21 +122,22 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "embeddingLLM",
   "health",
   "lock",
-  "probeCache",
   "agentEventStore",
   "sessionGrants",
   "awakenBackgroundRegistry",
+  "indexExclusion",
+  "surrealDb",
   "indexer",
   "embedder",
   "extractor",
-  "reasoningMutex",
-  "idleDetector",
+  "reasoningScheduler",
+  "agentRunExecutor",
+  "sentienceActivity",
+  "daemonMutationJournal",
   "coordinator",
   "approvalService",
   "vitalsService",
   "searchPipeline",
-  "savedQueries",
-  "searchHistory",
   "conversationStore",
   "conversationIndex",
   "toolRegistry",
@@ -145,8 +146,8 @@ const REQUIRED_KEYS: ServiceKey[] = [
   "contextManager",
   "chatService",
   "historyService",
+  "durableNoteWriter",
   "transcriptDistiller",
-  "vaultBootstrap",
 ];
 
 const PHASE_A_KEYS: ServiceKey[] = [
@@ -158,10 +159,11 @@ const PHASE_A_KEYS: ServiceKey[] = [
   "embeddingLLM",
   "health",
   "lock",
-  "probeCache",
   "agentEventStore",
   "sessionGrants",
   "awakenBackgroundRegistry",
+  "indexExclusion",
+  "surrealDb",
 ];
 
 const PHASE_B_KEYS: ServiceKey[] = [
@@ -169,12 +171,11 @@ const PHASE_B_KEYS: ServiceKey[] = [
   "indexer",
   "embedder",
   "extractor",
-  "vaultBootstrap",
-  "idleDetector",
-  "reasoningMutex",
+  "sentienceActivity",
+  "daemonMutationJournal",
+  "reasoningScheduler",
+  "agentRunExecutor",
   "searchPipeline",
-  "savedQueries",
-  "searchHistory",
   "vitalsService",
   "coordinator",
 ];
@@ -189,6 +190,7 @@ const PHASE_C_KEYS: ServiceKey[] = [
   "contextManager",
   "chatService",
   "historyService",
+  "durableNoteWriter",
   "approvalService",
   "transcriptDistiller",
 ];

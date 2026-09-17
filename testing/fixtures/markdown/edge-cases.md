@@ -30,11 +30,11 @@ A list-item with id ^para-1
 
 Paragraph under H3 with heading qualifier [[note#Heading Two]] and block qualifier [[note#^block-x]] and an embed ![[asset.png]]. ^h3-trailing
 
-#### H4 (rolls into H3)
+#### H4 Heading
 
-Content under H4 belongs to the H3 ancestor block.
+Content under H4 remains attached to its own heading block.
 
-##### H5 (also rolls in)
+##### H5 Heading
 
 ```
 Code block: [[skipped]] and #skipped

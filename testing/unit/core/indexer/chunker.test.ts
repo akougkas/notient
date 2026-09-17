@@ -1,70 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { chunkBlocks, chunkNote, tokenEstimate } from "../../../../src/core/indexer/chunker";
+import { chunkBlocks, tokenEstimate } from "../../../../src/core/indexer/chunker";
 import { CHUNK } from "../../../../src/core/indexer/concurrencyDefaults";
 import type { BlockSpec } from "../../../../src/core/markdown/types";
 
-describe("chunkNote", () => {
-  test("returns single chunk for short note", async () => {
-    const chunks = await chunkNote("/n.md", "Hello world.");
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].notePath).toBe("/n.md");
-    expect(chunks[0].ord).toBe(0);
-    expect(chunks[0].text).toBe("Hello world.");
-    expect(chunks[0].id).toMatch(/^[0-9a-f]{16}$/);
-    expect(chunks[0].sha).toMatch(/^[0-9a-f]{64}$/);
-    expect(chunks[0].tokenEstimate).toBeGreaterThan(0);
-  });
-
-  test("returns empty array for empty body", async () => {
-    expect(await chunkNote("/n.md", "")).toEqual([]);
-    expect(await chunkNote("/n.md", "   \n  \n")).toEqual([]);
-  });
-
-  test("merges short paragraphs while under target tokens", async () => {
-    const body = "Para one.\n\nPara two.\n\nPara three.";
-    const chunks = await chunkNote("/n.md", body, { targetTokens: 1000, maxTokens: 2000 });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].text).toBe("Para one.\n\nPara two.\n\nPara three.");
-  });
-
-  test("splits when next paragraph would exceed target tokens", async () => {
-    const big = "x ".repeat(800); // ~400 tokens
-    const body = `${big.trim()}\n\n${big.trim()}\n\n${big.trim()}`;
-    const chunks = await chunkNote("/n.md", body, { targetTokens: 400, maxTokens: 800 });
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const c of chunks) expect(c.tokenEstimate).toBeLessThanOrEqual(800);
-  });
-
-  test("ord is monotonically increasing from 0", async () => {
-    const body = Array.from({ length: 5 }, (_, i) => `${"y ".repeat(900).trim()} P${i}`).join(
-      "\n\n",
-    );
-    const chunks = await chunkNote("/n.md", body, { targetTokens: 400, maxTokens: 800 });
-    for (let i = 0; i < chunks.length; i++) expect(chunks[i].ord).toBe(i);
-  });
-
-  test("ids are stable across runs and unique within a note", async () => {
-    const body = "First.\n\nSecond.\n\nThird.";
-    const a = await chunkNote("/n.md", body, { targetTokens: 5, maxTokens: 10 });
-    const b = await chunkNote("/n.md", body, { targetTokens: 5, maxTokens: 10 });
-    expect(a.map((c) => c.id)).toEqual(b.map((c) => c.id));
-    expect(new Set(a.map((c) => c.id)).size).toBe(a.length);
-  });
-
-  test("hard-splits an oversize paragraph at sentence boundaries", async () => {
-    const sentence = "This is one sentence with several words. ";
-    const body = sentence.repeat(200); // ~10000 chars, far over maxTokens
-    const chunks = await chunkNote("/n.md", body, { targetTokens: 200, maxTokens: 400 });
-    for (const c of chunks) {
-      expect(c.tokenEstimate).toBeLessThanOrEqual(400);
-      expect(c.text.trim().length).toBeGreaterThan(0);
-    }
-  });
-});
-
 function makeHeadingBlock(
   ord: number,
-  level: 1 | 2 | 3,
+  level: 1 | 2 | 3 | 4 | 5 | 6,
   headingPath: string[],
   startLine: number,
   endLine: number,
@@ -184,6 +125,16 @@ describe("chunkBlocks", () => {
     expect(specs[2].text).toBe("Third section body.");
   });
 
+  test("an H6 block remains a first-class chunk section", () => {
+    const blocks: BlockSpec[] = [
+      makeHeadingBlock(0, 6, ["One", "Two", "Three", "Four", "Five", "Six"], 6, 7, "Deep."),
+    ];
+    const specs = chunkBlocks(blocks);
+    expect(specs).toHaveLength(1);
+    expect(specs[0].blockOrd).toBe(0);
+    expect(specs[0].text).toBe("Deep.");
+  });
+
   test("standalone block under heading attaches to that heading section", () => {
     const blocks: BlockSpec[] = [
       makeHeadingBlock(0, 1, ["Heading"], 1, 1, "Heading-attached body."),
@@ -225,5 +176,52 @@ describe("tokenEstimate", () => {
     expect(tokenEstimate("abcd")).toBe(1);
     expect(tokenEstimate("abcde")).toBe(2);
     expect(tokenEstimate("x".repeat(400))).toBe(100);
+  });
+});
+
+describe("stripHtmlTags", () => {
+  test("removes inline HTML and MathML but keeps text and autolinks", async () => {
+    const { stripHtmlTags } = await import("../../../../src/core/indexer/chunker");
+    const input =
+      "score <math><semantics><mrow><mi>n</mi><mo>,</mo><mi>m</mi></mrow></semantics></math> see <https://example.com> and <sup>1</sup>";
+    const out = stripHtmlTags(input);
+    expect(out).not.toContain("<mi>");
+    expect(out).not.toContain("<sup>");
+    expect(out).toContain("<https://example.com>");
+    expect(out).toContain("n , m");
+    expect(out).toContain("1");
+  });
+
+  test("is the identity for text without angle brackets", async () => {
+    const { stripHtmlTags } = await import("../../../../src/core/indexer/chunker");
+    expect(stripHtmlTags("plain text\n\nmore")).toBe("plain text\n\nmore");
+  });
+
+  test("preserves angle-bracket syntax inside fenced and inline code", async () => {
+    const { stripHtmlTags } = await import("../../../../src/core/indexer/chunker");
+    const input = `outside <b>bold</b>
+
+\`\`\`cpp
+Vec<int> values;
+if (left < right) return Map<Key, Value>{};
+\`\`\`
+
+Keep \`Vec<float>\` and remove <em>this markup</em>.`;
+
+    const output = stripHtmlTags(input);
+    expect(output).toContain(`\`\`\`cpp
+Vec<int> values;
+if (left < right) return Map<Key, Value>{};
+\`\`\``);
+    expect(output).toContain("Keep `Vec<float>`");
+    expect(output).not.toContain("<b>");
+    expect(output).not.toContain("<em>");
+  });
+
+  test("preserves code through an unterminated fence", async () => {
+    const { stripHtmlTags } = await import("../../../../src/core/indexer/chunker");
+    const input = "before <i>text</i>\n~~~rust\nlet value: Vec<int> = read();\n<!-- code -->";
+
+    expect(stripHtmlTags(input)).toEndWith("~~~rust\nlet value: Vec<int> = read();\n<!-- code -->");
   });
 });

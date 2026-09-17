@@ -33,6 +33,7 @@ import { IndexerQueue } from "../../../../src/core/indexer/indexerQueue";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
 import { makeAwakenHandler } from "../../../../src/daemon/handlers/awaken";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { rpcRequest } from "../../../rpcRequest";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -139,6 +140,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -147,7 +149,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterAll(async () => {
@@ -160,17 +162,17 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  test("[smoke] one awaken pass produces the same cross-edge counts as two passes did before the fix", async () => {
+  test("[smoke] one awaken pass resolves every cross-note edge", async () => {
     await clearGraphTables(connection);
 
     const bus = new EventBus();
     const vault = new FsVault(vaultDir);
 
     // Bind a Tier-1-only indexer. Tier 2 / Tier 3 are out of scope for
-    // this regression: we only verify cross-note edge convergence on
-    // the first awaken pass. Wiring just Tier 1 keeps the smoke fast
+    // this contract: we verify cross-note edge convergence on the first
+    // awaken pass. Wiring just Tier 1 keeps the smoke fast
     // and avoids embedder/linker dependencies.
     const allMarkdown = await vault.listMarkdown();
     const vaultPaths = allMarkdown.map((entry) => entry.path);
@@ -185,7 +187,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
           vaultPaths,
           bus,
         });
-        // The awaken handler now drives `runAwakenWorker`, which awaits
+        // The awaken handler drives `runAwakenWorker`, which awaits
         // `indexer:note-indexed` per note before advancing. The bare
         // Tier-1-only indexNote in this smoke does not emit it; emit it
         // here so the worker observes per-note completion.
@@ -195,12 +197,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
           result: {
             chunkCount: 0,
             embedCount: 0,
-            nodeCount: 0,
-            edgeCount: 0,
             durationMs: 0,
+            llmCalls: 0,
+            extractionWindows: 0,
           },
         });
       },
+
+      isExcluded: () => false,
     });
 
     const handler = makeAwakenHandler({
@@ -209,8 +213,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
       vault,
       awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal: connection,
+      isExcluded: () => false,
+      approvalIntents: {
+        cancelForNoteDeletion: async () => ({ cancelled: 0, failed: 0 }),
+      },
     });
-    const result = await handler({ tier: [1] }, () => {}, "smoke-1");
+    const result = await handler(rpcRequest({ tier: [1] }, { requestId: "smoke-1" }));
     expect(result.ok).toBe(true);
     expect(result.queued).toBe(vaultPaths.length);
 
@@ -218,9 +226,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
     const noteCount = await countTable(connection, "note");
     expect(noteCount).toBe(vaultPaths.length);
 
-    // 12 frontmatter refs (a:2, b:1, c:1, d:1, e:1, f:2, g:1, h:1, i:1,
-    // j:1) all land on the first pass. Before the fix this number was
-    // 5 after pass 1 and only converged on pass 2.
+    // All 12 frontmatter refs (a:2, b:1, c:1, d:1, e:1, f:2, g:1, h:1,
+    // i:1, j:1) land on the first pass.
     const frontmatterRefs = await countWhere(
       connection,
       "frontmatter_ref",
@@ -244,7 +251,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] awaken cross-note edge pre-pass", () =>
     // A second awaken pass converges to the exact same numbers; the
     // pre-pass plus Tier 1's idempotent transaction guarantees no
     // duplicates accumulate.
-    const secondResult = await handler({ tier: [1] }, () => {}, "smoke-2");
+    const secondResult = await handler(rpcRequest({ tier: [1] }, { requestId: "smoke-2" }));
     expect(secondResult.ok).toBe(true);
 
     const secondFrontmatter = await countWhere(

@@ -1,3 +1,5 @@
+import type { CompletionMetadata } from "./completion";
+
 export interface ChatTextPart {
   type: "text";
   text: string;
@@ -13,22 +15,65 @@ export interface ChatImagePart {
 
 export type ChatContent = string | Array<ChatTextPart | ChatImagePart>;
 
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+/**
+ * OpenAI-compatible assistant tool call. `arguments` is a JSON *string*, not
+ * an object: that is what the wire format specifies and what llama.cpp's
+ * Qwen3-coder tool template expects when a prior round is replayed back into
+ * the prompt.
+ */
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface SystemChatMessage {
+  role: "system";
   content: ChatContent;
 }
+
+export interface UserChatMessage {
+  role: "user";
+  content: ChatContent;
+}
+
+export interface AssistantChatMessage {
+  role: "assistant";
+  content: ChatContent;
+  tool_calls?: ChatToolCall[];
+}
+
+/**
+ * Tool result message. `tool_call_id` must match the id of the assistant
+ * `tool_calls` entry it answers; llama-server and LM Studio both reject or
+ * silently mis-thread a tool message whose id does not pair.
+ */
+export interface ToolChatMessage {
+  role: "tool";
+  content: string;
+  tool_call_id: string;
+}
+
+export type ChatMessage =
+  | SystemChatMessage
+  | UserChatMessage
+  | AssistantChatMessage
+  | ToolChatMessage;
 
 export interface ChatOptions {
   model: string;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Called once with terminal accounting, including incomplete responses. */
+  onCompletion?: (metadata: CompletionMetadata) => void;
   /**
-   * Qwen3 / Nemotron-Cascade thinking toggle. When false, the request body
-   * carries `chat_template_kwargs: { enable_thinking: false }` so llama-server's
-   * jinja template skips the chain-of-thought preamble. Indexer extraction and
-   * structured-output reranking pass false; chat / co-author / agents leave it
-   * undefined to keep reasoning available.
+   * Template hint only; the server may ignore it. maxTokens remains a shared
+   * generation ceiling covering reasoning AND final output. No independent
+   * reasoning budget is assumed or sent to an unverified provider.
    */
   enableThinking?: boolean;
 }
@@ -77,6 +122,7 @@ export interface ChatWithToolsRequest {
   temperature?: number;
   maxTokens?: number;
   responseSchema?: JsonSchema;
+  onCompletion?: (metadata: CompletionMetadata) => void;
   /** See {@link ChatOptions.enableThinking}. */
   enableThinking?: boolean;
 }
@@ -98,6 +144,7 @@ export interface ChatWithToolsResult {
   content: string;
   reasoningContent: string;
   toolCalls: ChatWithToolsToolCall[];
+  completion?: CompletionMetadata;
 }
 
 export interface ChatWithToolsHandle {

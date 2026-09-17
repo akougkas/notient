@@ -1,6 +1,6 @@
 # Build output
-main.js
-/styles.css
+dist/
+/artifacts/
 *.js.map
 
 # Dependencies
@@ -14,9 +14,6 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
-
-# Obsidian
-data.json
 
 # Debug
 *.log
@@ -44,25 +41,17 @@ repomix-output.xml
 .claude/settings.local.json
 # Gemini (mirrors Claude patterns)
 .gemini/logs/
-.gemini/orchestration/*/queue/*.task
-.gemini/orchestration/*/responses/*.response
 .gemini/settings.local.json
 
 testbench/
-vector.worker.js
-embed.worker.js
-indexer.worker.js
-main.js
-/styles.css
 
 .claude/agents/__pycache__/
 .gemini/agents/__pycache__/
 
-mprocs.log
-
 # Local scratch (Codex marker, planning workspace)
 .codex
 .planning/
+.clio/
 
 # Audit/move scratch artifacts produced by repo plumbing sessions
 /tmp/notient-*
@@ -72,10 +61,14 @@ mprocs.log
 
 # Notient v0.1 archive
 /.nuked/
-dist/
 
 # Local operator env. The canonical config still lives in
 # <vault>/.notient/config.json and <vault>/.notient/.env; the project-root
 # .env here is just a developer convenience for `bun run dev` flows.
 .env
 .env.local
+.claude.old.bak/
+.superpowers/
+
+# Agent worktrees
+.claude/worktrees/

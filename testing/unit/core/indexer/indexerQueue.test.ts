@@ -7,13 +7,28 @@ function tick(ms: number): Promise<void> {
 }
 
 describe("IndexerQueue", () => {
+  test("rejects invalid debounce intervals instead of repairing them", () => {
+    const indexNote: IndexNoteFn = async () => {};
+    for (const debounceMs of [-1, 1.5, 600_001, Number.NaN]) {
+      expect(
+        () =>
+          new IndexerQueue({
+            indexNote,
+            debounceMs,
+            bus: new EventBus(),
+            isExcluded: () => false,
+          }),
+      ).toThrow("debounceMs must be an integer between 0 and 600000");
+    }
+  });
+
   test("debounces repeated enqueues for the same path", async () => {
     const calls: string[] = [];
     const fn: IndexNoteFn = async (path) => {
       calls.push(path);
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus, isExcluded: () => false });
     queue.enqueue("/a.md");
     await tick(10);
     queue.enqueue("/a.md");
@@ -30,7 +45,7 @@ describe("IndexerQueue", () => {
       calls.push(path);
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 10, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 10, bus, isExcluded: () => false });
     queue.enqueue("/a.md");
     queue.enqueue("/b.md");
     queue.enqueue("/c.md");
@@ -48,7 +63,7 @@ describe("IndexerQueue", () => {
       i++;
       if (i === 1) throw new Error(`bad ${path}`);
     };
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus, isExcluded: () => false });
     queue.enqueue("/a.md");
     queue.enqueue("/b.md");
     await tick(80);
@@ -63,11 +78,55 @@ describe("IndexerQueue", () => {
       calls.push(path);
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus, isExcluded: () => false });
     queue.enqueue("/a.md");
     queue.dispose();
     await tick(40);
     expect(calls).toEqual([]);
+  });
+
+  test("stopAccepting drains queued work and refuses later enqueues", async () => {
+    const calls: string[] = [];
+    const queue = new IndexerQueue({
+      bus: new EventBus(),
+      debounceMs: 20,
+      indexNote: async (path) => {
+        calls.push(path);
+      },
+
+      isExcluded: () => false,
+    });
+
+    queue.enqueue("/accepted.md");
+    queue.stopAccepting();
+    queue.enqueue("/late.md");
+    await queue.drain();
+
+    expect(calls).toEqual(["/accepted.md"]);
+    queue.dispose();
+  });
+
+  test("maintenance pause drains accepted work and resumes admission", async () => {
+    const calls: string[] = [];
+    const queue = new IndexerQueue({
+      bus: new EventBus(),
+      debounceMs: 5,
+      indexNote: async (path) => {
+        calls.push(path);
+      },
+      isExcluded: () => false,
+    });
+
+    queue.enqueue("/accepted.md");
+    queue.pause();
+    queue.enqueue("/paused.md");
+    await queue.drain();
+    queue.resume();
+    queue.enqueue("/resumed.md");
+    await queue.drain();
+
+    expect(calls).toEqual(["/accepted.md", "/resumed.md"]);
+    queue.dispose();
   });
 
   test("isExcluded predicate skips Notient-owned folders without enqueuing", async () => {
@@ -79,7 +138,6 @@ describe("IndexerQueue", () => {
     const excluded = new Set([
       "Notient/conversations/2026-04-25 chat.md",
       "Notient/proposals/p1.md",
-      "Notient/searches/s1.md",
     ]);
     const queue = new IndexerQueue({
       indexNote: fn,
@@ -89,7 +147,6 @@ describe("IndexerQueue", () => {
     });
     queue.enqueue("Notient/conversations/2026-04-25 chat.md");
     queue.enqueue("Notient/proposals/p1.md");
-    queue.enqueue("Notient/searches/s1.md");
     queue.enqueue("notes/keep.md");
     expect(queue.pendingCount()).toBe(1);
     await tick(40);
@@ -114,7 +171,7 @@ describe("IndexerQueue", () => {
       calls.push(path);
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 5, bus, isExcluded: () => false });
     queue.enqueue("/blocker.md", 2);
     await tick(20);
     queue.enqueue("/low.md", 1);
@@ -140,7 +197,7 @@ describe("IndexerQueue", () => {
       }
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus, isExcluded: () => false });
     queue.enqueue("/blocker.md", 0);
     await tick(50);
     queue.enqueue("/ready-low.md", 1);
@@ -174,7 +231,7 @@ describe("IndexerQueue", () => {
       calls.push(path);
     };
     const bus = new EventBus();
-    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus });
+    const queue = new IndexerQueue({ indexNote: fn, debounceMs: 30, bus, isExcluded: () => false });
     queue.enqueue("/blocker.md", 2);
     await tick(50);
     queue.enqueue("/sibling.md", 1);

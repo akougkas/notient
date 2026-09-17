@@ -14,7 +14,12 @@
  */
 
 import type { Surreal } from "surrealdb";
-import { EDGE_TABLES } from "../../core/db/edgeTables";
+import { EDGE_TABLES, isEdgeSource } from "../../core/db/edgeTables";
+import {
+  isExactRecord,
+  readAggregateCount,
+  readSingleStatementRows,
+} from "../../core/db/queryResult";
 import type { Emitter } from "../output";
 import { connectVaultSurreal } from "./awakenSurrealClient";
 
@@ -45,10 +50,32 @@ export async function runGraphStatsCommand(options: GraphStatsOptions): Promise<
       process.stdout.write(`${line}\n`);
     });
   let connection: { db: Surreal; close: () => Promise<void> } | undefined;
+  let rows: StatsRow[] | undefined;
+  let failure: unknown;
   try {
     const opened = await connectVaultSurreal(options.vaultPath);
     connection = opened;
-    const rows = await collectStats(opened.db);
+    rows = await collectStats(opened.db);
+  } catch (error) {
+    failure = error;
+  }
+  if (connection !== undefined) {
+    try {
+      await connection.close();
+    } catch (error) {
+      failure = combineErrors(failure, error);
+    }
+  }
+  if (failure !== undefined || rows === undefined) {
+    const error = failure ?? new Error("graph stats completed without a result");
+    options.emitter.emit({
+      type: "error",
+      code: "INTERNAL",
+      message: `graph stats failed: ${formatError(error)}`,
+    });
+    return 1;
+  }
+  try {
     if (options.asJson === true) {
       writeStdout(JSON.stringify(rows, null, 2));
       return 0;
@@ -61,13 +88,9 @@ export async function runGraphStatsCommand(options: GraphStatsOptions): Promise<
     options.emitter.emit({
       type: "error",
       code: "INTERNAL",
-      message: `graph stats failed: ${error instanceof Error ? error.message : String(error)}`,
+      message: `graph stats failed: ${formatError(error)}`,
     });
     return 1;
-  } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
   }
 }
 
@@ -75,26 +98,60 @@ async function collectStats(db: Surreal): Promise<StatsRow[]> {
   const rows: StatsRow[] = [];
   for (const table of ENTITY_TABLES) {
     const sql = `SELECT count() AS count FROM ${table} GROUP ALL;`;
-    const [result] = await db
-      .query<[Array<{ count: number }>]>(sql)
-      .collect<[Array<{ count: number }>]>();
-    const count = result[0]?.count ?? 0;
+    const result: unknown = await db.query(sql).collect();
+    const count = readAggregateCount(result, `graph stats ${table}`);
     rows.push({ table, source: "-", count });
   }
   for (const table of EDGE_TABLES) {
     const sql = `SELECT source, count() AS count FROM ${table} GROUP BY source;`;
-    const [result] = await db
-      .query<[Array<{ source: string; count: number }>]>(sql)
-      .collect<[Array<{ source: string; count: number }>]>();
-    if (result.length === 0) {
+    const result: unknown = await db.query(sql).collect();
+    const groupedRows = readSingleStatementRows(result, `graph stats ${table}`);
+    if (groupedRows.length === 0) {
       rows.push({ table, source: "-", count: 0 });
       continue;
     }
-    for (const entry of result) {
-      rows.push({ table, source: entry.source ?? "-", count: entry.count });
+    const sources = new Set<string>();
+    const decoded = groupedRows.map((entry) => {
+      if (!isExactRecord(entry, ["source", "count"])) {
+        throw new Error(`graph stats ${table} storage integrity: invalid grouped count row`);
+      }
+      if (!isEdgeSource(entry.source)) {
+        throw new Error(`graph stats ${table} storage integrity: invalid provenance source`);
+      }
+      if (
+        typeof entry.count !== "number" ||
+        !Number.isSafeInteger(entry.count) ||
+        entry.count <= 0
+      ) {
+        throw new Error(
+          `graph stats ${table} storage integrity: grouped count must be a positive safe integer`,
+        );
+      }
+      if (sources.has(entry.source)) {
+        throw new Error(`graph stats ${table} storage integrity: duplicate provenance source`);
+      }
+      sources.add(entry.source);
+      return { table, source: entry.source, count: entry.count };
+    });
+    decoded.sort((left, right) => left.source.localeCompare(right.source));
+    for (const entry of decoded) {
+      rows.push(entry);
     }
   }
   return rows;
+}
+
+function combineErrors(primary: unknown, closeError: unknown): Error {
+  if (primary === undefined) {
+    return new Error(`database connection close failed: ${formatError(closeError)}`);
+  }
+  return new Error(
+    `${formatError(primary)}; database connection close also failed: ${formatError(closeError)}`,
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function renderFixedWidth(rows: StatsRow[]): string[] {

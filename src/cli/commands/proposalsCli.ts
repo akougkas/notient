@@ -1,170 +1,144 @@
-/**
- * `notient proposals list|approve|reject` CLI verbs.
- *
- * M1 operator approval surface: gives operators a non-SurrealQL path to
- * decide on linker proposals. Mirrors `links sync`'s short-lived SurrealDB
- * connection plus an inline `ApprovalService` instance. The reconcile path
- * is idempotent (Locked Decision 2 in `writeback.ts`), so racing the daemon
- * is safe.
- *
- * Verbs:
- *   - list     enumerates every pending edge (state 1) across the six
- *              writeback-capable tables. Source/target paths are joined in
- *              from `note.path` so the operator can recognize what they are
- *              approving without a second query.
- *   - approve  flips one edge through the three-state contract by delegating
- *              to `ApprovalService.approveEdge`.
- *   - reject   deletes one edge by delegating to `ApprovalService.rejectEdge`.
- *              `--reason` is recorded in stdout/json output only; the
- *              service does not persist a rejection reason today.
- *
- * Idempotent error semantics: an unknown id (or one that has already moved
- * past state 1) prints `proposal not found or already applied` and exits 0,
- * matching `selectEdge` returning null. The CLI never throws when the row
- * was simply not there for it to act on.
- */
+/** Human CLI for deciding pending typed-edge proposals through the vault daemon. */
 
-import { rename, unlink, writeFile } from "node:fs/promises";
-import { type RecordId, StringRecordId, type Surreal } from "surrealdb";
-import {
-  ApprovalService,
-  WRITEBACK_EDGE_TABLES,
-  type WritebackEdgeTable,
-} from "../../core/approvals/approvalService";
-import { EventBus } from "../../core/events/eventBus";
-import type { AtomicFs } from "../../core/utils/atomicWrite";
+import { isCanonicalAgentId } from "../../core/auth/agentIdentity";
+import { WRITEBACK_EDGE_TABLES, type WritebackEdgeTable } from "../../core/db/edgeTables";
+import { parseSurrealRelationRecordId, parseUuidRecordId } from "../../core/db/recordId";
+import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
+import type { ProposalWire } from "../../daemon/wire";
+import type { ClientHandle, ClientOptions, RpcResponseFrame } from "../client";
+import { connectClient } from "../client";
 import type { Emitter } from "../output";
-import { connectVaultSurreal } from "./awakenSurrealClient";
 
-export interface ProposalsListOptions {
+type Connector = (options: ClientOptions) => Promise<ClientHandle>;
+
+interface CommandConnectionOptions {
   vaultPath: string;
+  clientIdentity?: string;
+  connect?: Connector;
+}
+
+export interface ProposalsListOptions extends CommandConnectionOptions {
   emitter: Emitter;
   asJson: boolean;
   notePath?: string;
   agent?: string;
   limit?: number;
-  clientIdentity?: string;
-  /**
-   * Test seam. Defaults to `process.stdout.write`. The runtime never threads
-   * this from the dispatcher; tests override it to capture output.
-   */
+  /** Test seam for the JSON array mode. */
   writeStdout?: (line: string) => void;
 }
 
-export interface ProposalsApproveOptions {
-  vaultPath: string;
-  vaultRoot: string;
+export interface ProposalsApproveOptions extends CommandConnectionOptions {
   emitter: Emitter;
   id: string;
-  clientIdentity?: string;
 }
 
-export interface ProposalsRejectOptions {
-  vaultPath: string;
-  vaultRoot: string;
+export interface ProposalsRejectOptions extends CommandConnectionOptions {
   emitter: Emitter;
   id: string;
   reason?: string;
-  clientIdentity?: string;
 }
 
-interface PendingRow {
-  id: RecordId;
-  table: WritebackEdgeTable;
-  source: string | null;
-  target: string | null;
-  agent: string | null;
-  confidence: number;
+interface RpcSuccess {
+  ok: true;
+  frame: RpcResponseFrame;
 }
 
-interface EdgeWithPathsRow {
-  id: RecordId;
-  fromPath: string | null;
-  toPath: string | null;
-  agent: string | null;
-  confidence: number;
+interface RpcFailure {
+  ok: false;
+  code: string;
+  message: string;
 }
 
-const cliFs: AtomicFs = {
-  writeBinary: async (path: string, data: ArrayBuffer): Promise<void> => {
-    await writeFile(path, new Uint8Array(data));
-  },
-  rename: async (from: string, to: string): Promise<void> => {
-    await rename(from, to);
-  },
-  remove: async (path: string): Promise<void> => {
-    await unlink(path).catch(() => {
-      // missing-file is not an error for cleanup
-    });
-  },
-};
+type RpcOutcome = RpcSuccess | RpcFailure;
 
-async function readFileText(path: string): Promise<string> {
-  return await Bun.file(path).text();
+async function connect(options: CommandConnectionOptions): Promise<ClientHandle> {
+  const connector = options.connect ?? connectClient;
+  return await connector({
+    socketPath: resolveSocketPath(options.vaultPath, currentPlatform()),
+    vaultPath: options.vaultPath,
+    ...(options.clientIdentity !== undefined ? { clientIdentity: options.clientIdentity } : {}),
+  });
 }
 
-/**
- * Detects the writeback-capable table from a SurrealDB record id of the
- * shape `{table}:{recordId}`. Returns `null` when the prefix does not
- * match any of the six writeback edge tables.
- */
-export function tableFromEdgeId(id: string): WritebackEdgeTable | null {
-  const colonIndex = id.indexOf(":");
-  if (colonIndex <= 0) return null;
-  const prefix = id.slice(0, colonIndex);
-  if ((WRITEBACK_EDGE_TABLES as ReadonlyArray<string>).includes(prefix)) {
-    return prefix as WritebackEdgeTable;
+async function callOnce(
+  client: ClientHandle,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<RpcOutcome> {
+  for await (const frame of client.call(method, params)) {
+    if (frame.type === "error") {
+      return {
+        ok: false,
+        code: typeof frame.code === "string" ? frame.code : "INTERNAL",
+        message: typeof frame.message === "string" ? frame.message : `${method} failed`,
+      };
+    }
+    if (frame.type === "result") return { ok: true, frame };
   }
-  return null;
+  return { ok: false, code: "INTERNAL", message: `${method} returned no result` };
+}
+
+function emitFailure(emitter: Emitter, action: string, failure: RpcFailure): number {
+  emitter.emit({
+    type: "error",
+    code: failure.code,
+    message: `proposals ${action} failed: ${failure.message}`,
+  });
+  return failure.code === "INVALID_PARAMS" ? 2 : 1;
 }
 
 export async function runProposalsListCommand(options: ProposalsListOptions): Promise<number> {
-  let connection: { db: Surreal; close: () => Promise<void> } | undefined;
+  let client: ClientHandle | undefined;
   try {
-    const opened = await connectVaultSurreal(options.vaultPath);
-    connection = opened;
-    const rows = await collectPendingEdges(opened.db, {
-      notePath: options.notePath,
-      agent: options.agent,
+    client = await connect(options);
+    const params: Record<string, unknown> = {};
+    if (options.notePath !== undefined) params.notePath = options.notePath;
+    if (options.agent !== undefined) params.agent = options.agent;
+    if (options.limit !== undefined) params.limit = options.limit;
+    const outcome = await callOnce(client, "links.proposals", params);
+    if (!outcome.ok) return emitFailure(options.emitter, "list", outcome);
+    if (!Array.isArray(outcome.frame.proposals)) {
+      throw new Error("links.proposals returned an invalid proposals payload");
+    }
+    const proposals = (outcome.frame.proposals as ProposalWire[]).map((proposal) => {
+      const parsed = parseSurrealRelationRecordId(
+        proposal.id,
+        WRITEBACK_EDGE_TABLES,
+        "proposal id",
+      );
+      if (parsed.table !== proposal.table) {
+        throw new Error("links.proposals returned a proposal whose id and table disagree");
+      }
+      return proposal;
     });
-    // Each table's rows arrive newest-first via ORDER BY created_at DESC; the
-    // outer concatenation does not re-sort across tables. The CLI keeps the
-    // per-table grouping so the operator sees correlated proposals together.
-    const limited = options.limit !== undefined ? rows.slice(0, options.limit) : rows;
     if (options.asJson) {
-      const writeStdout =
-        options.writeStdout ??
-        ((line: string) => {
-          process.stdout.write(line);
-        });
+      const writeStdout = options.writeStdout ?? ((line: string) => process.stdout.write(line));
       writeStdout(
         `${JSON.stringify(
-          limited.map((row) => ({
-            id: row.id.toString(),
-            table: row.table,
-            source: row.source,
-            target: row.target,
-            agent: row.agent,
-            confidence: row.confidence,
+          proposals.map((proposal) => ({
+            id: proposal.id,
+            table: proposal.table,
+            source: proposal.fromNotePath,
+            target: proposal.toNotePath,
+            agent: proposal.agent,
+            confidence: proposal.confidence,
           })),
         )}\n`,
       );
-    } else {
-      for (const row of limited) {
-        options.emitter.emit({
-          type: "proposals:list",
-          id: row.id.toString(),
-          table: row.table,
-          source: row.source,
-          target: row.target,
-          agent: row.agent,
-          confidence: row.confidence,
-        });
-      }
-      if (limited.length === 0) {
-        options.emitter.emit({ type: "proposals:list:empty" });
-      }
+      return 0;
     }
+    for (const proposal of proposals) {
+      options.emitter.emit({
+        type: "proposals:list",
+        id: proposal.id,
+        table: proposal.table,
+        source: proposal.fromNotePath,
+        target: proposal.toNotePath,
+        agent: proposal.agent,
+        confidence: proposal.confidence,
+      });
+    }
+    if (proposals.length === 0) options.emitter.emit({ type: "proposals:list:empty" });
     return 0;
   } catch (error) {
     options.emitter.emit({
@@ -174,50 +148,64 @@ export async function runProposalsListCommand(options: ProposalsListOptions): Pr
     });
     return 1;
   } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
+    await client?.close().catch(() => {});
+  }
+}
+
+function validateProposalId(
+  action: "approve" | "reject",
+  id: string,
+  emitter: Emitter,
+): WritebackEdgeTable | null {
+  if (id.length === 0) {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_PARAMS",
+      message: `proposals ${action} requires an id`,
+    });
+    return null;
+  }
+  try {
+    return parseSurrealRelationRecordId(id, WRITEBACK_EDGE_TABLES, "id").table;
+  } catch (error) {
+    emitter.emit({
+      type: "error",
+      code: "INVALID_ID",
+      message: `proposals ${action}: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return null;
+  }
+}
+
+function assertDecisionIdentity(
+  frame: RpcResponseFrame,
+  expectedId: string,
+  expectedTable: WritebackEdgeTable,
+): void {
+  const parsed = parseSurrealRelationRecordId(frame.edgeId, WRITEBACK_EDGE_TABLES, "edgeId");
+  if (parsed.id !== expectedId || parsed.table !== expectedTable || frame.table !== expectedTable) {
+    throw new Error("proposal decision returned an identity that differs from the request");
+  }
+  if (typeof frame.found !== "boolean") {
+    throw new Error("proposal decision returned an invalid found flag");
   }
 }
 
 export async function runProposalsApproveCommand(
   options: ProposalsApproveOptions,
 ): Promise<number> {
-  if (options.id.length === 0) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_PARAMS",
-      message: "proposals approve requires an id",
-    });
-    return 2;
-  }
-  const table = tableFromEdgeId(options.id);
-  if (table === null) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_ID",
-      message: `proposals approve: id '${options.id}' has no writeback-capable table prefix`,
-    });
-    return 2;
-  }
-  let recordId: StringRecordId;
+  const table = validateProposalId("approve", options.id, options.emitter);
+  if (table === null) return 2;
+  let client: ClientHandle | undefined;
   try {
-    recordId = new StringRecordId(options.id);
-  } catch (error) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_ID",
-      message: `proposals approve: id '${options.id}' is not a valid SurrealDB record id (${
-        error instanceof Error ? error.message : String(error)
-      })`,
-    });
-    return 2;
-  }
-  let connection: { db: Surreal; close: () => Promise<void> } | undefined;
-  try {
-    const opened = await connectVaultSurreal(options.vaultPath);
-    connection = opened;
-    if (!(await edgeRowExists(opened.db, table, recordId))) {
+    client = await connect(options);
+    const outcome = await callOnce(client, "links.approve", { id: options.id });
+    if (!outcome.ok) return emitFailure(options.emitter, "approve", outcome);
+    assertDecisionIdentity(outcome.frame, options.id, table);
+    if (outcome.frame.found !== true) {
+      if (outcome.frame.historyId !== null || outcome.frame.approvedBy !== null) {
+        throw new Error("missing proposal returned an unexpected approval receipt");
+      }
       options.emitter.emit({
         type: "proposals:not_found",
         id: options.id,
@@ -225,68 +213,46 @@ export async function runProposalsApproveCommand(
       });
       return 0;
     }
-    const service = new ApprovalService({
-      db: opened.db,
-      bus: new EventBus(),
-      vaultRoot: options.vaultRoot,
-      fs: cliFs,
-      readFile: readFileText,
+    const historyId = parseUuidRecordId(
+      outcome.frame.historyId,
+      "history",
+      "approval historyId",
+    ).toString();
+    if (!isCanonicalAgentId(outcome.frame.approvedBy)) {
+      throw new Error("proposal approval returned an invalid approving principal");
+    }
+    options.emitter.emit({
+      type: "proposals:approved",
+      id: options.id,
+      table,
+      historyId,
+      approvedBy: outcome.frame.approvedBy,
     });
-    await service.approveEdge({ id: recordId as unknown as RecordId, table });
-    options.emitter.emit({ type: "proposals:approved", id: options.id, table });
     return 0;
   } catch (error) {
     options.emitter.emit({
       type: "error",
       code: "INTERNAL",
-      message: `proposals approve failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `proposals approve failed: ${error instanceof Error ? error.message : String(error)}`,
     });
     return 1;
   } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
+    await client?.close().catch(() => {});
   }
 }
 
 export async function runProposalsRejectCommand(options: ProposalsRejectOptions): Promise<number> {
-  if (options.id.length === 0) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_PARAMS",
-      message: "proposals reject requires an id",
-    });
-    return 2;
-  }
-  const table = tableFromEdgeId(options.id);
-  if (table === null) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_ID",
-      message: `proposals reject: id '${options.id}' has no writeback-capable table prefix`,
-    });
-    return 2;
-  }
-  let recordId: StringRecordId;
+  const table = validateProposalId("reject", options.id, options.emitter);
+  if (table === null) return 2;
+  let client: ClientHandle | undefined;
   try {
-    recordId = new StringRecordId(options.id);
-  } catch (error) {
-    options.emitter.emit({
-      type: "error",
-      code: "INVALID_ID",
-      message: `proposals reject: id '${options.id}' is not a valid SurrealDB record id (${
-        error instanceof Error ? error.message : String(error)
-      })`,
-    });
-    return 2;
-  }
-  let connection: { db: Surreal; close: () => Promise<void> } | undefined;
-  try {
-    const opened = await connectVaultSurreal(options.vaultPath);
-    connection = opened;
-    if (!(await edgeRowExists(opened.db, table, recordId))) {
+    client = await connect(options);
+    const params: Record<string, unknown> = { id: options.id };
+    if (options.reason !== undefined) params.reason = options.reason;
+    const outcome = await callOnce(client, "links.reject", params);
+    if (!outcome.ok) return emitFailure(options.emitter, "reject", outcome);
+    assertDecisionIdentity(outcome.frame, options.id, table);
+    if (outcome.frame.found !== true) {
       options.emitter.emit({
         type: "proposals:not_found",
         id: options.id,
@@ -294,23 +260,14 @@ export async function runProposalsRejectCommand(options: ProposalsRejectOptions)
       });
       return 0;
     }
-    const service = new ApprovalService({
-      db: opened.db,
-      bus: new EventBus(),
-      vaultRoot: options.vaultRoot,
-      fs: cliFs,
-      readFile: readFileText,
-    });
-    await service.rejectEdge({ id: recordId as unknown as RecordId, table });
-    const event: Record<string, unknown> = {
+    const historyId = parseUuidRecordId(outcome.frame.historyId, "history", "historyId").toString();
+    options.emitter.emit({
       type: "proposals:rejected",
       id: options.id,
       table,
-    };
-    if (options.reason !== undefined) {
-      event.reason = options.reason;
-    }
-    options.emitter.emit(event as { type: string; [key: string]: unknown });
+      reason: outcome.frame.reason,
+      historyId,
+    });
     return 0;
   } catch (error) {
     options.emitter.emit({
@@ -320,55 +277,6 @@ export async function runProposalsRejectCommand(options: ProposalsRejectOptions)
     });
     return 1;
   } finally {
-    if (connection !== undefined) {
-      await connection.close().catch(() => {});
-    }
+    await client?.close().catch(() => {});
   }
-}
-
-async function collectPendingEdges(
-  db: Surreal,
-  filters: { notePath?: string; agent?: string },
-): Promise<PendingRow[]> {
-  const out: PendingRow[] = [];
-  for (const table of WRITEBACK_EDGE_TABLES) {
-    const conditions: string[] = ["approved = false"];
-    const bindings: Record<string, unknown> = {};
-    if (filters.agent !== undefined) {
-      conditions.push("agent = $agent");
-      bindings.agent = filters.agent;
-    }
-    if (filters.notePath !== undefined) {
-      conditions.push("(in.path = $path OR out.path = $path)");
-      bindings.path = filters.notePath;
-    }
-    // SurrealDB 3.x requires every ORDER BY field in the projection.
-    const sql = `SELECT id, in.path AS fromPath, out.path AS toPath, agent, confidence, created_at FROM ${table} WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC;`;
-    const [rows] = await db
-      .query<[EdgeWithPathsRow[]]>(sql, bindings)
-      .collect<[EdgeWithPathsRow[]]>();
-    for (const row of rows) {
-      out.push({
-        id: row.id,
-        table,
-        source: row.fromPath,
-        target: row.toPath,
-        agent: row.agent,
-        confidence: row.confidence,
-      });
-    }
-  }
-  return out;
-}
-
-async function edgeRowExists(
-  db: Surreal,
-  table: WritebackEdgeTable,
-  id: StringRecordId,
-): Promise<boolean> {
-  const sql = `SELECT id FROM ${table} WHERE id = $id AND approved = false LIMIT 1;`;
-  const [rows] = await db
-    .query<[Array<{ id: RecordId }>]>(sql, { id })
-    .collect<[Array<{ id: RecordId }>]>();
-  return rows.length > 0;
 }

@@ -1,32 +1,11 @@
-/**
- * Phase 5 Task 9 graph dump CLI smoke harness.
- *
- * Skipped by default. Run with `NOTIENT_SMOKE=1 bun test src/cli/commands/graphDump.test.ts`.
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, hand-writes a per-vault
- * state directory under a tempdir-rooted `HOME`, seeds a fixture graph
- * (two notes, a wikilink, a linker proposal), and exercises the three
- * tier filters and three output formats end-to-end.
- */
-
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import type { RecordId } from "surrealdb";
+import { describe, expect, test } from "bun:test";
+import { DateTime, RecordId } from "surrealdb";
 import {
-  type DumpedGraph,
+  decodeDumpEdge,
+  decodeDumpNode,
   parseDumpFormat,
   parseDumpTier,
-  runGraphDumpCommand,
 } from "../../../../src/cli/commands/graphDump";
-import { makeEmitter } from "../../../../src/cli/output";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect, upsertNoteByPath } from "../../../../src/core/db/surreal";
-import { vaultPortPath, vaultSecretPath, vaultStateDir } from "../../../../src/core/vault/identity";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
 describe("graph dump argument parsers", () => {
   test("parseDumpTier accepts 1, 2, 3", () => {
@@ -40,6 +19,8 @@ describe("graph dump argument parsers", () => {
     expect(() => parseDumpTier("0")).toThrow();
     expect(() => parseDumpTier("4")).toThrow();
     expect(() => parseDumpTier("abc")).toThrow();
+    expect(() => parseDumpTier(1)).toThrow();
+    expect(() => parseDumpTier(" 1")).toThrow();
   });
 
   test("parseDumpFormat defaults to json and accepts the three supported formats", () => {
@@ -51,5 +32,118 @@ describe("graph dump argument parsers", () => {
 
   test("parseDumpFormat rejects unknown formats", () => {
     expect(() => parseDumpFormat("dot")).toThrow();
+  });
+});
+
+describe("graph dump storage contracts", () => {
+  test("decodes native node attributes without generic string coercion", () => {
+    const node = decodeDumpNode(
+      {
+        id: new RecordId("note", "alpha"),
+        path: "alpha.md",
+        tier1_at: new DateTime("2026-08-29T12:00:00Z"),
+        optional: undefined,
+        nested: { target: new RecordId("note", "beta") },
+      },
+      "note",
+    );
+    expect(node).toEqual({
+      id: "note:alpha",
+      table: "note",
+      attributes: {
+        path: "alpha.md",
+        tier1_at: "2026-08-29T12:00:00.000Z",
+        optional: null,
+        nested: { target: "note:beta" },
+      },
+    });
+  });
+
+  test("decodes the exact native edge row", () => {
+    const edge = decodeDumpEdge(
+      {
+        id: new RecordId("supports", "proposal"),
+        in: new RecordId("note", "alpha"),
+        out: new RecordId("note", "beta"),
+        source: "linker",
+        class: "INFERRED",
+        confidence: 0.8,
+        evidence: [new RecordId("chunk", "evidence")],
+        agent: "linker",
+        approved: false,
+        applied: true,
+        created_at: new DateTime("2026-08-29T12:00:00Z"),
+      },
+      "supports",
+    );
+    expect(edge).toMatchObject({
+      id: "supports:proposal",
+      table: "supports",
+      in: "note:alpha",
+      out: "note:beta",
+      source: "linker",
+      confidenceClass: "INFERRED",
+      createdAt: "2026-08-29T12:00:00.000Z",
+      attributes: {
+        confidence: 0.8,
+        evidence: ["chunk:evidence"],
+        agent: "linker",
+        approved: false,
+        applied: true,
+      },
+    });
+  });
+
+  test.each([
+    ["string id", { id: "note:alpha", path: "alpha.md" }, "note"],
+    ["wrong table", { id: new RecordId("chunk", "alpha"), path: "alpha.md" }, "note"],
+    ["unsupported Date alias", { id: new RecordId("note", "alpha"), at: new Date() }, "note"],
+  ])("rejects a node with %s", (_label, row, table) => {
+    expect(() => decodeDumpNode(row, table as "note")).toThrow(/storage integrity/);
+  });
+
+  test.each([
+    ["an extra field", { legacy: true }],
+    ["a string created_at alias", { created_at: "2026-08-29T12:00:00Z" }],
+    ["a missing source", { source: undefined }],
+    [
+      "duplicate evidence",
+      { evidence: [new RecordId("chunk", "one"), new RecordId("chunk", "one")] },
+    ],
+  ])("rejects an edge with %s", (_label, replacement) => {
+    const row: Record<string, unknown> = {
+      id: new RecordId("supports", "proposal"),
+      in: new RecordId("note", "alpha"),
+      out: new RecordId("note", "beta"),
+      source: "linker",
+      class: "INFERRED",
+      confidence: 0.8,
+      evidence: [new RecordId("chunk", "one")],
+      agent: "linker",
+      approved: false,
+      applied: true,
+      created_at: new DateTime("2026-08-29T12:00:00Z"),
+      ...replacement,
+    };
+    expect(() => decodeDumpEdge(row, "supports")).toThrow(/storage integrity/);
+  });
+
+  test("requires evidence on extractor edges", () => {
+    expect(() =>
+      decodeDumpEdge(
+        {
+          id: new RecordId("mentions", "relation"),
+          in: new RecordId("note", "alpha"),
+          out: new RecordId("concept", "beta"),
+          source: "extractor",
+          class: "INFERRED",
+          confidence: 0.8,
+          approved: true,
+          applied: true,
+          created_at: new DateTime("2026-08-29T12:00:00Z"),
+        },
+        "mentions",
+      ),
+    ).toThrow(/lacks evidence/);
   });
 });

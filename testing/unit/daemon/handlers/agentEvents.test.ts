@@ -1,74 +1,17 @@
-/**
- * Phase 4 Task 12 agent.events handler smoke harness.
- *
- * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
- * or directly via `NOTIENT_SMOKE=1 bun test src/daemon/handlers/`.
- *
- * Boots a real SurrealDB, applies the Phase 1 schema, and exercises the
- * RPC handler against the SurrealDB-backed AgentEventStore. The wire
- * shape (events / cursor / longPollExpired) is preserved end-to-end; the
- * only behaviour change from the SQLite-era harness is that
- * `store.record` is now async, so test seeders await it.
- */
-
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import { applySchema } from "../../../../src/core/db/schemaApplier";
-import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
+import { describe, expect, test } from "bun:test";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { EventBus } from "../../../../src/core/events/eventBus";
-import type { EventHandler, EventType } from "../../../../src/core/events/types";
 import type { AgentEventStore } from "../../../../src/core/services/agentEventStore";
-import {
-  AGENT_EVENTS_DEFAULT_LIMIT,
-  AGENT_EVENTS_DEFAULT_LONG_POLL_MS,
-  AGENT_EVENTS_MAX_LIMIT,
-  AGENT_EVENTS_MAX_LONG_POLL_MS,
-  createAgentEventsHandler,
-} from "../../../../src/daemon/handlers/agentEvents";
-import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
-
-const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
-
-class CountingEventBus extends EventBus {
-  listenerCount(type: EventType): number {
-    const handlers = (this as unknown as { handlers: Map<EventType, Set<unknown>> }).handlers;
-    const set = handlers.get(type);
-    return set ? set.size : 0;
-  }
-  on<T extends EventType>(type: T, handler: EventHandler<T>): () => void {
-    return super.on(type, handler);
-  }
-}
-
-interface TestRig {
-  bus: CountingEventBus;
-  store: AgentEventStore;
-}
-
-async function clearLedger(connection: SurrealConnection): Promise<void> {
-  await connection.db.query("DELETE agent_event;").collect();
-}
-
-async function flush(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-}
-
-async function seedClaimAdvanced(store: AgentEventStore, count: number): Promise<void> {
-  for (let index = 0; index < count; index++) {
-    await store.record("swarm:claim_advanced", { claimId: `claim:${index}`, ord: index });
-  }
-}
+import { createAgentEventsHandler } from "../../../../src/daemon/handlers/agentEvents";
+import { agentPrincipal, rpcRequest } from "../../../rpcRequest";
 
 /**
  * Unit-only regression tests for the indexer-event extension. These do not
  * require SurrealDB so they run on every `bun test` invocation. The store is
- * stubbed because the handler only depends on `since(cursor, limit)`; the
- * end-to-end persistence path is exercised by the smoke suite above.
+ * stubbed because these cases only depend on `since(cursor, limit)`.
  */
 interface StubRow {
-  id: number;
+  id: string;
   ts: number;
   type: string;
   payload: unknown;
@@ -81,12 +24,88 @@ class StubAgentEventStore {
     this.rows.push(row);
   }
 
-  async since(cursor: number, limit: number): Promise<StubRow[]> {
-    return this.rows.filter((row) => row.id > cursor).slice(0, limit);
+  async since(cursor: string | null, limit: number): Promise<StubRow[]> {
+    return this.rows
+      .filter((row) => cursor === null || row.id.localeCompare(cursor) > 0)
+      .slice(0, limit);
+  }
+
+  async snapshot(sinceTs: number, types: readonly string[], limit: number) {
+    const events = this.rows
+      .filter((row) => row.ts >= sinceTs && types.includes(row.type))
+      .slice(-limit);
+    return { cursor: this.rows.at(-1)?.id ?? null, events };
   }
 }
 
+function eventId(value: number): string {
+  return createUuidRecordId(
+    "agent_event",
+    `018f05cd-3f7b-7000-8000-${value.toString().padStart(12, "0")}`,
+  ).toString();
+}
+
 describe("agent.events watches indexer events", () => {
+  test("returns a filtered recent snapshot with a global continuation cursor", async () => {
+    const bus = new EventBus();
+    const stub = new StubAgentEventStore();
+    stub.enqueue({
+      id: eventId(1),
+      ts: 1_000,
+      type: "swarm:link_proposed",
+      payload: { edgeId: "old" },
+    });
+    stub.enqueue({
+      id: eventId(2),
+      ts: 2_100,
+      type: "swarm:link_proposed",
+      payload: { edgeId: "recent" },
+    });
+    stub.enqueue({
+      id: eventId(3),
+      ts: 2_200,
+      type: "indexer:note-indexed",
+      payload: { path: "x.md" },
+    });
+    const handler = createAgentEventsHandler({
+      agentEventStore: stub as unknown as AgentEventStore,
+      bus,
+    });
+
+    const result = await handler(
+      rpcRequest(
+        { snapshotSinceMs: 2_000, types: ["swarm:link_proposed"], limit: 20 },
+        { requestId: "req-snapshot", principal: agentPrincipal("tui") },
+      ),
+    );
+
+    expect(result.events).toEqual([
+      {
+        id: eventId(2),
+        ts: 2_100,
+        type: "swarm:link_proposed",
+        payload: { edgeId: "recent" },
+      },
+    ]);
+    expect(result.cursor).toBe(eventId(3));
+    expect(result.longPollExpired).toBe(false);
+  });
+
+  test("rejects cursor polling fields in snapshot mode", async () => {
+    const handler = createAgentEventsHandler({
+      agentEventStore: new StubAgentEventStore() as unknown as AgentEventStore,
+      bus: new EventBus(),
+    });
+    await expect(
+      handler(
+        rpcRequest(
+          { snapshotSinceMs: 2_000, types: ["swarm:link_proposed"], since: eventId(0) },
+          { requestId: "req-invalid-snapshot", principal: agentPrincipal("tui") },
+        ),
+      ),
+    ).rejects.toThrow("snapshotSinceMs cannot be combined");
+  });
+
   test("long-poll wakes when an indexer:note-indexed event fires", async () => {
     const bus = new EventBus();
     const stub = new StubAgentEventStore();
@@ -96,13 +115,18 @@ describe("agent.events watches indexer events", () => {
       bus,
       flushIntervalMs: 5,
     });
-    const pending = handler({ since: 0, longPollMs: 1000 }, () => {}, "req-idx", "claude-code");
+    const pending = handler(
+      rpcRequest(
+        { since: null, longPollMs: 1000 },
+        { requestId: "req-idx", principal: agentPrincipal() },
+      ),
+    );
     setTimeout(() => {
       // The store stub does not subscribe to the bus, so the handler's read
       // would otherwise return nothing. Seed the row in the same tick the
       // event fires so the post-flush re-read finds it.
       stub.enqueue({
-        id: 1,
+        id: eventId(1),
         ts: Date.now(),
         type: "indexer:note-indexed",
         payload: {
@@ -110,9 +134,9 @@ describe("agent.events watches indexer events", () => {
           result: {
             chunkCount: 3,
             embedCount: 3,
-            nodeCount: 1,
-            edgeCount: 0,
             durationMs: 12,
+            llmCalls: 1,
+            extractionWindows: 1,
           },
         },
       });
@@ -122,9 +146,9 @@ describe("agent.events watches indexer events", () => {
         result: {
           chunkCount: 3,
           embedCount: 3,
-          nodeCount: 1,
-          edgeCount: 0,
           durationMs: 12,
+          llmCalls: 1,
+          extractionWindows: 1,
         },
       });
     }, 25);
@@ -133,7 +157,7 @@ describe("agent.events watches indexer events", () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("indexer:note-indexed");
     expect(result.longPollExpired).toBe(false);
-    expect(result.cursor).toBe(1);
+    expect(result.cursor).toBe(eventId(1));
   });
 
   test("long-poll also wakes on indexer:error and indexer:warn", async () => {
@@ -146,14 +170,14 @@ describe("agent.events watches indexer events", () => {
         flushIntervalMs: 5,
       });
       const pending = handler(
-        { since: 0, longPollMs: 1000 },
-        () => {},
-        `req-${eventType}`,
-        "claude-code",
+        rpcRequest(
+          { since: null, longPollMs: 1000 },
+          { requestId: `req-${eventType}`, principal: agentPrincipal() },
+        ),
       );
       setTimeout(() => {
         stub.enqueue({
-          id: 1,
+          id: eventId(1),
           ts: Date.now(),
           type: eventType,
           payload: { message: "test", phase: "tier1" },
@@ -172,6 +196,44 @@ describe("agent.events watches indexer events", () => {
     }
   });
 
+  test("long-poll wakes on indexer:tombstoned and returns its path payload", async () => {
+    const bus = new EventBus();
+    const stub = new StubAgentEventStore();
+    const handler = createAgentEventsHandler({
+      agentEventStore: stub as unknown as AgentEventStore,
+      bus,
+      flushIntervalMs: 0,
+    });
+    const pending = handler(
+      rpcRequest(
+        { since: eventId(4), longPollMs: 1000 },
+        { requestId: "req-tombstone", principal: agentPrincipal() },
+      ),
+    );
+    setTimeout(() => {
+      stub.enqueue({
+        id: eventId(5),
+        ts: 1_700_000_000_000,
+        type: "indexer:tombstoned",
+        payload: { path: "Archive/deleted.md" },
+      });
+      bus.emit({ type: "indexer:tombstoned", path: "Archive/deleted.md" });
+    }, 10);
+
+    const result = await pending;
+
+    expect(result.events).toEqual([
+      {
+        id: eventId(5),
+        ts: 1_700_000_000_000,
+        type: "indexer:tombstoned",
+        payload: { path: "Archive/deleted.md" },
+      },
+    ]);
+    expect(result.cursor).toBe(eventId(5));
+    expect(result.longPollExpired).toBe(false);
+  });
+
   test("long-poll expires cleanly when no watched event fires", async () => {
     const bus = new EventBus();
     const stub = new StubAgentEventStore();
@@ -181,14 +243,14 @@ describe("agent.events watches indexer events", () => {
       flushIntervalMs: 0,
     });
     const result = await handler(
-      { since: 0, longPollMs: 60 },
-      () => {},
-      "req-expire",
-      "claude-code",
+      rpcRequest(
+        { since: null, longPollMs: 60 },
+        { requestId: "req-expire", principal: agentPrincipal() },
+      ),
     );
     expect(result.events).toEqual([]);
     expect(result.longPollExpired).toBe(true);
-    expect(result.cursor).toBe(0);
+    expect(result.cursor).toBeNull();
   });
 
   test("ignored indexer events (progress, tier1-done, tier2-done, tier3-done) do not wake the poll", async () => {
@@ -199,7 +261,12 @@ describe("agent.events watches indexer events", () => {
       bus,
       flushIntervalMs: 0,
     });
-    const pending = handler({ since: 0, longPollMs: 80 }, () => {}, "req-noise", "claude-code");
+    const pending = handler(
+      rpcRequest(
+        { since: null, longPollMs: 80 },
+        { requestId: "req-noise", principal: agentPrincipal() },
+      ),
+    );
     setTimeout(() => {
       bus.emit({ type: "indexer:progress", processed: 1, total: 10 });
       bus.emit({ type: "indexer:tier1-done", path: "x.md", bodySha: "deadbeef" });

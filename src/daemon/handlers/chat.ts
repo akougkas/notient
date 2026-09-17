@@ -1,3 +1,4 @@
+import type { InferenceAttempt } from "../../core/llm/executionBudget";
 /**
  * chat.* RPC handlers.
  *
@@ -17,12 +18,17 @@
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import { resolveAttachments } from "../../agent/attachments";
 import type { VisionRouter } from "../../agent/visionProbe";
+import { normalizeRejectionReason } from "../../core/approvals/rejectionReason";
 import type { AgentLoopEvent } from "../../core/chat/agentLoop";
-import type { ApprovalGate } from "../../core/chat/approvalGate";
+import type { ApprovalDecision, ApprovalGate } from "../../core/chat/approvalGate";
 import type { ChatService } from "../../core/chat/chatService";
 import type { Conversation } from "../../core/chat/types";
 import type { EventBus } from "../../core/events/eventBus";
-import { encodeEvent } from "../rpc";
+import {
+  isCanonicalConversationPath,
+  isCanonicalOrdinaryNotePath,
+} from "../../core/vault/publicPath";
+import { type MethodHandler, RpcError, encodeEvent } from "../rpc";
 
 export interface ChatHandlerDeps {
   chatService: ChatService;
@@ -33,12 +39,7 @@ export interface ChatHandlerDeps {
   bus: EventBus;
 }
 
-export type ChatHandler = (
-  params: Record<string, unknown>,
-  emit: (line: string) => void,
-  envelopeId: string,
-  clientIdentity: string,
-) => Promise<Record<string, unknown>>;
+export type ChatHandler = MethodHandler;
 
 export interface ChatHandlers {
   start: ChatHandler;
@@ -50,38 +51,57 @@ export interface ChatHandlers {
 }
 
 export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
-  const conversationsById = new Map<string, Conversation>();
+  /**
+   * Turns in flight, keyed by the connection that started them. A connection
+   * may cancel only its own turns; a human may explicitly request the
+   * process-wide scope with `allConnections: true`.
+   */
+  const turnsByConnection = new Map<string, number>();
+  /**
+   * Owner principal id for each pending approval call id, so `chat.approve`
+   * can refuse a call id belonging to somebody else's turn.
+   */
 
-  const cacheConversation = (conversation: Conversation): void => {
-    conversationsById.set(conversation.id, conversation);
+  const beginTurn = (connectionId: string): void => {
+    turnsByConnection.set(connectionId, (turnsByConnection.get(connectionId) ?? 0) + 1);
+  };
+  const endTurn = (connectionId: string): void => {
+    const next = (turnsByConnection.get(connectionId) ?? 1) - 1;
+    if (next <= 0) turnsByConnection.delete(connectionId);
+    else turnsByConnection.set(connectionId, next);
   };
 
   const findConversationById = async (id: string): Promise<Conversation> => {
-    const cached = conversationsById.get(id);
-    if (cached) return cached;
     const all = await deps.chatService.listConversations();
-    for (const conversation of all) cacheConversation(conversation);
-    const fresh = conversationsById.get(id);
-    if (!fresh) throw new Error(`INVALID_PARAMS: conversation ${id} not found`);
-    return fresh;
+    const matches = all.filter((conversation) => conversation.id === id);
+    if (matches.length > 1) {
+      throw new Error(`conversation storage integrity: duplicate conversation id '${id}'`);
+    }
+    const conversation = matches[0];
+    if (conversation === undefined) {
+      throw new RpcError("INVALID_PARAMS", `conversation ${id} not found`);
+    }
+    return conversation;
   };
 
   return {
-    start: async (params, _emit, _envelopeId, clientIdentity) => {
-      const topic = typeof params.topic === "string" ? params.topic : "Untitled";
-      const pinnedContext = Array.isArray(params.pinnedContext)
-        ? (params.pinnedContext as string[])
-        : undefined;
+    start: async ({ params, principal }) => {
+      const { topic, pinnedContext } = parseStartParams(params);
       const conversation = await deps.chatService.startConversation({
         topic,
         pinnedContext,
-        clientIdentity,
+        clientIdentity: principal.id,
       });
-      cacheConversation(conversation);
       return { ok: true, conversation };
     },
-    send: async (params, emit, envelopeId) => {
+    send: async ({ params, emit, requestId, principal, connectionId }) => {
       const { conversationId, userMessage } = parseSendParams(params);
+      const conversation = await findConversationById(conversationId);
+      assertConversationOwner(conversation, principal.id);
+
+      // Resolve user-supplied attachments only after the transcript owner is
+      // authorized. A refused cross-principal send must not touch the vault,
+      // invoke vision, mutate shared context, or reach the provider.
       const attachments = await resolveAttachments({
         vault: deps.vault,
         message: userMessage,
@@ -89,17 +109,18 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
         resolveImage: makeImageResolver(deps.visionRouter),
       });
 
-      const conversation = await findConversationById(conversationId);
-      if (attachments.pinnedContext.length > 0) {
-        conversation.pinnedContext = [...conversation.pinnedContext, ...attachments.pinnedContext];
-      }
-
       const conversationIdAtTurnStart = conversation.id;
-      const unsubscribeApprovals = subscribeApprovalEvents(deps.approvalGate, emit, envelopeId);
+      const unsubscribeApprovals = subscribeApprovalEvents(
+        deps.approvalGate,
+        emit,
+        requestId,
+        principal.id,
+        principal.kind === "human",
+      );
       const unsubscribeSummary = deps.bus.on("loop:context_summarized", (event) => {
         if (event.conversationId !== conversationIdAtTurnStart) return;
         emit(
-          encodeEvent(envelopeId, "loop:context_summarized", {
+          encodeEvent(requestId, "loop:context_summarized", {
             conversationId: event.conversationId,
             model: event.model,
             originalTokens: event.originalTokens,
@@ -110,7 +131,7 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       const unsubscribeOverflow = deps.bus.on("loop:context_overflow_warning", (event) => {
         if (event.conversationId !== conversationIdAtTurnStart) return;
         emit(
-          encodeEvent(envelopeId, "loop:context_overflow_warning", {
+          encodeEvent(requestId, "loop:context_overflow_warning", {
             conversationId: event.conversationId,
             model: event.model,
             configuredTokens: event.configuredTokens,
@@ -120,64 +141,160 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       });
       const unsubscribeProbed = deps.bus.on("loop:tool_mode_probed", (event) => {
         emit(
-          encodeEvent(envelopeId, "loop:tool_mode_probed", {
+          encodeEvent(requestId, "loop:tool_mode_probed", {
             model: event.model,
             mode: event.mode,
             attempts: event.attempts,
           }),
         );
       });
+      beginTurn(connectionId);
       try {
         return await runSendStream(
           deps.chatService,
           conversation,
           userMessage,
+          attachments.pinnedContext,
           emit,
-          envelopeId,
-          cacheConversation,
+          requestId,
+          connectionId,
         );
       } finally {
+        endTurn(connectionId);
         unsubscribeProbed();
         unsubscribeOverflow();
         unsubscribeSummary();
         unsubscribeApprovals();
       }
     },
-    abort: async () => {
-      deps.chatService.abort();
-      return { ok: true };
+    abort: async ({ params, principal, connectionId }) => {
+      const isHuman = principal.kind === "human";
+      // Process-wide cancellation is a separate explicit capability and is
+      // reachable only when a human asks for it by name.
+      if (params.allConnections === true) {
+        if (!isHuman) {
+          throw new RpcError("FORBIDDEN", "a process-wide abort requires a human principal");
+        }
+        deps.chatService.abortAllConnections();
+        return { ok: true, aborted: true, scope: "all" };
+      }
+      // Default scope is the calling connection. Without a turn of its own
+      // there is nothing to cancel, whoever is asking.
+      if (!turnsByConnection.has(connectionId)) {
+        return { ok: true, aborted: false };
+      }
+      deps.chatService.abortConnection(connectionId);
+      return { ok: true, aborted: true };
     },
-    list: async () => {
+    list: async ({ principal }) => {
       const conversations = await deps.chatService.listConversations();
-      for (const conversation of conversations) cacheConversation(conversation);
-      return { ok: true, conversations };
+      return {
+        ok: true,
+        conversations:
+          principal.kind === "human"
+            ? conversations
+            : conversations.filter((conversation) => conversation.clientIdentity === principal.id),
+      };
     },
-    load: async (params) => {
+    load: async ({ params, principal }) => {
       const notePath = typeof params.notePath === "string" ? params.notePath : "";
-      if (notePath.length === 0) {
-        throw new Error("INVALID_PARAMS: notePath is required");
+      if (!isCanonicalConversationPath(notePath)) {
+        throw new RpcError(
+          "INVALID_PARAMS",
+          "notePath must be one exact Notient conversation path",
+        );
       }
       const conversation = await deps.chatService.loadConversation(notePath);
-      cacheConversation(conversation);
+      if (principal.kind !== "human") assertConversationOwner(conversation, principal.id);
       return { ok: true, conversation };
     },
-    approve: async (params) => {
-      const callId = typeof params.callId === "string" ? params.callId : "";
-      const approved = params.approved === true;
-      const reason = typeof params.reason === "string" ? params.reason : undefined;
+    approve: async ({ params, principal }) => {
+      const callId = typeof params.callId === "string" ? params.callId.trim() : "";
       if (callId.length === 0) {
-        throw new Error("INVALID_PARAMS: callId is required");
+        throw new RpcError("INVALID_PARAMS", "callId is required");
       }
-      const resolved = deps.approvalGate.resolve(callId, { approved, reason });
+      const decision = parseApprovalDecision(params);
+      if (principal.kind !== "human" || !principal.scopes.includes("admin"))
+        throw new RpcError(
+          "FORBIDDEN",
+          "tool decisions require an authenticated human administrator",
+        );
+      const resolved = deps.approvalGate.resolve(callId, decision, { ...principal, kind: "human" });
       if (!resolved) {
-        throw new Error(`INVALID_PARAMS: unknown call id: ${callId}`);
+        throw new RpcError("INVALID_PARAMS", `unknown call id: ${callId}`);
       }
-      return { ok: true };
+      return decision.approved
+        ? { ok: true, callId, approved: true }
+        : { ok: true, callId, approved: false, reason: decision.reason };
     },
   };
 }
 
+function parseStartParams(params: Record<string, unknown>): {
+  topic: string;
+  pinnedContext?: string[];
+} {
+  const rawTopic = params.topic;
+  const topic = rawTopic === undefined ? "Untitled" : rawTopic;
+  if (
+    typeof topic !== "string" ||
+    topic.length === 0 ||
+    topic.trim() !== topic ||
+    topic.length > 200
+  ) {
+    throw new RpcError("INVALID_PARAMS", "topic must be an exact non-empty string up to 200 chars");
+  }
+  const rawPinned = params.pinnedContext;
+  if (rawPinned === undefined) return { topic };
+  if (
+    !Array.isArray(rawPinned) ||
+    rawPinned.length > 64 ||
+    rawPinned.some((entry) => !isCanonicalOrdinaryNotePath(entry))
+  ) {
+    throw new RpcError(
+      "INVALID_PARAMS",
+      "pinnedContext must contain at most 64 exact ordinary Markdown note paths",
+    );
+  }
+  const pinnedContext = rawPinned as string[];
+  const totalChars = pinnedContext.reduce((total, entry) => total + entry.length, 0);
+  if (totalChars > 262_144) {
+    throw new RpcError("INVALID_PARAMS", "pinnedContext must not exceed 262144 characters");
+  }
+  return { topic, pinnedContext: [...pinnedContext] };
+}
+
+function assertConversationOwner(conversation: Conversation, principalId: string): void {
+  if (conversation.clientIdentity !== principalId) {
+    throw new RpcError("FORBIDDEN", "conversation belongs to another principal");
+  }
+}
+
+function parseApprovalDecision(params: Record<string, unknown>): ApprovalDecision {
+  if (typeof params.approved !== "boolean") {
+    throw new RpcError("INVALID_PARAMS", "approved must be a boolean");
+  }
+  if (params.approved) {
+    if (params.reason !== undefined) {
+      throw new RpcError("INVALID_PARAMS", "reason is valid only when denying a pending tool call");
+    }
+    return { approved: true };
+  }
+  if (params.reason !== undefined && typeof params.reason !== "string") {
+    throw new RpcError("INVALID_PARAMS", "reason must be a string");
+  }
+  try {
+    return {
+      approved: false,
+      reason: normalizeRejectionReason(params.reason as string | undefined) ?? "rejected by user",
+    };
+  } catch (error) {
+    throw new RpcError("INVALID_PARAMS", error instanceof Error ? error.message : String(error));
+  }
+}
+
 type ChatStreamEvent =
+  | { type: "turn:usage"; attempts: InferenceAttempt[]; durationMs: number }
   | AgentLoopEvent
   | { type: "turn:start"; conversationId: string; userMessage: unknown }
   | { type: "turn:complete"; conversation: Conversation }
@@ -190,10 +307,10 @@ function parseSendParams(params: Record<string, unknown>): {
   const conversationId = typeof params.conversationId === "string" ? params.conversationId : "";
   const userMessage = typeof params.userMessage === "string" ? params.userMessage : "";
   if (conversationId.length === 0) {
-    throw new Error("INVALID_PARAMS: conversationId is required");
+    throw new RpcError("INVALID_PARAMS", "conversationId is required");
   }
   if (userMessage.length === 0) {
-    throw new Error("INVALID_PARAMS: userMessage is required");
+    throw new RpcError("INVALID_PARAMS", "userMessage is required");
   }
   return { conversationId, userMessage };
 }
@@ -203,22 +320,38 @@ function makeImageResolver(
 ): (path: string, bytes: ArrayBuffer, mediaType: string) => Promise<string> {
   return async (path, bytes, mediaType) => {
     if (visionRouter === null) {
-      throw new Error(
-        "VISION_UNAVAILABLE: vision is not supported in this session. Either load a multi-modal model in LMStudio at the primary baseUrl, or configure chat.vision.",
+      throw new RpcError(
+        "VISION_UNAVAILABLE",
+        "vision is not supported in this session. Load a multimodal primary model and restart Notient.",
       );
     }
     return visionRouter.describe({ path, bytes, mediaType });
   };
 }
 
+/**
+ * Bridge the process-wide ApprovalGate onto one turn's NDJSON stream.
+ *
+ * The gate has a single listener list, so every subscriber hears every
+ * pending call in the process. An agent's stream must not: a pending frame
+ * carries the tool `args` and the rendered `preview`, which would hand one
+ * agent the body of the human's (or another agent's) `notes.write`.
+ *
+ * A non-human subscriber therefore sees only the entries the gate attributes
+ * to its own principal via `requestedBy`. A human owns the daemon and keeps
+ * seeing everything, which is what drives the approval prompt.
+ */
 function subscribeApprovalEvents(
   gate: ApprovalGate,
   emit: (line: string) => void,
   envelopeId: string,
+  ownerId: string,
+  isHuman: boolean,
 ): () => void {
   const trackedCallIds = new Set<string>();
   return gate.subscribe({
     onPending: (pending) => {
+      if (!isHuman && pending.requestedBy !== ownerId) return;
       trackedCallIds.add(pending.callId);
       emit(
         encodeEvent(envelopeId, "loop:approval_pending", {
@@ -233,11 +366,13 @@ function subscribeApprovalEvents(
       if (!trackedCallIds.has(callId)) return;
       trackedCallIds.delete(callId);
       emit(
-        encodeEvent(envelopeId, "loop:approval_resolved", {
-          callId,
-          approved: decision.approved,
-          reason: decision.reason,
-        }),
+        encodeEvent(
+          envelopeId,
+          "loop:approval_resolved",
+          decision.approved
+            ? { callId, approved: true }
+            : { callId, approved: false, reason: decision.reason },
+        ),
       );
     },
   });
@@ -247,16 +382,22 @@ async function runSendStream(
   chatService: ChatService,
   conversation: Conversation,
   userMessage: string,
+  ephemeralContext: readonly string[],
   emit: (line: string) => void,
   envelopeId: string,
-  cache: (conversation: Conversation) => void,
+  /** Connection owner, so `chat.abort` stops only this turn. */
+  connectionId: string,
 ): Promise<Record<string, unknown>> {
   let finalConversation: Conversation = conversation;
-  for await (const event of chatService.sendMessage({ conversation, userMessage })) {
+  for await (const event of chatService.sendMessage({
+    conversation,
+    userMessage,
+    connectionId,
+    ephemeralContext,
+  })) {
     forwardChatEvent(emit, envelopeId, event);
     if (event.type === "turn:complete") {
       finalConversation = event.conversation;
-      cache(event.conversation);
     }
     if (event.type === "turn:aborted") {
       throw new Error(`turn aborted: ${event.reason}`);
@@ -276,6 +417,14 @@ function forwardChatEvent(
         encodeEvent(envelopeId, "turn:start", {
           conversationId: event.conversationId,
           userMessage: event.userMessage,
+        }),
+      );
+      return;
+    case "turn:usage":
+      emit(
+        encodeEvent(envelopeId, "turn:usage", {
+          attempts: event.attempts,
+          durationMs: event.durationMs,
         }),
       );
       return;

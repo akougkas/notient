@@ -29,3 +29,10 @@ export class EventBus {
     }
   }
 }
+
+/** Fail fast when an observable runtime service is wired without the application bus. */
+export function assertEventBus(value: unknown, owner: string): asserts value is EventBus {
+  if (!(value instanceof EventBus)) {
+    throw new Error(`${owner} requires an EventBus`);
+  }
+}

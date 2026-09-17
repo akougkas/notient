@@ -1,6 +1,6 @@
 export type ConnectivityTier = "isolated" | "sparse" | "connected" | "hub";
 
-export type Maturity = "raw" | "draft" | "review" | "mature";
+export type Maturity = "raw" | "adolescent" | "mature" | "synthesis-ready";
 
 export interface VitalsSnapshot {
   notePath: string;

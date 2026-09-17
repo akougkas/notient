@@ -1,0 +1,10 @@
+{
+  "id": "notient",
+  "name": "Notient",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Your local knowledge companion: grounded retrieval, note evolution and reviewed changes through your Notient daemon.",
+  "author": "Anthony Kougkas",
+  "authorUrl": "https://notient.org",
+  "isDesktopOnly": true
+}

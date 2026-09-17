@@ -1,20 +1,21 @@
 /**
- * Phase 4 Task 12 SessionGrants smoke harness.
+ * SessionGrants real-SurrealDB integration harness.
  *
  * Skipped by default. Run with `bun run test:smoke` (sets NOTIENT_SMOKE=1)
  * or directly via `NOTIENT_SMOKE=1 bun test src/core/services/`.
  *
- * Boots a real SurrealDB, applies the Phase 1 schema (which now includes
- * the `agent_session` table added by Task 12), and exercises grant /
- * revoke / list / find / incrementWriteCount end-to-end. Each test
- * truncates the table in `afterEach` so seq counters and ordering
- * assertions stay independent.
+ * Boots a real SurrealDB, applies the canonical schema, and exercises grant,
+ * revoke, list, and atomic claim behavior end-to-end. Each test
+ * truncates the table in `afterEach` so ordering assertions stay independent.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ApprovalGate } from "../../../../src/core/chat/approvalGate";
+import { assertToolApproval } from "../../../../src/core/chat/toolAuthority";
+import { createUuidRecordId } from "../../../../src/core/db/recordId";
 import { applySchema } from "../../../../src/core/db/schemaApplier";
 import { type SurrealConnection, connect } from "../../../../src/core/db/surreal";
 import {
@@ -37,20 +38,12 @@ interface ManualGrantOptions {
   revokedAt?: number | null;
 }
 
-async function nextSeq(connection: SurrealConnection): Promise<number> {
-  const [rows] = await connection.db
-    .query<[Array<{ seq: number }>]>("SELECT seq FROM agent_session ORDER BY seq DESC LIMIT 1;")
-    .collect<[Array<{ seq: number }>]>();
-  return (rows[0]?.seq ?? 0) + 1;
-}
-
 async function insertGrantManually(
   connection: SurrealConnection,
   options: ManualGrantOptions,
-): Promise<number> {
-  const seq = await nextSeq(connection);
+): Promise<string> {
+  const id = createUuidRecordId("agent_session");
   const setClauses: string[] = [
-    "seq: $seq",
     "client: $client",
     "granted_at: $grantedAt",
     "expires_at: $expiresAt",
@@ -59,12 +52,12 @@ async function insertGrantManually(
     "used_writes: $usedWrites",
   ];
   const bindings: Record<string, unknown> = {
-    seq,
+    id,
     client: options.client,
     grantedAt: options.grantedAt,
     expiresAt: options.expiresAt,
-    allowedFolders: JSON.stringify(options.allowedFolders),
-    allowedTools: JSON.stringify(options.allowedTools),
+    allowedFolders: options.allowedFolders,
+    allowedTools: options.allowedTools,
     usedWrites: options.usedWrites ?? 0,
   };
   if (options.maxWrites !== null) {
@@ -76,9 +69,9 @@ async function insertGrantManually(
     bindings.revokedAt = options.revokedAt;
   }
   await connection.db
-    .query(`CREATE agent_session CONTENT { ${setClauses.join(", ")} };`, bindings)
+    .query(`CREATE ONLY $id CONTENT { ${setClauses.join(", ")} };`, bindings)
     .collect();
-  return seq;
+  return id.toString();
 }
 
 async function clearAgentSessions(connection: SurrealConnection): Promise<void> {
@@ -100,6 +93,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -108,9 +102,9 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
-    service = new SessionGrants({ db: connection.db });
-  });
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
+    service = new SessionGrants({ db: connection.db, now: Date.now });
+  }, 30_000);
 
   afterAll(async () => {
     if (connection !== undefined) {
@@ -122,7 +116,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
     await clearAgentSessions(connection);
@@ -137,7 +131,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       maxWrites: 20,
       ttlMinutes: 60,
     });
-    expect(grant.id).toBeGreaterThan(0);
+    expect(grant.id).toMatch(/^agent_session:/);
     expect(grant.client).toBe("claude-code");
     expect(grant.grantedAt).toBeGreaterThanOrEqual(before);
     expect(grant.expiresAt).toBe(grant.grantedAt + 60 * 60_000);
@@ -148,25 +142,21 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
     expect(grant.revokedAt).toBeNull();
   });
 
-  test("[smoke] grant normalizes the client via normalizeAgentId and rejects invalid ids", async () => {
-    const granted = await service.grant({
-      client: "  claude-code  ",
-      allowedFolders: ["Inbox/"],
-      ttlMinutes: 30,
-    });
-    expect(granted.client).toBe("claude-code");
-    let thrown: unknown = null;
-    try {
-      await service.grant({
+  test("[smoke] grant rejects non-canonical and invalid client ids", async () => {
+    await expect(
+      service.grant({
+        client: "  claude-code  ",
+        allowedFolders: ["Inbox/"],
+        ttlMinutes: 30,
+      }),
+    ).rejects.toThrow(/canonical agent id/);
+    await expect(
+      service.grant({
         client: "Bad Client!",
         allowedFolders: ["Inbox/"],
         ttlMinutes: 30,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toMatch(/Invalid agent id/);
+      }),
+    ).rejects.toThrow(/Invalid agent id/);
   });
 
   test("[smoke] grant rejects an empty allowedFolders array", async () => {
@@ -184,22 +174,23 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
     expect((thrown as Error).message).toMatch(/allowedFolders/);
   });
 
-  test("[smoke] grant normalizes folder entries to a trailing slash", async () => {
-    const grant = await service.grant({
-      client: "claude-code",
-      allowedFolders: ["Inbox", "Notient/agent-asks/"],
-      ttlMinutes: 30,
-    });
-    expect(grant.allowedFolders).toEqual(["Inbox/", "Notient/agent-asks/"]);
+  test("[smoke] grant rejects a folder prefix without its canonical trailing slash", async () => {
+    await expect(
+      service.grant({
+        client: "claude-code",
+        allowedFolders: ["Inbox", "Notient/agent-asks/"],
+        ttlMinutes: 30,
+      }),
+    ).rejects.toThrow(/ending in/);
   });
 
-  test("[smoke] grant defaults allowedTools to the empty 'all writes' sentinel", async () => {
+  test("[smoke] grant defaults allowedTools to the explicit wildcard", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 30,
     });
-    expect(grant.allowedTools).toEqual([]);
+    expect(grant.allowedTools).toEqual(["*"]);
   });
 
   test("[smoke] grant rejects ttlMinutes <= 0", async () => {
@@ -227,157 +218,160 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
     expect(negThrown).toBeInstanceOf(Error);
   });
 
-  test("[smoke] grant clamps ttlMinutes silently at the documented maximum", async () => {
-    const grant = await service.grant({
-      client: "claude-code",
-      allowedFolders: ["Inbox/"],
-      ttlMinutes: SESSION_GRANT_TTL_MAX_MINUTES + 100,
-    });
-    expect(grant.expiresAt - grant.grantedAt).toBe(SESSION_GRANT_TTL_MAX_MINUTES * 60_000);
+  test("[smoke] grant rejects ttlMinutes beyond the maximum", async () => {
+    await expect(
+      service.grant({
+        client: "claude-code",
+        allowedFolders: ["Inbox/"],
+        ttlMinutes: SESSION_GRANT_TTL_MAX_MINUTES + 100,
+      }),
+    ).rejects.toThrow(/must not exceed/);
   });
 
-  test("[smoke] find returns the active grant when folder and tool match", async () => {
+  test("[smoke] claim returns and consumes the active grant when folder and tool match", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       allowedTools: ["notes.create"],
       ttlMinutes: 60,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).not.toBeNull();
     expect(found?.id).toBe(grant.id);
   });
 
-  test("[smoke] find returns null when allowed_tools excludes the tool", async () => {
+  test("[smoke] claim returns null when allowed_tools excludes the tool", async () => {
     await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       allowedTools: ["notes.create"],
       ttlMinutes: 60,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.append",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] find matches any tool when allowed_tools is the empty sentinel", async () => {
+  test("[smoke] claim matches any tool only with the explicit wildcard", async () => {
     await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 60,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.append",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).not.toBeNull();
   });
 
-  test("[smoke] find returns null when no folder prefix matches", async () => {
+  test("[smoke] claim returns null when no folder prefix matches", async () => {
     await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 60,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Outbox/today.md",
+      folder: "Outbox/",
       now: Date.now(),
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] find returns null when the grant is expired", async () => {
+  test("[smoke] claim returns null when the grant is expired", async () => {
     await insertGrantManually(connection, {
       client: "claude-code",
       grantedAt: 1_000,
       expiresAt: 2_000,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: 5_000,
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] find returns null when the grant is revoked", async () => {
+  test("[smoke] claim returns null when the grant is revoked", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 60,
     });
     await service.revoke(grant.id);
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] find returns null when used_writes has reached max_writes", async () => {
+  test("[smoke] claim returns null when used_writes has reached max_writes", async () => {
     await insertGrantManually(connection, {
       client: "claude-code",
       grantedAt: 1_000,
       expiresAt: 99_999_999_999_999,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: 3,
       usedWrites: 3,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: 5_000,
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] find ignores max_writes when it is null", async () => {
+  test("[smoke] claim remains unlimited when max_writes is absent", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 60,
     });
-    for (let index = 0; index < 50; index++) {
-      await service.incrementWriteCount(grant.id);
-    }
-    const found = await service.find({
-      client: "claude-code",
-      tool: "notes.create",
-      folder: "Inbox/today.md",
-      now: Date.now(),
-    });
-    expect(found).not.toBeNull();
-    expect(found?.usedWrites).toBe(50);
+    const claims = await Promise.all(
+      Array.from({ length: 50 }, () =>
+        service.claim({
+          client: "claude-code",
+          tool: "notes.create",
+          folder: "Inbox/",
+          now: Date.now(),
+        }),
+      ),
+    );
+    expect(claims.every((claim) => claim?.id === grant.id)).toBe(true);
+    const rows = await service.list({ activeOnly: true });
+    expect(rows.find((row) => row.id === grant.id)?.usedWrites).toBe(50);
   });
 
-  test("[smoke] find returns the most recent active grant when multiple match", async () => {
+  test("[smoke] claim returns the most recent active grant when multiple match", async () => {
     const oldId = await insertGrantManually(connection, {
       client: "claude-code",
       grantedAt: 1_000,
       expiresAt: 99_999_999_999_999,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     const newId = await insertGrantManually(connection, {
@@ -385,35 +379,34 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       grantedAt: 2_000,
       expiresAt: 99_999_999_999_999,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
-    expect(newId).toBeGreaterThan(oldId);
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: 3_000,
     });
     expect(found?.id).toBe(newId);
   });
 
-  test("[smoke] find scopes the search to the requested client", async () => {
+  test("[smoke] claim scopes the search to the requested client", async () => {
     await service.grant({
       client: "cursor",
       allowedFolders: ["Inbox/"],
       ttlMinutes: 60,
     });
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).toBeNull();
   });
 
-  test("[smoke] revoke flips revoked_at and excludes the row from subsequent find calls", async () => {
+  test("[smoke] revoke flips revoked_at and excludes the row from subsequent claims", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
@@ -424,17 +417,19 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
     expect(revoked).not.toBeNull();
     expect(revoked?.revokedAt).not.toBeNull();
     expect((revoked as SessionGrant).revokedAt).toBeGreaterThanOrEqual(before);
-    const found = await service.find({
+    const found = await service.claim({
       client: "claude-code",
       tool: "notes.create",
-      folder: "Inbox/today.md",
+      folder: "Inbox/",
       now: Date.now(),
     });
     expect(found).toBeNull();
   });
 
   test("[smoke] revoke returns null when the id does not match any row", async () => {
-    const result = await service.revoke(9_999);
+    const result = await service.revoke(
+      createUuidRecordId("agent_session", "018f05cd-3f7b-7000-8000-999999999999").toString(),
+    );
     expect(result).toBeNull();
   });
 
@@ -449,7 +444,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       grantedAt: 1_000,
       expiresAt: 2_000,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     const revokedGrant = await service.grant({
@@ -474,7 +469,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       grantedAt: 1_000,
       expiresAt: 2_000,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     const all = await service.list({ activeOnly: false });
@@ -502,7 +497,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       grantedAt: 1_000,
       expiresAt: 99_999_999_999_999,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     const newId = await insertGrantManually(connection, {
@@ -510,35 +505,143 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] SessionGrants", () => {
       grantedAt: 2_000,
       expiresAt: 99_999_999_999_999,
       allowedFolders: ["Inbox/"],
-      allowedTools: [],
+      allowedTools: ["*"],
       maxWrites: null,
     });
     const rows = await service.list({ activeOnly: true });
     expect(rows.map((row) => row.id)).toEqual([newId, oldId]);
   });
 
-  test("[smoke] incrementWriteCount: ten back-to-back calls land used_writes at exactly 10", async () => {
+  test("[smoke] concurrent claims cannot exceed max_writes", async () => {
     const grant = await service.grant({
       client: "claude-code",
       allowedFolders: ["Inbox/"],
-      maxWrites: 100,
+      maxWrites: 10,
       ttlMinutes: 60,
     });
-    for (let index = 0; index < 10; index++) {
-      await service.incrementWriteCount(grant.id);
-    }
+    const claims = await Promise.all(
+      Array.from({ length: 25 }, () =>
+        service.claim({
+          client: "claude-code",
+          tool: "notes.create",
+          folder: "Inbox/",
+          now: Date.now(),
+        }),
+      ),
+    );
+    expect(claims.filter((claim) => claim !== null)).toHaveLength(10);
     const rows = await service.list({ activeOnly: true });
     const updated = rows.find((row) => row.id === grant.id);
     expect(updated?.usedWrites).toBe(10);
   });
 
-  test("[smoke] incrementWriteCount is a no-op against an unknown id", async () => {
-    let thrown: unknown = null;
-    try {
-      await service.incrementWriteCount(9_999);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeNull();
+  test("[smoke] batch claims reserve all effects or none, including concurrent reservations", async () => {
+    const grant = await service.grant({
+      client: "codex",
+      allowedFolders: ["Notient/proposals/"],
+      allowedTools: ["agent.distill"],
+      maxWrites: 5,
+      ttlMinutes: 60,
+    });
+    const query = {
+      client: "codex",
+      tool: "agent.distill",
+      folder: "Notient/proposals/",
+      now: Date.now(),
+      writeCount: 3,
+    };
+    const claims = await Promise.all([service.claim(query), service.claim(query)]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect((await service.get(grant.id))?.usedWrites).toBe(3);
+    expect(await service.claim(query)).toBeNull();
+    expect((await service.get(grant.id))?.usedWrites).toBe(3);
+    expect(await service.claim({ ...query, writeCount: 2 })).toMatchObject({
+      id: grant.id,
+      usedWrites: 5,
+    });
+    expect(await service.claim({ ...query, writeCount: 1 })).toBeNull();
+  });
+
+  test("[smoke] a one-write grant parks a two-note approval without consuming allowance", async () => {
+    const grant = await service.grant({
+      client: "codex",
+      allowedFolders: ["Notient/proposals/"],
+      allowedTools: ["agent.distill"],
+      maxWrites: 1,
+      ttlMinutes: 60,
+    });
+    const gate = new ApprovalGate({
+      sessionGrants: service,
+      recordHistoryAutoApprove: async () => {},
+      perToolPolicy: () => ({}),
+    });
+    let pending!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      pending = resolve;
+    });
+    gate.subscribe({ onPending: () => pending(), onResolved: () => {} });
+    const paths = ["Notient/proposals/first.md", "Notient/proposals/second.md"];
+    const call = {
+      id: "batch",
+      name: "agent.distill",
+      args: { path: paths[0], proposalPaths: paths },
+    };
+    const signal = new AbortController().signal;
+    const decision = gate.request(call, "safe", "Create two notes", signal, {
+      clientIdentity: "codex",
+    });
+    await parked;
+    expect((await service.get(grant.id))?.usedWrites).toBe(0);
+    expect(gate.pendingCount()).toBe(1);
+    gate.resolve("batch", { approved: false, reason: "No additional permission" });
+    expect(await decision).toEqual({ approved: false, reason: "No additional permission" });
+    const enough = await service.grant({
+      client: "codex",
+      allowedFolders: ["Notient/proposals/"],
+      allowedTools: ["agent.distill"],
+      maxWrites: 2,
+      ttlMinutes: 60,
+    });
+    const approved = await gate.request(
+      { ...call, id: "batch2" },
+      "safe",
+      "Create two notes",
+      signal,
+      { clientIdentity: "codex" },
+    );
+    const proof = gate.writeGuard(approved, signal).toolApproval;
+    expect(proof.permission).toMatchObject({
+      kind: "session",
+      id: enough.id,
+      claimedWrite: 2,
+      claimedWrites: 2,
+    });
+    await expect(
+      assertToolApproval(proof, {
+        authorizeIdentity: () => {},
+        grant: (id) => service.get(id),
+        policy: async () => ({ approvalMode: "safe", perTool: {} }),
+      }),
+    ).resolves.toBeUndefined();
+    expect((await service.get(grant.id))?.usedWrites).toBe(0);
+  });
+
+  test("[smoke] grant rejects ambiguous or empty tool authority", async () => {
+    await expect(
+      service.grant({
+        client: "claude-code",
+        allowedFolders: ["Inbox/"],
+        allowedTools: [],
+        ttlMinutes: 60,
+      }),
+    ).rejects.toThrow(/allowedTools/);
+    await expect(
+      service.grant({
+        client: "claude-code",
+        allowedFolders: ["Inbox/"],
+        allowedTools: ["*", "notes.create"],
+        ttlMinutes: 60,
+      }),
+    ).rejects.toThrow(/wildcard/);
   });
 });

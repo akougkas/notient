@@ -19,9 +19,10 @@
  *      Decision 2).
  *   6. `daemon_write` carries one row whose `sha` matches the post-write
  *      body, `agent='linker'`, and `targets` contains the target note id.
- *   7. Re-running `runTier1` against the same body attributes the new
- *      wikilink edge with `source='linker'` because Tier 1's
- *      `findRecentDaemonWrite` cross-reference matches the row from step 6.
+ *   7. Re-running `runTier1` against the same body keeps the new wikilink's
+ *      canonical `source='wikilink'` while attributing its producer through
+ *      `agent='linker'` because Tier 1's `findRecentDaemonWrite`
+ *      cross-reference matches the row from step 6.
  *
  * Hermetic guarantees:
  *   - `mkdtemp` for both the SurrealDB data dir and the vault root.
@@ -36,6 +37,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RecordId } from "surrealdb";
+import { FsVault } from "../../../../src/adapters/fsVault";
 import type { VaultAdapter } from "../../../../src/adapters/vaultAdapter";
 import { ApprovalService } from "../../../../src/core/approvals/approvalService";
 import { findById, findCurrent, updateStatus } from "../../../../src/core/awaken/awakenRun";
@@ -55,8 +57,10 @@ import {
 import { EventBus } from "../../../../src/core/events/eventBus";
 import type { IndexerQueue } from "../../../../src/core/indexer/indexerQueue";
 import { runTier1 } from "../../../../src/core/indexer/tier1";
+import { sha256Hex } from "../../../../src/core/utils/sha256";
 import { makeAwakenResumeHandler } from "../../../../src/daemon/handlers/awaken";
 import { type SurrealServerHandle, startSurreal } from "../../../../src/daemon/surrealServer";
+import { rpcRequest } from "../../../rpcRequest";
 
 const SMOKE_ENABLED = process.env.NOTIENT_SMOKE === "1";
 
@@ -66,39 +70,64 @@ function waitForLiveQueryDelivery(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, PROPAGATION_DELAY_MS));
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const buffer = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-const realFs = {
-  writeBinary: async (filePath: string, data: ArrayBuffer): Promise<void> => {
-    await writeFile(filePath, new Uint8Array(data));
-  },
-  rename: async (from: string, to: string): Promise<void> => {
-    const { rename } = await import("node:fs/promises");
-    await rename(from, to);
-  },
-  remove: async (filePath: string): Promise<void> => {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(filePath).catch(() => {
-      // missing-file is not an error for cleanup
-    });
-  },
-};
-
 interface RecordedEnqueue {
   path: string;
   priority: number;
 }
 
-function makeIndexerQueue(records: RecordedEnqueue[]): AwakenWorkerIndexerQueue {
+function emitNoteIndexed(bus: EventBus, notePath: string): void {
+  bus.emit({
+    type: "indexer:note-indexed",
+    path: notePath,
+    result: {
+      chunkCount: 0,
+      embedCount: 0,
+      durationMs: 1,
+      llmCalls: 0,
+      extractionWindows: 0,
+    },
+  });
+}
+
+async function persistSuccessfulTierState(
+  connection: SurrealConnection,
+  notePath: string,
+): Promise<void> {
+  await upsertNoteByPath(connection.db, {
+    path: notePath,
+    sha: "0".repeat(64),
+    wordCount: 0,
+  });
+  await connection.db
+    .query(
+      "UPDATE note SET tier1_at = time::now(), tier2_at = time::now(), tier3_at = time::now() WHERE path = $path;",
+      { path: notePath },
+    )
+    .collect();
+}
+
+function makeIndexerQueue(
+  connection: SurrealConnection,
+  records: RecordedEnqueue[],
+  bus: EventBus,
+  afterEnqueue: (notePath: string) => void | Promise<void>,
+): AwakenWorkerIndexerQueue {
   return {
     enqueue(filePath: string, priority?: number): void {
       records.push({ path: filePath, priority: priority ?? 2 });
+      void persistSuccessfulTierState(connection, filePath)
+        .then(() => afterEnqueue(filePath))
+        .then(
+          () => emitNoteIndexed(bus, filePath),
+          (error: unknown) => {
+            bus.emit({
+              type: "indexer:error",
+              path: filePath,
+              message: error instanceof Error ? error.message : String(error),
+              phase: "phase4-smoke-indexer",
+            });
+          },
+        );
     },
   };
 }
@@ -110,7 +139,7 @@ function makeVaultFacade(paths: string[]): AwakenWorkerVaultFacade {
 }
 
 async function clearAwakenRuns(connection: SurrealConnection): Promise<void> {
-  await connection.db.query("DELETE awaken_run;").collect();
+  await connection.db.query("DELETE awaken_run; DELETE note;").collect();
 }
 
 async function clearGraphRows(connection: SurrealConnection): Promise<void> {
@@ -157,6 +186,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       portFile: path.join(tempDir, "port"),
       pidFile: path.join(tempDir, "pid"),
       logLevel: "warn",
+      hnswCacheMib: 64,
     });
     connection = await connect({
       url: handle.url,
@@ -165,7 +195,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       namespace: "notient",
       database: "vault",
     });
-    await applySchema(connection.db, secret);
+    await applySchema(connection.db, secret, { embedDim: 768, embedModel: "fixture-embedding" });
   }, 30_000);
 
   afterAll(async () => {
@@ -178,27 +208,23 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("[smoke] awaken pause mid-flight, resume to completion", async () => {
     await clearAwakenRuns(connection);
     const paths = ["a.md", "b.md", "c.md", "d.md", "e.md"];
 
-    // First pass: pause once `b.md` finishes. The pause is signalled from
-    // the `onNoteIndexed` callback to mirror the production path where
-    // `awaken --pause` runs in a separate process and updates the status
-    // row that the worker subscribes to via SurrealDB live query.
+    // First pass: pause once `b.md` finishes. The queue callback mirrors a
+    // separate `awaken --pause` caller, then emits the same canonical note
+    // completion event as the production indexer.
     const firstEnqueued: RecordedEnqueue[] = [];
+    const firstBus = new EventBus();
     let pauseSignalled = false;
     let runIdRef: RecordId<"awaken_run"> | null = null;
     const firstResult = await runAwakenWorker({
       db: connection.db,
       vaultFacade: makeVaultFacade(paths),
-      indexerQueue: makeIndexerQueue(firstEnqueued),
-      tierFilter: [1, 2, 3],
-      priorityGlobs: [],
-      resume: false,
-      onNoteIndexed: async (notePath) => {
+      indexerQueue: makeIndexerQueue(connection, firstEnqueued, firstBus, async (notePath) => {
         if (notePath === "b.md" && !pauseSignalled) {
           pauseSignalled = true;
           const active = await findCurrent(connection.db);
@@ -209,7 +235,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
           await updateStatus(connection.db, active.id, "paused");
           await waitForLiveQueryDelivery();
         }
-      },
+      }),
+      bus: firstBus,
+      tierFilter: [1, 2, 3],
+      priorityGlobs: [],
+      resume: false,
+      signal: new AbortController().signal,
     });
 
     expect(firstResult.status).toBe("paused");
@@ -251,11 +282,8 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     const secondIndexerQueue = {
       enqueue(filePath: string, priority?: number): void {
         secondEnqueued.push({ path: filePath, priority: priority ?? 2 });
-        // Mirror the unit-test pattern: tee `enqueue` into the worker's
-        // per-note completion event so the background worker drains
-        // without needing the real indexer.
-        queueMicrotask(() => {
-          secondBus.emit({ type: "indexer:tier3-done", path: filePath });
+        void persistSuccessfulTierState(connection, filePath).then(() => {
+          emitNoteIndexed(secondBus, filePath);
         });
       },
     };
@@ -265,8 +293,12 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       vault: secondVault as VaultAdapter,
       awakenBackgroundRegistry: new AwakenBackgroundRegistry(),
       surreal: connection,
+      isExcluded: () => false,
+      approvalIntents: {
+        cancelForNoteDeletion: async () => ({ cancelled: 0, failed: 0 }),
+      },
     });
-    const resumeResult = await resumeHandler();
+    const resumeResult = await resumeHandler(rpcRequest());
     expect(resumeResult.ok).toBe(true);
     expect(resumeResult.status).toBe("running");
     expect(resumeResult.runId).toBe(firstResult.runId.toString());
@@ -290,7 +322,7 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     expect(secondEnqueued.map((entry) => entry.path)).toEqual(["c.md", "d.md", "e.md"]);
   });
 
-  test("[smoke] approve linker proposal writes ## Related, records daemon_write, and re-Tier1 attributes the wikilink to linker", async () => {
+  test("[smoke] approve linker proposal writes ## Related and re-Tier1 keeps canonical source plus proposer attribution", async () => {
     await clearGraphRows(connection);
 
     // Per-test fixture vault. Hermetic across tests: each phase-4 test
@@ -348,11 +380,11 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     const service = new ApprovalService({
       db: connection.db,
       bus,
-      vaultRoot,
-      fs: realFs,
-      readFile: (filePath) => readFile(filePath, "utf8"),
+      vault: new FsVault(vaultRoot),
+      hash: sha256Hex,
+      pruneHistory: async () => {},
     });
-    await service.approveEdge({ id: seedEdge.id, table: "related_to" });
+    await service.approveEdge({ id: seedEdge.id, table: "related_to", approvedBy: "human" });
 
     expect(decisions).toEqual(["edge:accepted"]);
 
@@ -367,13 +399,14 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     // (`approved = true AND applied = true`), which is what search
     // consumers filter on.
     const [edgeRows] = await connection.db
-      .query<[Array<{ approved: boolean; applied: boolean }>]>(
-        "SELECT approved, applied FROM related_to WHERE id = $id;",
+      .query<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>(
+        "SELECT approved, applied, approved_by FROM related_to WHERE id = $id;",
         { id: seedEdge.id },
       )
-      .collect<[Array<{ approved: boolean; applied: boolean }>]>();
+      .collect<[Array<{ approved: boolean; applied: boolean; approved_by: string }>]>();
     expect(edgeRows[0]?.approved).toBe(true);
     expect(edgeRows[0]?.applied).toBe(true);
+    expect(edgeRows[0]?.approved_by).toBe("human");
 
     // Step 6: a single `daemon_write` row exists for the source note
     // with the post-write body's SHA (the Tier 1 cross-reference key),
@@ -404,22 +437,25 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
       .collect<[Array<{ kind: string; client_identity: string }>]>();
     expect(historyRows.length).toBe(1);
     expect(historyRows[0].kind).toBe("note.append_section");
-    expect(historyRows[0].client_identity).toBe("linker");
+    expect(historyRows[0].client_identity).toBe("human");
 
     // Step 7: simulate the user save that would normally arrive after the
     // file watcher fires for the writeback. Re-running `runTier1` against
-    // the new body must attribute the new `[[beta]]` wikilink to the
-    // linker because the daemon_write row matches `(noteId, newSha)`.
+    // the new body must keep the new `[[beta]]` edge's extraction source
+    // canonical while carrying linker attribution in the separate agent
+    // field because the daemon_write row matches `(noteId, newSha)`.
     const vaultPaths = ["alpha.md", "beta.md"];
     await runTier1(connection.db, {
       notePath: "beta.md",
       source: targetBody,
       vaultPaths,
+      bus: new EventBus(),
     });
     const tier1Output = await runTier1(connection.db, {
       notePath: "alpha.md",
       source: afterBody,
       vaultPaths,
+      bus: new EventBus(),
     });
     expect(tier1Output.noteId.toString()).toBe(sourceNoteId.toString());
 
@@ -429,22 +465,20 @@ describe.skipIf(!SMOKE_ENABLED)("[smoke] Phase 4 vault enrichment", () => {
     }
     interface WikilinkRow {
       source: string;
+      agent: string;
       class: string;
       out: RecordId<"note">;
     }
     const [wikilinkRows] = await connection.db
       .query<[WikilinkRow[]]>(
-        "SELECT source, class, out FROM wikilink WHERE in.note = $note AND out = $target;",
+        "SELECT source, agent, class, out FROM wikilink WHERE in.note = $note AND out = $target;",
         { note: sourceNoteId, target: resolvedTargetId },
       )
       .collect<[WikilinkRow[]]>();
     expect(wikilinkRows.length).toBeGreaterThan(0);
-    // Tier 1's daemon_write override rewrites the wikilink's `source`
-    // from the default literal `'wikilink'` to the agent name recorded
-    // on the matching `daemon_write` row. This is the Locked Decision 3
-    // attribution contract that prevents the user from being credited
-    // with edges the daemon wrote on their behalf.
-    expect(wikilinkRows[0].source).toBe("linker");
+    // Extraction mechanism and producer are distinct provenance axes.
+    expect(wikilinkRows[0].source).toBe("wikilink");
+    expect(wikilinkRows[0].agent).toBe("linker");
     expect(wikilinkRows[0].class).toBe("EXTRACTED");
   });
 });

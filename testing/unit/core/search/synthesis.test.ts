@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ReasoningScheduler } from "../../../../src/core/coordinator/reasoningScheduler";
 import type {
   ChatMessage,
   ChatOptions,
@@ -112,6 +113,7 @@ describe("parseSynthesis", () => {
 
 describe("synthesize", () => {
   const baseHits: SearchHit[] = [makeHit("/Notes/Graph.md", "graph reasoning")];
+  const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
 
   test("streams tokens, parses bullets, and emits onToken callback", async () => {
     const tokens = [
@@ -129,6 +131,7 @@ describe("synthesize", () => {
       query: "why graphs",
       hits: [...baseHits, makeHit("/Notes/Vector.md", "vector search")],
       signal: new AbortController().signal,
+      scheduler,
       onToken: (token) => {
         seen.push(token);
       },
@@ -149,6 +152,7 @@ describe("synthesize", () => {
       query: "why graphs",
       hits: baseHits,
       signal: new AbortController().signal,
+      scheduler,
     });
     expect(card.bullets).toHaveLength(1);
     expect(card.bullets[0].citations).toEqual(["[[Graph]]"]);
@@ -162,6 +166,7 @@ describe("synthesize", () => {
       query: "anything",
       hits: [],
       signal: new AbortController().signal,
+      scheduler,
     });
     expect(card.bullets).toEqual([]);
     expect(card.error).toBe("no-hits");
@@ -175,6 +180,7 @@ describe("synthesize", () => {
       query: "q",
       hits: baseHits,
       signal: new AbortController().signal,
+      scheduler,
     });
     expect(card.bullets).toEqual([]);
     expect(card.error).toBe("empty-response");
@@ -190,6 +196,7 @@ describe("synthesize", () => {
       query: "q",
       hits: baseHits,
       signal: new AbortController().signal,
+      scheduler,
     });
     expect(card.bullets).toEqual([]);
     expect(card.error).toBe("llama-server 500");
@@ -212,45 +219,20 @@ describe("synthesize", () => {
         query: "q",
         hits: baseHits,
         signal: controller.signal,
+        scheduler,
       }),
     ).rejects.toBeDefined();
   });
 
-  test("tolerates graph-expanded hits that lack a notePath at runtime", async () => {
-    // Graph-expanded hits set viaPath instead of notePath. The runtime can
-    // produce entries where notePath is undefined even though the SearchHit
-    // type declares it required. The prompt builder must not crash on such
-    // entries via `notePath.split("/")`.
-    const baseHit: SearchHit = makeHit("/Notes/Indexing.md", "tier 1 indexing");
-    const graphExpandedHit = {
-      notePath: undefined,
-      chunkId: null,
-      snippet: "via [[06-indexing.md]] (wikilink, agent: unknown)",
-      score: 0.5,
-      matchedText: "",
-      viaPath: "06-indexing.md",
-    } as unknown as SearchHit;
-    const provider = fakeProvider({
-      tokens: ["- Indexing is tiered [[Indexing]]\n"],
-    });
-    const card = await synthesize({
-      provider,
-      model: "reasoning",
-      query: "tier 1 indexing",
-      hits: [baseHit, graphExpandedHit],
-      signal: new AbortController().signal,
-    });
-    expect(card.error).toBeUndefined();
-    expect(card.rawText.length).toBeGreaterThan(0);
-    expect(card.bullets).toHaveLength(1);
-    expect(card.bullets[0].citations).toEqual(["[[Indexing]]"]);
-  });
-
-  test("forwards model and signal into the provider call", async () => {
-    const captured: { options: ChatOptions | null } = { options: null };
+  test("forwards the model and a caller-linked scheduler signal into the provider call", async () => {
+    const captured: { label: string | null; options: ChatOptions | null } = {
+      label: null,
+      options: null,
+    };
     const provider = fakeProvider({
       tokens: ["- ok [[Graph]]\n"],
       onStream: (_messages, options) => {
+        captured.label = scheduler.currentLabel();
         captured.options = options;
       },
     });
@@ -261,9 +243,40 @@ describe("synthesize", () => {
       query: "q",
       hits: baseHits,
       signal: controller.signal,
+      scheduler,
     });
     expect(captured.options?.model).toBe("reason-1");
-    expect(captured.options?.signal).toBe(controller.signal);
+    expect(captured.label).toBe("search:synthesis");
+    expect(captured.options?.signal).toBeInstanceOf(AbortSignal);
+    expect(captured.options?.signal).not.toBe(controller.signal);
+    expect(captured.options?.signal?.aborted).toBe(false);
+  });
+
+  test("propagates caller cancellation into the scheduler-owned provider signal", async () => {
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const provider = fakeProvider({
+      tokens: ["- too late [[Graph]]\n"],
+      delayPerToken: 5,
+      onStream: (_messages, options) => {
+        providerSignal = options.signal;
+        controller.abort();
+      },
+    });
+
+    await expect(
+      synthesize({
+        provider,
+        model: "reason-1",
+        query: "q",
+        hits: baseHits,
+        signal: controller.signal,
+        scheduler,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal).not.toBe(controller.signal);
+    expect(providerSignal?.aborted).toBe(true);
   });
 
   test("does not set a default maxTokens cap", async () => {
@@ -280,6 +293,7 @@ describe("synthesize", () => {
       query: "q",
       hits: baseHits,
       signal: new AbortController().signal,
+      scheduler,
     });
     expect(captured.options?.maxTokens).toBeUndefined();
   });

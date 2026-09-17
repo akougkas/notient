@@ -9,6 +9,17 @@ import {
 import type { Conversation } from "../../../../src/core/chat/types";
 import { EventBus } from "../../../../src/core/events/eventBus";
 import { makeChatHandlers } from "../../../../src/daemon/handlers/chat";
+import type { RpcRequestContext } from "../../../../src/daemon/rpc";
+import { agentPrincipal, humanPrincipal, rpcRequest } from "../../../rpcRequest";
+
+function chatRequest(
+  params: Record<string, unknown>,
+  identity = "human",
+  overrides: Partial<Omit<RpcRequestContext, "params" | "principal">> = {},
+): RpcRequestContext {
+  const principal = identity === "human" ? humanPrincipal() : agentPrincipal(identity);
+  return rpcRequest(params, { principal, ...overrides });
+}
 
 function makeConversation(id = "conv-1", clientIdentity = "human"): Conversation {
   return {
@@ -19,7 +30,6 @@ function makeConversation(id = "conv-1", clientIdentity = "human"): Conversation
     approvalMode: "yolo",
     topic: "test",
     summary: "",
-    summaryEmbeddingB64: null,
     clientIdentity,
     messageCount: 0,
     createdAt: 0,
@@ -41,13 +51,16 @@ function makeChatService(events: unknown[]): ChatService {
 }
 
 const STUB_VAULT: VaultAdapter = {
+  isIndexablePath: () => true,
   listMarkdown: async () => [],
   read: async () => "",
-  readNote: async () => "",
+  readBounded: async () => "",
   write: async () => {},
-  writeNote: async () => {},
+  createIfAbsent: async () => true,
+  writeIfUnchanged: async () => true,
   updateFrontmatter: async () => {},
   remove: async () => {},
+  removeIfUnchanged: async () => true,
   exists: async () => false,
   createFolder: async () => {},
   list: async () => ({ files: [], folders: [] }),
@@ -58,10 +71,15 @@ const STUB_VAULT: VaultAdapter = {
 
 function makeGate(): ApprovalGate {
   return new ApprovalGate({
-    events: { onPending: () => {}, onResolved: () => {} },
     recordHistoryAutoApprove: async () => {},
-    sessionGrants: { find: () => null, incrementWriteCount: () => {} },
+    perToolPolicy: () => ({}),
+    sessionGrants: { claim: async () => null },
   });
+}
+
+async function advanceGrantLookup(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe("chat.send handler", () => {
@@ -74,10 +92,18 @@ describe("chat.send handler", () => {
         userMessage: { role: "user", content: "hi" },
       },
       { type: "loop:assistant-token", delta: "hello" },
-      { type: "loop:tool-call", call: { id: "tc1", name: "vault.search_notes", args: {} } },
+      {
+        type: "loop:tool-call",
+        call: { id: "tc1", name: "vault.search_notes", args: {} },
+      },
       {
         type: "loop:tool-result",
-        result: { callId: "tc1", status: "ok", data: { hits: [] }, durationMs: 12 },
+        result: {
+          callId: "tc1",
+          status: "ok",
+          data: { hits: [] },
+          durationMs: 12,
+        },
       },
       {
         type: "loop:done",
@@ -96,10 +122,9 @@ describe("chat.send handler", () => {
     });
     const lines: string[] = [];
     const result = await handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
     const events = lines.map((line) => JSON.parse(line));
     const types = events.map((event) => event.event);
@@ -122,7 +147,12 @@ describe("chat.send handler", () => {
       },
       {
         type: "loop:tool-result",
-        result: { callId: "tc1", status: "error", error: "boom", durationMs: 1 },
+        result: {
+          callId: "tc1",
+          status: "error",
+          error: "boom",
+          durationMs: 1,
+        },
       },
       { type: "turn:complete", conversation },
     ]);
@@ -136,10 +166,9 @@ describe("chat.send handler", () => {
     });
     const lines: string[] = [];
     await handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
     const events = lines.map((line) => JSON.parse(line));
     expect(events.some((event) => event.event === "loop:tool_call_error")).toBe(true);
@@ -164,16 +193,16 @@ describe("chat.send handler", () => {
     let thrown: unknown = null;
     try {
       await handlers.send(
-        { conversationId: conversation.id, userMessage: "describe @cat.png" },
-        () => {},
-        "req-1",
-        "human",
+        chatRequest({
+          conversationId: conversation.id,
+          userMessage: "describe @cat.png",
+        }),
       );
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("VISION_UNAVAILABLE");
+    expect((thrown as Error).message).toContain("vision is not supported");
   });
 
   test("emits loop:approval_pending and loop:approval_resolved when gate fires", async () => {
@@ -215,10 +244,9 @@ describe("chat.send handler", () => {
 
     const lines: string[] = [];
     const sendPromise = handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
 
     // Let the handler subscribe before firing the gate.
@@ -229,16 +257,207 @@ describe("chat.send handler", () => {
       "safe",
       "preview",
       controller.signal,
+      { clientIdentity: "human" },
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    gate.resolve("tc-approval", { approved: true });
-    await requestPromise;
+    const resolved = await handlers.approve(
+      chatRequest({
+        callId: "tc-approval",
+        approved: false,
+        reason: "  unsafe target  ",
+      }),
+    );
+    expect(resolved).toEqual({
+      ok: true,
+      callId: "tc-approval",
+      approved: false,
+      reason: "unsafe target",
+    });
+    await expect(requestPromise).resolves.toEqual({
+      approved: false,
+      reason: "unsafe target",
+    });
     releaseGate();
     await sendPromise;
 
     const events = lines.map((line) => JSON.parse(line));
     expect(events.some((event) => event.event === "loop:approval_pending")).toBe(true);
-    expect(events.some((event) => event.event === "loop:approval_resolved")).toBe(true);
+    expect(events.find((event) => event.event === "loop:approval_resolved")).toMatchObject({
+      callId: "tc-approval",
+      approved: false,
+      reason: "unsafe target",
+    });
+  });
+
+  test("an agent stream sees only its own principal's pending approvals", async () => {
+    const conversation = makeConversation("conv-1", "claude-code");
+    const gate = makeGate();
+    let releaseGate: () => void = () => {};
+    const gateReady = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const fakeService: ChatService = {
+      startConversation: async () => conversation,
+      listConversations: async () => [conversation],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        yield {
+          type: "turn:start",
+          conversationId: conversation.id,
+          userMessage: { role: "user", content: "hi" },
+        } as never;
+        await gateReady;
+        yield { type: "turn:complete", conversation } as never;
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+    const handlers = makeChatHandlers({
+      chatService: fakeService,
+      approvalGate: gate,
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    const claude = {
+      principal: {
+        id: "claude-code",
+        kind: "agent" as const,
+        scopes: ["read", "write"],
+      },
+      connectionId: "conn-claude",
+    };
+    const codex = {
+      principal: {
+        id: "codex",
+        kind: "agent" as const,
+        scopes: ["read", "write"],
+      },
+      connectionId: "conn-codex",
+    };
+
+    const lines: string[] = [];
+    const sendPromise = handlers.send(
+      rpcRequest(
+        { conversationId: conversation.id, userMessage: "hi" },
+        { ...claude, emit: (line) => lines.push(line) },
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const controller = new AbortController();
+    const mine = gate.request(
+      { id: "tc-mine", name: "notes.write", args: { path: "mine.md" } },
+      "safe",
+      "my preview",
+      controller.signal,
+      { clientIdentity: "claude-code" },
+    );
+    const theirs = gate.request(
+      {
+        id: "tc-theirs",
+        name: "notes.write",
+        args: { path: "secret.md", body: "their data" },
+      },
+      "safe",
+      "their preview",
+      controller.signal,
+      { clientIdentity: "codex" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pendingIds = lines
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === "loop:approval_pending")
+      .map((event) => event.callId);
+    expect(pendingIds).toEqual(["tc-mine"]);
+
+    // Visibility never grants an agent authority to approve its own writes.
+    await expect(
+      handlers.approve(
+        rpcRequest({ callId: "tc-theirs", approved: true }, { ...codex, requestId: "req-approve" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await handlers.approve(rpcRequest({ callId: "tc-theirs", approved: true }));
+    gate.resolve(
+      "tc-mine",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
+    await Promise.all([mine, theirs]);
+    releaseGate();
+    await sendPromise;
+  });
+
+  test("a human stream still sees every principal's pending approvals", async () => {
+    const conversation = makeConversation();
+    const gate = makeGate();
+    let releaseGate: () => void = () => {};
+    const gateReady = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const fakeService: ChatService = {
+      startConversation: async () => conversation,
+      listConversations: async () => [conversation],
+      loadConversation: async () => conversation,
+      sendMessage: async function* () {
+        yield {
+          type: "turn:start",
+          conversationId: conversation.id,
+          userMessage: { role: "user", content: "hi" },
+        } as never;
+        await gateReady;
+        yield { type: "turn:complete", conversation } as never;
+      },
+      abort: () => {},
+    } as unknown as ChatService;
+    const handlers = makeChatHandlers({
+      chatService: fakeService,
+      approvalGate: gate,
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    const human = {
+      principal: {
+        id: "human",
+        kind: "human" as const,
+        scopes: ["read", "write", "admin"],
+      },
+      connectionId: "conn-human",
+    };
+    const lines: string[] = [];
+    const sendPromise = handlers.send(
+      rpcRequest(
+        { conversationId: conversation.id, userMessage: "hi" },
+        { ...human, emit: (line) => lines.push(line) },
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const controller = new AbortController();
+    const theirs = gate.request(
+      { id: "tc-agent", name: "notes.write", args: { path: "a.md" } },
+      "safe",
+      "preview",
+      controller.signal,
+      { clientIdentity: "codex" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pendingIds = lines
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === "loop:approval_pending")
+      .map((event) => event.callId);
+    expect(pendingIds).toEqual(["tc-agent"]);
+    gate.resolve(
+      "tc-agent",
+      { approved: true },
+      { id: "human", kind: "human", scopes: ["read", "write", "admin"] },
+    );
+    await theirs;
+    releaseGate();
+    await sendPromise;
   });
 
   test("forwards loop:context_summarized scoped to the conversation", async () => {
@@ -277,10 +496,9 @@ describe("chat.send handler", () => {
 
     const lines: string[] = [];
     const sendPromise = handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -346,10 +564,9 @@ describe("chat.send handler", () => {
 
     const lines: string[] = [];
     const sendPromise = handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -415,10 +632,9 @@ describe("chat.send handler", () => {
 
     const lines: string[] = [];
     const sendPromise = handlers.send(
-      { conversationId: conversation.id, userMessage: "hi" },
-      (line) => lines.push(line),
-      "req-1",
-      "human",
+      chatRequest({ conversationId: conversation.id, userMessage: "hi" }, "human", {
+        emit: (line) => lines.push(line),
+      }),
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -452,8 +668,8 @@ describe("chat.approve handler", () => {
     });
 
     await expect(
-      handlers.approve({ callId: "missing", approved: true }, () => {}, "req-1", "human"),
-    ).rejects.toThrow("INVALID_PARAMS: unknown call id: missing");
+      handlers.approve(chatRequest({ callId: "missing", approved: true })),
+    ).rejects.toThrow("unknown call id: missing");
   });
 
   test("resolves a pending call id", async () => {
@@ -472,31 +688,104 @@ describe("chat.approve handler", () => {
       "safe",
       "preview",
       controller.signal,
+      { clientIdentity: "human" },
     );
+    await advanceGrantLookup();
 
     const result = await handlers.approve(
-      { callId: "call-1", approved: false, reason: "not now" },
-      () => {},
-      "req-1",
-      "human",
+      chatRequest({ callId: "call-1", approved: false, reason: "  not now  " }),
     );
 
-    expect(result).toEqual({ ok: true });
-    await expect(pending).resolves.toEqual({ approved: false, reason: "not now" });
+    expect(result).toEqual({
+      ok: true,
+      callId: "call-1",
+      approved: false,
+      reason: "not now",
+    });
+    await expect(pending).resolves.toEqual({
+      approved: false,
+      reason: "not now",
+    });
+  });
+
+  test("supplies one observable reason when a denial omits it", async () => {
+    const gate = makeGate();
+    const handlers = makeChatHandlers({
+      chatService: makeChatService([]),
+      approvalGate: gate,
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    const pending = gate.request(
+      { id: "call-default", name: "notes.create", args: { path: "x.md" } },
+      "safe",
+      "preview",
+      new AbortController().signal,
+      { clientIdentity: "human" },
+    );
+    await advanceGrantLookup();
+
+    const result = await handlers.approve(chatRequest({ callId: "call-default", approved: false }));
+
+    expect(result).toEqual({
+      ok: true,
+      callId: "call-default",
+      approved: false,
+      reason: "rejected by user",
+    });
+    await expect(pending).resolves.toEqual({
+      approved: false,
+      reason: "rejected by user",
+    });
+  });
+
+  test("refuses a decorative reason on an approved decision", async () => {
+    const handlers = makeChatHandlers({
+      chatService: makeChatService([]),
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    await expect(
+      handlers.approve(chatRequest({ callId: "call-1", approved: true, reason: "looks good" })),
+    ).rejects.toThrow("reason is valid only when denying");
+  });
+
+  test("requires approved to be an explicit boolean", async () => {
+    const handlers = makeChatHandlers({
+      chatService: makeChatService([]),
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    await expect(handlers.approve(chatRequest({ callId: "call-1" }))).rejects.toThrow(
+      "approved must be a boolean",
+    );
   });
 });
 
 describe("chat.start handler identity plumbing", () => {
-  test("forwards clientIdentity from the envelope into ChatService.startConversation", async () => {
-    const captured: Array<{ topic: string; clientIdentity: string | undefined }> = [];
+  test("forwards the authenticated principal into ChatService.startConversation", async () => {
+    const captured: Array<{ topic: string; clientIdentity: string }> = [];
     const conversation = makeConversation("conv-id-1", "claude-code");
     const service: ChatService = {
       startConversation: async (input: {
         topic: string;
         pinnedContext?: string[];
-        clientIdentity?: string;
+        clientIdentity: string;
       }) => {
-        captured.push({ topic: input.topic, clientIdentity: input.clientIdentity });
+        captured.push({
+          topic: input.topic,
+          clientIdentity: input.clientIdentity,
+        });
         return { ...conversation, topic: input.topic };
       },
       listConversations: async () => [],
@@ -514,8 +803,16 @@ describe("chat.start handler identity plumbing", () => {
       pinnedNoteMaxTokens: 1000,
       bus: new EventBus(),
     });
-    await handlers.start({ topic: "agent-bridge" }, () => {}, "req-claude", "claude-code");
-    await handlers.start({ topic: "human-direct" }, () => {}, "req-human", "human");
+    await handlers.start(
+      chatRequest({ topic: "agent-bridge" }, "claude-code", {
+        requestId: "req-claude",
+      }),
+    );
+    await handlers.start(
+      chatRequest({ topic: "human-direct" }, "human", {
+        requestId: "req-human",
+      }),
+    );
     expect(captured).toEqual([
       { topic: "agent-bridge", clientIdentity: "claude-code" },
       { topic: "human-direct", clientIdentity: "human" },
@@ -533,11 +830,20 @@ describe("chat.start handler identity plumbing", () => {
         if (value === undefined) throw new Error(`not found: ${path}`);
         return value;
       }
-      async write(path: string, content: string): Promise<void> {
+      async createIfAbsent(path: string, content: string): Promise<boolean> {
+        if (this.files.has(path)) return false;
         this.files.set(path, content);
+        return true;
       }
-      async delete(path: string): Promise<void> {
+      async writeIfUnchanged(path: string, expected: string, content: string): Promise<boolean> {
+        if (this.files.get(path) !== expected) return false;
+        this.files.set(path, content);
+        return true;
+      }
+      async removeIfUnchanged(path: string, expected: string): Promise<boolean> {
+        if (this.files.get(path) !== expected) return false;
         this.files.delete(path);
+        return true;
       }
     })();
     const store = new ConversationStore({
@@ -558,14 +864,369 @@ describe("chat.start handler identity plumbing", () => {
     const reloaded = await store.load(created.notePath);
     expect(reloaded.clientIdentity).toBe("claude-code");
 
-    const defaultCreated = await store.create({
+    const humanCreated = await store.create({
       id: "conv-human",
       model: "test-model",
       pinnedContext: [],
       approvalMode: "yolo",
       topic: "from human",
+      clientIdentity: "human",
     });
-    const defaultRaw = facade.files.get(defaultCreated.notePath) ?? "";
-    expect(defaultRaw).toContain('client_identity: "human"');
+    const humanRaw = facade.files.get(humanCreated.notePath) ?? "";
+    expect(humanRaw).toContain('client_identity: "human"');
+  });
+
+  test("accepts only ordinary note paths as durable pinned context", async () => {
+    const captured: string[][] = [];
+    const conversation = makeConversation("pinned", "claude-code");
+    const service = makeChatService([]);
+    service.startConversation = async (input) => {
+      captured.push([...(input.pinnedContext ?? [])]);
+      return conversation;
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    await handlers.start(
+      chatRequest({ topic: "owned context", pinnedContext: ["Projects/brief.md"] }, "claude-code"),
+    );
+    expect(captured).toEqual([["Projects/brief.md"]]);
+
+    for (const pinnedContext of [
+      ["Notient/conversations/another-owner.md"],
+      ["notient/PROPOSALS/private.md"],
+      ["../outside.md"],
+      ["Images/photo.png"],
+    ]) {
+      await expect(
+        handlers.start(chatRequest({ topic: "forged", pinnedContext }, "claude-code")),
+      ).rejects.toThrow("ordinary Markdown note paths");
+    }
+    expect(captured).toEqual([["Projects/brief.md"]]);
+  });
+});
+
+describe("chat authority model", () => {
+  const AGENT_CONTEXT = {
+    principal: {
+      id: "claude-code",
+      kind: "agent" as const,
+      scopes: ["read", "write"],
+    },
+    connectionId: "conn-agent",
+  };
+  const HUMAN_CONTEXT = {
+    principal: {
+      id: "human",
+      kind: "human" as const,
+      scopes: ["read", "write", "admin"],
+    },
+    connectionId: "conn-human",
+  };
+
+  interface AbortCalls {
+    connections: string[];
+    all: number;
+  }
+
+  function makeAbortCalls(): AbortCalls {
+    return { connections: [], all: 0 };
+  }
+
+  function build(abortCalls: AbortCalls, events: unknown[] = []) {
+    const service = makeChatService(events);
+    service.abortConnection = (connectionId: string) => {
+      abortCalls.connections.push(connectionId);
+    };
+    service.abortAllConnections = () => {
+      abortCalls.all++;
+    };
+    return makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+  }
+
+  test("an agent connection with no turn in flight cannot abort", async () => {
+    const abortCalls = makeAbortCalls();
+    const handlers = build(abortCalls);
+    const result = await handlers.abort(rpcRequest({}, AGENT_CONTEXT));
+    expect(result).toEqual({ ok: true, aborted: false });
+    expect(abortCalls).toEqual({ connections: [], all: 0 });
+  });
+
+  test("a human connection with no turn in flight aborts nothing by default", async () => {
+    const abortCalls = makeAbortCalls();
+    const handlers = build(abortCalls);
+    const result = await handlers.abort(rpcRequest({}, HUMAN_CONTEXT));
+    expect(result).toEqual({ ok: true, aborted: false });
+    expect(abortCalls).toEqual({ connections: [], all: 0 });
+  });
+
+  test("a human may abort every connection by asking for it explicitly", async () => {
+    const abortCalls = makeAbortCalls();
+    const handlers = build(abortCalls);
+    const result = await handlers.abort(rpcRequest({ allConnections: true }, HUMAN_CONTEXT));
+    expect(result).toEqual({ ok: true, aborted: true, scope: "all" });
+    expect(abortCalls).toEqual({ connections: [], all: 1 });
+  });
+
+  test("an agent cannot ask for a process-wide abort", async () => {
+    const abortCalls = makeAbortCalls();
+    const handlers = build(abortCalls);
+    expect(handlers.abort(rpcRequest({ allConnections: true }, AGENT_CONTEXT))).rejects.toThrow(
+      "human principal",
+    );
+    expect(abortCalls).toEqual({ connections: [], all: 0 });
+  });
+
+  test("an agent connection may abort a turn it owns", async () => {
+    const abortCalls = makeAbortCalls();
+    const conversation = makeConversation("conv-1", "claude-code");
+    let releaseTurn: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const service = makeChatService([]);
+    service.listConversations = async () => [conversation];
+    service.abortConnection = (connectionId: string) => {
+      abortCalls.connections.push(connectionId);
+    };
+    service.abortAllConnections = () => {
+      abortCalls.all++;
+    };
+    service.sendMessage = async function* () {
+      await gate;
+      yield { type: "turn:complete", conversation } as never;
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    const sending = handlers.send(
+      rpcRequest(
+        { conversationId: conversation.id, userMessage: "hi" },
+        { ...AGENT_CONTEXT, requestId: "req-send" },
+      ),
+    );
+    // Let the send handler register its turn before the abort lands.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = await handlers.abort(
+      rpcRequest({}, { ...AGENT_CONTEXT, requestId: "req-abort" }),
+    );
+    expect(result).toEqual({ ok: true, aborted: true });
+    expect(abortCalls.all).toBe(0);
+    // Scoped to the calling connection, so a concurrent turn on another
+    // connection keeps running.
+    expect(abortCalls.connections).toEqual(["conn-agent"]);
+    releaseTurn();
+    await sending;
+
+    // Once the turn settles the connection owns nothing again.
+    const after = await handlers.abort(
+      rpcRequest({}, { ...AGENT_CONTEXT, requestId: "req-abort-2" }),
+    );
+    expect(after).toEqual({ ok: true, aborted: false });
+  });
+
+  test("a different agent connection cannot abort somebody else's turn", async () => {
+    const abortCalls = makeAbortCalls();
+    const conversation = makeConversation("conv-1", "claude-code");
+    let releaseTurn: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const service = makeChatService([]);
+    service.listConversations = async () => [conversation];
+    service.abortConnection = (connectionId: string) => {
+      abortCalls.connections.push(connectionId);
+    };
+    service.abortAllConnections = () => {
+      abortCalls.all++;
+    };
+    service.sendMessage = async function* () {
+      await gate;
+      yield { type: "turn:complete", conversation } as never;
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    const sending = handlers.send(
+      rpcRequest(
+        { conversationId: conversation.id, userMessage: "hi" },
+        { ...AGENT_CONTEXT, requestId: "req-send" },
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const other = {
+      principal: {
+        id: "codex",
+        kind: "agent" as const,
+        scopes: ["read", "write"],
+      },
+      connectionId: "conn-other",
+    };
+    expect(await handlers.abort(rpcRequest({}, { ...other, requestId: "req-abort" }))).toEqual({
+      ok: true,
+      aborted: false,
+    });
+    expect(abortCalls).toEqual({ connections: [], all: 0 });
+    releaseTurn();
+    await sending;
+  });
+
+  test("chat.send passes the owning connection into ChatService", async () => {
+    const conversation = makeConversation("conv-1", "claude-code");
+    const service = makeChatService([{ type: "turn:complete", conversation }]);
+    service.listConversations = async () => [conversation];
+    const seen: string[] = [];
+    const inner = service.sendMessage.bind(service);
+    service.sendMessage = (input) => {
+      seen.push(input.connectionId);
+      return inner(input);
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    await handlers.send(
+      rpcRequest({ conversationId: conversation.id, userMessage: "hi" }, AGENT_CONTEXT),
+    );
+    expect(seen).toEqual(["conn-agent"]);
+  });
+
+  test("chat.send refuses a foreign conversation before attachments, provider work, or mutation", async () => {
+    const conversation = makeConversation("conv-1", "human");
+    const service = makeChatService([{ type: "turn:complete", conversation }]);
+    service.listConversations = async () => [conversation];
+    let sends = 0;
+    service.sendMessage = async function* () {
+      sends++;
+      yield* [];
+    };
+    let vaultTouches = 0;
+    const vault: VaultAdapter = {
+      ...STUB_VAULT,
+      exists: async () => {
+        vaultTouches++;
+        return true;
+      },
+      read: async () => {
+        vaultTouches++;
+        return "secret";
+      },
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+    await expect(
+      handlers.send(
+        rpcRequest(
+          {
+            conversationId: conversation.id,
+            userMessage: "inspect @private.md",
+          },
+          AGENT_CONTEXT,
+        ),
+      ),
+    ).rejects.toThrow("conversation belongs to another principal");
+    expect(conversation.clientIdentity).toBe("human");
+    expect(conversation.pinnedContext).toEqual([]);
+    expect(vaultTouches).toBe(0);
+    expect(sends).toBe(0);
+  });
+
+  test("chat.list and chat.load isolate agents while a human can inspect every transcript", async () => {
+    const claude = makeConversation("claude", "claude-code");
+    const codex = makeConversation("codex", "codex");
+    const service = makeChatService([]);
+    service.listConversations = async () => [claude, codex];
+    service.loadConversation = async (path) => (path === claude.notePath ? claude : codex);
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    const agentList = await handlers.list(rpcRequest({}, AGENT_CONTEXT));
+    const humanList = await handlers.list(rpcRequest({}, HUMAN_CONTEXT));
+    expect((agentList.conversations as Conversation[]).map((item) => item.id)).toEqual(["claude"]);
+    expect((humanList.conversations as Conversation[]).map((item) => item.id)).toEqual([
+      "claude",
+      "codex",
+    ]);
+    await expect(
+      handlers.load(rpcRequest({ notePath: codex.notePath }, AGENT_CONTEXT)),
+    ).rejects.toThrow("conversation belongs to another principal");
+    await expect(
+      handlers.load(rpcRequest({ notePath: codex.notePath }, HUMAN_CONTEXT)),
+    ).resolves.toMatchObject({ ok: true, conversation: codex });
+  });
+
+  test("chat.send fails closed when storage presents a duplicate conversation id", async () => {
+    const first = makeConversation("duplicate", "claude-code");
+    const second = {
+      ...makeConversation("duplicate", "claude-code"),
+      notePath: "Notient/conversations/second.md",
+    };
+    const service = makeChatService([]);
+    service.listConversations = async () => [first, second];
+    let sends = 0;
+    service.sendMessage = async function* () {
+      sends++;
+      yield* [];
+    };
+    const handlers = makeChatHandlers({
+      chatService: service,
+      approvalGate: makeGate(),
+      vault: STUB_VAULT,
+      visionRouter: null,
+      pinnedNoteMaxTokens: 1000,
+      bus: new EventBus(),
+    });
+
+    await expect(
+      handlers.send(
+        rpcRequest(
+          {
+            conversationId: "duplicate",
+            userMessage: "do not choose arbitrarily",
+          },
+          AGENT_CONTEXT,
+        ),
+      ),
+    ).rejects.toThrow("duplicate conversation id");
+    expect(sends).toBe(0);
   });
 });

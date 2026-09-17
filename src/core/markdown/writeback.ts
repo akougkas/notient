@@ -1,48 +1,33 @@
-import type { Heading, List, ListItem, Root, Yaml } from "mdast";
-import YAML from "yaml";
-import { processAst, stringify } from "./pipeline";
-import type { WikiLinkNode } from "./plugins/remarkWikilink";
+import { detectNewline, locateFrontmatter, patchFrontmatter, readFrontmatter } from "./frontmatter";
+import { parseWikilinkInner } from "./plugins/remarkWikilink";
 
 /**
- * AST-aware writeback for approved cross-document edges.
+ * Byte-range splicing writeback for approved cross-document edges.
  *
  * Two pure entry points:
  *   applyApprovedLink     appends a `[[target]]` (or qualified variant) under
- *                         a `## Related` H2, creating the section if absent.
- *   applyApprovedRelation appends `[[target]]` under
+ *                         a `## Related` H2, creating the section at the end
+ *                         of the file when absent.
+ *   applyApprovedRelation appends `[[target]]` to the
  *                         `frontmatter.notient.<key>` array, creating the
  *                         frontmatter and `notient` mapping if absent.
  *
- * Both functions are pure: input markdown string in, output markdown string
- * out. They never touch the filesystem, never record provenance, and never
- * coordinate with approval/history stores. The caller (Task 3 approval-and-
- * write flow) wires these into the agreed failure-semantics contract and
- * provenance recording.
+ * remark's stringifier is a *normalizer*: it rewrites `- [ ] task` to `- task`,
+ * escapes `> [!note]` to
+ * `> \[!note]`, and turns `$a_i$` into `$a\_i$` and `5 * 3` into `5 \* 3`.
+ * Running it over a note the user wrote is data loss, so no write path may
+ * re-serialize a document. Instead both functions locate an offset in the
+ * ORIGINAL text and splice; every byte outside the inserted range is
+ * preserved exactly, including newline style, indentation, trailing-newline
+ * convention and any syntax remark does not model.
  *
- * Both functions are idempotent: when the approved edge is already present
- * the original `source` is returned unchanged (byte-for-byte). Only when a
- * mutation is required do we re-stringify the AST.
+ * The remark pipeline remains the reader (AST, blocks, links). It is not on
+ * any write path.
  *
- * Implementation strategy (Locked Decision 2, spec §8.4):
- *   1. `processAst(source)` to obtain a fully-typed mdast tree containing
- *      `wikiLink` / `wikiEmbed` / `yaml` nodes.
- *   2. Mutate the AST in place (heading + list for `## Related`; raw YAML
- *      string for the frontmatter `yaml` node).
- *   3. `stringify(ast)` via the same pipeline. The pipeline now registers
- *      stringify handlers for `wikiLink` / `wikiEmbed`, so the round-trip is
- *      closed and Obsidian wikilink syntax is preserved.
+ * Both functions are pure and idempotent: when the approved edge is already
+ * present the original `source` is returned byte-for-byte.
  *
- * Frontmatter is treated as YAML rather than as mdast: the `yaml` node's
- * `value` is an opaque raw YAML body. We parse it into a JS object via the
- * `yaml` package, mutate, and re-serialise back into `value`. The mdast
- * stringifier then emits the surrounding `---` fences.
- *
- * This module supersedes the legacy native-graph-bridge / related-section /
- * frontmatter-writer helpers; Task 5 deletes those.
- *
- * Failure-semantics contract: PENDING-STATE.
- *
- * Approve-and-write flow owned by `ApprovalService.approveEdge`:
+ * Failure-semantics contract, owned by `ApprovalService.approveEdge`:
  *   1. UPDATE edge SET approved = true, applied = false.
  *   2. Run `applyApprovedLink` / `applyApprovedRelation` in memory.
  *   3. If output equals input, flip `applied = true` and finish (idempotent
@@ -54,10 +39,6 @@ import type { WikiLinkNode } from "./plugins/remarkWikilink";
  * On crash anywhere between steps 1 and 4, daemon start runs
  * `ApprovalService.reconcilePendingApplications`, which selects rows with
  * `approved = true AND applied = false` and replays the flow from step 2.
- * The writeback itself is idempotent (Locked Decision 2); duplicate
- * `daemon_write` inserts are guarded by `findRecentDaemonWrite`; the
- * `applied` flip is the end-of-flow commit signal that consumers (Task 11)
- * filter on via `WHERE approved = true AND applied = true`.
  */
 
 export interface ApplyApprovedLinkInput {
@@ -71,265 +52,347 @@ export interface ApplyApprovedRelationInput {
   target: string;
 }
 
+interface LineSpan {
+  /** Offset of the first character of the line. */
+  start: number;
+  /** Offset just past the last content character (before the terminator). */
+  contentEnd: number;
+  /** `\n`, `\r\n`, or `""` for a final line with no terminator. */
+  term: string;
+}
+
+const RELATED_HEADING = /^[ \t]{0,3}##[ \t]+related[ \t]*$/i;
+const HEADING_LE_H2 = /^[ \t]{0,3}#{1,2}[ \t]+/;
+const ANY_HEADING = /^[ \t]{0,3}#{1,6}(?:[ \t]+|$)/;
+const LIST_ITEM = /^([ \t]{0,3})[-+*][ \t]+/;
+const FENCE = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/;
+const COMPLETE_WIKILINK = /^\[\[([^\]\n]+?)\]\]$/;
+
+interface FenceState {
+  character: "`" | "~";
+  length: number;
+}
+
+interface InsertionAnchor {
+  line: number;
+  kind: "heading" | "content" | "list";
+}
+
+interface VisibleLine {
+  index: number;
+  raw: string;
+}
+
+function splitLines(text: string): LineSpan[] {
+  const lines: LineSpan[] = [];
+  let cursor = 0;
+  while (cursor <= text.length) {
+    const index = text.indexOf("\n", cursor);
+    if (index === -1) {
+      lines.push({ start: cursor, contentEnd: text.length, term: "" });
+      break;
+    }
+    const hasCr = index > cursor && text[index - 1] === "\r";
+    lines.push({
+      start: cursor,
+      contentEnd: hasCr ? index - 1 : index,
+      term: hasCr ? "\r\n" : "\n",
+    });
+    cursor = index + 1;
+  }
+  // A text ending in a newline yields a trailing zero-length span; drop it so
+  // "last non-empty line" logic does not have to special-case it.
+  const last = lines[lines.length - 1];
+  if (lines.length > 1 && last !== undefined && last.term === "" && last.start === text.length) {
+    lines.pop();
+  }
+  return lines;
+}
+
+function lineText(text: string, line: LineSpan): string {
+  return text.slice(line.start, line.contentEnd);
+}
+
+function formatWikilink(target: string, heading: string | null, block: string | null): string {
+  let body = target;
+  if (heading !== null) {
+    body += `#${heading}`;
+  } else if (block !== null) {
+    body += `#^${block}`;
+  }
+  return `[[${body}]]`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Matches `[[target]]` and `[[target|alias]]` (alias is display-only, so an
+ * aliased link is the same edge) but never `![[target]]`: an embed is
+ * transclusion, a link is a reference, and they are distinct edge kinds.
+ */
+function linkPresencePattern(target: string, heading: string | null, block: string | null): RegExp {
+  let body = escapeRegExp(target);
+  if (heading !== null) {
+    body += `#${escapeRegExp(heading)}`;
+  } else if (block !== null) {
+    body += `#\\^${escapeRegExp(block)}`;
+  }
+  return new RegExp(`(^|[^!])\\[\\[${body}(\\|[^\\]\\n]*)?\\]\\]`);
+}
+
+function nextFenceState(raw: string, state: FenceState | null): FenceState | null {
+  const match = raw.match(FENCE);
+  if (match === null) return state;
+  const marker = match[1];
+  const character = marker[0] as "`" | "~";
+  if (state === null) return { character, length: marker.length };
+  if (character !== state.character || marker.length < state.length) return state;
+  return match[2].trim().length === 0 ? null : state;
+}
+
+function firstBodyLine(lines: LineSpan[], bodyStart: number): number {
+  const index = lines.findIndex((line) => line.start >= bodyStart);
+  return index === -1 ? lines.length : index;
+}
+
+function closeOpenFenceAtEof(
+  source: string,
+  lines: LineSpan[],
+  startLine: number,
+  newline: string,
+): string {
+  let fence: FenceState | null = null;
+  for (let index = startLine; index < lines.length; index += 1) {
+    const raw = bodyLineText(source, lines[index], index === startLine);
+    fence = nextFenceState(raw, fence);
+  }
+  if (fence === null) return source;
+  const marker = fence.character.repeat(fence.length);
+  return source.endsWith("\n") ? `${source}${marker}${newline}` : `${source}${newline}${marker}`;
+}
+
+function bodyLineText(text: string, line: LineSpan, firstBodyLine: boolean): string {
+  const raw = lineText(text, line);
+  return firstBodyLine && raw.startsWith("﻿") ? raw.slice(1) : raw;
+}
+
+/** Index of the first body `## Related` heading outside a fenced code block. */
+function findRelatedHeadingLine(text: string, lines: LineSpan[], startLine: number): number {
+  let fence: FenceState | null = null;
+  for (let index = startLine; index < lines.length; index += 1) {
+    const raw = bodyLineText(text, lines[index], index === startLine);
+    const next = nextFenceState(raw, fence);
+    if (next !== fence) {
+      fence = next;
+      continue;
+    }
+    if (fence !== null) continue;
+    if (RELATED_HEADING.test(raw)) return index;
+  }
+  return -1;
+}
+
+/** First line index after the `## Related` section (next H1/H2, or EOF). */
+function findSectionEndLine(text: string, lines: LineSpan[], headingLine: number): number {
+  let fence: FenceState | null = null;
+  for (let index = headingLine + 1; index < lines.length; index += 1) {
+    const raw = lineText(text, lines[index]);
+    const next = nextFenceState(raw, fence);
+    if (next !== fence) {
+      fence = next;
+      continue;
+    }
+    if (fence !== null) continue;
+    if (HEADING_LE_H2.test(raw)) return index;
+  }
+  return lines.length;
+}
+
+function sectionContainsLink(
+  text: string,
+  lines: LineSpan[],
+  headingLine: number,
+  sectionEnd: number,
+  presence: RegExp,
+): boolean {
+  let fence: FenceState | null = null;
+  for (let index = headingLine + 1; index < sectionEnd; index += 1) {
+    const raw = lineText(text, lines[index]);
+    const next = nextFenceState(raw, fence);
+    if (next !== fence) {
+      fence = next;
+      continue;
+    }
+    if (fence === null && presence.test(raw)) return true;
+  }
+  return false;
+}
+
+function findInsertionAnchor(
+  text: string,
+  lines: LineSpan[],
+  headingLine: number,
+  sectionEnd: number,
+): InsertionAnchor {
+  const visible = topLevelSectionLines(text, lines, headingLine, sectionEnd);
+  const firstListAt = visible.findIndex((line) => LIST_ITEM.test(line.raw));
+  if (firstListAt !== -1) {
+    return listInsertionAnchor(visible, firstListAt);
+  }
+  const content = lastNonBlankLine(visible);
+  return content === null
+    ? { line: headingLine, kind: "heading" }
+    : { line: content.index, kind: "content" };
+}
+
+function topLevelSectionLines(
+  text: string,
+  lines: LineSpan[],
+  headingLine: number,
+  sectionEnd: number,
+): VisibleLine[] {
+  let fence: FenceState | null = null;
+  const visible: VisibleLine[] = [];
+  for (let index = headingLine + 1; index < sectionEnd; index += 1) {
+    const raw = lineText(text, lines[index]);
+    const next = nextFenceState(raw, fence);
+    if (next !== fence) {
+      fence = next;
+      continue;
+    }
+    if (fence !== null) continue;
+    if (ANY_HEADING.test(raw)) break;
+    visible.push({ index, raw });
+  }
+  return visible;
+}
+
+function lastNonBlankLine(lines: VisibleLine[]): VisibleLine | null {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line.raw.trim().length > 0) return line;
+  }
+  return null;
+}
+
+function listInsertionAnchor(lines: VisibleLine[], firstListAt: number): InsertionAnchor {
+  const first = lines[firstListAt];
+  const baseIndent = first.raw.match(LIST_ITEM)?.[1] ?? "";
+  let last = first.index;
+  for (const line of lines.slice(firstListAt + 1)) {
+    if (line.raw.trim().length === 0) continue;
+    const match = line.raw.match(LIST_ITEM);
+    if (match?.[1] === baseIndent || indentation(line.raw) > baseIndent.length) {
+      last = line.index;
+      continue;
+    }
+    break;
+  }
+  return { line: last, kind: "list" };
+}
+
+function indentation(raw: string): number {
+  return raw.length - raw.trimStart().length;
+}
+
+function insertBullet(
+  source: string,
+  lines: LineSpan[],
+  anchor: InsertionAnchor,
+  bullet: string,
+  newline: string,
+): string {
+  const line = lines[anchor.line];
+  const term = line.term.length === 0 ? newline : line.term;
+  const separator = line.term.length === 0 || anchor.kind !== "list" ? term : "";
+  const insertion = `${separator}${bullet}${line.term.length === 0 ? "" : line.term}`;
+  if (line.term.length === 0) return `${source}${insertion}`;
+  const at = line.contentEnd + line.term.length;
+  return `${source.slice(0, at)}${insertion}${source.slice(at)}`;
+}
+
 export function applyApprovedLink(source: string, input: ApplyApprovedLinkInput): string {
   if (input.heading !== undefined && input.block !== undefined) {
     throw new Error("applyApprovedLink: heading and block qualifiers are mutually exclusive");
   }
   const heading = input.heading ?? null;
   const block = input.block ?? null;
+  const bullet = `- ${formatWikilink(input.target, heading, block)}`;
+  const newline = detectNewline(source);
+  const bodyStart = locateFrontmatter(source)?.end ?? 0;
+  const originalLines = splitLines(source);
+  const originalStartLine = firstBodyLine(originalLines, bodyStart);
+  const originalHeadingLine = findRelatedHeadingLine(source, originalLines, originalStartLine);
+  if (originalHeadingLine !== -1) {
+    const originalSectionEnd = findSectionEndLine(source, originalLines, originalHeadingLine);
+    const presence = linkPresencePattern(input.target, heading, block);
+    if (
+      sectionContainsLink(source, originalLines, originalHeadingLine, originalSectionEnd, presence)
+    ) {
+      return source;
+    }
+  }
+  const reconciled = closeOpenFenceAtEof(source, originalLines, originalStartLine, newline);
+  const lines = splitLines(reconciled);
+  const headingLine = findRelatedHeadingLine(reconciled, lines, firstBodyLine(lines, bodyStart));
 
-  const tree = processAst(source);
-  const relatedHeadingIndex = findRelatedHeadingIndex(tree);
-
-  if (relatedHeadingIndex === -1) {
-    appendNewRelatedSection(tree, input.target, heading, block);
-    return stringify(tree);
+  if (headingLine === -1) {
+    return appendRelatedSection(reconciled, bullet, newline);
   }
 
-  const list = findListAfterHeading(tree, relatedHeadingIndex);
-  if (list === null) {
-    insertListAfterHeading(tree, relatedHeadingIndex, input.target, heading, block);
-    return stringify(tree);
+  const sectionEnd = findSectionEndLine(reconciled, lines, headingLine);
+  const presence = linkPresencePattern(input.target, heading, block);
+  if (sectionContainsLink(reconciled, lines, headingLine, sectionEnd, presence)) {
+    return reconciled;
   }
-
-  if (listContainsLink(list, input.target, heading, block)) {
-    return source;
-  }
-
-  list.children.push(buildWikilinkListItem(input.target, heading, block));
-  return stringify(tree);
+  return insertBullet(
+    reconciled,
+    lines,
+    findInsertionAnchor(reconciled, lines, headingLine, sectionEnd),
+    bullet,
+    newline,
+  );
 }
 
-function isWikiLinkNode(node: { type: string }): node is WikiLinkNode {
-  return node.type === "wikiLink";
-}
-
-// Walk every descendant of the listItem looking for a `wikiLink` whose
-// target / heading / block match the approval input. Embeds (`wikiEmbed`,
-// e.g. `- ![[Note]]`) are deliberately treated as a distinct edge kind: an
-// embed is transclusion, a link is a reference, so an existing embed does
-// not block a new approved link with the same target.
-function findMatchingWikilinkInListItem(
-  listItem: ListItem,
-  target: string,
-  heading: string | null,
-  block: string | null,
-): WikiLinkNode | null {
-  const stack: Array<{ children?: unknown }> = [listItem];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (current === undefined) {
-      continue;
-    }
-    const children = (current as { children?: unknown }).children;
-    if (!Array.isArray(children)) {
-      continue;
-    }
-    for (const child of children) {
-      const node = child as { type: string };
-      if (isWikiLinkNode(node)) {
-        if (node.target === target && node.heading === heading && node.block === block) {
-          return node;
-        }
-        continue;
-      }
-      stack.push(child as { children?: unknown });
-    }
+function appendRelatedSection(source: string, bullet: string, newline: string): string {
+  const section = `## Related${newline}${newline}${bullet}`;
+  if (source.length === 0) {
+    return `${section}${newline}`;
   }
-  return null;
+  if (source.endsWith("\n")) {
+    return `${source}${newline}${section}${newline}`;
+  }
+  return `${source}${newline}${newline}${section}`;
 }
 
 export function applyApprovedRelation(source: string, input: ApplyApprovedRelationInput): string {
-  const tree = processAst(source);
-  const yamlNode = findYamlNode(tree);
   const wikilink = `[[${input.target}]]`;
-
-  if (yamlNode === null) {
-    const newYaml = YAML.stringify({ notient: { [input.key]: [wikilink] } }).replace(/\n$/, "");
-    const created: Yaml = { type: "yaml", value: newYaml };
-    tree.children.unshift(created);
-    return stringify(tree);
-  }
-
-  const parsed = parseYamlAsObject(yamlNode.value);
-  const notient = ensureMapping(parsed, "notient");
-  const list = ensureStringArray(notient, input.key);
-  // Exact-string match against the canonical `[[target]]` form. Pre-existing
-  // entries in non-wikilink or aliased shape (e.g. plain strings, or
-  // `[[Note|Display]]`) are left alone and may produce a duplicate-looking
-  // append. Resolving aliases requires Obsidian's link cache, which the
-  // pure-string writeback intentionally does not depend on.
-  if (list.includes(wikilink)) {
+  const found = readFrontmatter(source);
+  const existing = readRelationArray(found.data, input.key);
+  if (existing.some((entry) => relationTargets(entry, input.target))) {
     return source;
   }
-  list.push(wikilink);
-  notient[input.key] = list;
-  parsed.notient = notient;
-
-  yamlNode.value = YAML.stringify(parsed).replace(/\n$/, "");
-  return stringify(tree);
+  return patchFrontmatter(source, {
+    notient: { [input.key]: [...existing, wikilink] },
+  });
 }
 
-// Contract: the first `## Related` H2 wins; subsequent occurrences are
-// ignored. Documents with multiple `## Related` sections are pathological in
-// Obsidian; the writeback declines to disambiguate and leaves the latter
-// sections byte-identical to the input.
-function findRelatedHeadingIndex(tree: Root): number {
-  for (let index = 0; index < tree.children.length; index += 1) {
-    const child = tree.children[index];
-    if (child !== undefined && child.type === "heading" && child.depth === 2) {
-      if (headingPlainText(child) === "Related") {
-        return index;
-      }
-    }
-  }
-  return -1;
+function relationTargets(entry: string, target: string): boolean {
+  const match = entry.match(COMPLETE_WIKILINK);
+  return match !== null && parseWikilinkInner(match[1]).target === target;
 }
 
-function headingPlainText(heading: Heading): string {
-  let out = "";
-  for (const child of heading.children) {
-    if (child.type === "text") {
-      out += child.value;
-    }
+function readRelationArray(data: Record<string, unknown> | null, key: string): string[] {
+  if (data === null) return [];
+  const notient = data.notient;
+  if (notient === undefined || notient === null) return [];
+  if (typeof notient !== "object" || Array.isArray(notient)) {
+    throw new Error("frontmatter.notient must be a mapping");
   }
-  return out.trim();
-}
-
-function findListAfterHeading(tree: Root, headingIndex: number): List | null {
-  const next = tree.children[headingIndex + 1];
-  if (next === undefined) {
-    return null;
-  }
-  if (next.type === "list") {
-    return next;
-  }
-  return null;
-}
-
-function listContainsLink(
-  list: List,
-  target: string,
-  heading: string | null,
-  block: string | null,
-): boolean {
-  for (const item of list.children) {
-    if (findMatchingWikilinkInListItem(item, target, heading, block) !== null) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function buildWikilinkNode(
-  target: string,
-  heading: string | null,
-  block: string | null,
-): WikiLinkNode {
-  return {
-    type: "wikiLink",
-    target,
-    alias: null,
-    heading,
-    block,
-  };
-}
-
-function buildWikilinkListItem(
-  target: string,
-  heading: string | null,
-  block: string | null,
-): ListItem {
-  return {
-    type: "listItem",
-    spread: false,
-    children: [
-      {
-        type: "paragraph",
-        children: [buildWikilinkNode(target, heading, block)],
-      },
-    ],
-  };
-}
-
-function appendNewRelatedSection(
-  tree: Root,
-  target: string,
-  heading: string | null,
-  block: string | null,
-): void {
-  const headingNode: Heading = {
-    type: "heading",
-    depth: 2,
-    children: [{ type: "text", value: "Related" }],
-  };
-  const list: List = {
-    type: "list",
-    ordered: false,
-    spread: false,
-    children: [buildWikilinkListItem(target, heading, block)],
-  };
-  tree.children.push(headingNode, list);
-}
-
-function insertListAfterHeading(
-  tree: Root,
-  headingIndex: number,
-  target: string,
-  heading: string | null,
-  block: string | null,
-): void {
-  const list: List = {
-    type: "list",
-    ordered: false,
-    spread: false,
-    children: [buildWikilinkListItem(target, heading, block)],
-  };
-  tree.children.splice(headingIndex + 1, 0, list);
-}
-
-// `remark-frontmatter` always emits the YAML node at the top of the tree
-// before any block content, but we scan defensively to tolerate any future
-// sibling nodes (e.g. comments) that might land ahead of it.
-function findYamlNode(tree: Root): Yaml | null {
-  for (const child of tree.children) {
-    if (child.type === "yaml") {
-      return child;
-    }
-  }
-  return null;
-}
-
-function parseYamlAsObject(value: string): Record<string, unknown> {
-  if (value.trim().length === 0) {
-    return {};
-  }
-  const parsed = YAML.parse(value) as unknown;
-  if (parsed === null || parsed === undefined) {
-    return {};
-  }
-  if (typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("frontmatter root must be a mapping");
-  }
-  return { ...(parsed as Record<string, unknown>) };
-}
-
-function ensureMapping(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-  const existing = parent[key];
-  if (existing === undefined || existing === null) {
-    return {};
-  }
-  if (typeof existing !== "object" || Array.isArray(existing)) {
-    throw new Error(`frontmatter.${key} must be a mapping`);
-  }
-  return { ...(existing as Record<string, unknown>) };
-}
-
-function ensureStringArray(parent: Record<string, unknown>, key: string): string[] {
-  const existing = parent[key];
-  if (existing === undefined || existing === null) {
-    return [];
-  }
+  const existing = (notient as Record<string, unknown>)[key];
+  if (existing === undefined || existing === null) return [];
   if (!Array.isArray(existing)) {
     throw new Error(`frontmatter.notient.${key} must be an array`);
   }

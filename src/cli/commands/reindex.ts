@@ -1,11 +1,9 @@
 /**
  * `notient reindex [<glob>] [--pattern <glob>]` command entrypoint.
  *
- * Phase 5 Task 11 adds `--tier <csv>` so the operator can re-run a
- * subset of tiers across matched notes. The CSV is parsed via
- * `parseTierCsv` (shared with `awaken --tier`) into a sorted array of
- * valid tier ids (1, 2, 3); invalid tokens drop and an empty result
- * falls back to `[1, 2, 3]`. The parsed array is forwarded as the
+ * `--tier <csv>` lets the operator re-run a subset of tiers across matched
+ * notes. The strict parser shared with `awaken --tier` rejects every
+ * malformed or out-of-range token before the parsed array is forwarded as the
  * `tier` RPC parameter; the daemon clears the matching `tier{N}_at`
  * timestamps on every matched note before enqueueing so the indexer
  * only runs the requested tiers.
@@ -24,8 +22,7 @@ export interface ReindexCommandOptions {
   /**
    * Tier filter forwarded as the `tier` RPC parameter. Defaults to
    * `[1, 2, 3]` when omitted. Callers should run the raw `--tier`
-   * value through `parseTierCsv` so invalid tokens are stripped before
-   * reaching the wire.
+   * value through `parseTierCsv` before reaching the wire.
    */
   tier?: number[];
   emitter: Emitter;
