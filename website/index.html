@@ -2,164 +2,1035 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Notient · A place to think with your notes</title>
 <meta name="description" content="Notient is a local, terminal-first workspace for asking, reading, writing and evolving knowledge in Markdown you own. Every answer cites the exact passage. Every change waits for your review.">
 <link rel="canonical" href="https://notient.org/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23171B19'/%3E%3Ctext x='32' y='46' font-family='Georgia,serif' font-size='44' text-anchor='middle' fill='%23BBD5A6'%3En%3C/text%3E%3C/svg%3E">
 <meta name="theme-color" content="#171B19">
+<meta name="color-scheme" content="dark">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://notient.org/">
 <meta property="og:title" content="Notient · A place to think with your notes">
 <meta property="og:description" content="A local, terminal-first workspace over Markdown you own. Every answer cites the exact passage. Every change waits for your review.">
 <meta property="og:image" content="https://notient.org/og.png">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Notient · A place to think with your notes">
+<meta name="twitter:description" content="A local, terminal-first workspace over Markdown you own. Every answer cites the exact passage. Every change waits for your review.">
+<meta name="twitter:image" content="https://notient.org/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Spectral:ital,wght@0,400;0,500;1,400&family=Young+Serif&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=Spectral:ital,wght@0,400;0,500;1,400&family=Young+Serif&display=swap" rel="stylesheet">
+<script>document.documentElement.classList.add('js');</script>
 <style>
   :root {
-    /* The terminal workspace's own palette (src/cli/tui/views/theme.ts). */
-    --ground: #171B19; --panel: #202622; --rule: #39443D; --dim: #89978B;
-    --label: #B3BCAF; --text: #DFE4DA; --bright: #F3F2E8; --sage: #BBD5A6;
-    --amber: #E2BD7D; --clay: #E79A8A; --lilac: #B9B5CF;
+    /* The terminal workspace palette (src/cli/tui/views/theme.ts). */
+    --ground: #171B19;
+    --panel: #202622;
+    --rule: #39443D;
+    --dim: #89978B;
+    --label: #B3BCAF;
+    --text: #DFE4DA;
+    --bright: #F3F2E8;
+    --sage: #BBD5A6;
+    --amber: #E2BD7D;
+    --clay: #E79A8A;
+    --lilac: #B9B5CF;
+    --accent: #BBD5A6;
+    --ok: #A9C69B;
+    --border-active: #A9C69B;
+
     --serif: "Spectral", "Iowan Old Style", Georgia, serif;
     --display: "Young Serif", "Spectral", Georgia, serif;
     --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-    --measure: 38rem;
+    --measure: 68ch;
   }
+
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  html {
+    scroll-behavior: smooth;
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
-    margin: 0; color: var(--text); font: 400 1.125rem/1.7 var(--serif);
+    margin: 0;
+    color: var(--text);
+    font: 400 clamp(1.05rem, 0.98rem + 0.35vw, 1.2rem)/1.7 var(--serif);
     background:
-      radial-gradient(90rem 50rem at 85% -10%, rgba(187, 213, 166, .09), transparent 60%),
-      radial-gradient(60rem 40rem at -10% 40%, rgba(226, 189, 125, .05), transparent 60%),
+      radial-gradient(90rem 50rem at 85% -10%, rgba(187, 213, 166, 0.09), transparent 60%),
+      radial-gradient(60rem 40rem at -10% 40%, rgba(226, 189, 125, 0.05), transparent 60%),
       var(--ground);
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
-  /* Paper grain, so the dark ground reads as a surface and not a void. */
+
+  /* Paper grain surface texture */
   body::before {
-    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .35; mix-blend-mode: soft-light;
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    mix-blend-mode: soft-light;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+    z-index: 1;
   }
-  a { color: var(--sage); text-decoration-color: rgba(187, 213, 166, .4); text-underline-offset: .2em; }
-  a:hover { text-decoration-color: var(--sage); }
-  a:focus-visible, summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
-  code, pre, .mono { font-family: var(--mono); font-size: .82em; }
-  code { color: var(--bright); background: rgba(243, 242, 232, .06); padding: .08em .35em; border-radius: 3px; }
 
-  .page { max-width: 72rem; margin: 0 auto; padding: 0 1.5rem; }
+  /* Skip Link for Accessibility */
+  .skip-link {
+    position: absolute;
+    top: -3.5rem;
+    left: 1.5rem;
+    background: var(--sage);
+    color: var(--ground);
+    padding: 0.6rem 1.2rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    font-weight: 500;
+    border-radius: 4px;
+    z-index: 1000;
+    transition: top 0.15s ease-out;
+    text-decoration: none;
+  }
+  .skip-link:focus {
+    top: 1rem;
+    outline: 2px solid var(--bright);
+  }
+
+  a {
+    color: var(--sage);
+    text-decoration-color: rgba(187, 213, 166, 0.4);
+    text-underline-offset: 0.22em;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
+  }
+  a:hover {
+    color: var(--bright);
+    text-decoration-color: var(--bright);
+  }
+  a:focus-visible,
+  button:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 3px;
+    border-radius: 3px;
+  }
+
+  code, pre, .mono {
+    font-family: var(--mono);
+  }
+  code {
+    font-size: 0.84em;
+    color: var(--bright);
+    background: rgba(243, 242, 232, 0.08);
+    padding: 0.1em 0.38em;
+    border-radius: 3px;
+  }
+
+  /* Page Wrapper */
+  .page {
+    max-width: 76rem;
+    margin: 0 auto;
+    padding: 0 max(1.25rem, env(safe-area-inset-left)) 0 max(1.25rem, env(safe-area-inset-right));
+    position: relative;
+    z-index: 2;
+  }
+
+  /* Masthead */
   header.mast {
-    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
-    padding: 1.6rem 0; border-bottom: 1px solid var(--rule); font-family: var(--mono); font-size: .8rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.25rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.82rem;
   }
-  .mast .name { color: var(--bright); letter-spacing: .02em; }
-  .mast .name b { color: var(--sage); font-weight: 500; }
-  .mast nav { display: flex; gap: 1.4rem; flex-wrap: wrap; }
-  .mast nav a { color: var(--label); text-decoration: none; }
-  .mast nav a:hover { color: var(--sage); }
+  .mast-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  .mast .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--bright);
+    text-decoration: none;
+    letter-spacing: 0.02em;
+    min-height: 44px;
+  }
+  .mast .brand b {
+    color: var(--sage);
+    font-weight: 500;
+    font-size: 1.1rem;
+  }
+  .mast .brand-sub {
+    color: var(--dim);
+    font-size: 0.8rem;
+  }
+  .nav-toggle {
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    padding: 0.45rem 0.85rem;
+    border-radius: 6px;
+    cursor: pointer;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    transition: all 0.15s ease;
+  }
+  .nav-toggle:hover {
+    color: var(--bright);
+    border-color: var(--dim);
+  }
+  .nav-toggle-icon {
+    display: inline-flex;
+    align-items: center;
+  }
+  .mast nav {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .mast nav a {
+    color: var(--label);
+    text-decoration: none;
+    padding: 0.5rem 0.7rem;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+  }
+  .mast nav a:hover {
+    color: var(--bright);
+    background: rgba(243, 242, 232, 0.05);
+  }
 
-  .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 3.5rem; padding: 6rem 0 5rem; align-items: center; }
+  /* Hero Section */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 3.5rem;
+    padding: clamp(3rem, 6vw, 5.5rem) 0 clamp(2.5rem, 5vw, 4.5rem);
+    align-items: center;
+  }
+  .hero-content {
+    display: flex;
+    flex-direction: column;
+  }
   h1 {
-    font: 400 clamp(2.6rem, 6vw, 4.6rem)/1.04 var(--display); color: var(--bright);
-    margin: 0 0 1.6rem; letter-spacing: -.015em; text-wrap: balance;
+    font: 400 clamp(2.3rem, 5vw, 4.3rem)/1.06 var(--display);
+    color: var(--bright);
+    margin: 0 0 1.4rem;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
   }
-  h1 em { font-style: normal; color: var(--sage); }
-  .lede { font-size: 1.3rem; line-height: 1.6; color: var(--text); max-width: 32rem; margin: 0 0 2rem; }
-  .status {
-    font-family: var(--mono); font-size: .78rem; color: var(--amber); border-left: 2px solid var(--amber);
-    padding: .1rem 0 .1rem .9rem; max-width: 32rem; line-height: 1.6;
+  h1 em {
+    font-style: normal;
+    color: var(--sage);
+  }
+  .lede {
+    font-size: clamp(1.15rem, 1.05rem + 0.35vw, 1.35rem);
+    line-height: 1.62;
+    color: var(--text);
+    margin: 0 0 1.7rem;
+    max-width: var(--measure);
   }
 
-  /* A terminal frame: real captured output, reproduced as text. */
+  /* Honest Limits Callout */
+  .status-badge {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--amber);
+    background: rgba(226, 189, 125, 0.08);
+    border: 1px solid rgba(226, 189, 125, 0.3);
+    border-left: 3px solid var(--amber);
+    padding: 0.65rem 0.95rem;
+    border-radius: 4px;
+    margin-bottom: 1.8rem;
+    line-height: 1.55;
+    max-width: 36rem;
+  }
+
+  /* Action Buttons */
+  .hero-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    font-weight: 500;
+    text-decoration: none;
+    min-height: 44px;
+    padding: 0 1.25rem;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+  }
+  .btn-primary {
+    background: var(--sage);
+    color: var(--ground);
+    border: 1px solid var(--sage);
+  }
+  .btn-primary:hover {
+    background: var(--bright);
+    border-color: var(--bright);
+    color: var(--ground);
+    text-decoration: none;
+  }
+  .btn-secondary {
+    background: var(--panel);
+    color: var(--bright);
+    border: 1px solid var(--rule);
+  }
+  .btn-secondary:hover {
+    border-color: var(--dim);
+    color: var(--bright);
+    text-decoration: none;
+  }
+
+  /* Terminal Frame */
   .frame {
-    background: var(--ground); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden;
-    box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .7), 0 0 0 1px rgba(187, 213, 166, .04);
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(187, 213, 166, 0.05);
   }
   .frame .bar {
-    display: flex; justify-content: space-between; padding: .55rem .9rem; background: var(--panel);
-    border-bottom: 1px solid var(--rule); font-family: var(--mono); font-size: .72rem; color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.65rem 1rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--dim);
   }
-  .frame .bar b { color: var(--bright); font-weight: 500; }
-  .frame pre { margin: 0; padding: 1.1rem 1.1rem 1.2rem; overflow-x: auto; line-height: 1.62; font-size: .78rem; color: var(--text); }
-  .frame .a { color: var(--sage); } .frame .d { color: var(--dim); } .frame .b { color: var(--bright); }
-  .frame .add { background: #243426; color: var(--bright); display: inline-block; width: 100%; }
-  .caption { font-family: var(--mono); font-size: .72rem; color: var(--dim); margin: .9rem 0 0; line-height: 1.6; }
-  .hero .frame { transform: rotate(.6deg); }
-
-  section { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 2rem; padding: 4.5rem 0; border-top: 1px solid var(--rule); }
-  .mark { font-family: var(--mono); font-size: .72rem; color: var(--dim); letter-spacing: .08em; text-transform: uppercase; padding-top: .7rem; }
-  .mark span { display: block; color: var(--sage); font-size: 1.6rem; font-family: var(--display); letter-spacing: 0; margin-bottom: .3rem; }
-  h2 { font: 400 clamp(1.7rem, 3.2vw, 2.4rem)/1.15 var(--display); color: var(--bright); margin: 0 0 1.2rem; max-width: 26ch; text-wrap: balance; }
-  h3 { font: 500 1.05rem/1.4 var(--serif); color: var(--bright); margin: 0 0 .4rem; }
-  p { max-width: var(--measure); margin: 0 0 1.1rem; }
-  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 2rem 2.5rem; margin-top: 2.2rem; }
-  .cols p { font-size: 1rem; line-height: 1.65; color: var(--label); margin: 0; }
-
-  .demo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; margin-top: 2.2rem; align-items: start; }
-  .finding { border-left: 2px solid var(--clay); padding: .2rem 0 .2rem 1.3rem; }
-  .finding .kind { font-family: var(--mono); font-size: .72rem; color: var(--clay); text-transform: uppercase; letter-spacing: .08em; }
-  .finding p { font-size: 1.02rem; line-height: 1.65; }
-  .finding p.caption { font-size: .72rem; line-height: 1.6; }
-  blockquote { margin: 0 0 .9rem; padding: .7rem .9rem; background: var(--panel); border-radius: 6px; font-size: .95rem; line-height: 1.55; color: var(--bright); }
-  blockquote cite { display: block; font: normal .7rem var(--mono); color: var(--sage); margin-bottom: .3rem; }
-
-  table { border-collapse: collapse; width: 100%; max-width: 46rem; font-size: .98rem; margin-top: 1.6rem; }
-  th, td { text-align: left; vertical-align: top; padding: .8rem 1rem .8rem 0; border-bottom: 1px solid var(--rule); line-height: 1.55; }
-  th { font: 500 .72rem var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
-  td:first-child { color: var(--bright); white-space: nowrap; padding-right: 1.6rem; }
-  td { color: var(--label); }
-
-  .install pre {
-    background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 1.1rem 1.2rem;
-    overflow-x: auto; max-width: 46rem; line-height: 1.75; color: var(--bright); margin: 1.4rem 0;
+  .frame .bar b {
+    color: var(--bright);
+    font-weight: 500;
   }
-  .install pre .c { color: var(--dim); }
-  .links { list-style: none; padding: 0; margin: 1.6rem 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .2rem 2.5rem; max-width: 50rem; }
-  .links li { padding: .75rem 0; border-bottom: 1px solid var(--rule); font-size: 1rem; }
-  .links small { display: block; color: var(--dim); font-size: .85rem; line-height: 1.5; }
-
-  footer { border-top: 1px solid var(--rule); padding: 2.2rem 0 4rem; font-family: var(--mono); font-size: .74rem; color: var(--dim); display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .rise { opacity: 0; transform: translateY(14px); animation: rise .9s cubic-bezier(.2, .7, .2, 1) forwards; }
-    .rise:nth-child(2) { animation-delay: .12s; } .rise:nth-child(3) { animation-delay: .24s; }
-    .hero .frame.rise { animation-delay: .35s; }
-    @keyframes rise { to { opacity: 1; transform: none; } }
-    .hero .frame.rise { animation-name: settle; }
-    @keyframes settle { from { opacity: 0; transform: translateY(20px) rotate(2deg); } to { opacity: 1; transform: rotate(.6deg); } }
+  .frame pre {
+    margin: 0;
+    padding: 1.1rem;
+    overflow-x: auto;
+    line-height: 1.65;
+    font-size: clamp(0.72rem, 0.66rem + 0.2vw, 0.82rem);
+    color: var(--text);
+    white-space: pre;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) var(--panel);
+    -webkit-overflow-scrolling: touch;
   }
-  @media (max-width: 56rem) {
-    header.mast { flex-direction: column; gap: .7rem; }
-    .mast nav { gap: .5rem 1.2rem; }
-    .hero { grid-template-columns: 1fr; padding: 3.5rem 0; gap: 2.5rem; }
-    .hero .frame { transform: none; }
-    section { grid-template-columns: 1fr; gap: .6rem; padding: 3.2rem 0; }
-    .demo { grid-template-columns: 1fr; }
-    td:first-child { white-space: normal; }
+  .frame pre::-webkit-scrollbar { height: 6px; }
+  .frame pre::-webkit-scrollbar-track { background: var(--panel); }
+  .frame pre::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+  .frame .a { color: var(--sage); }
+  .frame .d { color: var(--dim); }
+  .frame .b { color: var(--bright); }
+  .frame .add {
+    background: rgba(187, 213, 166, 0.14);
+    color: var(--bright);
+    display: inline-block;
+    width: 100%;
+    padding: 0.05rem 0.2rem;
+    margin: 0 -0.2rem;
+    border-left: 2px solid var(--sage);
+  }
+  .caption {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--dim);
+    margin: 0.8rem 0 0;
+    line-height: 1.55;
+  }
+
+  /* Sections Base */
+  section {
+    padding: clamp(3.2rem, 5.5vw, 5rem) 0;
+    border-top: 1px solid var(--rule);
+  }
+  .section-intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 2.5rem;
+    align-items: start;
+    margin-bottom: 2.6rem;
+  }
+  .section-mark {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .section-mark .num {
+    color: var(--sage);
+    font-family: var(--display);
+    font-size: 1.3rem;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+  h2 {
+    font: 400 clamp(1.8rem, 2.9vw, 2.5rem)/1.15 var(--display);
+    color: var(--bright);
+    margin: 0 0 1.2rem;
+    text-wrap: balance;
+  }
+  h3 {
+    font: 500 clamp(1.05rem, 1rem + 0.2vw, 1.2rem)/1.4 var(--serif);
+    color: var(--bright);
+    margin: 0 0 0.5rem;
+  }
+  p {
+    max-width: var(--measure);
+    margin: 0 0 1.2rem;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* 2x2 Feature Grid */
+  .grid-2x2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.8rem;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 1.6rem;
+    position: relative;
+    transition: border-color 0.15s ease;
+  }
+  .card:hover {
+    border-color: rgba(187, 213, 166, 0.35);
+  }
+  .card p {
+    font-size: 0.98rem;
+    line-height: 1.65;
+    color: var(--label);
+    margin: 0;
+  }
+
+  /* Surfaces Section */
+  .surfaces-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+  .surface-card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .surface-card.span-2 {
+    grid-column: span 2;
+  }
+  .surface-card .tag {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--sage);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.6rem;
+  }
+  .surface-card h3 {
+    margin: 0 0 0.6rem;
+  }
+  .surface-card p {
+    font-size: 0.96rem;
+    line-height: 1.6;
+    color: var(--label);
+    margin: 0 0 0.9rem;
+  }
+  .surface-card ul {
+    margin: 0;
+    padding-left: 1.2rem;
+    font-size: 0.92rem;
+    color: var(--label);
+    line-height: 1.6;
+  }
+  .surface-card ul li {
+    margin-bottom: 0.35rem;
+  }
+  .surface-card ul li:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Demonstration Section */
+  .demo-block {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+    margin: 2rem 0;
+  }
+  .source-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  blockquote {
+    margin: 0;
+    padding: 0.9rem 1.1rem;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font-size: 0.96rem;
+    line-height: 1.6;
+    color: var(--bright);
+  }
+  blockquote cite {
+    display: block;
+    font: normal 0.72rem var(--mono);
+    color: var(--sage);
+    margin-bottom: 0.4rem;
+    letter-spacing: 0.02em;
+  }
+  .finding-card {
+    background: rgba(231, 154, 138, 0.05);
+    border: 1px solid rgba(231, 154, 138, 0.3);
+    border-left: 3px solid var(--clay);
+    border-radius: 6px;
+    padding: 1.25rem 1.4rem;
+  }
+  .finding-card .kind {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--clay);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    margin-bottom: 0.6rem;
+  }
+  .finding-card p {
+    font-size: 1rem;
+    line-height: 1.65;
+    margin: 0 0 0.8rem;
+    color: var(--bright);
+  }
+  .finding-card .finding-caption {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    line-height: 1.55;
+    color: var(--dim);
+    margin: 0;
+  }
+
+  /* Structured Lists & Latency */
+  .data-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem;
+    margin-top: 2rem;
+  }
+  .data-item {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 1.25rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .data-item .header-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.8rem;
+  }
+  .data-item .title {
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--bright);
+  }
+  .data-item .badge {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .data-item p {
+    font-size: 0.94rem;
+    line-height: 1.58;
+    color: var(--label);
+    margin: 0;
+  }
+
+  .latency-wrap {
+    margin: 2.2rem 0;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .latency-header {
+    padding: 0.9rem 1.2rem;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--amber);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  table.latency-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  table.latency-table th,
+  table.latency-table td {
+    padding: 0.8rem 1.2rem;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+  }
+  table.latency-table th {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: rgba(0, 0, 0, 0.15);
+  }
+  table.latency-table tr:last-child td {
+    border-bottom: none;
+  }
+  table.latency-table td:first-child {
+    font-family: var(--mono);
+    color: var(--bright);
+    white-space: nowrap;
+    width: 40%;
+  }
+  table.latency-table td:last-child {
+    color: var(--label);
+  }
+
+  /* Installation Code Blocks */
+  .code-block {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    margin: 1.2rem 0 1.8rem;
+    overflow: hidden;
+  }
+  .code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.55rem 1rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--dim);
+    gap: 0.5rem;
+  }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .copy-btn:hover {
+    background: rgba(243, 242, 232, 0.08);
+    color: var(--bright);
+    border-color: var(--dim);
+  }
+  .copy-btn.copied {
+    background: rgba(187, 213, 166, 0.15);
+    color: var(--sage);
+    border-color: var(--sage);
+  }
+  .code-block pre {
+    margin: 0;
+    padding: 1.2rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: clamp(0.74rem, 0.68rem + 0.2vw, 0.84rem);
+    line-height: 1.7;
+    color: var(--bright);
+    white-space: pre;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) var(--panel);
+    -webkit-overflow-scrolling: touch;
+  }
+  .code-block pre::-webkit-scrollbar { height: 6px; }
+  .code-block pre::-webkit-scrollbar-track { background: var(--panel); }
+  .code-block pre::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+  .code-block pre .c { color: var(--dim); }
+
+  /* Docs Links Grid */
+  .docs-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.2rem;
+    margin-top: 2rem;
+  }
+  .doc-card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 1.3rem;
+    display: flex;
+    flex-direction: column;
+    text-decoration: none;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .doc-card:hover {
+    border-color: var(--sage);
+    text-decoration: none;
+    transform: translateY(-2px);
+  }
+  .doc-card .doc-title {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--bright);
+    margin-bottom: 0.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .doc-card .doc-title::after {
+    content: "→";
+    color: var(--sage);
+    font-size: 0.85rem;
+    transition: transform 0.15s ease;
+  }
+  .doc-card:hover .doc-title::after {
+    transform: translateX(3px);
+  }
+  .doc-card p {
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: var(--dim);
+    margin: 0;
+  }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--rule);
+    padding: 3rem 0 4.5rem;
+    margin-top: 2rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--dim);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .footer-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .footer-row a {
+    color: var(--label);
+    text-decoration: none;
+  }
+  .footer-row a:hover {
+    color: var(--sage);
+  }
+  .footer-sub {
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: var(--dim);
+    border-top: 1px dashed rgba(57, 68, 61, 0.6);
+    padding-top: 1.2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+  }
+
+  /* Responsive Breakpoints */
+  @media (max-width: 64rem) {
+    .hero {
+      grid-template-columns: 1fr;
+      gap: 2.8rem;
+      padding: 3rem 0;
+    }
+    .section-intro {
+      grid-template-columns: 1fr;
+      gap: 1.2rem;
+      margin-bottom: 2rem;
+    }
+    .surfaces-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .surface-card.span-2 {
+      grid-column: span 2;
+    }
+    .docs-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 48rem) {
+    header.mast {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: 0.9rem 0;
+    }
+    .mast-bar {
+      width: 100%;
+    }
+    html.js .nav-toggle {
+      display: inline-flex;
+    }
+    /* When JS is enabled: collapsible drawer */
+    html.js .mast nav {
+      display: none;
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
+      margin-top: 0.8rem;
+      padding-top: 0.6rem;
+      border-top: 1px dashed var(--rule);
+      gap: 0.35rem;
+    }
+    html.js .mast nav.open {
+      display: flex;
+    }
+    /* When JS is disabled (fallback): clean responsive grid */
+    html:not(.js) .mast nav {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.45rem;
+      width: 100%;
+      margin-top: 0.8rem;
+      padding-top: 0.6rem;
+      border-top: 1px dashed var(--rule);
+    }
+    .mast nav a {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      padding: 0.5rem 0.8rem;
+      border-radius: 4px;
+      background: rgba(32, 38, 34, 0.6);
+      border: 1px solid rgba(57, 68, 61, 0.5);
+    }
+    .demo-block {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+  }
+
+  @media (max-width: 36rem) {
+    table.latency-table,
+    table.latency-table thead,
+    table.latency-table tbody,
+    table.latency-table th,
+    table.latency-table td,
+    table.latency-table tr {
+      display: block;
+    }
+    table.latency-table thead {
+      display: none;
+    }
+    table.latency-table tr {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--rule);
+    }
+    table.latency-table td {
+      padding: 0.2rem 0;
+      border: none;
+    }
+    table.latency-table td:first-child {
+      font-size: 0.85rem;
+      color: var(--bright);
+      margin-bottom: 0.25rem;
+      width: 100%;
+    }
+    table.latency-table td:last-child {
+      font-size: 0.85rem;
+      color: var(--label);
+    }
+    .latency-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.3rem;
+      padding: 0.8rem 1rem;
+    }
+    .grid-2x2 {
+      grid-template-columns: 1fr;
+      gap: 1.2rem;
+    }
+    .surfaces-grid {
+      grid-template-columns: 1fr;
+    }
+    .surface-card.span-2 {
+      grid-column: span 1;
+    }
+    .data-cards {
+      grid-template-columns: 1fr;
+    }
+    .docs-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .page {
+      padding: 0 0.85rem;
+    }
+    .mast .brand-sub {
+      display: none;
+    }
+    .hero-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .btn {
+      width: 100%;
+    }
+    .card, .surface-card, .data-item, .finding-card {
+      padding: 1.15rem;
+    }
+    .frame pre {
+      padding: 0.85rem 0.75rem;
+      font-size: 0.68rem;
+      line-height: 1.55;
+    }
+    .code-block pre {
+      padding: 0.85rem 0.75rem;
+      font-size: 0.72rem;
+    }
+    html:not(.js) .mast nav {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* Accessibility: Prefers Reduced Motion */
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Print Stylesheet */
+  @media print {
+    body {
+      background: #ffffff;
+      color: #000000;
+      font-size: 11pt;
+    }
+    body::before { display: none; }
+    .page { max-width: 100%; padding: 0; }
+    .btn, .copy-btn, .skip-link, nav, .nav-toggle { display: none; }
+    .card, .surface-card, .frame, .code-block, blockquote {
+      border: 1px solid #ccc;
+      background: #fafafa;
+      color: #000000;
+      box-shadow: none;
+    }
+    a { color: #000000; text-decoration: underline; }
+    h1, h2, h3 { color: #000000; }
   }
 </style>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
 <div class="page">
   <header class="mast">
-    <div class="name"><b>notient</b> / your notes, within reach</div>
-    <nav aria-label="Sections">
-      <a href="#how">How it works</a><a href="#demo">Demonstration</a><a href="#boundaries">Data boundaries</a><a href="#install">Install</a><a href="#docs">Documentation</a>
+    <div class="mast-bar">
+      <a href="#" class="brand" aria-label="Notient home">
+        <b>notient</b>
+        <span class="brand-sub">/ your notes, within reach</span>
+      </a>
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
+        <span class="nav-toggle-text">Menu</span>
+        <span class="nav-toggle-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </span>
+      </button>
+    </div>
+    <nav id="site-nav" class="nav" aria-label="Main navigation">
+      <a href="#how">How it works</a>
+      <a href="#surfaces">Surfaces</a>
+      <a href="#demo">Demonstration</a>
+      <a href="#boundaries">Data boundaries</a>
+      <a href="#install">Install</a>
+      <a href="#docs">Documentation</a>
     </nav>
   </header>
 
-  <main>
+  <main id="main-content">
     <div class="hero">
-      <div>
-        <h1 class="rise">A place to think <em>with</em> your notes.</h1>
-        <p class="lede rise">Notient is a calm terminal workspace over Markdown you own. Ask it something and every claim opens the exact passage it came from. Let it suggest a change and nothing moves until you have read the diff.</p>
-        <p class="status rise">0.1.0 · the first public release, on GitHub. Early software with stated limits: Linux and WSL, local-model latency, and an Obsidian plugin that installs from a ZIP.</p>
-        <p class="status rise" style="border:0;padding-left:0"><a href="#install">Install 0.1.0</a> &nbsp;·&nbsp; <a href="https://github.com/akougkas/notient">Source on GitHub</a> &nbsp;·&nbsp; <a href="https://github.com/akougkas/notient/releases/tag/v0.1.0">Release notes</a></p>
+      <div class="hero-content">
+        <h1>A place to think <em>with</em> your notes.</h1>
+        <p class="lede">Notient is a calm terminal workspace over Markdown you own. Ask it something and every claim opens the exact passage it came from. Let it suggest a change and nothing moves until you have read the diff.</p>
+
+        <div class="status-badge" role="note">
+          <span><strong>0.1.0</strong> is the first public release on GitHub. It is early software with stated limits: Linux and WSL are the exercised platforms, local-model latency applies, and the Obsidian plugin installs from a ZIP archive.</span>
+        </div>
+
+        <div class="hero-actions">
+          <a href="#install" class="btn btn-primary">Install v0.1.0</a>
+          <a href="https://github.com/akougkas/notient" class="btn btn-secondary" target="_blank" rel="noopener">Source on GitHub</a>
+          <a href="https://github.com/akougkas/notient/releases/tag/v0.1.0" class="btn btn-secondary" target="_blank" rel="noopener">Release notes</a>
+        </div>
       </div>
-      <figure class="frame rise" style="margin:0" aria-label="Terminal capture of the Notient review pane">
-        <div class="bar"><span><b>notient</b> / demo-vault</span><span>Review · ready</span></div>
+
+      <figure class="frame" aria-label="Terminal capture of the Notient review pane">
+        <div class="bar">
+          <span><b>notient</b> / demo-vault</span>
+          <span>Review · ready</span>
+        </div>
 <pre><span class="a">Suggestions</span>   <span class="d">Requests →</span>
 
 <span class="b">Change requested by codex</span>
@@ -177,113 +1048,468 @@ r reject · o source · Esc back</span></pre>
       </figure>
     </div>
 
+    <!-- SECTION: How it works -->
     <section id="how">
-      <div class="mark"><span>i</span>How it works</div>
-      <div>
-        <h2>The notes stay yours. The models only visit.</h2>
-        <p>One small daemon runs beside each vault. It reads your Markdown, keeps a structural and lexical index in a local database, and answers the terminal workspace, the command line, MCP agents such as Claude Code and Codex, an authenticated local HTTP API and an Obsidian companion plugin. They all reach the same operations with the same rules.</p>
-        <p>The index can always be rebuilt. Your approvals, rejections and change history cannot, so those are kept.</p>
-        <div class="cols">
-          <div><h3>Answers carry their evidence</h3><p>Ask, brief and compare return exact quotations bound to the saved revision they were read from. When the notes do not support an answer, Notient says so instead of reaching into the model's memory.</p></div>
-          <div><h3>Changes wait for you</h3><p>An agent, a pipeline or the in-app assistant can plan an edit, a move or an archive. It is stored as an exact before and after. Only a person applies it, and an edit you make in the meantime turns the plan stale instead of being overwritten.</p></div>
-          <div><h3>Everything can be undone</h3><p>Applied changes land in a journal with their original bytes. Undo is guarded: it refuses when you have written something newer, and it survives a restart halfway through.</p></div>
-          <div><h3>Works before any model does</h3><p>Reading, structure, links, tags and lexical search need no inference. Seven background workflows exist and every one of them is off until you turn it on.</p></div>
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">i</span> How it works</div>
+          <h2>The notes stay yours. The models only visit.</h2>
+        </div>
+        <div>
+          <p>One small daemon runs beside each vault. It reads your Markdown, keeps a structural and lexical index in a local database, and answers the terminal workspace, the command line, MCP agents such as Claude Code and Codex, an authenticated local HTTP API and an Obsidian companion plugin. They all reach the same operations with the same rules.</p>
+          <p>The index can always be rebuilt. Your approvals, rejections and change history cannot, so those are kept.</p>
+        </div>
+      </div>
+
+      <div class="grid-2x2">
+        <div class="card">
+          <h3>Answers carry their evidence</h3>
+          <p>Ask, brief and compare return exact quotations bound to the saved revision they were read from. When the notes do not support an answer, Notient says so instead of reaching into the model's memory.</p>
+        </div>
+        <div class="card">
+          <h3>Changes wait for you</h3>
+          <p>An agent, a pipeline or the in-app assistant can plan an edit, a move or an archive. It is stored as an exact before and after. Only a person applies it, and an edit you make in the meantime turns the plan stale instead of being overwritten.</p>
+        </div>
+        <div class="card">
+          <h3>Everything can be undone</h3>
+          <p>Applied changes land in a journal with their original bytes. Undo is guarded: it refuses when you have written something newer, and it survives a restart halfway through.</p>
+        </div>
+        <div class="card">
+          <h3>Works before any model does</h3>
+          <p>Reading, structure, links, tags and lexical search need no inference. Seven background workflows exist and every one of them is off until you turn it on.</p>
         </div>
       </div>
     </section>
 
+    <!-- SECTION: Surfaces -->
+    <section id="surfaces">
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">ii</span> Unified Surfaces</div>
+          <h2>One daemon. Five integrated surfaces.</h2>
+        </div>
+        <div>
+          <p>Notient treats your Markdown files as the durable memory. Whether you work in a terminal, run scripted queries, connect agents or write in Obsidian, all surfaces connect to the same per-vault daemon with the same rules.</p>
+        </div>
+      </div>
+
+      <div class="surfaces-grid">
+        <div class="surface-card">
+          <div class="tag">Surface 1</div>
+          <h3>Terminal Workspace</h3>
+          <p>Keyboard-first interactive TUI with persistent conversations, rendered Markdown, exact source navigation, recoverable drafts, and reviewed changes.</p>
+          <ul>
+            <li><code>Ctrl+P</code> opens the menu</li>
+            <li><code>Ctrl+B</code> captures a thought</li>
+            <li><code>Ctrl+O</code> switches conversations</li>
+            <li><code>Ctrl+S</code> saves an answer</li>
+          </ul>
+        </div>
+
+        <div class="surface-card">
+          <div class="tag">Surface 2</div>
+          <h3>Command Line CLI</h3>
+          <p>Direct terminal operations for search, structured Q&amp;A, briefs, correlation, history inspection, and guided setup.</p>
+          <ul>
+            <li><code>notient setup</code> writes config and doctor report</li>
+            <li><code>notient search</code> quick lexical mode needs no model</li>
+            <li><code>notient history</code> inspects journaled changes</li>
+            <li><code>notient undo</code> restores original note bytes</li>
+          </ul>
+        </div>
+
+        <div class="surface-card">
+          <div class="tag">Surface 3</div>
+          <h3>MCP for Agents</h3>
+          <p>32 Model Context Protocol tools connecting Claude Code, Codex, and other orchestrators to your vault with strict authority boundaries.</p>
+          <ul>
+            <li>Agents propose changes and ask for human review</li>
+            <li>Agents cannot approve their own changes</li>
+            <li>Missing evidence forces structured abstention</li>
+            <li>Untrusted note content cannot issue tool commands</li>
+          </ul>
+        </div>
+
+        <div class="surface-card span-2">
+          <div class="tag">Surface 4 &amp; 5</div>
+          <h3>Obsidian Desktop Companion &amp; Local SDK</h3>
+          <p>A native desktop sidebar that protects active editor buffers from daemon writes while maintaining raw-byte fidelity across byte-order marks and CRLF line endings. Connects over loopback HTTP with single-use pairing codes. Four selection commands debut in version 0.1.0:</p>
+          <ul>
+            <li><strong>Ask about selection:</strong> A grounded question about the selected passage, answered from its note.</li>
+            <li><strong>Brief from selection:</strong> A cited brief from the saved revision, focused on the passage.</li>
+            <li><strong>Find connections for selection:</strong> Discovers evidence-backed connections to related notes.</li>
+            <li><strong>Propose an edit to the selection:</strong> Stages an exact before and after preview in Review without touching disk.</li>
+          </ul>
+        </div>
+
+        <div class="surface-card">
+          <div class="tag">Developer SDK</div>
+          <h3>Typed Client</h3>
+          <p>The <code>notient/sdk</code> package export provides runtime-validated TypeScript bindings for all vault operations and pipelines.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION: Demonstration -->
     <section id="demo">
-      <div class="mark"><span>ii</span>Demonstration</div>
-      <div>
-        <h2>A real run: finding a contradiction between two notes.</h2>
-        <p>This is excerpted, otherwise unedited output from the <em>Find contradictions</em> pipeline, run on 17 September 2026 against a locally hosted <code>qwen3.8-27b</code> on two synthetic notes from the project's evaluation pack. It took 122 seconds, most of it reasoning. Both quotations resolved byte for byte in the recorded revisions, and the result was staged as a review, not written.</p>
-        <div class="demo">
-          <div>
-            <blockquote><cite>Projects/Guarantee.md · line 3</cite>For the 2026-09-16 production cluster, every acknowledged write survives the loss of any one replica, even if replication was not complete.</blockquote>
-            <blockquote><cite>Projects/Loss.md · line 3</cite>For the same 2026-09-16 production cluster, an acknowledged write can be lost when one replica fails before replication completes.</blockquote>
-            <blockquote><cite>Projects/Loss.md · line 3</cite>This describes the same current configuration as [[Projects/Guarantee]].</blockquote>
-          </div>
-          <div class="finding">
-            <div class="kind">contradiction · proposed edge: contradicts</div>
-            <p>“Projects/Guarantee.md and Projects/Loss.md make incompatible claims about the same production cluster on the same date under the same failure condition. […] This is a direct contradiction rather than a temporal change or difference in assumptions.”</p>
-            <p class="caption">The same evaluation also recorded what went wrong: three of twenty-two runs exhausted their reasoning budget, and one synthesis joined two unrelated notes before its instruction was corrected. Those results are kept in the project ledger alongside the passes.</p>
-          </div>
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">iii</span> Demonstration</div>
+          <h2>A real run: finding a contradiction between two notes.</h2>
         </div>
-        <table>
-          <thead><tr><th>Workflow</th><th>What it proposes</th></tr></thead>
+        <div>
+          <p>This is excerpted, otherwise unedited output from the <em>Find contradictions</em> pipeline, run on 17 September 2026 against a locally hosted <code>qwen3.8-27b</code> on two synthetic notes from the project's evaluation pack. It took 122 seconds, most of it reasoning. Both quotations resolved byte for byte in the recorded revisions, and the result was staged as a review, not written.</p>
+        </div>
+      </div>
+
+      <div class="demo-block">
+        <div class="source-notes">
+          <blockquote>
+            <cite>Projects/Guarantee.md · line 3</cite>
+            For the 2026-09-16 production cluster, every acknowledged write survives the loss of any one replica, even if replication was not complete.
+          </blockquote>
+          <blockquote>
+            <cite>Projects/Loss.md · line 3</cite>
+            For the same 2026-09-16 production cluster, an acknowledged write can be lost when one replica fails before replication completes.
+          </blockquote>
+          <blockquote>
+            <cite>Projects/Loss.md · line 3</cite>
+            This describes the same current configuration as [[Projects/Guarantee]].
+          </blockquote>
+        </div>
+
+        <div class="finding-card">
+          <div class="kind">contradiction · proposed edge: contradicts</div>
+          <p>“Projects/Guarantee.md and Projects/Loss.md make incompatible claims about the same production cluster on the same date under the same failure condition. […] This is a direct contradiction rather than a temporal change or difference in assumptions.”</p>
+          <p class="finding-caption">The evaluation recorded passes and failures together. Three of twenty-two runs exhausted their reasoning budget. One synthesis joined two unrelated notes before its instruction was corrected. Those results remain recorded in the project ledger.</p>
+        </div>
+      </div>
+
+      <!-- Real Latency Table -->
+      <div class="latency-wrap">
+        <div class="latency-header">
+          <span>Measured Real-Model Latency (qwen3.8-27b on LAN Host)</span>
+          <span>Sequential Runs</span>
+        </div>
+        <table class="latency-table">
+          <thead>
+            <tr>
+              <th scope="col">Operation</th>
+              <th scope="col">Measured Duration &amp; Scope</th>
+            </tr>
+          </thead>
           <tbody>
-            <tr><td>Index and extract</td><td>Concepts, claims and open questions, each tied to its passage. Never edits a note.</td></tr>
-            <tr><td>Enrich</td><td>Tags, aliases and a summary that extend what you wrote without replacing it.</td></tr>
-            <tr><td>Relate</td><td>A specific, directed connection supported by quotations from both notes.</td></tr>
-            <tr><td>Find contradictions</td><td>Genuine conflicts, kept apart from changes over time and differing assumptions.</td></tr>
-            <tr><td>Synthesize</td><td>A cited draft or map of content from complementary sources, as a new note.</td></tr>
-            <tr><td>Process inbox</td><td>Routing for substantive captures. Fragments stay where they are.</td></tr>
-            <tr><td>Review for archive</td><td>Finished or superseded notes, with reference-aware moves. Age alone is never a reason.</td></tr>
+            <tr>
+              <td><code>ask</code> on small vault</td>
+              <td>15.6 s to 16.3 s with exact citations</td>
+            </tr>
+            <tr>
+              <td><code>ask</code> on 961-note vault</td>
+              <td>31.7 s across 895 indexed notes</td>
+            </tr>
+            <tr>
+              <td><code>brief</code> from a note</td>
+              <td>30.8 s (2-note vault) to 69.0 s (selection, 2 sources)</td>
+            </tr>
+            <tr>
+              <td>Connections for selection</td>
+              <td>110.2 s (two-sided evidence resolution)</td>
+            </tr>
+            <tr>
+              <td>Pipelines (Enrich / Contradict / Relate)</td>
+              <td>60 s to 120 s (enrich), 122 s (contradiction), 213 s (relate up to 3.5 min)</td>
+            </tr>
           </tbody>
         </table>
       </div>
+
+      <!-- Seven Workflows Cards -->
+      <h3 style="margin-top:2.5rem">The Seven Built-in Workflows</h3>
+      <p>All background workflows are disabled on fresh installations. Enabled workflows operate under explicit scopes and resource budgets.</p>
+
+      <div class="data-cards">
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Index and extract</span>
+            <span class="badge">Analysis</span>
+          </div>
+          <p>Concepts, claims and open questions, each tied to its passage. Never edits a note.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Enrich</span>
+            <span class="badge">Metadata</span>
+          </div>
+          <p>Tags, aliases and a summary that extend what you wrote without replacing it.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Relate</span>
+            <span class="badge">Graph</span>
+          </div>
+          <p>A specific, directed connection supported by quotations from both notes.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Find contradictions</span>
+            <span class="badge">Integrity</span>
+          </div>
+          <p>Genuine conflicts, kept apart from changes over time and differing assumptions.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Synthesize</span>
+            <span class="badge">Generation</span>
+          </div>
+          <p>A cited draft or map of content from complementary sources, created as a new note.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Process inbox</span>
+            <span class="badge">Organization</span>
+          </div>
+          <p>Routing for substantive captures. Unrelated fragments stay where they are.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Review for archive</span>
+            <span class="badge">Lifecycle</span>
+          </div>
+          <p>Finished or superseded notes, with reference-aware moves. Age alone is never a reason.</p>
+        </div>
+      </div>
     </section>
 
+    <!-- SECTION: Data Boundaries -->
     <section id="boundaries">
-      <div class="mark"><span>iii</span>Data boundaries</div>
-      <div>
-        <h2>Know exactly where a sentence of yours can travel.</h2>
-        <p>Notient ships no hosted service and no telemetry. What leaves your machine depends on two choices that are yours, and they are separate.</p>
-        <table>
-          <thead><tr><th>Boundary</th><th>What crosses it</th></tr></thead>
-          <tbody>
-            <tr><td>Local inference</td><td>The reference setup. Prompts and note excerpts go to an OpenAI-compatible endpoint on this machine or on a network you operate: llama.cpp, LM Studio, Ollama, vLLM and others.</td></tr>
-            <tr><td>A cloud endpoint</td><td>Supported when you configure one deliberately. That provider then receives the prompts, excerpts, images or embeddings Notient sends for inference.</td></tr>
-            <tr><td>An MCP host</td><td>A separate boundary. Claude Code, Codex or another host receives whatever note content its tool calls request and handles it under that vendor's policy, whichever model Notient itself uses.</td></tr>
-            <tr><td>Paired HTTP</td><td>Loopback only, scoped credentials from a single-use pairing code, revocable at any time. Agents can ask for a review. They cannot approve one.</td></tr>
-          </tbody>
-        </table>
-        <p style="margin-top:1.6rem">Note content is treated as untrusted data everywhere. Text inside a note can never grant a permission, approve a change or issue a tool command.</p>
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">iv</span> Data boundaries</div>
+          <h2>Know exactly where a sentence of yours can travel.</h2>
+        </div>
+        <div>
+          <p>Notient ships no hosted service and no telemetry. What leaves your machine depends on two choices that are yours, and they are separate.</p>
+          <p>Note content is treated as untrusted data everywhere. Text inside a note can never grant a permission, approve a change or issue a tool command.</p>
+        </div>
+      </div>
+
+      <div class="data-cards">
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Local inference</span>
+            <span class="badge">Reference Setup</span>
+          </div>
+          <p>Prompts and note excerpts go to an OpenAI-compatible endpoint on this machine or on a network you operate: llama.cpp, LM Studio, Ollama, vLLM and others.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">A cloud endpoint</span>
+            <span class="badge">Optional Choice</span>
+          </div>
+          <p>Supported when you configure one deliberately. That provider then receives the prompts, excerpts, images or embeddings Notient sends for inference.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">An MCP host</span>
+            <span class="badge">Separate Boundary</span>
+          </div>
+          <p>Claude Code, Codex or another host receives whatever note content its tool calls request and handles it under that vendor's policy, whichever model Notient itself uses.</p>
+        </div>
+
+        <div class="data-item">
+          <div class="header-line">
+            <span class="title">Paired HTTP</span>
+            <span class="badge">Loopback Only</span>
+          </div>
+          <p>Scoped credentials from a single-use pairing code, revocable at any time. Agents can ask for a review. They cannot approve one.</p>
+        </div>
       </div>
     </section>
 
-    <section id="install" class="install">
-      <div class="mark"><span>iv</span>Install</div>
-      <div>
-        <h2>From the GitHub release.</h2>
-        <p>You need <a href="https://bun.sh">Bun</a> 1.4.2 or newer and <a href="https://surrealdb.com/install">SurrealDB</a> 3.0.5 on your <code>PATH</code>. Linux and WSL are exercised; macOS is unverified on a real host and a native Windows daemon is unsupported. A model endpoint is optional.</p>
-<pre><span class="c"># download, verify and install the release package</span>
+    <!-- SECTION: Install -->
+    <section id="install">
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">v</span> Install</div>
+          <h2>From the GitHub release.</h2>
+        </div>
+        <div>
+          <p>You need <a href="https://bun.sh" target="_blank" rel="noopener">Bun</a> 1.4.2 or newer and <a href="https://surrealdb.com/install" target="_blank" rel="noopener">SurrealDB</a> 3.0.5 on your <code>PATH</code>. Linux and WSL are exercised; macOS is unverified on a real host and a native Windows daemon is unsupported. A model endpoint is optional for reading and lexical search.</p>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span>Download and install verified release package</span>
+          <button type="button" class="copy-btn" data-copy="curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/notient-0.1.0.tgz
+curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+bun add --global &quot;$PWD/notient-0.1.0.tgz&quot;
+notient --version">Copy commands</button>
+        </div>
+<pre><span class="c"># Download, verify and install the release package</span>
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/notient-0.1.0.tgz
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 bun add --global "$PWD/notient-0.1.0.tgz"
+notient --version</pre>
+      </div>
 
-<span class="c"># or build from source</span>
-git clone https://github.com/akougkas/notient.git && cd notient
-bun install --frozen-lockfile && bun run build && bun link
+      <div class="code-block">
+        <div class="code-header">
+          <span>Or build from repository source</span>
+          <button type="button" class="copy-btn" data-copy="git clone https://github.com/akougkas/notient.git &amp;&amp; cd notient
+bun install --frozen-lockfile &amp;&amp; bun run build &amp;&amp; bun link">Copy commands</button>
+        </div>
+<pre><span class="c"># Build from source and register on PATH</span>
+git clone https://github.com/akougkas/notient.git &amp;&amp; cd notient
+bun install --frozen-lockfile &amp;&amp; bun run build &amp;&amp; bun link</pre>
+      </div>
 
-<span class="c"># guided setup: settings, one model endpoint, then a read-only health report</span>
+      <div class="code-block">
+        <div class="code-header">
+          <span>Guided vault setup and workspace launch</span>
+          <button type="button" class="copy-btn" data-copy="notient setup /path/to/your/vault
+notient --vault /path/to/your/vault">Copy commands</button>
+        </div>
+<pre><span class="c"># Guided setup: writes settings, one model endpoint, then prints a read-only health report</span>
 notient setup /path/to/your/vault
 
-<span class="c"># open the workspace</span>
+<span class="c"># Open the terminal workspace</span>
 notient --vault /path/to/your/vault</pre>
-        <p>The Obsidian companion, version 0.1.0, is <a href="https://github.com/akougkas/notient/releases/download/v0.1.0/notient-obsidian-0.1.0.zip">notient-obsidian-0.1.0.zip</a>: extract its <code>notient/</code> folder into <code>.obsidian/plugins/</code> and pair it with <code>notient pair create</code>. It is not in the community directory.</p>
-        <p class="status" style="margin-top:1.6rem"><a href="https://github.com/akougkas/notient/releases/tag/v0.1.0">Release v0.1.0</a> carries the package, the plugin archive, the OpenAPI document, installation notes and SHA-256 checksums. Those exact artifacts were verified from a clean install by <code>bun run release:check</code>. Notient is not on npm.</p>
+      </div>
+
+      <div class="card" style="margin: 2rem 0">
+        <h3>Obsidian Desktop Companion (v0.1.0)</h3>
+        <p>Download <a href="https://github.com/akougkas/notient/releases/download/v0.1.0/notient-obsidian-0.1.0.zip">notient-obsidian-0.1.0.zip</a> from the release. Extract its <code>notient/</code> folder into <code>.obsidian/plugins/</code>, enable the plugin in Obsidian settings, and pair the vault from your terminal:</p>
+        <div class="code-block" style="margin: 1rem 0 0.5rem">
+          <div class="code-header">
+            <span>Terminal pairing command</span>
+            <button type="button" class="copy-btn" data-copy="notient pair create --vault /path/to/your/vault --label &quot;Obsidian desktop&quot; --kind human --scopes read,write,host">Copy command</button>
+          </div>
+<pre>notient pair create --vault /path/to/your/vault \
+  --label "Obsidian desktop" --kind human --scopes read,write,host</pre>
+        </div>
+        <p class="caption">The plugin is distributed directly as an archive and is not in the Obsidian community directory.</p>
+      </div>
+
+      <div class="status-badge" style="max-width: 100%">
+        <span><a href="https://github.com/akougkas/notient/releases/tag/v0.1.0">Release v0.1.0</a> carries the package, the plugin archive, the OpenAPI document, installation notes and SHA-256 checksums. Those exact artifacts were verified from a clean install by <code>bun run release:check</code>. Notient is not published on npm.</span>
       </div>
     </section>
 
+    <!-- SECTION: Documentation -->
     <section id="docs">
-      <div class="mark"><span>v</span>Documentation</div>
-      <div>
-        <h2>Read the contracts, not a brochure.</h2>
-        <ul class="links">
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/getting-started.md">Getting started</a><small>Setup, models, the daemon, backups and recovery.</small></li>
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/api-v1.md">API v1 and pipelines</a><small>Every operation, its authority and the typed <code>notient/sdk</code> client.</small></li>
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/openapi-v1.json">OpenAPI document</a><small>Generated from the same catalog the daemon validates with.</small></li>
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/mcp.md">MCP for agents</a><small>Connect Claude Code, Codex and other hosts to a vault.</small></li>
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/obsidian.md">Obsidian companion</a><small>Pairing, editor protection and native review.</small></li>
-          <li><a href="https://github.com/akougkas/notient/blob/main/docs/release-v0.1.0.md">Release status</a><small>What is verified, what failed and what is still unverified.</small></li>
-        </ul>
+      <div class="section-intro">
+        <div>
+          <div class="section-mark"><span class="num">vi</span> Documentation</div>
+          <h2>Read the contracts, not a brochure.</h2>
+        </div>
+        <div>
+          <p>Every interface, schema and operational rule is documented in the repository. The integration suite runs against real daemons in continuous integration, and the OpenAPI document is checked against the running catalog.</p>
+        </div>
+      </div>
+
+      <div class="docs-grid">
+        <a href="https://github.com/akougkas/notient/blob/main/docs/getting-started.md" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">Getting started</span>
+          <p>Setup, models, the daemon, backups and recovery procedures.</p>
+        </a>
+
+        <a href="https://github.com/akougkas/notient/blob/main/docs/api-v1.md" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">API v1 &amp; Pipelines</span>
+          <p>Every operation, its authority level and the typed <code>notient/sdk</code> client.</p>
+        </a>
+
+        <a href="https://github.com/akougkas/notient/blob/main/docs/openapi-v1.json" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">OpenAPI Document</span>
+          <p>Generated directly from the catalog the daemon validates with.</p>
+        </a>
+
+        <a href="https://github.com/akougkas/notient/blob/main/docs/mcp.md" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">MCP for Agents</span>
+          <p>Connect Claude Code, Codex and other hosts to a vault.</p>
+        </a>
+
+        <a href="https://github.com/akougkas/notient/blob/main/docs/obsidian.md" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">Obsidian Companion</span>
+          <p>Pairing, editor protection, raw byte handling and native review.</p>
+        </a>
+
+        <a href="https://github.com/akougkas/notient/blob/main/docs/release-v0.1.0.md" class="doc-card" target="_blank" rel="noopener">
+          <span class="doc-title">Release Status</span>
+          <p>Full verification results: what passed, what failed and what is unverified.</p>
+        </a>
       </div>
     </section>
   </main>
 
-  <footer><span>notient · 0.1.0 · local-first, MIT-licensed source</span><span>No cookies. No analytics. This page loads its web fonts and nothing else.</span></footer>
+  <footer>
+    <div class="footer-row">
+      <span><strong>notient</strong> · 0.1.0 · local-first Markdown workspace</span>
+      <nav aria-label="Footer navigation" style="display:flex;gap:1.2rem;flex-wrap:wrap">
+        <a href="#main-content">Back to top ↑</a>
+        <a href="https://github.com/akougkas/notient" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/akougkas/notient/releases/tag/v0.1.0" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/akougkas/notient/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </nav>
+    </div>
+    <div class="footer-sub">
+      <span>No cookies. No telemetry. No trackers. This page loads its Google Fonts stylesheet and nothing else.</span>
+      <span>Deterministic verification: 2,662 unit tests · 540 integration tests · 43 evaluation pack cases.</span>
+    </div>
+  </footer>
 </div>
+
+<script>
+  // Mobile Navigation Toggle
+  (function() {
+    var toggle = document.getElementById('nav-toggle');
+    var nav = document.getElementById('site-nav');
+    if (!toggle || !nav) return;
+
+    toggle.addEventListener('click', function() {
+      var isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', !isExpanded);
+      nav.classList.toggle('open', !isExpanded);
+    });
+
+    nav.querySelectorAll('a').forEach(function(link) {
+      link.addEventListener('click', function() {
+        if (window.innerWidth <= 768) {
+          toggle.setAttribute('aria-expanded', 'false');
+          nav.classList.remove('open');
+        }
+      });
+    });
+  })();
+
+  // Progressive enhancement: copy code snippets to clipboard
+  (function() {
+    document.querySelectorAll('.copy-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var text = btn.getAttribute('data-copy');
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(function() {
+          var original = btn.textContent;
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(function() {
+            btn.textContent = original;
+            btn.classList.remove('copied');
+          }, 2000);
+        }).catch(function() {});
+      });
+    });
+  })();
+</script>
 </body>
 </html>

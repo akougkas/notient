@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>404 · Notient</title>
+<meta name="description" content="Page not found.">
+<link rel="canonical" href="https://notient.org/404.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23171B19'/%3E%3Ctext x='32' y='46' font-family='Georgia,serif' font-size='44' text-anchor='middle' fill='%23BBD5A6'%3En%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#171B19">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Spectral:ital,wght@0,400;0,500;1,400&family=Young+Serif&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ground: #171B19;
+    --panel: #202622;
+    --rule: #39443D;
+    --dim: #89978B;
+    --label: #B3BCAF;
+    --text: #DFE4DA;
+    --bright: #F3F2E8;
+    --sage: #BBD5A6;
+    --amber: #E2BD7D;
+    --clay: #E79A8A;
+    --serif: "Spectral", "Iowan Old Style", Georgia, serif;
+    --display: "Young Serif", "Spectral", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--text);
+    font: 400 1.15rem/1.7 var(--serif);
+    background:
+      radial-gradient(90rem 50rem at 85% -10%, rgba(187, 213, 166, 0.09), transparent 60%),
+      radial-gradient(60rem 40rem at -10% 40%, rgba(226, 189, 125, 0.05), transparent 60%),
+      var(--ground);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem 1.5rem;
+    text-align: center;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    mix-blend-mode: soft-light;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .box {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 3rem 2.5rem;
+    max-width: 32rem;
+    width: 100%;
+    position: relative;
+    z-index: 2;
+    box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8);
+  }
+  .code {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--clay);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.8rem;
+  }
+  h1 {
+    font: 400 2.4rem/1.1 var(--display);
+    color: var(--bright);
+    margin: 0 0 1rem;
+  }
+  p {
+    font-size: 1.05rem;
+    color: var(--label);
+    margin: 0 0 2rem;
+    line-height: 1.6;
+  }
+  a.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    font-weight: 500;
+    text-decoration: none;
+    min-height: 44px;
+    padding: 0 1.5rem;
+    border-radius: 6px;
+    background: var(--sage);
+    color: var(--ground);
+    transition: background 0.15s ease;
+  }
+  a.btn:hover {
+    background: var(--bright);
+  }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="code">404 · Not Found</div>
+    <h1>Passage not found.</h1>
+    <p>The requested page does not exist in this index. Return to the home workspace to explore your notes.</p>
+    <a href="/" class="btn">Return to notient.org</a>
+  </div>
+</body>
+</html>
