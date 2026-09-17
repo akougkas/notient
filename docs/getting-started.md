@@ -24,7 +24,7 @@ The release package installs without a checkout:
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/notient-0.1.0.tgz
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
-bun add --global ./notient-0.1.0.tgz
+bun add --global "$PWD/notient-0.1.0.tgz"
 ```
 
 From source:

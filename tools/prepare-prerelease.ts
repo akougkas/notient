@@ -69,7 +69,8 @@ Requires Bun 1.4.2 and SurrealDB 3.0.5 on PATH. The daemon runs on Linux/WSL;
 macOS has implementation and deterministic coverage but lacks current host validation.
 Native Windows daemon startup is unsupported; Windows Obsidian connects to WSL.
 
-Install from this directory: \`bun add --global ./notient-${pkg.version}.tgz\`.
+Install from this directory: \`bun add --global "$PWD/notient-${pkg.version}.tgz"\`.
+Bun needs an absolute path here; a relative one fails to resolve.
 Then run \`notient --version\` and \`notient setup /path/to/vault\`, which guides a
 first run and ends in the read-only \`notient doctor\` report. Launch the workspace
 with \`notient --vault /path/to/vault\`. Ctrl+P opens its menu.

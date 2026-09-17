@@ -48,7 +48,7 @@ From the GitHub release:
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/notient-0.1.0.tgz
 curl -LO https://github.com/akougkas/notient/releases/download/v0.1.0/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
-bun add --global ./notient-0.1.0.tgz
+bun add --global "$PWD/notient-0.1.0.tgz"
 notient --version
 ```
 
@@ -61,7 +61,8 @@ bun run build
 bun link
 ```
 
-Notient is not published to npm.
+Give Bun the absolute path as shown; `bun add --global` cannot resolve a relative
+tarball. Notient is not published to npm.
 
 ## First run
 
@@ -120,6 +121,9 @@ $ notient search "replicas" --vault ~/MyVault | tail -1 | jq ".result.hits"
   }
 ]
 ```
+
+The first command against a vault starts its daemon. A search issued in those
+first seconds reports incomplete coverage while the index builds; run it again.
 
 No model is needed to read notes, build the structural index or search lexically
 (`notient search` defaults to `--mode quick`, which is lexical; `balanced` and

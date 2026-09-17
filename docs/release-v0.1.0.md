@@ -35,9 +35,9 @@ changed or has unsaved edits is a conflict, never a recompute. `brief.run` and
 | Root and Obsidian typechecks and builds | Passed |
 | Lint | 0 errors, **139 warnings** (unchanged baseline; not warning-free) |
 | Release package | `release:prepare` from the clean release commit; `release:check` clean-installed that exact tarball and exercised packaged CLI/OpenTUI imports, BOM/CRLF read, graph, reviewed append and receipt replay, exact undo across restart, read-only paired HTTP, the installed `notient/sdk` runtime and declarations, and 32-tool stdio MCP with zero generation calls; `sha256sum -c SHA256SUMS` passed |
-| Install from the public release | Performed after publication from a clean directory: download by URL, checksum, global install, `--version`, `setup`, `doctor`, one lexical search. The result is recorded in the ledger and on the release page |
+| Install from the public release | In a clean directory with an empty `HOME`: the tarball downloaded by URL matched `SHA256SUMS` and the locally verified bytes; `bun add --global` with the absolute path installed it; `notient --version` printed 0.1.0; `notient setup` on a temporary vault ended in the doctor report; `doctor` showed the daemon and index current; one lexical search returned the expected passage. The documented relative-path install command failed and was corrected the same day in `main`, `INSTALL.md` and the release page |
 | Documented commands | Every `notient` command in the README and the model-free commands in Getting started were run as written against a fresh temporary vault; `ask`, `brief --file` and `chat` ran once each against the real model. Two documentation gaps found and fixed (search modes, backup precondition) |
-| Remote CI | `.github/workflows/ci.yml` (unit, integration, installed package) needs no model and no Obsidian. It first ran remotely with this release; its result for the tagged commit is recorded in the ledger and on the release page |
+| Remote CI | `.github/workflows/ci.yml` (unit, integration, installed package) needs no model and no Obsidian. It first ran remotely with this release. The integration job failed once on the upstream SurrealDB installer, which rejects a positional directory; CI now downloads the 3.0.5 binary directly. All three jobs are green on the tagged commit `1679d48` |
 
 ### The plugin ZIP in a real Obsidian
 
@@ -120,6 +120,7 @@ from this provider and is never inferred from aggregate completion usage.
   is exact and coarse. In Obsidian, selecting such a citation excludes the
   frontmatter that the Properties view owns.
 - Vision has not been accepted. Lint has 139 warnings.
+- The README inside the tagged commit and the published tarball shows a relative install path that Bun cannot resolve. `main`, `INSTALL.md` and the release page carry the absolute-path command.
 - Not published to npm; the website in `website/` is not deployed.
 
 ## Assets
