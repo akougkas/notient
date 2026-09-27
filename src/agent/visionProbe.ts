@@ -29,6 +29,8 @@ export interface VisionConfig {
 }
 
 export interface ProbeVisionRouteOptions {
+  /** Bounds optional discovery, including time waiting for a reasoning slot. */
+  signal?: AbortSignal;
   primaryLLM: LLMProvider;
   primaryModel: string;
   visionConfig: VisionConfig;
@@ -51,35 +53,11 @@ export async function probeVisionRoute(
   const primaryChatVision = options.primaryLLM.chatVision;
   if (typeof primaryChatVision === "function") {
     try {
-      await options.scheduler.run("vision:probe", (signal) =>
-        primaryChatVision.call(options.primaryLLM, {
-          model: options.primaryModel,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "respond with the single word: ok" },
-                { type: "image_url", image_url: { url: PROBE_IMAGE } },
-              ],
-            },
-          ],
-          maxTokens: 8,
-          signal,
-        }),
-      );
-      return makeRouter(options.primaryLLM, options.primaryModel, options.scheduler);
-    } catch {
-      // Primary lacks vision; fall through to the configured fallback.
-    }
-  }
-  if (options.visionConfig.enabled && options.visionConfig.baseUrl.length > 0) {
-    const fallback = options.makeFallback();
-    const fallbackChatVision = fallback.chatVision;
-    if (typeof fallbackChatVision === "function") {
-      try {
-        await options.scheduler.run("vision:probe", (signal) =>
-          fallbackChatVision.call(fallback, {
-            model: options.visionConfig.model,
+      await options.scheduler.run(
+        "vision:probe",
+        (signal) =>
+          primaryChatVision.call(options.primaryLLM, {
+            model: options.primaryModel,
             messages: [
               {
                 role: "user",
@@ -92,6 +70,40 @@ export async function probeVisionRoute(
             maxTokens: 8,
             signal,
           }),
+        { signal: options.signal },
+      );
+      return makeRouter(options.primaryLLM, options.primaryModel, options.scheduler);
+    } catch {
+      // Primary lacks vision; fall through to the configured fallback.
+    }
+  }
+  if (
+    !options.signal?.aborted &&
+    options.visionConfig.enabled &&
+    options.visionConfig.baseUrl.length > 0
+  ) {
+    const fallback = options.makeFallback();
+    const fallbackChatVision = fallback.chatVision;
+    if (typeof fallbackChatVision === "function") {
+      try {
+        await options.scheduler.run(
+          "vision:probe",
+          (signal) =>
+            fallbackChatVision.call(fallback, {
+              model: options.visionConfig.model,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "respond with the single word: ok" },
+                    { type: "image_url", image_url: { url: PROBE_IMAGE } },
+                  ],
+                },
+              ],
+              maxTokens: 8,
+              signal,
+            }),
+          { signal: options.signal },
         );
         return makeRouter(fallback, options.visionConfig.model, options.scheduler);
       } catch {

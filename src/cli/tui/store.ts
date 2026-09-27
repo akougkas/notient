@@ -28,7 +28,7 @@ import type {
 } from "../../daemon/wire";
 import type { ChatLine } from "./ChatView";
 import { conversationLines, conversationTitle, lastPreparedDraft } from "./conversations";
-import { conversationSources } from "./sources";
+import { conversationSources, mergeSources, toolSources } from "./sources";
 import { extractCitations } from "./viewModels";
 
 export const VIEW_IDS = ["home", "inbox", "ask", "explore", "stream"] as const;
@@ -79,6 +79,7 @@ export interface AskState {
   readonly citations: ReadonlyArray<string>;
   /** Revision-bound passages observed in successful tools in the current turn. */
   readonly sources: ReadonlyArray<SourceReference>;
+  readonly sourceCalls: ReadonlyMap<string, string>;
   readonly citationCursor: number;
   /** Text stays text until Esc explicitly enters navigation. */
   readonly composerMode: "editing" | "navigation";
@@ -109,6 +110,20 @@ export interface StreamState {
   readonly events: ReadonlyArray<AgentEventWire>;
   readonly cursor: string | null;
   readonly filter: string;
+}
+
+export interface IntelligenceSession {
+  readonly showWork: boolean;
+  readonly digestCursor: number;
+  readonly selectedDigestId: string | null;
+  readonly selectedJobId: string | null;
+  readonly detailJobId: string | null;
+  readonly pages: ReadonlyArray<string | null>;
+  readonly scroll: {
+    readonly developments: number;
+    readonly work: number;
+    readonly detail: number;
+  };
 }
 
 /**
@@ -151,6 +166,7 @@ export interface AppState {
   readonly ask: AskState;
   readonly explore: ExploreState;
   readonly stream: StreamState;
+  readonly intelligence: IntelligenceSession;
   readonly prompt: PromptState;
   /** Output of the last `:` command, newest last. */
   readonly commandOutput: ReadonlyArray<string>;
@@ -185,6 +201,7 @@ export function initialState(vaultPath: string): AppState {
       pendingApprovals: new Map(),
       citations: [],
       sources: [],
+      sourceCalls: new Map(),
       citationCursor: 0,
       composerMode: "editing",
     },
@@ -209,6 +226,15 @@ export function initialState(vaultPath: string): AppState {
       error: null,
     },
     stream: { events: [], cursor: null, filter: "" },
+    intelligence: {
+      showWork: false,
+      digestCursor: 0,
+      selectedDigestId: null,
+      selectedJobId: null,
+      detailJobId: null,
+      pages: [null],
+      scroll: { developments: 0, work: 0, detail: 0 },
+    },
     prompt: { kind: null, buffer: "", matches: [], cursor: 0 },
     commandOutput: [],
     notice: null,
@@ -246,6 +272,8 @@ export type Action =
   | { type: "ask/busy"; busy: boolean }
   | { type: "ask/turnDone"; tokens: number; citations: string[] }
   | { type: "ask/sources"; sources: SourceReference[] }
+  | { type: "ask/sourceStarted"; callId: string; tool: string }
+  | { type: "ask/sourceFinished"; callId: string; data?: unknown }
   | { type: "ask/model"; model: string }
   | { type: "ask/approvalPending"; callId: string; tool: string }
   | { type: "ask/approvalResolved"; callId: string }
@@ -280,6 +308,7 @@ export type Action =
   | { type: "explore/move"; delta: number }
   | { type: "stream/events"; events: AgentEventWire[]; cursor: string | null }
   | { type: "stream/filter"; filter: string }
+  | { type: "intelligence/session"; session: IntelligenceSession }
   | { type: "prompt/open"; kind: PromptKind; buffer?: string }
   | { type: "prompt/buffer"; buffer: string }
   | { type: "prompt/matches"; matches: string[] }
@@ -526,12 +555,33 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         ask: {
           ...state.ask,
-          ...(action.line.kind === "user" ? { sources: [], citations: [], citationCursor: 0 } : {}),
+          ...(action.line.kind === "user"
+            ? { sources: [], sourceCalls: new Map(), citations: [], citationCursor: 0 }
+            : {}),
           lines: [...state.ask.lines, action.line],
         },
       };
     case "ask/sources":
-      return { ...state, ask: { ...state.ask, sources: action.sources, citationCursor: 0 } };
+      return {
+        ...state,
+        ask: { ...state.ask, sources: action.sources, sourceCalls: new Map(), citationCursor: 0 },
+      };
+    case "ask/sourceStarted": {
+      if (action.tool !== "vault.read_note" && action.tool !== "vault.search_notes") return state;
+      if (state.ask.sourceCalls.has(action.callId) || state.ask.sourceCalls.size >= 128)
+        return state;
+      const sourceCalls = new Map(state.ask.sourceCalls);
+      sourceCalls.set(action.callId, action.tool);
+      return { ...state, ask: { ...state.ask, sourceCalls } };
+    }
+    case "ask/sourceFinished": {
+      const tool = state.ask.sourceCalls.get(action.callId);
+      if (!tool) return state;
+      const sourceCalls = new Map(state.ask.sourceCalls);
+      sourceCalls.delete(action.callId);
+      const sources = mergeSources(state.ask.sources, toolSources(tool, action.data));
+      return { ...state, ask: { ...state.ask, sourceCalls, sources } };
+    }
     case "ask/reset":
       return {
         ...state,
@@ -540,6 +590,7 @@ export function reducer(state: AppState, action: Action): AppState {
           lines: action.line === undefined ? [] : [action.line],
           citations: [],
           sources: [],
+          sourceCalls: new Map(),
           citationCursor: 0,
           composerMode: "editing",
         },
@@ -557,7 +608,14 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, ask: { ...state.ask, lines } };
     }
     case "ask/busy":
-      return { ...state, ask: { ...state.ask, busy: action.busy } };
+      return {
+        ...state,
+        ask: {
+          ...state.ask,
+          busy: action.busy,
+          ...(!action.busy ? { sourceCalls: new Map() } : {}),
+        },
+      };
     case "ask/turnDone":
       return {
         ...state,
@@ -727,6 +785,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "stream/filter":
       return { ...state, stream: { ...state.stream, filter: action.filter } };
+    case "intelligence/session":
+      return { ...state, intelligence: action.session };
     case "prompt/open":
       return {
         ...state,

@@ -32,10 +32,10 @@ export function InputBar({
     const textarea = ref.current;
     if (!textarea) return;
     if (textarea.plainText === value) return;
-    const cursor = textarea.cursorOffset;
     textarea.setText(value);
-    const clamped = Math.min(value.length, cursor);
-    textarea.cursorOffset = clamped;
+    // External changes are restored drafts, history entries or inserted note
+    // references. Continue after that text rather than typing into its prefix.
+    textarea.cursorOffset = value.length;
   }, [value]);
 
   const accent = focused && !busy ? COLOR.accent : COLOR.border;

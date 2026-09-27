@@ -267,6 +267,7 @@ export async function updateStatus(
   runId: RecordId<"awaken_run">,
   status: AwakenStatus,
   extra?: UpdateStatusExtra,
+  expectedStatus?: AwakenStatus,
 ): Promise<void> {
   const id = parseStoredUuidRecordId(runId, "awaken_run", "awaken run update id");
   const nextStatus = parseAwakenStatus(status, "updateStatus status");
@@ -275,6 +276,7 @@ export async function updateStatus(
   if (current === null) {
     throw new Error("updateStatus: awaken run does not exist");
   }
+  if (expectedStatus !== undefined && current.status !== expectedStatus) return;
   assertStatusTransition(current.status, nextStatus);
 
   const next = mergeUpdate(current, nextStatus, validatedExtra);

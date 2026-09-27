@@ -6,36 +6,50 @@ import type { ChatMessage } from "../../core/chat/types";
  * reasoning or tool arguments. Restored transcripts are checked again on open. */
 export function conversationSources(messages: readonly ChatMessage[]): SourceReference[] {
   const sources: SourceReference[] = [];
-  const lastUser = messages.map((message) => message.role).lastIndexOf("user");
-  for (const message of messages.slice(lastUser + 1)) {
+  for (const message of [...messages].reverse()) {
     if (message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
       const results = message.toolResults?.filter((item) => item.callId === call.id);
       if (results?.length !== 1 || results[0]?.status !== "ok") continue;
-      const data = results[0].data;
-      if (call.name === "vault.read_note") {
-        const parsed = noteExcerptSchema.safeParse(data);
-        if (
-          parsed.success &&
-          parsed.data.notePath === parsed.data.evidence.path &&
-          parsed.data.body === parsed.data.evidence.quote
-        )
-          addSource(sources, parsed.data.evidence);
-      } else if (call.name === "vault.search_notes") {
-        const parsed = retrievalResultSchema.safeParse(data);
-        if (!parsed.success) continue;
-        for (const hit of parsed.data.hits) {
-          if (
-            hit.evidence &&
-            hit.freshness.state === "current" &&
-            hit.note.path === hit.evidence.path &&
-            hit.note.revision === hit.evidence.revision
-          )
-            addSource(sources, hit.evidence);
-        }
-      }
+      for (const source of toolSources(call.name, results[0].data)) addSource(sources, source);
     }
   }
+  return sources;
+}
+
+/** Only completed domain results can supply early evidence; never call arguments. */
+export function toolSources(tool: string, data: unknown): SourceReference[] {
+  const sources: SourceReference[] = [];
+  if (tool === "vault.read_note") {
+    const parsed = noteExcerptSchema.safeParse(data);
+    if (
+      parsed.success &&
+      parsed.data.notePath === parsed.data.evidence.path &&
+      parsed.data.body === parsed.data.evidence.quote
+    )
+      addSource(sources, parsed.data.evidence);
+  } else if (tool === "vault.search_notes") {
+    const parsed = retrievalResultSchema.safeParse(data);
+    if (parsed.success)
+      for (const hit of parsed.data.hits) {
+        if (
+          hit.evidence &&
+          hit.freshness.state === "current" &&
+          hit.note.path === hit.evidence.path &&
+          hit.note.revision === hit.evidence.revision
+        )
+          addSource(sources, hit.evidence);
+      }
+  }
+  return sources;
+}
+
+export function mergeSources(
+  previous: readonly SourceReference[],
+  incoming: readonly SourceReference[],
+): SourceReference[] {
+  const sources = [...previous];
+  for (const source of incoming) addSource(sources, source);
   return sources;
 }
 

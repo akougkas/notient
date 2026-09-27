@@ -19,6 +19,9 @@ export interface EnvSource {
   readonly NOTIENT_EMBED_API_KEY?: string;
   readonly NOTIENT_CONTEXT_TOKENS?: string;
   readonly NOTIENT_REASONING_SLOTS?: string;
+  readonly NOTIENT_LLM_TEMPERATURE?: string;
+  readonly NOTIENT_LLM_TOP_P?: string;
+  readonly NOTIENT_LLM_REASONING?: string;
 }
 
 export const NOTIENT_ENV_KEYS = [
@@ -30,6 +33,9 @@ export const NOTIENT_ENV_KEYS = [
   "NOTIENT_EMBED_API_KEY",
   "NOTIENT_CONTEXT_TOKENS",
   "NOTIENT_REASONING_SLOTS",
+  "NOTIENT_LLM_TEMPERATURE",
+  "NOTIENT_LLM_TOP_P",
+  "NOTIENT_LLM_REASONING",
 ] as const satisfies ReadonlyArray<keyof EnvSource>;
 
 /**
@@ -79,6 +85,34 @@ export function resolveProviderCredentials(env: EnvSource): ProviderCredentials 
     ...(chatApiKey === undefined ? {} : { chatApiKey }),
     ...(embeddingApiKey === undefined ? {} : { embeddingApiKey }),
   };
+}
+
+/** Deployment sampling overrides task defaults, so a model's recommended
+ * settings apply equally to conversational and structured generations. */
+export function resolveProviderSampling(env: EnvSource): {
+  temperature?: number;
+  topP?: number;
+  enableThinking?: boolean;
+} {
+  const result: { temperature?: number; topP?: number; enableThinking?: boolean } = {};
+  if (env.NOTIENT_LLM_TEMPERATURE !== undefined) {
+    const value = Number(env.NOTIENT_LLM_TEMPERATURE);
+    if (!env.NOTIENT_LLM_TEMPERATURE.trim() || !Number.isFinite(value) || value < 0 || value > 2)
+      throw new Error("NOTIENT_LLM_TEMPERATURE must be a number from 0 to 2");
+    result.temperature = value;
+  }
+  if (env.NOTIENT_LLM_TOP_P !== undefined) {
+    const value = Number(env.NOTIENT_LLM_TOP_P);
+    if (!Number.isFinite(value) || value <= 0 || value > 1)
+      throw new Error("NOTIENT_LLM_TOP_P must be a number greater than 0 and at most 1");
+    result.topP = value;
+  }
+  if (env.NOTIENT_LLM_REASONING !== undefined) {
+    if (env.NOTIENT_LLM_REASONING !== "on" && env.NOTIENT_LLM_REASONING !== "off")
+      throw new Error("NOTIENT_LLM_REASONING must be on or off");
+    result.enableThinking = env.NOTIENT_LLM_REASONING === "on";
+  }
+  return result;
 }
 
 /**

@@ -132,7 +132,9 @@ export async function indexExtract(
   }
   if (!plan.findings.length)
     plan.reason =
-      "Structural indexing completed; supplied content yielded no supported concepts, claims or questions.";
+      context.options.policy.parameters.indexExtract.extraction
+        ? "Structural indexing completed; no concepts, claims or questions were extracted."
+        : "Structural indexing completed; understanding extraction was not requested.";
 }
 
 /** Called only after the job has durably checkpointed its complete output. */

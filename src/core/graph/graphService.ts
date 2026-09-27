@@ -21,6 +21,7 @@ import { operationInputs } from "../../api/operations";
 import { proposalProvenanceSchema } from "../../api/proposals";
 import { NoteApiError, type NoteReference, revisionSchema } from "../../api/schema";
 import { isWritebackEdgeTable } from "../db/edgeTables";
+import { recoverCurrentRelationshipIntelligence } from "./intelligenceProvenance";
 import { STRUCTURAL_INDEX_VERSION } from "../markdown/types";
 import { type StoredNoteNeighbor, readNoteNeighborPage } from "./noteNeighbors";
 
@@ -277,25 +278,43 @@ class GraphRead {
         this.omitted++;
         continue;
       }
-      connections.push(await this.connection(row, target));
+      connections.push(await this.connection(row, source, target));
     }
     return { connections, truncated: page.truncated };
   }
-  private async connection(row: StoredNoteNeighbor, target: ReadNote): Promise<Connection> {
+  private async connection(
+    row: StoredNoteNeighbor,
+    requested: ReadNote,
+    neighbor: ReadNote,
+  ): Promise<Connection> {
     const semantic = isWritebackEdgeTable(row.table);
+    const source = row.direction === "outgoing" ? requested : neighbor;
+    const target = row.direction === "outgoing" ? neighbor : requested;
     const result: Connection = {
       id: row.id,
-      note: target.note,
+      note: neighbor.note,
       relation: row.table,
       direction: row.direction,
       state: row.proposed ? "proposed" : semantic ? "approved" : "authored",
       assessment: semantic ? row.confidence : null,
       author: row.agent,
       rationale: null,
+      meaningSource: null,
       evidence: [],
       evidenceState: "unavailable",
     };
-    if (row.provenance === null) return result;
+    if (row.provenance === null) {
+      if (semantic) {
+        const recovered = recoverCurrentRelationshipIntelligence(source, target, row.table);
+        if (recovered) {
+          result.rationale = recovered.rationale;
+          result.meaningSource = "note";
+          result.evidence = recovered.evidence;
+          result.evidenceState = recovered.evidenceState;
+        }
+      }
+      return result;
+    }
     let raw: unknown;
     try {
       raw = JSON.parse(row.provenance);
@@ -306,6 +325,7 @@ class GraphRead {
     if (!parsed.success)
       throw new Error("graph storage integrity: invalid relationship provenance");
     result.rationale = parsed.data.rationale;
+    result.meaningSource = "private-record";
     let current = true;
     let available = true;
     for (const ref of parsed.data.sources) {

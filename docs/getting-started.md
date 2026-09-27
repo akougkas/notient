@@ -135,7 +135,21 @@ Drop `NOTIENT_EMBED_BASE_URL` when chat and embeddings share one server; `NOTIEN
 
 ### Changing the embedding model later
 
-You can swap `NOTIENT_EMBED_MODEL` at any time. The daemon probes the embedding width at boot and compares it against the model and width recorded in the database. When either changed, it clears the vectors, resets only each note's Tier 2 timestamp, and redefines the HNSW index. Tier 3 extraction and its concepts, claims, questions, evidence, and timestamp remain intact. A durable startup repair re-embeds every affected note before running a linker-only refresh, and resumes from its pending flags after an interrupted boot. Nothing in the Markdown vault is touched, and you do not need to `nuke` first. Expect the Tier 2 rebuild to take as long as the original embedding pass.
+You can swap `NOTIENT_EMBED_MODEL` at any time. The daemon probes the embedding width at boot and compares it against the model and width recorded in the database. When either changed, it clears the vectors, resets each note's Tier 2 timestamp, and redefines the HNSW index. Tier 3 extraction and its concepts, claims, questions, evidence, and timestamp remain intact. You do not need to `nuke` first.
+
+With background AI disabled, explicitly rebuild the vectors after restarting the
+daemon:
+
+```bash
+notient awaken --vault "$VAULT" --tier 2 --background
+notient awaken --vault "$VAULT" --status
+```
+
+This pass rebuilds embeddings without extraction, relationship generation or
+Markdown edits. Expect it to take as long as the original embedding pass. Use
+`--pause` and `--resume` to interrupt and continue the run. Until it completes,
+semantic results cover only the vectors already rebuilt; a current structural
+index or a successful model catalog check does not establish semantic coverage.
 
 ## Check the installation
 
@@ -258,7 +272,9 @@ notient awaken --vault "$VAULT" --tier 3 --background
 
 Without `--yes` on a TTY it prompts. Without `--yes` and without a TTY it refuses and exits 2, so a script cannot silently destroy a vault.
 
-Reach for `nuke` when the database is corrupt or you want a clean benchmark. You do not need it for an embedding model change, which self-heals, or for a config change, which needs only a daemon restart.
+Reach for `nuke` when the database is corrupt or you want a clean benchmark. An
+embedding model change needs a daemon restart and a vector rebuild, as described
+above. Other deployment changes need a daemon restart.
 
 ## Back up and restore the graph
 

@@ -1,3 +1,4 @@
+import { methodologySuggestionResultSchema } from "../../api/methodology";
 import { backgroundResultSchema } from "../../api/background";
 import {
   type ChangePreview,
@@ -6,6 +7,7 @@ import {
   changeResultSchema,
 } from "../../api/changes";
 import { chatConfigureResultSchema, chatSettingsResultSchema } from "../../api/chat";
+import { cultivationDigestSchema, cultivationSettingsResultSchema } from "../../api/cultivation";
 import {
   type GraphNeighbors,
   type GraphPath,
@@ -20,6 +22,7 @@ import { jobListSchema, jobResultSchema } from "../../api/pipelines";
 import { policyValidationSchema } from "../../api/policyValidation";
 import { proposalListSchema, proposalResultSchema } from "../../api/proposals";
 import { type OperationResult, noteListSchema } from "../../api/results";
+import { type RetrievalResult, retrievalResultSchema } from "../../api/retrieval";
 import { daemonStatusSchema } from "../../daemon/wire";
 /**
  * Typed RPC surface for the TUI.
@@ -93,6 +96,22 @@ export class RpcCallError extends Error {
 export function isDisconnect(error: unknown): boolean {
   if (error instanceof RpcCallError) return error.code === DISCONNECTED_CODE;
   return error instanceof Error && error.message.startsWith(DISCONNECT_PREFIX);
+}
+
+/** Find by name first, then by saved text. Opening a note needs no inference. */
+export async function findNotePaths(rpc: NotientRpc, query: string, limit = 30): Promise<string[]> {
+  const named = await rpc.listNotes(query, limit);
+  const paths = named.notes.map((note) => note.path);
+  if (paths.length || query.trim().length < 2) return paths;
+  const result = await callOnce(
+    rpc.client,
+    "search.run",
+    { query, mode: "lexical", scope: {}, limit },
+    resultDecoder<RetrievalResult>(
+      retrievalResultSchema.refine((value) => value.query === query && value.mode === "lexical"),
+    ),
+  );
+  return result.hits.map((hit) => hit.note.path);
 }
 
 function errorFromFrame(method: string, frame: RpcResponseFrame): RpcCallError {
@@ -605,7 +624,7 @@ export const conversationSchema = z
   .strictObject({
     id: trimmedString,
     notePath: canonicalPath,
-    model: trimmedString,
+    model: z.union([trimmedString, z.literal("")]),
     pinnedContext: z.array(z.string()),
     approvalMode: z.enum(["safe", "yolo"]),
     topic: z.string(),
@@ -963,6 +982,10 @@ export interface NotientRpc {
   jobs(cursor?: string): Promise<z.infer<typeof jobListSchema>>;
   job(id: string): Promise<z.infer<typeof jobResultSchema>>;
   pipelines(): Promise<z.infer<typeof pipelineListSchema>>;
+  cultivationDigest(input?: OperationInput<"cultivation.digest">): Promise<z.infer<typeof cultivationDigestSchema>>;
+  cultivationSettings(): Promise<z.infer<typeof cultivationSettingsResultSchema>>;
+  suggestMethodology(input: OperationInput<"methodology.suggest">): Promise<z.infer<typeof methodologySuggestionResultSchema>>;
+  configureCultivation(input: OperationInput<"cultivation.configure">): Promise<z.infer<typeof backgroundResultSchema>>;
   validatePipeline(
     input: OperationInput<"pipelines.validate">,
   ): Promise<z.infer<typeof policyValidationSchema>>;
@@ -1024,6 +1047,10 @@ export function createRpc(client: ClientHandle): NotientRpc {
 
   return {
     client,
+    cultivationDigest: (input = {}) => call("cultivation.digest", resultDecoder<z.infer<typeof cultivationDigestSchema>>(cultivationDigestSchema), input),
+    suggestMethodology: (input) => call("methodology.suggest", resultDecoder<z.infer<typeof methodologySuggestionResultSchema>>(methodologySuggestionResultSchema), input),
+    cultivationSettings: () => call("cultivation.settings", resultDecoder<z.infer<typeof cultivationSettingsResultSchema>>(cultivationSettingsResultSchema)),
+    configureCultivation: (input) => call("cultivation.configure", resultDecoder<z.infer<typeof backgroundResultSchema>>(backgroundResultSchema), input),
     previewChanges: (input) =>
       call("changes.preview", resultDecoder<ChangePreview>(changePreviewSchema), input),
     applyChanges: (input) =>

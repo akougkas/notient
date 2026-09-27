@@ -8,6 +8,16 @@ import {
 } from "./operations";
 import { noteReferenceSchema, revisionSchema, sourceReferenceSchema } from "./schema";
 
+export const findingEvidenceScopeSchema = z
+  .enum(["source-report", "direct-support", "interpretation"])
+  .describe(
+    "source-report means the saved passage states what the source reports; direct-support requires a separate semantic assessment that the exact passage supports the bounded claim; interpretation is an inference and remains provisional. Exact quotation alone never establishes direct support. This scope does not claim external verification.",
+  );
+export const findingEvidenceAssessmentSchema = z
+  .enum(["source-report", "direct-support", "interpretation"])
+  .describe(
+    "Result of a separate semantic assessment of the bounded claim against its exact cited passages. Exact quotation matching alone never establishes this assessment. This does not claim external verification.",
+  );
 export const pipelineFindingSchema = z.object({
   kind: z.enum([
     "summary",
@@ -26,6 +36,12 @@ export const pipelineFindingSchema = z.object({
   title: z.string().min(1).max(300),
   explanation: z.string().min(1).max(8000),
   evidence: z.array(sourceReferenceSchema).min(1).max(30),
+  target: noteReferenceSchema.optional(),
+  assessmentOf: z.string().regex(/^i-[a-f0-9]{64}$/).optional(),
+  epistemic: z.enum(["source-assertion", "interpretation", "decision"]).optional(),
+  evidenceScope: findingEvidenceScopeSchema.optional(),
+  evidenceAssessment: findingEvidenceAssessmentSchema.optional(),
+  qualifications: z.array(z.string().min(1).max(2000)).max(20).optional(),
 });
 export const relationshipSuggestionSchema = z.object({
   relation: z.enum([
@@ -42,6 +58,26 @@ export const relationshipSuggestionSchema = z.object({
   evidence: z.array(sourceReferenceSchema).min(2).max(20),
   assessment: z.number().min(0).max(1),
 });
+export const pipelineReconsiderationAssessmentSchema = z
+  .object({
+    recordId: z.string().regex(/^i-[a-f0-9]{64}$/),
+    target: noteReferenceSchema,
+    sourceRevisions: z.array(noteReferenceSchema).max(20),
+    outcome: z.enum(["material-context-change", "no-material-change", "unresolved"]),
+  })
+  .strict()
+  .superRefine((assessment, context) => {
+    const byPath = new Map<string, string>();
+    for (const source of assessment.sourceRevisions) {
+      const prior = byPath.get(source.path);
+      if (prior !== undefined && prior !== source.revision)
+        context.addIssue({ code: "custom", path: ["sourceRevisions"], message: "one path cannot have conflicting revisions" });
+      byPath.set(source.path, source.revision);
+    }
+    if (byPath.get(assessment.target.path) !== assessment.target.revision)
+      context.addIssue({ code: "custom", path: ["sourceRevisions"], message: "source revisions must include the target's exact revision" });
+  });
+export type PipelineReconsiderationAssessment = z.infer<typeof pipelineReconsiderationAssessmentSchema>;
 export const pipelinePlanSchema = z.object({
   pipeline: pipelineIdSchema,
   summary: z.string().min(1),
@@ -51,6 +87,8 @@ export const pipelinePlanSchema = z.object({
   changes: z.array(changeSetSchema.shape.changes.element).max(200),
   relationships: z.array(relationshipSuggestionSchema).max(200),
   sources: z.array(noteReferenceSchema).max(200),
+  reconsiderationAssessments: z.array(pipelineReconsiderationAssessmentSchema).max(20).optional(),
+  reconsiderationDeferred: z.enum(["capacity", "assessment"]).optional(),
   extractions: z
     .array(
       z.object({
@@ -130,6 +168,7 @@ export const pipelineJobSchema = z.object({
   updatedAt: z.number().int(),
   sourceRevisions: z.array(noteReferenceSchema).max(200),
   configurationRevision: revisionSchema,
+  reconsiderationContextRevision: revisionSchema.optional(),
   policy: pipelinePolicySchema,
   attempts: z.array(inferenceAttemptSchema).max(100),
   runAttempts: z.number().int().nonnegative(),
@@ -171,6 +210,8 @@ export const jobSummarySchema = pipelineJobSchema
   .extend({
     sourceCount: z.number().int().nonnegative(),
     proposalCount: z.number().int().nonnegative(),
+    findingCount: z.number().int().nonnegative(),
+    headline: z.string().nullable(),
     modelCalls: z.number().int().nonnegative(),
     chargedTokens: z.number().nonnegative(),
   });

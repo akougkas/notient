@@ -122,9 +122,13 @@ describe("chat stream event integrity", () => {
 
     expect(collector.actions).toEqual([
       { type: "ask/assistantDelta", text: "The notes remember." },
+      { type: "ask/sourceStarted", callId: "call-123456789", tool: "vault.search_notes" },
       { type: "ask/line", line: { kind: "tool", text: "vault.search_notes" } },
+      { type: "ask/sourceFinished", callId: "call-123456789", data: { hits: [] } },
       { type: "ask/line", line: { kind: "tool", text: "done call-123" } },
+      { type: "ask/sourceFinished", callId: "call-no-result", data: undefined },
       { type: "ask/line", line: { kind: "tool", text: "done call-no-" } },
+      { type: "ask/sourceFinished", callId: "call-error" },
       { type: "ask/line", line: { kind: "error", text: "tool error: index unavailable" } },
       { type: "ask/approvalPending", callId: "call-write", tool: "notes.write" },
       {

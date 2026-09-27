@@ -165,6 +165,10 @@ export class ChatService {
     const turnController = new AbortController();
     this.registerTurn(input.connectionId, turnController);
     try {
+      const capturedConversation = await this.options.conversationStore.save(conversation, {
+        ...conversation,
+        messages: [...conversation.messages, userMessage],
+      });
       yield {
         type: "turn:start",
         conversationId: conversation.id,
@@ -186,6 +190,10 @@ export class ChatService {
             budget.run(async () => {
               const signal = AbortSignal.any([scheduledSignal, budget.signal]);
               if (signal.aborted) throw abortError();
+              if (!settings.model)
+                throw new Error(
+                  "No reasoning model is configured; local capture, reading, and search remain available",
+                );
               const toolMode = await this.ensureToolMode(settings.model, signal);
               const composed = await this.options.contextManager.compose(
                 conversation,
@@ -203,6 +211,11 @@ export class ChatService {
                   contextBudgetTokens: this.options.contextManager.contextBudgetTokens(),
                   generateId,
                   now,
+                  onToolExchange: (messages) => {
+                    toolExchange = messages.map((message) =>
+                      settings.persistReasoning ? message : stripReasoning(message),
+                    );
+                  },
                 },
                 {
                   conversation,
@@ -215,7 +228,9 @@ export class ChatService {
                 queue.push(event);
                 if (event.type === "loop:done") {
                   finalAssistant = event.finalMessage;
-                  toolExchange = event.toolMessages;
+                  toolExchange = event.toolMessages.map((message) =>
+                    settings.persistReasoning ? message : stripReasoning(message),
+                  );
                 }
                 if (event.type === "loop:error") {
                   aborted = true;
@@ -237,7 +252,18 @@ export class ChatService {
         });
 
       for await (const event of queue.drain()) {
-        yield event;
+        if (
+          event.type === "loop:error" &&
+          /\bLLM\s+\d{3}\b|engine protocol startup was aborted/iu.test(event.message)
+        ) {
+          yield {
+            ...event,
+            message:
+              "Inference could not complete this turn. Your thought was saved; reading, capture, and review remain available",
+          };
+        } else {
+          yield event;
+        }
       }
       await runPromise;
       await budget.flush();
@@ -255,6 +281,23 @@ export class ChatService {
       });
 
       if (aborted || finalAssistant === null) {
+        if (/\bLLM\s+\d{3}\b|engine protocol startup was aborted/iu.test(abortReason))
+          abortReason =
+            "Inference could not complete this turn. Your thought was saved; reading, capture, and review remain available";
+        await this.options.conversationStore.save(capturedConversation, {
+          ...capturedConversation,
+          messages: [
+            ...conversation.messages,
+            userMessage,
+            ...toolExchange,
+            {
+              id: generateId(),
+              role: "assistant",
+              content: `Turn stopped before a final answer: ${abortReason.replace(/[.!?]+$/, "")}. Your thought is saved. Inspect review and change history before retrying a write; a stopped answer does not cancel submitted proposals or completed changes.`,
+              createdAt: now(),
+            },
+          ],
+        });
         yield { type: "turn:aborted", reason: abortReason };
         return;
       }
@@ -263,7 +306,7 @@ export class ChatService {
         ? finalAssistant
         : stripReasoning(finalAssistant);
       const updated: Conversation = {
-        ...conversation,
+        ...capturedConversation,
         messages: [...conversation.messages, userMessage, ...toolExchange, persistedAssistant],
       };
 
@@ -271,7 +314,7 @@ export class ChatService {
       // releases its busy state. The cross-session summary refresh runs in the
       // background; failure is non-fatal and a stale summary just means the
       // next turn's cross-session memory lags by one round.
-      const saved = await this.options.conversationStore.save(input.conversation, updated);
+      const saved = await this.options.conversationStore.save(capturedConversation, updated);
       yield { type: "turn:complete", conversation: saved };
       this.queueSummaryRefresh(saved, budget, userMessage.id, started);
     } finally {
@@ -350,7 +393,12 @@ export class ChatService {
         (signal) =>
           this.options.provider.chatJson<{ summary: string }>(
             summarizePrompt(conversation.messages),
-            { model: settings.model, signal, maxTokens: settings.budget.generationTokens },
+            {
+              model: settings.model,
+              signal,
+              maxTokens: settings.budget.generationTokens,
+              enableThinking: this.options.provider.defaultEnableThinking ?? false,
+            },
             SUMMARY_JSON_SCHEMA,
           ),
         { signal: budget.signal },

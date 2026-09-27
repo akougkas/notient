@@ -1,3 +1,4 @@
+import { MethodologyView, type MethodologySession } from "./views/MethodologyView";
 import { z } from "zod";
 import { inferenceAttemptSchema } from "../../api/pipelines";
 import type { NoteSelector } from "../../api/schema";
@@ -25,6 +26,8 @@ import type { Conversation } from "../../core/chat/types";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import type { AgentEventWire, ChatApproveResult } from "../../daemon/wire";
 import { type ClientHandle, connectClient } from "../client";
+import { findNotePaths } from "./rpc";
+import type { ConventionDraft } from "./methodologyConvention";
 import type { Emitter } from "../output";
 import type { ChatLine } from "./ChatView";
 import {
@@ -78,8 +81,9 @@ import { AskView } from "./views/AskView";
 import { DisconnectedBanner, KeyHintBar, NoticeLine, PromptLine, TopBar } from "./views/Chrome";
 import { ExploreView } from "./views/ExploreView";
 import { HomeView } from "./views/HomeView";
+import { IntelligenceView } from "./views/IntelligenceView";
 import { InboxView } from "./views/InboxView";
-import { ReviewView } from "./views/ReviewView";
+import { ReviewView, type ReviewReadingSession } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { StreamView } from "./views/StreamView";
 import { WritingView } from "./views/WritingView";
@@ -138,7 +142,21 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const [state, dispatch] = useReducer(reducer, vaultPath, initialState);
   const [reviewRequests, setReviewRequests] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [conventionDraft, setConventionDraft] = useState<ConventionDraft | undefined>();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
+  const [methodologyOpen, setMethodologyOpen] = useState(false);
+  const methodologySession = useRef<MethodologySession>({
+    path: "",
+    result: null,
+    pending: null,
+    message: "Enter studies the saved note and current examples. Changes remain pending review.",
+  });
+  const intelligenceNoteReturnRef = useRef(false);
+  const methodologyNoteReturnRef = useRef(false);
+  const methodologyReviewReturnRef = useRef(false);
+  const reviewSourceReturnRef = useRef(false);
+  const reviewReadingSession = useRef<ReviewReadingSession | null>(null);
   const briefSession = useRef<BriefSession>({ topic: "", mode: "topic", result: null });
   const [briefOpen, setBriefOpen] = useState(false);
   const analysisSessions = useRef<Record<"compare" | "correlate", AnalysisSession>>({
@@ -219,6 +237,11 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
 
   const selectConversation = useCallback(
     async (conversation: Conversation | null) => {
+      // Switch before persisting the selection. A fast typist can start the
+      // next draft while the filesystem write is pending; do not erase it
+      // with a delayed reset when that write completes.
+      sessionReadyRef.current = true;
+      dispatch(conversation === null ? { type: "ask/new" } : { type: "ask/restore", conversation });
       try {
         await rememberConversation(
           vaultPath,
@@ -228,8 +251,6 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       } catch (error) {
         fail(error, "Saving selected conversation");
       }
-      sessionReadyRef.current = true;
-      dispatch(conversation === null ? { type: "ask/new" } : { type: "ask/restore", conversation });
     },
     [fail, vaultPath],
   );
@@ -594,7 +615,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         let conversationId = stateRef.current.ask.conversationId;
         if (conversationId === null) {
           const { conversation } = await rpcRef.current.chatStart(
-            trimmed.replace(/\s+/g, " ").slice(0, 80),
+            trimmed.replace(/\s+/g, " ").slice(0, 80).trimEnd(),
           );
           await selectConversation(conversation);
           conversationId = conversation.id;
@@ -733,8 +754,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const openPickedNote = useCallback(
     async (query: string, selected?: string) => {
       try {
-        const chosen = selected ?? (await rpcRef.current.listNotes(query, 1)).notes[0]?.path;
-        if (!chosen) throw new Error("No matching note. Try part of its name or path.");
+        const chosen = selected ?? (await findNotePaths(rpcRef.current, query, 1))[0];
+        if (!chosen) throw new Error("No matching note. Try a name, path or words from its text.");
         await openNote(chosen);
       } catch (error) {
         fail(error, "Finding notes");
@@ -778,6 +799,66 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
 
   const runIntent = useCallback(
     (intent: Intent): void => {
+      const activeState = stateRef.current;
+      if (intent.kind === "view" || intent.kind === "discuss-note") {
+        methodologyReviewReturnRef.current = false;
+        reviewSourceReturnRef.current = false;
+        reviewReadingSession.current = null;
+      }
+      if (
+        activeState.view === "explore" &&
+        intelligenceNoteReturnRef.current &&
+        (intent.kind === "discuss-note" || (intent.kind === "view" && intent.view !== "explore"))
+      )
+        intelligenceNoteReturnRef.current = false;
+      if (
+        activeState.view === "explore" &&
+        (intent.kind === "discuss-note" || (intent.kind === "view" && intent.view !== "explore"))
+      )
+        methodologyNoteReturnRef.current = false;
+      if (intent.kind === "discuss-note") {
+        const current = stateRef.current;
+        const path = current.explore.notePath;
+        if (!path || current.explore.error) {
+          dispatch({ type: "notice", text: "Open a current note to discuss it." });
+          return;
+        }
+        if (current.ask.busy) {
+          dispatch({ type: "notice", text: "Finish or stop the current turn first." });
+          return;
+        }
+        dispatch({ type: "prompt/close" });
+        dispatch({ type: "view/set", view: "ask" });
+        dispatch({ type: "ask/composer", mode: "editing" });
+        const mention = `@"${path}"`;
+        dispatch({
+          type: "ask/buffer",
+          buffer: `${current.ask.buffer.trimEnd()}${current.ask.buffer.trim() ? "\n\n" : ""}${mention}\n`,
+        });
+        dispatch({ type: "notice", text: "Note attached. Write your question and press Enter." });
+        return;
+      }
+      if (intent.kind === "methodology") {
+        const path = stateRef.current.explore.notePath;
+        if (!path) {
+          dispatch({
+            type: "notice",
+            text: "Open a note before studying organization and recurring conventions.",
+          });
+          return;
+        }
+        dispatch({ type: "prompt/close" });
+        if (!methodologySession.current.pending && methodologySession.current.path !== path)
+          methodologySession.current = {
+            path,
+            result: null,
+            pending: null,
+            message:
+              "Enter studies the saved note and current examples. Changes remain pending review.",
+          };
+        setMethodologyOpen(true);
+        return;
+      }
       if (intent.kind === "brief") {
         dispatch({ type: "prompt/close" });
         setBriefOpen(true);
@@ -791,6 +872,11 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       if (intent.kind === "history") {
         dispatch({ type: "prompt/close" });
         setHistoryOpen(true);
+        return;
+      }
+      if (intent.kind === "intelligence") {
+        dispatch({ type: "prompt/close" });
+        setIntelligenceOpen(true);
         return;
       }
       if (intent.kind === "settings") {
@@ -910,11 +996,9 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
     if (state.prompt.kind !== "note-picker") return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void rpcRef.current
-        .listNotes(state.prompt.buffer, 30)
-        .then((result) => {
-          if (!cancelled)
-            dispatch({ type: "prompt/matches", matches: result.notes.map((note) => note.path) });
+      void findNotePaths(rpcRef.current, state.prompt.buffer, 30)
+        .then((paths) => {
+          if (!cancelled) dispatch({ type: "prompt/matches", matches: paths });
         })
         .catch((error) => {
           if (!cancelled) fail(error, "Finding notes");
@@ -945,7 +1029,15 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
 
   const handleKey = useCallback(
     (event: KeyEvent) => {
-      if (settingsOpen || historyOpen || analysisOpen || briefOpen) return;
+      if (
+        settingsOpen ||
+        historyOpen ||
+        intelligenceOpen ||
+        analysisOpen ||
+        briefOpen ||
+        methodologyOpen
+      )
+        return;
       if (stateRef.current.writing !== null) return;
       if (event.eventType !== "press" && event.eventType !== "repeat") return;
       const current = stateRef.current;
@@ -965,6 +1057,38 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         sequence: readSequence(event),
         repeat: event.eventType === "repeat",
       };
+      if (
+        current.view === "explore" &&
+        current.prompt.kind === null &&
+        reviewSourceReturnRef.current &&
+        event.name === "escape"
+      ) {
+        event.preventDefault();
+        reviewSourceReturnRef.current = false;
+        dispatch({ type: "view/set", view: "inbox" });
+        return;
+      }
+      if (
+        current.view === "explore" &&
+        current.prompt.kind === null &&
+        methodologyNoteReturnRef.current &&
+        event.name === "escape"
+      ) {
+        event.preventDefault();
+        methodologyNoteReturnRef.current = false;
+        setMethodologyOpen(true);
+        return;
+      }
+      if (
+        current.view === "explore" &&
+        current.prompt.kind === null &&
+        intelligenceNoteReturnRef.current &&
+        event.name === "escape"
+      ) {
+        event.preventDefault();
+        setIntelligenceOpen(true);
+        return;
+      }
       const intent = resolveKey(current, key);
       if (intent !== null) {
         event.preventDefault();
@@ -982,10 +1106,57 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       }
       if (!isTyping(current)) event.preventDefault();
     },
-    [runIntent, updatePrompt, reviewRequests, settingsOpen, historyOpen, analysisOpen, briefOpen],
+    [
+      runIntent,
+      updatePrompt,
+      reviewRequests,
+      settingsOpen,
+      historyOpen,
+      intelligenceOpen,
+      methodologyOpen,
+      analysisOpen,
+      briefOpen,
+    ],
   );
   useKeyboard(handleKey);
 
+  if (methodologyOpen)
+    return (
+      <MethodologyView
+        session={methodologySession.current}
+        initialPath={state.explore.notePath ?? ""}
+        rpc={() => rpcRef.current}
+        width={width}
+        height={height}
+        onClose={() => setMethodologyOpen(false)}
+        onReview={() => {
+          methodologyReviewReturnRef.current = true;
+          setMethodologyOpen(false);
+          setReviewRequests(false);
+          dispatch({ type: "view/set", view: "inbox" });
+        }}
+        onUseConvention={(draft) => {
+          setConventionDraft(draft);
+          setMethodologyOpen(false);
+          setSettingsOpen(true);
+        }}
+        onExaminedSource={(note) => {
+          methodologyNoteReturnRef.current = true;
+          setMethodologyOpen(false);
+          void openNote(note.path, undefined, note.revision);
+        }}
+        onSource={(source) => {
+          methodologyNoteReturnRef.current = true;
+          setMethodologyOpen(false);
+          void openNote(
+            source.path,
+            { kind: "range", start: source.range.start, end: source.range.end },
+            source.revision,
+            source.quote,
+          );
+        }}
+      />
+    );
   if (briefOpen)
     return (
       <BriefView
@@ -1041,6 +1212,48 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       />
     );
 
+  if (intelligenceOpen)
+    return (
+      <IntelligenceView
+        rpc={() => rpcRef.current}
+        onReconnect={reconnect}
+        session={state.intelligence}
+        onSessionChange={(session) => dispatch({ type: "intelligence/session", session })}
+        width={width}
+        height={height}
+        onClose={() => {
+          setIntelligenceOpen(false);
+          intelligenceNoteReturnRef.current = false;
+        }}
+        onExit={onExit}
+        onReview={() => {
+          setIntelligenceOpen(false);
+          intelligenceNoteReturnRef.current = false;
+          dispatch({ type: "view/set", view: "inbox" });
+        }}
+        onSettings={() => {
+          setIntelligenceOpen(false);
+          intelligenceNoteReturnRef.current = false;
+          setSettingsOpen(true);
+        }}
+        onNote={(note) => {
+          intelligenceNoteReturnRef.current = true;
+          setIntelligenceOpen(false);
+          void openNote(note.path, undefined, note.revision);
+        }}
+        onSource={(source) => {
+          intelligenceNoteReturnRef.current = true;
+          setIntelligenceOpen(false);
+          void openNote(
+            source.path,
+            { kind: "range", start: source.range.start, end: source.range.end },
+            source.revision,
+            source.quote,
+          );
+        }}
+      />
+    );
+
   if (historyOpen)
     return (
       <HistoryView
@@ -1055,10 +1268,14 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   if (settingsOpen)
     return (
       <SettingsView
+        initialConvention={conventionDraft}
         rpc={() => rpcRef.current}
         width={width}
         height={height}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setConventionDraft(undefined);
+          setSettingsOpen(false);
+        }}
         onExit={onExit}
       />
     );
@@ -1110,19 +1327,27 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       ) : null}
       {state.view === "inbox" && !reviewRequests ? (
         <ReviewView
+          readingSession={reviewReadingSession}
           rpc={() => rpcRef.current}
           width={width}
           height={viewLayout.inbox.height}
           active={state.prompt.kind === null}
           onRequests={() => setReviewRequests(true)}
           onOpen={(source) => {
+            reviewSourceReturnRef.current = true;
             void openNote(
               source.path,
               { kind: "range", start: source.range.start, end: source.range.end },
               source.revision,
+              source.quote,
             );
           }}
-          onClose={() => dispatch({ type: "view/set", view: "ask" })}
+          onClose={() => {
+            if (methodologyReviewReturnRef.current) {
+              methodologyReviewReturnRef.current = false;
+              setMethodologyOpen(true);
+            } else dispatch({ type: "view/set", view: "ask" });
+          }}
         />
       ) : null}
       {state.view === "ask" ? (
@@ -1799,9 +2024,10 @@ function handleToolCallStarted(
 ): string {
   const event = "loop:tool_call_started";
   assertExactEvent(detail, event, ["callId", "tool", "args"]);
-  readCanonicalWireString(detail.callId, event, "callId");
+  const callId = readCanonicalWireString(detail.callId, event, "callId");
   const tool = readCanonicalWireString(detail.tool, event, "tool");
   readRecord(detail.args, event, "args");
+  dispatch({ type: "ask/sourceStarted", callId, tool });
   dispatch({ type: "ask/line", line: { kind: "tool", text: tool } });
   return "";
 }
@@ -1817,6 +2043,7 @@ function handleToolCallResult(
   if (Object.hasOwn(detail, "result") && !isJsonValue(detail.result)) {
     throw streamIntegrity(event, "result", "must be a JSON value when present");
   }
+  dispatch({ type: "ask/sourceFinished", callId, data: detail.result });
   dispatch({
     type: "ask/line",
     line: { kind: "tool", text: `done ${callId.slice(0, 8)}` },
@@ -1830,9 +2057,10 @@ function handleToolCallError(
 ): string {
   const event = "loop:tool_call_error";
   assertExactEvent(detail, event, ["callId", "error", "durationMs"]);
-  readCanonicalWireString(detail.callId, event, "callId");
+  const callId = readCanonicalWireString(detail.callId, event, "callId");
   const error = readCanonicalWireString(detail.error, event, "error");
   readNonNegativeInteger(detail.durationMs, event, "durationMs");
+  dispatch({ type: "ask/sourceFinished", callId });
   dispatch({ type: "ask/line", line: { kind: "error", text: `tool error: ${error}` } });
   return "";
 }

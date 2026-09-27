@@ -27,10 +27,13 @@ export interface KeyPress {
 }
 
 export type Intent =
+  | { readonly kind: "discuss-note" }
   | { readonly kind: "brief" }
+  | { readonly kind: "methodology" }
   | { readonly kind: "analysis"; readonly mode: "compare" | "correlate" }
   | { readonly kind: "settings" }
   | { readonly kind: "history" }
+  | { readonly kind: "intelligence" }
   | { readonly kind: "cancel-turn" }
   | { readonly kind: "capture" }
   | { readonly kind: "edit-note" }
@@ -95,6 +98,7 @@ const VIEW_HINTS: Record<AppState["view"], KeyHint[]> = {
   ],
   explore: [
     { keys: "Esc", label: "chat" },
+    { keys: "a", label: "discuss" },
     { keys: "o", label: "find note" },
     { keys: "e", label: "edit" },
     { keys: "r", label: "source/preview" },
@@ -212,6 +216,7 @@ const VIEW_KEYS: Record<AppState["view"], ViewResolver> = {
     return null;
   },
   explore: (key) => {
+    if (key.name === "a") return { kind: "discuss-note" };
     if (key.name === "f") return { kind: "full-note" };
     if (key.name === "e") return { kind: "edit-note" };
     if (key.name === "escape") return { kind: "view", view: "ask" };

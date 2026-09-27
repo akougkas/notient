@@ -539,9 +539,19 @@ function kickOffBackgroundWorker(dispatch: BackgroundWorkerDispatch): void {
       bus: dispatch.deps.bus,
       existingRunId: dispatch.runId,
       signal,
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       if (signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
+      try {
+        await updateStatus(dispatch.surreal.db, dispatch.runId, "failed", { error: message }, "running");
+      } catch (recoveryError) {
+        dispatch.deps.bus.emit({
+          type: "indexer:error",
+          path: "",
+          message: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+          phase: "awaken-status",
+        });
+      }
       dispatch.deps.bus.emit({
         type: "indexer:error",
         path: "",

@@ -1,5 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { type Socket, connect } from "node:net";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DEFAULT_AGENT_ID, validateAgentId } from "../core/auth/agentIdentity";
 import { vaultAdminTokenPath, vaultDaemonPidPath } from "../core/vault/identity";
 import { deriveAgentCredential } from "../daemon/auth";
@@ -20,17 +23,27 @@ export interface ClientOptions {
   autoSpawn?: boolean;
   /**
    * Authenticated identity established once in `session.hello`. Unset means
-   * the reserved human operator; every explicit non-human id uses a derived
-   * agent credential bound to that exact id.
+   * the reserved human operator; unpaired non-human ids use a derived agent
+   * credential, while paired ids require the paired credential file.
    */
   clientIdentity?: string;
   /**
    * Root-token override used to construct the hello. When omitted, the client
    * reads `~/.notient/<vaultId>/admin.token`. Human clients send the token;
-   * named agents send only an HMAC derived from it and their canonical id.
-   * The root token never appears in an agent hello.
+   * unpaired named agents send only an HMAC derived from it and their canonical
+   * id. Paired agents use `credentialFile` and never read the root token.
    */
   rootToken?: string;
+  credentialFile?: string;
+}
+
+const credentialFileContext = new AsyncLocalStorage<string | undefined>();
+
+export function withPairedCredentialFile<T>(
+  path: string | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return credentialFileContext.run(path, operation);
 }
 
 export interface RpcResponseFrame {
@@ -266,19 +279,66 @@ async function performHello(
   options: ClientOptions,
 ): Promise<Principal> {
   const clientIdentity = options.clientIdentity ?? DEFAULT_AGENT_ID;
-  const rootToken = await resolveRootToken(options);
-  const params: Record<string, unknown> =
-    clientIdentity === DEFAULT_AGENT_ID
-      ? { clientIdentity, token: rootToken }
-      : {
-          clientIdentity,
-          agentCredential: deriveAgentCredential(rootToken, clientIdentity),
-        };
+  const credentialFile = options.credentialFile ?? credentialFileContext.getStore();
+  let params: Record<string, unknown>;
+  if (credentialFile !== undefined) {
+    if (!isPairedIdentity(clientIdentity))
+      throw new Error(`${HELLO_FAILED_PREFIX}: --credential-file requires an exact paired agent id`);
+    params = {
+      clientIdentity,
+      pairedCredential: await readPairedCredentialFile(credentialFile),
+    };
+  } else {
+    const rootToken = await resolveRootToken(options);
+    params =
+      clientIdentity === DEFAULT_AGENT_ID
+        ? { clientIdentity, token: rootToken }
+        : {
+            clientIdentity,
+            agentCredential: deriveAgentCredential(rootToken, clientIdentity),
+          };
+  }
   for await (const frame of call(HELLO_METHOD, params)) {
     const principal = decodeHelloFrame(frame, clientIdentity);
     if (principal !== null) return principal;
   }
   throw new Error(`${HELLO_FAILED_PREFIX}: daemon closed before answering ${HELLO_METHOD}`);
+}
+
+function isPairedIdentity(value: string): boolean {
+  return /^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
+async function readPairedCredentialFile(path: string): Promise<string> {
+  if (typeof process.getuid !== "function")
+    throw new Error(`${HELLO_FAILED_PREFIX}: paired credential ownership cannot be verified`);
+  const before = await lstat(path);
+  if (
+    !before.isFile() ||
+    before.uid !== process.getuid() ||
+    (before.mode & 0o7777) !== 0o600 ||
+    before.size > 128
+  )
+    throw new Error(`${HELLO_FAILED_PREFIX}: paired credential file must be an owned mode-0600 file`);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.uid !== process.getuid() ||
+      (opened.mode & 0o7777) !== 0o600 ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size > 128
+    )
+      throw new Error(`${HELLO_FAILED_PREFIX}: paired credential file changed during read`);
+    const token = (await handle.readFile("utf8")).trim();
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+      throw new Error(`${HELLO_FAILED_PREFIX}: paired credential file has invalid content`);
+    return token;
+  } finally {
+    await handle.close();
+  }
 }
 
 function decodeHelloFrame(frame: RpcResponseFrame, clientIdentity: string): Principal | null {
@@ -323,14 +383,17 @@ function decodePrincipal(raw: unknown, requestedId: string): Principal {
     throw malformedPrincipal("principal must be an object");
   }
   const candidate = raw as Record<string, unknown>;
-  if (!hasExactKeys(candidate, ["id", "kind", "scopes"])) {
-    throw malformedPrincipal("principal must contain exactly id, kind, and scopes");
+  if (
+    !hasExactKeys(candidate, ["id", "kind", "scopes"]) &&
+    !hasExactKeys(candidate, ["id", "kind", "scopes", "vaultOwner"])
+  ) {
+    throw malformedPrincipal("principal must contain id, kind, scopes, and optional vaultOwner");
   }
   if (typeof candidate.id !== "string") {
     throw malformedPrincipal("id must be a string");
   }
   const validatedId = validateAgentId(candidate.id);
-  if (!validatedId.valid || validatedId.id !== candidate.id) {
+  if ((!validatedId.valid || validatedId.id !== candidate.id) && !isPairedIdentity(candidate.id)) {
     throw malformedPrincipal("id must be a canonical agent id");
   }
   if (candidate.id !== requestedId) {
@@ -344,16 +407,33 @@ function decodePrincipal(raw: unknown, requestedId: string): Principal {
     throw malformedPrincipal(`${requestedId} must be assigned kind '${expectedKind}'`);
   }
   const expectedScopes = candidate.kind === "human" ? HUMAN_SCOPES : AGENT_SCOPES;
-  if (
-    !Array.isArray(candidate.scopes) ||
-    candidate.scopes.length !== expectedScopes.length ||
-    candidate.scopes.some((scope, index) => scope !== expectedScopes[index])
-  ) {
+  const validPairedScopes =
+    isPairedIdentity(requestedId) &&
+    Array.isArray(candidate.scopes) &&
+    candidate.scopes.length > 0 &&
+    candidate.scopes.every((scope) => scope === "read" || scope === "write") &&
+    new Set(candidate.scopes).size === candidate.scopes.length;
+  const validStandardScopes =
+    Array.isArray(candidate.scopes) &&
+    candidate.scopes.length === expectedScopes.length &&
+    candidate.scopes.every((scope, index) => scope === expectedScopes[index]);
+  if (!(isPairedIdentity(requestedId) ? validPairedScopes : validStandardScopes)) {
     throw malformedPrincipal(
       `${candidate.kind} scopes must be exactly [${expectedScopes.join(", ")}]`,
     );
   }
-  return { id: candidate.id, kind: candidate.kind, scopes: [...expectedScopes] };
+  if (
+    candidate.vaultOwner !== undefined &&
+    (candidate.vaultOwner !== true || !isPairedIdentity(requestedId))
+  )
+    throw malformedPrincipal("vaultOwner may only be true for an authenticated paired agent");
+  const scopes = candidate.scopes as string[];
+  return {
+    id: candidate.id,
+    kind: candidate.kind,
+    scopes: [...scopes],
+    ...(candidate.vaultOwner === true ? { vaultOwner: true } : {}),
+  };
 }
 
 function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]): boolean {

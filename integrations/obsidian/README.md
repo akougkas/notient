@@ -74,13 +74,16 @@ the plugin does not silently remove the daemon's protection: reconnect it, or us
 `notient pair list` and `notient pair revoke --id …` to deliberately release that
 pairing. Read-only daemon access remains available during deferred write recovery.
 
-Remaining N07 work includes selection-scoped workflows and broader host
-validation. Do not treat this build as
-full plugin acceptance.
+Selection-scoped workflows shipped in 0.1.0 and were exercised in Windows
+Obsidian against the WSL daemon. Broader host validation and the complete
+cross-surface acceptance pass remain open; see the
+[release evidence](../../docs/release-v0.1.0.md). Do not treat the verified
+selection workflows as full N07 acceptance.
 
 Run `bun run release:prepare` from the repository root to prepare the local
 development ZIP alongside the CLI tarball under the root `artifacts/` directory.
 Unzip its `notient/` folder into `.obsidian/plugins/`. Actual Windows Obsidian
 1.13.7 / WSL validation uses a disposable vault: native rendering and navigation,
 unsaved-buffer protection, reviewed creation/rejection and daemon restart recovery.
-This does not establish complete N07 acceptance or a published plugin release.
+The plugin ZIP is published with 0.1.0. This host pass does not establish complete
+N07 acceptance or approval in Obsidian's community directory.

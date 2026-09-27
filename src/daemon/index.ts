@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { type Socket, connect as connectSocket, createServer } from "node:net";
 import { dirname, join } from "node:path";
+import { contributionStageResultSchema } from "../api/contributions";
 import { NoteCatalogService } from "../api/catalog";
 import { NoteReadService } from "../api/notes";
 import { operationInputs } from "../api/operations";
 import { operationOutputs } from "../api/results";
 import { NoteApiError } from "../api/schema";
+import { ContributionStore } from "../core/contributions/contributionStore";
+import { MethodologySuggestionService } from "../core/methodology/suggestionService";
+import { DatabaseMethodologySuggestionResultStore } from "../core/methodology/suggestionStore";
 import { EffectAuthorityRevoked } from "../core/history/effectAuthority";
 import { EventCursorExpiredError, parseAgentEventRecordId } from "../core/services/agentEventStore";
 import type { HumanActivitySource } from "../core/services/sentienceActivity";
@@ -40,6 +44,10 @@ import {
 } from "./handlers/awaken";
 import { makeChatHandlers } from "./handlers/chat";
 import { makeChatSettingsHandlers } from "./handlers/chatSettings";
+import {
+  makeContributionHandlers,
+  makeRejectedReviewFeedbackRetainer,
+} from "./handlers/contributions";
 import { makeHealthHandler } from "./handlers/health";
 import { makeJobHandlers } from "./handlers/jobs";
 import { makeLinksSyncHandler } from "./handlers/links";
@@ -52,6 +60,8 @@ import { makeNotesWriteHandler } from "./handlers/notesWrite";
 import { makePipelineHandlers } from "./handlers/pipelines";
 import { makeProposalNoteHandler } from "./handlers/proposalNote";
 import { makeProposalsHandlers } from "./handlers/proposals";
+import { makeRelationshipRetentionHandler } from "./handlers/relationshipRetention";
+import { makeMethodologySuggestionHandler } from "./handlers/methodology";
 import { makeReviewHandlers } from "./handlers/reviews";
 import { makeSearchHandler } from "./handlers/search";
 import { makeSentientHandlers } from "./handlers/sentient";
@@ -245,7 +255,6 @@ async function main(argv: string[]): Promise<void> {
       vaultPath: args.vaultPath,
       lockHandle,
       beforeVaultMutation: (paths) => hostBridge.beforeMutation(paths),
-      deferMutationRecovery: hostBridge.hasAttachedHosts(),
       authorizeIdentity: (id, scope) => {
         if (id.startsWith("paired-") && !pairing.hasActiveScope(id, scope))
           throw new EffectAuthorityRevoked(
@@ -299,7 +308,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   const dispatcher = new MethodDispatcher({
-    authenticate: makeHelloAuthenticator({ adminToken }),
+    authenticate: makeHelloAuthenticator({ adminToken, pairing }),
     beforeInvoke: (method, kind) => {
       if (
         !bootstrapResult.mutationsReady() &&
@@ -834,7 +843,78 @@ async function main(argv: string[]): Promise<void> {
     { kind: "admin" },
   );
   const changes = kernel.get("changes");
-  const reviewHandlers = makeReviewHandlers(kernel.get("approvalService"), changes);
+  const methodologySuggestionService = new MethodologySuggestionService({
+    store: new DatabaseMethodologySuggestionResultStore(surreal.db),
+    vault: kernel.get("vault"),
+    search: kernel.get("searchPipeline"),
+    provider: kernel.get("primaryLLM"),
+    scheduler: kernel.get("reasoningScheduler"),
+    settings: kernel.get("settings"),
+    changes,
+    approvals: kernel.get("approvalService"),
+  });
+  dispatcher.register(
+    "methodology.suggest",
+    makeMethodologySuggestionHandler({
+      service: methodologySuggestionService,
+      authorizeCaller: ({ principal }) => {
+        if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
+          throw new NoteApiError("FORBIDDEN", "caller credential is missing, revoked or has insufficient scope");
+      },
+    }),
+    { kind: "write" },
+  );
+  dispatcher.register(
+    "relationships.retain",
+    makeRelationshipRetentionHandler({
+      db: surreal.db,
+      graph: kernel.get("graph"),
+      vault: kernel.get("vault"),
+      changes,
+      approvals: kernel.get("approvalService"),
+      settings: kernel.get("settings"),
+    }),
+    { kind: "write" },
+  );
+  const contributionStore = new ContributionStore(surreal.db);
+  const contributionNotes = new NoteReadService(kernel.get("vault"));
+  const contributionHandlers = makeContributionHandlers({
+    store: contributionStore,
+    notes: contributionNotes,
+    settings: kernel.get("settings"),
+    approvals: kernel.get("approvalService"),
+    changes,
+  });
+  const reviewHandlers = makeReviewHandlers(
+    kernel.get("approvalService"),
+    changes,
+    makeRejectedReviewFeedbackRetainer({
+      store: contributionStore,
+      notes: contributionNotes,
+      changes,
+      authorize: (principal) => {
+        if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
+          throw new RpcError("FORBIDDEN", "caller credential is missing, revoked or has insufficient scope");
+        if (principal.kind !== "human" && !pairing.isActiveVaultOwner(principal))
+          throw new RpcError("FORBIDDEN", "an active vault owner grant is required");
+      },
+      getReview: (id) => kernel.get("approvalService").getReview(id),
+      stage: async (params, principal) => {
+        const result = await contributionHandlers.stage({
+          params,
+          principal,
+          requestId: randomUUID(),
+          connectionId: "review-feedback-retention",
+          emit: () => {},
+        });
+        return contributionStageResultSchema.parse(result).proposal;
+      },
+    }),
+    (principal) => {
+      if (!pairing.isActiveVaultOwner(principal))
+        throw new RpcError("FORBIDDEN", "an active vault owner grant is required");
+    },
+  );
   dispatcher.register("proposals.list", reviewHandlers.list, { kind: "read" });
   dispatcher.register("proposals.get", reviewHandlers.get, { kind: "read" });
   dispatcher.register("proposals.approve", withHumanActivity("approval", reviewHandlers.approve), {
@@ -844,6 +924,12 @@ async function main(argv: string[]): Promise<void> {
     kind: "write",
   });
   dispatcher.register("proposals.submit", reviewHandlers.submit, { kind: "write" });
+  dispatcher.register("contributions.submit", contributionHandlers.submit, { kind: "write" });
+  dispatcher.register("feedback.submit", contributionHandlers.submitFeedback, { kind: "read" });
+  dispatcher.register("contributions.list", contributionHandlers.list, { kind: "read" });
+  dispatcher.register("contributions.get", contributionHandlers.get, { kind: "read" });
+  dispatcher.register("contributions.stage", contributionHandlers.stage, { kind: "write" });
+  dispatcher.register("contributions.dismiss", contributionHandlers.dismiss, { kind: "write" });
   const jobHandlers = makeJobHandlers(kernel.get("jobs"));
   dispatcher.register("jobs.list", jobHandlers.list, { kind: "read" });
   dispatcher.register("jobs.get", jobHandlers.get, { kind: "read" });
@@ -857,12 +943,19 @@ async function main(argv: string[]): Promise<void> {
       if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
         throw new NoteApiError("FORBIDDEN", "Configuration credential was revoked.");
     },
+    authorizeVaultOwner: ({ principal }) => {
+      if (!pairing.isActiveVaultOwner(principal))
+        throw new NoteApiError("FORBIDDEN", "An active vault owner grant is required.");
+    },
   });
   dispatcher.register("pipelines.list", pipelineHandlers.list, { kind: "read" });
   dispatcher.register("pipelines.run", pipelineHandlers.run, { kind: "write" });
   dispatcher.register("pipelines.validate", pipelineHandlers.validate, { kind: "read" });
-  dispatcher.register("pipelines.configure", pipelineHandlers.configure, { kind: "admin" });
-  dispatcher.register("background.pause", pipelineHandlers.pause, { kind: "admin" });
+  dispatcher.register("pipelines.configure", pipelineHandlers.configure, { kind: "write" });
+  dispatcher.register("background.pause", pipelineHandlers.pause, { kind: "write" });
+  dispatcher.register("cultivation.digest", pipelineHandlers.cultivationDigest, { kind: "read" });
+  dispatcher.register("cultivation.settings", pipelineHandlers.cultivationSettings, { kind: "read" });
+  dispatcher.register("cultivation.configure", pipelineHandlers.cultivationConfigure, { kind: "write" });
   const chatSettingsHandlers = makeChatSettingsHandlers({
     settings: kernel.get("settings"),
     journal: new DatabaseSettingsJournal(surreal.db),
@@ -870,9 +963,13 @@ async function main(argv: string[]): Promise<void> {
       if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
         throw new NoteApiError("FORBIDDEN", "Configuration credential was revoked.");
     },
+    authorizeVaultOwner: ({ principal }) => {
+      if (!pairing.isActiveVaultOwner(principal))
+        throw new NoteApiError("FORBIDDEN", "An active vault owner grant is required.");
+    },
   });
   dispatcher.register("chat.settings", chatSettingsHandlers.get, { kind: "read" });
-  dispatcher.register("chat.configure", chatSettingsHandlers.configure, { kind: "admin" });
+  dispatcher.register("chat.configure", chatSettingsHandlers.configure, { kind: "write" });
   dispatcher.register(
     "changes.get",
     async ({ params, principal }) => {
@@ -1153,6 +1250,34 @@ async function main(argv: string[]): Promise<void> {
       if (!http) throw new RpcError("INTERNAL", "HTTP transport is unavailable");
       await http.revoke(params.id, principal);
       return { ok: true };
+    },
+    { kind: "admin" },
+  );
+  dispatcher.register(
+    "pairing.owner.grant",
+    async ({ params, principal }) => {
+      if (
+        Object.keys(params).length !== 1 ||
+        typeof params.id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(params.id)
+      )
+        throw new RpcError("INVALID_PARAMS", "an exact paired credential id is required");
+      await pairing.setVaultOwner(params.id, true, principal);
+      return { ok: true, id: params.id, vaultOwner: true };
+    },
+    { kind: "admin" },
+  );
+  dispatcher.register(
+    "pairing.owner.revoke",
+    async ({ params, principal }) => {
+      if (
+        Object.keys(params).length !== 1 ||
+        typeof params.id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(params.id)
+      )
+        throw new RpcError("INVALID_PARAMS", "an exact paired credential id is required");
+      await pairing.setVaultOwner(params.id, false, principal);
+      return { ok: true, id: params.id, vaultOwner: false };
     },
     { kind: "admin" },
   );

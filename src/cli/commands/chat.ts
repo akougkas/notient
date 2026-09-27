@@ -11,7 +11,7 @@ export interface ChatCommandOptions {
   clientIdentity?: string;
 }
 
-export async function runChatSingleShot(options: ChatCommandOptions): Promise<void> {
+export async function runChatSingleShot(options: ChatCommandOptions): Promise<number> {
   const socketPath = resolveSocketPath(options.vaultPath, currentPlatform());
   const client = await connectClient({
     socketPath,
@@ -22,20 +22,17 @@ export async function runChatSingleShot(options: ChatCommandOptions): Promise<vo
   const conversationId = options.conversationId ?? (await ensureConversation(client, options));
   if (conversationId === null) {
     await client.close();
-    return;
+    return 1;
   }
 
-  const approvalClient =
-    options.approve === "ask"
-      ? await connectClient({
-          socketPath,
-          vaultPath: options.vaultPath,
-          clientIdentity: options.clientIdentity,
-        })
-      : null;
+  const approvalClient = await connectClient({
+    socketPath,
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
 
   try {
-    await streamChatSend(client, approvalClient, conversationId, options);
+    return await streamChatSend(client, approvalClient, conversationId, options);
   } finally {
     if (approvalClient !== null) await approvalClient.close();
     await client.close();
@@ -46,7 +43,9 @@ async function ensureConversation(
   client: ClientHandle,
   options: ChatCommandOptions,
 ): Promise<string | null> {
-  for await (const frame of client.call("chat.start", { topic: "single-shot" })) {
+  for await (const frame of client.call("chat.start", {
+    topic: options.prompt.trim().replace(/\s+/g, " ").slice(0, 80).trimEnd(),
+  })) {
     if (frame.type === "result") {
       const started = frame as unknown as { conversation?: { id?: string } };
       const id = started.conversation?.id;
@@ -68,7 +67,7 @@ async function streamChatSend(
   approvalClient: ClientHandle | null,
   conversationId: string,
   options: ChatCommandOptions,
-): Promise<void> {
+): Promise<number> {
   for await (const frame of client.call("chat.send", {
     conversationId,
     userMessage: options.prompt,
@@ -77,8 +76,10 @@ async function streamChatSend(
     if (isApprovalPending(frame)) {
       await handleApproval(frame as unknown as Record<string, unknown>, approvalClient, options);
     }
-    if (frame.type === "result" || frame.type === "error") break;
+    if (frame.type === "result") return 0;
+    if (frame.type === "error") return 1;
   }
+  throw new Error("Conversation disconnected before the turn completed.");
 }
 
 function isApprovalPending(frame: { type: string; event?: string }): boolean {
@@ -106,26 +107,44 @@ async function handleApproval(
   approvalClient: ClientHandle | null,
   options: ChatCommandOptions,
 ): Promise<void> {
-  if (options.approve === "auto" || approvalClient === null) return;
+  if (approvalClient === null) throw new Error("Approval connection unavailable");
   const callId = (frame as { callId: string }).callId;
   const tool = (frame as { tool: string }).tool;
-  process.stderr.write(`approve ${tool} (${callId})? [y/N] `);
-  const answer = await readLineFromStdin();
-  const approved = answer.trim().toLowerCase() === "y";
+  let approved = options.approve === "auto";
+  if (!approved) {
+    if (typeof frame.preview === "string") process.stderr.write(`${frame.preview}\n`);
+    process.stderr.write(`Approve ${tool}? [y/N] `);
+    approved = (await readLineFromStdin()).trim().toLowerCase() === "y";
+  }
   for await (const _frame of approvalClient.call("chat.approve", {
     callId,
     approved,
   })) {
-    if (_frame.type === "result" || _frame.type === "error") break;
+    if (_frame.type === "error") throw new Error(`Approval failed: ${_frame.message}`);
+    if (_frame.type === "result") break;
   }
 }
 
 function readLineFromStdin(): Promise<string> {
   return new Promise((resolve) => {
-    const onData = (chunk: Buffer): void => {
+    if (process.stdin.readableEnded || process.stdin.destroyed) {
+      resolve("");
+      return;
+    }
+    const finish = (value: string) => {
       process.stdin.off("data", onData);
-      resolve(chunk.toString("utf-8"));
+      process.stdin.off("end", onEnd);
+      process.stdin.off("error", onEnd);
+      process.stdin.pause();
+      resolve(value);
     };
+    const onData = (chunk: Buffer): void => {
+      finish(chunk.toString("utf-8").split(/\r?\n/, 1)[0] ?? "");
+    };
+    const onEnd = () => finish("");
     process.stdin.on("data", onData);
+    process.stdin.once("end", onEnd);
+    process.stdin.once("error", onEnd);
+    process.stdin.resume();
   });
 }

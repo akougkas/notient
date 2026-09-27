@@ -71,7 +71,7 @@ export interface ChatOptions {
   /** Called once with terminal accounting, including incomplete responses. */
   onCompletion?: (metadata: CompletionMetadata) => void;
   /**
-   * Template hint only; the server may ignore it. maxTokens remains a shared
+   * Reasoning preference; support depends on the server. maxTokens remains a shared
    * generation ceiling covering reasoning AND final output. No independent
    * reasoning budget is assumed or sent to an unverified provider.
    */
@@ -166,6 +166,7 @@ export interface ChatVisionResult {
 }
 
 export interface LLMProvider {
+  readonly defaultEnableThinking?: boolean;
   isAvailable(signal?: AbortSignal): Promise<boolean>;
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<string>;
   chatStream(messages: ChatMessage[], opts: ChatOptions): AsyncIterable<string>;

@@ -8,6 +8,7 @@ import { operationInputs } from "../../api/operations";
 import { pipelineListSchema } from "../../api/pipelineCatalog";
 import { jobListSchema, jobResultSchema } from "../../api/pipelines";
 import { operationOutputs } from "../../api/results";
+import { relationshipRetentionResultSchema } from "../../api/relationshipRetention";
 /**
  * MCP tool definitions for Notient.
  *
@@ -1112,6 +1113,35 @@ const PROPOSE_LINK_TOOL: McpToolDefinition = {
   },
 };
 
+const RETAIN_RELATIONSHIP_TOOL: McpToolDefinition = {
+  name: "notient_retain_relationship",
+  title: "Propose note retention for an approved relationship",
+  description:
+    "Turn one already approved and applied typed graph edge into a source-readable relationship record in the source note's configured intelligence section. This creates an ordinary pending note review; it does not edit or approve the note. Only exact currently verifiable passages are copied, and stale or missing evidence stays explicitly unverified. Reuse an idempotencyKey only for an exact retry; provide a new key to stage a new review after a rejection or source edit.",
+  inputShape: operationInputs["relationships.retain"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["relationships.retain"].parse(args);
+    const outcome = await caller.call("relationships.retain", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "relationships.retain",
+      relationshipRetentionResultSchema,
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (decoded.edgeId !== request.edgeId)
+      return integrityFailure("relationships.retain", "retained edge does not match the request");
+    return {
+      summary:
+        decoded.status === "already-retained"
+          ? `${decoded.relation} edge is already represented in ${decoded.sourcePath}.`
+          : `Note retention proposal ${decoded.proposal.id} is ${decoded.proposal.state}; inspect preview ${decoded.previewId} before approving the append to ${decoded.sourcePath}.`,
+      payload: decoded,
+    };
+  },
+};
+
 const JOBS_LIST_TOOL: McpToolDefinition = {
   name: "notient_list_jobs",
   title: "List pipeline jobs",
@@ -1177,7 +1207,7 @@ const PREVIEW_CHANGES_TOOL: McpToolDefinition = {
   name: "notient_preview_changes",
   title: "Preview exact note changes",
   description:
-    "Plan up to 200 changes against exact {path, revision} sources and store the exact before/after Markdown: create, append, heading/block/range edits, property patches, and reference-aware move, archive or unarchive. Heading selectors must resolve to exactly one section. No note bytes change. Inspect effects and conflicts, then use notient_submit_change to ask the human to apply it. Reusing an idempotency key with different changes is refused.",
+    "Plan up to 200 changes against exact {path, revision} sources and store the exact before/after Markdown: create, append, heading/block/range edits, property patches, and reference-aware move, archive or unarchive. Heading selectors must resolve to exactly one section. No note bytes change. Inspect effects and conflicts, then use notient_submit_change to ask an authorized human or explicitly granted vault owner to apply it. Reusing an idempotency key with different changes is refused.",
   inputShape: operationInputs["changes.preview"].shape,
   annotations: WRITE,
   run: async (caller, args) => {
@@ -1204,7 +1234,7 @@ const SUBMIT_CHANGE_TOOL: McpToolDefinition = {
   name: "notient_submit_change",
   title: "Submit a previewed change for review",
   description:
-    "Ask the human to review and apply one of your own exact stored previews. Pass its previewId and revision, a concise rationale and optional supporting evidence quotations. Sources must still match their previewed revisions. This grants no approval: nothing changes until the human applies it, a rejection is permanent for that preview, and later source edits make it stale. Repeating the same preview returns the existing review.",
+    "Ask an authorized human or explicitly granted vault owner to review one of your own exact stored previews. Pass its previewId and revision, a concise rationale and optional supporting evidence quotations. Sources must still match their previewed revisions. This grants no approval: nothing changes until an authorized reviewer applies it, a rejection is permanent for that preview, and later source edits make it stale. Repeating the same preview returns the existing review.",
   inputShape: operationInputs["proposals.submit"].shape,
   annotations: WRITE,
   run: async (caller, args) => {
@@ -1220,9 +1250,320 @@ const SUBMIT_CHANGE_TOOL: McpToolDefinition = {
     if (decoded.proposal.previewId !== request.previewId)
       return integrityFailure("proposals.submit", "review does not match the submitted preview");
     return {
-      summary: `Review ${decoded.proposal.id} is ${decoded.proposal.state}; note bytes unchanged until the human applies it.`,
+      summary: `Review ${decoded.proposal.id} is ${decoded.proposal.state}; note bytes unchanged until an authorized reviewer applies it.`,
       payload: decoded,
     };
+  },
+};
+
+const APPROVE_CHANGE_TOOL: McpToolDefinition = {
+  name: "notient_approve_change",
+  title: "Approve an exact reviewed change",
+  description:
+    "Apply one pending review using its exact proposal id, preview id and revision from notient_get_review. This requires the human operator or a currently active explicit vault-owner grant. The daemon rechecks the grant before each note effect; ordinary agent write scope does not authorize approval. The proposal must still be current, and the exact stored before/after bytes are applied through the normal reviewed writer.",
+  inputShape: operationInputs["proposals.approve"].shape,
+  annotations: DESTRUCTIVE_WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["proposals.approve"].parse(args);
+    const outcome = await caller.call("proposals.approve", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "proposals.approve",
+      operationOutputs["proposals.approve"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (decoded.previewId !== request.previewId)
+      return integrityFailure("proposals.approve", "applied result does not match the requested preview");
+    return {
+      summary: `Review ${request.id} application is ${decoded.state}; inspect each effect result.`,
+      payload: decoded,
+    };
+  },
+};
+
+const REJECT_CHANGE_TOOL: McpToolDefinition = {
+  name: "notient_reject_change",
+  title: "Reject a reviewed change with a reason",
+  description:
+    "Reject one pending review using its exact proposal id and revision from notient_get_review. This requires the human operator or a currently active explicit vault-owner grant; ordinary agent write scope does not authorize review decisions. Add a concise reason and optional feedback category so the durable note-feedback workflow can retain the decision. Rejection is terminal for this preview and does not edit note bytes.",
+  inputShape: operationInputs["proposals.reject"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["proposals.reject"].parse(args);
+    const outcome = await caller.call("proposals.reject", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "proposals.reject",
+      operationOutputs["proposals.reject"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (decoded.proposal.id !== request.id || decoded.proposal.state !== "rejected")
+      return integrityFailure("proposals.reject", "rejection result does not match the requested review");
+    return {
+      summary: `Review ${decoded.proposal.id} was rejected; its preview remains unapplied.`,
+      payload: decoded,
+    };
+  },
+};
+
+const CONTRIBUTE_TOOL: McpToolDefinition = {
+  name: "notient_contribute",
+  title: "Contribute a source or experience",
+  description:
+    "Submit an attributed finding, interpretation, question, or decision about an exact saved note revision. Evidence quotations must match current saved passages. Optional origin details are contributor assertions, never permissions or proof. This creates a private pending item and changes no note bytes.",
+  inputShape: operationInputs["contributions.submit"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["contributions.submit"].parse(args);
+    const outcome = await caller.call("contributions.submit", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "contributions.submit",
+      operationOutputs["contributions.submit"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (
+      decoded.contribution.kind !== "contribution" ||
+      decoded.contribution.target.path !== request.target.path ||
+      decoded.contribution.statement !== request.statement
+    )
+      return integrityFailure("contributions.submit", "stored contribution does not match the request");
+    return {
+      summary: `Contribution ${decoded.contribution.id} is ${decoded.contribution.status}; note bytes unchanged.`,
+      payload: decoded,
+    };
+  },
+};
+
+const FEEDBACK_TOOL: McpToolDefinition = {
+  name: "notient_give_feedback",
+  title: "Give reasoned feedback on retained intelligence",
+  description:
+    "Record that a specific note-resident intelligence item is false, unsupported, irrelevant, already known, or deferred. The target identity comes from the saved record and its evidence. Feedback remains private and pending until it is staged as a reviewed note append; this tool changes no note bytes.",
+  inputShape: operationInputs["feedback.submit"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["feedback.submit"].parse(args);
+    const outcome = await caller.call("feedback.submit", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "feedback.submit",
+      operationOutputs["feedback.submit"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (
+      decoded.contribution.kind !== "feedback" ||
+      decoded.contribution.target.path !== request.target.path ||
+      decoded.contribution.feedback?.targetRecordId !== request.targetRecordId ||
+      decoded.contribution.feedback.reason !== request.reason
+    )
+      return integrityFailure("feedback.submit", "stored feedback does not match the request");
+    return {
+      summary: `Feedback ${decoded.contribution.id} is privately queued as ${decoded.contribution.status}; note bytes unchanged.`,
+      payload: decoded,
+    };
+  },
+};
+
+const CONTRIBUTIONS_LIST_TOOL: McpToolDefinition = {
+  name: "notient_list_contributions",
+  title: "List contribution and feedback items",
+  description:
+    "List the authenticated agent's own pending items or the human operator's vault-wide queue. Status reflects any linked review proposal. This is read-only.",
+  inputShape: operationInputs["contributions.list"].shape,
+  annotations: READ_ONLY,
+  run: async (caller, args) => {
+    const request = operationInputs["contributions.list"].parse(args);
+    const outcome = await caller.call("contributions.list", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "contributions.list",
+      operationOutputs["contributions.list"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    return {
+      summary: `${decoded.contributions.length} contribution or feedback item${decoded.contributions.length === 1 ? "" : "s"} in this page.`,
+      payload: decoded,
+    };
+  },
+};
+
+const CONTRIBUTION_GET_TOOL: McpToolDefinition = {
+  name: "notient_get_contribution",
+  title: "Inspect one contribution or feedback item",
+  description:
+    "Read one private item submitted by this agent, or any item as the human operator. Its linked review proposal remains the authority for any note change.",
+  inputShape: operationInputs["contributions.get"].shape,
+  annotations: READ_ONLY,
+  run: async (caller, args) => {
+    const request = operationInputs["contributions.get"].parse(args);
+    const outcome = await caller.call("contributions.get", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "contributions.get",
+      operationOutputs["contributions.get"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (decoded.contribution.id !== request.id)
+      return integrityFailure("contributions.get", "contribution id does not match the request");
+    return { summary: `${decoded.contribution.kind} is ${decoded.contribution.status}.`, payload: decoded };
+  },
+};
+
+const STAGE_CONTRIBUTION_TOOL: McpToolDefinition = {
+  name: "notient_stage_contribution",
+  title: "Prepare a contribution as a reviewed note change",
+  description:
+    "Turn one of your pending items into a concrete, exact append on its target note and submit that stored preview for review by a human or explicitly granted vault owner. Agent appends must use a trusted designated section. This never applies the preview or changes note bytes.",
+  inputShape: operationInputs["contributions.stage"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["contributions.stage"].parse(args);
+    const outcome = await caller.call("contributions.stage", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "contributions.stage",
+      operationOutputs["contributions.stage"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (
+      decoded.contribution.id !== request.id ||
+      decoded.proposal.id.length !== 64 ||
+      decoded.proposal.previewId.length !== 64
+    )
+      return integrityFailure("contributions.stage", "staged contribution or review identity is invalid");
+    return {
+      summary: `Review ${decoded.proposal.id} is ${decoded.proposal.state}; note bytes unchanged until an authorized reviewer applies it.`,
+      payload: decoded,
+    };
+  },
+};
+
+const DISMISS_CONTRIBUTION_TOOL: McpToolDefinition = {
+  name: "notient_dismiss_contribution",
+  title: "Dismiss a pending contribution",
+  description:
+    "Dismiss your own pending item with a reason, or dismiss any pending item as the human operator. This only updates the private operational queue and does not change a note.",
+  inputShape: operationInputs["contributions.dismiss"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["contributions.dismiss"].parse(args);
+    const outcome = await caller.call("contributions.dismiss", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "contributions.dismiss",
+      operationOutputs["contributions.dismiss"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    if (decoded.contribution.id !== request.id || decoded.contribution.status !== "dismissed")
+      return integrityFailure("contributions.dismiss", "dismissed contribution does not match the request");
+    return { summary: `Contribution ${decoded.contribution.id} dismissed.`, payload: decoded };
+  },
+};
+
+const CULTIVATION_DIGEST_TOOL: McpToolDefinition = {
+  name: "notient_cultivation_digest",
+  title: "Read the cultivation digest",
+  description:
+    "Read a bounded, relevance-ranked digest of current source-backed cultivation findings. Each item distinguishes an applied note effect, a proposed change awaiting review, and a report-only finding. Evidence quotations are rebound to exact current saved passages; stale or generated-only quotations are omitted. This is read-only and does not apply or approve changes.",
+  inputShape: operationInputs["cultivation.digest"].shape,
+  annotations: READ_ONLY,
+  run: async (caller, args) => {
+    const request = operationInputs["cultivation.digest"].parse(args);
+    const outcome = await caller.call("cultivation.digest", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "cultivation.digest",
+      operationOutputs["cultivation.digest"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    return {
+      summary: `${decoded.items.length} current evidence-backed item${decoded.items.length === 1 ? "" : "s"}; ${decoded.items.filter((item) => item.disposition === "awaiting-review").length} awaiting review, ${decoded.items.filter((item) => item.disposition === "applied").length} applied, and ${decoded.items.filter((item) => item.disposition === "report-only").length} report-only.`,
+      payload: decoded,
+    };
+  },
+};
+
+const CULTIVATION_SETTINGS_TOOL: McpToolDefinition = {
+  name: "notient_cultivation_settings",
+  title: "Inspect cultivation settings",
+  description:
+    "Read current daily token and model-call budgets, revisit interval, explicit per-note attention priorities, pause state, and the named PARA, FLAP, custom, or AI-managed methodology guidance. Methodology conventions guide capture and retrieval; they do not grant folder or note write authority.",
+  inputShape: operationInputs["cultivation.settings"].shape,
+  annotations: READ_ONLY,
+  run: async (caller, args) => {
+    const outcome = await caller.call(
+      "cultivation.settings",
+      operationInputs["cultivation.settings"].parse(args),
+    );
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "cultivation.settings",
+      operationOutputs["cultivation.settings"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    return { summary: `Cultivation is ${decoded.paused ? "paused" : "enabled by each pipeline policy"}.`, payload: decoded };
+  },
+};
+
+const CULTIVATION_CONFIGURE_TOOL: McpToolDefinition = {
+  name: "notient_configure_cultivation",
+  title: "Configure cultivation attention and methodology",
+  description:
+    "Save the full attention and methodology settings under a human administrator's authority or an explicitly granted vault-owner credential. The daemon rechecks the owner grant when saving. The saved configuration sets daily token and model-call ceilings, note revisits, digest size, exact per-note priorities, and the capture conventions used by prompts and role inference. PARA, FLAP, custom and AI-managed modes remain guidance; they do not authorize folder moves or note writes. This operation does not pause pipelines or approve proposed note changes.",
+  inputShape: operationInputs["cultivation.configure"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["cultivation.configure"].parse(args);
+    const outcome = await caller.call("cultivation.configure", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "cultivation.configure",
+      operationOutputs["cultivation.configure"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    return {
+      summary: `Cultivation settings saved at revision ${decoded.revision}.`,
+      payload: decoded,
+    };
+  },
+};
+
+const METHODOLOGY_SUGGEST_TOOL: McpToolDefinition = {
+  name: "notient_methodology_suggest",
+  title: "Study organization and conventions",
+  description:
+    "Use the configured methodology and current in-scope note examples to suggest at most one evidence-grounded move or useful convention refinement, or explain why no change is warranted. A move destination must already contain an in-scope example. Positive suggestions include exact source passages and a normal pending review; this operation does not apply note or settings changes. Supply a stable idempotencyKey to recover the accepted study result after interruption without repeating inference; use a new key for a new study.",
+  inputShape: operationInputs["methodology.suggest"].shape,
+  annotations: WRITE,
+  run: async (caller, args) => {
+    const request = operationInputs["methodology.suggest"].parse(args);
+    const outcome = await caller.call("methodology.suggest", request);
+    if (!outcome.ok) return outcome;
+    const decoded = decodeRpcResult(
+      "methodology.suggest",
+      operationOutputs["methodology.suggest"],
+      outcome.result,
+    );
+    if (isRpcFailure(decoded)) return decoded;
+    const summary =
+      decoded.status === "proposal-created"
+        ? `Move suggestion for ${decoded.source.path} to ${decoded.destination}; proposal ${decoded.proposal.state}.`
+        : decoded.status === "convention-suggestion"
+          ? `Convention suggestion for ${decoded.source.path}; proposal ${decoded.proposal.state}.`
+          : `No methodology suggestion for ${decoded.source.path}: ${decoded.reason}`;
+    return { summary, payload: decoded };
   },
 };
 
@@ -1230,7 +1571,7 @@ const PIPELINES_LIST_TOOL: McpToolDefinition = {
   name: "notient_list_pipelines",
   title: "Inspect built-in pipelines and policies",
   description:
-    "List all seven finite pipeline families, their current read/write scopes, effects, budgets, destinations and background schedule status. Read-only. Inspect policy before starting a run. Background enablement and live invocation are separate; this tool cannot change configuration or permissions.",
+    "List all built-in finite pipeline families, their current read/write scopes, effects, budgets, destinations and background schedule status. Read-only. Inspect policy before starting a run. Background enablement and live invocation are separate; this tool cannot change configuration or permissions.",
   inputShape: operationInputs["pipelines.list"].shape,
   annotations: READ_ONLY,
   run: async (caller, args) => {
@@ -1350,7 +1691,7 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
       [
         "notient_get_review",
         "proposals.get",
-        "Read an evidence-backed suggestion and its human decision. Changed source revisions are reported as stale. This does not approve or reject anything.",
+        "Read an evidence-backed suggestion and its human or explicitly granted vault-owner decision. Changed source revisions are reported as stale. This does not approve or reject anything.",
       ],
       [
         "notient_get_change_preview",
@@ -1426,6 +1767,10 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
   ),
   HOST_STATUS_TOOL,
   HOST_CONTEXT_TOOL,
+  CULTIVATION_DIGEST_TOOL,
+  CULTIVATION_SETTINGS_TOOL,
+  CULTIVATION_CONFIGURE_TOOL,
+  METHODOLOGY_SUGGEST_TOOL,
   PIPELINES_LIST_TOOL,
   PIPELINE_RUN_TOOL,
   JOBS_LIST_TOOL,
@@ -1433,6 +1778,14 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
   JOB_CONTROL_TOOL,
   PREVIEW_CHANGES_TOOL,
   SUBMIT_CHANGE_TOOL,
+  APPROVE_CHANGE_TOOL,
+  REJECT_CHANGE_TOOL,
+  CONTRIBUTE_TOOL,
+  FEEDBACK_TOOL,
+  CONTRIBUTIONS_LIST_TOOL,
+  CONTRIBUTION_GET_TOOL,
+  STAGE_CONTRIBUTION_TOOL,
+  DISMISS_CONTRIBUTION_TOOL,
   ASK_TOOL,
   BRIEF_TOOL,
   SEARCH_TOOL,
@@ -1448,6 +1801,7 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
   UPDATE_FRONTMATTER_TOOL,
   PROPOSE_NOTE_TOOL,
   PROPOSE_LINK_TOOL,
+  RETAIN_RELATIONSHIP_TOOL,
 ];
 
 export function findTool(name: string): McpToolDefinition | undefined {

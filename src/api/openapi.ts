@@ -20,8 +20,13 @@ export function createOpenApiDocument() {
         responses: {
           "200": {
             description:
-              "Runtime-validated operation result; inspect result state for partial or denied effects.",
-            content: { "application/json": { schema: z.toJSONSchema(operationOutputs[name]) } },
+              name === "chat.send"
+                ? "Authenticated persistent chat turn streamed as named server-sent events; turn completion includes the saved conversation. A disconnected request is never replayed automatically."
+                : "Runtime-validated operation result; inspect result state for partial or denied effects.",
+            content:
+              name === "chat.send"
+                ? { "text/event-stream": { schema: { type: "string" } } }
+                : { "application/json": { schema: z.toJSONSchema(operationOutputs[name]) } },
           },
           default: {
             description:

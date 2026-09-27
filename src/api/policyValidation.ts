@@ -54,23 +54,35 @@ export function validatePipelinePolicy(pipeline: PipelineId, policy: PipelinePol
       "warning",
       "Allowed effects can reach every ordinary note outside exclusions. Restrict the write scope for automatic work.",
     );
-  if (policy.budget.tokens < policy.budget.generationTokens)
+  const usesGeneration =
+    (pipeline !== "reconsider" || (policy.budget.modelCalls > 0 && policy.budget.tokens > 0)) &&
+    (pipeline !== "index-extract" || policy.parameters.indexExtract.extraction);
+  if (usesGeneration && policy.budget.tokens < policy.budget.generationTokens)
     add(
       "budget.tokens",
       "warning",
       "The total token budget is smaller than one generation ceiling; reasoning may be unable to start.",
     );
-  if (policy.budget.generationTokens < 4096)
+  if (usesGeneration && policy.budget.generationTokens < 4096)
     add(
       "budget.generationTokens",
       "warning",
       "Reasoning models share this ceiling with the final answer; a small ceiling can produce incomplete output.",
     );
-  if (pipeline !== "index-extract" && (!policy.budget.modelCalls || !policy.budget.tokens))
+  if (
+    !["index-extract", "reconsider"].includes(pipeline) &&
+    (!policy.budget.modelCalls || !policy.budget.tokens)
+  )
     add(
       "budget",
       "warning",
       "This workflow needs inference; a zero model-call or token budget prevents it from producing a model result.",
+    );
+  if (pipeline === "reconsider" && (!policy.budget.modelCalls || !policy.budget.tokens))
+    add(
+      "budget",
+      "warning",
+      "Missing sources and changed quotations can be checked without inference. Contextual rechecks require an explicit model-call and token budget and remain deferred with these limits.",
     );
   if (pipeline === "index-extract" && policy.mode === "apply")
     add(

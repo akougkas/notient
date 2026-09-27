@@ -37,7 +37,7 @@ export const askResultSchema = z
       .min(1)
       .max(100),
     durationMs: z.number().int().nonnegative(),
-    attempts: z.array(inferenceAttemptSchema).max(10),
+    attempts: z.array(inferenceAttemptSchema).max(18),
     coverage: searchCoverageSchema,
   })
   .strict()

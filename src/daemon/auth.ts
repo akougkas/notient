@@ -17,10 +17,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { DEFAULT_AGENT_ID, validateAgentId } from "../core/auth/agentIdentity";
 import { AGENT_SCOPES, type Authenticator, HUMAN_SCOPES, type Principal, RpcError } from "./rpc";
+import type { PairingStore } from "./pairing";
 
 export interface HelloAuthenticatorOptions {
   /** The live root token, or `null` when the daemon minted none. */
   adminToken: string | null;
+  pairing?: Pick<PairingStore, "authenticate">;
 }
 
 const ROOT_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
@@ -28,7 +30,7 @@ const AGENT_CREDENTIAL_PATTERN = /^[0-9a-f]{64}$/;
 const AGENT_CREDENTIAL_DOMAIN = "notient/session.hello/agent-identity/v1\0";
 
 export function makeHelloAuthenticator(options: HelloAuthenticatorOptions): Authenticator {
-  return (params) => authenticateHello(params, options.adminToken);
+  return (params) => authenticateHello(params, options.adminToken, options.pairing);
 }
 
 /** Derive the one boot-scoped credential valid for a canonical non-human id. */
@@ -47,12 +49,41 @@ export function deriveAgentCredential(adminToken: string, clientIdentity: string
 export function authenticateHello(
   params: Record<string, unknown>,
   adminToken: string | null,
+  pairing?: Pick<PairingStore, "authenticate">,
 ): Principal {
   assertKnownHelloFields(params);
+  if (Object.hasOwn(params, "pairedCredential")) {
+    if (!pairing) throw unauthenticated("paired authentication failed");
+    return authenticatePaired(params, pairing);
+  }
   const id = parseWireIdentity(params.clientIdentity);
   return id === DEFAULT_AGENT_ID
     ? authenticateHuman(params, adminToken)
     : authenticateAgent(params, id, adminToken);
+}
+
+function authenticatePaired(
+  params: Record<string, unknown>,
+  pairing: Pick<PairingStore, "authenticate">,
+): Principal {
+  const id = params.clientIdentity;
+  const token = params.pairedCredential;
+  if (
+    Object.keys(params).length !== 2 ||
+    typeof id !== "string" ||
+    !/^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ||
+    typeof token !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(token)
+  )
+    throw unauthenticated("paired authentication failed");
+  try {
+    const authenticated = pairing.authenticate(token);
+    if (authenticated.principal.id !== id || authenticated.principal.kind !== "agent")
+      throw unauthenticated("paired authentication failed");
+    return authenticated.principal;
+  } catch {
+    throw unauthenticated("paired authentication failed");
+  }
 }
 
 function authenticateHuman(params: Record<string, unknown>, adminToken: string | null): Principal {
@@ -118,7 +149,7 @@ function assertRootToken(token: string): void {
 }
 
 function assertKnownHelloFields(params: Record<string, unknown>): void {
-  const known = new Set(["clientIdentity", "token", "agentCredential"]);
+  const known = new Set(["clientIdentity", "token", "agentCredential", "pairedCredential"]);
   const unknown = Object.keys(params).filter((key) => !known.has(key));
   if (unknown.length > 0) {
     throw new RpcError(

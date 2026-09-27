@@ -108,3 +108,42 @@ test("source navigation binds the revision and range, spans more than six items 
   expect(sourceLabel({ ...source, path: `${"long".repeat(40)}.md` }, 30)).toEndWith(" · L1–4");
   expect(sourceLabel({ ...source, path: `${"long".repeat(40)}.md` }, 30)).toHaveLength(30);
 });
+
+test("live domain results expose evidence before the answer completes and preserve navigation", () => {
+  let state = reducer(initialState("/vault"), { type: "ask/busy", busy: true });
+  const excerpt = read().toolResults?.[0]?.data;
+  state = reducer(state, { type: "ask/sourceStarted", callId: "read-1", tool: "vault.read_note" });
+  expect(state.ask.sources).toEqual([]);
+  state = reducer(state, { type: "ask/sourceFinished", callId: "read-1", data: excerpt });
+  expect(state.ask.busy).toBe(true);
+  expect(state.ask.lines).toEqual([]);
+  expect(state.ask.sources).toEqual([source]);
+  expect(exploreOpenTarget(state)).toEqual({ kind: "source", source });
+  // Replayed results and a failed later read do not replace verified evidence.
+  state = reducer(state, { type: "ask/sourceFinished", callId: "read-1", data: excerpt });
+  state = reducer(state, { type: "ask/sourceStarted", callId: "read-2", tool: "vault.read_note" });
+  state = reducer(state, { type: "ask/sourceFinished", callId: "read-2" });
+  expect(state.ask.sources).toEqual([source]);
+  state = reducer(state, { type: "ask/busy", busy: false });
+  expect(state.ask.sources).toEqual([source]);
+});
+
+test("live evidence rejects unpaired, wrong-tool, stale and malformed results and clears across turns", () => {
+  const excerpt = read().toolResults?.[0]?.data;
+  let state = initialState("/vault");
+  state = reducer(state, { type: "ask/sourceFinished", callId: "unknown", data: excerpt });
+  for (const [tool, data] of [
+    ["notes.prepare_draft", excerpt],
+    ["vault.search_notes", search(source, "lagging").toolResults?.[0]?.data],
+    ["vault.read_note", { ...(excerpt as object), body: "invented" }],
+  ] as const) {
+    state = reducer(state, { type: "ask/sourceStarted", callId: "call", tool });
+    state = reducer(state, { type: "ask/sourceFinished", callId: "call", data });
+  }
+  expect(state.ask.sources).toEqual([]);
+  state = reducer(state, { type: "ask/sourceStarted", callId: "old", tool: "vault.read_note" });
+  state = reducer(state, { type: "ask/line", line: { kind: "user", text: "Next question" } });
+  state = reducer(state, { type: "ask/sourceFinished", callId: "old", data: excerpt });
+  expect(state.ask.sources).toEqual([]);
+  expect(state.ask.sourceCalls.size).toBe(0);
+});

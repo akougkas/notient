@@ -76,3 +76,38 @@ describe("probeVisionRoute", () => {
     expect(route).toBeNull();
   });
 });
+
+test("a stalled optional probe releases its slot on deadline without trying a fallback", async () => {
+  const scheduler = new ReasoningScheduler({ maxConcurrent: 1 });
+  let aborted = false;
+  let fallback = false;
+  const provider = makeProviderWithVision(true);
+  provider.chatVision = async ({ signal }) =>
+    new Promise((_, reject) => {
+      if (!signal) throw new Error("probe must be cancellable");
+      signal.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+          reject(signal.reason);
+        },
+        { once: true },
+      );
+    });
+  const route = await probeVisionRoute({
+    primaryLLM: provider,
+    primaryModel: "slow-model",
+    visionConfig: { enabled: true, baseUrl: "http://fallback", model: "fallback" },
+    scheduler,
+    signal: AbortSignal.timeout(20),
+    makeFallback: () => {
+      fallback = true;
+      return makeProviderWithVision(true);
+    },
+  });
+  expect(route).toBeNull();
+  expect(aborted).toBe(true);
+  expect(fallback).toBe(false);
+  expect(scheduler.isBusy()).toBe(false);
+  expect(await scheduler.run("foreground", async () => "ready")).toBe("ready");
+});

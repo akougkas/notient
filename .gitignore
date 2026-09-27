@@ -72,3 +72,7 @@ testbench/
 
 # Agent worktrees
 .claude/worktrees/
+
+.clio-coder/
+
+/SPRINT.md

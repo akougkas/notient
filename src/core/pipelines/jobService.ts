@@ -1,7 +1,12 @@
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
 import type { ChangeResult } from "../../api/changes";
 import { NoteReadService } from "../../api/notes";
-import { type OperationInput, type PipelineId, operationInputs } from "../../api/operations";
+import {
+  type OperationInput,
+  type PipelineId,
+  type PipelinePolicy,
+  operationInputs,
+} from "../../api/operations";
 import { type PipelineJob, type PipelinePlan, jobResultSchema } from "../../api/pipelines";
 import { NoteApiError } from "../../api/schema";
 import { scopeAllows } from "../../api/scope";
@@ -14,7 +19,12 @@ import type { LLMProvider } from "../llm/provider";
 import type { SearchPipeline } from "../search/searchPipeline";
 import type { SettingsService } from "../settings/settingsService";
 import type { PipelineContextOptions } from "./context";
-import { assertPipelinePolicy } from "./effectPolicy";
+import {
+  reconsiderationContextMatches,
+  reconsiderationContextRevision,
+} from "./reconsiderationContext";
+import { assertPipelinePolicy, pipelinePolicyAllows } from "./effectPolicy";
+import { cultivationBudgetStatus } from "../cultivation/budget";
 import type { PipelineEngine } from "./engine";
 import { type JobStore, stableJobId } from "./jobStore";
 
@@ -83,7 +93,7 @@ export class JobService {
       work: Promise<void>;
       pipeline: PipelineId;
       callerId: string;
-      policy: string;
+      policy: PipelinePolicy;
       background: boolean;
     }
   >();
@@ -95,15 +105,31 @@ export class JobService {
       const { settings } = options.settings.background();
       for (const run of this.running.values()) {
         if (
-          run.policy !== JSON.stringify(settings.pipelines[run.pipeline]) ||
+          !pipelinePolicyAllows(run.policy, settings.pipelines[run.pipeline]) ||
           (run.background && settings.paused)
         )
           run.controller.abort(
             new NoteApiError("FORBIDDEN", "pipeline permission changed during execution"),
           );
       }
-      void this.pump().catch(() => {});
+      void this.enforceDailyCultivationBudget(settings.cultivation.attention)
+        .then(() => this.pump())
+        .catch(() => {});
     });
+  }
+  private async enforceDailyCultivationBudget(
+    attention: ReturnType<SettingsService["background"]>["settings"]["cultivation"]["attention"],
+  ): Promise<void> {
+    const jobs = await this.options.store.list(10000);
+    const status = cultivationBudgetStatus(jobs, attention, Date.now());
+    if (status.tokens.reserved <= status.tokens.limit && status.modelCalls.reserved <= status.modelCalls.limit)
+      return;
+    for (const run of this.running.values()) {
+      if (run.background)
+        run.controller.abort(
+          new NoteApiError("LIMIT_EXCEEDED", "daily cultivation budget changed during execution"),
+        );
+    }
   }
   async recover(): Promise<void> {
     for (const job of await this.options.store.list(10000)) {
@@ -123,7 +149,11 @@ export class JobService {
   async run(
     input: unknown,
     caller: ChangeCaller,
-    origin?: { reason: string; key: string },
+    origin?: {
+      reason: string;
+      key: string;
+      budget?: Partial<Pick<PipelineJob["policy"]["budget"], "modelCalls" | "tokens">>;
+    },
     signal?: AbortSignal,
   ): Promise<PipelineJob> {
     signal?.throwIfAborted();
@@ -140,15 +170,33 @@ export class JobService {
         existing.preview !== request.preview ||
         existing.caller.kind !== caller.kind ||
         existing.background !== (origin !== undefined) ||
-        JSON.stringify(existing.sourceRevisions) !== JSON.stringify(request.sources)
+        JSON.stringify(existing.sourceRevisions) !== JSON.stringify(request.sources) ||
+        (origin?.budget !== undefined &&
+          Object.entries(origin.budget).some(
+            ([key, value]) =>
+              existing.policy.budget[key as keyof PipelineJob["policy"]["budget"]] !== value,
+          ))
       )
         throw new NoteApiError("CONFLICT", "job idempotency key was reused with different inputs");
       return existing;
     }
     const configuration = this.options.settings.background();
-    const policy = configuration.settings.pipelines[request.pipeline];
-    if (origin && (configuration.settings.paused || !policy.enabled))
+    const configuredPolicy = configuration.settings.pipelines[request.pipeline];
+    if (origin && (configuration.settings.paused || !configuredPolicy.enabled))
       throw new NoteApiError("FORBIDDEN", "background pipeline is disabled or paused");
+    const policy = {
+      ...configuredPolicy,
+      budget: {
+        ...configuredPolicy.budget,
+        ...(origin?.budget ?? {}),
+      },
+    };
+    for (const key of ["modelCalls", "tokens"] as const) {
+      const selected = policy.budget[key];
+      const configured = configuredPolicy.budget[key];
+      if (!Number.isSafeInteger(selected) || selected < 0 || selected > configured)
+        throw new NoteApiError("LIMIT_EXCEEDED", `cultivation ${key} budget exceeds its policy`);
+    }
     if (request.sources.length > policy.budget.notes)
       throw new NoteApiError("LIMIT_EXCEEDED", "selected notes exceed the pipeline note budget");
     await this.requireSources(request.sources, policy.readScope);
@@ -168,6 +216,14 @@ export class JobService {
       updatedAt: at,
       sourceRevisions: request.sources,
       configurationRevision: configuration.revision,
+      ...(request.pipeline === "reconsider"
+        ? {
+            reconsiderationContextRevision: reconsiderationContextRevision(
+              configuredPolicy,
+              configuration.settings.cultivation.methodology,
+            ),
+          }
+        : {}),
       policy: structuredClone(policy),
       attempts: [],
       runAttempts: 0,
@@ -203,7 +259,8 @@ export class JobService {
   }
   private async pumpSerial(): Promise<void> {
     if (!this.accepting) return;
-    const jobs = (await this.options.store.list(10000)).filter(
+    const storedJobs = await this.options.store.list(10000);
+    const jobs = storedJobs.filter(
       (job) =>
         (job.state === "queued" || job.state === "waiting-inference") &&
         !this.running.has(job.id) &&
@@ -215,6 +272,9 @@ export class JobService {
         b.policy.budget.priority - a.policy.budget.priority ||
         a.createdAt - b.createdAt,
     );
+    let backgroundActive =
+      storedJobs.some((job) => job.background && job.state === "running") ||
+      [...this.running.values()].some((run) => run.background);
     for (const job of jobs) {
       if (!this.accepting || this.running.size >= 8) break;
       try {
@@ -243,18 +303,21 @@ export class JobService {
         continue;
       }
       if (job.background && this.options.settings.background().settings.paused) continue;
+      if (job.background) {
+        if (backgroundActive || !(await this.fitsDailyCultivationBudget(job, storedJobs))) continue;
+      }
       const activeSamePipeline = [...this.running.values()].filter(
         (run) => run.pipeline === job.pipeline,
       ).length;
       if (activeSamePipeline >= job.policy.budget.concurrency) continue;
-      if (
-        job.plan === null &&
-        !(
-          job.pipeline === "index-extract" &&
-          !job.policy.parameters.indexExtract.extraction &&
-          !job.policy.parameters.indexExtract.embeddings
-        )
-      ) {
+      const deterministicOnlyIndexExtract =
+        job.pipeline === "index-extract" &&
+        !job.policy.parameters.indexExtract.extraction &&
+        !job.policy.parameters.indexExtract.embeddings;
+      const configuredReasoning =
+        job.pipeline !== "reconsider" ||
+        (job.policy.budget.modelCalls > 0 && job.policy.budget.tokens > 0);
+      if (job.plan === null && configuredReasoning && !deterministicOnlyIndexExtract) {
         const model = this.options.settings.get().primary.reasoningModel;
         const available =
           model !== "" &&
@@ -295,9 +358,10 @@ export class JobService {
         work,
         pipeline: job.pipeline,
         callerId: job.caller.id,
-        policy: JSON.stringify(job.policy),
+        policy: job.policy,
         background: job.background,
       });
+      if (job.background) backgroundActive = true;
       void work.catch((error) =>
         process.stderr.write(
           `${JSON.stringify({ type: "job:execution_failed", jobId: job.id, message: error instanceof Error ? error.message : String(error) })}\n`,
@@ -305,10 +369,35 @@ export class JobService {
       );
     }
   }
+  private async fitsDailyCultivationBudget(
+    job: PipelineJob,
+    storedJobs: readonly PipelineJob[],
+  ): Promise<boolean> {
+    const attention = this.options.settings.background().settings.cultivation.attention;
+    const prior = storedJobs.filter(
+      (candidate) =>
+        candidate.id !== job.id &&
+        candidate.background &&
+        !["queued", "waiting-inference", "paused"].includes(candidate.state),
+    );
+    const status = cultivationBudgetStatus(prior, attention, Date.now());
+    return (
+      status.tokens.remaining >= job.policy.budget.tokens &&
+      status.modelCalls.remaining >= job.policy.budget.modelCalls
+    );
+  }
   async assertAuthority(job: PipelineJob, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     await this.authorizeCaller(job.caller);
-    assertPipelinePolicy(job, this.options.settings.background().settings);
+    const background = this.options.settings.background().settings;
+    assertPipelinePolicy(job, background);
+    if (
+      job.pipeline === "reconsider" &&
+      job.reconsiderationContextRevision !== undefined &&
+      reconsiderationContextRevision(job.policy, background.cultivation.methodology) !==
+        job.reconsiderationContextRevision
+    )
+      throw new NoteApiError("FORBIDDEN", "reconsideration context changed; run again under current guidance");
     const stored = await this.options.store.get(job.id);
     if (!stored || stored.state !== "running")
       throw new NoteApiError("CANCELLED", "job is no longer running");
@@ -388,7 +477,7 @@ export class JobService {
             await this.assertAuthority(job, combined);
           };
           await authorize();
-          const context = this.context(job, combined);
+          const context = await this.context(job, combined);
           const plan = job.plan ?? (await this.options.engine.plan(job.pipeline, context));
           await authorize();
           await this.requireSources(plan.sources, job.policy.readScope);
@@ -405,21 +494,62 @@ export class JobService {
             draft.stage = "review";
           });
           await authorize();
+          const expectedReconsiderationAppends = await this.expectedReconsiderationAppends(job, plan);
           const effects =
             job.preview || job.policy.mode !== "apply"
               ? null
               : await this.options.apply(ready, combined, authorize);
+          if (effects?.state === "applied")
+            await this.rebindAppliedReconsiderationTargets(plan, effects, expectedReconsiderationAppends);
           await budget.flush();
           await this.finish(job, plan, effects, started);
         });
-      if (job.background) await this.options.scheduler.run(`pipeline-${job.id}`, task, { signal });
+      if (
+        job.pipeline === "reconsider" &&
+        (job.policy.budget.modelCalls === 0 || job.policy.budget.tokens === 0)
+      )
+        await task(signal);
+      else if (job.background) await this.options.scheduler.run(`pipeline-${job.id}`, task, { signal });
       else await this.options.scheduler.runPriority(`pipeline-${job.id}`, task, { signal });
     } catch (error) {
       await budget.flush().catch(() => {});
       await this.fail(job, error, started, signal);
     }
   }
-  private context(job: PipelineJob, signal: AbortSignal): PipelineContextOptions {
+  private async context(job: PipelineJob, signal: AbortSignal): Promise<PipelineContextOptions> {
+    const attention = this.options.settings.background().settings.cultivation.attention;
+    const positivePriorityPaths = new Set(
+      attention.priorities
+        .filter((entry) => entry.priority > 0)
+        .map((entry) => entry.path),
+    );
+    const deferredRelevancePaths = job.background
+      ? job.sourceRevisions
+          .filter((source) => positivePriorityPaths.has(source.path))
+          .map((source) => source.path)
+      : job.sourceRevisions.map((source) => source.path);
+    const priorReconsiderationAssessments = job.background && job.pipeline === "reconsider"
+      ? (await this.options.store.list(10000))
+          .filter(
+            (prior) =>
+              prior.id !== job.id &&
+              prior.background &&
+              prior.pipeline === "reconsider" &&
+              prior.state === "completed" &&
+              reconsiderationContextMatches(prior, job) &&
+              Date.now() - prior.updatedAt < attention.revisitDays * 86_400_000 &&
+              prior.plan !== null,
+          )
+          .flatMap((prior) => prior.plan?.reconsiderationAssessments ?? [])
+          .filter((assessment) =>
+            job.sourceRevisions.some(
+              (source) =>
+                source.path === assessment.target.path &&
+                source.revision === assessment.target.revision,
+            ),
+          )
+          .slice(0, 200)
+      : [];
     return {
       vault: this.options.vault,
       search: this.options.search,
@@ -427,6 +557,16 @@ export class JobService {
       model: this.options.settings.get().primary.reasoningModel,
       modelContextTokens: this.options.settings.get().chat.modelContextTokens,
       policy: job.policy,
+      methodology: this.options.settings.background().settings.cultivation.methodology,
+      deferredRelevancePaths,
+      ...(deferredRelevancePaths.length
+        ? {
+            deferredRelevanceReason: job.background
+              ? ("positive-attention-priority" as const)
+              : ("foreground-investigation" as const),
+          }
+        : {}),
+      ...(priorReconsiderationAssessments.length ? { priorReconsiderationAssessments } : {}),
       sources: job.sourceRevisions,
       signal,
       stage: async (stage, completed = 0, total = job.sourceRevisions.length) => {
@@ -438,6 +578,67 @@ export class JobService {
         this.options.changed(updated);
       },
     };
+  }
+  private async expectedReconsiderationAppends(
+    job: PipelineJob,
+    plan: PipelinePlan,
+  ): Promise<Map<string, { before: string; expected: string }>> {
+    if (job.pipeline !== "reconsider" || !plan.reconsiderationAssessments?.length) return new Map();
+    const targets = new Set(plan.reconsiderationAssessments.map((assessment) => assessment.target.path));
+    const changesByPath = new Map<string, string[]>();
+    for (const change of plan.changes) {
+      if (!("source" in change) || !targets.has(change.source.path)) continue;
+      if (change.kind !== "append") return new Map();
+      const additions = changesByPath.get(change.source.path) ?? [];
+      additions.push(change.text);
+      changesByPath.set(change.source.path, additions);
+    }
+    const result = new Map<string, { before: string; expected: string }>();
+    const reader = new NoteReadService(this.options.vault);
+    for (const path of targets) {
+      const reference = job.sourceRevisions.find((source) => source.path === path);
+      if (!reference) continue;
+      try {
+        const current = await reader.read(reference);
+        const expected = `${current.body}${(changesByPath.get(path) ?? []).join("")}`;
+        result.set(path, { before: current.body, expected });
+      } catch {
+        return new Map();
+      }
+    }
+    return result;
+  }
+  private async rebindAppliedReconsiderationTargets(
+    plan: PipelinePlan,
+    effects: NonNullable<PipelineJob["effects"]>,
+    expectedBodies: Map<string, { before: string; expected: string }>,
+  ): Promise<void> {
+    if (plan.pipeline !== "reconsider" || !plan.reconsiderationAssessments?.length || !expectedBodies.size)
+      return;
+    const appliedPaths = new Set(
+      effects.effects.filter((effect) => effect.state === "applied" && effect.historyId).map((effect) => effect.path),
+    );
+    const reader = new NoteReadService(this.options.vault);
+    for (const [path, expected] of expectedBodies) {
+      if (!appliedPaths.has(path)) continue;
+      try {
+        const current = await reader.read({ path });
+        if (current.body !== expected.expected || current.body === expected.before) continue;
+        plan.reconsiderationAssessments = plan.reconsiderationAssessments.map((assessment) =>
+          assessment.target.path === path
+            ? {
+                ...assessment,
+                target: current.note,
+                sourceRevisions: assessment.sourceRevisions.map((source) =>
+                  source.path === path ? current.note : source,
+                ),
+              }
+            : assessment,
+        );
+      } catch {
+        continue;
+      }
+    }
   }
   private async finish(
     job: PipelineJob,

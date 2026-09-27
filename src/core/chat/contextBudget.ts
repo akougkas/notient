@@ -1,6 +1,22 @@
 import { sourceReferenceSchema } from "../../api/schema";
 import type { ChatContent } from "../llm/provider";
 
+/** The transport retains exact source records; the model needs the note text
+ * once, rather than repeated as body, evidence.quote and structural raw text. */
+export function modelToolContent(content: string): string {
+  let data: unknown;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  if (!isRecord(data) || typeof data.body !== "string") return content;
+  const source = sourceReferenceSchema.safeParse(data.evidence);
+  if (!source.success || source.data.quote !== data.body) return content;
+  const { quote: _quote, ...evidence } = source.data;
+  return JSON.stringify({ ...data, evidence, structure: undefined, structureOmitted: true });
+}
+
 /** Pack provider context without altering the persisted transcript. Keep short,
  * attributed note excerpts before resorting to removing old tool results. */
 export function fitToolEvidence<T extends { role: string; content: ChatContent }>(
@@ -52,7 +68,11 @@ function noteExcerpt(
     isRecord(data.lineRange) && Number.isSafeInteger(data.lineRange.start)
       ? Number(data.lineRange.start)
       : 1;
-  const source = sourceReferenceSchema.safeParse(data.evidence);
+  const source = sourceReferenceSchema.safeParse(
+    isRecord(data.evidence) && data.evidence.quote === undefined
+      ? { ...data.evidence, quote: body }
+      : data.evidence,
+  );
   const evidence =
     source.success && source.data.quote === body
       ? {

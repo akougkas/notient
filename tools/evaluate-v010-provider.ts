@@ -11,7 +11,10 @@ const endpoint = process.env.NOTIENT_LLM_BASE_URL;
 const model = process.env.NOTIENT_LLM_MODEL;
 if (!endpoint || !model)
   throw new Error("set NOTIENT_LLM_BASE_URL and NOTIENT_LLM_MODEL to the endpoint under test");
-const provider = new LMStudioProvider({ baseUrl: endpoint });
+const provider = new LMStudioProvider({
+  baseUrl: endpoint,
+  apiKey: process.env.NOTIENT_LLM_API_KEY,
+});
 const originalFetch = globalThis.fetch;
 let sequence = 0;
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {

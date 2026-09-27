@@ -579,27 +579,72 @@ export async function markTier1Done(db: Surreal, noteId: RecordId<"note">): Prom
     .collect();
 }
 
+interface VectorCandidate {
+  id: RecordId<"chunk">;
+  distance: number;
+}
+
+async function selectVectorCandidates(
+  db: Surreal,
+  vector: number[],
+  k: number,
+  ef: number,
+  label: string,
+): Promise<VectorCandidate[]> {
+  const sql = `SELECT id, vector::distance::knn() AS d FROM chunk WHERE vector <|${k},${ef}|> $q;`;
+  const slices: unknown = await db.query(sql, { q: vector }).collect();
+  const rows = queryRows(slices, label);
+  if (rows.length > k) {
+    throw new Error(`${label} storage integrity: candidate window exceeded k`);
+  }
+  const candidates: VectorCandidate[] = [];
+  const seen = new Set<string>();
+  for (const value of rows) {
+    if (!isRow(value)) throw new Error(`${label} storage integrity: row is not an object`);
+    const id = requireRecordId(value.id, "chunk", label);
+    const key = id.toString();
+    if (seen.has(key)) throw new Error(`${label} storage integrity: duplicate chunk id`);
+    seen.add(key);
+    candidates.push({ id, distance: requireFiniteNumber(value.d, `${label} distance`) });
+  }
+  return candidates;
+}
+
 export async function searchVector(db: Surreal, input: SearchVectorInput): Promise<SearchHit[]> {
   if (!Number.isInteger(input.k) || input.k <= 0) {
     throw new Error("searchVector: k must be a positive integer");
   }
-  const operator = input.ef !== undefined ? `<|${input.k},${input.ef}|>` : `<|${input.k}|>`;
-  const sql = `SELECT id, note, text, vector::distance::knn() AS d FROM chunk WHERE vector ${operator} $q AND string::len(string::trim(text)) > 0 ORDER BY d FETCH note;`;
-  const slices: unknown = await db.query(sql, { q: input.vector }).collect();
-  return queryRows(slices, "vector search").map((value) => {
-    if (!isRow(value)) throw new Error("vector search storage integrity: row is not an object");
-    const note = requireFetchedNote(value.note, "vector search");
-    const chunkId = requireRecordId(value.id, "chunk", "vector search");
-    if (typeof value.text !== "string" || value.text.trim().length === 0) {
-      throw new Error("vector search storage integrity: chunk text is invalid");
-    }
-    return {
-      noteId: note.id,
-      chunkId,
-      distance: requireFiniteNumber(value.d, "vector search distance"),
-      text: value.text,
-    };
-  });
+  const candidates = await selectVectorCandidates(
+    db,
+    input.vector,
+    input.k,
+    input.ef ?? DEFAULT_SEARCH_EF,
+    "vector candidate search",
+  );
+  if (candidates.length === 0) return [];
+  const distanceById = new Map(
+    candidates.map((candidate) => [candidate.id.toString(), candidate.distance]),
+  );
+  const sql = `SELECT id, note, text FROM chunk WHERE id IN $candidateIds AND string::len(string::trim(text)) > 0 FETCH note;`;
+  const slices: unknown = await db
+    .query(sql, { candidateIds: candidates.map((candidate) => candidate.id) })
+    .collect();
+  return queryRows(slices, "vector search")
+    .map((value) => {
+      if (!isRow(value)) throw new Error("vector search storage integrity: row is not an object");
+      const note = requireFetchedNote(value.note, "vector search");
+      const chunkId = requireRecordId(value.id, "chunk", "vector search");
+      if (typeof value.text !== "string" || value.text.trim().length === 0) {
+        throw new Error("vector search storage integrity: chunk text is invalid");
+      }
+      const distance = distanceById.get(chunkId.toString());
+      if (distance === undefined) {
+        throw new Error("vector search storage integrity: row was not in the candidate window");
+      }
+      return { noteId: note.id, chunkId, distance, text: value.text };
+    })
+    .sort((left, right) => left.distance - right.distance)
+    .slice(0, input.k);
 }
 
 /**
@@ -665,16 +710,42 @@ export async function searchVectorWithPath(
   }
   const ef = input.ef ?? DEFAULT_SEARCH_EF;
   const extraWhere = input.extraWhere ?? "";
-  const sql = `SELECT id, note.{ id, path } AS note, text, source_revision, start_line, end_line, vector::distance::knn() AS d FROM chunk WHERE vector <|${input.k},${ef}|> $q AND string::len(string::trim(text)) > 0 AND note.tombstoned_at IS NONE${extraWhere} ORDER BY d LIMIT $k;`;
+  const candidates = await selectVectorCandidates(
+    db,
+    input.vector,
+    input.k,
+    ef,
+    "vector candidate search",
+  );
+  if (candidates.length === 0) return [];
+  const distanceById = new Map(
+    candidates.map((candidate) => [candidate.id.toString(), candidate.distance]),
+  );
+  const sql = `SELECT id, note.{ id, path } AS note, text, source_revision, start_line, end_line FROM chunk WHERE id IN $candidateIds AND string::len(string::trim(text)) > 0 AND note.tombstoned_at IS NONE${extraWhere};`;
   const bindings: Record<string, unknown> = {
-    q: input.vector,
-    k: input.k,
     ...(input.extraBindings ?? {}),
+    candidateIds: candidates.map((candidate) => candidate.id),
   };
   const slices: unknown = await db.query(sql, bindings).collect();
-  return queryRows(slices, "vector path search").map((value) =>
-    parseSearchChunkRow(value, "vector path search", "distance"),
-  );
+  return queryRows(slices, "vector path search")
+    .map((value) => {
+      if (!isRow(value)) {
+        throw new Error("vector path search storage integrity: row is not an object");
+      }
+      const id = requireRecordId(value.id, "chunk", "vector path search");
+      const distance = distanceById.get(id.toString());
+      if (distance === undefined) {
+        throw new Error(
+          "vector path search storage integrity: row was not in the candidate window",
+        );
+      }
+      return parseSearchChunkRow({ ...value, d: distance }, "vector path search", "distance");
+    })
+    .sort(
+      (left, right) =>
+        (left.distance ?? Number.POSITIVE_INFINITY) - (right.distance ?? Number.POSITIVE_INFINITY),
+    )
+    .slice(0, input.k);
 }
 
 export interface SearchBm25Input {
@@ -1183,21 +1254,49 @@ export function selectProbeVectors(vectors: number[][], count: number): number[]
 
 async function queryNeighborRows(
   db: Surreal,
-  sql: string,
   activeNoteId: RecordId<"note">,
   probes: number[][],
+  k: number,
+  ef: number,
 ): Promise<NeighborRow[]> {
   const rows: NeighborRow[] = [];
   const seen = new Set<string>();
   for (const queryVector of probes) {
+    const candidates = await selectVectorCandidates(
+      db,
+      queryVector,
+      k,
+      ef,
+      "linker vector candidate search",
+    );
+    if (candidates.length === 0) continue;
+    const distanceById = new Map(
+      candidates.map((candidate) => [candidate.id.toString(), candidate.distance]),
+    );
+    const sql = [
+      "LET $excluded = (SELECT VALUE (out.note ?? out) FROM wikilink WHERE in = $active OR in.note = $active);",
+      "LET $excludedBack = (SELECT VALUE (in.note ?? in) FROM wikilink WHERE out = $active OR out.note = $active);",
+      "SELECT id, note FROM chunk WHERE id IN $candidateIds AND note != $active AND note NOT IN $excluded AND note NOT IN $excludedBack AND note.tier2_at != NONE AND note.tombstoned_at IS NONE FETCH note;",
+    ].join("\n");
     const results: unknown = await db
-      .query(sql, { active: activeNoteId, q: queryVector })
+      .query(sql, {
+        active: activeNoteId,
+        candidateIds: candidates.map((candidate) => candidate.id),
+      })
       .collect();
     if (!Array.isArray(results) || results.length !== 3 || !Array.isArray(results[2])) {
       throw new Error("linker neighbor storage integrity: invalid query result slices");
     }
     for (const value of results[2]) {
-      const row = parseNeighborRow(value);
+      if (!isRow(value)) {
+        throw new Error("linker neighbor storage integrity: row is not an object");
+      }
+      const id = requireRecordId(value.id, "chunk", "linker neighbor");
+      const distance = distanceById.get(id.toString());
+      if (distance === undefined) {
+        throw new Error("linker neighbor storage integrity: row was not in the candidate window");
+      }
+      const row = parseNeighborRow({ ...value, d: distance });
       const key = row.id.toString();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1262,14 +1361,11 @@ export async function linkerNeighbors(
     return [];
   }
   const ef = input.ef ?? DEFAULT_LINKER_EF;
-  const operator = `<|${input.k},${ef}|>`;
   // A long note is not its first paragraph. Probe with several vectors
   // spread across the note and merge the neighbourhoods; a candidate
   // only needs embeddings (tier2_at), not a finished extraction, so the
   // first full pass over a vault can link early notes to later ones.
   const probes = selectProbeVectors(input.activeChunkVectors, LINKER_PROBE_VECTORS);
-  // Multi-statement query: SurrealDB returns one result slice per statement.
-  // We only care about the final SELECT, so we read the last slice.
   // Tier 1 writes wikilink edges block-anchored: `in` is a `block` record
   // whose `note` field points at the source note, and `out` is either a note
   // or another block. A graph walk from the note (`->wikilink->note`) never
@@ -1277,12 +1373,7 @@ export async function linkerNeighbors(
   // author had already wikilinked. The exclusion sets are computed over the
   // `wikilink` table directly with the same endpoint fallback that
   // `expandWikilinkNeighbors` uses.
-  const sql = [
-    "LET $excluded = (SELECT VALUE (out.note ?? out) FROM wikilink WHERE in = $active OR in.note = $active);",
-    "LET $excludedBack = (SELECT VALUE (in.note ?? in) FROM wikilink WHERE out = $active OR out.note = $active);",
-    `SELECT id, note, vector::distance::knn() AS d FROM chunk WHERE vector ${operator} $q AND note != $active AND note NOT IN $excluded AND note NOT IN $excludedBack AND note.tier2_at != NONE AND note.tombstoned_at IS NONE ORDER BY d FETCH note;`,
-  ].join("\n");
-  const rows = await queryNeighborRows(db, sql, input.activeNoteId, probes);
+  const rows = await queryNeighborRows(db, input.activeNoteId, probes, input.k, ef);
   return neighborCandidates(groupNeighborRows(rows));
 }
 

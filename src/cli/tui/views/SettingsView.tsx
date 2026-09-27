@@ -12,7 +12,9 @@ import {
 import type { OperationResult } from "../../../api/results";
 import { readingColumn } from "../layout";
 import type { NotientRpc } from "../rpc";
+import type { ConventionDraft } from "../methodologyConvention";
 import { ChatBudgetPanel } from "./ChatBudgetPanel";
+import { CultivationSettingsPanel } from "./CultivationSettingsPanel";
 import { COLOR, truncate } from "./theme";
 
 const sections: PolicySection[] = ["Basics", "Scope", "Schedule", "Resources", "Details"];
@@ -22,12 +24,19 @@ interface Props {
   height: number;
   onClose: () => void;
   onExit: () => void;
+  initialConvention?: ConventionDraft;
 }
 export function SettingsView(props: Props) {
   const column = readingColumn(props.width);
   const [catalog, setCatalog] = useState<OperationResult<"pipelines.list"> | null>(null);
   const [chat, setChat] = useState<OperationResult<"chat.settings"> | null>(null);
+  const [cultivation, setCultivation] = useState<OperationResult<"cultivation.settings"> | null>(
+    null,
+  );
   const [chatOpen, setChatOpen] = useState(false);
+  const [cultivationOpen, setCultivationOpen] = useState(false);
+  const [conventionDraft, setConventionDraft] = useState(props.initialConvention);
+  const conventionOpened = useRef(false);
   const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState<PipelinePolicy | null>(null);
   const [section, setSection] = useState(0);
@@ -61,13 +70,15 @@ export function SettingsView(props: Props) {
     flight.current = true;
     setBusy(true);
     try {
-      const [result, chatSettings] = await Promise.all([
+      const [result, chatSettings, cultivationSettings] = await Promise.all([
         rpc.current().pipelines(),
         rpc.current().chatSettings(),
+        rpc.current().cultivationSettings(),
       ]);
       if (!alive.current) return;
       setCatalog(result);
       setChat(chatSettings);
+      setCultivation(cultivationSettings);
       setDraft(null);
       setConfirmation(null);
       setEditing(null);
@@ -94,6 +105,12 @@ export function SettingsView(props: Props) {
       alive.current = false;
     };
   }, [load]);
+  useEffect(() => {
+    if (cultivation && conventionDraft && !conventionOpened.current) {
+      conventionOpened.current = true;
+      setCultivationOpen(true);
+    }
+  }, [cultivation, conventionDraft]);
   const save = async () => {
     if (!entry || !draft || !catalog || flight.current) return;
     if (!dirty && !pending.current) {
@@ -187,7 +204,7 @@ export function SettingsView(props: Props) {
   useKeyboard((key) =>
     flushSync(() => {
       // The resource panel owns the keyboard while it is open.
-      if (chatOpen) return;
+      if (chatOpen || cultivationOpen) return;
       if (key.eventType !== "press" && key.eventType !== "repeat") return;
       if (key.ctrl && key.name === "c") {
         key.preventDefault();
@@ -256,11 +273,25 @@ export function SettingsView(props: Props) {
       setDiscard(false);
       if (!draft) {
         if (key.name === "down" || key.name === "j")
-          setSelected((v) => Math.min(catalog?.pipelines.length ?? 0, v + 1));
+          setSelected((v) => Math.min((catalog?.pipelines.length ?? 0) + 1, v + 1));
         if (key.name === "up" || key.name === "k") setSelected((v) => Math.max(0, v - 1));
         if (key.name === "p" && key.eventType !== "repeat") void pause();
-        if (key.name === "return" && !entry && chat && key.eventType !== "repeat")
+        if (
+          key.name === "return" &&
+          !entry &&
+          chat &&
+          selected === (catalog?.pipelines.length ?? 0) &&
+          key.eventType !== "repeat"
+        )
           setChatOpen(true);
+        if (
+          key.name === "return" &&
+          !entry &&
+          cultivation &&
+          selected === (catalog?.pipelines.length ?? 0) + 1 &&
+          key.eventType !== "repeat"
+        )
+          setCultivationOpen(true);
         if (key.name === "return" && entry) {
           setDraft(structuredClone(entry.policy));
           setSection(0);
@@ -321,6 +352,26 @@ export function SettingsView(props: Props) {
             setNotice("Saved. The next chat turn uses these limits.");
           }}
           onClose={() => setChatOpen(false)}
+          onExit={props.onExit}
+        />
+      ) : cultivationOpen && cultivation ? (
+        <CultivationSettingsPanel
+          rpc={props.rpc}
+          current={cultivation}
+          initialConvention={conventionDraft}
+          width={column.width}
+          height={Math.max(8, props.height - 5)}
+          onSaved={(saved) => {
+            setCultivation(saved);
+            setConventionDraft(undefined);
+            setCultivationOpen(false);
+            setError(false);
+            setNotice("Saved. Attention limits and methodology guidance are active.");
+          }}
+          onClose={() => {
+            setConventionDraft(undefined);
+            setCultivationOpen(false);
+          }}
           onExit={props.onExit}
         />
       ) : editing && draft ? (
@@ -398,21 +449,37 @@ export function SettingsView(props: Props) {
               {`${selected === (catalog?.pipelines.length ?? 0) ? "›" : " "} Conversation resources   ${chat.budget.modelCalls} calls · ${chat.budget.tokens} tokens · ${chat.budget.durationMs / 1000}s`}
             </text>
           ) : null}
+          {cultivation ? (
+            <text
+              key="cultivation-settings"
+              height={rowHeight}
+              fg={selected === (catalog?.pipelines.length ?? 0) + 1 ? COLOR.accent : COLOR.text}
+            >
+              {`${selected === (catalog?.pipelines.length ?? 0) + 1 ? "›" : " "} Cultivation attention & methodology   ${cultivation.methodology.mode === "custom" ? cultivation.methodology.name : cultivation.methodology.mode} · ${cultivation.attention.dailyTokens} tokens/day · ${cultivation.attention.dailyModelCalls} calls/day`}
+            </text>
+          ) : null}
           <text width={column.width} wrapMode="word" fg={COLOR.dim}>
             {entry?.description ??
               (chat
                 ? "Limits for each chat answer: model calls, tokens, time and the largest single generation."
-                : "")}
+                : cultivation
+                  ? "What eligible notes should receive attention, how often to revisit them, and the methodology and conventions that guide interpretation."
+                  : "")}
           </text>
         </box>
       )}
-      {chatOpen ? null : (
+      {chatOpen || cultivationOpen ? null : (
         <text width={column.width} height={3} wrapMode="word" fg={error ? COLOR.bad : COLOR.dim}>
           {busy ? "Saving or checking settings…" : notice}
         </text>
       )}
-      <text width={column.width} height={chatOpen ? 0 : 2} wrapMode="word" fg={COLOR.label}>
-        {chatOpen
+      <text
+        width={column.width}
+        height={chatOpen || cultivationOpen ? 0 : 2}
+        wrapMode="word"
+        fg={COLOR.label}
+      >
+        {chatOpen || cultivationOpen
           ? ""
           : editing
             ? "Ctrl+S keep value · Esc cancel field"

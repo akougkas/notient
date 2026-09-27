@@ -1,4 +1,7 @@
-import { AGENT_ID_PATTERN, isCanonicalAgentId } from "../auth/agentIdentity";
+import {
+  CONVERSATION_CLIENT_ID_PATTERN,
+  isCanonicalConversationClientId,
+} from "../auth/agentIdentity";
 import type {
   ApprovalMode,
   ApprovalRecord,
@@ -183,14 +186,16 @@ function assertSerializableFrontmatter(values: ConversationFrontmatter): void {
   if (values.conversation_id.length === 0) {
     throw new Error("invalid conversation: conversation_id must not be empty");
   }
-  if (values.model.length === 0) {
-    throw new Error("invalid conversation: model must not be empty");
+  if (values.model.trim() !== values.model) {
+    throw new Error("invalid conversation: model must not contain surrounding whitespace");
   }
   if (values.topic.includes("\n") || values.topic.includes("\r")) {
     throw new Error("invalid conversation: topic must fit on one line");
   }
-  if (!isCanonicalAgentId(values.client_identity)) {
-    throw new Error(`invalid conversation: client_identity must match ${AGENT_ID_PATTERN.source}`);
+  if (!isCanonicalConversationClientId(values.client_identity)) {
+    throw new Error(
+      `invalid conversation: client_identity must match ${CONVERSATION_CLIENT_ID_PATTERN.source}`,
+    );
   }
   if (!values.pinned_context.every((entry) => typeof entry === "string")) {
     throw new Error("invalid conversation: pinned_context must contain only strings");
@@ -231,8 +236,8 @@ function parseFrontmatter(yaml: string): ConversationFrontmatter {
     throw new Error("invalid conversation: conversation_id must not be empty");
   }
   const model = parseJsonStringField(fields, "model");
-  if (model.length === 0) {
-    throw new Error("invalid conversation: model must not be empty");
+  if (model.trim() !== model) {
+    throw new Error("invalid conversation: model must not contain surrounding whitespace");
   }
   const pinnedContext = parseStringArrayField(fields, "pinned_context");
   const approvalMode = normalizeApprovalMode(fields.approval_mode);
@@ -240,8 +245,10 @@ function parseFrontmatter(yaml: string): ConversationFrontmatter {
     throw new Error("invalid conversation: approval_mode must be 'safe' or 'yolo'");
   }
   const clientIdentity = parseJsonStringField(fields, "client_identity");
-  if (!isCanonicalAgentId(clientIdentity)) {
-    throw new Error(`invalid conversation: client_identity must match ${AGENT_ID_PATTERN.source}`);
+  if (!isCanonicalConversationClientId(clientIdentity)) {
+    throw new Error(
+      `invalid conversation: client_identity must match ${CONVERSATION_CLIENT_ID_PATTERN.source}`,
+    );
   }
   const createdAt = parseIntegerField(fields, "created_at");
   const updatedAt = parseIntegerField(fields, "updated_at");

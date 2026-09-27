@@ -64,6 +64,12 @@ export class InferenceBudget {
   get chargedTokens(): number {
     return this.attempts.reduce((sum, item) => sum + item.chargedTokens, 0);
   }
+  get remainingTokens(): number {
+    return Math.max(
+      0,
+      Math.min(this.limits.tokens - this.chargedTokens, this.parent?.remainingTokens ?? Infinity),
+    );
+  }
   assertAvailable(): void {
     this.signal.throwIfAborted();
     this.parent?.assertAvailable();
@@ -179,7 +185,7 @@ export function reserveGeneration(
   ready: Promise<void>;
 } {
   const budget = activeBudget.getStore();
-  // UTF-8 byte count plus framing is a conservative estimate, not measured
+  // Text plus framing is an estimate, not measured
   // prompt usage. Include tools/schema and all prior results on every round.
   const inputEstimate = estimateInputTokens(messages, extra);
   const reservation = budget?.reserve(inputEstimate, requested);
@@ -194,12 +200,20 @@ export function reserveGeneration(
   };
 }
 
-/** Conservative UTF-8/framing estimate, never provider-measured usage. */
+/** Estimate Latin text at three bytes/token; retain a byte allowance for other
+ * scripts. Reconcile with actual provider usage when the request completes. */
 export function estimateInputTokens(messages: ChatMessage[], extra: unknown): number {
-  return Buffer.byteLength(JSON.stringify({ messages, extra })) + 256 + messages.length * 64;
+  const text = JSON.stringify({ messages, extra });
+  const ascii = text.match(/[\x00-\x7f]/g)?.length ?? 0;
+  return Math.ceil(ascii / 3) + Buffer.byteLength(text) - ascii + 256 + messages.length * 16;
 }
 
 /** Domain effects must not outlive a turn's resource authority. */
 export function assertInferenceBudgetAvailable(): void {
   activeBudget.getStore()?.assertAvailable();
+}
+
+/** Remaining run authority, including any enclosing job, before fitting evidence. */
+export function remainingInferenceTokens(): number {
+  return activeBudget.getStore()?.remainingTokens ?? Infinity;
 }

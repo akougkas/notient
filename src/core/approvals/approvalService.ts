@@ -27,11 +27,12 @@ import { type ToolApproval, assertToolTarget, toolApprovalSchema } from "../chat
 import { DateTime, RecordId, type Surreal } from "surrealdb";
 import { type VaultAdapter, VaultMutationBlockedError } from "../../adapters/vaultAdapter";
 import type { ChangePreview, ChangeResult, PreviewEffect } from "../../api/changes";
-import { NoteReadService } from "../../api/notes";
-import { operationInputs } from "../../api/operations";
+import { NoteReadService, sourceRange } from "../../api/notes";
+import { type OperationInput, operationInputs } from "../../api/operations";
+import { retainReviewedRelationship } from "./relationIntelligence";
 import type { PipelineJob, PipelinePlan } from "../../api/pipelines";
-import type { ProposalProvenance, ReviewProposal } from "../../api/proposals";
-import { NoteApiError, type NoteReference } from "../../api/schema";
+import type { ProposalProvenance, ReviewProposal, ReviewProvenance } from "../../api/proposals";
+import { NoteApiError, type NoteReference, type SourceReference } from "../../api/schema";
 import {
   WRITEBACK_EDGE_TABLES,
   type WritebackEdgeTable,
@@ -71,6 +72,7 @@ import {
   pageReviews,
   readReview,
   reviewRevision,
+  reviewSourceReferences,
   reviewsForEdge,
   saveReview,
 } from "./reviewStorage";
@@ -125,6 +127,7 @@ export interface ApproveEdgeInput extends EdgeDecisionTarget {
 export interface ApprovalExecutionGuard {
   before?: string;
   after?: string;
+  suppressGenericRelationshipRetention?: boolean;
   authorize: () => Promise<void>;
 }
 
@@ -223,11 +226,17 @@ export function renderApprovedRelation(
   before: string,
   table: WritebackEdgeTable,
   targetPath: string,
+  provenance?: ProposalProvenance,
+  contributor?: string,
+  suppressGenericRetention = false,
 ): string {
   const target = wikilinkTargetForPath(targetPath);
-  return isFrontmatterRelation(table)
+  const linked = isFrontmatterRelation(table)
     ? applyApprovedRelation(before, { key: table, target })
     : applyApprovedLink(before, { target });
+  return suppressGenericRetention
+    ? linked
+    : retainReviewedRelationship(linked, table, targetPath, provenance, contributor);
 }
 
 /** First-seen source revisions and reviewed edges named by a stored change set. */
@@ -248,6 +257,41 @@ function reviewedSources(preview: ChangePreview): { sources: NoteReference[]; ed
     edgeIds.push(change.edgeId);
   }
   return { sources: [...sources.values()], edgeIds };
+}
+
+function exactEvidenceMatch(body: string, evidence: SourceReference): boolean {
+  const { start, end, startLine, endLine } = evidence.range;
+  if (end <= start || end > body.length || body.slice(start, end) !== evidence.quote) return false;
+  const actual = sourceRange(body, start, end);
+  return actual.startLine === startLine && actual.endLine === endLine;
+}
+
+async function validateEvidenceAgainstPreview(
+  preview: ChangePreview,
+  evidence: SourceReference[],
+  reader: NoteReadService,
+): Promise<void> {
+  for (const reference of evidence) {
+    const before = preview.effects.find(
+      (effect) =>
+        effect.path === reference.path &&
+        effect.beforeRevision === reference.revision &&
+        effect.before !== null,
+    );
+    const after = before
+      ? undefined
+      : preview.effects.find(
+          (effect) =>
+            effect.path === reference.path && effect.afterRevision === reference.revision,
+        );
+    const body = before?.before ?? after?.after ??
+      (await reader.read({ path: reference.path, revision: reference.revision })).body;
+    if (!exactEvidenceMatch(body, reference))
+      throw new NoteApiError(
+        "CONFLICT",
+        `review evidence no longer matches the saved source: ${reference.path}`,
+      );
+  }
 }
 
 export class ApprovalService {
@@ -412,10 +456,25 @@ export class ApprovalService {
       if (preview.conflicts.length)
         throw new NoteApiError("CONFLICT", "resolve the reference ambiguities before submitting");
       const { sources, edgeIds } = reviewedSources(preview);
+      const provenance: ReviewProvenance = {
+        requestedBy: { id: caller.id, kind: caller.kind },
+        sources,
+        evidence: request.evidence,
+        rationale: request.rationale,
+        score: null,
+      };
+      const references = reviewSourceReferences(provenance);
       const reader = new NoteReadService(this.options.vault);
-      for (const source of sources) await reader.read(source);
-      for (const source of request.evidence)
-        await reader.read({ path: source.path, revision: source.revision });
+      const sourceBodies = new Map<string, Awaited<ReturnType<typeof reader.read>>>();
+      for (const source of references) sourceBodies.set(source.path, await reader.read(source));
+      for (const evidence of request.evidence) {
+        const source = sourceBodies.get(evidence.path);
+        if (!source || source.note.revision !== evidence.revision || !exactEvidenceMatch(source.body, evidence))
+          throw new NoteApiError(
+            "INVALID_PARAMS",
+            `review evidence range and quote must match the exact saved source: ${evidence.path}`,
+          );
+      }
       return saveReview(
         this.options.db,
         {
@@ -425,13 +484,7 @@ export class ApprovalService {
           previewId: preview.previewId,
           previewRevision: preview.revision,
           edgeIds,
-          provenance: {
-            requestedBy: { id: caller.id, kind: caller.kind },
-            sources,
-            evidence: request.evidence,
-            rationale: request.rationale,
-            score: null,
-          },
+          provenance,
           createdAt: Date.now(),
           decidedAt: null,
           decidedBy: null,
@@ -447,9 +500,18 @@ export class ApprovalService {
     if (!proposal) throw new NoteApiError("NOT_FOUND", "review proposal does not exist");
     if (proposal.state === "pending") {
       const reader = new NoteReadService(this.options.vault);
-      for (const source of proposal.provenance.sources) {
+      let references: NoteReference[];
+      try {
+        references = reviewSourceReferences(proposal.provenance);
+      } catch (error) {
+        if (error instanceof NoteApiError && error.code === "CONFLICT")
+          return { ...proposal, state: "stale" };
+        throw error;
+      }
+      const documents = new Map<string, Awaited<ReturnType<typeof reader.read>>>();
+      for (const source of references) {
         try {
-          await reader.read(source);
+          documents.set(source.path, await reader.read(source));
         } catch (error) {
           if (
             error instanceof NoteApiError &&
@@ -459,30 +521,54 @@ export class ApprovalService {
           throw error;
         }
       }
+      for (const evidence of proposal.provenance.evidence) {
+        const document = documents.get(evidence.path);
+        if (
+          !document ||
+          document.note.revision !== evidence.revision ||
+          !exactEvidenceMatch(document.body, evidence)
+        )
+          return { ...proposal, state: "stale" };
+      }
     }
     return proposal;
   }
   async pageReview(input: unknown, signal: AbortSignal) {
-    const cache = new Map<string, string | null>();
+    const cache = new Map<string, { revision: string; body: string } | null>();
     const reader = new NoteReadService(this.options.vault);
     return pageReviews(this.options.db, input, async (proposal) => {
       if (proposal.state !== "pending") return proposal;
-      for (const source of proposal.provenance.sources) {
+      let references: NoteReference[];
+      try {
+        references = reviewSourceReferences(proposal.provenance);
+      } catch (error) {
+        if (error instanceof NoteApiError && error.code === "CONFLICT")
+          return { ...proposal, state: "stale" };
+        throw error;
+      }
+      for (const source of references) {
         signal.throwIfAborted();
         if (!cache.has(source.path)) {
           if (cache.size >= 1000)
             throw new NoteApiError(
               "LIMIT_EXCEEDED",
               "review page exceeds 1000 evidence notes; use a smaller page",
-            );
+          );
           try {
-            cache.set(source.path, (await reader.read({ path: source.path })).note.revision);
+            const document = await reader.read({ path: source.path });
+            cache.set(source.path, { revision: document.note.revision, body: document.body });
           } catch (error) {
             if (!(error instanceof NoteApiError) || error.code !== "NOT_FOUND") throw error;
             cache.set(source.path, null);
           }
         }
-        if (cache.get(source.path) !== source.revision) return { ...proposal, state: "stale" };
+        if (cache.get(source.path)?.revision !== source.revision)
+          return { ...proposal, state: "stale" };
+      }
+      for (const evidence of proposal.provenance.evidence) {
+        const document = cache.get(evidence.path);
+        if (!document || !exactEvidenceMatch(document.body, evidence))
+          return { ...proposal, state: "stale" };
       }
       return proposal;
     });
@@ -518,6 +604,8 @@ export class ApprovalService {
         await this.updateReviewedJob(proposal, proposal.application);
         return proposal.application;
       }
+      const references = reviewSourceReferences(proposal.provenance);
+      const evidenceReader = new NoteReadService(this.options.vault);
       const result = await changes.apply(
         {
           previewId: request.previewId,
@@ -528,7 +616,12 @@ export class ApprovalService {
         signal,
         async (preview, effect) => {
           signal.throwIfAborted();
-          await changes.validateSources(preview, proposal.provenance.sources);
+          await changes.validateSources(preview, references);
+          await validateEvidenceAgainstPreview(
+            preview,
+            proposal.provenance.evidence,
+            evidenceReader,
+          );
           await authority?.(preview, effect);
         },
         proposal.id,
@@ -561,13 +654,18 @@ export class ApprovalService {
     });
   }
   async rejectReview(
-    input: { id: string; revision: string; idempotencyKey: string },
+    input: OperationInput<"proposals.reject">,
     caller: ChangeCaller,
+    authorize?: () => void,
   ): Promise<ReviewProposal> {
     const request = operationInputs["proposals.reject"].parse(input);
-    if (caller.kind !== "human" || !caller.scopes.includes("write"))
-      throw new NoteApiError("FORBIDDEN", "review rejection requires the human operator");
+    if (!caller.scopes.includes("write"))
+      throw new NoteApiError("FORBIDDEN", "review rejection requires write scope");
+    if (caller.kind !== "human" && !authorize)
+      throw new NoteApiError("FORBIDDEN", "only the human operator or a granted vault owner may reject a review");
+    authorize?.();
     return this.withIntentTurn(`review:${request.id}`, async () => {
+      authorize?.();
       await bindMutationRequest(this.options.db, "proposals", caller, request.idempotencyKey, {
         action: "reject",
         ...request,
@@ -581,17 +679,28 @@ export class ApprovalService {
         throw new NoteApiError("CONFLICT", "proposal changed before rejection");
       // Persist the rejection before removing graph candidates. A crash or a
       // later generation failure cannot erase the operator's decision.
-      const rejected =
-        proposal.state === "rejected"
-          ? proposal
-          : await saveReview(
-              this.options.db,
-              { ...proposal, state: "rejected", decidedAt: Date.now(), decidedBy: caller.id },
-              proposal.revision,
-            );
+      let rejected = proposal;
+      if (proposal.state !== "rejected") {
+        authorize?.();
+        rejected = await saveReview(
+          this.options.db,
+          {
+            ...proposal,
+            state: "rejected",
+            decidedAt: Date.now(),
+            decidedBy: caller.id,
+            feedback: request.reason
+              ? { reason: request.reason, category: request.category ?? null }
+              : null,
+          },
+          proposal.revision,
+        );
+      }
       for (const id of proposal.edgeIds) {
+        authorize?.();
         const edge = parseSurrealRelationRecordId(id, WRITEBACK_EDGE_TABLES);
         await this.withIntentTurn(id, async () => {
+          authorize?.();
           const intent = await this.readApprovalIntent(
             await proposalApprovalIntentId(edge.recordId),
           );
@@ -602,8 +711,15 @@ export class ApprovalService {
             if (!(error instanceof RejectedReviewWrite)) throw error;
           }
         });
-        await this.rejectEdge({ id: edge.recordId, table: edge.table, rejectedBy: caller.id });
+        authorize?.();
+        await this.rejectEdge({
+          id: edge.recordId,
+          table: edge.table,
+          rejectedBy: caller.id,
+          reason: request.reason,
+        });
       }
+      authorize?.();
       await this.updateReviewedJob(rejected, null);
       return rejected;
     });
@@ -664,13 +780,13 @@ export class ApprovalService {
 
   async describeEdge(
     input: EdgeDecisionTarget,
-  ): Promise<{ fromPath: string; toPath: string; table: WritebackEdgeTable }> {
+  ): Promise<{ fromPath: string; toPath: string; table: WritebackEdgeTable; provenance?: ProposalProvenance; contributor: string }> {
     const edge = await this.selectPendingEdge(input);
     if (!edge) throw new Error("relationship proposal is no longer pending");
     const from = await this.selectNote(edge.fromId);
     const to = await this.selectNote(edge.toId);
     if (!from || !to) throw new Error("relationship endpoint is unavailable");
-    return { fromPath: from.path, toPath: to.path, table: input.table };
+    return { fromPath: from.path, toPath: to.path, table: input.table, provenance: edge.provenance, contributor: edge.agent };
   }
 
   /**
@@ -1321,7 +1437,14 @@ RETURN $current = $note;`;
 
     const beforeBody = await this.options.vault.read(sourceNote.path);
     const kind = isFrontmatterRelation(input.table) ? "note.frontmatter" : "note.append_section";
-    const afterBody = renderApprovedRelation(beforeBody, input.table, targetNote.path);
+    const afterBody = renderApprovedRelation(
+      beforeBody,
+      input.table,
+      targetNote.path,
+      edge.provenance,
+      edge.agent,
+      guard?.suppressGenericRelationshipRetention,
+    );
     if (
       guard &&
       (guard.before !== undefined || guard.after !== undefined) &&

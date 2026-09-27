@@ -49,13 +49,23 @@ export const reviewProposalSchema = z.object({
   createdAt: z.number().int(),
   decidedAt: z.number().int().nullable(),
   decidedBy: z.string().nullable(),
+  feedback: z.object({
+    reason: z.string().min(1).max(4000),
+    category: z.enum(["false", "unsupported", "irrelevant", "already-known", "deferred"]).nullable(),
+  }).nullable().optional(),
   appliedHistory: z.array(z.string()).max(200),
   application: changeResultSchema.nullable().optional(),
 });
 export type ReviewProposal = z.infer<typeof reviewProposalSchema>;
+export const reviewFeedbackRetentionSchema = z.object({
+  reviewCount: z.number().int().nonnegative(),
+  pendingCount: z.number().int().nonnegative(),
+});
+export type ReviewFeedbackRetention = z.infer<typeof reviewFeedbackRetentionSchema>;
 export const proposalResultSchema = z.object({
   ok: z.literal(true),
   proposal: reviewProposalSchema,
+  feedbackRetention: reviewFeedbackRetentionSchema.optional(),
 });
 export const proposalListSchema = z.object({
   ok: z.literal(true),

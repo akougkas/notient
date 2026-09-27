@@ -56,8 +56,8 @@ export interface ChatContextSettings {
 
 export const DEFAULT_CHAT_BUDGET = {
   modelCalls: 12,
-  tokens: 160000,
-  durationMs: 180000,
+  tokens: 1000000,
+  durationMs: 300000,
   generationTokens: 16384,
 } satisfies InferenceBudgetLimits;
 

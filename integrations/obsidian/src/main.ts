@@ -52,9 +52,9 @@ export default class NotientPlugin extends Plugin {
       void this.open();
     });
     for (const [id, name, destination] of [
-      ["open", "Open knowledge workspace", "note"],
+      ["open", "Talk with Notient", "ask"],
       ["search", "Search your notes", "search"],
-      ["ask", "Ask your notes", "ask"],
+      ["ask", "Talk with your knowledge curator", "ask"],
       ["capture", "Capture a thought", "capture"],
       ["review", "Review suggested changes", "review"],
       ["activity", "Show activity and job controls", "activity"],
@@ -67,6 +67,42 @@ export default class NotientPlugin extends Plugin {
         },
       });
     }
+    this.addCommand({
+      id: "focus-chat-input",
+      name: "Focus the conversation input",
+      callback: () => {
+        const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+        const current = leaf?.view;
+        if (leaf && current instanceof NotientView && current.destination === "ask") {
+          void this.app.workspace.revealLeaf(leaf).then(() => {
+            current.containerEl.querySelector<HTMLTextAreaElement>(".notient-chat-input")?.focus();
+          });
+          return;
+        }
+        void this.open("ask").then((view) => {
+          if (!view) return;
+          view.containerEl.ownerDocument.defaultView?.setTimeout(() => {
+            view.containerEl.querySelector<HTMLTextAreaElement>(".notient-chat-input")?.focus();
+          }, 0);
+        });
+      },
+    });
+    this.addCommand({
+      id: "copy-last-answer",
+      name: "Copy the latest conversation answer",
+      checkCallback: (checking) => {
+        const current = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+        const workspace = current instanceof NotientView && current.destination === "ask"
+          ? current.containerEl.querySelector<HTMLElement>(".notient-workspace")
+          : null;
+        if (!workspace?.querySelector(".notient-message.is-assistant:not(.is-streaming)")) return false;
+        if (!checking) {
+          const EventClass = workspace.ownerDocument.defaultView?.CustomEvent ?? CustomEvent;
+          workspace.dispatchEvent(new EventClass("notient:copy-last-answer"));
+        }
+        return true;
+      },
+    });
     this.addCommand({
       id: "capture-selection",
       name: "Capture the selected text",
@@ -276,7 +312,7 @@ export default class NotientPlugin extends Plugin {
       new Notice(message(error), 10000);
     }
   }
-  async open(destination: NotientView["destination"] = "note"): Promise<NotientView | null> {
+  async open(destination: NotientView["destination"] = "ask"): Promise<NotientView | null> {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf("tab");

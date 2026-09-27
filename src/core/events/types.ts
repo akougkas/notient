@@ -8,6 +8,14 @@ export type AppEvent =
       revision: string;
       stage: string;
     }
+  | {
+      type: "note:changed";
+      changeId: string;
+      path: string;
+      revision: string;
+      callerId: string;
+      callerKind: "human" | "agent";
+    }
   | { type: "llm:health"; endpoint: string; ok: boolean; latencyMs?: number }
   | { type: "vault:note-saved"; path: string; sha: string }
   | { type: "indexer:progress"; processed: number; total: number }

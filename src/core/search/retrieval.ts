@@ -13,11 +13,13 @@ import { NoteApiError, type NoteReadResult, type SourceReference } from "../../a
 import { scopeAllows } from "../../api/scope";
 import {
   type SearchChunkRow,
+  fetchNoteShaByPath,
   listNotePaths,
   searchBm25,
   searchVectorWithPath,
 } from "../db/surreal";
 import { withQueryPhrases } from "./filters";
+import { matchingNoteNames, mergeNamedHits } from "./namedNotes";
 import { dedupeByNote, fuseHybridRows } from "./strategies/deep";
 import { significantTerms } from "./strategies/quick";
 
@@ -193,6 +195,56 @@ export class NoteRetrieval {
         },
       });
       if (base.hits.length >= request.limit) break;
+    }
+    if (request.mode !== "semantic") {
+      const named: RetrievalHit[] = [];
+      for (const path of matchingNoteNames(paths, request.query, request.limit)) {
+        signal.throwIfAborted();
+        if (!this.deps.vault.isIndexablePath(path)) {
+          base.omitted++;
+          continue;
+        }
+        try {
+          const note = await this.notes.read({ path });
+          if (!scopeAllows(request.scope, path, note.structure.tags)) {
+            base.omitted++;
+            continue;
+          }
+          const indexedRevision = await fetchNoteShaByPath(this.deps.db, path);
+          const current = indexedRevision === note.note.revision;
+          const quote = note.body.slice(0, 2000);
+          named.push({
+            note: note.note,
+            score: 0,
+            scoreKind: "reciprocal-rank",
+            evidence:
+              current && quote.trim()
+                ? {
+                    ...note.note,
+                    range: sourceRange(note.body, 0, quote.length),
+                    quote,
+                  }
+                : null,
+            freshness: {
+              indexedRevision,
+              state: current ? "current" : indexedRevision === null ? "unknown" : "lagging",
+              reason: current
+                ? null
+                : "Indexed name match is not established for the current file revision.",
+            },
+          });
+        } catch (error) {
+          if (
+            (error instanceof NoteApiError && error.code === "NOT_FOUND") ||
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            base.omitted++;
+            continue;
+          }
+          throw error;
+        }
+      }
+      base.hits = mergeNamedHits(base.hits, named, request.limit);
     }
     base.coverage = searchCoverage(indexing, this.deps.indexing?.() ?? unknownIndexingReadiness());
     if (semanticUnavailable)

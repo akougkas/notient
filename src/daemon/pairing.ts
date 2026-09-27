@@ -16,6 +16,7 @@ const credentialSchema = z.object({
   hash: z.string().regex(/^[a-f0-9]{64}$/),
   createdAt: z.number(),
   revoked: z.boolean(),
+  vaultOwner: z.boolean().default(false),
 });
 const credentialsSchema = z.array(credentialSchema).max(100);
 type Credential = z.infer<typeof credentialSchema>;
@@ -103,6 +104,7 @@ export class PairingStore {
           hash: digest(token),
           createdAt: Date.now(),
           revoked: false,
+          vaultOwner: false,
         };
         await this.save([...this.credentials, credential]);
         return { token, credentialId: id, principal, vaultId: this.vaultId };
@@ -116,7 +118,13 @@ export class PairingStore {
       (entry) => !entry.revoked && timingSafeEqual(hash, Buffer.from(entry.hash, "hex")),
     );
     if (!credential) throw new RpcError("UNAUTHENTICATED", "invalid or revoked credential");
-    return { principal: structuredClone(credential.principal), credentialId: credential.id };
+    return {
+      principal: {
+        ...structuredClone(credential.principal),
+        ...(credential.vaultOwner ? { vaultOwner: true as const } : {}),
+      },
+      credentialId: credential.id,
+    };
   }
   /** Detached jobs retain an identity, never a bearer token. Verify that saved
    * identity and scopes against the current credential authority before effects. */
@@ -129,6 +137,21 @@ export class PairingStore {
         principal.scopes.every((scope) =>
           entry.principal.scopes.some((allowed) => allowed === scope),
         ),
+    );
+  }
+  isActiveVaultOwner(principal: Principal): boolean {
+    return (
+      principal.vaultOwner === true &&
+      this.credentials.some(
+        (entry) =>
+          !entry.revoked &&
+          entry.vaultOwner &&
+          entry.principal.kind === "agent" &&
+          entry.principal.id === principal.id &&
+          principal.kind === "agent" &&
+          entry.principal.scopes.length === principal.scopes.length &&
+          principal.scopes.every((scope) => new Set<string>(entry.principal.scopes).has(scope)),
+      )
     );
   }
   hasActiveScope(id: string, scope: "write" | "admin"): boolean {
@@ -161,6 +184,24 @@ export class PairingStore {
         const credential = this.credentials.find((entry) => entry.id === id);
         if (credential)
           for (const listener of this.revokedListeners) listener(credential.principal.id);
+      });
+    this.tail = operation;
+    return operation;
+  }
+  setVaultOwner(id: string, vaultOwner: boolean, principal: Principal): Promise<void> {
+    requireOperator(principal);
+    const operation = this.tail
+      .catch(() => {})
+      .then(async () => {
+        const credential = this.credentials.find((entry) => entry.id === id);
+        if (!credential) throw new RpcError("NOT_FOUND", "credential does not exist");
+        if (credential.principal.kind !== "agent")
+          throw new RpcError("INVALID_PARAMS", "vault ownership can only be granted to an agent credential");
+        await this.save(
+          this.credentials.map((entry) =>
+            entry.id === id ? { ...entry, vaultOwner } : entry,
+          ),
+        );
       });
     this.tail = operation;
     return operation;

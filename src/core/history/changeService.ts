@@ -12,8 +12,10 @@ import type { PipelineJob } from "../../api/pipelines";
 import { NoteApiError } from "../../api/schema";
 import type { NoteReference } from "../../api/schema";
 import { type ApprovalService, renderApprovedRelation } from "../approvals/approvalService";
-import { readReview } from "../approvals/reviewStorage";
+import { hasValidatedRelationshipIntelligence } from "../approvals/relationIntelligence";
+import { readReview, reviewSourceReferences } from "../approvals/reviewStorage";
 import { WRITEBACK_EDGE_TABLES } from "../db/edgeTables";
+import type { EventBus } from "../events/eventBus";
 import { parseSurrealRelationRecordId } from "../db/recordId";
 import { patchFrontmatter } from "../markdown/frontmatter";
 import { rewriteMovedReferences } from "../markdown/referenceMove";
@@ -32,6 +34,7 @@ export interface ChangeServiceOptions {
   db: Surreal;
   vault: VaultAdapter;
   writer: DurableNoteWriter;
+  bus?: EventBus;
   approvalService?: Pick<ApprovalService, "describeEdge" | "approveEdge">;
   authorizeCaller?: (caller: ChangeCaller) => void | Promise<void>;
   authorizeRecoveredJob?: (
@@ -140,6 +143,11 @@ export class ChangeService {
         );
       const note = await this.notes.read(origin ?? change.source);
       if (origin) note.note.path = change.source.path;
+      const sourceSnapshot = {
+        path: change.source.path,
+        revision: note.note.revision,
+        body: note.body,
+      };
       const preceding = virtual.get(change.source.path);
       if (preceding !== undefined) {
         if (change.kind === "edit" && change.selector.kind === "range" && preceding !== note.body)
@@ -162,10 +170,27 @@ export class ChangeService {
             "CONFLICT",
             "relationship endpoints do not match reviewed sources",
           );
+        const suppressGenericRelationshipRetention = hasValidatedRelationshipIntelligence(
+          note.body,
+          edge.table,
+          sourceSnapshot,
+          {
+            path: target.note.path,
+            revision: target.note.revision,
+            body: target.body,
+          },
+        );
         addWrite(
           note.note.path,
           note.body,
-          renderApprovedRelation(note.body, edge.table, target.note.path),
+          renderApprovedRelation(
+            note.body,
+            edge.table,
+            target.note.path,
+            description.provenance,
+            description.contributor,
+            suppressGenericRelationshipRetention,
+          ),
           "Apply reviewed relationship",
           { edgeId: edge.id, table: edge.table, target: target.note },
         );
@@ -441,6 +466,18 @@ export class ChangeService {
           historyId: receipt.historyId,
           message: null,
         });
+        if (caller.id !== "background") {
+          const paths = new Set([effect.path, ...(effect.destination ? [effect.destination] : [])]);
+          for (const path of paths)
+            this.options.bus?.emit({
+              type: "note:changed",
+              changeId: contentRevision(`${preview.previewId}:${preview.revision}:${index}:${path}`),
+              path,
+              revision: effect.afterRevision,
+              callerId: caller.id,
+              callerKind: caller.kind,
+            });
+        }
       } catch (error) {
         const state = signal.aborted
           ? "cancelled"
@@ -499,7 +536,7 @@ export class ChangeService {
             throw new EffectAuthorityRevoked(
               "review was removed, rejected or replaced before recovery",
             );
-          await this.validateSources(preview, review.provenance.sources);
+          await this.validateSources(preview, reviewSourceReferences(review.provenance));
         }
         if (authority.caller.kind === "agent") {
           if (!authority.jobId || !this.options.authorizeRecoveredJob)
@@ -539,9 +576,21 @@ export class ChangeService {
     if (!effect.relationship || !this.options.approvalService || effect.before === null)
       throw new Error("relationship effect is missing its approval authority");
     const edge = parseSurrealRelationRecordId(effect.relationship.edgeId, WRITEBACK_EDGE_TABLES);
+    const target = await this.notes.read(effect.relationship.target);
+    const suppressGenericRelationshipRetention = hasValidatedRelationshipIntelligence(
+      effect.before,
+      edge.table,
+      { path: effect.path, revision: null, body: effect.before },
+      { path: target.note.path, revision: target.note.revision, body: target.body },
+    );
     const receipt = await this.options.approvalService.approveEdge(
       { id: edge.recordId, table: edge.table, approvedBy: caller.id },
-      { before: effect.before, after: effect.after, authorize },
+      {
+        before: effect.before,
+        after: effect.after,
+        authorize,
+        suppressGenericRelationshipRetention,
+      },
     );
     return receipt
       ? { applied: true as const, historyId: receipt.historyId }

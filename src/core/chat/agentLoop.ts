@@ -28,7 +28,7 @@ import type {
 } from "../llm/provider";
 import { ChatJsonParseError } from "../llm/provider";
 import { extractFirstJsonObject, stripThinkTags } from "../llm/text";
-import { fitToolEvidence } from "./contextBudget";
+import { fitToolEvidence, modelToolContent } from "./contextBudget";
 import type { ToolMode } from "./toolModeProbe";
 import type { ToolRegistry } from "./tools/registry";
 import type { ChatMessage, Conversation, ToolCall, ToolResult } from "./types";
@@ -61,6 +61,7 @@ export interface AgentLoopOptions {
   estimateTokens?: (text: string) => number;
   generateId?: () => string;
   now?: () => number;
+  onToolExchange?: (messages: readonly ChatMessage[]) => void;
 }
 
 export type AgentLoopEvent =
@@ -121,7 +122,11 @@ export async function* runAgentTurn(
     input,
     generateId,
     now,
-    messages: [...input.systemAndHistory],
+    messages: input.systemAndHistory.map((message) =>
+      message.role === "tool" && typeof message.content === "string"
+        ? { ...message, content: modelToolContent(message.content) }
+        : message,
+    ),
     accumulatedTurnMessages: [],
     tools: options.toolRegistry.exportToolsForOpenAI() as unknown as ToolSpec[],
     calls: new Map(),
@@ -301,7 +306,6 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
     };
   }
   const toolCalls = parsedToolCalls.calls;
-  const toolResults: ToolResult[] = [];
   try {
     for (const call of toolCalls) options.toolRegistry.validate(call.name, call.args);
   } catch (error) {
@@ -338,9 +342,16 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
     }
   }
 
+  appendRoundToHistory(
+    context,
+    buffers,
+    toolCalls,
+    dispatches.map((dispatch) => dispatch.result),
+  );
+  options.onToolExchange?.([...context.accumulatedTurnMessages]);
+
   for (const { result: callResult, aborted } of dispatches) {
     yield { type: "loop:tool-result", result: callResult };
-    toolResults.push(callResult);
     if (aborted) {
       return {
         kind: "error",
@@ -349,7 +360,6 @@ async function* runOneRound(context: RoundContext): AsyncGenerator<AgentLoopEven
     }
   }
 
-  appendRoundToHistory(context, buffers, toolCalls, toolResults);
   return { kind: "continue" };
 }
 
@@ -603,7 +613,11 @@ function appendRoundToHistory(
       createdAt: context.now(),
     };
     context.accumulatedTurnMessages.push(toolMessage);
-    context.messages.push({ role: "tool", tool_call_id: toolResult.callId, content });
+    context.messages.push({
+      role: "tool",
+      tool_call_id: toolResult.callId,
+      content: modelToolContent(content),
+    });
   }
 }
 

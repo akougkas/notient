@@ -76,7 +76,7 @@ export function makeChangeTools(
     {
       name: "changes.preview",
       description:
-        "Plan up to 200 changes against exact {path, revision} sources from vault.read_note: create, append, heading/block/range edits, property patches, and reference-aware move, archive or unarchive. Heading selectors must resolve to exactly one section. Stores the exact before/after Markdown and returns its effects and conflicts. No note bytes change. Use this for moves, multi-note or selector edits; follow with changes.submit_for_review.",
+        "Plan up to 200 changes against exact {path, revision} sources from vault.read_note: create, append, heading/block/range edits, property patches, and reference-aware move, archive or unarchive. Rename a note with {kind: 'move', source: {path, revision}, destination: 'Folder/New name.md', updateReferences: true}. Heading selectors must resolve to exactly one section. Stores the exact before/after Markdown and returns its effects and conflicts. No note bytes change. Use this for moves, multi-note or selector edits; follow with changes.submit_for_review.",
       schema: z.toJSONSchema(previewArgs) as ToolJsonSchema,
       validate: (raw) => previewArgs.parse(raw),
       writeGated: false,
@@ -117,7 +117,11 @@ export function makeChangeTools(
         const caller = await assistantCaller(tools, context);
         signal.throwIfAborted();
         const review = await tools.approvalService.submitReview(
-          { ...args, evidence: [], idempotencyKey: `chat-submit-${args.previewId}` },
+          {
+            ...args,
+            evidence: [],
+            idempotencyKey: `chat-submit-${contentRevision(JSON.stringify(args))}`,
+          },
           caller,
           tools.changes,
         );

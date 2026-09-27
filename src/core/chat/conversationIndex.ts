@@ -1,5 +1,5 @@
 import { DateTime, RecordId, type Surreal } from "surrealdb";
-import { isCanonicalAgentId } from "../auth/agentIdentity";
+import { isCanonicalConversationClientId } from "../auth/agentIdentity";
 import { isExactRecord, readSingleStatementRows } from "../db/queryResult";
 import type { EmbeddingIdentity } from "../llm/embeddingIdentity";
 import type { Conversation } from "./types";
@@ -484,7 +484,7 @@ function validateConversationMetadata(conversation: Conversation): void {
 }
 
 function validateClientIdentity(value: unknown, label: string): asserts value is string {
-  if (!isCanonicalAgentId(value)) {
+  if (!isCanonicalConversationClientId(value)) {
     throw new Error(`${label} must be a canonical client identity`);
   }
 }
@@ -593,7 +593,7 @@ function readMemoryFields(row: Record<string, unknown>, label: string): DecodedM
     throw new ConversationMemoryIntegrityError(`${label}.topic must be a single-line string`);
   }
   const clientIdentity = readCanonicalString(row.client_identity, `${label}.client_identity`);
-  if (!isCanonicalAgentId(clientIdentity)) {
+  if (!isCanonicalConversationClientId(clientIdentity)) {
     throw new ConversationMemoryIntegrityError(
       `${label}.client_identity must be a canonical client identity`,
     );

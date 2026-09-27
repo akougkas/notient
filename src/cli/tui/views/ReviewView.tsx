@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangePreview } from "../../../api/changes";
 import { PIPELINE_CATALOG } from "../../../api/pipelineCatalog";
 import { type ReviewProposal, reviewTitle } from "../../../api/proposals";
-import type { SourceReference } from "../../../api/schema";
+import { sourceRange } from "../../../api/notes";
+import type { NoteReference, SourceReference } from "../../../api/schema";
 import { Markdown } from "../Markdown";
 import { previewDiff } from "../draft";
 import { readingColumn } from "../layout";
@@ -14,6 +15,13 @@ import { COLOR, HORIZONTAL_SCROLLBAR_OPTIONS, VERTICAL_SCROLLBAR_OPTIONS } from 
 const pipelineTitles = Object.fromEntries(
   Object.entries(PIPELINE_CATALOG).map(([id, entry]) => [id, entry.title]),
 ) as Parameters<typeof reviewTitle>[1];
+const feedbackCategories = ["false", "unsupported", "irrelevant", "already-known", "deferred"] as const;
+
+export interface ReviewReadingSession {
+  id: string;
+  tab: "evidence" | "changes" | "after";
+  scroll: number;
+}
 
 interface Props {
   rpc: () => NotientRpc;
@@ -23,6 +31,7 @@ interface Props {
   onRequests: () => void;
   onOpen: (source: SourceReference) => void;
   onClose: () => void;
+  readingSession?: { current: ReviewReadingSession | null };
 }
 /** Exact stored reviews in the same quiet reading column as notes and writing. */
 export function ReviewView(props: Props) {
@@ -38,6 +47,8 @@ export function ReviewView(props: Props) {
   const [message, setMessage] = useState("Loading suggestions…");
   const [error, setError] = useState(false);
   const [confirm, setConfirm] = useState<"approve" | "reject" | null>(null);
+  const [feedbackReason, setFeedbackReason] = useState("");
+  const [feedbackCategory, setFeedbackCategory] = useState(1);
   const scroll = useRef<ScrollBoxRenderable | null>(null);
   const flight = useRef(false);
   const generation = useRef(0);
@@ -49,6 +60,7 @@ export function ReviewView(props: Props) {
   }, []);
   const load = useCallback(async (page?: string) => {
     if (flight.current) return;
+    if (props.readingSession) props.readingSession.current = null;
     flight.current = true;
     setBusy(true);
     const current = ++generation.current;
@@ -74,36 +86,76 @@ export function ReviewView(props: Props) {
     }
   }, []);
   useEffect(() => {
-    void load();
+    const saved = props.readingSession?.current;
+    if (saved) void inspect(saved.id, saved);
+    else void load();
     return () => {
       ++generation.current;
     };
   }, [load]);
-  const inspect = async (id: string) => {
+  const inspect = async (id: string, saved?: ReviewReadingSession) => {
     if (flight.current) return;
+    if (!saved && props.readingSession) props.readingSession.current = null;
     flight.current = true;
     setBusy(true);
     setConfirm(null);
+    setFeedbackReason("");
+    setFeedbackCategory(1);
     const current = ++generation.current;
     try {
       const { proposal } = await rpc.current().review(id);
       const preview = await rpc.current().changePreview(proposal.previewId);
       if (current !== generation.current) return;
       setDetail({ proposal, preview });
-      setTab("evidence");
+      setTab(saved?.tab ?? "evidence");
       setError(false);
       setMessage(
         proposal.state === "stale"
           ? "Saved evidence changed. Inspect current sources before deciding."
           : `${proposal.state} · ${preview.effects.length} file effects${proposal.appliedHistory.length ? ` · ${proposal.appliedHistory.length} effects already recorded` : ""}`,
       );
-      scroll.current?.scrollTo(0);
+      scroll.current?.scrollTo(saved?.scroll ?? 0);
     } catch (error) {
       if (current === generation.current) report(error);
     } finally {
       flight.current = false;
       setBusy(false);
     }
+  };
+  const openSource = (source: SourceReference) => {
+    if (detail && props.readingSession)
+      props.readingSession.current = {
+        id: detail.proposal.id,
+        tab,
+        scroll: scroll.current?.scrollTop ?? 0,
+      };
+    props.onOpen(source);
+  };
+  const openSourceNote = async (source: NoteReference) => {
+    if (flight.current || !detail) return;
+    const current = generation.current;
+    const reviewId = detail.proposal.id;
+    flight.current = true;
+    setBusy(true);
+    let exactSource: SourceReference | null = null;
+    try {
+      const note = await rpc.current().noteBody(source.path, undefined, source.revision);
+      if (current !== generation.current) return;
+      if (note.note.revision !== source.revision)
+        throw new Error("The saved source revision is no longer available. Inspect the current note instead.");
+      exactSource = {
+        ...source,
+        range: sourceRange(note.body, 0, note.body.length),
+        quote: note.body,
+      };
+    } catch (error) {
+      if (current === generation.current) report(error);
+    } finally {
+      flight.current = false;
+      if (current === generation.current) setBusy(false);
+    }
+    if (exactSource && current === generation.current && detail?.proposal.id === reviewId)
+      openSource(exactSource);
   };
   const decide = async (action: "approve" | "reject") => {
     if (!detail || flight.current) return;
@@ -124,9 +176,14 @@ export function ReviewView(props: Props) {
       setMessage(
         action === "approve"
           ? "Review the exact changes. Press a again to apply; Esc keeps everything unchanged."
-          : "Press r again to record rejection. Already applied effects stay in history.",
+          : "Explain the rejection. Tab changes its category; Enter records your feedback.",
       );
       scroll.current?.scrollTo(0);
+      return;
+    }
+    if (action === "reject" && !feedbackReason.trim()) {
+      setError(true);
+      setMessage("Give a reason so later work can understand this decision.");
       return;
     }
     flight.current = true;
@@ -147,12 +204,15 @@ export function ReviewView(props: Props) {
         );
         setError(!result.ok);
       } else {
-        await rpc.current().rejectReview({
+        const result = await rpc.current().rejectReview({
           id: proposal.id,
           revision: proposal.revision,
           idempotencyKey: `tui-reject-${proposal.id}-${proposal.revision.slice(0, 12)}`,
+          reason: feedbackReason.trim(),
+          category: feedbackCategories[feedbackCategory],
         });
-        setMessage("Rejected · your decision is recorded.");
+        const retained = result.feedbackRetention;
+        setMessage(`Rejected · your decision is recorded.${retained?.reviewCount ? ` ${retained.reviewCount} feedback append(s) await review.` : ""}${retained?.pendingCount ? ` ${retained.pendingCount} feedback item(s) still need staging.` : ""}`);
         setError(false);
       }
       const latest = await rpc.current().review(proposal.id);
@@ -173,9 +233,16 @@ export function ReviewView(props: Props) {
         setConfirm(null);
         setMessage("Decision cancelled. No new effect was requested.");
       } else if (detail) {
+        if (props.readingSession) props.readingSession.current = null;
         setDetail(null);
         void load();
       } else props.onClose();
+    } else if (confirm === "reject") {
+      if (key.name === "tab") {
+        setFeedbackCategory((value) => (value + 1) % feedbackCategories.length);
+        key.preventDefault();
+      }
+      return;
     } else if (busy) return;
     else if (key.name === "tab") props.onRequests();
     else if (key.name === "f5") void load();
@@ -205,14 +272,27 @@ export function ReviewView(props: Props) {
         scroll.current?.scrollBy(key.name === "pagedown" ? props.height - 8 : 3);
       if (["up", "k", "pageup"].includes(key.name))
         scroll.current?.scrollBy(key.name === "pageup" ? 8 - props.height : -3);
-      if (key.name === "o" && detail.proposal.provenance.evidence[0])
-        props.onOpen(detail.proposal.provenance.evidence[0]);
+      if (key.name === "o") {
+        const evidence = detail.proposal.provenance.evidence[0];
+        const source = detail.proposal.provenance.sources[0];
+        if (evidence) openSource(evidence);
+        else if (source) void openSourceNote(source);
+      }
     }
     key.preventDefault();
   });
   useEffect(() => {
     if (!detail) scroll.current?.scrollTo(Math.max(0, cursor * 4 - props.height + 12));
   }, [cursor, detail, props.height]);
+  useEffect(() => {
+    const saved = props.readingSession?.current;
+    if (!detail || saved?.id !== detail.proposal.id) return;
+    const timer = setTimeout(() => {
+      scroll.current?.scrollTo(saved.scroll);
+      if (props.readingSession?.current === saved) props.readingSession.current = null;
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [detail]);
   return (
     <box
       width={props.width}
@@ -239,6 +319,22 @@ export function ReviewView(props: Props) {
       <text width={width} wrapMode="word" fg={error ? COLOR.bad : COLOR.dim}>
         {busy ? "Checking saved evidence…" : message}
       </text>
+      {confirm === "reject" ? (
+        <box flexDirection="column" height={3} flexShrink={0}>
+          <text fg={COLOR.accent}>{feedbackCategories[feedbackCategory]} · Tab changes category</text>
+          <input
+            width={width}
+            value={feedbackReason}
+            focused={props.active && !busy}
+            onInput={(value) => flushSync(() => setFeedbackReason(value.slice(0, 4000)))}
+            onSubmit={() => void decide("reject")}
+            placeholder="Why should this suggestion change or stop?"
+            backgroundColor={COLOR.bg}
+            focusedBackgroundColor={COLOR.panel}
+            textColor={COLOR.text}
+          />
+        </box>
+      ) : null}
       {detail ? (
         <box height={2} flexDirection="row" gap={3} paddingTop={1}>
           {(["evidence", "changes", "after"] as const).map((item, index) => (
@@ -296,18 +392,36 @@ export function ReviewView(props: Props) {
           ) : tab === "evidence" ? (
             <>
               <Markdown text={detail.proposal.provenance.rationale} />
+              {detail.proposal.feedback ? (
+                <Markdown text={`Feedback (${detail.proposal.feedback.category ?? "uncategorized"}): ${detail.proposal.feedback.reason}`} />
+              ) : null}
               {detail.proposal.provenance.evidence.map((source, index) => (
                 <box
                   key={`${source.path}:${source.range.start}:${index}`}
                   flexDirection="column"
                   gap={1}
                 >
-                  <text fg={COLOR.accent} wrapMode="word" onMouseDown={() => props.onOpen(source)}>
+                  <text fg={COLOR.accent} wrapMode="word" onMouseDown={() => openSource(source)}>
                     {source.path} · line {source.range.startLine} ↗
                   </text>
                   <Markdown text={source.quote} />
                 </box>
               ))}
+              {detail.proposal.provenance.sources.length ? (
+                <box flexDirection="column" gap={1}>
+                  <text fg={COLOR.dim}>Source notes</text>
+                  {detail.proposal.provenance.sources.map((source) => (
+                    <text
+                      key={`${source.path}:${source.revision}`}
+                      fg={COLOR.accent}
+                      wrapMode="word"
+                      onMouseDown={() => void openSourceNote(source)}
+                    >
+                      {source.path} · open exact source ↗
+                    </text>
+                  ))}
+                </box>
+              ) : null}
             </>
           ) : tab === "changes" ? (
             <>

@@ -210,7 +210,7 @@ DEFINE FIELD OVERWRITE path ON conversation_memory TYPE string
   AND !string::contains($value, "\\");
 DEFINE FIELD OVERWRITE topic ON conversation_memory TYPE string;
 DEFINE FIELD OVERWRITE client_identity ON conversation_memory TYPE string
-  ASSERT string::matches($value, "{{AGENT_ID_PATTERN}}");
+  ASSERT string::matches($value, "{{CONVERSATION_CLIENT_ID_PATTERN}}");
 DEFINE FIELD OVERWRITE updated_at ON conversation_memory TYPE datetime
   ASSERT $value >= d'1970-01-01T00:00:00Z';
 DEFINE FIELD OVERWRITE summary_hash ON conversation_memory TYPE string
@@ -304,8 +304,28 @@ DEFINE TABLE OVERWRITE change_preview SCHEMAFULL;
 DEFINE FIELD OVERWRITE owner ON change_preview TYPE string;
 DEFINE FIELD OVERWRITE payload ON change_preview TYPE string;
 
+DEFINE TABLE OVERWRITE contribution SCHEMAFULL;
+DEFINE FIELD OVERWRITE principal_id ON contribution TYPE string;
+DEFINE FIELD OVERWRITE idempotency_key ON contribution TYPE string;
+DEFINE FIELD OVERWRITE request_hash ON contribution TYPE string ASSERT string::matches($value, '^[a-f0-9]{64}$');
+DEFINE FIELD OVERWRITE status ON contribution TYPE string ASSERT $value INSIDE ['pending','awaiting-review','dismissed'];
+DEFINE FIELD OVERWRITE target_path ON contribution TYPE string;
+DEFINE FIELD OVERWRITE kind ON contribution TYPE string ASSERT $value INSIDE ['contribution','feedback'];
+DEFINE FIELD OVERWRITE created_ms ON contribution TYPE int;
+DEFINE FIELD OVERWRITE updated_ms ON contribution TYPE int;
+DEFINE FIELD OVERWRITE revision ON contribution TYPE string ASSERT string::matches($value, '^[a-f0-9]{64}$');
+DEFINE FIELD OVERWRITE stage_key ON contribution TYPE option<string>;
+DEFINE FIELD OVERWRITE dismiss_key ON contribution TYPE option<string>;
+DEFINE FIELD OVERWRITE proposal_id ON contribution TYPE option<string>;
+DEFINE FIELD OVERWRITE disposition_reason ON contribution TYPE option<string>;
+DEFINE FIELD OVERWRITE payload ON contribution TYPE string;
+DEFINE INDEX OVERWRITE contribution_idempotency ON contribution FIELDS principal_id, idempotency_key UNIQUE;
+DEFINE INDEX OVERWRITE contribution_state ON contribution FIELDS status;
+DEFINE INDEX OVERWRITE contribution_target ON contribution FIELDS target_path;
+DEFINE INDEX OVERWRITE contribution_created ON contribution FIELDS created_ms;
+
 DEFINE TABLE OVERWRITE pipeline_job SCHEMAFULL;
-DEFINE FIELD OVERWRITE pipeline ON pipeline_job TYPE string ASSERT $value INSIDE ['index-extract','enrich','relate','contradictions','synthesize','inbox','archive'];
+DEFINE FIELD OVERWRITE pipeline ON pipeline_job TYPE string ASSERT $value INSIDE ['index-extract','enrich','relate','contradictions','reconsider','synthesize','inbox','archive'];
 DEFINE FIELD OVERWRITE state ON pipeline_job TYPE string ASSERT $value INSIDE ['queued','running','paused','waiting-inference','awaiting-approval','completed','failed','cancelled','partial'];
 DEFINE FIELD OVERWRITE revision ON pipeline_job TYPE string ASSERT string::matches($value, '^[a-f0-9]{64}$');
 DEFINE FIELD OVERWRITE updated_ms ON pipeline_job TYPE int;
@@ -331,6 +351,16 @@ DEFINE FIELD OVERWRITE payload ON mutation_request TYPE string;
 
 DEFINE TABLE OVERWRITE settings_change SCHEMAFULL;
 DEFINE FIELD OVERWRITE payload ON settings_change TYPE string;
+
+DEFINE TABLE OVERWRITE methodology_suggestion SCHEMAFULL;
+DEFINE FIELD OVERWRITE principal_id ON methodology_suggestion TYPE string;
+DEFINE FIELD OVERWRITE principal_kind ON methodology_suggestion TYPE string;
+DEFINE FIELD OVERWRITE idempotency_key ON methodology_suggestion TYPE string;
+DEFINE FIELD OVERWRITE request_hash ON methodology_suggestion TYPE string
+  ASSERT string::matches($value, "^[a-f0-9]{64}$");
+DEFINE FIELD OVERWRITE created_ms ON methodology_suggestion TYPE int;
+DEFINE FIELD OVERWRITE payload ON methodology_suggestion TYPE string;
+DEFINE INDEX OVERWRITE methodology_suggestion_idempotency ON methodology_suggestion FIELDS principal_kind, principal_id, idempotency_key UNIQUE;
 
 DEFINE TABLE OVERWRITE change_authority SCHEMAFULL;
 DEFINE FIELD OVERWRITE payload ON change_authority TYPE string;

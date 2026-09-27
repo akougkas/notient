@@ -24,8 +24,10 @@ export async function callApi<Name extends ImplementedOperation>(
         typeof frame.message === "string" ? frame.message : `${method} failed`,
       );
     }
-    if (frame.type === "result")
-      return operationOutputs[method].parse(frame) as OperationResult<Name>;
+    if (frame.type === "result") {
+      const { id: _id, type: _type, ...payload } = frame;
+      return operationOutputs[method].parse(payload) as OperationResult<Name>;
+    }
   }
   throw new NoteApiError(
     "INTERNAL_ERROR",
@@ -45,7 +47,16 @@ export async function runApiCommand(options: {
   const { method } = options;
   if (
     !Object.hasOwn(operationOutputs, method) &&
-    !(options.pairing && ["pairing.create", "pairing.list", "pairing.revoke"].includes(method))
+    !(
+      options.pairing &&
+      [
+        "pairing.create",
+        "pairing.list",
+        "pairing.revoke",
+        "pairing.owner.grant",
+        "pairing.owner.revoke",
+      ].includes(method)
+    )
   )
     throw new Error("INVALID_PARAMS: unknown API operation");
   const input = options.pairing
@@ -65,9 +76,10 @@ export async function runApiCommand(options: {
         return 1;
       }
       if (frame.type === "result") {
+        const { id: _id, type: _type, ...payload } = frame;
         const result = options.pairing
-          ? frame
-          : operationOutputs[method as ImplementedOperation].parse(frame);
+          ? payload
+          : operationOutputs[method as ImplementedOperation].parse(payload);
         options.emitter.emit({ ...result, type: "api:result", operation: method });
         return 0;
       }

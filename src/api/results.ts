@@ -3,8 +3,29 @@ import { askResultSchema } from "./ask";
 import { backgroundResultSchema } from "./background";
 import { briefResultSchema } from "./brief";
 import { changePreviewSchema, changeResultSchema } from "./changes";
-import { chatConfigureResultSchema, chatSettingsResultSchema } from "./chat";
+import {
+  chatAbortResultSchema,
+  chatApproveResultSchema,
+  chatConfigureResultSchema,
+  chatListResultSchema,
+  chatLoadResultSchema,
+  chatSendResultSchema,
+  chatSettingsResultSchema,
+  chatStartResultSchema,
+} from "./chat";
 import { comparisonResultSchema } from "./comparison";
+import {
+  contributionListSchema,
+  contributionResultSchema,
+  contributionStageResultSchema,
+  contributionSubmitResultSchema,
+} from "./contributions";
+import {
+  cultivationDigestSchema,
+  cultivationSettingsResultSchema,
+} from "./cultivation";
+import { relationshipRetentionResultSchema } from "./relationshipRetention";
+import { methodologySuggestionResultSchema } from "./methodology";
 import { graphNeighborsSchema, graphPathSchema } from "./graph";
 import { historyDetailSchema, historyListSchema, historyUndoResultSchema } from "./history";
 import { hostOutputs } from "./host";
@@ -63,6 +84,7 @@ export const operationOutputs = {
   "notes.read": noteReadResultSchema,
   "graph.neighbors": graphNeighborsSchema,
   "graph.path": graphPathSchema,
+  "relationships.retain": relationshipRetentionResultSchema,
   "history.list": historyListSchema,
   "history.get": historyDetailSchema,
   "history.undo": historyUndoResultSchema,
@@ -78,6 +100,12 @@ export const operationOutputs = {
   "proposals.approve": changeResultSchema,
   "proposals.reject": proposalResultSchema,
   "proposals.submit": proposalResultSchema,
+  "contributions.submit": contributionSubmitResultSchema,
+  "feedback.submit": contributionSubmitResultSchema,
+  "contributions.list": contributionListSchema,
+  "contributions.get": contributionResultSchema,
+  "contributions.stage": contributionStageResultSchema,
+  "contributions.dismiss": contributionResultSchema,
   "jobs.list": jobListSchema,
   "jobs.get": jobResultSchema,
   "jobs.control": jobResultSchema,
@@ -86,6 +114,16 @@ export const operationOutputs = {
   "pipelines.validate": policyValidationSchema,
   "pipelines.configure": backgroundResultSchema,
   "background.pause": backgroundResultSchema,
+  "cultivation.digest": cultivationDigestSchema,
+  "cultivation.settings": cultivationSettingsResultSchema,
+  "cultivation.configure": backgroundResultSchema,
+  "methodology.suggest": methodologySuggestionResultSchema,
+  "chat.start": chatStartResultSchema,
+  "chat.send": chatSendResultSchema,
+  "chat.abort": chatAbortResultSchema,
+  "chat.list": chatListResultSchema,
+  "chat.load": chatLoadResultSchema,
+  "chat.approve": chatApproveResultSchema,
   "chat.settings": chatSettingsResultSchema,
   "chat.configure": chatConfigureResultSchema,
   "events.subscribe": eventsResultSchema,

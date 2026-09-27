@@ -36,3 +36,23 @@ export {
   type SourceReference,
   apiErrorCodeSchema,
 } from "./schema";
+export type { ContributionRecord, ContributionKind, ContributionOrigin } from "./contributions";
+export type { CultivationDigest, CultivationDigestItem } from "./cultivation";
+export type { CultivationSettings } from "./cultivationSettings";
+export type { RelationshipRetentionResult } from "./relationshipRetention";
+export type { MethodologySuggestionResult } from "./methodology";
+export type {
+  ChatMessage,
+  ChatStreamEvent,
+  ChatStartResult,
+  ChatListResult,
+  ChatLoadResult,
+  ChatSendResult,
+  ChatAbortResult,
+  ChatApproveResult,
+  Conversation,
+  ChatStartRequest,
+  ChatSendRequest,
+  ChatAbortRequest,
+  ChatApproveRequest,
+} from "./chat";

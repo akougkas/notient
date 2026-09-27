@@ -12,6 +12,7 @@ export const connectionSchema = z.object({
   assessment: z.number().min(0).max(1).nullable(),
   author: z.string(),
   rationale: z.string().nullable(),
+  meaningSource: z.enum(["note", "private-record"]).nullable().optional(),
   evidence: z.array(sourceReferenceSchema).max(20),
   evidenceState: z.enum(["current", "stale", "unavailable"]),
 });

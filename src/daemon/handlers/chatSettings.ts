@@ -11,6 +11,7 @@ export function makeChatSettingsHandlers(options: {
   settings: SettingsService;
   journal: SettingsChangeJournal;
   authorize: (request: RpcRequestContext) => void;
+  authorizeVaultOwner?: (request: RpcRequestContext) => void;
 }) {
   const typed = async <T>(action: () => Promise<T>): Promise<T> => {
     try {
@@ -35,11 +36,11 @@ export function makeChatSettingsHandlers(options: {
         const { principal, params, signal } = context;
         const authorize = () => {
           signal?.throwIfAborted();
-          if (principal.kind !== "human" || !principal.scopes.includes("admin"))
-            throw new NoteApiError(
-              "FORBIDDEN",
-              "Changing chat resource limits requires a human administrator.",
-            );
+          if (principal.kind !== "human" || !principal.scopes.includes("admin")) {
+            if (!options.authorizeVaultOwner)
+              throw new NoteApiError("FORBIDDEN", "Changing chat resource limits requires a human administrator or granted vault owner.");
+            options.authorizeVaultOwner(context);
+          }
           options.authorize(context);
         };
         authorize();

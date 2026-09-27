@@ -94,7 +94,7 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
       });
       return { ok: true, conversation };
     },
-    send: async ({ params, emit, requestId, principal, connectionId }) => {
+    send: async ({ params, emit, requestId, principal, connectionId, signal }) => {
       const { conversationId, userMessage } = parseSendParams(params);
       const conversation = await findConversationById(conversationId);
       assertConversationOwner(conversation, principal.id);
@@ -148,6 +148,23 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
           }),
         );
       });
+      const abortOnSignal = () => deps.chatService.abortConnection(connectionId);
+      if (signal?.aborted) {
+        unsubscribeProbed();
+        unsubscribeOverflow();
+        unsubscribeSummary();
+        unsubscribeApprovals();
+        throw new RpcError("CANCELLED", "chat turn was interrupted before it started");
+      }
+      signal?.addEventListener("abort", abortOnSignal, { once: true });
+      if (signal?.aborted) {
+        signal.removeEventListener("abort", abortOnSignal);
+        unsubscribeProbed();
+        unsubscribeOverflow();
+        unsubscribeSummary();
+        unsubscribeApprovals();
+        throw new RpcError("CANCELLED", "chat turn was interrupted before it started");
+      }
       beginTurn(connectionId);
       try {
         return await runSendStream(
@@ -161,6 +178,7 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
         );
       } finally {
         endTurn(connectionId);
+        signal?.removeEventListener("abort", abortOnSignal);
         unsubscribeProbed();
         unsubscribeOverflow();
         unsubscribeSummary();

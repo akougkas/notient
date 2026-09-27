@@ -121,7 +121,9 @@ from this provider and is never inferred from aggregate completion usage.
   frontmatter that the Properties view owns.
 - Vision has not been accepted. Lint has 139 warnings.
 - The README inside the tagged commit and the published tarball shows a relative install path that Bun cannot resolve. `main`, `INSTALL.md` and the release page carry the absolute-path command.
-- Not published to npm; the website in `website/` is not deployed.
+- Not published to npm. The website was subsequently deployed to GitHub Pages;
+  see the dated website entry in the [ledger](sprints/v0.1.0.md) for the deployment
+  and domain setup checkpoint.
 
 ## Assets
 

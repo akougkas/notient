@@ -4,7 +4,9 @@ Notient works directly on an Obsidian vault because both products treat Markdown
 The terminal experience does not require Obsidian to be running. The first-party desktop plugin
 adds native editor context, exact source navigation, search, capture, connection browsing, workflow previews and editor write
 protection. Its current development build and installation steps are in
-[the Obsidian integration](../integrations/obsidian/README.md); the full sprint plugin is still in progress.
+[the Obsidian integration](../integrations/obsidian/README.md). Version 0.1.0 ships
+the desktop plugin and selection workflows; the full cross-surface acceptance
+pass remains open.
 
 The Note workspace shows outgoing links, backlinks and reviewed/proposed relationships from the same graph service used by the terminal and external agents. It checks saved-file revisions, distinguishes authored links from model assessments, and labels stale or unavailable evidence. Connection buttons open existing files through Obsidian; evidence buttons use native revision-checked source navigation. Dirty editor context remains separate from saved-file graph evidence.
 

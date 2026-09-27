@@ -6,6 +6,8 @@ import { enrichNotes } from "./enrich";
 import { processInbox } from "./inbox";
 import { type IndexExtractDependencies, indexExtract, persistExtractions } from "./indexExtract";
 import { relateNotes } from "./relate";
+import { retainPipelineIntelligence } from "./retainIntelligence";
+import { reconsiderPipelineIntelligence } from "./reconsiderIntelligence";
 import { synthesizeNotes } from "./synthesize";
 
 /** Finite stage implementations shared by live and scheduled execution. */
@@ -27,6 +29,8 @@ export class PipelineEngine {
       extractions: [],
     };
     switch (pipeline) {
+      case "reconsider":
+        break;
       case "index-extract":
         await indexExtract(context, plan, this.indexing);
         break;
@@ -51,12 +55,14 @@ export class PipelineEngine {
     }
     await options.stage("validate");
     options.signal.throwIfAborted();
+    retainPipelineIntelligence(context, plan);
+    await reconsiderPipelineIntelligence(context, plan);
     plan.sources = context.references();
     plan.abstained =
       plan.findings.length === 0 && plan.changes.length === 0 && plan.relationships.length === 0;
     plan.summary = plan.abstained
       ? (plan.reason ?? "No evidence-backed result was found within this run's bounds.")
-      : `${plan.findings.length} supported findings, ${plan.changes.length} proposed note changes, ${plan.relationships.length} relationship suggestions.`;
+      : `${plan.findings.length} findings with cited evidence, ${plan.changes.length} proposed note changes, ${plan.relationships.length} relationship suggestions.`;
     if (!plan.abstained) plan.reason = null;
     if (context.retrievalLimitations.size)
       plan.summary += ` Retrieval limits: ${[...context.retrievalLimitations].join(" ")}`;

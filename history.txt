@@ -1,0 +1,23 @@
+#V2
+SELECT count() AS total FROM chunk GROUP ALL;
+SELECT count() AS vectorized FROM chunk WHERE vector IS NOT NONE GROUP ALL;
+SELECT count() AS unvectorized FROM chunk WHERE vector IS NONE GROUP ALL;
+SELECT count() AS vectorized FROM chunk WHERE vector IS NOT NONE GROUP ALL;
+SELECT count() AS unvectorized FROM chunk WHERE vector IS NONE GROUP ALL;
+SELECT id, status, processed, failed, attempted, cursor, failures FROM awaken_run WHERE status = "running";
+SELECT ts_ms, kind, payload.path AS path, payload.phase AS phase, payload.message AS message FROM agent_event WHERE ts_ms > 1790521019563 AND kind INSIDE ["indexer:note-indexed", "indexer:error"] ORDER BY ts_ms DESC LIMIT 100;
+SELECT ts_ms, kind, payload FROM agent_event WHERE ts_ms > 1790521019563 AND kind = "indexer:error" ORDER BY ts_ms DESC LIMIT 30;
+SELECT ts_ms, payload FROM agent_event WHERE ts_ms > 1790521019563 AND kind = "indexer:note-indexed" LIMIT 2;
+SELECT payload.data.path AS path, payload.data.result.embedCount AS embedCount, ts_ms FROM agent_event WHERE ts_ms > 1790521019563 AND kind = "indexer:note-indexed" AND payload.data.path IN ["0-inbox/Clippings/Clipboard cli tool.md", "0-inbox/Clippings/DeepConf on vLLM - Minimal Patch & Usage Guide.md", "0-inbox/Clippings/Evaluating Chunking Strategies for Retrieval.md", "0-inbox/Clippings/From Prototype to Production Enhancing LLM Accuracy.md", "0-inbox/Clippings/How AIML teams can transition from prototype REST APIs to production‑grade gRPC infrastructure for high‑volume LLM inference workloads.md", "0-inbox/Clippings/LLM Visualization.md", "0-inbox/Clippings/OpenAI-Cpp Community Library for OpenAI API in C++.md", "0-inbox/Clippings/Postgres for Agents.md", "0-inbox/Clippings/The Ultimate Guide for Building a Multilingual-Multimodal RAG with LlamaIndex and Qdrant.md", "0-inbox/Clippings/codefuse-aiAwesome-Code-LLM.md", "0-inbox/Clippings/coleam00local-ai-packaged Run all your local AI together in one package - Ollama, Supabase, n8n, Open WebUI, and more!.md", "0-inbox/Clippings/container-filesystem-from-scratch.md", "0-inbox/Clippings/langchain-ailanggraph-swarm-py.md", "0-inbox/Clippings/local-ai-packaged.md", "0-inbox/Clippings/mbzuai-oryxAwesome-LLM-Post-training Awesome Reasoning LLM TutorialSurveyGuide.md", "0-inbox/Clippings/sinq-public-quantization-method.md", "1-projects/personal/green-card/_archived/[CV]Antonios_Kougkas.md", "1-projects/personal/mediaCoverage/grok_summary.md", "1-projects/personal/obsidian-vault-manager/local-vault-manager/lmstudio-setup.md", "1-projects/professional/AI4Science/00-Demo/fromGithub/scientific_workflow_summary.md", "1-projects/professional/AI4Science/08-Slides/@ANL-oct25/planning/GenomIO_Full_Report_Pandoc.md", "1-projects/professional/CAE/cae_technical_spec_Oct25.md", "1-projects/professional/CAE/plan.md", "1-projects/professional/ContextOS/prelim_material/plan.md", "1-projects/professional/agentlog/material/chronolog_project/ChronoLog_Infrastructure_Assessment.md"] ORDER BY ts_ms ASC;
+SELECT count() AS vectorized FROM chunk WHERE vector IS NOT NONE GROUP ALL;
+SELECT count() AS unvectorized FROM chunk WHERE vector IS NONE GROUP ALL;
+SELECT count() AS chunks FROM chunk GROUP ALL;
+SELECT count() AS vectorized FROM chunk WHERE vector IS NOT NONE GROUP ALL;
+SELECT count() AS unvectorized FROM chunk WHERE vector IS NONE GROUP ALL;
+SELECT count() AS embed_errors FROM chunk WHERE embed_error IS NOT NONE GROUP ALL;
+SELECT count() AS tier1 FROM note WHERE tier1_at IS NOT NONE GROUP ALL;
+SELECT count() AS tier2 FROM note WHERE tier2_at IS NOT NONE GROUP ALL;
+SELECT count() AS tier3 FROM note WHERE tier3_at IS NOT NONE GROUP ALL;
+SELECT embed_model, count() AS chunks FROM chunk GROUP BY embed_model;
+SELECT path, tier1_at, tier2_at, tier3_at FROM note WHERE path IN ["0-inbox/Clippings/A Guide to Gen AI  LLM Vibecoding for Expert Programmers.md", "1-projects/research/hdf5_mcp_server/h5py_docs/Single Writer Multiple Reader (SWMR) — h5py 3.13.0 documentation.md"];
+SELECT ts_ms, kind, payload FROM agent_event WHERE kind INSIDE ["indexer:note-indexed", "indexer:error"] AND payload.data.path IN ["0-inbox/Clippings/A Guide to Gen AI  LLM Vibecoding for Expert Programmers.md", "1-projects/research/hdf5_mcp_server/h5py_docs/Single Writer Multiple Reader (SWMR) — h5py 3.13.0 documentation.md"] ORDER BY ts_ms ASC;

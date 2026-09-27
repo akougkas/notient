@@ -32,13 +32,13 @@
 
 import type { Surreal } from "surrealdb";
 import { backfillReviewPreviews } from "../approvals/reviewStorage";
-import { AGENT_ID_PATTERN } from "../auth/agentIdentity";
+import { CONVERSATION_CLIENT_ID_PATTERN } from "../auth/agentIdentity";
 import { EDGE_TABLES, EXTRACTOR_EDGE_TABLES, provenanceFields } from "./edgeTables";
 
 const MANAGED_BEGIN = "-- BEGIN MANAGED INDEXES";
 const MANAGED_END = "-- END MANAGED INDEXES";
 const EMBED_DIM_PLACEHOLDER = "{{EMBED_DIM}}";
-const AGENT_ID_PATTERN_PLACEHOLDER = "{{AGENT_ID_PATTERN}}";
+const CONVERSATION_CLIENT_ID_PATTERN_PLACEHOLDER = "{{CONVERSATION_CLIENT_ID_PATTERN}}";
 
 export interface EmbeddingMeta {
   model: string;
@@ -88,13 +88,16 @@ function substituteDim(sql: string, embedDim: number | null): string {
   return sql.replaceAll(EMBED_DIM_PLACEHOLDER, String(embedDim));
 }
 
-function substituteAgentIdPattern(sql: string): string {
-  if (!sql.includes(AGENT_ID_PATTERN_PLACEHOLDER)) {
+function substituteConversationClientIdPattern(sql: string): string {
+  if (!sql.includes(CONVERSATION_CLIENT_ID_PATTERN_PLACEHOLDER)) {
     throw new Error(
-      "applySchema: schema.surql is missing the agent identity placeholder; storage and authentication would have split authority",
+      "applySchema: schema.surql is missing the conversation client identity placeholder",
     );
   }
-  return sql.replaceAll(AGENT_ID_PATTERN_PLACEHOLDER, AGENT_ID_PATTERN.source);
+  return sql.replaceAll(
+    CONVERSATION_CLIENT_ID_PATTERN_PLACEHOLDER,
+    CONVERSATION_CLIENT_ID_PATTERN.source,
+  );
 }
 
 function splitManagedIndexes(source: string): SchemaSources {
@@ -376,7 +379,7 @@ export async function applySchema(
       : false;
 
   const rawSource = await Bun.file(new URL("./schema.surql", import.meta.url)).text();
-  const sources = splitManagedIndexes(substituteAgentIdPattern(rawSource));
+  const sources = splitManagedIndexes(substituteConversationClientIdPattern(rawSource));
 
   await db.query(substituteDim(sources.base, embedDim));
   await backfillReviewPreviews(db);

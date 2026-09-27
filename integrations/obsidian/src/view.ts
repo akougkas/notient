@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Notice, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Menu, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { ChangePreview } from "../../../src/api/changes";
 import { NotientApiError, type NotientClient } from "../../../src/api/client";
 import type { PipelineId } from "../../../src/api/operations";
@@ -7,6 +7,7 @@ import type { SourceReference } from "../../../src/api/schema";
 import { isCanonicalOrdinaryNotePath } from "../../../src/core/vault/publicPath";
 import { chooseAnalysisNote, renderAnalysisPanel } from "./analysis";
 import { type AskState, renderAskPanel } from "./ask";
+import { type ChatPanelState, createChatPanelState, renderChatPanel } from "./chat";
 import { renderBriefPanel } from "./brief";
 import { renderCapturePanel } from "./capture";
 import { renderConnections } from "./connections";
@@ -21,12 +22,13 @@ const titles: Record<PipelineId, string> = {
   enrich: "Suggest refinements",
   relate: "Find connections",
   contradictions: "Check competing claims",
+  reconsider: "Reconsider changed evidence",
   synthesize: "Draft a synthesis",
   inbox: "Organize this note",
   archive: "Review for archive",
 };
 export class NotientView extends ItemView {
-  destination: "note" | "ask" | "capture" | "search" | "review" | "activity" = "note";
+  destination: "note" | "ask" | "capture" | "search" | "review" | "activity" = "ask";
   private content!: HTMLElement;
   private status!: HTMLElement;
   private tabs!: HTMLElement;
@@ -38,6 +40,7 @@ export class NotientView extends ItemView {
   private reviewHistory = false;
   private analysisActive = false;
   private renderedClient: NotientClient | null = null;
+  private chatState: ChatPanelState;
   private askState: AskState = {
     question: "",
     scope: "vault",
@@ -51,6 +54,7 @@ export class NotientView extends ItemView {
     readonly plugin: NotientPlugin,
   ) {
     super(leaf);
+    this.chatState = createChatPanelState(this.app.loadLocalStorage("notient-chat-session"));
   }
   private get client() {
     if (!this.plugin.client) throw new Error("Reconnect Notient before continuing.");
@@ -75,17 +79,33 @@ export class NotientView extends ItemView {
     const root = this.containerEl.children[1] as HTMLElement;
     root.addClass("notient-workspace");
     const header = root.createDiv({ cls: "notient-header" });
-    header.createEl("h2", { text: "notient" });
-    header.createEl("span", { text: "Grow what you know", cls: "notient-muted" });
-    this.status = root.createDiv({ cls: "notient-status", attr: { role: "status" } });
+    const identity = header.createDiv({ cls: "notient-identity" });
+    setIcon(identity.createSpan({ cls: "notient-mark" }), "sprout");
+    identity.createEl("h2", { text: "notient" });
+    this.status = identity.createDiv({ cls: "notient-status", attr: { role: "status" } });
+    const more = header.createEl("button", { cls: "notient-icon-button", attr: { "aria-label": "Notient actions", title: "Notient actions" } });
+    setIcon(more, "ellipsis");
+    more.addEventListener("click", (event) => {
+      const menu = new Menu();
+      for (const [id, title, icon] of [
+        ["ask", "Conversation", "message-circle"],
+        ["note", "Explore this note", "file-text"],
+        ["search", "Search your knowledge", "search"],
+        ["capture", "Capture a thought", "pencil"],
+        ["review", "Review proposed changes", "check-check"],
+        ["activity", "Cultivation activity", "sprout"],
+      ] as const)
+        menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(() => this.select(id)));
+      menu.showAtMouseEvent(event);
+    });
     this.tabs = root.createDiv({
       cls: "notient-tabs",
-      attr: { role: "tablist", "aria-label": "Knowledge workspace" },
+      attr: { "aria-label": "Return to conversation" },
     });
     this.content = root.createDiv({ cls: "notient-content" });
     this.register(
       this.plugin.subscribe(() => {
-        this.status.setText(this.plugin.status);
+        this.updateStatus();
         if (this.plugin.client !== this.renderedClient) {
           void this.render();
           return;
@@ -104,29 +124,21 @@ export class NotientView extends ItemView {
     this.controller.abort();
     if (this.debounce) clearTimeout(this.debounce);
   }
-  select(destination: NotientView["destination"]): void {
+  select(destination: NotientView["destination"], selectedPassage?: SelectionTarget): void {
     if (this.debounce) {
       clearTimeout(this.debounce);
       this.debounce = null;
     }
     this.destination = destination;
+    if (destination === "ask") this.askState.focus = selectedPassage ?? null;
     if (!this.tabs) return;
     this.tabs.empty();
-    for (const [id, title] of [
-      ["note", "Note"],
-      ["ask", "Ask"],
-      ["capture", "Write"],
-      ["search", "Search"],
-      ["review", "Review"],
-      ["activity", "Activity"],
-    ] as const) {
-      const button = this.tabs.createEl("button", {
-        text: title,
-        attr: { role: "tab", "aria-selected": String(id === destination) },
-      });
-      button.toggleClass("is-active", id === destination);
-      button.addEventListener("click", () => this.select(id));
+    this.tabs.hidden = destination === "ask";
+    if (destination !== "ask") {
+      const button = this.tabs.createEl("button", { text: "← Conversation", cls: "notient-back" });
+      button.addEventListener("click", () => this.select("ask"));
     }
+    this.content.toggleClass("is-conversation", destination === "ask");
     void this.render();
   }
   private async render(): Promise<void> {
@@ -139,7 +151,7 @@ export class NotientView extends ItemView {
     this.markdown = new Component();
     this.addChild(this.markdown);
     this.content.empty();
-    this.status.setText(this.plugin.status);
+    this.updateStatus();
     this.renderedClient = this.plugin.client;
     if (!this.plugin.client && this.destination !== "capture") {
       this.content.createEl("h3", { text: "Your knowledge stays here" });
@@ -168,7 +180,7 @@ export class NotientView extends ItemView {
           },
         });
       else if (this.destination === "search") this.renderSearch();
-      else if (this.destination === "ask")
+      else if (this.destination === "ask" && this.askState.focus)
         renderAskPanel({
           parent: this.content,
           state: this.askState,
@@ -182,6 +194,27 @@ export class NotientView extends ItemView {
           verify: (target) => this.host.verify(target),
           markdown: (parent, text, path) => this.renderMarkdown(parent, text, path),
           source: (parent, evidence) => this.source(parent, evidence),
+        });
+      else if (this.destination === "ask")
+        renderChatPanel({
+          parent: this.content,
+          state: this.chatState,
+          client: this.client,
+          signal,
+          active: async () => {
+            const context = await this.host.context();
+            return { path: context?.path ?? null, dirty: context?.dirty ?? false };
+          },
+          markdown: (parent, text, path) => this.renderMarkdown(parent, text, path),
+          source: (parent, evidence) => this.source(parent, evidence),
+          navigate: (destination) => this.select(destination),
+          openNote: async (path) => {
+            if (!isCanonicalOrdinaryNotePath(path)) throw new Error("Choose an ordinary Markdown note.");
+            const file = this.app.vault.getFileByPath(path);
+            if (!file) throw new Error("This note is no longer available in the vault.");
+            await this.app.workspace.getLeaf(false).openFile(file);
+          },
+          persist: (saved) => this.app.saveLocalStorage("notient-chat-session", saved),
         });
       else if (this.destination === "review") {
         const actions = this.content.createDiv({ cls: "notient-actions" });
@@ -215,6 +248,14 @@ export class NotientView extends ItemView {
     } finally {
       loading.remove();
     }
+  }
+  private updateStatus(): void {
+    const connected = !!this.plugin.client;
+    const ready = connected && this.plugin.status === "Connected · editor protection active";
+    this.status.setText(ready ? "Ready" : connected ? "Connecting" : "Offline");
+    this.status.setAttribute("title", this.plugin.status);
+    this.status.setAttribute("aria-label", this.plugin.status);
+    this.status.toggleClass("is-connected", ready);
   }
   private async renderNote(signal: AbortSignal): Promise<void> {
     const file = this.app.workspace.getActiveFile();
@@ -464,9 +505,8 @@ export class NotientView extends ItemView {
   }
   /** Ask keeps the person's question; the bound passage rides along as its focus. */
   askSelection(target: SelectionTarget): void {
-    this.askState.focus = target;
     this.askState.scope = "note";
-    this.select("ask");
+    this.select("ask", target);
   }
   /** A person's own range edit becomes an ordinary preview. Nothing is written here. */
   async proposeEdit(target: SelectionTarget): Promise<void> {
@@ -597,7 +637,7 @@ export class NotientView extends ItemView {
         await this.renderReviews(signal, nextCursor);
       });
   }
-  private async inspectProposal(id: string): Promise<void> {
+  private async inspectProposal(id: string, suppressApply = false): Promise<void> {
     ++this.renderId;
     this.controller.abort();
     this.controller = new AbortController();
@@ -627,7 +667,7 @@ export class NotientView extends ItemView {
           : "Source evidence has changed. Inspect the current note and prepare a fresh suggestion before applying.",
         cls: "notient-warning",
       });
-    await this.review(preview, proposal);
+    await this.review(preview, proposal, this.content, suppressApply);
   }
   private async inspectJob(id: string): Promise<void> {
     ++this.renderId;
@@ -695,6 +735,7 @@ export class NotientView extends ItemView {
     preview: ChangePreview,
     proposal?: ReviewProposal,
     container: HTMLElement = this.content,
+    suppressApply = false,
   ): Promise<void> {
     const parent = container.createDiv({ cls: "notient-review" });
     parent.createEl("h4", { text: `Review ${preview.effects.length} file effects` });
@@ -723,9 +764,11 @@ export class NotientView extends ItemView {
       preview.effects.length &&
       !preview.conflicts.length &&
       !decided &&
+      !suppressApply &&
       (proposal?.state !== "stale" || proposal.appliedHistory.length)
-    )
-      this.button(
+    ) {
+      let applyButton: HTMLButtonElement;
+      applyButton = this.button(
         parent,
         "Apply these reviewed changes",
         async () => {
@@ -737,6 +780,27 @@ export class NotientView extends ItemView {
           const result = proposal
             ? await this.client.call("proposals.approve", { ...request, id: proposal.id })
             : await this.client.call("changes.apply", request);
+          if (proposal && (result.state === "conflict" || result.state === "partial")) {
+            applyButton.remove();
+            const invalidated =
+              result.state === "conflict" ||
+              result.effects.some((effect) => effect.state === "conflict");
+            const showOutcome = () => {
+              const outcome = this.content.createDiv({ cls: "notient-warning" });
+              outcome.createEl("p", { text: `Application ${result.state}.` });
+              for (const effect of result.effects)
+                if (effect.message) outcome.createEl("p", { text: `${effect.path}: ${effect.message}` });
+              this.content.insertBefore(outcome, this.content.firstChild);
+            };
+            try {
+              await this.inspectProposal(proposal.id, invalidated);
+            } catch (error) {
+              showOutcome();
+              throw error;
+            }
+            showOutcome();
+            return;
+          }
           parent.createEl("p", {
             text: result.state,
             cls: result.ok ? "notient-success" : "notient-error",
@@ -744,30 +808,67 @@ export class NotientView extends ItemView {
           for (const effect of result.effects)
             if (effect.message) parent.createEl("p", { text: `${effect.path}: ${effect.message}` });
           if (proposal && result.state === "applied") await this.inspectProposal(proposal.id);
+          if (
+            !proposal &&
+            (result.state === "conflict" ||
+              (result.state === "partial" && result.effects.some((effect) => effect.state === "conflict")))
+          ) {
+            applyButton.remove();
+            parent.createEl("p", {
+              text: "This exact preview cannot be retried because a source changed. The before and after content remains available above; prepare a fresh preview from the current note.",
+              cls: "notient-warning",
+            });
+          }
         },
         true,
       );
-    if (proposal && !decided)
+    }
+    if (proposal?.feedback)
+      parent.createEl("p", {
+        text: `Feedback (${proposal.feedback.category ?? "uncategorized"}): ${proposal.feedback.reason}`,
+      });
+    if (proposal && !decided) {
+      const feedback = parent.createDiv();
+      feedback.createEl("label", { text: "Reason for rejection" });
+      const reason = feedback.createEl("textarea", {
+        attr: { placeholder: "Explain what later work should change or avoid", maxlength: "4000" },
+      });
+      const category = feedback.createEl("select", {
+        attr: { "aria-label": "Feedback category" },
+      });
+      category.createEl("option", { text: "Decision only", value: "" });
+      for (const value of ["false", "unsupported", "irrelevant", "already-known", "deferred"])
+        category.createEl("option", { text: value, value });
       this.button(
         parent,
         proposal.appliedHistory.length ? "Reject remaining changes" : "Reject suggestion",
         async () => {
+          const explanation = reason.value.trim();
+          const selected = category.value as "false" | "unsupported" | "irrelevant" | "already-known" | "deferred" | "";
+          if (selected && !explanation)
+            throw new Error("Give a reason so later work can understand this feedback.");
           await this.client.call("proposals.reject", {
             id: proposal.id,
             revision: proposal.revision,
             idempotencyKey: `obsidian-reject-${proposal.id}-${proposal.revision.slice(0, 12)}`,
+            ...(explanation ? { reason: explanation } : {}),
+            ...(selected ? { category: selected } : {}),
           });
           await this.inspectProposal(proposal.id);
         },
       );
+    }
   }
   private source(parent: HTMLElement, source: SourceReference): void {
-    this.button(parent, `${source.path} · line ${source.range.startLine}`, () =>
+    const title = (source.path.split("/").pop() ?? source.path).replace(/\.md$/i, "").replace(/[-_]/g, " ");
+    const button = this.button(parent, `${title} · line ${source.range.startLine}`, () =>
       this.host.open(source),
-    ).addClass("notient-source");
+    );
+    button.addClass("notient-source");
+    button.setAttribute("title", source.path);
   }
   private async renderMarkdown(parent: HTMLElement, text: string, path: string): Promise<void> {
-    const rendered = parent.createDiv({ cls: "notient-markdown" });
+    const rendered = parent.createDiv({ cls: "notient-markdown markdown-rendered" });
     await MarkdownRenderer.render(this.app, text, rendered, path, this.markdown);
     // These are saved evidence or reviewed future bytes, not the native editor.
     // A task toggle must never edit a source through a preview's line offsets.

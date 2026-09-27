@@ -105,9 +105,20 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   let lastProcessedPath: string | null = start.resumeCursor;
   const failurePaths = [...start.failurePaths];
 
-  const remainingPaths = sliceAfterCursor(orderedPaths, start.resumeCursor, comparator);
+  const retryFailurePaths = new Set(start.failurePaths);
+  const plannedPaths = new Set(orderedPaths);
+  if (start.failurePaths.some((path) => !plannedPaths.has(path))) {
+    throw new Error("runAwakenWorker: persisted failure path is outside the immutable path plan");
+  }
+  const remainingPaths = [
+    ...orderedPaths.filter((path) => retryFailurePaths.has(path)),
+    ...sliceAfterCursor(orderedPaths, start.resumeCursor, comparator).filter(
+      (path) => !retryFailurePaths.has(path),
+    ),
+  ];
   const outcomesThisRun: AwakenTerminalOutcome[] = [];
   let checkpointOutcomes: AwakenTerminalOutcome[] = [];
+  let retriedFailureCount = 0;
 
   // The live-query callback mutates `current` from another microtask; we
   // wrap it in an object so TypeScript does not narrow the field to its
@@ -132,7 +143,17 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
       // emit synchronously, so registering afterward would lose the terminal
       // event and leave the run stuck forever.
       const waitForDone = waitForNoteIndexed(options.bus, notePath, options.signal);
-      attempted += 1;
+      const retryingFailure = retryFailurePaths.has(notePath) && failurePaths.includes(notePath);
+      if (retryingFailure) {
+        if (failed === 0) {
+          throw new Error("runAwakenWorker: persisted failure count cannot cover a retry path");
+        }
+        failurePaths.splice(failurePaths.indexOf(notePath), 1);
+        failed -= 1;
+        retriedFailureCount += 1;
+      } else {
+        attempted += 1;
+      }
       try {
         // Forward the run's tier filter so per-note Tier 1/2/3 execution
         // honours the operator's `--tier` scope. A full filter (`[1, 2, 3]`)
@@ -152,7 +173,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
         outcomesThisRun.push(outcome);
         checkpointOutcomes.push(outcome);
       }
-      lastProcessedPath = notePath;
+      if (!retryingFailure) lastProcessedPath = notePath;
 
       if (attempted % CHECKPOINT_EVERY === 0) {
         const checkpoint = await reconcileWorkerCounters(
@@ -191,7 +212,7 @@ export async function runAwakenWorker(options: AwakenWorkerOptions): Promise<Awa
   );
   throwIfAborted(options.signal);
   processed = start.processed + finalCounters.processed;
-  failed = start.failed + finalCounters.failed;
+  failed = start.failed - retriedFailureCount + finalCounters.failed;
   if (isInterruptedStatus(finalStatus)) {
     // Preserve the user's terminal status. Persist final counters and the
     // last processed path so a future `resume` picks up exactly where we
@@ -494,14 +515,11 @@ function readTierStateRow(raw: unknown): { path: string; state: AwakenTierState 
   if (tier2At !== null && tier1At === null) {
     throw new Error("awaken reconciliation: tier2_at exists without tier1_at");
   }
-  if (tier3At !== null && tier2At === null) {
-    throw new Error("awaken reconciliation: tier3_at exists without tier2_at");
+  if (tier3At !== null && tier1At === null) {
+    throw new Error("awaken reconciliation: tier3_at exists without tier1_at");
   }
   if (tier1At !== null && tier2At !== null && tier2At < tier1At) {
     throw new Error("awaken reconciliation: tier2_at precedes tier1_at");
-  }
-  if (tier2At !== null && tier3At !== null && tier3At < tier2At) {
-    throw new Error("awaken reconciliation: tier3_at precedes tier2_at");
   }
   return { path: row.path, state: { tier1At, tier2At, tier3At } };
 }

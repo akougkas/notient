@@ -1,5 +1,9 @@
+import { join } from "node:path";
 import type { Surreal } from "surrealdb";
 import type { VaultAdapter } from "../adapters/vaultAdapter";
+import type { ChangePreview } from "../api/changes";
+import type { PipelineJob } from "../api/pipelines";
+import type { NoteReference } from "../api/schema";
 import type { ApprovalService } from "../core/approvals/approvalService";
 import { Coordinator } from "../core/coordinator/coordinator";
 import type { ReasoningScheduler } from "../core/coordinator/reasoningScheduler";
@@ -17,6 +21,29 @@ import { JobStore } from "../core/pipelines/jobStore";
 import type { SearchPipeline } from "../core/search/searchPipeline";
 import type { SentienceActivity } from "../core/services/sentienceActivity";
 import type { SettingsService } from "../core/settings/settingsService";
+import { vaultStateDir } from "../core/vault/identity";
+
+export function appliedPipelineSources(job: PipelineJob, preview: ChangePreview): NoteReference[] {
+  if (
+    !job.effects ||
+    job.effects.previewId !== job.previewId ||
+    preview.previewId !== job.previewId ||
+    preview.revision !== job.previewRevision ||
+    preview.owner !== job.caller.id
+  )
+    return [];
+  const references = new Map<string, NoteReference>();
+  const receipts = [...job.effects.effects].sort((left, right) => left.index - right.index);
+  for (const receipt of receipts) {
+    if (receipt.state !== "applied" || !receipt.historyId) continue;
+    const effect = preview.effects[receipt.index];
+    if (!effect || receipt.path !== effect.path) continue;
+    if (effect.kind === "move") references.delete(effect.path);
+    const path = effect.destination ?? effect.path;
+    references.set(path, { path, revision: effect.afterRevision });
+  }
+  return [...references.values()];
+}
 
 export function makePipelineServices(options: {
   db: Surreal;
@@ -31,6 +58,7 @@ export function makePipelineServices(options: {
   search: SearchPipeline;
   provider: LLMProvider;
   activity: SentienceActivity;
+  vaultPath?: string;
   authorizeCaller?: JobServiceOptions["authorizeCaller"];
 }) {
   const { db, vault, settings, bus } = options;
@@ -38,6 +66,7 @@ export function makePipelineServices(options: {
     db,
     vault,
     writer: options.writer,
+    bus,
     approvalService: options.approvals,
     authorizeCaller: options.authorizeCaller,
     authorizeRecoveredJob: async (job, preview, effect) => {
@@ -97,6 +126,26 @@ export function makePipelineServices(options: {
         stage: job.stage,
       }),
   });
-  const coordinator = new Coordinator({ bus, jobs, settings, vault, activity: options.activity });
+  const coordinator = new Coordinator({
+    bus,
+    jobs,
+    settings,
+    vault,
+    activity: options.activity,
+    appliedSources: async (job) => {
+      if (
+        !job.previewId ||
+        !job.previewRevision ||
+        job.effects?.previewId !== job.previewId ||
+        !job.effects.effects.some((effect) => effect.state === "applied" && effect.historyId)
+      )
+        return [];
+      const preview = await changes.get(job.previewId, job.caller);
+      return appliedPipelineSources(job, preview);
+    },
+    pendingStatePath: options.vaultPath
+      ? join(vaultStateDir(options.vaultPath), "coordinator-pending.json")
+      : undefined,
+  });
   return { changes, jobs, coordinator };
 }

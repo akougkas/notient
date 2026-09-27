@@ -135,3 +135,60 @@ test("indexed candidates keep live exclusions, scope and changed/deleted evidenc
   );
   expect(scoped.hits).toEqual([]);
 });
+
+test("named-note retrieval finds a filename absent from the body without bypassing scope or revision guards", async () => {
+  const original = "# Native storage\nKeep durable buffers close to the application.\n";
+  let body = original;
+  const path = "Projects/Orchid — storage engine.md";
+  let excluded = false;
+  const reads: string[] = [];
+  const read = async (name: string) => {
+    reads.push(name);
+    return body;
+  };
+  const retrieval = new NoteRetrieval({
+    vault: {
+      read,
+      readBounded: read,
+      listMarkdown: async () => {
+        throw new Error("no walk");
+      },
+      isIndexablePath: () => !excluded,
+    },
+    db: {
+      query: (sql: string) => ({
+        collect: async () => {
+          if (sql.startsWith("SELECT path FROM note")) return [[{ path }]];
+          if (sql.startsWith("SELECT sha FROM note")) return [[{ sha: contentRevision(original) }]];
+          return [[]];
+        },
+      }),
+    } as unknown as Surreal,
+    embed: async () => null,
+  });
+  const request = { query: "Orchid", mode: "lexical", limit: 5, scope: {} };
+  const signal = new AbortController().signal;
+  const result = await retrieval.search(request, signal);
+  expect(result.hits).toHaveLength(1);
+  expect(result.hits[0]?.scoreKind).toBe("reciprocal-rank");
+  const evidence = result.hits[0]?.evidence;
+  if (!evidence) throw new Error("Named source must carry evidence");
+  expect(evidence.quote).toBe(original);
+  expect(
+    (await retrieval.context({ query: "Orchid", scope: {}, limit: 5, maxCharacters: 5000 }, signal))
+      .sources,
+  ).toEqual([evidence]);
+  expect((await retrieval.search({ ...request, query: '"Orchid"' }, signal)).hits).toEqual([]);
+  expect((await retrieval.search({ ...request, query: "Orch" }, signal)).hits).toEqual([]);
+  reads.length = 0;
+  expect(
+    (await retrieval.search({ ...request, scope: { folders: ["Private"] } }, signal)).hits,
+  ).toEqual([]);
+  expect(reads).toEqual([]);
+  body += "A newer edit.\n";
+  const stale = await retrieval.search(request, signal);
+  expect(stale.hits[0]?.freshness.state).toBe("lagging");
+  expect(stale.hits[0]?.evidence).toBeNull();
+  excluded = true;
+  expect((await retrieval.search(request, signal)).hits).toEqual([]);
+});

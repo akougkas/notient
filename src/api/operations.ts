@@ -1,7 +1,21 @@
 /** Runtime input contracts for the v1 note-centered API. Implementations register separately. */
 import { z } from "zod";
 import { isCanonicalPublicFolderPath } from "../core/vault/publicPath";
-import { chatBudgetSchema } from "./chat";
+import {
+  chatAbortRequestSchema,
+  chatApproveRequestSchema,
+  chatBudgetSchema,
+  chatLoadRequestSchema,
+  chatSendRequestSchema,
+  chatStartRequestSchema,
+} from "./chat";
+import {
+  contributionIdSchema,
+  contributionKindSchema,
+  contributionOriginSchema,
+  contributionStatusSchema,
+} from "./contributionContracts";
+import { cultivationSettingsSchema } from "./cultivationSettings";
 import { historyIdSchema } from "./history";
 import { hostInputs } from "./host";
 import {
@@ -15,7 +29,13 @@ import {
   sourceReferenceSchema,
 } from "./schema";
 
-export const folderSchema = z.string().refine(isCanonicalPublicFolderPath);
+export const folderSchema = z
+  .string()
+  .refine(
+    isCanonicalPublicFolderPath,
+    'use a vault-relative folder without a trailing slash, or "" for the vault root',
+  )
+  .describe('Vault-relative folder without a trailing slash; "" selects the vault root.');
 export const scopeSchema = z
   .object({
     paths: z.array(notePathSchema).max(200).default([]),
@@ -30,6 +50,7 @@ export const pipelineIdSchema = z.enum([
   "enrich",
   "relate",
   "contradictions",
+  "reconsider",
   "synthesize",
   "inbox",
   "archive",
@@ -283,6 +304,12 @@ export const operationInputs = {
       limit: z.number().int().min(1).max(200).default(50),
     })
     .strict(),
+  "relationships.retain": z
+    .object({
+      edgeId: identifier,
+      idempotencyKey: z.string().min(1).max(128).optional(),
+    })
+    .strict(),
   "graph.path": z
     .object({
       from: notePathSchema,
@@ -324,7 +351,57 @@ export const operationInputs = {
     })
     .strict(),
   "proposals.reject": z
-    .object({ id: identifier, revision: revisionSchema, idempotencyKey: identifier })
+    .object({
+      id: identifier,
+      revision: revisionSchema,
+      idempotencyKey: identifier,
+      reason: z.string().trim().min(1).max(4000).optional(),
+      category: z.enum(["false", "unsupported", "irrelevant", "already-known", "deferred"]).optional(),
+    })
+    .strict()
+    .refine((value) => !value.category || !!value.reason, "categorized feedback requires a reason"),
+  "contributions.submit": z
+    .object({
+      idempotencyKey: identifier,
+      target: noteReferenceSchema,
+      kind: contributionKindSchema,
+      statement: z.string().trim().min(1).max(8000),
+      evidence: z.array(sourceReferenceSchema).max(30).default([]),
+      origin: contributionOriginSchema.optional(),
+    })
+    .strict(),
+  "feedback.submit": z
+    .object({
+      idempotencyKey: identifier,
+      target: noteReferenceSchema,
+      targetRecordId: z.string().regex(/^i-[a-f0-9]{64}$/),
+      reason: z.enum(["false", "unsupported", "irrelevant", "already-known", "deferred"]),
+      explanation: z.string().trim().min(1).max(4000),
+      evidence: z.array(sourceReferenceSchema).max(30).default([]),
+    })
+    .strict(),
+  "contributions.list": pageSchema
+    .extend({
+      kind: z.enum(["contribution", "feedback"]).optional(),
+      state: contributionStatusSchema.optional(),
+    })
+    .strict(),
+  "contributions.get": z.object({ id: contributionIdSchema }).strict(),
+  "contributions.stage": z
+    .object({
+      id: contributionIdSchema,
+      revision: revisionSchema,
+      idempotencyKey: identifier,
+      section: z.string().trim().min(1).max(256).optional(),
+    })
+    .strict(),
+  "contributions.dismiss": z
+    .object({
+      id: contributionIdSchema,
+      revision: revisionSchema,
+      idempotencyKey: identifier,
+      reason: z.string().trim().min(1).max(2000),
+    })
     .strict(),
   "history.list": pageSchema.extend({ path: notePathSchema.optional() }).strict(),
   "history.get": z.object({ id: historyIdSchema }).strict(),
@@ -349,6 +426,30 @@ export const operationInputs = {
       idempotencyKey: identifier,
     })
     .strict(),
+  "cultivation.digest": z
+    .object({ limit: z.number().int().min(1).max(20).optional(), scope: scopeSchema.optional() })
+    .strict(),
+  "cultivation.settings": empty,
+  "cultivation.configure": z
+    .object({
+      settings: cultivationSettingsSchema,
+      revision: revisionSchema,
+      idempotencyKey: identifier,
+    })
+    .strict(),
+  "methodology.suggest": z
+    .object({
+      source: noteReferenceSchema,
+      candidateLimit: z.number().int().min(1).max(6).default(5),
+      idempotencyKey: z.string().min(1).max(128).optional(),
+    })
+    .strict(),
+  "chat.start": chatStartRequestSchema,
+  "chat.send": chatSendRequestSchema,
+  "chat.abort": chatAbortRequestSchema,
+  "chat.list": empty,
+  "chat.load": chatLoadRequestSchema,
+  "chat.approve": chatApproveRequestSchema,
   "chat.settings": empty,
   "chat.configure": z
     .object({ budget: chatBudgetSchema, revision: revisionSchema, idempotencyKey: identifier })

@@ -130,6 +130,7 @@ export interface Principal {
   id: string;
   kind: PrincipalKind;
   scopes: string[];
+  vaultOwner?: true;
 }
 
 export const HUMAN_SCOPES: readonly MethodKind[] = ["read", "write", "admin"];
@@ -469,7 +470,17 @@ export class MethodDispatcher {
       try {
         const principal = await attempt;
         session.principal = principal;
-        emit(encodeResult(envelope.id, { ok: true, principal }));
+        emit(
+          encodeResult(envelope.id, {
+            ok: true,
+            principal: {
+              id: principal.id,
+              kind: principal.kind,
+              scopes: principal.scopes,
+              ...(principal.vaultOwner === true ? { vaultOwner: true } : {}),
+            },
+          }),
+        );
       } catch (error) {
         const failure = rpcFailure(error);
         emit(encodeError(envelope.id, failure.code, failure.message, failure.detail));

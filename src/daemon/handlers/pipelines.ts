@@ -3,6 +3,10 @@ import { operationInputs, pipelineIdSchema } from "../../api/operations";
 import { PIPELINE_CATALOG, pipelineListSchema } from "../../api/pipelineCatalog";
 import { jobResultSchema } from "../../api/pipelines";
 import { validatePipelinePolicy } from "../../api/policyValidation";
+import {
+  cultivationDigestSchema,
+  cultivationSettingsResultSchema,
+} from "../../api/cultivation";
 import { NoteApiError } from "../../api/schema";
 import type { Coordinator } from "../../core/coordinator/coordinator";
 import type { JobService } from "../../core/pipelines/jobService";
@@ -16,17 +20,18 @@ export function makePipelineHandlers(options: {
   coordinator: Coordinator;
   journal: SettingsChangeJournal;
   authorize: (request: RpcRequestContext) => void;
+  authorizeVaultOwner?: (request: RpcRequestContext) => void;
 }) {
   const update =
     (name: "pipelines.configure" | "background.pause") => async (context: RpcRequestContext) => {
       const { principal, params, signal } = context;
       const authorize = () => {
         signal?.throwIfAborted();
-        if (principal.kind !== "human" || !principal.scopes.includes("admin"))
-          throw new NoteApiError(
-            "FORBIDDEN",
-            "Saving background permissions requires a human administrator.",
-          );
+        if (principal.kind !== "human" || !principal.scopes.includes("admin")) {
+          if (!options.authorizeVaultOwner)
+            throw new NoteApiError("FORBIDDEN", "Saving background permissions requires a human administrator or granted vault owner.");
+          options.authorizeVaultOwner(context);
+        }
         options.authorize(context);
       };
       try {
@@ -69,6 +74,65 @@ export function makePipelineHandlers(options: {
   return {
     configure: update("pipelines.configure"),
     pause: update("background.pause"),
+    cultivationSettings: async ({ principal }: RpcRequestContext) => {
+      if (!principal.scopes.includes("read"))
+        throw new RpcError("FORBIDDEN", "cultivation settings require read scope");
+      try {
+        const result = await options.coordinator.cultivationSettings();
+        return cultivationSettingsResultSchema.parse(result);
+      } catch (error) {
+        if (error instanceof NoteApiError) throw new RpcError(error.code, error.message);
+        throw error;
+      }
+    },
+    cultivationDigest: async ({ params, principal }: RpcRequestContext) => {
+      if (!principal.scopes.includes("read"))
+        throw new RpcError("FORBIDDEN", "cultivation digest requires read scope");
+      const parsed = operationInputs["cultivation.digest"].safeParse(params);
+      if (!parsed.success) throw new RpcError("INVALID_PARAMS", parsed.error.message);
+      try {
+        await options.settings.refreshBackground();
+        return cultivationDigestSchema.parse(await options.coordinator.digest(parsed.data));
+      } catch (error) {
+        if (error instanceof NoteApiError) throw new RpcError(error.code, error.message);
+        throw error;
+      }
+    },
+    cultivationConfigure: async (context: RpcRequestContext) => {
+      const { principal, params, signal } = context;
+      const authorize = () => {
+        signal?.throwIfAborted();
+        if (principal.kind !== "human" || !principal.scopes.includes("admin")) {
+          if (!options.authorizeVaultOwner)
+            throw new NoteApiError("FORBIDDEN", "Saving cultivation attention and methodology requires a human administrator or granted vault owner.");
+          options.authorizeVaultOwner(context);
+        }
+        options.authorize(context);
+      };
+      try {
+        authorize();
+        const request = operationInputs["cultivation.configure"].parse(params);
+        return await options.settings.updateBackground(
+          (current: BackgroundSettings) => ({
+            ...structuredClone(current),
+            cultivation: request.settings,
+          }),
+          request.revision,
+          {
+            journal: options.journal,
+            caller: principal,
+            key: request.idempotencyKey,
+            request: { name: "cultivation.configure", ...request },
+            authorize,
+          },
+        );
+      } catch (error) {
+        if (error instanceof NoteApiError) throw new RpcError(error.code, error.message);
+        if (error instanceof Error && error.name === "ZodError")
+          throw new RpcError("INVALID_PARAMS", error.message);
+        throw error;
+      }
+    },
     validate: async ({ params, principal }: RpcRequestContext) => {
       if (!principal.scopes.includes("read"))
         throw new RpcError("FORBIDDEN", "Policy validation requires read scope.");

@@ -150,3 +150,119 @@ test.skipIf(process.env.NOTIENT_SMOKE !== "1")(
   },
   60000,
 );
+
+test.skipIf(process.env.NOTIENT_SMOKE !== "1")(
+  "[smoke] live TUI shows a verified passage while the model's final answer is still pending",
+  async () => {
+    const vault = await mkdtemp(join(tmpdir(), "notient-live-sources-"));
+    let finishAnswer: (() => void) | undefined;
+    const answerGate = new Promise<void>((resolve) => {
+      finishAnswer = resolve;
+    });
+    const stream = (delta: Record<string, unknown>, finish: string) =>
+      new Response(
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\n` +
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finish }] })}\n\n` +
+          `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\ndata: [DONE]\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const endpoint = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET") {
+          if (path === "/v1/models")
+            return Response.json({
+              object: "list",
+              data: [{ object: "model", id: "source-model" }],
+            });
+          return new Response(null, { status: 404 });
+        }
+        const input = (await request.json()) as {
+          stream?: boolean;
+          messages: Array<{ role: string; content: unknown }>;
+        };
+        if (!input.stream)
+          return Response.json({
+            choices: [{ message: { content: "{}" }, finish_reason: "stop" }],
+          });
+        const probe = input.messages.some(
+          (message) => message.content === "Call the echo tool with value=ping.",
+        );
+        if (!probe && input.messages.some((message) => message.role === "tool")) {
+          await answerGate;
+          return stream({ content: "The final answer is now ready." }, "stop");
+        }
+        return stream(
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: probe ? "probe" : "read",
+                type: "function",
+                function: {
+                  name: probe ? "echo" : "vault.read_note",
+                  arguments: JSON.stringify(
+                    probe
+                      ? { value: "ping" }
+                      : { notePath: "Source.md", lineRange: { start: 3, end: 3 } },
+                  ),
+                },
+              },
+            ],
+          },
+          "tool_calls",
+        );
+      },
+    });
+    let daemon: Awaited<ReturnType<typeof startTestDaemon>> | undefined;
+    let screen: Screen | undefined;
+    try {
+      await mkdir(join(vault, ".notient"));
+      await Bun.write(
+        join(vault, ".notient/.env"),
+        `NOTIENT_LLM_BASE_URL=http://127.0.0.1:${endpoint.port}/v1\nNOTIENT_LLM_MODEL=source-model\n`,
+      );
+      const body = "# Source\r\n\r\nEvidence arrives before the answer.\r\n";
+      await Bun.write(join(vault, "Source.md"), body);
+      daemon = await startTestDaemon(vault);
+      const connect = () =>
+        connectClient({
+          vaultPath: vault,
+          socketPath: resolveSocketPath(vault, currentPlatform()),
+          autoSpawn: false,
+        });
+      const client = await connect();
+      await act(async () => {
+        screen = await testRender(
+          <App vaultPath={vault} client={client} connect={connect} onExit={() => {}} />,
+          { width: 100, height: 30 },
+        );
+      });
+      if (!screen) throw new Error("No terminal renderer");
+      const mounted = screen;
+      await frameContaining(mounted, "Ask anything");
+      await act(async () => {
+        await mounted.mockInput.typeText("Read Source.md");
+        mounted.mockInput.pressEnter();
+      });
+      const early = await frameContaining(mounted, "Source · L3");
+      expect(early).toContain("Working");
+      expect(early).not.toContain("The final answer is now ready.");
+      finishAnswer?.();
+      await frameContaining(mounted, "The final answer is now ready.");
+      expect(await readFile(join(vault, "Source.md"), "utf8")).toBe(body);
+    } finally {
+      finishAnswer?.();
+      await act(async () => {
+        screen?.renderer.destroy();
+      });
+      await daemon?.stop();
+      endpoint.stop(true);
+      await rm(vault, { recursive: true, force: true });
+      await rm(vaultStateDir(vault), { recursive: true, force: true });
+    }
+  },
+  45000,
+);

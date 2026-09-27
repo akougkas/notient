@@ -1,12 +1,17 @@
 import type { Intent } from "./keymap";
 
 const ACTIONS: ReadonlyArray<{ label: string; intent: Intent }> = [
+  { label: "Vault intelligence — findings and background work", intent: { kind: "intelligence" } },
+  {
+    label: "Discuss this note — bring it into your conversation",
+    intent: { kind: "discuss-note" },
+  },
   { label: "Capture a thought — write or resume your draft", intent: { kind: "capture" } },
   { label: "Save this answer — review it as a note", intent: { kind: "save-answer" } },
   { label: "Edit the open note — review before saving", intent: { kind: "edit-note" } },
   { label: "Chat — return to your conversation", intent: { kind: "view", view: "ask" } },
   {
-    label: "Find a note — browse your vault",
+    label: "Find a note — search names and saved text",
     intent: { kind: "prompt-open", prompt: "note-picker" },
   },
   { label: "Conversations — continue a saved thread", intent: { kind: "conversations" } },
@@ -20,6 +25,7 @@ const ACTIONS: ReadonlyArray<{ label: string; intent: Intent }> = [
     label: "Find connections — explore one note’s ideas",
     intent: { kind: "analysis", mode: "correlate" },
   },
+  { label: "Methodology suggestions — study organization and recurring conventions", intent: { kind: "methodology" } },
   { label: "Brief me — get up to speed with source evidence", intent: { kind: "brief" } },
   { label: "Change history — inspect earlier versions and undo", intent: { kind: "history" } },
   { label: "Vault status — indexing and connections", intent: { kind: "view", view: "home" } },

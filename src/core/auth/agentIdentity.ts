@@ -7,6 +7,9 @@
 export const DEFAULT_AGENT_ID = "human";
 
 export const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+export const PAIRED_PRINCIPAL_ID_PATTERN = /^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const CONVERSATION_CLIENT_ID_PATTERN =
+  /^([a-z][a-z0-9-]{0,31}|paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 /**
  * Requester identity of the in-app assistant: this prefix plus the
@@ -19,6 +22,13 @@ export type ValidateAgentIdResult = { valid: true; id: string } | { valid: false
 
 export function isCanonicalAgentId(value: unknown): value is string {
   return typeof value === "string" && AGENT_ID_PATTERN.test(value);
+}
+
+export function isCanonicalConversationClientId(value: unknown): value is string {
+  return (
+    isCanonicalAgentId(value) ||
+    (typeof value === "string" && PAIRED_PRINCIPAL_ID_PATTERN.test(value))
+  );
 }
 
 export function validateAgentId(candidate: string): ValidateAgentIdResult {

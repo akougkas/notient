@@ -66,6 +66,7 @@ import { readEnvSource, readOptionalVaultFile } from "../core/settings/envFile";
 import {
   type ProviderCredentials,
   resolveProviderCredentials,
+  resolveProviderSampling,
   resolveSettings,
 } from "../core/settings/envOverrides";
 import { SettingsService } from "../core/settings/settingsService";
@@ -89,7 +90,6 @@ export interface BootstrapOptions {
   vaultPath: string;
   /** Lock acquired by the daemon's boot ownership transaction. */
   lockHandle: VaultLockHandle;
-  deferMutationRecovery?: boolean;
   beforeVaultMutation?: (paths: string[]) => Promise<undefined | (() => void)>;
   authorizeIdentity?: ToolAuthorityChecks["authorizeIdentity"];
   authorizeCaller?: Parameters<typeof makePipelineServices>[0]["authorizeCaller"];
@@ -147,6 +147,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const envSource = await readEnvSource(internalVault, process.env);
   const configured = resolveSettings(config, envSource);
   const providerCredentials = resolveProviderCredentials(envSource);
+  const providerSampling = resolveProviderSampling(envSource);
   const selection = await resolveStartupModels(configured, providerCredentials);
   const settings = new SettingsService(applyResolvedModels(configured, selection), {
     config,
@@ -190,12 +191,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const baseUrl = current.primary.baseUrl;
   const primaryLLM = new LMStudioProvider({
     baseUrl,
+    ...providerSampling,
     ...(providerCredentials.chatApiKey === undefined
       ? {}
       : { apiKey: providerCredentials.chatApiKey }),
   });
   const deepLLM = new LMStudioProvider({
     baseUrl: current.deep.baseUrl,
+    ...providerSampling,
     ...(providerCredentials.chatApiKey === undefined
       ? {}
       : { apiKey: providerCredentials.chatApiKey }),
@@ -528,7 +531,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Close the crash window between any terminal receipt and its post-commit
   // retention maintenance before accepting another write.
   await historyService.prune();
-  let mutationRecoveryComplete = !options.deferMutationRecovery;
+  let mutationRecoveryComplete = false;
   const reconcileNotes = async (): Promise<boolean> => {
     const result = await durableNoteWriter.reconcilePendingWrites();
     if (result.replayed || result.abandoned || result.failed || result.deferred)
@@ -559,6 +562,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const { changes, jobs, coordinator } = makePipelineServices({
     db: surrealDbConnection.db,
+    vaultPath: options.vaultPath,
     vault,
     settings,
     bus,
@@ -637,6 +641,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         modelContextTokens: live.modelContextTokens,
       };
     },
+    methodology: () => settings.background().settings.cultivation.methodology,
     engagedNotePath: () => sentienceActivity.snapshot().activeNotePath,
     facade: { readNote: (path) => vault.read(path) },
     approvalMode: () => settings.get().chat.approvalMode,
@@ -701,6 +706,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // primary probe fails; chat.send then returns VISION_UNAVAILABLE.
   const visionConfig = { enabled: false, baseUrl: "", model: "" };
   const visionRouter = await optionalVisionProbe({
+    // Optional inference must not hold up local reads, pairing or the listener.
+    // A slow model leaves vision unverified for this daemon generation.
+    signal: AbortSignal.timeout(2000),
     enabled: canProbeVision(current, selection.warnings),
     primaryLLM,
     primaryModel: current.primary.reasoningModel,
@@ -713,7 +721,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   kernel.seal({ phase: "C" });
-  if (mutationRecoveryComplete) await reconcileNotes();
+  // Inspect the actual recovery journals even when an editor is disconnected.
+  // Empty journals must not disable configuration and background intelligence.
+  // Replays that need file writes still pass through the editor mutation guard.
+  const notesRecovered = await reconcileNotes();
   health.start();
   // Replay approve-and-write rows that landed in state 2 of the pending-state
   // contract (approved=true, applied=false) before a daemon crashed. Mutation
@@ -725,9 +736,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     assertMutationReconciliationSucceeded("approved proposal", result.failed);
     return result.deferred === 0;
   };
-  const approvalReconciliation = mutationRecoveryComplete
-    ? reconcileApprovals().then(() => {})
-    : Promise.resolve();
+  const approvalReconciliation = reconcileApprovals().then((ready) => {
+    mutationRecoveryComplete = notesRecovered && ready;
+  });
   await approvalReconciliation;
   let recoveryFlight: Promise<boolean> | null = null;
   const resumeMutationRecovery = (): Promise<boolean> => {

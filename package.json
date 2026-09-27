@@ -1,7 +1,7 @@
 {
   "name": "notient",
-  "version": "0.1.0",
-  "description": "A local-first terminal home for your Markdown notes: grounded search and answers, reviewed changes, agents over CLI and MCP, and an Obsidian companion",
+  "version": "0.2.0",
+  "description": "Sentient Markdown notes with evidence-grounded cultivation, persistent terminal conversation, reviewed changes, and scoped collaboration over CLI and MCP",
   "type": "module",
   "bin": {
     "notient": "./dist/notient.js"

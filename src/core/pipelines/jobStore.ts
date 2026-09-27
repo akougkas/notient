@@ -122,6 +122,8 @@ export class JobStore {
         ...job,
         sourceCount: job.sourceRevisions.length,
         proposalCount: job.proposalIds.length,
+        findingCount: job.plan?.findings.length ?? 0,
+        headline: job.plan?.findings[0]?.explanation ?? job.plan?.reason ?? null,
         modelCalls: job.attempts.length,
         chargedTokens: job.attempts.reduce((total, attempt) => total + attempt.chargedTokens, 0),
       });

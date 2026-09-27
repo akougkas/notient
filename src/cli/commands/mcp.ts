@@ -16,8 +16,8 @@
  *     auto-spawn.
  *
  * Principal. The adapter connects as an authenticated agent, never as the
- * human admin. `connectClient` derives an id-bound credential from the local
- * root token and sends only that credential in `session.hello`.
+ * human admin. `connectClient` uses the paired credential file when supplied;
+ * otherwise it derives an id-bound credential from the local root token.
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -32,6 +32,7 @@ export const MCP_DEFAULT_AGENT_ID = "mcp-client";
 export interface McpCommandOptions {
   vaultPath: string;
   clientIdentity: string;
+  credentialFile?: string;
   /** Test seam; defaults to a newline-terminated write to process.stderr. */
   writeStderr?: (line: string) => void;
   /** Test seam; defaults to dialing the real per-vault socket. */
@@ -57,6 +58,7 @@ export async function runMcpCommand(options: McpCommandOptions): Promise<number>
         socketPath: resolveSocketPath(options.vaultPath, currentPlatform()),
         vaultPath: options.vaultPath,
         clientIdentity: options.clientIdentity,
+        credentialFile: options.credentialFile,
       };
       return connectClient(clientOptions);
     });

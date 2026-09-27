@@ -33,6 +33,14 @@ export const PIPELINES = {
     effects: ["relationships"],
     model: "reasoning",
   },
+  reconsider: {
+    name: "Reconsider changed evidence",
+    purpose:
+      "Compare current scoped source bytes with note-resident evidence; deterministically qualify missing or changed quotations, and use configured bounded reasoning to assess whether other changed source context matters.",
+    stages: ["read", "compare-retained-evidence", "assess-changed-context", "qualify-review-question", "preview"],
+    effects: ["body"],
+    model: "bounded reasoning when configured",
+  },
   synthesize: {
     name: "Synthesize and create",
     purpose: "Create a cited draft or map of content from complementary source material.",

@@ -1,10 +1,16 @@
 import { operationInputs } from "../../api/operations";
+import type { ReviewFeedbackRetention, ReviewProposal } from "../../api/proposals";
 import { NoteApiError } from "../../api/schema";
 import type { ApprovalService } from "../../core/approvals/approvalService";
 import type { ChangeService } from "../../core/history/changeService";
-import { RpcError, type RpcRequestContext } from "../rpc";
+import { RpcError, type Principal, type RpcRequestContext } from "../rpc";
 
-export function makeReviewHandlers(approvals: ApprovalService, changes: ChangeService) {
+export function makeReviewHandlers(
+  approvals: ApprovalService,
+  changes: ChangeService,
+  onRejected?: (proposal: ReviewProposal, principal: Principal) => Promise<ReviewFeedbackRetention | void>,
+  authorizeVaultOwner?: (principal: Principal) => void,
+) {
   const call =
     <
       Name extends
@@ -37,27 +43,40 @@ export function makeReviewHandlers(approvals: ApprovalService, changes: ChangeSe
       ok: true,
       proposal: await approvals.getReview(String(params.id)),
     })),
-    approve: call("proposals.approve", ({ params, principal, signal }) =>
-      approvals.applyReview(
+    approve: call("proposals.approve", ({ params, principal, signal }) => {
+      const ownerAuthority = () => {
+        if (principal.kind === "human") return;
+        if (!authorizeVaultOwner) throw new RpcError("FORBIDDEN", "vault owner grant is required");
+        authorizeVaultOwner(principal);
+      };
+      ownerAuthority();
+      return approvals.applyReview(
         operationInputs["proposals.approve"].parse(params),
         principal,
         changes,
         signal ?? AbortSignal.timeout(120000),
-      ),
-    ),
+        principal.kind === "human" ? undefined : async () => ownerAuthority(),
+      );
+    }),
     submit: call("proposals.submit", async ({ params, principal }) => ({
       ok: true,
       proposal: await approvals.submitReview(params, principal, changes),
     })),
     reject: call("proposals.reject", async ({ params, principal, signal }) => {
       signal?.throwIfAborted();
-      return {
-        ok: true,
-        proposal: await approvals.rejectReview(
-          operationInputs["proposals.reject"].parse(params),
-          principal,
-        ),
+      const ownerAuthority = () => {
+        if (principal.kind === "human") return;
+        if (!authorizeVaultOwner) throw new RpcError("FORBIDDEN", "vault owner grant is required");
+        authorizeVaultOwner(principal);
       };
+      ownerAuthority();
+      const proposal = await approvals.rejectReview(
+        operationInputs["proposals.reject"].parse(params),
+        principal,
+        principal.kind === "human" ? undefined : ownerAuthority,
+      );
+      const feedbackRetention = await onRejected?.(proposal, principal);
+      return { ok: true, proposal, ...(feedbackRetention ? { feedbackRetention } : {}) };
     }),
   };
 }

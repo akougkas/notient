@@ -42,7 +42,7 @@ export async function processInbox(context: PipelineContext, plan: PipelinePlan)
   context.selected.splice(0, context.selected.length, ...pending);
   const output = await context.model(
     "classify_inbox",
-    "Classify selected inbox notes by their actual content. Organize only substantive notes with a clear topic and usable destination title. Keep empty notes, raw ambiguous fragments and unresolved requests in the inbox. Cite exact evidence and explain the category and routing decision. The category is descriptive; it grants no permission.",
+    "Classify selected inbox notes by their actual content. Organize only substantive notes with a clear topic and usable destination title. Keep empty notes, raw ambiguous fragments and unresolved requests in the inbox. Cite exact evidence and explain the category and routing decision. For each evidence item, use its numeric documents[].index and exactly one selector: passageId copied from that document's supplied passages[].id, or quote copied exactly from one contiguous supplied passages[].content. Never invent IDs or cite across separate passages. The category is descriptive; it grants no permission.",
     schema,
   );
   const organized = new Map<number, z.infer<typeof schema>["items"][number]>();

@@ -84,7 +84,7 @@ export function ExploreView({
             ? "f open current note"
             : explore.selected
               ? "Cited passage · f full note"
-              : "←/→ switch"}
+              : "a discuss · e edit · ←/→ switch"}
         </text>
       </box>
       <box width={layout.contentWidth} height={layout.scrollHeight} flexDirection="column">
@@ -309,9 +309,16 @@ function NeighborsPane({
           </text>
           <text fg={COLOR.dim} wrapMode="word">
             {detail.state === "authored"
-              ? "Authored reference · checked against saved files"
+              ? "Saved reference · checked against saved files"
               : `${detail.state} relationship · ${detail.author}`}
           </text>
+          {detail.meaningSource && (
+            <text fg={COLOR.dim} wrapMode="word">
+              {detail.meaningSource === "note"
+                ? "Meaning read from the note"
+                : "Meaning read from the private relationship record"}
+            </text>
+          )}
           {detail.rationale && <Markdown text={detail.rationale} />}
           {detail.state !== "authored" && (
             <text fg={COLOR.dim} wrapMode="word">

@@ -1,4 +1,15 @@
 import { z } from "zod";
+import {
+  chatAbortResultSchema,
+  chatApproveResultSchema,
+  chatListResultSchema,
+  chatLoadResultSchema,
+  chatSendRequestSchema,
+  chatStartRequestSchema,
+  chatStreamEventSchema,
+  chatStreamFailureSchema,
+  type ChatStreamEvent,
+} from "./chat";
 import { briefResultFor } from "./brief";
 import { type OperationInput, operationInputs } from "./operations";
 import {
@@ -63,6 +74,9 @@ export class NotientClient {
     input: OperationInput<Name>,
     signal?: AbortSignal,
   ): Promise<OperationResult<Name>> {
+    if (name === "chat.send") {
+      throw new NotientApiError("STREAM_REQUIRED", "use chatSend() to receive this streamed operation");
+    }
     const parsed = operationInputs[name].parse(input);
     if (!this.connected) await this.connect(signal);
     const schema =
@@ -70,6 +84,94 @@ export class NotientClient {
         ? briefResultFor(operationInputs["brief.run"].parse(parsed))
         : operationOutputs[name];
     return schema.parse(await this.request(name, parsed, signal)) as OperationResult<Name>;
+  }
+  async chatStart(input: { topic?: string; pinnedContext?: string[] } = {}, signal?: AbortSignal) {
+    const parsed = chatStartRequestSchema.parse(input);
+    return this.call("chat.start", parsed, signal);
+  }
+  async chatList(signal?: AbortSignal) {
+    return this.call("chat.list", {}, signal);
+  }
+  async chatLoad(notePath: string, signal?: AbortSignal) {
+    return this.call("chat.load", { notePath }, signal);
+  }
+  async chatApprove(
+    input: { callId: string; approved: true } | { callId: string; approved: false; reason?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.call("chat.approve", input, signal);
+  }
+  async chatAbort(input: { turnId: string }, signal?: AbortSignal) {
+    return chatAbortResultSchema.parse(
+      await this.call("chat.abort", input, signal),
+    );
+  }
+  async *chatSend(
+    input: { conversationId: string; userMessage: string; turnId: string },
+    options: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<ChatStreamEvent> {
+    const parsed = chatSendRequestSchema.parse(input);
+    const signal = options.signal;
+    if (signal?.aborted) signal.throwIfAborted();
+    if (!this.connected) await this.connect(signal);
+    let abortPromise: Promise<unknown> | undefined;
+    const abortTurn = () => {
+      abortPromise ??= this.chatAbort({ turnId: parsed.turnId }).catch(() => undefined);
+      return abortPromise;
+    };
+    const onAbort = () => void abortTurn();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.endpoint}/api/v1/chat/send`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.options.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(parsed),
+        signal,
+        redirect: "error",
+      });
+    } catch {
+      if (signal?.aborted) {
+        await abortTurn();
+        signal.removeEventListener("abort", onAbort);
+        signal.throwIfAborted();
+      }
+      signal?.removeEventListener("abort", onAbort);
+      throw new NotientApiError(
+        "REQUEST_INTERRUPTED",
+        "chat stream disconnected; reload the saved conversation before deciding whether to send again",
+        null,
+        true,
+      );
+    }
+    try {
+      if (!response.ok) await decodeResponse(response);
+      if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body)
+        throw new NotientApiError("PROTOCOL_ERROR", "chat event stream is unavailable", null, true);
+      const correlationId = response.headers.get("x-correlation-id");
+      let terminal = false;
+      for await (const event of decodeChatStream(response, signal, correlationId)) {
+        if (event.event === "turn:complete" || event.event === "turn:aborted") terminal = true;
+        yield event;
+      }
+      if (signal?.aborted) {
+        await abortTurn();
+        signal.throwIfAborted();
+      }
+      if (!terminal)
+        throw new NotientApiError(
+          "STREAM_INTERRUPTED",
+          "chat stream ended before a terminal turn event; reload the saved conversation before deciding whether to send again",
+          correlationId,
+          true,
+        );
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) await abortTurn();
+    }
   }
   private async request(
     name: ImplementedOperation,
@@ -95,12 +197,19 @@ export class NotientClient {
         null,
         [
           "changes.apply",
+          "contributions.submit",
+          "contributions.stage",
+          "contributions.dismiss",
+          "feedback.submit",
+          "relationships.retain",
+          "methodology.suggest",
           "jobs.control",
           "pipelines.run",
           "proposals.approve",
           "proposals.reject",
           "proposals.submit",
           "pipelines.configure",
+          "cultivation.configure",
           "background.pause",
           "chat.configure",
         ].includes(name),
@@ -218,6 +327,97 @@ async function* decodeEvents(response: Response, signal: AbortSignal) {
         const event = eventSchema.parse(JSON.parse(data));
         if (lines.find((line) => line.startsWith("id: "))?.slice(4) !== event.id)
           throw new NotientApiError("PROTOCOL_ERROR", "event id does not match payload");
+        yield event;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+async function* decodeChatStream(
+  response: Response,
+  signal: AbortSignal | undefined,
+  correlationId: string | null,
+): AsyncGenerator<ChatStreamEvent> {
+  const body = response.body;
+  if (body === null)
+    throw new NotientApiError("PROTOCOL_ERROR", "chat event body is missing", correlationId, true);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (!signal?.aborted) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      pending += decoder.decode(value, { stream: true });
+      if (pending.length > 4 * 1024 * 1024)
+        throw new NotientApiError(
+          "PROTOCOL_ERROR",
+          "chat event frame exceeds client limit",
+          correlationId,
+          true,
+        );
+      while (true) {
+        const end = pending.indexOf("\n\n");
+        if (end === -1) break;
+        const frame = pending.slice(0, end);
+        pending = pending.slice(end + 2);
+        const lines = frame.split("\n");
+        const data = lines
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice(6))
+          .join("\n");
+        if (!data) continue;
+        let raw: unknown;
+        try {
+          raw = JSON.parse(data);
+        } catch {
+          throw new NotientApiError(
+            "PROTOCOL_ERROR",
+            "daemon returned invalid chat event JSON",
+            correlationId,
+            true,
+          );
+        }
+        const failure = chatStreamFailureSchema.safeParse(raw);
+        if (failure.success) {
+          const frameId = lines.find((line) => line.startsWith("id: "))?.slice(4);
+          const frameType = lines.find((line) => line.startsWith("event: "))?.slice(7);
+          if (frameId === undefined || frameType !== failure.data.event)
+            throw new NotientApiError(
+              "PROTOCOL_ERROR",
+              "chat error routing does not match its payload",
+              correlationId,
+              true,
+            );
+          throw new NotientApiError(
+            failure.data.code,
+            failure.data.message,
+            failure.data.correlationId ?? correlationId,
+            failure.data.outcomeMayBeUnknown ?? true,
+          );
+        }
+        let event: ChatStreamEvent;
+        try {
+          event = chatStreamEventSchema.parse(raw);
+        } catch {
+          throw new NotientApiError(
+            "PROTOCOL_ERROR",
+            "daemon returned an invalid chat event",
+            correlationId,
+            true,
+          );
+        }
+        const frameId = lines.find((line) => line.startsWith("id: "))?.slice(4);
+        const frameType = lines.find((line) => line.startsWith("event: "))?.slice(7);
+        if (frameId === undefined || frameType !== event.event)
+          throw new NotientApiError(
+            "PROTOCOL_ERROR",
+            "chat event routing does not match its payload",
+            correlationId,
+            true,
+          );
         yield event;
       }
     }

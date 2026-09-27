@@ -14,7 +14,19 @@ const RETRY_BACKOFF_STEPS = [1, 3, 8] as const;
 
 function isContextOverflow(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /exceeds the context length|context length|too long|input is too large/i.test(message);
+  if (/exceeds the context length|context length|too long|input is too large/i.test(message)) {
+    return true;
+  }
+  if (/\btype['"]?\s*:\s*['"]exceed_context_size_error['"]/i.test(message)) {
+    return true;
+  }
+  const promptTokens = /\bn_prompt_tokens['"]?\s*:\s*(\d+)/i.exec(message);
+  const contextTokens = /\bn_ctx['"]?\s*:\s*(\d+)/i.exec(message);
+  return (
+    promptTokens !== null &&
+    contextTokens !== null &&
+    Number(promptTokens[1]) > Number(contextTokens[1])
+  );
 }
 
 export class EmbeddingContextOverflowError extends Error {

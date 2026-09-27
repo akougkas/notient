@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { normalizeAgentId } from "../core/auth/agentIdentity";
+import { withPairedCredentialFile } from "./client";
 import { VERSION } from "../version";
 import { runAnalysisCommand } from "./commands/analysis";
 import { runApiCommand } from "./commands/api";
@@ -36,6 +37,7 @@ import { runInit } from "./commands/init";
 import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit";
 import { runLinksSyncCommand } from "./commands/linksSync";
 import { MCP_DEFAULT_AGENT_ID, runMcpCommand } from "./commands/mcp";
+import { runMethodologySuggestionCommand } from "./commands/methodology";
 import { runNukeCommand } from "./commands/nuke";
 import {
   runProposalsApproveCommand,
@@ -113,6 +115,8 @@ const COMMAND_NAMES = [
   "api",
   "jobs",
   "pipelines",
+  "cultivation",
+  "methodology",
   "pair",
   "init",
   "setup",
@@ -165,6 +169,10 @@ const COMMAND_DISPATCHERS = {
   jobs: ({ parsed, emitter, clientIdentity }) => dispatchJobs(parsed, emitter, clientIdentity),
   pipelines: ({ parsed, emitter, clientIdentity }) =>
     dispatchPipelines(parsed, emitter, clientIdentity),
+  cultivation: ({ parsed, emitter, clientIdentity }) =>
+    dispatchCultivation(parsed, emitter, clientIdentity),
+  methodology: ({ parsed, emitter, clientIdentity }) =>
+    dispatchMethodology(parsed, emitter, clientIdentity),
   pair: ({ parsed, emitter, clientIdentity }) => dispatchPair(parsed, emitter, clientIdentity),
   db: ({ parsed, emitter }) => dispatchDbSql(parsed, emitter),
   awaken: ({ parsed, emitter, clientIdentity }) => dispatchAwaken(parsed, emitter, clientIdentity),
@@ -216,6 +224,8 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (rootEntry === "help") return emitRootHelp(emitter);
   if (rootEntry === "version") return emitVersion(emitter);
   if (rootEntry === "tui") {
+    if (resolveCredentialFile(parsed) !== undefined)
+      throw new Error("INVALID_PARAMS: --credential-file requires an explicit CLI command");
     return await dispatchChat({ ...parsed, command: "chat" }, emitter, undefined);
   }
   const command = parsed.command;
@@ -227,7 +237,9 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   const clientIdentity = resolveClientIdentity(parsed);
   if (!isCommandName(command)) return emitUnknownCommand(command, emitter);
 
-  return await COMMAND_DISPATCHERS[command]({ parsed, emitter, clientIdentity });
+  return await withPairedCredentialFile(resolveCredentialFile(parsed), () =>
+    COMMAND_DISPATCHERS[command]({ parsed, emitter, clientIdentity }),
+  );
 }
 
 function emitVersion(emitter: Emitter): number {
@@ -275,10 +287,10 @@ const VERB_HELP: Record<string, VerbHelp> = {
   },
   api: {
     usage: "notient api <operation> --input <JSON> --vault <path>",
-    flags: ["--input <JSON>", "--vault <path>", "--as <agent>"],
+    flags: ["--input <JSON>", "--vault <path>", "--as <agent-id>", "--credential-file <path>"],
   },
   pair: {
-    usage: "notient pair create|list|revoke --vault <path>",
+    usage: "notient pair create|list|revoke|owner-grant|owner-revoke --vault <path>",
     flags: [
       "--label <client name>",
       "--kind human|agent",
@@ -427,17 +439,25 @@ const VERB_HELP: Record<string, VerbHelp> = {
       "--ndjson",
     ],
   },
+  cultivation: {
+    usage: "notient cultivation digest|settings|configure --vault <path>",
+    flags: ["--limit <1-20>", "--scope <JSON>", "--input <JSON>", "--vault <path>"],
+  },
+  methodology: {
+    usage: "notient methodology suggest <note-path> --vault <path>",
+    flags: ["--candidate-limit <1-6>", "--idempotency-key <key>", "--vault <path>"],
+  },
   mcp: {
-    usage: "notient mcp --vault <path> [--as <agent-id>]",
-    flags: ["--vault <path>", "--as <agent-id>"],
+    usage: "notient mcp --vault <path> [--as <agent-id>] [--credential-file <path>]",
+    flags: ["--vault <path>", "--as <agent-id>", "--credential-file <path>"],
   },
   graph: {
     usage: "notient graph dump|stats --vault <path>",
     flags: ["--vault <path>", "--tier <number>", "--format <format>", "--out <path>", "--json"],
   },
   links: {
-    usage: "notient links sync|audit --vault <path>",
-    flags: ["--vault <path>", "--json", "--pretty", "--ndjson"],
+    usage: "notient links sync|audit|retain <edge-id> --vault <path>",
+    flags: ["--vault <path>", "--idempotency-key <key>", "--json", "--pretty", "--ndjson"],
   },
   proposals: {
     usage: "notient proposals list|approve|reject --vault <path>",
@@ -490,8 +510,24 @@ function printVerbHelp(command: string, emitter: Emitter): number {
  */
 function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
   const raw = parsed.flags.as;
+  if (resolveCredentialFile(parsed) !== undefined) {
+    if (
+      typeof raw !== "string" ||
+      !/^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)
+    )
+      throw new Error("INVALID_PARAMS: --credential-file requires an exact paired identity in --as");
+    return raw;
+  }
   if (typeof raw !== "string") return undefined;
   return normalizeAgentId(raw);
+}
+
+function resolveCredentialFile(parsed: ParsedArgs): string | undefined {
+  const raw = parsed.flags["credential-file"];
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.length === 0)
+    throw new Error("INVALID_PARAMS: --credential-file requires a path");
+  return raw;
 }
 
 async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
@@ -592,6 +628,71 @@ async function dispatchPipelines(
   });
 }
 
+async function dispatchCultivation(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const action = parsed.positional[0] ?? "digest";
+  if (!["digest", "settings", "configure"].includes(action))
+    throw new Error("INVALID_PARAMS: cultivation expects digest, settings or configure");
+  if (parsed.positional.length > 1)
+    throw new Error("INVALID_PARAMS: unexpected cultivation argument");
+  const input: Record<string, unknown> =
+    typeof parsed.flags.input === "string" ? JSON.parse(parsed.flags.input) : {};
+  if (action === "digest") {
+    if (parsed.flags.limit !== undefined) {
+      if (typeof parsed.flags.limit !== "string")
+        throw new Error("INVALID_PARAMS: --limit requires a value");
+      input.limit = Number(parsed.flags.limit);
+    }
+    if (parsed.flags.scope !== undefined) {
+      if (typeof parsed.flags.scope !== "string")
+        throw new Error("INVALID_PARAMS: --scope requires JSON");
+      input.scope = JSON.parse(parsed.flags.scope);
+    }
+  } else if (action !== "configure" && Object.keys(input).length > 0) {
+    throw new Error("INVALID_PARAMS: cultivation settings accepts no input");
+  }
+  return runApiCommand({
+    method: `cultivation.${action}`,
+    input,
+    emitter,
+    clientIdentity,
+    vaultPath: await requireVault(parsed),
+  });
+}
+
+async function dispatchMethodology(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity?: string,
+): Promise<number> {
+  const action = parsed.positional[0] ?? "suggest";
+  const notePath = parsed.positional[1];
+  if (action !== "suggest" || !notePath)
+    throw new Error("INVALID_PARAMS: methodology expects suggest <note-path>");
+  if (parsed.positional.length > 2)
+    throw new Error("INVALID_PARAMS: unexpected methodology argument");
+  let candidateLimit: number | undefined;
+  if (parsed.flags["candidate-limit"] !== undefined) {
+    if (typeof parsed.flags["candidate-limit"] !== "string")
+      throw new Error("INVALID_PARAMS: --candidate-limit requires a value");
+    candidateLimit = Number(parsed.flags["candidate-limit"]);
+  }
+  const idempotencyKey = parsed.flags["idempotency-key"];
+  if (idempotencyKey !== undefined && typeof idempotencyKey !== "string")
+    throw new Error("INVALID_PARAMS: --idempotency-key requires a value");
+  return runMethodologySuggestionCommand({
+    vaultPath: await requireVault(parsed),
+    notePath,
+    candidateLimit,
+    ...(typeof idempotencyKey === "string" ? { idempotencyKey } : {}),
+    emitter,
+    clientIdentity,
+  });
+}
+
 async function dispatchApi(
   parsed: ParsedArgs,
   emitter: Emitter,
@@ -614,8 +715,14 @@ async function dispatchPair(
   clientIdentity?: string,
 ): Promise<number> {
   const action = parsed.positional[0];
-  if (action !== "create" && action !== "list" && action !== "revoke")
-    throw new Error("INVALID_PARAMS: pair requires create | list | revoke");
+  if (
+    action !== "create" &&
+    action !== "list" &&
+    action !== "revoke" &&
+    action !== "owner-grant" &&
+    action !== "owner-revoke"
+  )
+    throw new Error("INVALID_PARAMS: pair requires create | list | revoke | owner-grant | owner-revoke");
   const kind = parsed.flags.kind ?? "human";
   const scopes =
     typeof parsed.flags.scopes === "string"
@@ -626,11 +733,17 @@ async function dispatchPair(
   const input =
     action === "create"
       ? { label: parsed.flags.label ?? "Obsidian desktop", kind, scopes }
-      : action === "revoke"
+      : action === "revoke" || action === "owner-grant" || action === "owner-revoke"
         ? { id: parsed.flags.id }
         : {};
+  const method =
+    action === "owner-grant"
+      ? "pairing.owner.grant"
+      : action === "owner-revoke"
+        ? "pairing.owner.revoke"
+        : `pairing.${action}`;
   return runApiCommand({
-    method: `pairing.${action}`,
+    method,
     input,
     emitter,
     clientIdentity,
@@ -860,9 +973,12 @@ async function dispatchChat(
 ): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const prompt =
-    parsed.positional[0] ?? (typeof parsed.flags.prompt === "string" ? parsed.flags.prompt : "");
+    parsed.positional.join(" ").trim() ||
+    (typeof parsed.flags.prompt === "string" ? parsed.flags.prompt : "");
   const approveFlag = parsed.flags.approve;
-  const approve: "auto" | "ask" = approveFlag === "ask" ? "ask" : "auto";
+  if (approveFlag !== undefined && approveFlag !== "ask" && approveFlag !== "auto")
+    throw new Error("INVALID_PARAMS: --approve must be ask or auto");
+  const approve: "auto" | "ask" = approveFlag === "auto" ? "auto" : "ask";
   if (prompt.length === 0) {
     if (!process.stdout.isTTY) {
       throw new Error(
@@ -872,8 +988,7 @@ async function dispatchChat(
     await runChatTui({ vaultPath, emitter, clientIdentity });
     return 0;
   }
-  await runChatSingleShot({ vaultPath, prompt, approve, emitter, clientIdentity });
-  return 0;
+  return runChatSingleShot({ vaultPath, prompt, approve, emitter, clientIdentity });
 }
 
 async function dispatchAnalysis(
@@ -1111,10 +1226,32 @@ async function dispatchLinks(
     const mode = selectLinksAuditMode(parsed);
     return await runLinksAuditCommand({ vaultPath, mode, emitter, clientIdentity });
   }
+  if (subcommand === "retain") {
+    const edgeId = parsed.positional[1];
+    if (typeof edgeId !== "string" || edgeId.length === 0) {
+      emitter.emit({
+        type: "error",
+        code: "INVALID_PARAMS",
+        message: "links retain requires one approved edge id",
+      });
+      return 2;
+    }
+    const idempotencyKey =
+      typeof parsed.flags["idempotency-key"] === "string"
+        ? parsed.flags["idempotency-key"]
+        : undefined;
+    return await runApiCommand({
+      method: "relationships.retain",
+      input: { edgeId, ...(idempotencyKey === undefined ? {} : { idempotencyKey }) },
+      vaultPath: await requireVault(parsed),
+      emitter,
+      clientIdentity,
+    });
+  }
   emitter.emit({
     type: "error",
     code: "INVALID_PARAMS",
-    message: "usage: notient links sync|audit",
+    message: "usage: notient links sync|audit|retain <edge-id>",
   });
   return 2;
 }
@@ -1278,9 +1415,12 @@ async function dispatchNuke(
  */
 async function dispatchMcp(parsed: ParsedArgs): Promise<number> {
   const vaultPath = await requireVault(parsed);
-  const raw = parsed.flags.as;
-  const clientIdentity = typeof raw === "string" ? normalizeAgentId(raw) : MCP_DEFAULT_AGENT_ID;
-  return await runMcpCommand({ vaultPath, clientIdentity });
+  const clientIdentity = resolveClientIdentity(parsed) ?? MCP_DEFAULT_AGENT_ID;
+  return await runMcpCommand({
+    vaultPath,
+    clientIdentity,
+    credentialFile: resolveCredentialFile(parsed),
+  });
 }
 
 async function requireVault(parsed: ParsedArgs): Promise<string> {

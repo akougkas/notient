@@ -24,6 +24,11 @@ export const PIPELINE_CATALOG: Record<PipelineId, { title: string; description: 
     description:
       "Compare grounded claims and distinguish contradictions from temporal changes and different assumptions.",
   },
+  reconsider: {
+    title: "Reconsider changed evidence",
+    description:
+      "Compare current source passages with the evidence retained by notes in scope and append a qualified review question when support changed.",
+  },
   synthesize: {
     title: "Synthesize and create",
     description:

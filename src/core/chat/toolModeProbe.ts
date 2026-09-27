@@ -123,6 +123,7 @@ async function runProbe(
     signal,
     temperature,
     maxTokens,
+    enableThinking: options.provider.defaultEnableThinking ?? false,
   });
   for await (const _event of handle.events) {
     // Drain stream so the aggregator collects the final state.

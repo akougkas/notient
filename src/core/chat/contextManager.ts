@@ -28,6 +28,8 @@ import {
 import type { ConversationMemory } from "./conversationIndex";
 import { SUMMARY_JSON_SCHEMA, summarizePrompt } from "./prompts/summarize";
 import { composeSystemPrompt } from "./prompts/system";
+import type { MethodologySettings } from "../../api/cultivationSettings";
+import { buildMethodologyGuidance } from "../methodology";
 import type { ChatMessage, Conversation } from "./types";
 
 export interface ContextSettingsView {
@@ -51,6 +53,7 @@ export interface ContextManagerOptions {
   conversationIndex: ConversationMemory;
   embed: (text: string, signal: AbortSignal) => Promise<Float32Array | null>;
   contextSettings: () => ContextSettingsView;
+  methodology?: () => MethodologySettings;
   /** Canonical note currently engaged by SentienceActivity. */
   engagedNotePath: () => string | null;
   facade: ContextNotesFacade;
@@ -136,8 +139,11 @@ export class ContextManager {
       crossSessionMemory,
       approvalMode: this.options.approvalMode(),
       tools: this.options.toolCatalog(),
+      methodologyGuidance: this.options.methodology
+        ? buildMethodologyGuidance(this.options.methodology())
+        : "",
     });
-    const fullHistory = [...conversation.messages, latestUserMessage];
+    const fullHistory = withActivityProvenance([...conversation.messages, latestUserMessage]);
     const budgeted = await this.budgetedHistory(systemPrompt, fullHistory, signal, conversation.id);
     const messages: ProviderChatMessage[] = [
       { role: "system", content: systemPrompt },
@@ -282,7 +288,11 @@ export class ContextManager {
     try {
       const result = await this.options.provider.chatJson<{ summary: string }>(
         summarizePrompt(oldest),
-        { model: this.options.summaryModel, signal },
+        {
+          model: this.options.summaryModel,
+          signal,
+          enableThinking: this.options.provider.defaultEnableThinking ?? false,
+        },
         SUMMARY_JSON_SCHEMA,
       );
       if (typeof result.summary === "string" && result.summary.length > 0) {
@@ -345,6 +355,25 @@ function alignCutoffToToolGroup(history: ChatMessage[], cutoff: number): number 
  * tool messages require their call id; an unmatched assistant call is invalid
  * conversation state rather than an alternate prose protocol.
  */
+function withActivityProvenance(history: ChatMessage[]): ChatMessage[] {
+  let hasUser = false;
+  let hasTools = false;
+  return history.map((message) => {
+    if (message.role === "user") {
+      hasUser = true;
+      hasTools = false;
+    } else if (message.role === "tool" || message.toolCalls?.length) {
+      hasTools = true;
+    } else if (message.role === "assistant" && hasUser && !hasTools && message.content.trim()) {
+      return {
+        ...message,
+        content: `${message.content}\n\n[Runtime activity: no native tools were executed in this turn. Any claim that it searched the vault or changed a note is unconfirmed.]`,
+      };
+    }
+    return message;
+  });
+}
+
 export function toProviderMessages(history: ChatMessage[]): ProviderChatMessage[] {
   const out: ProviderChatMessage[] = [];
   for (let index = 0; index < history.length; index++) {

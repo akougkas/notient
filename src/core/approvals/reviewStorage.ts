@@ -2,12 +2,35 @@ import { createHash } from "node:crypto";
 import { RecordId, type Surreal } from "surrealdb";
 import { z } from "zod";
 import { operationInputs } from "../../api/operations";
-import { type ReviewProposal, reviewProposalSchema } from "../../api/proposals";
-import { NoteApiError } from "../../api/schema";
+import {
+  type ReviewProposal,
+  type ReviewProvenance,
+  reviewProposalSchema,
+} from "../../api/proposals";
+import { NoteApiError, type NoteReference } from "../../api/schema";
 
 export function reviewRevision(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
+
+export function reviewSourceReferences(provenance: ReviewProvenance): NoteReference[] {
+  const references = [
+    ...("sources" in provenance ? provenance.sources : []),
+    ...provenance.evidence.map(({ path, revision }) => ({ path, revision })),
+  ];
+  const byPath = new Map<string, NoteReference>();
+  for (const reference of references) {
+    const existing = byPath.get(reference.path);
+    if (existing && existing.revision !== reference.revision)
+      throw new NoteApiError(
+        "CONFLICT",
+        `review cites conflicting revisions for source: ${reference.path}`,
+      );
+    if (!existing) byPath.set(reference.path, reference);
+  }
+  return [...byPath.values()];
+}
+
 function record(id: string) {
   if (!/^[a-f0-9]{64}$/.test(id))
     throw new NoteApiError("INVALID_PARAMS", "invalid review proposal id");
