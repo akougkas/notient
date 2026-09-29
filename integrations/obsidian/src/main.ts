@@ -55,6 +55,28 @@ export default class NotientPlugin extends Plugin {
   private listeners = new Set<() => void>();
   private disposed = false;
   private connecting = false;
+  private lostClient: NotientClient | null = null;
+  markReachable(reachable: boolean): void {
+    if (this.disposed || this.connecting) return;
+    if (!reachable && this.client) {
+      this.lostClient = this.client;
+      this.client = null;
+      this.problem = {
+        reason:
+          "Notient stopped answering at the paired endpoint. Any pending write stays locked in the editor.",
+        action: this.wakeConfigured()
+          ? "Press Reconnect. The configured launch command runs only if the daemon cannot be reached."
+          : ASLEEP_ACTION,
+      };
+      this.report("Notient stopped answering");
+      this.changed();
+    } else if (reachable && !this.client && this.lostClient) {
+      this.client = this.lostClient;
+      this.lostClient = null;
+      this.problem = null;
+      this.changed();
+    }
+  }
   get isConnecting(): boolean {
     return this.connecting;
   }
@@ -330,10 +352,18 @@ export default class NotientPlugin extends Plugin {
           error.code !== "REQUEST_INTERRUPTED"
         )
           throw error;
-        const command = parseWakeCommand(this.app.loadLocalStorage("notient-wake-command"));
+        let command: string[] | null;
+        try {
+          command = parseWakeCommand(this.app.loadLocalStorage("notient-wake-command"));
+        } catch (cause) {
+          throw new ConnectionFailure(
+            message(cause),
+            "Fix or clear the launch command in Settings → Notient, then press Reconnect.",
+          );
+        }
         if (!command)
           throw new ConnectionFailure(
-            "Notient is not reachable at the paired endpoint, and no launch command is configured.",
+            "Notient did not answer at the paired endpoint within 10 seconds, and no launch command is configured.",
             ASLEEP_ACTION,
           );
         this.report("Waking Notient…");
@@ -351,10 +381,16 @@ export default class NotientPlugin extends Plugin {
       }
       if (this.disposed) return;
       this.client = client;
+      this.lostClient = null;
       if (this.host) await this.host.reconnect(client, local.instanceId);
       else {
-        this.host = new ObsidianHost(this.app, this, client, local.instanceId, (text) =>
-          this.report(text),
+        this.host = new ObsidianHost(
+          this.app,
+          this,
+          client,
+          local.instanceId,
+          (text) => this.report(text),
+          (reachable) => this.markReachable(reachable),
         );
         this.host.start();
       }
@@ -364,7 +400,10 @@ export default class NotientPlugin extends Plugin {
       this.problem =
         error instanceof ConnectionFailure
           ? { reason: error.message, action: error.action }
-          : { reason: message(error), action: CHECK_ACTION };
+          : error instanceof NotientApiError &&
+              (error.code === "UNAUTHENTICATED" || error.code === "VAULT_MISMATCH")
+            ? { reason: message(error), action: REPAIR_ACTION }
+            : { reason: message(error), action: CHECK_ACTION };
       this.report(message(error));
     } finally {
       this.connecting = false;

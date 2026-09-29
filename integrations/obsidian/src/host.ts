@@ -36,12 +36,14 @@ export class ObsidianHost {
   private views = new Set<EditorView>();
   private task: Promise<void> | null = null;
   private lastNotice = 0;
+  private failures = 0;
   constructor(
     private readonly app: App,
     plugin: Plugin,
     private client: NotientClient,
     private instanceId: string,
     private readonly report: (text: string) => void,
+    private readonly health: (reachable: boolean) => void = () => {},
   ) {
     const views = this.views;
     const locked = StateField.define<boolean>({
@@ -104,6 +106,7 @@ export class ObsidianHost {
     this.instanceId = instanceId;
     this.controller = new AbortController();
     this.sessionId = null;
+    this.failures = 0;
     this.task = null;
     this.start();
   }
@@ -157,6 +160,8 @@ export class ObsidianHost {
             AbortSignal.any([signal, AbortSignal.timeout(5000)]),
           );
         }
+        this.failures = 0;
+        this.health(true);
         this.report(
           this.guards.size
             ? "Finishing a reviewed change…"
@@ -165,6 +170,7 @@ export class ObsidianHost {
       } catch (error) {
         if (signal.aborted) return;
         if (error instanceof NotientApiError && error.code === "CONFLICT") this.sessionId = null;
+        else if (++this.failures >= 4) this.health(false);
         this.report(
           `${message(error)}${this.guards.size ? " · Pending editor locks retained until reconnection." : ""}`,
         );
