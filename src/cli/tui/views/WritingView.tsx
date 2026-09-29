@@ -4,6 +4,7 @@ import { flushSync, useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangePreview } from "../../../api/changes";
 import { type NoteDraft, draftChangeSet, newDraft } from "../../../api/drafts";
+import { scopeAllows } from "../../../api/scope";
 import { noteFilename } from "../../../core/vault/noteFilename";
 import { Markdown } from "../Markdown";
 import { DraftStore, type WritingRequest, previewDiff, redirectNotice } from "../draft";
@@ -75,7 +76,7 @@ export function WritingView(props: Props) {
     setMessage(attempt ? "Reopening your draft…" : "Opening your draft…");
     void (async () => {
       try {
-        const { draft: next, restored } = await openWritingDraft(
+        const { draft: next, restored, note } = await openWritingDraft(
           store,
           rpc.current(),
           props.request,
@@ -93,7 +94,7 @@ export function WritingView(props: Props) {
             ? "Your unsaved draft is restored. Save or discard it before starting another."
             : next.base
               ? "Edit your Markdown below. Review the changes before saving."
-              : "Write the thought. Ctrl+S saves it as a note at the destination below; your draft is kept privately meanwhile.",
+              : `Write the thought. Ctrl+S saves it to the folder below. Draft kept privately. ${note ?? ""}`.trim(),
         );
       } catch (error) {
         if (!cancelled) report(error);
@@ -566,6 +567,8 @@ function hasUnsavedEdits(value: NoteDraft): boolean {
   return value.body !== value.base.body.replace(/^\ufeff/, "").replace(/\r\n/g, "\n");
 }
 
+const DEFAULT_CAPTURE_FOLDER = "Inbox";
+
 async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: WritingRequest) {
   const existing = await store.load();
   if (existing) return { draft: existing, restored: true };
@@ -580,13 +583,33 @@ async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: Wri
     };
     return { draft, restored: false };
   }
-  const inbox = await rpc.listNotes("inbox", 10);
-  const folder = inbox.notes
-    .map((note) => /^(.*?(?:^|\/)(?:\d+-)?inbox)\//i.exec(note.path)?.[1])
-    .find(Boolean);
-  const draft = newDraft(folder ?? "Inbox", request.text);
-  if (request.title) draft.path = `${folder ?? "Inbox"}/${noteFilename(request.title)}`;
-  return { draft, restored: false };
+  const destination = await captureDestination(rpc);
+  const draft = newDraft(destination.folder, request.text);
+  if (request.title) draft.path = `${destination.folder ? `${destination.folder}/` : ""}${noteFilename(request.title)}`;
+  return { draft, restored: false, note: destination.note(draft.path) };
+}
+
+async function captureDestination(rpc: NotientRpc) {
+  try {
+    const catalog = await rpc.pipelines();
+    const entry = catalog.pipelines.find((item) => item.id === "inbox");
+    if (!entry) return { folder: DEFAULT_CAPTURE_FOLDER, note: () => "" };
+    const { policy } = entry;
+    return {
+      folder: policy.destinations.inbox,
+      note: (path: string) =>
+        !policy.enabled || catalog.paused || !policy.triggers.includes("save")
+          ? "Background Inbox work is off, so saving only stores the note."
+          : scopeAllows({ ...policy.readScope, tags: [], excludeTags: [] }, path, [])
+            ? "This folder is your Inbox: your background save trigger applies."
+            : "This folder is outside your background scope, so saving only stores the note.",
+    };
+  } catch {
+    return {
+      folder: DEFAULT_CAPTURE_FOLDER,
+      note: () => "Background settings were unavailable, so the Inbox folder is a default.",
+    };
+  }
 }
 
 async function prepareDraftPreview(value: NoteDraft, rpc: NotientRpc, store: DraftStore) {
