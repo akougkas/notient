@@ -832,7 +832,7 @@ function suggestionPolicy(configured: PipelinePolicy, candidateLimit: number): P
   policy.effects = ["move"];
   policy.parameters.retrieval = "lexical";
   policy.budget.notes = Math.min(policy.budget.notes, candidateLimit + 1);
-  policy.budget.retries = 0;
+  policy.budget.retries = Math.min(1, configured.budget.retries);
   return policy;
 }
 
