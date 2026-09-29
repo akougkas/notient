@@ -146,7 +146,7 @@ interface AppProps {
 }
 
 export function App({ vaultPath, client, connect, onExit }: AppProps): React.ReactNode {
-  const [state, dispatch] = useReducer(reducer, vaultPath, initialState);
+  const [state, rawDispatch] = useReducer(reducer, vaultPath, initialState);
   const [reviewRequests, setReviewRequests] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [conventionDraft, setConventionDraft] = useState<ConventionDraft | undefined>();
@@ -208,6 +208,27 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const elapsedSeconds = useTurnElapsed(state.ask.busy);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const askScrollSavedRef = useRef<number | null>(null);
+  const dispatch = useCallback<React.Dispatch<Action>>((action) => {
+    if (
+      (action.type === "view/set" || action.type === "view/cycle") &&
+      stateRef.current.view === "ask"
+    ) {
+      const box = askScrollRef.current;
+      askScrollSavedRef.current =
+        box && box.scrollTop + box.viewport.height < box.scrollHeight - 1 ? box.scrollTop : null;
+    }
+    if (action.type === "ask/new" || action.type === "ask/restore" || action.type === "ask/reset")
+      askScrollSavedRef.current = null;
+    rawDispatch(action);
+  }, []);
+  useEffect(() => {
+    if (state.view !== "ask" || askScrollSavedRef.current === null) return;
+    const top = askScrollSavedRef.current;
+    askScrollSavedRef.current = null;
+    const timer = setTimeout(() => askScrollRef.current?.scrollTo(top), 0);
+    return () => clearTimeout(timer);
+  }, [state.view]);
   // Terminal input may deliver several characters before React renders.
   const promptBufferRef = useRef(state.prompt.buffer);
   promptBufferRef.current = state.prompt.buffer;
