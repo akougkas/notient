@@ -172,10 +172,7 @@ export class ObsidianHost {
         if (error instanceof NotientApiError && error.code === "CONFLICT") this.sessionId = null;
         if (error instanceof NotientApiError && error.code === "REQUEST_INTERRUPTED") {
           if (++this.failures >= 4) this.health(false);
-        } else if (error instanceof NotientApiError) {
-          this.failures = 0;
-          this.health(true);
-        }
+        } else if (error instanceof NotientApiError) this.failures = 0;
         this.report(
           `${message(error)}${this.guards.size ? " · Pending editor locks retained until reconnection." : ""}`,
         );
