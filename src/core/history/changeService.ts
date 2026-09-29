@@ -24,6 +24,7 @@ import {
   intelligenceRecordId,
   parseAllIntelligenceRecords,
   prepareIntelligenceAppend,
+  withoutRetainedIntelligence,
 } from "../intelligence";
 import { patchFrontmatter } from "../markdown/frontmatter";
 import { rewriteMovedReferences } from "../markdown/referenceMove";
@@ -91,6 +92,22 @@ function qualifyingQuestions(body: string, source: NoteReference): IntelligenceR
     });
   }
   return questions;
+}
+
+function isIntelligenceOnlyAppend(before: string | null, after: string): boolean {
+  if (before === null || !after.startsWith(before)) return false;
+  const addition = after.slice(before.length);
+  if (
+    withoutRetainedIntelligence(addition)
+      .split(/\r?\n/u)
+      .some((line) => line.trim().length > 0 && !/^## [^\r\n]+$/u.test(line.trim()))
+  )
+    return false;
+  try {
+    return parseAllIntelligenceRecords(after).length > parseAllIntelligenceRecords(before).length;
+  } catch {
+    return false;
+  }
 }
 
 /** Exact previews are durable inputs to the existing writer, not a second write engine. */
@@ -567,7 +584,15 @@ export class ChangeService {
           historyId: receipt.historyId,
           message: null,
         });
-        if (caller.id !== "background") {
+        const reviewedCultivation =
+          review !== null &&
+          "pipeline" in review.provenance &&
+          ["enrich", "reconsider"].includes(review.provenance.pipeline);
+        const generatedOnly =
+          reviewedCultivation &&
+          (effect.category === "properties" ||
+            (effect.category === "body" && isIntelligenceOnlyAppend(effect.before, effect.after)));
+        if (caller.id !== "background" && !generatedOnly) {
           const paths = new Set([effect.path, ...(effect.destination ? [effect.destination] : [])]);
           for (const path of paths)
             this.options.bus?.emit({
