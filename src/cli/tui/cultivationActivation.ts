@@ -34,9 +34,11 @@ function sectionName(policy: PipelinePolicy): string {
   return policy.allowedSections[0] ?? DEFAULT_SECTION;
 }
 
-function resultText(policy: PipelinePolicy): string {
+function resultText(id: PipelineId, policy: PipelinePolicy): string {
   if (policy.mode === "apply")
     return `Only ${policy.effects.join(", ") || "no"} effects apply without review; anything else waits for review.`;
+  if (id !== "enrich")
+    return "Whatever it proposes is a review, nothing is written until you approve it, and a capture with nothing to propose produces no review. What it can propose depends on the workflow.";
   return `A supported finding is proposed as a "## ${sectionName(policy)}" section appended to the end of the capture note, nothing is written until you approve it, and a capture with nothing supportable produces no review.`;
 }
 
@@ -69,7 +71,7 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean, folder: st
     blockers.push(
       `Its read scope (${scopeText(policy.readScope)}) does not include the capture folder (${folderLabel(folder)}), so new captures would not be read.`,
     );
-  if (!policy.allowedSections.length)
+  if (entry.id === "enrich" && !policy.allowedSections.length)
     blockers.push(
       "No designated intelligence section is set, so retained understanding cannot be checked against one.",
     );
@@ -102,12 +104,12 @@ export function captureExplanation(
     const blockers = captureBlockers(selected, paused, folder);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) can be studied after ${seconds(policy.debounceMs)}, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. ${resultText(policy)} Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) can be studied after ${seconds(policy.debounceMs)}, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. ${resultText(selected.id, policy)} Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
     return `A new capture may not yield a reviewable development from ${selected.title}. ${blockers.join(" ")} ${DRAFT_WORKFLOWS.includes(selected.id) ? "Press s for a folder-scoped, review-only draft; nothing changes until you review and save." : "Edit it with Enter; nothing changes until you review and save."}`;
   }
   if (active.length)
-    return `New captures can receive reviewable study from ${active.map((entry) => entry.title).join(", ")}. Select a workflow to see timing, scope and review behavior.`;
+    return `New captures can be studied by ${active.map((entry) => entry.title).join(", ")}. What each one proposes differs, and a capture with nothing to propose produces no review. Select a workflow for timing, scope and review behavior.`;
   return "No workflow is ready to produce a reviewable development from a new capture. Captures are still saved and searchable. Select Enrich notes and press s to prepare a narrow, review-only draft; nothing is enabled until you review and save it.";
 }
 
@@ -127,6 +129,7 @@ export function captureDraft(
 }
 
 export function activationConsequence(
+  id: PipelineId,
   title: string,
   before: PipelinePolicy,
   after: PipelinePolicy,
@@ -141,9 +144,11 @@ export function activationConsequence(
     `Each run is bounded to ${after.budget.notes} notes, ${after.budget.modelCalls} model calls and ${after.budget.tokens} tokens, and the daily cultivation budget still applies.`,
     after.mode === "apply"
       ? `Apply mode writes ${after.effects.join(", ") || "nothing"} without asking. Authored prose changes still require review.`
-      : `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Retained understanding is proposed as a "## ${sectionName(after)}" section at the end of the note, so authored text is not edited. Nothing is written until you approve it.`,
+      : id === "enrich"
+        ? `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Retained understanding is proposed as a "## ${sectionName(after)}" section at the end of the note, so authored text is not edited. Nothing is written until you approve it.`
+        : `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Nothing is written until you approve it; what this workflow proposes is described in its own help.`,
   ];
-  if (after.allowedProperties.length)
+  if (id === "enrich" && after.allowedProperties.length)
     lines.push(
       `A review may also propose frontmatter properties limited to: ${after.allowedProperties.join(", ")}. Remove any you do not want under Details before saving.`,
     );

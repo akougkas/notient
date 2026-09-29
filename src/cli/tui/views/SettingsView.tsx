@@ -146,7 +146,7 @@ export function SettingsView(props: Props) {
           );
         setConfirmation([
           ...changes,
-          ...activationConsequence(entry.title, entry.policy, draft),
+          ...activationConsequence(entry.id, entry.title, entry.policy, draft),
           ...result.issues.map((i) => i.message),
         ]);
         setError(false);
