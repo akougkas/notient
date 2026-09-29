@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PIPELINE_CATALOG } from "../../../api/pipelineCatalog";
 import type { NoteReference, SourceReference } from "../../../api/schema";
 import type { CultivationDigest } from "../../../api/cultivation";
+import {
+  conditionLine,
+  emptyDevelopments,
+  originLine,
+  quietLine,
+} from "../cultivationGuide";
 import { Markdown } from "../Markdown";
 import { readingColumn } from "../layout";
 import { isDisconnect, type NotientRpc } from "../rpc";
@@ -354,32 +360,72 @@ export function IntelligenceView(props: {
         {detail ? (
           <Markdown text={jobMarkdown(detail)} />
         ) : !showWork ? (
-          digest?.items.length ? digest.items.map((item, index) => (
-            <box key={item.id} flexDirection="column" paddingBottom={2} gap={1}>
-              <text
-                id={`cultivation-development-${item.id}`}
-                fg={index === digestCursor ? COLOR.accent : COLOR.bright}
-                onMouseDown={() => updateSession({ digestCursor: index, selectedDigestId: item.id })}
-              >
-                {index === digestCursor ? "› " : ""}{item.title} · {item.status} · {item.disposition}
-              </text>
-              <Markdown text={item.explanation} />
-              {item.qualifications.map((qualification, qualificationIndex) => (
-                <text key={qualificationIndex} fg={COLOR.dim} wrapMode="word">{qualification}</text>
-              ))}
-              <text fg={COLOR.dim} wrapMode="word">{item.reasons.join(" ")}</text>
-              <text
-                fg={COLOR.accent}
-                wrapMode="word"
-                onMouseDown={() => {
-                  updateSession({ digestCursor: index, selectedDigestId: item.id });
-                  openDigestNote(item);
-                }}
-              >
-                {item.path} ↗
-              </text>
-            </box>
-          )) : <text fg={COLOR.dim}>No current developments to surface. Read and capture normally; use settings to choose attention and permissions.</text>
+          <box flexDirection="column" gap={1}>
+            {digest?.conditions.length ? (
+              <box flexDirection="column" gap={1} paddingBottom={1}>
+                <text fg={COLOR.label}>What limits cultivation</text>
+                {digest.conditions.map((condition) => (
+                  <text
+                    key={condition.id}
+                    fg={condition.level === "attention" ? COLOR.bright : COLOR.dim}
+                    wrapMode="word"
+                  >
+                    {conditionLine(condition)}
+                  </text>
+                ))}
+              </box>
+            ) : null}
+            {digest?.items.length ? digest.items.map((item, index) => (
+              <box key={item.id} flexDirection="column" paddingBottom={2} gap={1}>
+                <text
+                  id={`cultivation-development-${item.id}`}
+                  fg={index === digestCursor ? COLOR.accent : COLOR.bright}
+                  onMouseDown={() => updateSession({ digestCursor: index, selectedDigestId: item.id })}
+                >
+                  {index === digestCursor ? "› " : ""}{item.title} · {item.status} · {item.disposition}
+                </text>
+                <Markdown text={item.explanation} />
+                {item.qualifications.map((qualification, qualificationIndex) => (
+                  <text key={qualificationIndex} fg={COLOR.dim} wrapMode="word">{qualification}</text>
+                ))}
+                <text fg={COLOR.dim} wrapMode="word">{item.reasons.join(" ")}</text>
+                {item.origin ? (
+                  <text fg={COLOR.dim} wrapMode="word">{originLine(item.origin)}</text>
+                ) : null}
+                {item.disposition === "awaiting-review" ? (
+                  <text fg={COLOR.label} wrapMode="word">This change is written only if you approve it. v opens reviews.</text>
+                ) : null}
+                <text
+                  fg={COLOR.accent}
+                  wrapMode="word"
+                  onMouseDown={() => {
+                    updateSession({ digestCursor: index, selectedDigestId: item.id });
+                    openDigestNote(item);
+                  }}
+                >
+                  {item.path} ↗
+                </text>
+              </box>
+            )) : digest ? (
+              <text fg={COLOR.dim} wrapMode="word">{emptyDevelopments(digest)}</text>
+            ) : (
+              <text fg={COLOR.dim}>Loading developments…</text>
+            )}
+            {digest?.quiet.length ? (
+              <box flexDirection="column" gap={1}>
+                <text fg={COLOR.label}>Studied without writing</text>
+                {digest.quiet.map((entry) => (
+                  <text
+                    key={entry.jobId}
+                    fg={entry.outcome === "failed" ? COLOR.bad : COLOR.dim}
+                    wrapMode="word"
+                  >
+                    {quietLine(entry, titles[entry.pipeline] ?? entry.pipeline)}
+                  </text>
+                ))}
+              </box>
+            ) : null}
+          </box>
         ) : rows.length ? (
           rows.map((row) => (
             <box key={row.id} flexDirection="column" height={3}>
