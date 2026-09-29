@@ -252,7 +252,7 @@ function emitRootHelp(emitter: Emitter): number {
   emitter.emit({
     type: "help",
     commands: COMMAND_NAMES.map((command) => (command === "db" ? "db sql" : command)),
-    note: "Local-first CLI where the notes become sentient: search, converse, awaken, and inspect their graph over one vault daemon.",
+    note: "Terminal-first home for a Markdown vault. Run notient to converse, capture and find notes; the other commands serve scripts, MCP clients and operators.",
   });
   return 0;
 }

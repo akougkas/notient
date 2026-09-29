@@ -3,10 +3,10 @@ import { briefMarkdown } from "../api/briefMarkdown";
 import { comparisonResultSchema } from "../api/comparison";
 import { comparisonMarkdown } from "../api/comparisonMarkdown";
 import { cultivationDigestSchema, cultivationSettingsResultSchema } from "../api/cultivation";
-import { methodologySuggestionResultSchema } from "../api/methodology";
 import { cultivationDigestMarkdown, cultivationSettingsMarkdown } from "../api/cultivationMarkdown";
-import { historyEntrySchema } from "../api/history";
 import { graphNeighborsSchema } from "../api/graph";
+import { historyEntrySchema } from "../api/history";
+import { methodologySuggestionResultSchema } from "../api/methodology";
 import { relationshipRetentionResultSchema } from "../api/relationshipRetention";
 import { type DoctorReport, formatDoctorReport } from "./commands/doctor";
 import { type SetupReport, formatSetupReport } from "./commands/setup";
@@ -68,10 +68,47 @@ export function makeEmitter(options: EmitterOptions): Emitter {
           write(event.usage);
           if (Array.isArray(event.flags)) write(`\nOptions: ${event.flags.join("  ")}`);
         } else {
+          const primary = new Set([
+            "chat",
+            "search",
+            "brief",
+            "history",
+            "undo",
+            "setup",
+            "doctor",
+            "mcp",
+          ]);
           write(
-            'Notient — think and work with your notes\n\n  notient --vault <path>         Open your terminal workspace\n  notient chat "question"       Have a conversation with your vault\n  notient search "topic"        Find source notes\n  notient brief "project"       Pick up where you left off\n  notient history               Inspect changes\n  notient undo <id>             Undo a change\n\n  notient setup <vault>          Connect models and open a vault\n  notient doctor                Check the current setup\n\nUse --vault <path> outside your vault. In the workspace, Ctrl+P opens actions,\nCtrl+B captures a thought, and Ctrl+S reviews an answer before saving.\n\nOther commands (notient <command> --help):',
+            [
+              "Notient, a terminal home for your Markdown vault",
+              "",
+              "  notient                        Open your workspace (offers setup the first time)",
+              "  notient --vault <path>         Open a specific vault",
+              "",
+              "In the workspace",
+              "  Ask       Type a question and press Enter",
+              "  Capture   Ctrl+B or Alt+C saves a thought in your own words",
+              "  Find      Alt+O or /find <words>; /search <words> lists saved-text matches",
+              "  Save      Ctrl+S or Alt+S reviews an answer as a note before saving",
+              "  Review    /review opens proposed changes to approve or reject",
+              "  All       Ctrl+P opens every action; /help lists them with their keys",
+              "",
+              "From scripts, agents and operators",
+              '  notient chat "question"        One question, answered in the terminal',
+              '  notient search "topic"         Saved-text and semantic search',
+              '  notient brief "project"        Pick up where you left off',
+              "  notient history | undo <id>    Inspect and reverse recorded changes",
+              "  notient setup <vault>          Choose a vault and connect a model",
+              "  notient doctor                 Check the current setup without changing it",
+              "  notient mcp --vault <path>     Serve the vault to MCP clients",
+              "",
+              "Use --vault <path> outside your vault.",
+              "",
+              "More commands (notient <command> --help):",
+            ].join("\n"),
           );
-          if (Array.isArray(event.commands)) write(`  ${event.commands.join(" · ")}`);
+          if (Array.isArray(event.commands))
+            write(`  ${event.commands.filter((name) => !primary.has(String(name))).join(" · ")}`);
         }
         return;
       }
@@ -154,7 +191,12 @@ export function makeEmitter(options: EmitterOptions): Emitter {
           .map((source) => `- ${source.path} · ${source.revision}`)
           .join("\n");
         write(
-          [headline, explanation, examined ? `Notes read for this study:\n${examined}` : "", evidence ? `Evidence:\n${evidence}` : ""]
+          [
+            headline,
+            explanation,
+            examined ? `Notes read for this study:\n${examined}` : "",
+            evidence ? `Evidence:\n${evidence}` : "",
+          ]
             .filter(Boolean)
             .join("\n\n"),
         );
