@@ -42,7 +42,7 @@ const PAIR_ACTION =
   'Create a code in a terminal with: notient pair create --vault <vault path> --label "Obsidian desktop" --kind human --scopes read,write,host. Then enter the vault id and code in Settings → Notient.';
 const REPAIR_ACTION = "Pair again in Settings → Notient with a new single-use code.";
 const ASLEEP_ACTION =
-  "Start it in a terminal with: notient daemon start --vault <vault path>, or set a launch command in Settings → Notient. Then press Reconnect.";
+  "Open the Notient terminal app for this vault, or run: notient daemon wake --vault <vault path> --json. Wake starts a daemon that exits when idle. You can also set it as the launch command in Settings → Notient. Then press Reconnect.";
 const WAKE_ACTION =
   "Run the launch command yourself in a terminal to see its error, fix it in Settings → Notient, then press Reconnect.";
 const CHECK_ACTION =
@@ -66,7 +66,7 @@ export default class NotientPlugin extends Plugin {
     }
   }
   offlineKey(): string {
-    return `${this.connecting}|${this.problem?.reason ?? ""}|${this.status}`;
+    return `${this.connecting}|${this.wakeConfigured()}|${this.problem?.reason ?? ""}|${this.status}`;
   }
   private readonly wakeController = new AbortController();
   private captureDraft: CaptureDraft | null = null;
