@@ -25,6 +25,10 @@ function configuredFolderLabel(policy: PipelinePolicy): string {
   return captureFolder(policy) || "the vault root";
 }
 
+function unbounded(scope: PipelinePolicy["readScope"]): boolean {
+  return !scope.folders.length && !scope.paths.length && !scope.tags.length;
+}
+
 function scopeText(scope: PipelinePolicy["readScope"]): string {
   const parts = [
     scope.folders.length ? `folders ${scope.folders.join(", ")}` : "",
@@ -46,7 +50,11 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean): string[] 
         : "It has no trigger, so nothing starts it.",
     );
   }
-  if (!scopeAllows(policy.readScope, sampleCapturePath(policy), []))
+  if (unbounded(policy.readScope))
+    blockers.push(
+      "Its read scope is unbounded (any eligible note), so it is not a safely scoped capture workflow.",
+    );
+  else if (!scopeAllows(policy.readScope, sampleCapturePath(policy), []))
     blockers.push(
       `Its read scope (${scopeText(policy.readScope)}) does not include the configured Inbox folder (${configuredFolderLabel(policy)}), so notes saved there would not be read.`,
     );
@@ -63,7 +71,8 @@ export function captureRowSummary(entry: CatalogEntry, paused: boolean): string 
   const blocked = captureBlockers(entry, paused).length > 0;
   const trigger = policy.triggers.length ? policy.triggers.join("+") : "no trigger";
   const mode = policy.mode === "propose" ? "review" : policy.mode;
-  return `on · ${trigger}${reactsToSave && blocked ? " (blocked)" : ""} · ${mode}`;
+  const flag = unbounded(policy.readScope) ? " · broad scope" : reactsToSave && blocked ? " (blocked)" : "";
+  return `on · ${trigger}${flag} · ${mode}`;
 }
 
 export function captureExplanation(
@@ -77,9 +86,9 @@ export function captureExplanation(
     const blockers = captureBlockers(selected, paused);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A note saved inside ${configuredFolderLabel(policy)} (the configured Inbox folder; a capture saved to another folder is judged by that folder against the read scope: ${scopeText(policy.readScope)}) is studied by ${selected.title} ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A note saved in ${configuredFolderLabel(policy)} (the configured Inbox folder, not necessarily where the capture screen saves) is studied ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
-    return `A new capture will not start ${selected.title}. ${blockers.join(" ")} Press s to prepare a safe draft; nothing changes until you review and save it.`;
+    return `A new capture will not start ${selected.title}. ${blockers.join(" ")} Press s for a folder-scoped, review-only draft; nothing changes until you review and save.`;
   }
   if (active.length)
     return `New captures are studied by ${active.map((entry) => entry.title).join(", ")}. Select a workflow to see timing, scope and review behavior.`;
