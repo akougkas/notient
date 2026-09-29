@@ -392,6 +392,8 @@ export const operationInputs = {
     .extend({
       kind: z.enum(["contribution", "feedback"]).optional(),
       state: contributionStatusSchema.optional(),
+      path: notePathSchema.optional(),
+      proposalId: revisionSchema.optional(),
     })
     .strict(),
   "contributions.get": z.object({ id: contributionIdSchema }).strict(),

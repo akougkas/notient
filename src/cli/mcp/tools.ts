@@ -1373,7 +1373,7 @@ const CONTRIBUTIONS_LIST_TOOL: McpToolDefinition = {
   name: "notient_list_contributions",
   title: "List contribution and feedback items",
   description:
-    "List the authenticated agent's own pending items or the human operator's vault-wide queue. Status reflects any linked review proposal. This is read-only.",
+    "List the authenticated agent's own contribution and feedback items (any status) or the human operator's vault-wide queue. Filter by kind, status, target note path, or the review id an item was staged into (its proposalId, the same id notient_get_review reads). Status reflects the linked review: awaiting-review, retained once approved, rejected, or stale. This is read-only.",
   inputShape: operationInputs["contributions.list"].shape,
   annotations: READ_ONLY,
   run: async (caller, args) => {
@@ -1397,7 +1397,7 @@ const CONTRIBUTION_GET_TOOL: McpToolDefinition = {
   name: "notient_get_contribution",
   title: "Inspect one contribution or feedback item",
   description:
-    "Read one private item submitted by this agent, or any item as the human operator. Its linked review proposal remains the authority for any note change.",
+    "Read one private item submitted by this agent, or any item as the human operator. Once staged, proposalId is the review id for notient_get_review, which shows the decision and any applied history; that review remains the authority for any note change.",
   inputShape: operationInputs["contributions.get"].shape,
   annotations: READ_ONLY,
   run: async (caller, args) => {
@@ -1412,7 +1412,12 @@ const CONTRIBUTION_GET_TOOL: McpToolDefinition = {
     if (isRpcFailure(decoded)) return decoded;
     if (decoded.contribution.id !== request.id)
       return integrityFailure("contributions.get", "contribution id does not match the request");
-    return { summary: `${decoded.contribution.kind} is ${decoded.contribution.status}.`, payload: decoded };
+    return {
+      summary: decoded.contribution.proposalId
+        ? `${decoded.contribution.kind} is ${decoded.contribution.status}. Its review is ${decoded.contribution.proposalId}; read it with notient_get_review for the decision and applied history.`
+        : `${decoded.contribution.kind} is ${decoded.contribution.status}.`,
+      payload: decoded,
+    };
   },
 };
 

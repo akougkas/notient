@@ -131,6 +131,8 @@ export class ContributionStore {
     principalId: string | null;
     kind?: "contribution" | "feedback";
     state?: ContributionRecord["status"];
+    path?: string;
+    proposalId?: string;
     limit: number;
     cursor?: string;
   }): Promise<{ contributions: StoredContribution[]; snapshot: string; nextCursor: string | null }> {
@@ -139,7 +141,13 @@ export class ContributionStore {
         ? "awaiting-review"
         : input.state ?? null;
     const filterRevision = contentRevision(
-      JSON.stringify([input.principalId, input.kind ?? null, input.state ?? null]),
+      JSON.stringify([
+        input.principalId,
+        input.kind ?? null,
+        input.state ?? null,
+        input.path ?? null,
+        input.proposalId ?? null,
+      ]),
     );
     const inventory = async () => {
       const filters: string[] = [];
@@ -155,6 +163,14 @@ export class ContributionStore {
       if (storedState !== null) {
         filters.push("status = $state");
         variables.state = storedState;
+      }
+      if (input.path !== undefined) {
+        filters.push("target_path = $path");
+        variables.path = input.path;
+      }
+      if (input.proposalId !== undefined) {
+        filters.push("proposal_id = $proposal");
+        variables.proposal = input.proposalId;
       }
       const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
       const [rows] = await this.db

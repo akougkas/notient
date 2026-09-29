@@ -239,6 +239,8 @@ export function makeContributionHandlers(options: {
       principalId: principal.kind === "human" ? null : principal.id,
       kind: params.kind,
       state: params.state,
+      path: params.path,
+      proposalId: params.proposalId,
       limit: params.limit,
       cursor: params.cursor,
     });
