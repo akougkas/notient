@@ -12,6 +12,7 @@ import {
 import type { OperationResult } from "../../../api/results";
 import {
   CAPTURE_WORKFLOWS,
+  actualCaptureFolder,
   activationConsequence,
   captureDraft,
   captureExplanation,
@@ -68,6 +69,7 @@ export function SettingsView(props: Props) {
     ? policyFields(entry.id).filter((field) => field.section === sections[section])
     : [];
   const field = fields[cursor];
+  const captureFolder = actualCaptureFolder(catalog?.pipelines ?? []);
   const report = useCallback((error: unknown) => {
     setError(true);
     setNotice(error instanceof Error ? error.message : String(error));
@@ -315,11 +317,11 @@ export function SettingsView(props: Props) {
           CAPTURE_WORKFLOWS.includes(entry.id) &&
           key.eventType !== "repeat"
         ) {
-          const prepared = captureDraft(entry.policy);
+          const prepared = captureDraft(entry.policy, captureFolder);
           if (!prepared) {
             setError(true);
             setNotice(
-              "The configured Inbox folder is the vault root or invalid, so a narrow draft is not possible. Set a folder under Scope first.",
+              "The capture folder set by Process inbox is the vault root or invalid, so a narrow draft is not possible. Set a folder under Scope first.",
             );
             return;
           }
@@ -473,7 +475,7 @@ export function SettingsView(props: Props) {
               key={p.id}
               height={rowHeight}
               fg={listStart + i === selected ? COLOR.accent : COLOR.text}
-            >{`${listStart + i === selected ? "›" : " "} ${p.title}   ${captureRowSummary(p, catalog?.paused ?? false)}`}</text>
+            >{`${listStart + i === selected ? "›" : " "} ${p.title}   ${captureRowSummary(p, catalog?.paused ?? false, captureFolder)}`}</text>
           ))}
           {chat ? (
             <text
@@ -494,12 +496,12 @@ export function SettingsView(props: Props) {
           ) : null}
           <text width={column.width} wrapMode="word" fg={COLOR.dim}>
             {entry
-              ? `${entry.description}\n${captureExplanation(catalog?.pipelines ?? [], entry, catalog?.paused ?? false)}`
+              ? `${entry.description}\n${captureExplanation(catalog?.pipelines ?? [], entry, catalog?.paused ?? false, captureFolder)}`
               : selected === (catalog?.pipelines.length ?? 0)
                 ? "Limits for each chat answer: model calls, tokens, time and the largest single generation."
                 : selected === (catalog?.pipelines.length ?? 0) + 1
                   ? "What eligible notes should receive attention, how often to revisit them, and the methodology and conventions that guide interpretation."
-                  : captureExplanation(catalog?.pipelines ?? [], undefined, catalog?.paused ?? false)}
+                  : captureExplanation(catalog?.pipelines ?? [], undefined, catalog?.paused ?? false, captureFolder)}
           </text>
         </box>
       )}

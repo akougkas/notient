@@ -12,17 +12,16 @@ interface CatalogEntry {
 
 const seconds = (ms: number) => (ms % 60000 === 0 ? `${ms / 60000} min` : `${ms / 1000} s`);
 
-function captureFolder(policy: PipelinePolicy): string {
-  return policy.destinations.inbox;
+export function actualCaptureFolder(entries: readonly CatalogEntry[]): string {
+  return entries.find((entry) => entry.id === "inbox")?.policy.destinations.inbox ?? "Inbox";
 }
 
-function sampleCapturePath(policy: PipelinePolicy): string {
-  const folder = captureFolder(policy);
+function sampleCapturePath(folder: string): string {
   return `${folder ? `${folder}/` : ""}Thought.md`;
 }
 
-function configuredFolderLabel(policy: PipelinePolicy): string {
-  return captureFolder(policy) || "the vault root";
+function folderLabel(folder: string): string {
+  return folder || "the vault root";
 }
 
 function unbounded(scope: PipelinePolicy["readScope"]): boolean {
@@ -38,7 +37,7 @@ function scopeText(scope: PipelinePolicy["readScope"]): string {
   return parts.length ? parts.join("; ") : "any eligible note";
 }
 
-export function captureBlockers(entry: CatalogEntry, paused: boolean): string[] {
+export function captureBlockers(entry: CatalogEntry, paused: boolean, folder: string): string[] {
   const { policy } = entry;
   const blockers: string[] = [];
   if (paused) blockers.push("All background work is paused (press p to resume).");
@@ -54,9 +53,9 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean): string[] 
     blockers.push(
       "Its read scope is unbounded (any eligible note), so it is not a safely scoped capture workflow.",
     );
-  else if (!scopeAllows(policy.readScope, sampleCapturePath(policy), []))
+  else if (!scopeAllows(policy.readScope, sampleCapturePath(folder), []))
     blockers.push(
-      `Its read scope (${scopeText(policy.readScope)}) does not include the configured Inbox folder (${configuredFolderLabel(policy)}), so notes saved there would not be read.`,
+      `Its read scope (${scopeText(policy.readScope)}) does not include the capture folder (${folderLabel(folder)}), so new captures would not be read.`,
     );
   if (policy.mode === "report") blockers.push("It is in report mode, so findings never become reviews or note changes.");
   if (policy.enabled && (!policy.budget.modelCalls || !policy.budget.tokens))
@@ -64,11 +63,11 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean): string[] 
   return blockers;
 }
 
-export function captureRowSummary(entry: CatalogEntry, paused: boolean): string {
+export function captureRowSummary(entry: CatalogEntry, paused: boolean, folder: string): string {
   const { policy } = entry;
   if (!policy.enabled) return "off";
   const reactsToSave = policy.triggers.includes("save");
-  const blocked = captureBlockers(entry, paused).length > 0;
+  const blocked = captureBlockers(entry, paused, folder).length > 0;
   const trigger = policy.triggers.length ? policy.triggers.join("+") : "no trigger";
   const mode = policy.mode === "propose" ? "review" : policy.mode;
   const flag = unbounded(policy.readScope) ? " · broad scope" : reactsToSave && blocked ? " (blocked)" : "";
@@ -79,14 +78,15 @@ export function captureExplanation(
   entries: readonly CatalogEntry[],
   selected: CatalogEntry | undefined,
   paused: boolean,
+  folder: string,
 ): string {
   const candidates = entries.filter((entry) => CAPTURE_WORKFLOWS.includes(entry.id));
-  const active = candidates.filter((entry) => captureBlockers(entry, paused).length === 0);
+  const active = candidates.filter((entry) => captureBlockers(entry, paused, folder).length === 0);
   if (selected && CAPTURE_WORKFLOWS.includes(selected.id)) {
-    const blockers = captureBlockers(selected, paused);
+    const blockers = captureBlockers(selected, paused, folder);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A note saved in ${configuredFolderLabel(policy)} (the configured Inbox folder, not necessarily where the capture screen saves) is studied ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) is studied ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
     return `A new capture will not start ${selected.title}. ${blockers.join(" ")} Press s for a folder-scoped, review-only draft; nothing changes until you review and save.`;
   }
@@ -95,8 +95,10 @@ export function captureExplanation(
   return "No workflow will study a new capture. Captures are still saved and searchable. Select Enrich notes and press s to prepare a narrow, review-only draft; nothing is enabled until you review and save it.";
 }
 
-export function captureDraft(policy: PipelinePolicy): { policy: PipelinePolicy; folder: string } | null {
-  const folder = captureFolder(policy);
+export function captureDraft(
+  policy: PipelinePolicy,
+  folder: string,
+): { policy: PipelinePolicy; folder: string } | null {
   if (!folder || !folderSchema.safeParse(folder).success) return null;
   const next = structuredClone(policy);
   next.enabled = true;
