@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useKeyboard } from "@opentui/react";
 import type { MethodologySuggestionResult } from "../../../api/methodology";
 import type { MethodologySettings } from "../../../api/cultivationSettings";
+import type { ReviewProposal } from "../../../api/proposals";
 import type { NoteReference, SourceReference } from "../../../api/schema";
 import { Markdown } from "../Markdown";
 import {
@@ -21,6 +22,18 @@ export interface MethodologySession {
   request?: { path: string; revision: string; configurationRevision: string; idempotencyKey: string };
   studyMethodology?: MethodologySettings | null;
   scroll?: number;
+}
+
+function conventionReviewMessage(proposal: ReviewProposal): string {
+  if (proposal.state === "approved")
+    return !proposal.application || proposal.application.state === "applied"
+      ? "Approved and applied to the note. Press c to prepare a settings draft; saving it there activates the guidance."
+      : "Approved, but the note change did not finish applying. Press v to inspect it.";
+  if (proposal.state === "rejected")
+    return "Rejected. Nothing was added to your conventions. Press Enter to run a fresh study.";
+  if (proposal.state === "stale")
+    return "This suggestion is stale because a source changed. Press Enter to run a fresh study.";
+  return "Still awaiting your review. Press v to inspect its exact changes and decide.";
 }
 
 export function MethodologyView(props: {
@@ -61,6 +74,24 @@ export function MethodologyView(props: {
       rememberScroll();
     };
   }, [session.pending]);
+  useEffect(() => {
+    const current = session.result;
+    if (current?.status !== "convention-suggestion" || session.pending) return;
+    let live = true;
+    void props
+      .rpc()
+      .review(current.proposal.id)
+      .then(({ proposal }) => {
+        if (!live || session.result !== current || session.pending) return;
+        session.result = { ...current, proposal };
+        if (session.studyMethodology !== null) session.message = conventionReviewMessage(proposal);
+        refresh();
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   useEffect(() => {
     scroll.current?.scrollTo(session.scroll ?? 0);
   }, [session.result]);
