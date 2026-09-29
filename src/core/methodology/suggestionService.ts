@@ -929,7 +929,7 @@ function validateMethodologyOutput(
       )
         throw new NoteApiError(
           "CONFLICT",
-          "a methodology body function lacks exact substantive evidence from its own note",
+          `Body function for ${note.note.path} cited ${JSON.stringify(evidence.quote.slice(0, 180))}, which is not substantive authored body evidence. Choose an exact passage ID containing a sentence or bullet from that note.`,
         );
       observedBodyNotes.add(item.note);
     }

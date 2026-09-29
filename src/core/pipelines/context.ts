@@ -519,7 +519,7 @@ export class PipelineContext {
       });
     }).slice(0, 12);
   }
-  private suppliedDocuments(byteBudget: number) {
+  private suppliedDocuments(byteBudget: number, methodologyOnly = false) {
     this.overviews.clear();
     this.evidenceSegments.clear();
     this.visibleRuns.clear();
@@ -555,10 +555,13 @@ export class PipelineContext {
           for (const segment of passages
             .flatMap((passage) => splitVisibleRunAtHeadings(passage, sectionStarts))
             .flatMap(splitVisibleRun)) {
-            const id = `g${generation}-d${index}-${part === "overview" ? "o" : "p"}${segmentIndex}`;
-            segmentIndex += 1;
             const end = segment.start + segment.content.length;
             const quote = note.body.slice(segment.start, end);
+            const segmentPart = bodyStart > 0 && end <= bodyStart ? "metadata" : part;
+            if (methodologyOnly && (segmentPart === "metadata" || !hasSubstantivePassage(quote)))
+              continue;
+            const id = `g${generation}-d${index}-${part === "overview" ? "o" : "p"}${segmentIndex}`;
+            segmentIndex += 1;
             if (quote !== segment.content || stripIntelligenceMarkers(quote) !== quote)
               throw new Error("supplied evidence passage does not map to visible source bytes");
             this.evidenceSegments.set(id, {
@@ -568,7 +571,7 @@ export class PipelineContext {
               quote,
             });
             runs.push({ start: segment.start, content: quote });
-            segments.push({ id, part: bodyStart > 0 && end <= bodyStart ? "metadata" : part, content: quote });
+            segments.push({ id, part: segmentPart, content: quote });
           }
         }
       };
@@ -655,7 +658,7 @@ export class PipelineContext {
     } else {
       do {
         messages[1].content = JSON.stringify({
-          documents: this.suppliedDocuments(byteBudget),
+          documents: this.suppliedDocuments(byteBudget, options.instructionProfile === "methodology"),
           retainedFeedback: this.retainedFeedbackContext(),
           task: extra ?? null,
           methodology:
@@ -806,6 +809,24 @@ function visibleSourceRuns(passage: SuppliedTextPassage, body: string): Supplied
     }
     if (start < end) pieces.push({ start, content: body.slice(start, end) });
     return pieces;
+  });
+}
+
+function hasSubstantivePassage(content: string): boolean {
+  return content.split(/\r?\n/u).some((line) => {
+    const text = line
+      .trim()
+      .replace(/^>\s*/u, "")
+      .replace(/^(?:[-*+]\s+|\d+[.)]\s+)/u, "")
+      .replace(/[`*_~]/gu, "")
+      .trim();
+    return (
+      text.length > 0 &&
+      !/^#{1,6}(?:\s|$)/u.test(text) &&
+      !/^[-*_]{3,}$/u.test(text) &&
+      !/^\[[^\]]+\]\([^)]*\)$/u.test(text) &&
+      /[\p{L}\p{N}]/u.test(text)
+    );
   });
 }
 
