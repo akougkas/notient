@@ -1,5 +1,9 @@
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
-import type { CultivationDigestItem } from "../../api/cultivation";
+import type {
+  CultivationDigestItem,
+  CultivationOrigin,
+  CultivationQuietResult,
+} from "../../api/cultivation";
 import { contentRevision, inspectMarkdown, NoteReadService } from "../../api/notes";
 import { sourceRange } from "../../api/notes";
 import type { PipelineJob } from "../../api/pipelines";
@@ -152,6 +156,7 @@ export async function createCultivationDigest(
           revision: route.note.revision,
           evidence,
           reasons,
+          origin: jobOrigin(job),
           createdAt: job.createdAt,
           updatedAt: job.updatedAt,
         },
@@ -355,4 +360,75 @@ function pick(candidates: DigestCandidate[], limit: number): CultivationDigestIt
     .sort((left, right) => right.score - left.score || right.item.updatedAt - left.item.updatedAt)
     .slice(0, limit)
     .map((candidate) => candidate.item);
+}
+
+export function jobOrigin(job: PipelineJob): CultivationOrigin {
+  const trigger = job.reason.startsWith("save trigger")
+    ? "save"
+    : job.reason.startsWith("idle trigger")
+      ? "idle"
+      : job.reason.startsWith("interval trigger")
+        ? "interval"
+        : job.pipeline === "reconsider"
+          ? "reconsider"
+          : "manual";
+  return {
+    trigger,
+    caller: job.caller.id,
+    examined: job.sourceRevisions.slice(0, 20).map((source) => source.path),
+  };
+}
+
+const QUIET_WINDOW_MS = 7 * 86_400_000;
+const QUIET_EXEMPT = new Set<PipelineJob["pipeline"]>(["index-extract", "reconsider"]);
+
+export function createQuietResults(options: {
+  jobs: readonly PipelineJob[];
+  currentScopes: Record<PipelineJob["pipeline"], NoteScope>;
+  requestedScope?: NoteScope;
+  now: number;
+  limit: number;
+}): CultivationQuietResult[] {
+  const requestedScope = options.requestedScope ?? scopeSchema.parse({});
+  const results: CultivationQuietResult[] = [];
+  const sorted = [...options.jobs].sort((left, right) => right.updatedAt - left.updatedAt);
+  for (const job of sorted) {
+    if (results.length >= options.limit) break;
+    if (!job.background || QUIET_EXEMPT.has(job.pipeline)) continue;
+    if (options.now - job.updatedAt > QUIET_WINDOW_MS) continue;
+    const examined = job.sourceRevisions.filter(
+      (source) =>
+        scopeAllows(job.policy.readScope, source.path, []) &&
+        scopeAllows(options.currentScopes[job.pipeline], source.path, []) &&
+        scopeAllows(requestedScope, source.path, []),
+    );
+    if (job.sourceRevisions.length > 0 && examined.length === 0) continue;
+    const origin = { ...jobOrigin(job), examined: examined.slice(0, 20).map((source) => source.path) };
+    if (job.state === "failed" && job.failure) {
+      results.push({
+        jobId: job.id,
+        pipeline: job.pipeline,
+        outcome: "failed",
+        reason: `The run stopped before producing a result: ${job.failure.message}`.slice(0, 2000),
+        origin,
+        updatedAt: job.updatedAt,
+      });
+      continue;
+    }
+    if (job.state !== "completed" || !job.plan) continue;
+    if (job.plan.findings.length > 0 || job.plan.changes.length > 0 || job.plan.relationships.length > 0)
+      continue;
+    results.push({
+      jobId: job.id,
+      pipeline: job.pipeline,
+      outcome: "no-write",
+      reason: (
+        job.plan.reason ??
+        (job.plan.abstained ? job.plan.summary : `Nothing worth retaining was found. ${job.plan.summary}`)
+      ).slice(0, 2000),
+      origin,
+      updatedAt: job.updatedAt,
+    });
+  }
+  return results;
 }

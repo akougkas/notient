@@ -654,7 +654,7 @@ const VITALS_TOOL: McpToolDefinition = {
   name: "notient_vitals",
   title: "Note vitals",
   description:
-    "For one exact public, contained, live indexed Markdown note, return freshness, health, maturity, word count, and approved/applied wikilink-only connectivity. Read-only.",
+    "For one exact public, contained, live indexed Markdown note, return structural proxies only: recency, a length/indexing/link composite named health, a status label named maturity, word count, and approved/applied wikilink-only connectivity. None of these measure understanding, evidence support, or usefulness. Read-only.",
   inputShape: {
     path: VAULT_PATH_INPUT.describe(
       "Exact public vault-relative note path. Hidden, absolute, traversal, and escaping-symlink paths return INVALID_PARAMS.",

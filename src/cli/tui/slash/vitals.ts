@@ -39,16 +39,19 @@ export async function rpcSentient(context: SlashContext): Promise<SlashOutcome> 
 export async function rpcVitals(context: SlashContext, path: string): Promise<SlashOutcome> {
   try {
     const snapshot = (await createRpc(context.client).vitals(path)).snapshot;
+    const conditions = [
+      snapshot.connectivityCount === 0 ? "No approved link connects this note to another." : null,
+      snapshot.wordCount < 20 ? "The note is too short to study for structure." : null,
+      snapshot.freshness < 0.25 ? "The note has not been edited for a long time." : null,
+    ].filter((line): line is string => line !== null);
     return {
       message: [
-        `vitals for ${path}:`,
-        `- wordCount:       ${snapshot.wordCount}`,
-        `- approvedEdges:   ${snapshot.connectivityCount}`,
-        `- connectivity:    ${snapshot.connectivityTier}`,
-        `- maturity:        ${snapshot.maturity}`,
-        `- health:          ${snapshot.health.toFixed(2)}`,
-        `- freshness:       ${snapshot.freshness.toFixed(2)}`,
-        `- computedAt:      ${new Date(snapshot.computedAt).toISOString()}`,
+        `structure for ${path} (proxies from length, indexing and links; they do not measure understanding):`,
+        `- words:           ${snapshot.wordCount}`,
+        `- approved links:  ${snapshot.connectivityCount} (${snapshot.connectivityTier})`,
+        `- edit recency:     ${snapshot.freshness.toFixed(2)} of 1 (decays with time since the last human edit)`,
+        conditions.length ? "conditions:" : "conditions: none found in these proxies",
+        ...conditions.map((line) => `  ${line}`),
       ].join("\n"),
     };
   } catch (error) {

@@ -10,8 +10,19 @@ export function cultivationDigestMarkdown(digest: CultivationDigest): string {
     `Methodology: ${digest.methodology.mode === "custom" ? digest.methodology.name : digest.methodology.mode}`,
     "",
   ];
-  if (digest.items.length === 0)
-    return `${lines.join("\n")}No current source-readable findings are available.`;
+  if (digest.conditions.length) {
+    lines.push("## Conditions", "");
+    for (const condition of digest.conditions)
+      lines.push(
+        `- **${condition.label}.** ${condition.detail}${condition.action ? ` ${condition.action}` : ""}`,
+      );
+    lines.push("");
+  }
+  if (digest.items.length === 0) {
+    lines.push("Nothing new worth surfacing: no current source-readable findings are available.");
+    appendQuiet(lines, digest);
+    return lines.join("\n").trimEnd();
+  }
   for (const item of digest.items) {
     lines.push(
       `## ${item.title}`,
@@ -21,6 +32,11 @@ export function cultivationDigestMarkdown(digest: CultivationDigest): string {
       item.explanation,
       "",
     );
+    if (item.origin)
+      lines.push(
+        `Origin: ${item.origin.trigger} trigger by ${item.origin.caller}; examined ${item.origin.examined.join(", ") || "no notes"}.`,
+        "",
+      );
     for (const qualification of item.qualifications)
       lines.push(`**Qualification:** ${qualification}`, "");
     for (const reason of item.reasons) lines.push(`- ${reason}`);
@@ -33,7 +49,17 @@ export function cultivationDigestMarkdown(digest: CultivationDigest): string {
       );
     }
   }
+  appendQuiet(lines, digest);
   return lines.join("\n").trimEnd();
+}
+
+function appendQuiet(lines: string[], digest: CultivationDigest): void {
+  if (!digest.quiet.length) return;
+  lines.push("", "## Studied without writing", "");
+  for (const entry of digest.quiet)
+    lines.push(
+      `- ${entry.outcome === "failed" ? "Failed" : "No write"} · ${entry.pipeline} · ${entry.origin.trigger} trigger · ${entry.origin.examined.join(", ") || "no notes"}: ${entry.reason}`,
+    );
 }
 
 export function cultivationSettingsMarkdown(settings: CultivationSettings): string {

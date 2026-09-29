@@ -11,6 +11,35 @@ export const cultivationDispositionSchema = z.enum([
   "partial",
 ]);
 
+export const cultivationOriginSchema = z
+  .object({
+    trigger: z.enum(["save", "idle", "interval", "reconsider", "manual"]),
+    caller: z.string().min(1).max(200),
+    examined: z.array(notePathSchema).max(20),
+  })
+  .strict();
+
+export const cultivationQuietResultSchema = z
+  .object({
+    jobId: z.string().uuid(),
+    pipeline: pipelineIdSchema,
+    outcome: z.enum(["no-write", "failed"]),
+    reason: z.string().min(1).max(2000),
+    origin: cultivationOriginSchema,
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const cultivationConditionSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    level: z.enum(["attention", "info"]),
+    label: z.string().min(1).max(200),
+    detail: z.string().min(1).max(600),
+    action: z.string().min(1).max(300).nullable(),
+  })
+  .strict();
+
 export const cultivationDigestItemSchema = z
   .object({
     id: z.string().min(1),
@@ -25,6 +54,7 @@ export const cultivationDigestItemSchema = z
     revision: revisionSchema,
     evidence: z.array(sourceReferenceSchema).min(1).max(30),
     reasons: z.array(z.string().min(1).max(300)).max(8),
+    origin: cultivationOriginSchema.optional(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
   })
@@ -36,6 +66,8 @@ export const cultivationDigestSchema = z
     generatedAt: z.number().int().nonnegative(),
     paused: z.boolean(),
     items: z.array(cultivationDigestItemSchema).max(20),
+    quiet: z.array(cultivationQuietResultSchema).max(20).default([]),
+    conditions: z.array(cultivationConditionSchema).max(20).default([]),
     budget: z
       .object({
         tokens: z
@@ -70,5 +102,8 @@ export const cultivationSettingsResultSchema = z
   })
   .strict();
 
+export type CultivationOrigin = z.infer<typeof cultivationOriginSchema>;
+export type CultivationQuietResult = z.infer<typeof cultivationQuietResultSchema>;
+export type CultivationCondition = z.infer<typeof cultivationConditionSchema>;
 export type CultivationDigestItem = z.infer<typeof cultivationDigestItemSchema>;
 export type CultivationDigest = z.infer<typeof cultivationDigestSchema>;

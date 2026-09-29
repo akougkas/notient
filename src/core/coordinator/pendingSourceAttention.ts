@@ -37,10 +37,16 @@ const scanCursorSchema = z.object({
   complete: z.boolean().default(false),
 }).strict();
 
+const saveTriggerSchema = z.object({
+  path: notePathSchema,
+  at: z.number().int().nonnegative(),
+}).strict();
+
 const privateStateSchema = z.object({
   version: z.literal(1),
   sources: z.array(privateSourceSchema).max(4096),
   scanCursors: z.array(scanCursorSchema).max(16).default([]),
+  saves: z.array(saveTriggerSchema).max(4096).default([]),
 }).strict();
 
 export type PendingSourceAttention = z.infer<typeof privateSourceSchema>;
@@ -52,7 +58,7 @@ const privateFileMode = 0o600;
 const maxStateBytes = 4 * 1024 * 1024;
 
 export class PendingSourceAttentionStore {
-  private state: PrivateState = { version: 1, sources: [], scanCursors: [] };
+  private state: PrivateState = { version: 1, sources: [], scanCursors: [], saves: [] };
   private loaded: Promise<void> | null = null;
   private serial: Promise<void> = Promise.resolve();
 
@@ -62,6 +68,31 @@ export class PendingSourceAttentionStore {
     return this.enqueue(async () => {
       await this.ensureLoaded();
       return this.state.sources.map((source) => structuredClone(source));
+    });
+  }
+
+  saveTriggers(): Promise<Array<{ path: string; at: number }>> {
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      return this.state.saves.map((save) => ({ ...save }));
+    });
+  }
+
+  recordSave(path: string, at: number): Promise<void> {
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      const saves = this.state.saves.filter((save) => save.path !== path);
+      saves.push({ path, at });
+      await this.commit({ ...this.state, saves: saves.slice(-4096) });
+    });
+  }
+
+  pruneSaves(olderThan: number): Promise<void> {
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      const saves = this.state.saves.filter((save) => save.at >= olderThan);
+      if (saves.length === this.state.saves.length) return;
+      await this.commit({ ...this.state, saves });
     });
   }
 

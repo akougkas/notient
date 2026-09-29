@@ -87,6 +87,7 @@ export class Coordinator {
   private running = false;
   private pending: Promise<void> = Promise.resolve();
   private ticking = false;
+  private workPending = false;
   private readonly saves = new Map<string, number>();
   private readonly seenChangeIds = new Map<string, true>();
   private readonly status = new Map<PipelineId, PipelineScheduleStatus>();
@@ -102,6 +103,7 @@ export class Coordinator {
       settings: opts.settings,
       activity: opts.activity,
       now: this.now,
+      schedule: (pipeline) => this.schedule(pipeline),
     });
   }
   digest(input: Parameters<CultivationService["digest"]>[0] = {}) {
@@ -128,7 +130,7 @@ export class Coordinator {
           event.activeNotePath &&
           ["vault:add", "vault:change", "vault:rename"].includes(event.source)
         ) {
-          this.saves.set(event.activeNotePath, this.now());
+          this.markSave(event.activeNotePath);
           void this.pendingSourceAttention
             .record(event.activeNotePath, null, "changed", this.now())
             .catch((error) => this.report(error));
@@ -141,32 +143,46 @@ export class Coordinator {
           const oldest = this.seenChangeIds.keys().next().value;
           if (oldest !== undefined) this.seenChangeIds.delete(oldest);
         }
-        this.saves.set(event.path, this.now());
+        this.markSave(event.path);
         void this.pendingSourceAttention
           .record(event.path, event.revision, "changed", this.now())
           .catch((error) => this.report(error));
       }),
       this.opts.bus.on("indexer:tombstoned", (event) => {
-        this.saves.set(event.path, this.now());
+        this.markSave(event.path);
         void this.pendingSourceAttention
           .record(event.path, null, "deleted", this.now())
           .catch((error) => this.report(error));
       }),
       this.opts.bus.on("indexer:renamed", (event) => {
         const at = this.now();
-        this.saves.set(event.fromPath, at);
-        this.saves.set(event.toPath, at);
+        this.markSave(event.fromPath, at);
+        this.markSave(event.toPath, at);
         void this.pendingSourceAttention
           .record(event.fromPath, null, "deleted", at)
           .then(() => this.pendingSourceAttention.record(event.toPath, null, "changed", at))
           .catch((error) => this.report(error));
       }),
     );
+    void this.pendingSourceAttention
+      .saveTriggers()
+      .then((persisted) => {
+        for (const { path, at } of persisted)
+          if ((this.saves.get(path) ?? 0) < at) this.saves.set(path, at);
+      })
+      .catch((error) => this.report(error));
     this.timer = setInterval(() => {
       void this.tick().catch((error) => this.report(error));
     }, 1000);
     this.timer.unref();
     void this.tick().catch((error) => this.report(error));
+  }
+  private markSave(path: string, at = this.now()): void {
+    this.saves.set(path, at);
+    void this.pendingSourceAttention.recordSave(path, at).catch((error) => this.report(error));
+  }
+  hasPendingWork(): boolean {
+    return this.workPending;
   }
   stop(): void {
     this.running = false;
@@ -239,6 +255,9 @@ export class Coordinator {
     await this.reconcilePendingSources(jobs, at);
     let pendingSources = await this.pendingSourceAttention.list();
     let submittedThisTick = false;
+    let workPending = jobs.some(
+      (job) => job.background && ["queued", "running", "waiting-inference"].includes(job.state),
+    );
     for (const pipeline of pipelineIdSchema.options) {
       const policy = configuration.settings.pipelines[pipeline];
       const prior = jobs.filter((job) => job.background && job.pipeline === pipeline);
@@ -291,6 +310,12 @@ export class Coordinator {
             )
             .map(([path]) => path)
         : [];
+      if (
+        policy.triggers.includes("save") &&
+        pipeline !== "reconsider" &&
+        [...this.saves].some(([, savedAt]) => at - savedAt < policy.debounceMs + 1000 && (last === null || savedAt > last))
+      )
+        workPending = true;
       const idle =
         policy.triggers.includes("idle") &&
         at - this.opts.activity.snapshot().lastHumanActivityAt >= policy.idleMs;
@@ -474,6 +499,8 @@ export class Coordinator {
       );
     }
     for (const [path, atSaved] of this.saves) if (at - atSaved > 86400000) this.saves.delete(path);
+    await this.pendingSourceAttention.pruneSaves(at - 86400000);
+    this.workPending = workPending;
     await this.opts.jobs.pump();
   }
   private async select(pipeline: PipelineId, saved: string[], prior: PipelineJob[]) {

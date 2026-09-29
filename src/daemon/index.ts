@@ -316,6 +316,7 @@ async function main(argv: string[]): Promise<void> {
       void shutdown("idle-exit");
     },
     isBusy: () =>
+      kernel.get("coordinator").hasPendingWork() ||
       awakenBackgroundRegistry.size() > 0 ||
       connections.size > 0 ||
       dispatches.size > 0 ||
