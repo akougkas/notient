@@ -57,9 +57,9 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean, folder: st
     blockers.push(
       `Its read scope (${scopeText(policy.readScope)}) does not include the capture folder (${folderLabel(folder)}), so new captures would not be read.`,
     );
-  if (policy.mode === "report") blockers.push("It is in report mode, so findings never become reviews or note changes.");
+  if (policy.mode === "report") blockers.push("Report mode may study the capture, but it creates no review or note change.");
   if (policy.enabled && (!policy.budget.modelCalls || !policy.budget.tokens))
-    blockers.push("Its model-call or token budget is zero, so it cannot produce a model result.");
+    blockers.push("Its model-call or token budget is zero, so model-assisted results are unavailable.");
   return blockers;
 }
 
@@ -86,13 +86,13 @@ export function captureExplanation(
     const blockers = captureBlockers(selected, paused, folder);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) is studied ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) can be studied after ${seconds(policy.debounceMs)}, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
-    return `A new capture will not start ${selected.title}. ${blockers.join(" ")} Press s for a folder-scoped, review-only draft; nothing changes until you review and save.`;
+    return `A new capture may not yield a reviewable development from ${selected.title}. ${blockers.join(" ")} Press s for a folder-scoped, review-only draft; nothing changes until you review and save.`;
   }
   if (active.length)
-    return `New captures are studied by ${active.map((entry) => entry.title).join(", ")}. Select a workflow to see timing, scope and review behavior.`;
-  return "No workflow will study a new capture. Captures are still saved and searchable. Select Enrich notes and press s to prepare a narrow, review-only draft; nothing is enabled until you review and save it.";
+    return `New captures can receive reviewable study from ${active.map((entry) => entry.title).join(", ")}. Select a workflow to see timing, scope and review behavior.`;
+  return "No workflow is ready to produce a reviewable development from a new capture. Captures are still saved and searchable. Select Enrich notes and press s to prepare a narrow, review-only draft; nothing is enabled until you review and save it.";
 }
 
 export function captureDraft(
