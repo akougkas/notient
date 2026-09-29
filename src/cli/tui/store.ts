@@ -281,6 +281,7 @@ export type Action =
   | { type: "ask/reset"; line?: ChatLine }
   | { type: "ask/assistantDelta"; text: string }
   | { type: "ask/assistantFinal"; text: string }
+  | { type: "ask/interrupted"; reason: string }
   | { type: "ask/busy"; busy: boolean }
   | { type: "ask/turnDone"; tokens: number; citations: string[] }
   | { type: "ask/sources"; sources: SourceReference[] }
@@ -630,6 +631,19 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         ask: { ...state.ask, lines: appendAssistantDelta(state.ask.lines, action.text) },
       };
+    case "ask/interrupted": {
+      const lines = [...state.ask.lines];
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index];
+        if (line === undefined || line.kind === "user") break;
+        if (line.kind === "assistant" && line.streaming === true) {
+          lines[index] = { kind: "system", text: `Unsaved partial reply:\n${line.text}` };
+          break;
+        }
+      }
+      lines.push({ kind: "system", text: action.reason });
+      return { ...state, ask: { ...state.ask, lines } };
+    }
     case "ask/assistantFinal": {
       const lines = [...state.ask.lines];
       const final: ChatLine = { kind: "assistant", text: action.text };

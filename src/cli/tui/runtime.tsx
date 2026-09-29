@@ -2537,6 +2537,14 @@ export async function drainTurn(
   const stream = createStreamDispatch(target);
   const dispatch = stream.dispatch;
   let assistant = "";
+  let completed = false;
+  let interrupted = false;
+  const interrupt = (reason: string): void => {
+    if (completed || interrupted) return;
+    interrupted = true;
+    dispatch({ type: "ask/interrupted", reason });
+  };
+  const unfinished = "The turn stopped before a final answer. Any partial reply above is not saved.";
   try {
     for await (const frame of frames) {
       if (frame.type === "event") {
@@ -2546,9 +2554,15 @@ export async function drainTurn(
           refreshPendingStats,
         );
         assistant = frame.event === "loop:done" ? text : assistant + text;
+        if (frame.event === "loop:done") completed = true;
+        if (frame.event === "turn:aborted")
+          interrupt(
+            `Turn stopped: ${String(frame.reason)}. The partial reply was not kept; your thought is saved.`,
+          );
         continue;
       }
       if (frame.type === "error") {
+        interrupt(unfinished);
         dispatch({
           type: "ask/line",
           line: frameToErrorLine(frame as { type: "error"; message?: unknown }),
@@ -2557,13 +2571,15 @@ export async function drainTurn(
       }
       if (frame.type === "result") break;
     }
+    interrupt(unfinished);
   } catch (error) {
     stream.flush();
+    interrupt(unfinished);
     reportTurnFailure(error, dispatch, fail);
   } finally {
     stream.flush();
   }
-  return assistant;
+  return completed ? assistant : "";
 }
 
 function reportTurnFailure(

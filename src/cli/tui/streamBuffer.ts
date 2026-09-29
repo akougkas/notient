@@ -1,7 +1,7 @@
 import type React from "react";
 import type { Action } from "./store";
 
-const MIN_FRAME_MS = 16;
+const MIN_FRAME_MS = 33;
 const MAX_FRAME_MS = 100;
 
 export interface StreamDispatch {
