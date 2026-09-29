@@ -12,7 +12,12 @@ import { scopeSchema } from "../../api/operations";
 import type { NoteScope } from "../../api/scope";
 import type { NoteReference, SourceReference } from "../../api/schema";
 import type { PipelineFinding } from "../../api/pipelines";
-import { parseAllIntelligenceRecords, withoutRetainedIntelligence } from "../intelligence";
+import {
+  appendedIntelligenceRecords,
+  canContinueSection,
+  parseAllIntelligenceRecords,
+  withoutRetainedIntelligence,
+} from "../intelligence";
 import { assessPipelineFinding } from "../pipelines/intelligenceAssessment";
 
 export interface CultivationDigestOptions {
@@ -234,15 +239,25 @@ function assessDigestFinding(
       : undefined;
     if (!append || append.kind !== "append") return staleAssessment(finding);
     const headings = new Set(job.policy.allowedSections.map((section) => `## ${section}`));
-    if (
-      parseAllIntelligenceRecords(append.text).length === 0 ||
-      withoutRetainedIntelligence(append.text)
-        .split(/\r?\n/u)
-        .some((line) => line.trim().length > 0 && !headings.has(line.trim()))
-    )
-      return staleAssessment(finding);
+    const residue = withoutRetainedIntelligence(append.text).split(/\r?\n/u);
     const originalBody = current.body.slice(0, -append.text.length);
     if (contentRevision(originalBody) !== reference.revision) return staleAssessment(finding);
+    const headed = residue.some((line) => headings.has(line.trim()));
+    let retained = 0;
+    try {
+      retained = headed
+        ? parseAllIntelligenceRecords(append.text).length
+        : job.policy.allowedSections.some((section) => canContinueSection(originalBody, section))
+          ? appendedIntelligenceRecords(originalBody, append.text).length
+          : 0;
+    } catch {
+      return staleAssessment(finding);
+    }
+    if (
+      retained === 0 ||
+      residue.some((line) => line.trim().length > 0 && !headings.has(line.trim()))
+    )
+      return staleAssessment(finding);
     documents.push({
       ...current,
       note: { ...current.note, revision: reference.revision },

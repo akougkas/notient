@@ -19,7 +19,11 @@ import type { MethodologySettings } from "../../api/background";
 import type { SettingsService } from "../settings/settingsService";
 import type { ApprovalService } from "../approvals/approvalService";
 import type { SearchPipeline } from "../search/searchPipeline";
-import { prepareIntelligenceAppend, parseIntelligenceRecords } from "../intelligence";
+import {
+  appendedIntelligenceRecords,
+  parseIntelligenceRecords,
+  prepareIntelligenceAppend,
+} from "../intelligence";
 import { reviewRevision } from "../approvals/reviewStorage";
 import type { MethodologySuggestionResultStore } from "./suggestionStore";
 
@@ -791,7 +795,8 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
     }
     const append = preview.changeSet.changes.find((change) => change.kind === "append");
     if (append?.kind === "append") {
-      const records = parseIntelligenceRecords(append.text, designation);
+      const before = preview.effects.find((effect) => effect.path === append.source.path)?.before;
+      const records = appendedRecords(append.text, designation, before ?? null);
       const record = records.find((item) =>
         item.attribution.id.startsWith("methodology-suggestion:"),
       );
@@ -1171,4 +1176,15 @@ function basename(path: string): string {
 function removeReviewSuffix(rationale: string, suffix: string): string {
   const ending = `\n\n${suffix}`;
   return rationale.endsWith(ending) ? rationale.slice(0, -ending.length) : rationale;
+}
+
+function appendedRecords(text: string, designation: string, before: string | null) {
+  if (before !== null) {
+    try {
+      return appendedIntelligenceRecords(before, text);
+    } catch {
+      return parseIntelligenceRecords(text, designation);
+    }
+  }
+  return parseIntelligenceRecords(text, designation);
 }

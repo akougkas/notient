@@ -19,6 +19,7 @@ export interface IntelligenceAppendPlan {
   body: string;
   appendedIds: string[];
   duplicateIds: string[];
+  continuation: boolean;
 }
 
 const START_MARKER = /^<!-- notient-intelligence:v1:start:(i-[a-f0-9]{64}):([A-Za-z0-9_-]+) -->$/;
@@ -288,12 +289,70 @@ export function prepareIntelligenceAppend(
     pending.set(id, record);
     appendedIds.push(id);
   }
-  if (pending.size === 0) return { text: "", body, appendedIds, duplicateIds };
+  if (pending.size === 0)
+    return { text: "", body, appendedIds, duplicateIds, continuation: false };
   const newline = detectNewline(body);
   const prefix = body.length === 0 ? "" : body.endsWith("\n") ? newline : `${newline}${newline}`;
   const rendered = [...pending.values()].map((record) => renderRecord(record, newline)).join(`${newline}${newline}`);
-  const text = `${prefix}## ${designation}${newline}${newline}${rendered}${newline}`;
-  return { text, body: `${body}${text}`, appendedIds, duplicateIds };
+  const continuation = canContinueSection(body, designation);
+  const text = continuation
+    ? `${prefix}${rendered}${newline}`
+    : `${prefix}## ${designation}${newline}${newline}${rendered}${newline}`;
+  return { text, body: `${body}${text}`, appendedIds, duplicateIds, continuation };
+}
+
+export function canContinueSection(body: string, designation: string): boolean {
+  try {
+    validateDesignation(designation);
+  } catch {
+    return false;
+  }
+  const lines = linesOf(body);
+  const last = findSections(body, designation).at(-1);
+  if (last === undefined || last.endLine !== lines.length) return false;
+  let fence: { char: "`" | "~"; length: number } | null = null;
+  for (let index = last.headingLine + 1; index < lines.length; index += 1) {
+    const raw = lines[index]?.text ?? "";
+    const fenceMatch = raw.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+    if (fence === null && fenceMatch) {
+      const marker = fenceMatch[1] ?? "";
+      fence = { char: marker[0] as "`" | "~", length: marker.length };
+      continue;
+    }
+    if (
+      fence !== null &&
+      fenceMatch &&
+      fenceMatch[1]?.[0] === fence.char &&
+      (fenceMatch[1]?.length ?? 0) >= fence.length &&
+      (fenceMatch[2] ?? "").trim() === ""
+    )
+      fence = null;
+  }
+  if (fence !== null) return false;
+  const tail = body.slice(lines[last.headingLine]?.start ?? 0);
+  return (tail.match(/<!--/gu) ?? []).length === (tail.match(/-->/gu) ?? []).length;
+}
+
+export function appendedIntelligenceRecords(before: string, addition: string): IntelligenceRecord[] {
+  const known = new Set(parseAllIntelligenceRecords(before).map((record) => intelligenceRecordId(record)));
+  return parseAllIntelligenceRecords(`${before}${addition}`).filter(
+    (record) => !known.has(intelligenceRecordId(record)),
+  );
+}
+
+export function isRecordsOnlyContinuation(
+  before: string,
+  addition: string,
+  designations: readonly string[],
+): boolean {
+  try {
+    if (!designations.some((designation) => canContinueSection(before, designation))) return false;
+    if (withoutRetainedIntelligence(addition).trim() !== "") return false;
+    const starts = (addition.match(/^<!-- notient-intelligence:v1:start:/gmu) ?? []).length;
+    return starts > 0 && appendedIntelligenceRecords(before, addition).length === starts;
+  } catch {
+    return false;
+  }
 }
 
 function validateDesignation(designation: string): void {

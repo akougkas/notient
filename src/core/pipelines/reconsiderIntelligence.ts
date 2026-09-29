@@ -718,7 +718,13 @@ export async function reconsiderPipelineIntelligence(context: PipelineContext, p
     const existingAppend = plan.changes
       .filter((change) => change.kind === "append" && change.source.path === note.note.path)
       .reduce((body, change) => body + (change.kind === "append" ? change.text : ""), note.body);
-    const append = prepareIntelligenceAppend(existingAppend, designation, updates);
+    const pending = prepareIntelligenceAppend(existingAppend, designation, updates);
+    if (!pending.text) continue;
+    const append = prepareIntelligenceAppend(
+      note.body,
+      designation,
+      updates.filter((record) => pending.appendedIds.includes(intelligenceRecordId(record))),
+    );
     if (!append.text) continue;
     plan.changes.unshift({ kind: "append", source: note.note, text: append.text });
     plan.findings.push(

@@ -39,7 +39,7 @@ function resultText(id: PipelineId, policy: PipelinePolicy): string {
     return `Only ${policy.effects.join(", ") || "no"} effects apply without review; anything else waits for review.`;
   if (id !== "enrich")
     return "Whatever it proposes is a review, nothing is written until you approve it, and a capture with nothing to propose produces no review. What it can propose depends on the workflow.";
-  return `A supported finding is proposed as a "## ${sectionName(policy)}" section appended to the end of the capture note, nothing is written until you approve it, and a capture with nothing supportable produces no review.`;
+  return `A supported finding is proposed under a "## ${sectionName(policy)}" section at the end of the capture note (added to that section when it is already the last one), nothing is written until you approve it, and a capture with nothing supportable produces no review.`;
 }
 
 function scopeText(scope: PipelinePolicy["readScope"]): string {
@@ -145,7 +145,7 @@ export function activationConsequence(
     after.mode === "apply"
       ? `Apply mode writes ${after.effects.join(", ") || "nothing"} without asking. Authored prose changes still require review.`
       : id === "enrich"
-        ? `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Retained understanding is proposed as a "## ${sectionName(after)}" section at the end of the note, so authored text is not edited. Nothing is written until you approve it.`
+        ? `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Retained understanding is proposed under a "## ${sectionName(after)}" section at the end of the note (added to that section when it is already the last one), so existing text is kept and only appended to. Nothing is written until you approve it.`
         : `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Nothing is written until you approve it; what this workflow proposes is described in its own help.`,
   ];
   if (id === "enrich" && after.allowedProperties.length)

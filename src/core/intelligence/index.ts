@@ -10,6 +10,9 @@ export {
 export type { CompactIntelligenceFeedback } from "./identity";
 export {
   EditedIntelligenceRecordError,
+  appendedIntelligenceRecords,
+  canContinueSection,
+  isRecordsOnlyContinuation,
   parseIntelligenceRecords,
   parseAllIntelligenceRecords,
   prepareIntelligenceAppend,

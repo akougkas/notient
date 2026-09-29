@@ -5,6 +5,7 @@ import { inspectMarkdown } from "../../api/notes";
 import type { PipelineJob } from "../../api/pipelines";
 import { NoteApiError } from "../../api/schema";
 import { insideFolder, scopeAllows } from "../../api/scope";
+import { isRecordsOnlyContinuation } from "../intelligence";
 
 export function assertPipelinePolicy(job: PipelineJob, current: BackgroundSettings): void {
   if (!pipelinePolicyAllows(job.policy, current.pipelines[job.pipeline]))
@@ -72,7 +73,8 @@ export function enforceEffectPolicy(
     const first = structure.headings[0];
     const savedHeadings = inspectMarkdown(effect.after).headings;
     if (
-      !first ||
+      !isRecordsOnlyContinuation(effect.before, addition, policy.allowedSections) &&
+      (!first ||
       first.level !== 2 ||
       addition.slice(0, first.range.start).trim() ||
       !savedHeadings.some(
@@ -81,7 +83,7 @@ export function enforceEffectPolicy(
       !policy.allowedSections.includes(first.text) ||
       structure.headings.some(
         (heading) => heading.level === 1 || (heading.level === 2 && !policy.allowedSections.includes(heading.text)),
-      )
+      ))
     )
       throw new NoteApiError("PENDING_APPROVAL", "Body enrichment must stay in designated sections.");
   }
@@ -102,7 +104,8 @@ export function enforceEffectPolicy(
         (section) =>
           change.text.trimStart().startsWith(`## ${section}\n`) ||
           change.text.trimStart().startsWith(`## ${section}\r\n`),
-      )
+      ) &&
+      !isRecordsOnlyContinuation(effect.before ?? "", change.text, policy.allowedSections)
     )
       throw new NoteApiError("FORBIDDEN", "body effect is outside configured sections");
   }
