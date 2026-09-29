@@ -16,7 +16,7 @@ import {
   withKeptAnswer,
 } from "../draft";
 import { readingColumn } from "../layout";
-import type { NotientRpc } from "../rpc";
+import { type NotientRpc, RpcCallError } from "../rpc";
 import {
   COLOR,
   HORIZONTAL_SCROLLBAR_OPTIONS,
@@ -56,13 +56,13 @@ export function WritingView(props: Props) {
   const [message, setMessage] = useState("Opening your draft…");
   const [error, setError] = useState<string | null>(null);
   const [persisted, setPersisted] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"delete" | "archive" | null>(null);
   const [moveTo, setMoveTo] = useState("");
   const [removal, setRemoval] = useState<{
     preview: ChangePreview;
     key: string;
     historyIds: string[];
-    kind: "delete" | "move";
+    kind: "delete" | "move" | "archive";
   } | null>(null);
   const current = useRef<NoteDraft | null>(null);
   const flight = useRef(false);
@@ -97,7 +97,12 @@ export function WritingView(props: Props) {
         setPhase(next.preview ? "preview" : "edit");
         setShowDiff(next.base !== null);
         const redirect = restored ? redirectNotice(props.request, next) : null;
-        setPendingDelete(props.request.action === "delete" && redirect === null);
+        setPendingAction(
+          redirect === null &&
+            (props.request.action === "delete" || props.request.action === "archive")
+            ? props.request.action
+            : null,
+        );
         setMessage(
           redirect
             ? redirect
@@ -277,10 +282,9 @@ export function WritingView(props: Props) {
       flight.current = false;
     }
   };
-  const previewMove = async () => {
+  const reviewMoveTo = async (kind: "move" | "archive", destination: string) => {
     const value = current.current;
     if (flight.current || busy || !value?.base) return;
-    const destination = moveTo.trim();
     if (!notePathSchema.safeParse(destination).success) {
       setError("Use a relative Markdown path ending in .md, such as Projects/Note.md.");
       return;
@@ -290,7 +294,9 @@ export function WritingView(props: Props) {
       return;
     }
     if (hasUnsavedEdits(value)) {
-      setError("This note has unsaved edits. Save or discard them, then move the note.");
+      setError(
+        `This note has unsaved edits. Save or discard them, then ${kind === "move" ? "move" : "archive"} the note.`,
+      );
       return;
     }
     flight.current = true;
@@ -299,10 +305,10 @@ export function WritingView(props: Props) {
     try {
       const key = randomUUID();
       const preview = await props.rpc().previewChanges({
-        idempotencyKey: `${key}:move`,
+        idempotencyKey: `${key}:${kind}`,
         changes: [
           {
-            kind: "move",
+            kind,
             source: { path: value.base.path, revision: value.base.revision },
             destination,
             updateReferences: true,
@@ -311,15 +317,26 @@ export function WritingView(props: Props) {
       });
       if (preview.conflicts.length)
         throw new Error(
-          `Resolve these before moving: ${preview.conflicts.map((item) => `${item.path}: ${item.reason}`).join("; ")}`,
+          `Resolve these first: ${preview.conflicts.map((item) => `${item.path}: ${item.reason}`).join("; ")}`,
         );
-      setRemoval({ preview, key, historyIds: [], kind: "move" });
+      setRemoval({ preview, key, historyIds: [], kind });
       setPhase("move-review");
     } catch (error) {
       report(error);
     } finally {
       flight.current = false;
       setBusy(false);
+    }
+  };
+  const previewMove = () => reviewMoveTo("move", moveTo.trim());
+  const reviewArchive = async () => {
+    const value = current.current;
+    if (flight.current || busy || !value?.base) return;
+    try {
+      const destination = await archiveDestination(props.rpc(), value.base.path);
+      await reviewMoveTo("archive", destination);
+    } catch (error) {
+      report(error);
     }
   };
   const confirmMove = async () => {
@@ -431,9 +448,10 @@ export function WritingView(props: Props) {
     }
   };
   useEffect(() => {
-    if (!pendingDelete || busy || !draft) return;
-    setPendingDelete(false);
-    void reviewDelete();
+    if (!pendingAction || busy || !draft) return;
+    setPendingAction(null);
+    if (pendingAction === "delete") void reviewDelete();
+    else void reviewArchive();
   });
   const think = async () => {
     if (flight.current || !current.current?.body.trim()) return;
@@ -524,8 +542,10 @@ export function WritingView(props: Props) {
           removal?.historyIds[0] ?? null,
         );
       else if (phase === "move") void cancelMove();
-      else if (phase === "move-review") flushSync(() => setPhase("move"));
-      else
+      else if (phase === "move-review") {
+        if (removal?.kind === "move") flushSync(() => setPhase("move"));
+        else void cancelMove();
+      } else
         flushSync(() => {
           setPhase("edit");
           setError(null);
@@ -578,7 +598,9 @@ export function WritingView(props: Props) {
             {phase === "preview"
               ? "Ready to become a note"
               : isMovePhase
-                ? "Move or rename a note"
+                ? removal?.kind === "archive"
+                  ? "Archive a note"
+                  : "Move or rename a note"
                 : draft?.base
                   ? "Edit note"
                   : "Capture a thought"}
@@ -658,7 +680,7 @@ export function WritingView(props: Props) {
           >
             <box width={Math.max(1, column - 1)} flexDirection="column">
               <text fg={COLOR.warn} wrapMode="word">
-                Move {draft?.base?.path} to{" "}
+                {removal.kind === "archive" ? "Archive" : "Move"} {draft?.base?.path} to{" "}
                 {removal.preview.effects.find((e) => e.kind === "move")?.destination}?
               </text>
               {removal.preview.effects
@@ -693,7 +715,7 @@ export function WritingView(props: Props) {
               )}
               <text fg={COLOR.label} wrapMode="word">
                 Nothing is written yet. Enter applies exactly this. After it applies, Ctrl+Z undoes
-                every step. Esc edits the path.
+                every step. {removal.kind === "move" ? "Esc edits the path." : "Esc cancels."}
               </text>
             </box>
           </scrollbox>
@@ -776,7 +798,9 @@ export function WritingView(props: Props) {
               ? phase === "moved"
                 ? "Ctrl+Z undoes the move · Esc opens the note"
                 : phase === "move-review"
-                  ? "Enter applies this review · Esc edits the path"
+                  ? removal?.kind === "move"
+                    ? "Enter applies this review · Esc edits the path"
+                    : "Enter applies this review · Esc cancels"
                   : "Enter reviews the move · Esc cancels"
               : draft?.base
                 ? "Ctrl+S/Alt+S review changes · Ctrl+D delete · Esc keep draft"
@@ -785,6 +809,30 @@ export function WritingView(props: Props) {
       </box>
     </box>
   );
+}
+
+async function archiveDestination(rpc: NotientRpc, path: string): Promise<string> {
+  const catalog = await rpc.pipelines();
+  const folder = catalog.pipelines.find((item) => item.id === "archive")?.policy.destinations
+    .archive;
+  if (folder === undefined) throw new Error("The archive folder is not configured.");
+  if (folder === "" || path.startsWith(`${folder}/`))
+    throw new Error(
+      folder === ""
+        ? "The archive folder is the vault root, so archiving would not move anything."
+        : `This note is already under ${folder}.`,
+    );
+  const stem = path.replace(/\.md$/, "");
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    const candidate = `${folder}/${attempt === 1 ? path : `${stem} (${attempt}).md`}`;
+    try {
+      await rpc.noteBody(candidate);
+    } catch (error) {
+      if (error instanceof RpcCallError && error.code === "NOT_FOUND") return candidate;
+      throw error;
+    }
+  }
+  throw new Error("The archive folder already holds too many copies of this name.");
 }
 
 function hasUnsavedEdits(value: NoteDraft): boolean {

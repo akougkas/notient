@@ -48,6 +48,11 @@ export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
     slash: "move",
   },
   {
+    label: "Archive the open note — move it under your archive folder after review",
+    intent: { kind: "archive-note" },
+    slash: "archive",
+  },
+  {
     label: "Delete the open note — review, then move it to Trash",
     intent: { kind: "delete-note" },
     keys: "Ctrl+D in editor",
