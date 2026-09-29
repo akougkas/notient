@@ -733,6 +733,8 @@ export function renderChatPanel(options: ChatPanelOptions): void {
         bubble.prepend(label);
         const body = bubble.querySelector<HTMLElement>(".notient-message-body") ?? bubble.createDiv({ cls: "notient-message-body" });
         body.hidden = false;
+        body.empty();
+        body.removeClass("is-collapsed");
         const answer = answerText(messages);
         if (answer) {
           const replyId = messages.at(-1)?.id ?? answer;
