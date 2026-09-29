@@ -98,7 +98,7 @@ export function isDisconnect(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(DISCONNECT_PREFIX);
 }
 
-/** Find by name first, then add saved-text matches. Opening a note needs no inference. */
+/** Find by name first, then by saved text. Opening a note needs no inference. */
 export async function findNotePaths(rpc: NotientRpc, query: string, limit = 30): Promise<string[]> {
   const named = await rpc.listNotes(query, limit);
   const paths = named.notes.map((note) => note.path);
