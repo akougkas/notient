@@ -128,13 +128,13 @@ function conditionsFor(
           detail: "Its read scope has no path, folder or tag limit.",
           action: "Restrict its read scope before letting it run unattended.",
         });
-      if (policy.mode !== "report" && policy.effects.length === 0)
+      if (policy.mode === "report")
         conditions.push({
-          id: `no-effects-${pipeline}`,
+          id: `report-only-${pipeline}`,
           level: "info",
-          label: `${pipeline} cannot retain results on notes`,
-          detail: "No effect is permitted, so its findings stay reports and never reach a note.",
-          action: "Permit a body or properties effect for the designated target notes.",
+          label: `${pipeline} is in report mode`,
+          detail: "Its findings stay reports and produce no review or note change.",
+          action: "Choose review mode to let it propose changes on notes.",
         });
       const status = schedule?.(pipeline);
       if (status && WAITING_REASONS.includes(status.reason))

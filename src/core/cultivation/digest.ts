@@ -15,6 +15,9 @@ import type { PipelineFinding } from "../../api/pipelines";
 import {
   appendedIntelligenceRecords,
   canContinueSection,
+  changedIntelligenceDependencies,
+  feedbackSuppresses,
+  intelligenceSuppressionSubject,
   parseAllIntelligenceRecords,
   withoutRetainedIntelligence,
 } from "../intelligence";
@@ -130,6 +133,11 @@ export async function createCultivationDigest(
       if (seen.has(identity)) continue;
       seen.add(identity);
       const itemDisposition = dispositionForPath(job, route.note.path, disposition);
+      if (
+        itemDisposition === "report-only" &&
+        suppressedByFeedback(job, finding, assessment.documents, route, currentNotes)
+      )
+        continue;
       const reasons = relevanceReasons(
         job,
         finding.kind,
@@ -215,7 +223,12 @@ function assessDigestFinding(
   job: PipelineJob,
   finding: PipelineFinding,
   currentNotes: ReadonlyMap<string, Awaited<ReturnType<NoteReadService["read"]>>>,
-): { status: CultivationDigestItem["status"]; statement: string; qualifications: string[] } {
+): {
+  status: CultivationDigestItem["status"];
+  statement: string;
+  qualifications: string[];
+  documents: Array<Awaited<ReturnType<NoteReadService["read"]>>> | null;
+} {
   const documents: Array<Awaited<ReturnType<NoteReadService["read"]>>> = [];
   for (const reference of finding.evidence) {
     const current = currentNotes.get(reference.path);
@@ -270,15 +283,69 @@ function assessDigestFinding(
     status: assessment.status,
     statement: assessment.statement,
     qualifications: assessment.qualifications,
+    documents,
   };
+}
+
+function suppressedByFeedback(
+  job: PipelineJob,
+  finding: PipelineFinding,
+  documents: Array<Awaited<ReturnType<NoteReadService["read"]>>> | null,
+  route: Awaited<ReturnType<NoteReadService["read"]>>,
+  currentNotes: ReadonlyMap<string, Awaited<ReturnType<NoteReadService["read"]>>>,
+): boolean {
+  if (documents === null || !job.plan) return false;
+  try {
+    const relationships = job.plan.relationships
+      .filter(
+        (relationship) =>
+          relationship.rationale === finding.explanation &&
+          [relationship.source.path, relationship.target.path].includes(route.note.path),
+      )
+      .map((relationship) => ({
+        target:
+          relationship.source.path === route.note.path
+            ? relationship.target.path
+            : relationship.source.path,
+        relation: relationship.relation,
+        meaning: `${relationship.source.path} ${relationship.relation} ${relationship.target.path}: ${relationship.rationale}`,
+        provenance: "inferred" as const,
+        evidence: relationship.evidence,
+      }));
+    const retained = assessPipelineFinding(finding, documents, relationships.length > 0);
+    const subject = intelligenceSuppressionSubject({
+      kind: retained.kind,
+      evidence: retained.evidence,
+      relationships,
+    });
+    const sources = [
+      ...new Map(
+        [route, ...currentNotes.values()].map((note) => [
+          note.note.path,
+          { path: note.note.path, revision: note.note.revision, body: note.body },
+        ]),
+      ).values(),
+    ];
+    return parseAllIntelligenceRecords(route.body).some((record) => {
+      if (record.kind !== "feedback" || record.feedback === null) return false;
+      const changedPaths = changedIntelligenceDependencies(record, sources)
+        .filter((dependency) => dependency.currentRevision !== null && dependency.changedEvidence.length > 0)
+        .map((dependency) => dependency.path);
+      return feedbackSuppresses(record.feedback, subject, changedPaths, false);
+    });
+  } catch {
+    return false;
+  }
 }
 
 function staleAssessment(finding: PipelineFinding): {
   status: CultivationDigestItem["status"];
   statement: string;
   qualifications: string[];
+  documents: null;
 } {
   return {
+    documents: null,
     status: finding.kind === "question" ? "open" : "provisional",
     statement: finding.explanation,
     qualifications: [
