@@ -183,7 +183,7 @@ export const DEFAULT_NOTIENT_CONFIG: NotientConfig = {
     },
   },
   indexer: {
-    excludePaths: ["Notient/conversations", "Notient/proposals", "Trash"],
+    excludePaths: ["Notient/conversations", "Notient/proposals"],
     excludeGlobs: ["**/*.excalidraw.md"],
     debounceMs: 500,
     concurrency: { embed: 4, extract: 2 },

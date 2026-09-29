@@ -204,6 +204,12 @@ export function WritingView(props: Props) {
   const reviewDelete = async () => {
     const value = current.current;
     if (flight.current || busy || !value?.base) return;
+    if (hasUnsavedEdits(value)) {
+      setError(
+        "This note has unsaved edits. Ctrl+S saves them after review, or Ctrl+X discards the draft. Then delete the note.",
+      );
+      return;
+    }
     flight.current = true;
     setBusy(true);
     setError(null);
@@ -228,6 +234,11 @@ export function WritingView(props: Props) {
   };
   const confirmDelete = async () => {
     if (flight.current || busy || !removal) return;
+    if (current.current && hasUnsavedEdits(current.current)) {
+      setPhase("edit");
+      setError("Unsaved edits appeared. Save or discard them before deleting.");
+      return;
+    }
     flight.current = true;
     setBusy(true);
     setError(null);
@@ -550,6 +561,11 @@ export function WritingView(props: Props) {
       </box>
     </box>
   );
+}
+
+function hasUnsavedEdits(value: NoteDraft): boolean {
+  if (!value.base) return value.body.trim().length > 0;
+  return value.body !== value.base.body.replace(/^\ufeff/, "").replace(/\r\n/g, "\n");
 }
 
 async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: WritingRequest) {

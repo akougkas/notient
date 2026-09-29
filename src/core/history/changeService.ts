@@ -505,6 +505,11 @@ export class ChangeService {
         signal.throwIfAborted();
         const authorize = async (): Promise<void> => {
           signal.throwIfAborted();
+          if (effect.category === "delete" && caller.kind !== "human")
+            throw new NoteApiError(
+              "FORBIDDEN",
+              "deleting a note requires the human operator; write scope is not deletion authority",
+            );
           if (caller.kind === "human") await this.options.authorizeCaller?.(caller);
           if (!caller.scopes.includes("write"))
             throw new NoteApiError("FORBIDDEN", "change requires write scope");
@@ -617,6 +622,8 @@ export class ChangeService {
           continue;
         if (!authority.caller.scopes.includes("write"))
           throw new EffectAuthorityRevoked("effect has no write authority");
+        if (effect.category === "delete" && authority.caller.kind !== "human")
+          throw new EffectAuthorityRevoked("deletion requires the human operator");
         if (authority.caller.id.startsWith("paired-") && !this.options.authorizeCaller)
           throw new EffectAuthorityRevoked("paired caller validation is unavailable");
         // Pipeline caller identity is recovered from the durable job below;
