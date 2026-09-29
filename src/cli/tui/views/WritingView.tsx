@@ -844,7 +844,8 @@ const DEFAULT_CAPTURE_FOLDER = "Inbox";
 
 async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: WritingRequest) {
   const existing = await store.load();
-  if (existing) return { draft: existing, restored: true };
+  if (existing && (existing.preview !== null || hasUnsavedEdits(existing)))
+    return { draft: existing, restored: true };
   if (request.path) {
     const source = await rpc.noteBody(request.path);
     const saved = source.body.replace(/^\ufeff/, "").replace(/\r\n/g, "\n");
