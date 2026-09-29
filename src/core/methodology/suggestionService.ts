@@ -347,7 +347,7 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
                   roles: inferNoteRoles(note),
                 })),
                 configuredConventions: methodology.conventions,
-                repeatedBodyLabels: repeatedBodyLabels(context),
+                repeatedBodyLabels: { toJSON: () => repeatedBodyLabels(context) },
               },
               {
                 instructionProfile: "methodology",
@@ -1130,8 +1130,15 @@ function repeatedBodyLabels(
     if (!context.isComplete(note)) return;
     const body = note.body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
     let fenced = false;
+    let retained = false;
     for (const raw of body.split(/\r?\n/)) {
       const line = raw.trim();
+      if (line.startsWith("<!-- notient-intelligence:v1:start:")) retained = true;
+      if (line.startsWith("<!-- notient-intelligence:v1:end:")) {
+        retained = false;
+        continue;
+      }
+      if (retained) continue;
       if (line.startsWith("```") || line.startsWith("~~~")) fenced = !fenced;
       if (fenced || line.startsWith("#")) continue;
       const label = BODY_LABEL_LINE.exec(line)?.[1]?.trim().toLowerCase();
