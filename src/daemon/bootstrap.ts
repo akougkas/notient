@@ -124,6 +124,26 @@ function identityAuthorizer(options: BootstrapOptions): ToolAuthorityChecks["aut
 }
 
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
+  const owned: {
+    handle?: { stop(): Promise<void> };
+    connection?: { close(): Promise<void> };
+  } = {};
+  try {
+    return await bootstrapWith(options, owned);
+  } catch (error) {
+    await owned.connection?.close().catch(() => {});
+    await owned.handle?.stop().catch(() => {});
+    throw error;
+  }
+}
+
+async function bootstrapWith(
+  options: BootstrapOptions,
+  owned: {
+    handle?: { stop(): Promise<void> };
+    connection?: { close(): Promise<void> };
+  },
+): Promise<BootstrapResult> {
   const daemonMutationJournal = new DaemonMutationJournal();
   const vault = new FsVault(options.vaultPath, {
     reserveMutation: (mutation) => daemonMutationJournal.reserve(mutation),
@@ -236,6 +256,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       process.stderr.write(`${JSON.stringify({ type: "daemon:db_failed", code: code ?? -1 })}\n`);
     },
   });
+  owned.handle = surrealHandle;
   const surrealConnection = await connectSurreal({
     url: surrealHandle.url,
     user: "root",
@@ -243,6 +264,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     namespace: "notient",
     database: "vault",
   });
+  owned.connection = surrealConnection;
   try {
     embeddingProbe = await probeEmbedding({
       provider: embeddingLLM,

@@ -195,6 +195,8 @@ function socketAccepts(socketPath: string, timeoutMs = SOCKET_PROBE_TIMEOUT_MS):
   });
 }
 
+let pendingStartupCleanup: (() => Promise<void>) | null = null;
+
 async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const platform = currentPlatform();
@@ -268,6 +270,11 @@ async function main(argv: string[]): Promise<void> {
     settleMaintenanceBackground,
     close: closeBootstrap,
   } = bootstrapResult;
+  pendingStartupCleanup = async () => {
+    await closeBootstrap().catch(() => {});
+    await removeAdminToken(adminTokenPath).catch(() => {});
+    await removeOwnedPidFile(pidPath, instanceId).catch(() => {});
+  };
   const sentienceActivity = kernel.get("sentienceActivity");
   const stopRevocationListener = pairing.onRevoked((id) => kernel.get("jobs").revokeCaller(id));
 
@@ -1298,6 +1305,7 @@ async function main(argv: string[]): Promise<void> {
     },
     { kind: "read" },
   );
+  pendingStartupCleanup = null;
   try {
     let preferredPort = 0;
     try {
@@ -1551,7 +1559,8 @@ async function main(argv: string[]): Promise<void> {
 }
 
 void dirname; // keep import; bun --compile is finicky with unused identifiers in some bundles
-void main(process.argv.slice(2)).catch((error) => {
+void main(process.argv.slice(2)).catch(async (error) => {
+  await pendingStartupCleanup?.().catch(() => {});
   process.stderr.write(
     `${JSON.stringify({
       type: "daemon:error",
