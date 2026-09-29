@@ -34,6 +34,7 @@ export class NotientView extends ItemView {
   private tabs!: HTMLElement;
   private controller = new AbortController();
   private renderId = 0;
+  private offlineKey = "";
   private markdown = new Component();
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private query = "";
@@ -110,6 +111,14 @@ export class NotientView extends ItemView {
           void this.render();
           return;
         }
+        if (
+          !this.plugin.client &&
+          this.destination !== "capture" &&
+          this.offlineKey !== this.plugin.offlineKey()
+        ) {
+          void this.render();
+          return;
+        }
         if (this.destination !== "note" || this.analysisActive) return;
         if (this.debounce) clearTimeout(this.debounce);
         this.debounce = setTimeout(() => {
@@ -154,11 +163,36 @@ export class NotientView extends ItemView {
     this.updateStatus();
     this.renderedClient = this.plugin.client;
     if (!this.plugin.client && this.destination !== "capture") {
-      this.content.createEl("h3", { text: "Your knowledge stays here" });
-      this.content.createEl("p", {
-        text: "Connect the Notient daemon for this vault in Settings → Notient. Your notes remain editable while it is offline.",
+      this.offlineKey = this.plugin.offlineKey();
+      const connecting = this.plugin.isConnecting;
+      const problem = this.plugin.problem;
+      this.content.createEl("h3", {
+        text: connecting ? "Connecting to Notient…" : "Notient is not connected",
       });
-      this.button(this.content, "Reconnect", () => this.plugin.connect().then(() => this.render()));
+      this.content.createEl("p", {
+        text: connecting ? this.plugin.status : (problem?.reason ?? this.plugin.status),
+        cls: connecting ? "notient-muted" : "notient-error",
+        attr: { role: "status" },
+      });
+      if (!connecting && problem)
+        this.content.createEl("p", { text: `Next: ${problem.action}`, cls: "notient-muted" });
+      this.content.createEl("p", {
+        text: this.plugin.wakeConfigured()
+          ? "A launch command is configured. Reconnect runs it only when the paired daemon cannot be reached."
+          : "No launch command is configured, so Reconnect will not start Notient.",
+        cls: "notient-muted",
+      });
+      this.content.createEl("p", {
+        text: "Your notes remain editable while Notient is offline.",
+        cls: "notient-muted",
+      });
+      const reconnect = this.content.createEl("button", {
+        text: connecting ? "Connecting…" : "Reconnect",
+      });
+      reconnect.disabled = connecting;
+      reconnect.addEventListener("click", () => {
+        void this.plugin.connect();
+      });
       return;
     }
     const loading = this.content.createEl("p", { text: "Loading…", cls: "notient-muted" });

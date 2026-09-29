@@ -26,13 +26,48 @@ interface LocalConnection {
   instanceId: string;
 }
 const STORAGE = "notient-desktop-connection";
+export interface ConnectionProblem {
+  reason: string;
+  action: string;
+}
+class ConnectionFailure extends Error {
+  constructor(
+    text: string,
+    readonly action: string,
+  ) {
+    super(text);
+  }
+}
+const PAIR_ACTION =
+  'Create a code in a terminal with: notient pair create --vault <vault path> --label "Obsidian desktop" --kind human --scopes read,write,host. Then enter the vault id and code in Settings → Notient.';
+const REPAIR_ACTION = "Pair again in Settings → Notient with a new single-use code.";
+const ASLEEP_ACTION =
+  "Start it in a terminal with: notient daemon start --vault <vault path>, or set a launch command in Settings → Notient. Then press Reconnect.";
+const WAKE_ACTION =
+  "Run the launch command yourself in a terminal to see its error, fix it in Settings → Notient, then press Reconnect.";
+const CHECK_ACTION =
+  "Check the daemon with: notient daemon status --vault <vault path>. Press Reconnect when it is running. If the credential was rejected, pair again in Settings → Notient.";
 export default class NotientPlugin extends Plugin {
   client: NotientClient | null = null;
   host: ObsidianHost | null = null;
   status = "Pair this vault with its local Notient daemon";
+  problem: ConnectionProblem | null = { reason: "This vault is not paired with a Notient daemon.", action: PAIR_ACTION };
   private listeners = new Set<() => void>();
   private disposed = false;
   private connecting = false;
+  get isConnecting(): boolean {
+    return this.connecting;
+  }
+  wakeConfigured(): boolean {
+    try {
+      return parseWakeCommand(this.app.loadLocalStorage("notient-wake-command")) !== null;
+    } catch {
+      return false;
+    }
+  }
+  offlineKey(): string {
+    return `${this.connecting}|${this.problem?.reason ?? ""}|${this.status}`;
+  }
   private readonly wakeController = new AbortController();
   private captureDraft: CaptureDraft | null = null;
   capture(): CaptureDraft {
@@ -260,19 +295,29 @@ export default class NotientPlugin extends Plugin {
   async connect(): Promise<void> {
     if (this.disposed || this.connecting) return;
     this.connecting = true;
+    this.problem = null;
+    this.changed();
     try {
       const local = this.local();
       if (!local) {
+        this.problem = {
+          reason: "This vault is not paired with a Notient daemon.",
+          action: PAIR_ACTION,
+        };
         this.report("Pair this vault with its local Notient daemon");
         return;
       }
       if (local.localPath !== this.path())
-        throw new Error(
+        throw new ConnectionFailure(
           "The local vault path changed. Pair this vault again to confirm its mapping.",
+          REPAIR_ACTION,
         );
       const token = this.app.secretStorage.getSecret(local.secretId);
       if (!token)
-        throw new Error("Pairing credential is missing from Obsidian Secret Storage. Pair again.");
+        throw new ConnectionFailure(
+          "The pairing credential is missing from Obsidian Secret Storage.",
+          REPAIR_ACTION,
+        );
       let client = new NotientClient({ endpoint: local.endpoint, vaultId: local.vaultId, token });
       try {
         await client.connect(
@@ -287,11 +332,16 @@ export default class NotientPlugin extends Plugin {
           throw error;
         const command = parseWakeCommand(this.app.loadLocalStorage("notient-wake-command"));
         if (!command)
-          throw new Error(
-            "Notient is asleep. Configure its local launch command in Notient preferences to wake it automatically.",
+          throw new ConnectionFailure(
+            "Notient is not reachable at the paired endpoint, and no launch command is configured.",
+            ASLEEP_ACTION,
           );
         this.report("Waking Notient…");
-        const endpoint = await wakeDaemon(command, local.vaultId, this.wakeController.signal);
+        const endpoint = await wakeDaemon(command, local.vaultId, this.wakeController.signal).catch(
+          (cause: unknown) => {
+            throw new ConnectionFailure(message(cause), WAKE_ACTION);
+          },
+        );
         client = new NotientClient({ endpoint, vaultId: local.vaultId, token });
         await client.connect(
           AbortSignal.any([AbortSignal.timeout(10000), this.wakeController.signal]),
@@ -308,11 +358,17 @@ export default class NotientPlugin extends Plugin {
         );
         this.host.start();
       }
+      this.problem = null;
       this.report("Connected · attaching editor protection…");
     } catch (error) {
+      this.problem =
+        error instanceof ConnectionFailure
+          ? { reason: error.message, action: error.action }
+          : { reason: message(error), action: CHECK_ACTION };
       this.report(message(error));
     } finally {
       this.connecting = false;
+      this.changed();
     }
   }
   private async withSelection(
@@ -459,9 +515,20 @@ class ConnectionSettings extends PluginSettingTab {
           }),
       )
       .addButton((button) =>
-        button.setButtonText("Reconnect").onClick(() => this.plugin.connect()),
+        button.setButtonText("Reconnect").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.plugin.connect();
+          } finally {
+            this.display();
+          }
+        }),
       );
     el.createEl("p", { text: this.plugin.status, cls: "notient-muted" });
+    if (this.plugin.problem && !this.plugin.client) {
+      el.createEl("p", { text: this.plugin.problem.reason, cls: "notient-error" });
+      el.createEl("p", { text: this.plugin.problem.action, cls: "notient-muted" });
+    }
     el.createEl("p", {
       text: "While this host is attached, a disconnected editor blocks Notient file writes until reconnection. To deliberately stop this protection, revoke the plugin's pairing with notient pair revoke. Disabling the plugin does not silently release pending writes.",
     });
