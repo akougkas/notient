@@ -68,8 +68,8 @@ async function chooseVault(options: EntryOptions): Promise<EntryResult> {
   if (offerHere) options.say(`  1  Use this folder    ${here}`);
   options.say(`  ${offerHere ? 2 : 1}  Choose another folder`);
   options.say(`  ${offerHere ? 3 : 2}  Quit\n`);
-  const answer = (await ask(`Choice [${offerHere ? 1 : 2}]: `)).trim();
-  const number = answer === "" ? (offerHere ? 1 : 2) : Number(answer);
+  const answer = (await ask("Choice [1]: ")).trim();
+  const number = answer === "" ? 1 : Number(answer);
   const pick = offerHere ? number : number + 1;
   if (pick === 1) return await setUp(options, here);
   if (pick === 2) {
