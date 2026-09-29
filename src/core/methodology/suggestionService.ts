@@ -312,6 +312,7 @@ export class MethodologySuggestionService {
               );
             await context.retrieve(context.selected, parsed.candidateLimit, undefined, {
               sameFolderFallback: true,
+              query: comparisonQuery(selected),
             });
             const folders = folderCandidates(context, configuredPolicy);
             const hasIndependentExample = context.documents.some(
@@ -833,6 +834,14 @@ function suggestionPolicy(configured: PipelinePolicy, candidateLimit: number): P
   policy.budget.notes = Math.min(policy.budget.notes, candidateLimit + 1);
   policy.budget.retries = 0;
   return policy;
+}
+
+function comparisonQuery(note: Awaited<ReturnType<NoteReadService["read"]>>): string | undefined {
+  const title = note.structure.headings[0]?.text ?? basename(note.note.path);
+  const words = (title.match(/\p{L}{3,}/gu) ?? [])
+    .map((word) => word.toLocaleLowerCase("en-US"))
+    .filter((word) => !["the", "and", "for", "with", "from"].includes(word));
+  return [...new Set(words)].slice(0, 2).join(" ") || undefined;
 }
 
 function folderCandidates(context: PipelineContext, policy: PipelinePolicy): FolderCandidate[] {

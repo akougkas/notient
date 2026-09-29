@@ -211,7 +211,7 @@ export class PipelineContext {
     sources = this.selected,
     candidateLimit = 6,
     seed?: string,
-    options: { sameFolderFallback?: boolean } = {},
+    options: { sameFolderFallback?: boolean; query?: string } = {},
   ): Promise<void> {
     await this.options.stage("retrieve");
     let examined = 0;
@@ -225,9 +225,11 @@ export class PipelineContext {
         // URLs/navigation that otherwise crowd all meaningful query terms out.
         (seed ?? noteContent(source)).slice(0, 500),
       ].join(" ");
-      const query = [...new Set(text.match(/[\p{L}\p{N}][\p{L}\p{N}_-]{3,}/gu) ?? [])]
-        .slice(0, 12)
-        .join(" ");
+      const query =
+        options.query ??
+        [...new Set(text.match(/[\p{L}\p{N}][\p{L}\p{N}_-]{3,}/gu) ?? [])]
+          .slice(0, 12)
+          .join(" ");
       if (!query) continue;
       const result = await this.options.search.retrieve(
         {
