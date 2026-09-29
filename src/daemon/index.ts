@@ -1209,8 +1209,14 @@ async function main(argv: string[]): Promise<void> {
   );
   dispatcher.register(
     "capabilities.get",
-    async () => ({
+    async ({ principal }) => ({
       ok: true,
+      principal: {
+        id: principal.id,
+        kind: principal.kind,
+        scopes: [...principal.scopes],
+        vaultOwner: principal.vaultOwner === true,
+      },
       apiVersion: "v1",
       version: VERSION,
       vaultId: pairing.vaultId,

@@ -1659,6 +1659,11 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
   ...(
     [
       [
+        "notient_capabilities",
+        "capabilities.get",
+        "Discover this connection before acting: the vault id, daemon version, the daemon operations it serves, request limits, and your own identity with the scopes you hold and whether you are a vault owner. Read-only. Scopes describe what your credential may attempt; individual writes can still require human review or a session grant.",
+      ],
+      [
         "notient_compare_notes",
         "notes.compare",
         "Compare 2–8 exact note revisions, optionally focused by a question. Returns substantive judgments, quotations from both notes, limitations and abstention. Uses bounded reasoning; read-only, without file effects or approvals.",
@@ -1753,7 +1758,9 @@ export const NOTIENT_MCP_TOOLS: readonly McpToolDefinition[] = [
           return integrityFailure(method, "preview id does not match the request");
         return {
           summary:
-            method === "notes.compare" || method === "notes.correlate"
+            method === "capabilities.get" && "principal" in decoded && decoded.principal
+              ? `Connected as ${decoded.principal.id} (${decoded.principal.kind}) with scopes ${decoded.principal.scopes.join(", ") || "none"}${decoded.principal.vaultOwner ? " · vault owner" : ""}.`
+              : method === "notes.compare" || method === "notes.correlate"
               ? "Read-only comparison; inspect judgments, quotations and limitations. Model assessments are not probabilities."
               : method === "graph.path"
                 ? "Bounded graph route; inspect outcome and coverage before drawing conclusions."

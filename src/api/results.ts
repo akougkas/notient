@@ -59,6 +59,14 @@ export const capabilitiesSchema = z.object({
     eventPage: z.number(),
     requestDurationMs: z.number(),
   }),
+  principal: z
+    .object({
+      id: z.string(),
+      kind: z.enum(["human", "agent"]),
+      scopes: z.array(z.string()),
+      vaultOwner: z.boolean(),
+    })
+    .optional(),
 });
 export const noteListSchema = z.object({
   ok: z.literal(true),
