@@ -19,7 +19,7 @@ export async function rpcSentient(context: SlashContext): Promise<SlashOutcome> 
     ]);
     return {
       message: [
-        "sentient:",
+        "workspace status (daemon and note agents; not a measure of understanding):",
         `daemon:      pid ${status.pid} ${status.sealed ? "sealed" : "starting"}`,
         `endpoints:   ${formatEndpoints(health.endpoints)}`,
         `vision:      ${status.visionReady ? "ready" : "off"}`,
@@ -40,9 +40,15 @@ export async function rpcVitals(context: SlashContext, path: string): Promise<Sl
   try {
     const snapshot = (await createRpc(context.client).vitals(path)).snapshot;
     const conditions = [
-      snapshot.connectivityCount === 0 ? "No approved link connects this note to another." : null,
-      snapshot.wordCount < 20 ? "The note is too short to study for structure." : null,
-      snapshot.freshness < 0.25 ? "The note has not been edited for a long time." : null,
+      snapshot.connectivityCount === 0
+        ? "No approved link connects this note to another. /connections finds candidates to review."
+        : null,
+      snapshot.wordCount < 20
+        ? "The note is too short to study for structure. /edit develops it, or /capture a fuller thought."
+        : null,
+      snapshot.freshness < 0.25
+        ? "The note has not been edited for a long time. /read it and decide whether it still holds."
+        : null,
     ].filter((line): line is string => line !== null);
     return {
       message: [
@@ -65,7 +71,7 @@ export async function rpcHealth(context: SlashContext): Promise<SlashOutcome> {
     const [health, status] = await Promise.all([rpc.health(), rpc.status()]);
     return {
       message: [
-        "notient health:",
+        "service health (daemon and model endpoints only; says nothing about note quality):",
         `- daemon:    pid ${status.pid} (${status.version})`,
         `- endpoints: ${formatEndpoints(health.endpoints)}`,
       ].join("\n"),
