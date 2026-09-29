@@ -781,7 +781,32 @@ function visibleSourceRuns(passage: SuppliedTextPassage, body: string): Supplied
   }
   if (cursor < passageEnd && !retained)
     runs.push({ start: cursor, content: body.slice(cursor, passageEnd) });
-  return runs;
+  const hiddenHeadings: Array<{ start: number; end: number }> = [];
+  const headings = [...body.matchAll(/^ {0,3}#{1,2}[ \t]+[^\r\n]*(?:\r?\n|$)/gmu)];
+  for (const [index, heading] of headings.entries()) {
+    if (!/^ {0,3}##[ \t]+/u.test(heading[0])) continue;
+    const start = heading.index ?? 0;
+    const end = start + heading[0].length;
+    const section = body.slice(end, headings[index + 1]?.index ?? body.length);
+    if (
+      section.includes("<!-- notient-intelligence:v1:start:") &&
+      withoutRetainedIntelligence(section).trim().length === 0
+    )
+      hiddenHeadings.push({ start, end });
+  }
+  return runs.flatMap((run) => {
+    const end = run.start + run.content.length;
+    const pieces: SuppliedVisibleRun[] = [];
+    let start = run.start;
+    for (const hidden of hiddenHeadings) {
+      if (hidden.end <= start || hidden.start >= end) continue;
+      if (hidden.start > start)
+        pieces.push({ start, content: body.slice(start, hidden.start) });
+      start = Math.max(start, hidden.end);
+    }
+    if (start < end) pieces.push({ start, content: body.slice(start, end) });
+    return pieces;
+  });
 }
 
 function splitVisibleRunAt(run: SuppliedVisibleRun, boundary: number): SuppliedVisibleRun[] {
