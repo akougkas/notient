@@ -801,7 +801,9 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
     [fail, openNote],
   );
 
-  findNoteRef.current = openPickedNote;
+  findNoteRef.current = async (query: string) => {
+    dispatch({ type: "prompt/open", kind: "note-picker", buffer: query });
+  };
 
   const setBackgroundPaused = useCallback(
     async (paused: boolean): Promise<void> => {

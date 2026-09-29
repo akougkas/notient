@@ -66,7 +66,7 @@ const ADVANCED_HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
 
 const EXTRA_HELP_ROWS: ReadonlyArray<readonly [string, string, string]> = [
   ["/read <path>", "", "read a vault note here in the conversation"],
-  ["/search <query>", "", "search saved text"],
+  ["/search <words>", "", "search saved text; -s adds meaning when a model is ready"],
   ["/model", "", "show the model, embeddings and context in use"],
   ["/copy", "", "copy the last reply"],
   ["/clear", "", "clear this transcript"],
@@ -127,8 +127,7 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   clear: async () => ({ message: "", resetTranscript: true }),
   read: async (rest, context) =>
     rest.length === 0 ? { message: "/read needs a path" } : rpcReadNote(context, rest),
-  search: async (rest, context) =>
-    rest.length === 0 ? { message: "/search needs a query" } : rpcSearch(context, rest),
+  search: async (rest, context) => rpcSearch(context, rest),
   awaken: async (_rest, context) => rpcAwaken(context),
   vitals: async (rest, context) =>
     rest.length === 0 ? { message: "/vitals needs a path" } : rpcVitals(context, rest),
@@ -240,20 +239,56 @@ async function rpcReadNote(context: SlashContext, path: string): Promise<SlashOu
   }
 }
 
-async function rpcSearch(context: SlashContext, query: string): Promise<SlashOutcome> {
+const SEARCH_SNIPPET_CHARS = 140;
+
+function hitSnippet(quote: string): string {
+  const flat = quote.replace(/\s+/g, " ").trim();
+  return flat.length > SEARCH_SNIPPET_CHARS ? `${flat.slice(0, SEARCH_SNIPPET_CHARS - 1)}…` : flat;
+}
+
+async function rpcSearch(context: SlashContext, rest: string): Promise<SlashOutcome> {
+  const semantic = /^(--semantic|-s)(\s|$)/.test(rest);
+  const query = semantic ? rest.replace(/^(--semantic|-s)\s*/, "") : rest;
+  if (query.length === 0) return { message: "/search needs a query" };
   try {
-    const result = await createRpc(context.client).search(query, 5);
-    if (result.result === null) return { message: "search completed without a result." };
-    const coverage = result.result.coverage.message;
-    if (result.result.hits.length === 0)
-      return { message: coverage ? `No hits yet. ${coverage}` : "no hits." };
+    const result = await createRpc(context.client).searchText(
+      query,
+      8,
+      semantic ? "hybrid" : "lexical",
+    );
+    const label = semantic
+      ? "Saved-text and meaning search"
+      : "Saved-text search (no model used)";
+    const coverage = result.coverage.message;
+    if (result.hits.length === 0)
+      return {
+        message: [
+          `${label}: no notes matched "${query}".`,
+          coverage ?? "Try other words from the note, or /find to browse by name.",
+        ].join("\n"),
+      };
+    const lines = result.hits.map((hit, index) => {
+      const quote = hit.evidence ? ` "${hitSnippet(hit.evidence.quote)}"` : "";
+      const stale = hit.freshness.state === "current" ? "" : " (index behind this note)";
+      return `${index + 1}. ${hit.note.path}${stale}${quote}`;
+    });
+    const omitted = result.omitted > 0 ? `${result.omitted} more not shown.` : null;
+    await context.findNote?.(query);
     return {
-      message: [coverage, ...result.result.hits.map((hit) => `${hit.notePath} (${hit.score})`)]
-        .filter(Boolean)
+      message: [
+        `${label}: ${result.hits.length} ${result.hits.length === 1 ? "note" : "notes"} for "${query}".`,
+        coverage,
+        ...lines,
+        omitted,
+        "Choose one below with Up/Down and Enter to open it.",
+      ]
+        .filter((line): line is string => Boolean(line))
         .join("\n"),
     };
   } catch (error) {
-    return { message: `search error: ${formatError(error)}` };
+    return {
+      message: `search error: ${formatError(error)}. /find still lists notes by name, and /read <path> opens one.`,
+    };
   }
 }
 

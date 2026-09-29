@@ -98,20 +98,21 @@ export function isDisconnect(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(DISCONNECT_PREFIX);
 }
 
-/** Find by name first, then by saved text. Opening a note needs no inference. */
+/** Find by name first, then add saved-text matches. Opening a note needs no inference. */
 export async function findNotePaths(rpc: NotientRpc, query: string, limit = 30): Promise<string[]> {
   const named = await rpc.listNotes(query, limit);
   const paths = named.notes.map((note) => note.path);
-  if (paths.length || query.trim().length < 2) return paths;
-  const result = await callOnce(
-    rpc.client,
-    "search.run",
-    { query, mode: "lexical", scope: {}, limit },
-    resultDecoder<RetrievalResult>(
-      retrievalResultSchema.refine((value) => value.query === query && value.mode === "lexical"),
-    ),
-  );
-  return result.hits.map((hit) => hit.note.path);
+  if (paths.length >= limit || query.trim().length < 2) return paths;
+  try {
+    const found = await rpc.searchText(query, limit);
+    for (const hit of found.hits) {
+      if (paths.length >= limit) break;
+      if (!paths.includes(hit.note.path)) paths.push(hit.note.path);
+    }
+  } catch (error) {
+    if (isDisconnect(error) || paths.length === 0) throw error;
+  }
+  return paths;
 }
 
 function errorFromFrame(method: string, frame: RpcResponseFrame): RpcCallError {
@@ -1021,6 +1022,7 @@ export interface NotientRpc {
   chatSend(conversationId: string, userMessage: string): AsyncIterable<RpcResponseFrame>;
   chatApprove(request: ChatApproveRequest): Promise<ChatApproveResult>;
   search(query: string, limit?: number): Promise<SearchRunResult>;
+  searchText(query: string, limit?: number, mode?: "lexical" | "hybrid"): Promise<RetrievalResult>;
   activeNote(): Promise<VaultActiveNoteResult>;
   neighbors(notePath: string, includePending?: boolean): Promise<GraphNeighbors>;
   findPath(fromNotePath: string, toNotePath: string): Promise<GraphPath>;
@@ -1134,6 +1136,14 @@ export function createRpc(client: ClientHandle): NotientRpc {
         mode: "balanced",
         limit,
       }),
+    searchText: (query, limit = 8, mode = "lexical") =>
+      call(
+        "search.run",
+        resultDecoder<RetrievalResult>(
+          retrievalResultSchema.refine((value) => value.query === query && value.mode === mode),
+        ),
+        { query, mode, scope: {}, limit },
+      ),
     activeNote: () => call("vault.active_note", decodeActiveNote),
     neighbors: (notePath, includePending = false) =>
       call(
