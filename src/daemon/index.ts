@@ -133,22 +133,9 @@ const MAINTENANCE_BEGIN_METHOD = "maintenance.begin";
 const MAINTENANCE_END_METHOD = "maintenance.end";
 const MAINTENANCE_POISON_METHOD = "maintenance.poison";
 
-/**
- * Bus events that count as daemon activity for the idle-exit deadline.
- * Only indexer traffic qualifies: it is the one signal emitted steadily by
- * a detached awaken run that has no client socket attached.
- */
-const INDEXER_ACTIVITY_EVENTS = [
-  "indexer:progress",
-  "indexer:complete",
-  "indexer:note-indexed",
-  "indexer:tier1-done",
-  "indexer:tier2-done",
-  "indexer:tier3-done",
-] as const;
-
 interface DaemonArgs {
   vaultPath: string;
+  persistent: boolean;
 }
 
 type DispatchAdmission =
@@ -190,7 +177,7 @@ function parseArgs(argv: string[]): DaemonArgs {
     throw new Error("Daemon entry requires --vault <absolute-path>.");
   }
   const vaultPath = normalizeVaultPath(argv[flagIndex + 1]);
-  return { vaultPath };
+  return { vaultPath, persistent: argv.includes("--persistent") };
 }
 
 /** Can we complete a connection to `socketPath` within the probe window? */
@@ -324,25 +311,17 @@ async function main(argv: string[]): Promise<void> {
   hostBridge.register(dispatcher);
   const awakenBackgroundRegistry = kernel.get("awakenBackgroundRegistry");
   const idleTimer = new IdleExitTimer({
-    // Persistent vault ownership: exit only on explicit shutdown or process signal.
-    idleMs: null,
+    idleMs: args.persistent ? null : 300_000,
     onIdleExit: () => {
       void shutdown("idle-exit");
     },
-    // Socket data alone is not a liveness signal: a detached
-    // `awaken --background` run has no client attached, so the timer used
-    // to fire mid-run and kill the daemon. Indexer progress refreshes the
-    // deadline, and a non-empty background-worker registry vetoes the
-    // exit outright.
-    isBusy: () => awakenBackgroundRegistry.size() > 0,
+    isBusy: () =>
+      awakenBackgroundRegistry.size() > 0 ||
+      connections.size > 0 ||
+      dispatches.size > 0 ||
+      (http?.activeCount ?? 0) > 0 ||
+      hostBridge.hasLiveHosts(),
   });
-
-  const busForIdle = kernel.get("bus");
-  for (const event of INDEXER_ACTIVITY_EVENTS) {
-    busForIdle.on(event, () => {
-      idleTimer.markActive();
-    });
-  }
 
   let shuttingDown = false;
   const connections = new RpcConnectionRegistry<Socket>();
@@ -538,6 +517,12 @@ async function main(argv: string[]): Promise<void> {
     writeFrame(socket, encodeAck(envelope.id, envelope.method));
     writeFrame(socket, encodeError(envelope.id, rejection.code, rejection.message, {}));
   }
+
+  dispatcher.register(
+    "daemon.endpoint",
+    async () => ({ httpEndpoint: http?.endpoint ?? null, vaultId: pairing.vaultId }),
+    { kind: "read" },
+  );
 
   dispatcher.register(
     "daemon.status",
@@ -859,7 +844,10 @@ async function main(argv: string[]): Promise<void> {
       service: methodologySuggestionService,
       authorizeCaller: ({ principal }) => {
         if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
-          throw new NoteApiError("FORBIDDEN", "caller credential is missing, revoked or has insufficient scope");
+          throw new NoteApiError(
+            "FORBIDDEN",
+            "caller credential is missing, revoked or has insufficient scope",
+          );
       },
     }),
     { kind: "write" },
@@ -894,7 +882,10 @@ async function main(argv: string[]): Promise<void> {
       changes,
       authorize: (principal) => {
         if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
-          throw new RpcError("FORBIDDEN", "caller credential is missing, revoked or has insufficient scope");
+          throw new RpcError(
+            "FORBIDDEN",
+            "caller credential is missing, revoked or has insufficient scope",
+          );
         if (principal.kind !== "human" && !pairing.isActiveVaultOwner(principal))
           throw new RpcError("FORBIDDEN", "an active vault owner grant is required");
       },
@@ -954,8 +945,12 @@ async function main(argv: string[]): Promise<void> {
   dispatcher.register("pipelines.configure", pipelineHandlers.configure, { kind: "write" });
   dispatcher.register("background.pause", pipelineHandlers.pause, { kind: "write" });
   dispatcher.register("cultivation.digest", pipelineHandlers.cultivationDigest, { kind: "read" });
-  dispatcher.register("cultivation.settings", pipelineHandlers.cultivationSettings, { kind: "read" });
-  dispatcher.register("cultivation.configure", pipelineHandlers.cultivationConfigure, { kind: "write" });
+  dispatcher.register("cultivation.settings", pipelineHandlers.cultivationSettings, {
+    kind: "read",
+  });
+  dispatcher.register("cultivation.configure", pipelineHandlers.cultivationConfigure, {
+    kind: "write",
+  });
   const chatSettingsHandlers = makeChatSettingsHandlers({
     settings: kernel.get("settings"),
     journal: new DatabaseSettingsJournal(surreal.db),
@@ -1322,6 +1317,7 @@ async function main(argv: string[]): Promise<void> {
     }
     http = startHttpApi({
       pairing,
+      onActivity: () => idleTimer.markActive(),
       port: preferredPort,
       admission: () => !shuttingDown && dispatches.maintenanceConnectionId === null,
       invoke: (method, context) => {

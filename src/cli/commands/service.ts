@@ -41,6 +41,7 @@ export function systemdUnit(input: ServiceDefinitionInput): string {
     input.daemonEntry,
     "--vault",
     input.vaultPath,
+    "--persistent",
   ]
     .map((value) => unitQuote(value))
     .join(" ");
@@ -53,6 +54,7 @@ export function launchdPlist(input: ServiceDefinitionInput): string {
     input.daemonEntry,
     "--vault",
     input.vaultPath,
+    "--persistent",
   ]
     .map((value) => `<string>${xml(value)}</string>`)
     .join("\n");

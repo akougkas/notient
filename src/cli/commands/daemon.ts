@@ -25,7 +25,7 @@ export type DaemonStartProbe = (options: {
 export type DaemonProcessSpawner = (vaultPath: string) => Pick<ChildProcess, "pid" | "unref">;
 
 export interface DaemonCommandOptions {
-  verb: "start" | "stop" | "status" | "list";
+  verb: "start" | "wake" | "stop" | "status" | "list";
   vaultPath: string | null;
   emitter: Emitter;
   clientIdentity?: string;
@@ -45,6 +45,9 @@ const START_PROBE_TRANSITION_MS = 250;
 
 export async function runDaemonCommand(options: DaemonCommandOptions): Promise<void> {
   switch (options.verb) {
+    case "wake":
+      await runWake(options);
+      return;
     case "start":
       await runStart(options);
       return;
@@ -85,6 +88,27 @@ async function runList(options: DaemonCommandOptions): Promise<void> {
       instanceId: entry.record.instanceId,
     })),
   });
+}
+
+async function runWake(options: DaemonCommandOptions): Promise<void> {
+  if (!options.vaultPath) throw new Error("daemon wake requires --vault");
+  const client = await (options.connect ?? connectClient)({
+    socketPath: resolveSocketPath(options.vaultPath, currentPlatform()),
+    vaultPath: options.vaultPath,
+    clientIdentity: options.clientIdentity,
+  });
+  try {
+    for await (const frame of client.call("daemon.endpoint", {})) {
+      if (frame.type === "error") throw new Error(String(frame.message ?? "Daemon wake failed"));
+      if (frame.type === "result") {
+        options.emitter.emit({ ...frame, type: "daemon:ready" });
+        return;
+      }
+    }
+    throw new Error("Daemon did not return its endpoint");
+  } finally {
+    await client.close();
+  }
 }
 
 async function runStart(options: DaemonCommandOptions): Promise<void> {
@@ -133,7 +157,7 @@ function reportExistingStart(emitter: Emitter, observation: DaemonStartObservati
 function spawnDaemonProcess(vaultPath: string): Pick<ChildProcess, "pid" | "unref"> {
   return spawn(
     process.execPath,
-    ["--env-file=/dev/null", resolveDaemonEntry(), "--vault", vaultPath],
+    ["--env-file=/dev/null", resolveDaemonEntry(), "--vault", vaultPath, "--persistent"],
     {
       detached: true,
       stdio: "ignore",

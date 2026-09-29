@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  chatSendRequestSchema,
-  chatSendResultSchema,
-  chatStreamEventSchema,
-} from "../api/chat";
+import { chatSendRequestSchema, chatSendResultSchema, chatStreamEventSchema } from "../api/chat";
 import { type OperationName, operationInputs } from "../api/operations";
 import { type ImplementedOperation, eventsResultSchema, operationOutputs } from "../api/results";
 import { NoteApiError } from "../api/schema";
@@ -14,6 +10,7 @@ export interface HttpApiOptions {
   invoke: (method: string, context: RpcRequestContext) => Promise<Record<string, unknown>>;
   pairing: PairingStore;
   port?: number;
+  onActivity?: () => void;
   admission?: () => boolean;
 }
 
@@ -96,11 +93,13 @@ export function startHttpApi(options: HttpApiOptions) {
     const controllers = active.get(credential.credentialId) ?? new Set<AbortController>();
     controllers.add(controller);
     active.set(credential.credentialId, controllers);
+    options.onActivity?.();
     count++;
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
+      options.onActivity?.();
       count--;
       controllers.delete(controller);
       if (!controllers.size) active.delete(credential.credentialId);
@@ -159,14 +158,13 @@ export function startHttpApi(options: HttpApiOptions) {
           signal,
           headers,
           requestId: id,
-        connectionId: chatConnectionId(credential.credentialId, input.turnId),
+          connectionId: chatConnectionId(credential.credentialId, input.turnId),
           assertCredential: () => options.pairing.authenticate(token),
           finish,
         });
       }
       const callOptions =
-        method === "chat.abort" &&
-        typeof (parsed.data as { turnId?: unknown }).turnId === "string"
+        method === "chat.abort" && typeof (parsed.data as { turnId?: unknown }).turnId === "string"
           ? {
               connectionId: chatConnectionId(
                 credential.credentialId,
@@ -187,6 +185,9 @@ export function startHttpApi(options: HttpApiOptions) {
       throw new RpcError("DAEMON_MAINTENANCE", "daemon is stopping or undergoing maintenance");
   }
   return {
+    get activeCount() {
+      return count;
+    },
     endpoint: `http://127.0.0.1:${server.port}`,
     port: server.port ?? 0,
     revoke: async (id: string, principal: Principal) => {
@@ -344,7 +345,9 @@ function chatStreamResponse(options: {
     try {
       controllerRef.enqueue(frame);
       if ((controllerRef.desiredSize ?? 0) < -(4 * 1024 * 1024)) {
-        sendFailure(new RpcError("LIMIT_EXCEEDED", "chat stream consumer exceeded its buffer limit"));
+        sendFailure(
+          new RpcError("LIMIT_EXCEEDED", "chat stream consumer exceeded its buffer limit"),
+        );
       }
     } catch {
       clientGone = true;
@@ -359,9 +362,18 @@ function chatStreamResponse(options: {
       : error instanceof DOMException && error.name === "TimeoutError"
         ? "LIMIT_EXCEEDED"
         : "INTERNAL_ERROR";
-    const message = known ? error.message : "chat turn could not complete; inspect the saved conversation before retrying";
+    const message = known
+      ? error.message
+      : "chat turn could not complete; inspect the saved conversation before retrying";
     const outcomeMayBeUnknown =
-      sawStart || !["INVALID_PARAMS", "NOT_FOUND", "FORBIDDEN", "UNAUTHENTICATED", "VISION_UNAVAILABLE"].includes(code);
+      sawStart ||
+      ![
+        "INVALID_PARAMS",
+        "NOT_FOUND",
+        "FORBIDDEN",
+        "UNAUTHENTICATED",
+        "VISION_UNAVAILABLE",
+      ].includes(code);
     const failure = encoder.encode(
       `id: ${options.input.turnId}-${++sequence}\nevent: notient.error\ndata: ${JSON.stringify({
         event: "notient.error",
@@ -419,7 +431,9 @@ function chatStreamResponse(options: {
             options.assertCredential();
             controller.enqueue(encoder.encode(": heartbeat\n\n"));
             if ((controller.desiredSize ?? 0) < -(4 * 1024 * 1024)) {
-              sendFailure(new RpcError("LIMIT_EXCEEDED", "chat stream consumer exceeded its buffer limit"));
+              sendFailure(
+                new RpcError("LIMIT_EXCEEDED", "chat stream consumer exceeded its buffer limit"),
+              );
             }
           } catch (error) {
             sendFailure(error);

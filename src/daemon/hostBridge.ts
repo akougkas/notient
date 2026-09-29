@@ -217,6 +217,11 @@ export class HostBridge {
       throw error;
     }
   }
+  hasLiveHosts(): boolean {
+    return this.activeBindings().some((binding) =>
+      this.live(this.sessions.get(binding.principal.id)),
+    );
+  }
   hasAttachedHosts(): boolean {
     return this.activeBindings().length > 0;
   }

@@ -8,13 +8,15 @@ import {
   PluginSettingTab,
   Setting,
 } from "obsidian";
-import { NotientClient } from "../../../src/api/client";
+import { NotientApiError, NotientClient } from "../../../src/api/client";
 import { isCanonicalOrdinaryNotePath } from "../../../src/core/vault/publicPath";
 import { CaptureDraft } from "./captureDraft";
 import { ObsidianHost, message, readSaved, revision } from "./host";
 import type { SelectionTarget } from "./selection";
 import { NotientView, VIEW_TYPE } from "./view";
 import { WorkflowSettings } from "./workflowSettings";
+
+import { parseWakeCommand, wakeDaemon } from "./wakeup";
 
 interface LocalConnection {
   endpoint: string;
@@ -31,6 +33,7 @@ export default class NotientPlugin extends Plugin {
   private listeners = new Set<() => void>();
   private disposed = false;
   private connecting = false;
+  private readonly wakeController = new AbortController();
   private captureDraft: CaptureDraft | null = null;
   capture(): CaptureDraft {
     this.captureDraft ??= new CaptureDraft(
@@ -92,10 +95,12 @@ export default class NotientPlugin extends Plugin {
       name: "Copy the latest conversation answer",
       checkCallback: (checking) => {
         const current = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-        const workspace = current instanceof NotientView && current.destination === "ask"
-          ? current.containerEl.querySelector<HTMLElement>(".notient-workspace")
-          : null;
-        if (!workspace?.querySelector(".notient-message.is-assistant:not(.is-streaming)")) return false;
+        const workspace =
+          current instanceof NotientView && current.destination === "ask"
+            ? current.containerEl.querySelector<HTMLElement>(".notient-workspace")
+            : null;
+        if (!workspace?.querySelector(".notient-message.is-assistant:not(.is-streaming)"))
+          return false;
         if (!checking) {
           const EventClass = workspace.ownerDocument.defaultView?.CustomEvent ?? CustomEvent;
           workspace.dispatchEvent(new EventClass("notient:copy-last-answer"));
@@ -173,6 +178,7 @@ export default class NotientPlugin extends Plugin {
   }
   onunload(): void {
     this.disposed = true;
+    this.wakeController.abort();
     this.host?.stop();
     this.captureDraft?.close();
     this.listeners.clear();
@@ -267,8 +273,32 @@ export default class NotientPlugin extends Plugin {
       const token = this.app.secretStorage.getSecret(local.secretId);
       if (!token)
         throw new Error("Pairing credential is missing from Obsidian Secret Storage. Pair again.");
-      const client = new NotientClient({ endpoint: local.endpoint, vaultId: local.vaultId, token });
-      await client.connect(AbortSignal.timeout(10000));
+      let client = new NotientClient({ endpoint: local.endpoint, vaultId: local.vaultId, token });
+      try {
+        await client.connect(
+          AbortSignal.any([AbortSignal.timeout(10000), this.wakeController.signal]),
+        );
+      } catch (error) {
+        if (
+          this.disposed ||
+          !(error instanceof NotientApiError) ||
+          error.code !== "REQUEST_INTERRUPTED"
+        )
+          throw error;
+        const command = parseWakeCommand(this.app.loadLocalStorage("notient-wake-command"));
+        if (!command)
+          throw new Error(
+            "Notient is asleep. Configure its local launch command in Notient preferences to wake it automatically.",
+          );
+        this.report("Waking Notient…");
+        const endpoint = await wakeDaemon(command, local.vaultId, this.wakeController.signal);
+        client = new NotientClient({ endpoint, vaultId: local.vaultId, token });
+        await client.connect(
+          AbortSignal.any([AbortSignal.timeout(10000), this.wakeController.signal]),
+        );
+        if (this.disposed) return;
+        this.app.saveLocalStorage(STORAGE, { ...local, endpoint });
+      }
       if (this.disposed) return;
       this.client = client;
       if (this.host) await this.host.reconnect(client, local.instanceId);
@@ -351,6 +381,33 @@ class ConnectionSettings extends PluginSettingTab {
     el.createEl("p", {
       text: "Pair with the daemon for this vault. Windows Obsidian can use localhost to reach a WSL daemon. Credentials stay in Obsidian Secret Storage; the local vault mapping stays on this device.",
     });
+    const savedWake = this.app.loadLocalStorage("notient-wake-command");
+    let wakeCommand = savedWake ? JSON.stringify(savedWake) : "";
+    new Setting(el)
+      .setName("Wake Notient automatically")
+      .setDesc(
+        'A device-local JSON command array. Native example: ["notient","daemon","wake","--vault","/path/to/vault","--json"]. For WSL use wsl.exe, -d, your distribution, --exec, then the absolute CLI command and Linux vault path. Clear to disable. Runs only when this paired vault is unreachable; never grants permissions.',
+      )
+      .addTextArea((input) =>
+        input
+          .setValue(wakeCommand)
+          .setPlaceholder('["notient","daemon","wake","--vault","/path/to/vault","--json"]')
+          .onChange((value) => {
+            wakeCommand = value;
+          }),
+      )
+      .addButton((button) =>
+        button.setButtonText("Save launch command").onClick(() => {
+          try {
+            this.app.saveLocalStorage("notient-wake-command", parseWakeCommand(wakeCommand));
+            new Notice(
+              wakeCommand.trim() ? "Automatic wakeup configured" : "Automatic wakeup disabled",
+            );
+          } catch {
+            new Notice("Invalid launch command. Use a JSON array of executable and arguments.");
+          }
+        }),
+      );
     const local = this.plugin.local();
     let endpoint = local?.endpoint ?? "http://127.0.0.1:";
     let vaultId = local?.vaultId ?? "";

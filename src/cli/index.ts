@@ -318,7 +318,7 @@ const VERB_HELP: Record<string, VerbHelp> = {
   },
   daemon: {
     usage:
-      "notient daemon start|stop|status|list --vault <path>; notient daemon service install|status|uninstall --vault <path>",
+      "notient daemon start|wake|stop|status|list --vault <path>; notient daemon service install|status|uninstall --vault <path>",
     flags: ["--vault <path>", "--as <agent>"],
   },
   db: {
@@ -515,7 +515,9 @@ function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
       typeof raw !== "string" ||
       !/^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)
     )
-      throw new Error("INVALID_PARAMS: --credential-file requires an exact paired identity in --as");
+      throw new Error(
+        "INVALID_PARAMS: --credential-file requires an exact paired identity in --as",
+      );
     return raw;
   }
   if (typeof raw !== "string") return undefined;
@@ -722,7 +724,9 @@ async function dispatchPair(
     action !== "owner-grant" &&
     action !== "owner-revoke"
   )
-    throw new Error("INVALID_PARAMS: pair requires create | list | revoke | owner-grant | owner-revoke");
+    throw new Error(
+      "INVALID_PARAMS: pair requires create | list | revoke | owner-grant | owner-revoke",
+    );
   const kind = parsed.flags.kind ?? "human";
   const scopes =
     typeof parsed.flags.scopes === "string"
@@ -766,8 +770,9 @@ async function dispatchDaemon(
     await runServiceCommand({ action, vaultPath, emitter, clientIdentity });
     return 0;
   }
-  const verb = parsed.positional[0] as "start" | "stop" | "status" | "list" | undefined;
-  if (!verb) throw new Error("daemon requires a verb: start | stop | status | list");
+  const verb = parsed.positional[0] as "start" | "wake" | "stop" | "status" | "list" | undefined;
+  if (!verb || !["start", "wake", "stop", "status", "list"].includes(verb))
+    throw new Error("daemon requires a verb: start | wake | stop | status | list");
   const vaultPath = await resolveVaultForDaemon(parsed);
   await runDaemonCommand({ verb, vaultPath, emitter, clientIdentity });
   return 0;
