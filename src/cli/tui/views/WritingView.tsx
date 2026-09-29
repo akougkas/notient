@@ -62,6 +62,7 @@ export function WritingView(props: Props) {
     preview: ChangePreview;
     key: string;
     historyIds: string[];
+    kind: "delete" | "move";
   } | null>(null);
   const current = useRef<NoteDraft | null>(null);
   const flight = useRef(false);
@@ -86,11 +87,11 @@ export function WritingView(props: Props) {
     setMessage(attempt ? "Reopening your draft…" : "Opening your draft…");
     void (async () => {
       try {
-        const { draft: next, restored, note } = await openWritingDraft(
-          store,
-          rpc.current(),
-          props.request,
-        );
+        const {
+          draft: next,
+          restored,
+          note,
+        } = await openWritingDraft(store, rpc.current(), props.request);
         if (cancelled) return;
         update(next);
         setPhase(next.preview ? "preview" : "edit");
@@ -101,12 +102,12 @@ export function WritingView(props: Props) {
           redirect
             ? redirect
             : restored
-            ? "Your unsaved draft is restored. Save or discard it before starting another."
-            : next.base && props.request.action === "append"
-              ? "The answer is added at the end, labelled unverified. Edit it freely. Ctrl+S shows the exact change; nothing saves until you approve it."
-              : next.base
-              ? "Edit your Markdown below. Review the changes before saving."
-              : `Ctrl+S saves to the folder below; your draft is kept privately. ${note ?? ""}`.trim(),
+              ? "Your unsaved draft is restored. Save or discard it before starting another."
+              : next.base && props.request.action === "append"
+                ? "The answer is added at the end, labelled unverified. Edit it freely. Ctrl+S shows the exact change; nothing saves until you approve it."
+                : next.base
+                  ? "Edit your Markdown below. Review the changes before saving."
+                  : `Ctrl+S saves to the folder below; your draft is kept privately. ${note ?? ""}`.trim(),
         );
         if (props.request.action === "move" && redirect === null && next.base) {
           setMoveTo(next.base.path);
@@ -252,7 +253,7 @@ export function WritingView(props: Props) {
       });
       if (preview.conflicts.length)
         throw new Error(preview.conflicts.map((item) => item.reason).join("; "));
-      setRemoval({ preview, key, historyIds: [] });
+      setRemoval({ preview, key, historyIds: [], kind: "delete" });
       setPhase("delete");
     } catch (error) {
       report(error);
@@ -312,7 +313,7 @@ export function WritingView(props: Props) {
         throw new Error(
           `Resolve these before moving: ${preview.conflicts.map((item) => `${item.path}: ${item.reason}`).join("; ")}`,
         );
-      setRemoval({ preview, key, historyIds: [] });
+      setRemoval({ preview, key, historyIds: [], kind: "move" });
       setPhase("move-review");
     } catch (error) {
       report(error);
@@ -395,7 +396,13 @@ export function WritingView(props: Props) {
     }
   };
   const undoDelete = async () => {
-    if (flight.current || busy || !removal?.historyIds.length) return;
+    if (flight.current || busy || !removal) return;
+    if (!removal.historyIds.length) {
+      setError(
+        "Nothing has been applied yet, so there is nothing to undo. Enter applies the reviewed change.",
+      );
+      return;
+    }
     flight.current = true;
     setBusy(true);
     setError(null);
@@ -410,7 +417,11 @@ export function WritingView(props: Props) {
         });
       }
       setRemoval({ ...removal, historyIds: [] });
-      setMessage("Restored. The note is back at its original path.");
+      setMessage(
+        removal.kind === "move"
+          ? "Undone. The note is back at its original path and its links are restored."
+          : "Restored. The note is back at its original path.",
+      );
       props.onClose();
     } catch (error) {
       report(error);
@@ -495,10 +506,7 @@ export function WritingView(props: Props) {
       return;
     if (key.repeated) return;
     const alt = (key.meta || key.option) && !key.ctrl && key.name === "s";
-    if (
-      (key.ctrl && ["c", "s", "o", "l", "g", "r", "x", "d", "z"].includes(key.name)) ||
-      alt
-    ) {
+    if ((key.ctrl && ["c", "s", "o", "l", "g", "r", "x", "d", "z"].includes(key.name)) || alt) {
       key.preventDefault();
       if (!busy) controlKey(key.name);
       return;
@@ -572,8 +580,8 @@ export function WritingView(props: Props) {
               : isMovePhase
                 ? "Move or rename a note"
                 : draft?.base
-                ? "Edit note"
-                : "Capture a thought"}
+                  ? "Edit note"
+                  : "Capture a thought"}
           </b>
         </text>
         <box
@@ -617,8 +625,8 @@ export function WritingView(props: Props) {
               </text>
             ))}
             <text fg={COLOR.label}>
-              Nothing is erased: the note keeps its exact content in Trash and Ctrl+Z restores it.
-              Enter moves it · Esc cancels
+              Nothing has moved yet. Enter moves it to Trash with its exact content; once applied,
+              Ctrl+Z restores it. Esc cancels
             </text>
           </box>
         ) : phase === "move" ? (
@@ -653,15 +661,39 @@ export function WritingView(props: Props) {
                 Move {draft?.base?.path} to{" "}
                 {removal.preview.effects.find((e) => e.kind === "move")?.destination}?
               </text>
-              {removal.preview.effects.map((effect) => (
-                <text key={`${effect.path}:${effect.reason}`} fg={COLOR.text} wrapMode="word">
-                  {effect.kind === "move" ? "Move" : "Rewrite links in"} {effect.path}:{" "}
-                  {effect.reason}
+              {removal.preview.effects
+                .filter((effect) => effect.kind === "move")
+                .map((effect) => (
+                  <text key={`${effect.path}:move`} fg={COLOR.text} wrapMode="word">
+                    Move {effect.path} to {effect.destination}. The note's own bytes are kept.
+                  </text>
+                ))}
+              {removal.preview.effects.some((effect) => effect.kind === "write") ? (
+                <>
+                  <text fg={COLOR.label} wrapMode="word">
+                    Exact link changes in other notes and in the moved note:
+                  </text>
+                  <diff
+                    diff={previewDiff({
+                      ...removal.preview,
+                      effects: removal.preview.effects.filter((effect) => effect.kind === "write"),
+                    })}
+                    view="unified"
+                    wrapMode="word"
+                    fg={COLOR.text}
+                    addedBg="#243426"
+                    removedBg="#3C2825"
+                    showLineNumbers
+                  />
+                </>
+              ) : (
+                <text fg={COLOR.dim} wrapMode="word">
+                  No other note links to this one, so no links change.
                 </text>
-              ))}
+              )}
               <text fg={COLOR.label} wrapMode="word">
-                The note keeps its exact content. Ctrl+Z undoes every step. Enter applies · Esc
-                edits the path
+                Nothing is written yet. Enter applies exactly this. After it applies, Ctrl+Z undoes
+                every step. Esc edits the path.
               </text>
             </box>
           </scrollbox>
@@ -741,10 +773,14 @@ export function WritingView(props: Props) {
           {phase === "preview"
             ? "Ctrl+S/Alt+S save note · Esc keep editing"
             : isMovePhase
-              ? "Enter continues · Ctrl+Z undoes applied steps · Esc goes back"
+              ? phase === "moved"
+                ? "Ctrl+Z undoes the move · Esc opens the note"
+                : phase === "move-review"
+                  ? "Enter applies this review · Esc edits the path"
+                  : "Enter reviews the move · Esc cancels"
               : draft?.base
-              ? "Ctrl+S/Alt+S review changes · Ctrl+D delete · Esc keep draft"
-              : "Ctrl+S/Alt+S save to Inbox · Ctrl+O preview · Ctrl+L destination · Esc keep draft"}
+                ? "Ctrl+S/Alt+S review changes · Ctrl+D delete · Esc keep draft"
+                : "Ctrl+S/Alt+S save to Inbox · Ctrl+O preview · Ctrl+L destination · Esc keep draft"}
         </text>
       </box>
     </box>
@@ -778,7 +814,8 @@ async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: Wri
   }
   const destination = await captureDestination(rpc);
   const draft = newDraft(destination.folder, request.text);
-  if (request.title) draft.path = `${destination.folder ? `${destination.folder}/` : ""}${noteFilename(request.title)}`;
+  if (request.title)
+    draft.path = `${destination.folder ? `${destination.folder}/` : ""}${noteFilename(request.title)}`;
   return { draft, restored: false, note: destination.note(draft.path) };
 }
 
