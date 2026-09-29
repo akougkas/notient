@@ -32,6 +32,7 @@ export interface SlashContext {
   readonly vaultPath: string;
   readonly proposals?: ProposalActions;
   readonly getLastAssistant?: () => string | null;
+  readonly copyText?: (text: string) => boolean;
   readonly openConversations?: () => Promise<void>;
   readonly newConversation?: () => Promise<void>;
   readonly runIntent?: (intent: Intent) => void;

@@ -68,7 +68,7 @@ const EXTRA_HELP_ROWS: ReadonlyArray<readonly [string, string, string]> = [
   ["/read <path>", "", "read a vault note here in the conversation"],
   ["/search <words>", "", "search saved text; -s adds meaning when a model is ready"],
   ["/model", "", "show the model, embeddings and context in use"],
-  ["/copy", "", "copy the last reply"],
+  ["/copy", "", "copy the last reply to the terminal clipboard and .notient/last.txt"],
   ["/clear", "", "clear this transcript"],
   ["/quit", "Ctrl+C", "leave the workspace"],
 ];

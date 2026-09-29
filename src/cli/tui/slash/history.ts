@@ -44,5 +44,10 @@ export async function copyLastAssistant(context: SlashContext): Promise<SlashOut
   const target = join(context.vaultPath, ".notient", "last.txt");
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, text);
-  return { message: `Copied ${text.length} chars → ${target}` };
+  const sent = context.copyText?.(text) ?? false;
+  return {
+    message: sent
+      ? `Sent ${text.length} characters to your terminal clipboard. That needs OSC 52 support (in tmux, set-clipboard on); the same text is saved at ${target}.`
+      : `Saved ${text.length} characters at ${target}. This terminal did not accept a clipboard copy, so open that file to reuse the text.`,
+  };
 }

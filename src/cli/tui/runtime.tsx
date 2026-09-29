@@ -19,7 +19,13 @@ import { type MethodologySession, MethodologyView } from "./views/MethodologyVie
 import { join } from "node:path";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
-import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import {
+  createRoot,
+  flushSync,
+  useKeyboard,
+  useRenderer,
+  useTerminalDimensions,
+} from "@opentui/react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Conversation } from "../../core/chat/types";
@@ -165,6 +171,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
     correlate: { paths: [], question: "", result: null },
   });
   const [analysisOpen, setAnalysisOpen] = useState<"compare" | "correlate" | null>(null);
+  const renderer = useRenderer();
   const { width, height } = useTerminalDimensions();
   const layout = useMemo(() => deriveTuiLayout(width, height), [height, width]);
   const rpcRef = useRef<NotientRpc>(createRpc(client));
@@ -607,6 +614,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
           client: rpcRef.current.client,
           vaultPath,
           getLastAssistant: () => lastAssistantText(stateRef.current),
+          copyText: (text) => renderer.copyToClipboardOSC52(text),
           openConversations,
           newConversation,
           runIntent: (intent) => intentRef.current(intent),
