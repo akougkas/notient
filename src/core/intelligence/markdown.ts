@@ -301,18 +301,72 @@ export function prepareIntelligenceAppend(
   return { text, body: `${body}${text}`, appendedIds, duplicateIds, continuation };
 }
 
+function activeStructure(body: string): {
+  lines: LineSpan[];
+  last: { index: number; raw: string; level: number } | null;
+  clean: boolean;
+} {
+  const lines = linesOf(body);
+  let fence: { char: "`" | "~"; length: number } | null = null;
+  let inComment = false;
+  let last: { index: number; raw: string; level: number } | null = null;
+  for (let index = skipFrontmatter(lines); index < lines.length; index += 1) {
+    const raw = lines[index]?.text ?? "";
+    if (!inComment) {
+      const fenceMatch = raw.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+      if (fence === null && fenceMatch) {
+        const marker = fenceMatch[1] ?? "";
+        fence = { char: marker[0] as "`" | "~", length: marker.length };
+        continue;
+      }
+      if (fence !== null) {
+        if (
+          fenceMatch &&
+          fenceMatch[1]?.[0] === fence.char &&
+          (fenceMatch[1]?.length ?? 0) >= fence.length &&
+          (fenceMatch[2] ?? "").trim() === ""
+        )
+          fence = null;
+        continue;
+      }
+      const level = headingLevel(raw);
+      if (level !== null && level <= 2) last = { index, raw, level };
+    }
+    let cursor = 0;
+    while (cursor < raw.length) {
+      const at = raw.indexOf(inComment ? "-->" : "<!--", cursor);
+      if (at < 0) break;
+      inComment = !inComment;
+      cursor = at + (inComment ? 4 : 3);
+    }
+  }
+  return { lines, last, clean: !inComment && fence === null };
+}
+
 export function canContinueSection(body: string, designation: string): boolean {
   try {
     validateDesignation(designation);
   } catch {
     return false;
   }
-  const lines = linesOf(body);
-  const last = findSections(body, designation).at(-1);
-  if (last === undefined || last.endLine !== lines.length) return false;
+  const active = activeStructure(body);
+  if (
+    !active.clean ||
+    active.last === null ||
+    active.last.level !== 2 ||
+    !matchesHeading(active.last.raw, designation)
+  )
+    return false;
+  const found = findSections(body, designation).at(-1);
+  if (
+    found === undefined ||
+    found.headingLine !== active.last.index ||
+    found.endLine !== active.lines.length
+  )
+    return false;
   let fence: { char: "`" | "~"; length: number } | null = null;
-  for (let index = last.headingLine + 1; index < lines.length; index += 1) {
-    const raw = lines[index]?.text ?? "";
+  for (let index = found.headingLine + 1; index < active.lines.length; index += 1) {
+    const raw = active.lines[index]?.text ?? "";
     const fenceMatch = raw.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
     if (fence === null && fenceMatch) {
       const marker = fenceMatch[1] ?? "";
@@ -328,9 +382,7 @@ export function canContinueSection(body: string, designation: string): boolean {
     )
       fence = null;
   }
-  if (fence !== null) return false;
-  const tail = body.slice(lines[last.headingLine]?.start ?? 0);
-  return (tail.match(/<!--/gu) ?? []).length === (tail.match(/-->/gu) ?? []).length;
+  return fence === null;
 }
 
 export function appendedIntelligenceRecords(before: string, addition: string): IntelligenceRecord[] {
