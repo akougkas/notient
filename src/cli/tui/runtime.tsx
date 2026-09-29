@@ -60,6 +60,7 @@ import {
 import { type SlashContext, type SlashOutcome, dispatchSlashCommand } from "./slashCommands";
 import { conversationSources } from "./sources";
 import { estimateTokens } from "./statusBar";
+import { createStreamDispatch } from "./streamBuffer";
 import {
   type Action,
   type AppState,
@@ -2509,10 +2510,12 @@ async function consumeTurnEvent(
 
 export async function drainTurn(
   frames: AsyncIterable<{ type: string; [key: string]: unknown }>,
-  dispatch: React.Dispatch<Action>,
+  target: React.Dispatch<Action>,
   fail: (error: unknown, context: string) => void,
   refreshPendingStats: (phase: PendingTransitionPhase, id: string) => Promise<void>,
 ): Promise<string> {
+  const stream = createStreamDispatch(target);
+  const dispatch = stream.dispatch;
   let assistant = "";
   try {
     for await (const frame of frames) {
@@ -2535,7 +2538,10 @@ export async function drainTurn(
       if (frame.type === "result") break;
     }
   } catch (error) {
+    stream.flush();
     reportTurnFailure(error, dispatch, fail);
+  } finally {
+    stream.flush();
   }
   return assistant;
 }
