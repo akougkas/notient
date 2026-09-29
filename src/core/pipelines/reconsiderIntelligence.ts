@@ -71,7 +71,7 @@ export function hasQuestionForRecord(records: readonly IntelligenceRecord[], rec
     (record) =>
       record.kind === "question" &&
       record.attribution.kind === "software" &&
-      record.attribution.id === "notient-source-reconsideration" &&
+      ["notient-source-reconsideration", "notient-deletion"].includes(record.attribution.id) &&
       record.qualifications.includes(target),
   );
 }

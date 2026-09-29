@@ -16,6 +16,7 @@ import { cultivationBudgetStatus } from "../cultivation/budget";
 import { CultivationService } from "../cultivation/service";
 import { assessAttention, attentionPriorityMap } from "../cultivation/attention";
 import type { EventBus } from "../events/eventBus";
+import { isTrashPath } from "../indexer/excludePaths";
 import type { JobService } from "../pipelines/jobService";
 import { stableJobId } from "../pipelines/jobStore";
 import {
@@ -128,6 +129,7 @@ export class Coordinator {
       this.opts.bus.on("sentience:activity", (event) => {
         if (
           event.activeNotePath &&
+          !isTrashPath(event.activeNotePath) &&
           ["vault:add", "vault:change", "vault:rename"].includes(event.source)
         ) {
           this.markSave(event.activeNotePath);
@@ -143,12 +145,14 @@ export class Coordinator {
           const oldest = this.seenChangeIds.keys().next().value;
           if (oldest !== undefined) this.seenChangeIds.delete(oldest);
         }
+        if (isTrashPath(event.path)) return;
         this.markSave(event.path);
         void this.pendingSourceAttention
           .record(event.path, event.revision, "changed", this.now())
           .catch((error) => this.report(error));
       }),
       this.opts.bus.on("indexer:tombstoned", (event) => {
+        if (isTrashPath(event.path)) return;
         this.markSave(event.path);
         void this.pendingSourceAttention
           .record(event.path, null, "deleted", this.now())
@@ -156,19 +160,25 @@ export class Coordinator {
       }),
       this.opts.bus.on("indexer:renamed", (event) => {
         const at = this.now();
-        this.markSave(event.fromPath, at);
-        this.markSave(event.toPath, at);
-        void this.pendingSourceAttention
-          .record(event.fromPath, null, "deleted", at)
-          .then(() => this.pendingSourceAttention.record(event.toPath, null, "changed", at))
-          .catch((error) => this.report(error));
+        if (!isTrashPath(event.fromPath)) {
+          this.markSave(event.fromPath, at);
+          void this.pendingSourceAttention
+            .record(event.fromPath, null, "deleted", at)
+            .catch((error) => this.report(error));
+        }
+        if (!isTrashPath(event.toPath)) {
+          this.markSave(event.toPath, at);
+          void this.pendingSourceAttention
+            .record(event.toPath, null, "changed", at)
+            .catch((error) => this.report(error));
+        }
       }),
     );
     void this.pendingSourceAttention
       .saveTriggers()
       .then((persisted) => {
         for (const { path, at } of persisted)
-          if ((this.saves.get(path) ?? 0) < at) this.saves.set(path, at);
+          if (!isTrashPath(path) && (this.saves.get(path) ?? 0) < at) this.saves.set(path, at);
       })
       .catch((error) => this.report(error));
     this.timer = setInterval(() => {
@@ -178,6 +188,7 @@ export class Coordinator {
     void this.tick().catch((error) => this.report(error));
   }
   private markSave(path: string, at = this.now()): void {
+    if (isTrashPath(path)) return;
     this.saves.set(path, at);
     void this.pendingSourceAttention.recordSave(path, at).catch((error) => this.report(error));
   }

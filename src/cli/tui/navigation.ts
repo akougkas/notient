@@ -26,7 +26,7 @@ export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
     slash: "capture",
   },
   {
-    label: "Save this answer — review it as a note",
+    label: "Save this answer as a note — preview is optional",
     intent: { kind: "save-answer" },
     keys: "Ctrl+S or Alt+S",
     slash: "save",

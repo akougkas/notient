@@ -66,7 +66,7 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(source);
 }
 
-function isTrashPath(normalized: string): boolean {
+export function isTrashPath(normalized: string): boolean {
   const folded = normalized.toLowerCase();
   const root = TRASH_FOLDER.toLowerCase();
   return folded === root || folded.startsWith(`${root}/`);
@@ -75,7 +75,7 @@ function isTrashPath(normalized: string): boolean {
 /**
  * Build the single predicate every indexing entry point consults.
  *
- * Notient-owned conversation and proposal artifacts and the deletion Trash folder are mandatory exclusions,
+ * Notient-owned conversation and proposal artifacts are mandatory exclusions,
  * case-insensitively, regardless of user settings. Configured folder prefixes
  * and globs are unioned on top. The predicate is threaded through `FsVault`
  * (listing), `IndexerQueue` (enqueue), `VaultWatcher` (fs events), and

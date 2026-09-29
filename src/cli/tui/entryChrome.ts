@@ -93,6 +93,10 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
   if (digest === null) segments.push({ text: "Cultivation status loading", tone: "dim" });
   else if (digest.paused)
     segments.push({ text: "Cultivation paused (/unpause resumes)", tone: "warn" });
+  else if (digest.conditions.some((condition) => condition.id === "no-trigger"))
+    segments.push({ text: "Cultivation has no active trigger", tone: "warn" });
+  else if (digest.conditions.some((condition) => condition.id === "no-save-trigger"))
+    segments.push({ text: "Saved notes wait for scheduled cultivation", tone: "dim" });
   else if ((enabledPipelines ?? 0) > 0)
     segments.push({
       text:
@@ -106,7 +110,7 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
 }
 
 export function developmentConditions(digest: CultivationDigest): string[] {
-  return digest.paused ? ["Cultivation is paused, so nothing new is being studied."] : [];
+  return digest.conditions.map((condition) => condition.label);
 }
 
 export function capabilityRows(segments: ReadonlyArray<CapabilitySegment>, width: number): number {
@@ -133,20 +137,29 @@ export function buildDevelopmentsStrip(
         : "Developments loading…",
       rows: [],
     };
-  if (digest.items.length === 0)
+  if (digest.items.length === 0) {
+    const quiet = digest.quiet.slice(0, Math.max(0, maxItems));
     return {
-      heading: `Developments: ${developmentConditions(digest)[0] ?? "nothing new worth surfacing right now."}`,
-      rows: [],
+      heading: `Developments: ${developmentConditions(digest)[0] ?? (quiet.length ? "recent work made no note change." : "nothing new worth surfacing right now.")}`,
+      rows: quiet.map((result) => ({
+        id: result.jobId,
+        item: null,
+        text: shorten(
+          `${result.outcome === "failed" ? "Needs attention" : "No note change"} · ${result.pipeline} · ${result.reason}`,
+          Math.max(20, width - 4),
+        ),
+      })),
     };
+  }
   const visible = digest.items.slice(0, Math.max(0, maxItems));
   const hidden = digest.items.length - visible.length;
   return {
-    heading: `Developments · ${digest.items.length}${hidden > 0 ? ` (Esc then d for all)` : ""}`,
+    heading: `Developments · ${digest.items.length}${hidden > 0 ? ` (Esc then d for all)` : ""}${digest.conditions.some((condition) => condition.level === "attention") ? " · needs attention" : ""}`,
     rows: visible.map((item) => ({
       id: item.id,
       item,
       text: shorten(
-        `${item.title} · ${item.path} · ${DISPOSITION_LABEL[item.disposition]} · ${item.status}`,
+        `${item.origin?.trigger ? `${item.origin.trigger} · ` : ""}${item.title} · ${item.path} · ${DISPOSITION_LABEL[item.disposition]} · ${item.status}`,
         Math.max(20, width - 4),
       ),
     })),
