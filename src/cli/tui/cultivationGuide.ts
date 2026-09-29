@@ -5,8 +5,6 @@ type Quiet = CultivationDigest["quiet"][number];
 
 export type ConditionRoute = "review" | "settings" | null;
 
-const STOPPING_CONDITIONS = new Set(["paused", "no-trigger", "no-save-trigger"]);
-
 export function conditionRoute(condition: Condition): ConditionRoute {
   if (condition.id === "pending-review") return "review";
   return condition.action ? "settings" : null;
@@ -19,13 +17,20 @@ export function conditionLine(condition: Condition): string {
 }
 
 export function emptyDevelopments(digest: CultivationDigest): string {
-  if (digest.conditions.some((condition) => STOPPING_CONDITIONS.has(condition.id)))
-    return "Nothing has been studied in the background, and that is not the same as nothing worth finding. See what prevents cultivation above.";
-  if (digest.conditions.some((condition) => condition.id === "pending-review"))
-    return "No new developments beyond the changes waiting for your review.";
-  if (digest.quiet.length)
-    return "Nothing new worth surfacing. Recent runs studied notes and found nothing they were allowed to write or could support.";
-  return "Nothing new worth surfacing. No cultivation run has finished recently for notes in scope.";
+  const has = (id: string) => digest.conditions.some((condition) => condition.id === id);
+  const scheduling = has("paused")
+    ? "Background cultivation is paused, so no new notes are being studied."
+    : has("no-trigger")
+      ? "No workflow is set to run, so no new notes will be studied."
+      : has("no-save-trigger")
+        ? "New saves wait for an idle or interval run."
+        : has("pending-review")
+          ? "Changes are waiting for your review."
+          : "";
+  const history = digest.quiet.length
+    ? "Earlier runs are listed below."
+    : "No run has finished recently for notes in scope.";
+  return ["Nothing new to surface.", scheduling, history].filter(Boolean).join(" ");
 }
 
 export function quietLine(entry: Quiet, pipelineTitle: string): string {
