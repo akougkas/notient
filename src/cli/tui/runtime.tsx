@@ -2547,8 +2547,8 @@ export async function drainTurn(
   };
   const unfinished = () =>
     answered
-      ? "The connection ended before the conversation was confirmed saved. The reply above is not saved."
-      : "The turn stopped before a final answer. Any partial reply above is not saved.";
+      ? "The connection ended before the conversation was confirmed saved. The reply above is not confirmed saved; reopen the conversation before keeping or resending."
+      : "The turn stopped before a final answer. Any partial reply above is not confirmed saved; reopen the conversation before keeping or resending.";
   try {
     for await (const frame of frames) {
       if (frame.type === "event") {

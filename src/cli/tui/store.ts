@@ -637,7 +637,7 @@ export function reducer(state: AppState, action: Action): AppState {
         const line = lines[index];
         if (line === undefined || line.kind === "user") break;
         if (line.kind === "assistant")
-          lines[index] = { kind: "system", text: `Unsaved reply:\n${line.text}` };
+          lines[index] = { kind: "system", text: `Unconfirmed reply:\n${line.text}` };
       }
       lines.push({ kind: "system", text: action.reason });
       return { ...state, ask: { ...state.ask, lines } };
