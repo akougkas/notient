@@ -2,6 +2,8 @@ import { type PipelineId, type PipelinePolicy, folderSchema } from "../../api/op
 import { scopeAllows } from "../../api/scope";
 
 export const CAPTURE_WORKFLOWS: readonly PipelineId[] = ["enrich", "relate", "contradictions", "inbox"];
+export const DRAFT_WORKFLOWS: readonly PipelineId[] = ["enrich"];
+const DEFAULT_SECTION = "Notient understanding";
 
 interface CatalogEntry {
   id: PipelineId;
@@ -26,6 +28,16 @@ function folderLabel(folder: string): string {
 
 function unbounded(scope: PipelinePolicy["readScope"]): boolean {
   return !scope.folders.length && !scope.paths.length && !scope.tags.length;
+}
+
+function sectionName(policy: PipelinePolicy): string {
+  return policy.allowedSections[0] ?? DEFAULT_SECTION;
+}
+
+function resultText(policy: PipelinePolicy): string {
+  if (policy.mode === "apply")
+    return `Only ${policy.effects.join(", ") || "no"} effects apply without review; anything else waits for review.`;
+  return `A supported finding is proposed as a "## ${sectionName(policy)}" section appended to the end of the capture note, nothing is written until you approve it, and a capture with nothing supportable produces no review.`;
 }
 
 function scopeText(scope: PipelinePolicy["readScope"]): string {
@@ -57,6 +69,10 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean, folder: st
     blockers.push(
       `Its read scope (${scopeText(policy.readScope)}) does not include the capture folder (${folderLabel(folder)}), so new captures would not be read.`,
     );
+  if (!policy.allowedSections.length)
+    blockers.push(
+      "No designated intelligence section is set, so retained understanding cannot be checked against one.",
+    );
   if (policy.mode === "report") blockers.push("Report mode may study the capture, but it creates no review or note change.");
   if (policy.enabled && (!policy.budget.modelCalls || !policy.budget.tokens))
     blockers.push("Its model-call or token budget is zero, so model-assisted results are unavailable.");
@@ -86,9 +102,9 @@ export function captureExplanation(
     const blockers = captureBlockers(selected, paused, folder);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) can be studied after ${seconds(policy.debounceMs)}, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A capture saved in ${folderLabel(folder)} (set by Process inbox) can be studied after ${seconds(policy.debounceMs)}, at most once per ${seconds(policy.cooldownMs)}, reading only ${scopeText(policy.readScope)}. ${resultText(policy)} Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
-    return `A new capture may not yield a reviewable development from ${selected.title}. ${blockers.join(" ")} Press s for a folder-scoped, review-only draft; nothing changes until you review and save.`;
+    return `A new capture may not yield a reviewable development from ${selected.title}. ${blockers.join(" ")} ${DRAFT_WORKFLOWS.includes(selected.id) ? "Press s for a folder-scoped, review-only draft; nothing changes until you review and save." : "Edit it with Enter; nothing changes until you review and save."}`;
   }
   if (active.length)
     return `New captures can receive reviewable study from ${active.map((entry) => entry.title).join(", ")}. Select a workflow to see timing, scope and review behavior.`;
@@ -104,6 +120,7 @@ export function captureDraft(
   next.enabled = true;
   if (!next.triggers.includes("save")) next.triggers = [...next.triggers, "save"];
   next.mode = "propose";
+  if (!next.allowedSections.length) next.allowedSections = [DEFAULT_SECTION];
   next.readScope = { ...next.readScope, paths: [], folders: [folder], tags: [] };
   next.writeScope = { ...next.writeScope, paths: [], folders: [folder], tags: [] };
   return { policy: next, folder };
@@ -124,8 +141,12 @@ export function activationConsequence(
     `Each run is bounded to ${after.budget.notes} notes, ${after.budget.modelCalls} model calls and ${after.budget.tokens} tokens, and the daily cultivation budget still applies.`,
     after.mode === "apply"
       ? `Apply mode writes ${after.effects.join(", ") || "nothing"} without asking. Authored prose changes still require review.`
-      : "Results arrive as reviews. Nothing is written to a note until you approve it.",
+      : `Results arrive as reviews and the effects list (${after.effects.join(", ") || "empty"}) is not used in review mode. Retained understanding is proposed as a "## ${sectionName(after)}" section at the end of the note, so authored text is not edited. Nothing is written until you approve it.`,
   ];
+  if (after.allowedProperties.length)
+    lines.push(
+      `A review may also propose frontmatter properties limited to: ${after.allowedProperties.join(", ")}. Remove any you do not want under Details before saving.`,
+    );
   if (after.readScope.folders.length + after.readScope.paths.length + after.readScope.tags.length === 0)
     lines.push("Warning: the read scope covers every eligible note.");
   return lines;

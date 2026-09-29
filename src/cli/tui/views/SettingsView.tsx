@@ -11,7 +11,7 @@ import {
 } from "../../../api/policyEditor";
 import type { OperationResult } from "../../../api/results";
 import {
-  CAPTURE_WORKFLOWS,
+  DRAFT_WORKFLOWS,
   actualCaptureFolder,
   activationConsequence,
   captureDraft,
@@ -314,7 +314,7 @@ export function SettingsView(props: Props) {
           key.name === "s" &&
           !key.ctrl &&
           entry &&
-          CAPTURE_WORKFLOWS.includes(entry.id) &&
+          DRAFT_WORKFLOWS.includes(entry.id) &&
           key.eventType !== "repeat"
         ) {
           const prepared = captureDraft(entry.policy, captureFolder);
@@ -524,7 +524,7 @@ export function SettingsView(props: Props) {
               ? "Ctrl+S save settings · Esc edit · F5 inspect current"
               : draft
                 ? "↑/↓ choose · Enter edit · Tab section · Ctrl+S review · Esc back"
-                : "↑/↓ choose · Enter customize · s prepare capture cultivation · p pause/resume · F5 refresh · Esc back"}
+                : "↑/↓ choose · Enter customize · s prepare capture cultivation (Enrich) · p pause/resume · F5 refresh · Esc back"}
       </text>
     </box>
   );
