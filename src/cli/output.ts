@@ -260,14 +260,16 @@ export function makeEmitter(options: EmitterOptions): Emitter {
         return;
       }
       if (event.type === "contributions:more") {
-        write(`More items are available. Continue with the cursor ${formatValue(event.cursor)}.`);
+        write(
+          `More items are available. Repeat the command with the same filters and --cursor ${formatValue(event.cursor)}`,
+        );
         return;
       }
       if (event.type === "contributions:entry") {
         const meaning: Record<string, string> = {
           pending: "private and not yet staged for review",
           "awaiting-review": "staged; a human or vault owner has not decided",
-          retained: "approved and written to the note",
+          retained: "approved and applied to the note when decided; later edits or an undo are not tracked here",
           rejected: "review rejected; the note was not changed",
           stale: "its evidence changed before a decision; nothing was applied",
           dismissed: "dismissed before review",

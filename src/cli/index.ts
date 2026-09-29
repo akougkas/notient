@@ -380,6 +380,7 @@ const VERB_HELP: Record<string, VerbHelp> = {
       "--kind contribution|feedback",
       "--review <review id>",
       "--limit <number>",
+      "--cursor <cursor from a previous page>",
     ],
   },
   chat: {
@@ -993,6 +994,7 @@ async function dispatchContributions(
     note: text("note"),
     review: text("review"),
     limit: parseHistoryLimit(parsed.flags.limit),
+    cursor: text("cursor"),
   });
 }
 

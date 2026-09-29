@@ -14,6 +14,7 @@ export interface ContributionsCommandOptions {
   note?: string;
   review?: string;
   limit?: number;
+  cursor?: string;
   connect?: (options: ClientOptions) => Promise<ClientHandle>;
 }
 
@@ -37,6 +38,7 @@ export async function runContributionsCommand(
       ...(state ? { state } : {}),
       ...(path ? { path } : {}),
       ...(proposalId ? { proposalId } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
     });
     if (!result.contributions.length) options.emitter.emit({ type: "contributions:empty" });
     for (const item of result.contributions)
