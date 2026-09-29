@@ -761,17 +761,24 @@ function visibleSourceRuns(passage: SuppliedTextPassage, body: string): Supplied
   if (body.slice(passage.start, passageEnd) !== passage.content)
     throw new Error("bounded source passage no longer maps to its saved body");
   let cursor = passage.start;
+  let retained = false;
   for (const match of body.matchAll(markerLines)) {
     const markerStart = match.index ?? 0;
     const markerEnd = markerStart + match[0].length;
-    if (markerEnd <= passage.start) continue;
+    const nextRetained = match[0].includes(":start:");
+    if (markerEnd <= passage.start) {
+      retained = nextRetained;
+      continue;
+    }
     if (markerStart >= passageEnd) break;
-    if (markerStart > cursor) {
+    if (markerStart > cursor && !retained) {
       runs.push({ start: cursor, content: body.slice(cursor, markerStart) });
     }
     cursor = Math.max(cursor, Math.min(passageEnd, markerEnd));
+    retained = nextRetained;
   }
-  if (cursor < passageEnd) runs.push({ start: cursor, content: body.slice(cursor, passageEnd) });
+  if (cursor < passageEnd && !retained)
+    runs.push({ start: cursor, content: body.slice(cursor, passageEnd) });
   return runs;
 }
 
