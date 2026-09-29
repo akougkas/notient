@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { KeyEvent, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { flushSync, useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangePreview } from "../../../api/changes";
 import { type NoteDraft, draftChangeSet, newDraft } from "../../../api/drafts";
 import { noteFilename } from "../../../core/vault/noteFilename";
 import { Markdown } from "../Markdown";
@@ -38,13 +39,18 @@ export function WritingView(props: Props) {
     [props.vaultPath, props.identity],
   );
   const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const [phase, setPhase] = useState<"edit" | "preview" | "discard">("edit");
+  const [phase, setPhase] = useState<"edit" | "preview" | "discard" | "delete" | "deleted">("edit");
   const [focusPath, setFocusPath] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("Opening your draft…");
   const [error, setError] = useState<string | null>(null);
   const [persisted, setPersisted] = useState(false);
+  const [removal, setRemoval] = useState<{
+    preview: ChangePreview;
+    key: string;
+    historyIds: string[];
+  } | null>(null);
   const current = useRef<NoteDraft | null>(null);
   const flight = useRef(false);
   const textarea = useRef<TextareaRenderable | null>(null);
@@ -82,7 +88,7 @@ export function WritingView(props: Props) {
             ? "Your unsaved draft is restored. Save or discard it before starting another."
             : next.base
               ? "Edit your Markdown below. Review the changes before saving."
-              : "Make room for the thought. You can organize it after capturing it.",
+              : "Write the thought. Ctrl+S saves it as a note at the destination below; your draft is kept privately meanwhile.",
         );
       } catch (error) {
         if (!cancelled) report(error);
@@ -134,40 +140,144 @@ export function WritingView(props: Props) {
       flight.current = false;
     }
   };
-  const save = async () => {
+  const applyPreview = async (value: NoteDraft) => {
+    if (!value.preview) throw new Error("Review the note before saving.");
+    await store.save(value);
+    const result = await props.rpc().applyChanges({
+      previewId: value.preview.previewId,
+      previewRevision: value.preview.revision,
+      idempotencyKey: `${value.id}:apply`,
+    });
+    if (!result.ok || result.state !== "applied")
+      throw new Error(
+        result.effects
+          .map((effect) => effect.message)
+          .filter(Boolean)
+          .join("; ") || `Save ${result.state}. The draft is retained.`,
+      );
+    if (!value.base) {
+      const saved = await props.rpc().noteBody(value.path);
+      if (saved.body !== value.body)
+        throw new Error(
+          `${value.path} exists but its content differs from your words. The draft is retained.`,
+        );
+    }
+    await store.save(null);
+    current.current = null;
+    props.onSaved(value.path, result.effects[0]?.historyId ?? null);
+  };
+  const save = async (reviewFirst = false) => {
     const value = current.current;
-    if (flight.current || busy || !value) return;
+    if (flight.current || busy || !value || (phase !== "edit" && phase !== "preview")) return;
     flight.current = true;
     setBusy(true);
     setError(null);
+    let prepared: NoteDraft | null = null;
     try {
-      if (phase !== "preview") {
+      if (phase === "preview") {
+        await applyPreview(value);
+      } else if (reviewFirst || value.base) {
         const next = await prepareDraftPreview(value, props.rpc(), store);
         update(next);
         setPhase("preview");
         setMessage(
-          "Review the exact content below. Ctrl+S saves this version; Esc returns to editing.",
+          "Review the exact content below. Ctrl+S or Alt+S saves this version; Esc returns to editing.",
         );
-      } else if (value.preview) {
-        // Persist the exact review before dispatch, so retries after an ambiguous
-        // disconnect reuse its durable effect receipts instead of creating a new write.
-        await store.save(value);
-        const result = await props.rpc().applyChanges({
-          previewId: value.preview.previewId,
-          previewRevision: value.preview.revision,
-          idempotencyKey: `${value.id}:apply`,
-        });
-        if (!result.ok || result.state !== "applied")
-          throw new Error(
+      } else {
+        prepared = await prepareDraftPreview(value, props.rpc(), store);
+        update(prepared);
+        await applyPreview(prepared);
+      }
+    } catch (error) {
+      if (prepared) {
+        setPhase("preview");
+        setMessage(
+          "The note was not saved. Ctrl+S or Alt+S retries; your words are kept as a draft.",
+        );
+      }
+      report(error);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
+  const reviewDelete = async () => {
+    const value = current.current;
+    if (flight.current || busy || !value?.base) return;
+    flight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const key = randomUUID();
+      const preview = await props.rpc().previewChanges({
+        idempotencyKey: `${key}:delete`,
+        changes: [
+          { kind: "delete", source: { path: value.base.path, revision: value.base.revision } },
+        ],
+      });
+      if (preview.conflicts.length)
+        throw new Error(preview.conflicts.map((item) => item.reason).join("; "));
+      setRemoval({ preview, key, historyIds: [] });
+      setPhase("delete");
+    } catch (error) {
+      report(error);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
+  const confirmDelete = async () => {
+    if (flight.current || busy || !removal) return;
+    flight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await props.rpc().applyChanges({
+        previewId: removal.preview.previewId,
+        previewRevision: removal.preview.revision,
+        idempotencyKey: `${removal.key}:delete-apply`,
+      });
+      const historyIds = result.effects.flatMap((effect) =>
+        effect.state === "applied" && effect.historyId ? [effect.historyId] : [],
+      );
+      setRemoval({ ...removal, historyIds });
+      if (!result.ok || result.state !== "applied")
+        throw new Error(
+          `${
             result.effects
               .map((effect) => effect.message)
               .filter(Boolean)
-              .join("; ") || `Save ${result.state}. The draft is retained.`,
-          );
-        await store.save(null);
-        current.current = null;
-        props.onSaved(value.path, result.effects[0]?.historyId ?? null);
+              .join("; ") || `Delete ${result.state}`
+          }. Nothing was lost; ${historyIds.length ? "earlier steps can be undone with Ctrl+Z" : "the note is unchanged"}.`,
+        );
+      await store.save(null);
+      current.current = null;
+      setPhase("deleted");
+    } catch (error) {
+      report(error);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
+  const undoDelete = async () => {
+    if (flight.current || busy || !removal?.historyIds.length) return;
+    flight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const id of [...removal.historyIds].reverse()) {
+        const detail = await props.rpc().historyEntry(id);
+        if (detail.entry.undo?.completedAt != null) continue;
+        await props.rpc().undoHistory({
+          id,
+          sources: detail.sources,
+          idempotencyKey: `undo:${id}`,
+        });
       }
+      setRemoval({ ...removal, historyIds: [] });
+      setMessage("Restored. The note is back at its original path.");
+      props.onClose();
     } catch (error) {
       report(error);
     } finally {
@@ -209,6 +319,9 @@ export function WritingView(props: Props) {
       case "s":
         void save();
         return;
+      case "o":
+        if (phase === "edit") void save(true);
+        return;
       case "l":
         if (phase === "edit" && !draft?.base) flushSync(() => setFocusPath(!focusPath));
         return;
@@ -233,13 +346,23 @@ export function WritingView(props: Props) {
       case "x":
         flushSync(() => setPhase("discard"));
         return;
+      case "d":
+        if (phase === "edit" && draft?.base) void reviewDelete();
+        return;
+      case "z":
+        if (phase === "delete" || phase === "deleted") void undoDelete();
+        return;
     }
   };
   useKeyboard((key: KeyEvent) => {
     if (key.eventType !== "press") return;
     if (phase === "preview" && scrollPreview(key, scroll.current, props.height)) return;
     if (key.repeated) return;
-    if (key.ctrl && ["c", "s", "l", "b", "g", "r", "x"].includes(key.name)) {
+    const alt = (key.meta || key.option) && !key.ctrl && key.name === "s";
+    if (
+      (key.ctrl && ["c", "s", "o", "l", "b", "g", "r", "x", "d", "z"].includes(key.name)) ||
+      alt
+    ) {
       key.preventDefault();
       if (!busy) controlKey(key.name);
       return;
@@ -248,6 +371,7 @@ export function WritingView(props: Props) {
       key.preventDefault();
       if (busy) return;
       if (phase === "edit") void leave();
+      else if (phase === "deleted") props.onClose();
       else
         flushSync(() => {
           setPhase("edit");
@@ -258,6 +382,7 @@ export function WritingView(props: Props) {
     if (phase === "edit") return;
     key.preventDefault();
     if (phase === "discard" && key.name === "return") void discard();
+    if (phase === "delete" && key.name === "return") void confirmDelete();
     if (phase === "preview" && key.name === "tab") flushSync(() => setShowDiff(!showDiff));
   });
 
@@ -294,7 +419,13 @@ export function WritingView(props: Props) {
       </box>
       <box paddingLeft={inset} width={props.width} flexDirection="column">
         <text height={2} paddingTop={1} fg={COLOR.bright}>
-          <b>{phase === "preview" ? "Ready to become a note" : "A place for the thought"}</b>
+          <b>
+            {phase === "preview"
+              ? "Ready to become a note"
+              : draft?.base
+                ? "Edit note"
+                : "Capture a thought"}
+          </b>
         </text>
         <box
           width={column}
@@ -329,6 +460,29 @@ export function WritingView(props: Props) {
             <text fg={COLOR.warn}>Discard this unsaved draft?</text>
             <text fg={COLOR.text}>The note in your vault stays as it is.</text>
             <text fg={COLOR.label}>Enter discards the draft · Esc keeps writing</text>
+          </box>
+        ) : phase === "delete" && removal ? (
+          <box height={contentHeight} width={column} flexDirection="column">
+            <text fg={COLOR.warn}>
+              Move {draft?.base?.path} to{" "}
+              {removal.preview.effects.find((e) => e.kind === "move")?.destination}?
+            </text>
+            {removal.preview.effects.map((effect) => (
+              <text key={`${effect.path}:${effect.reason}`} fg={COLOR.text} wrapMode="word">
+                {effect.kind === "move" ? "Move" : "Qualify"} {effect.path}: {effect.reason}
+              </text>
+            ))}
+            <text fg={COLOR.label}>
+              Nothing is erased: the note keeps its exact content in Trash and Ctrl+Z restores it.
+              Enter moves it · Esc cancels
+            </text>
+          </box>
+        ) : phase === "deleted" ? (
+          <box height={contentHeight} width={column} flexDirection="column">
+            <text fg={COLOR.accent}>
+              Moved to {removal?.preview.effects.find((e) => e.kind === "move")?.destination}
+            </text>
+            <text fg={COLOR.label}>Ctrl+Z restores it · Esc closes</text>
           </box>
         ) : phase === "preview" && preview ? (
           <scrollbox
@@ -388,8 +542,10 @@ export function WritingView(props: Props) {
         </text>
         <text height={1} width={column} fg={COLOR.label}>
           {phase === "preview"
-            ? "Ctrl+S save note · Esc keep editing"
-            : `Ctrl+S review & save · ${draft?.base ? "" : "Ctrl+L destination · "}Esc keep draft`}
+            ? "Ctrl+S/Alt+S save note · Esc keep editing"
+            : draft?.base
+              ? "Ctrl+S/Alt+S review changes · Ctrl+D delete · Esc keep draft"
+              : "Ctrl+S/Alt+S save to Inbox · Ctrl+O preview · Ctrl+L destination · Esc keep draft"}
         </text>
       </box>
     </box>

@@ -36,6 +36,8 @@ export function enforceEffectPolicy(
   effect: PreviewEffect,
 ): void {
   const policy = job.policy;
+  if (effect.category === "delete")
+    throw new NoteApiError("PENDING_APPROVAL", "Deleting a note always requires human review.");
   if (
     job.preview ||
     !job.caller.scopes.includes("write") ||

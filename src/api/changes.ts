@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { changeSetSchema, effectSchema } from "./operations";
+
+export const TRASH_FOLDER = "Trash";
+export const previewCategorySchema = z.enum([...effectSchema.options, "delete"]);
 import { notePathSchema, noteReferenceSchema, revisionSchema } from "./schema";
 
 export const previewEffectSchema = z.object({
   kind: z.enum(["write", "move"]),
-  category: effectSchema,
+  category: previewCategorySchema,
   relationship: z
     .object({
       edgeId: z.string(),

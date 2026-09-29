@@ -225,6 +225,12 @@ const change = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("delete"),
+      source: noteReferenceSchema,
+    })
+    .strict(),
+  z
+    .object({
       kind: z.enum(["move", "archive", "unarchive"]),
       source: noteReferenceSchema,
       destination: notePathSchema,
@@ -356,7 +362,9 @@ export const operationInputs = {
       revision: revisionSchema,
       idempotencyKey: identifier,
       reason: z.string().trim().min(1).max(4000).optional(),
-      category: z.enum(["false", "unsupported", "irrelevant", "already-known", "deferred"]).optional(),
+      category: z
+        .enum(["false", "unsupported", "irrelevant", "already-known", "deferred"])
+        .optional(),
     })
     .strict()
     .refine((value) => !value.category || !!value.reason, "categorized feedback requires a reason"),

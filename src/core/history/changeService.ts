@@ -4,6 +4,7 @@ import {
   type ChangePreview,
   type ChangeResult,
   type PreviewEffect,
+  TRASH_FOLDER,
   changePreviewSchema,
 } from "../../api/changes";
 import { NoteReadService, contentRevision, inspectMarkdown, selectRange } from "../../api/notes";
@@ -17,6 +18,13 @@ import { readReview, reviewSourceReferences } from "../approvals/reviewStorage";
 import { WRITEBACK_EDGE_TABLES } from "../db/edgeTables";
 import type { EventBus } from "../events/eventBus";
 import { parseSurrealRelationRecordId } from "../db/recordId";
+import {
+  type IntelligenceRecord,
+  changedIntelligenceDependencies,
+  intelligenceRecordId,
+  parseAllIntelligenceRecords,
+  prepareIntelligenceAppend,
+} from "../intelligence";
 import { patchFrontmatter } from "../markdown/frontmatter";
 import { rewriteMovedReferences } from "../markdown/referenceMove";
 import { JobStore } from "../pipelines/jobStore";
@@ -48,6 +56,41 @@ export interface ChangeServiceOptions {
     preview: ChangePreview,
     effect: PreviewEffect,
   ) => Promise<void>;
+}
+
+function qualifyingQuestions(body: string, source: NoteReference): IntelligenceRecord[] {
+  let records: IntelligenceRecord[];
+  try {
+    records = parseAllIntelligenceRecords(body);
+  } catch {
+    return [];
+  }
+  const questions: IntelligenceRecord[] = [];
+  for (const record of records) {
+    let changes: ReturnType<typeof changedIntelligenceDependencies>;
+    try {
+      changes = changedIntelligenceDependencies(record, []);
+    } catch {
+      continue;
+    }
+    const dependency = changes.find((entry) => entry.path === source.path);
+    if (!dependency || record.kind === "question") continue;
+    questions.push({
+      kind: "question",
+      status: "open",
+      statement: `Reconsider retained understanding: ${record.statement.slice(0, 7800)}`,
+      attribution: { kind: "software", id: "notient-deletion", label: "Notient deletion review" },
+      evidence: [],
+      qualifications: [
+        `A cited source, ${source.path}, was moved to ${TRASH_FOLDER}. The earlier finding is historical until its evidence is available or reassessed.`,
+        `This qualifies retained record ${intelligenceRecordId(record)}; it does not establish that the conclusion is false.`,
+      ],
+      relationships: [],
+      dependencies: [{ path: source.path, revision: dependency.previousRevision }],
+      feedback: null,
+    });
+  }
+  return questions;
 }
 
 /** Exact previews are durable inputs to the existing writer, not a second write engine. */
@@ -124,9 +167,11 @@ export class ChangeService {
               ? "create"
               : change.kind === "archive"
                 ? "archive"
-                : change.kind === "move" || change.kind === "unarchive"
-                  ? "move"
-                  : "body";
+                : change.kind === "delete"
+                  ? "delete"
+                  : change.kind === "move" || change.kind === "unarchive"
+                    ? "move"
+                    : "body";
       if (change.kind === "create") {
         if (await this.options.vault.exists(change.path))
           throw new NoteApiError("CONFLICT", `destination exists: ${change.path}`);
@@ -211,6 +256,57 @@ export class ChangeService {
           note.body.slice(0, range.start) + change.replacement + note.body.slice(range.end),
           "Replace selected content",
         );
+      } else if (change.kind === "delete") {
+        if (moved.has(change.source.path) || touched.has(change.source.path))
+          throw new NoteApiError("CONFLICT", "a note in this change set cannot also be deleted");
+        let destination = `${TRASH_FOLDER}/${change.source.path}`;
+        for (
+          let attempt = 1;
+          touched.has(destination) || (await this.options.vault.exists(destination));
+          attempt++
+        ) {
+          if (attempt > 50)
+            throw new NoteApiError("CONFLICT", "Trash already holds too many copies of this path");
+          destination = `${TRASH_FOLDER}/${change.source.path.replace(/\.md$/, "")} (${attempt + 1}).md`;
+        }
+        let linking = 0;
+        let qualified = 0;
+        for (const path of universe) {
+          if (path === change.source.path) continue;
+          const referring = await this.notes.read({ path });
+          const body = virtual.get(path) ?? referring.body;
+          linking += rewriteMovedReferences(body, path, change.source.path, destination, universe)
+            .count
+            ? 1
+            : 0;
+          const questions = qualifyingQuestions(body, note.note);
+          if (!questions.length) continue;
+          const append = prepareIntelligenceAppend(body, "Notient understanding", questions);
+          if (!append.text) continue;
+          qualified++;
+          addWrite(
+            path,
+            body,
+            append.body,
+            `Qualify retained understanding that cited ${change.source.path}`,
+          );
+        }
+        touched.add(change.source.path);
+        touched.add(destination);
+        moved.add(change.source.path);
+        moved.add(destination);
+        effects.push({
+          kind: "move",
+          category,
+          relationship: null,
+          path: change.source.path,
+          destination,
+          before: note.body,
+          after: note.body,
+          beforeRevision: note.note.revision,
+          afterRevision: note.note.revision,
+          reason: `Move to ${TRASH_FOLDER}. ${linking} note${linking === 1 ? "" : "s"} still link to it; ${qualified} retained understanding${qualified === 1 ? "" : "s"} will be qualified.`,
+        });
       } else {
         if (
           moved.has(change.source.path) ||
@@ -471,7 +567,9 @@ export class ChangeService {
           for (const path of paths)
             this.options.bus?.emit({
               type: "note:changed",
-              changeId: contentRevision(`${preview.previewId}:${preview.revision}:${index}:${path}`),
+              changeId: contentRevision(
+                `${preview.previewId}:${preview.revision}:${index}:${path}`,
+              ),
               path,
               revision: effect.afterRevision,
               callerId: caller.id,
