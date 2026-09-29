@@ -975,6 +975,16 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         else dispatch({ type: "notice", text: "Open a note first, then press e to edit it." });
         return;
       }
+      if (intent.kind === "delete-note") {
+        const path = stateRef.current.explore.notePath;
+        if (path) dispatch({ type: "writing/open", request: { path, action: "delete" } });
+        else
+          dispatch({
+            type: "notice",
+            text: "Open a note first. Deleting always shows a review before anything moves.",
+          });
+        return;
+      }
       if (intent.kind === "save-answer") {
         const draft = lastPreparedDraft(stateRef.current.ask.lines);
         const text = draft?.markdown ?? lastAssistantText(stateRef.current);

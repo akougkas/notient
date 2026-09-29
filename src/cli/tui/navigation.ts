@@ -38,6 +38,12 @@ export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
     slash: "edit",
   },
   {
+    label: "Delete the open note — review, then move it to Trash",
+    intent: { kind: "delete-note" },
+    keys: "Ctrl+D in editor",
+    slash: "delete",
+  },
+  {
     label: "Chat — return to your conversation",
     intent: { kind: "view", view: "ask" },
     keys: "Esc in Notes",

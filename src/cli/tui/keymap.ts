@@ -37,6 +37,7 @@ export type Intent =
   | { readonly kind: "cancel-turn" }
   | { readonly kind: "capture" }
   | { readonly kind: "edit-note" }
+  | { readonly kind: "delete-note" }
   | { readonly kind: "save-answer" }
   | { readonly kind: "navigation" }
   | { readonly kind: "toggle-activity" }

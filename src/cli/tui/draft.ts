@@ -9,6 +9,23 @@ export interface WritingRequest {
   path?: string;
   text?: string;
   title?: string;
+  action?: "delete";
+}
+
+export function requestLabel(request: WritingRequest): string {
+  if (request.action === "delete") return `delete ${request.path ?? "the open note"}`;
+  if (request.path) return `edit ${request.path}`;
+  if (request.text) return "save this answer";
+  return "capture a new thought";
+}
+
+export function redirectNotice(request: WritingRequest, draft: NoteDraft): string | null {
+  const matches = request.path
+    ? draft.base?.path === request.path
+    : draft.base === null && (request.text === undefined || draft.body === request.text);
+  if (matches) return null;
+  const held = draft.base ? `edit of ${draft.base.path}` : `capture ${draft.path}`;
+  return `Restored your unsaved ${held}. Not started: ${requestLabel(request)}. Ctrl+S saves it, Ctrl+X discards it, Esc keeps it; then retry.`;
 }
 /** Only local drafts live here. Saving a note always goes through changes.apply. */
 export class DraftStore {

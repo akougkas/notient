@@ -6,7 +6,7 @@ import type { ChangePreview } from "../../../api/changes";
 import { type NoteDraft, draftChangeSet, newDraft } from "../../../api/drafts";
 import { noteFilename } from "../../../core/vault/noteFilename";
 import { Markdown } from "../Markdown";
-import { DraftStore, type WritingRequest, previewDiff } from "../draft";
+import { DraftStore, type WritingRequest, previewDiff, redirectNotice } from "../draft";
 import { readingColumn } from "../layout";
 import type { NotientRpc } from "../rpc";
 import {
@@ -46,6 +46,7 @@ export function WritingView(props: Props) {
   const [message, setMessage] = useState("Opening your draft…");
   const [error, setError] = useState<string | null>(null);
   const [persisted, setPersisted] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(false);
   const [removal, setRemoval] = useState<{
     preview: ChangePreview;
     key: string;
@@ -83,8 +84,12 @@ export function WritingView(props: Props) {
         update(next);
         setPhase(next.preview ? "preview" : "edit");
         setShowDiff(next.base !== null);
+        const redirect = restored ? redirectNotice(props.request, next) : null;
+        setPendingDelete(props.request.action === "delete" && redirect === null);
         setMessage(
-          restored
+          redirect
+            ? redirect
+            : restored
             ? "Your unsaved draft is restored. Save or discard it before starting another."
             : next.base
               ? "Edit your Markdown below. Review the changes before saving."
@@ -296,6 +301,11 @@ export function WritingView(props: Props) {
       setBusy(false);
     }
   };
+  useEffect(() => {
+    if (!pendingDelete || busy || !draft) return;
+    setPendingDelete(false);
+    void reviewDelete();
+  });
   const think = async () => {
     if (flight.current || !current.current?.body.trim()) return;
     flight.current = true;
@@ -336,13 +346,6 @@ export function WritingView(props: Props) {
       case "l":
         if (phase === "edit" && !draft?.base) flushSync(() => setFocusPath(!focusPath));
         return;
-      case "b":
-        if (phase === "edit" && props.request.text)
-          flushSync(() => {
-            edit({ body: props.request.text });
-            textarea.current?.setText(props.request.text ?? "");
-          });
-        return;
       case "g":
         void think();
         return;
@@ -371,7 +374,7 @@ export function WritingView(props: Props) {
     if (key.repeated) return;
     const alt = (key.meta || key.option) && !key.ctrl && key.name === "s";
     if (
-      (key.ctrl && ["c", "s", "o", "l", "b", "g", "r", "x", "d", "z"].includes(key.name)) ||
+      (key.ctrl && ["c", "s", "o", "l", "g", "r", "x", "d", "z"].includes(key.name)) ||
       alt
     ) {
       key.preventDefault();
@@ -459,12 +462,7 @@ export function WritingView(props: Props) {
           />
         </box>
         <text height={2} width={column} fg={COLOR.dim} wrapMode="word">
-          {truncate(
-            props.request.text && draft?.body !== props.request.text
-              ? "Your earlier draft is restored. Ctrl+B replaces its text with the selected answer. You can review before saving."
-              : message,
-            column * 2,
-          )}
+          {truncate(message, column * 2)}
         </text>
         {phase === "discard" ? (
           <box height={contentHeight} width={column} flexDirection="column">
