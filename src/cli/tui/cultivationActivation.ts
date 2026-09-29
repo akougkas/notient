@@ -1,4 +1,4 @@
-import type { PipelineId, PipelinePolicy } from "../../api/operations";
+import { type PipelineId, type PipelinePolicy, folderSchema } from "../../api/operations";
 import { scopeAllows } from "../../api/scope";
 
 export const CAPTURE_WORKFLOWS: readonly PipelineId[] = ["enrich", "relate", "contradictions", "inbox"];
@@ -19,6 +19,10 @@ function captureFolder(policy: PipelinePolicy): string {
 function sampleCapturePath(policy: PipelinePolicy): string {
   const folder = captureFolder(policy);
   return `${folder ? `${folder}/` : ""}Thought.md`;
+}
+
+function configuredFolderLabel(policy: PipelinePolicy): string {
+  return captureFolder(policy) || "the vault root";
 }
 
 function scopeText(scope: PipelinePolicy["readScope"]): string {
@@ -43,7 +47,9 @@ export function captureBlockers(entry: CatalogEntry, paused: boolean): string[] 
     );
   }
   if (!scopeAllows(policy.readScope, sampleCapturePath(policy), []))
-    blockers.push(`Its read scope (${scopeText(policy.readScope)}) does not include ${captureFolder(policy) || "the vault root"}, where captures are saved.`);
+    blockers.push(
+      `Its read scope (${scopeText(policy.readScope)}) does not include the configured Inbox folder (${configuredFolderLabel(policy)}), so notes saved there would not be read.`,
+    );
   if (policy.mode === "report") blockers.push("It is in report mode, so findings never become reviews or note changes.");
   if (policy.enabled && (!policy.budget.modelCalls || !policy.budget.tokens))
     blockers.push("Its model-call or token budget is zero, so it cannot produce a model result.");
@@ -71,7 +77,7 @@ export function captureExplanation(
     const blockers = captureBlockers(selected, paused);
     if (!blockers.length) {
       const { policy } = selected;
-      return `A capture saved to ${captureFolder(policy) || "the vault root"} is studied by ${selected.title} ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
+      return `A note saved inside ${configuredFolderLabel(policy)} (the configured Inbox folder; a capture saved to another folder is judged by that folder against the read scope: ${scopeText(policy.readScope)}) is studied by ${selected.title} ${seconds(policy.debounceMs)} after saving, at most once per ${seconds(policy.cooldownMs)}. Results are ${policy.mode === "apply" ? "applied within the allowed effects" : "reviews"}. Now: ${selected.schedule.reason || "waiting for a save"}`;
     }
     return `A new capture will not start ${selected.title}. ${blockers.join(" ")} Press s to prepare a safe draft; nothing changes until you review and save it.`;
   }
@@ -80,17 +86,16 @@ export function captureExplanation(
   return "No workflow will study a new capture. Captures are still saved and searchable. Select Enrich notes and press s to prepare a narrow, review-only draft; nothing is enabled until you review and save it.";
 }
 
-export function captureDraft(policy: PipelinePolicy): PipelinePolicy {
+export function captureDraft(policy: PipelinePolicy): { policy: PipelinePolicy; folder: string } | null {
+  const folder = captureFolder(policy);
+  if (!folder || !folderSchema.safeParse(folder).success) return null;
   const next = structuredClone(policy);
-  const folder = captureFolder(next);
-  const inScope = (scope: PipelinePolicy["readScope"]) =>
-    scope.folders.length > 0 || scope.paths.length > 0 || scope.tags.length > 0;
   next.enabled = true;
   if (!next.triggers.includes("save")) next.triggers = [...next.triggers, "save"];
-  if (next.mode !== "propose") next.mode = "propose";
-  if (!inScope(next.readScope)) next.readScope = { ...next.readScope, folders: [folder] };
-  if (!inScope(next.writeScope)) next.writeScope = { ...next.writeScope, folders: [folder] };
-  return next;
+  next.mode = "propose";
+  next.readScope = { ...next.readScope, paths: [], folders: [folder], tags: [] };
+  next.writeScope = { ...next.writeScope, paths: [], folders: [folder], tags: [] };
+  return { policy: next, folder };
 }
 
 export function activationConsequence(

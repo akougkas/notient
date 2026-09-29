@@ -315,12 +315,20 @@ export function SettingsView(props: Props) {
           CAPTURE_WORKFLOWS.includes(entry.id) &&
           key.eventType !== "repeat"
         ) {
-          setDraft(captureDraft(entry.policy));
+          const prepared = captureDraft(entry.policy);
+          if (!prepared) {
+            setError(true);
+            setNotice(
+              "The configured Inbox folder is the vault root or invalid, so a narrow draft is not possible. Set a folder under Scope first.",
+            );
+            return;
+          }
+          setDraft(prepared.policy);
           setSection(0);
           setCursor(0);
           setError(false);
           setNotice(
-            "Draft only, nothing is saved. It turns the workflow on for saves, limits reads and writes to your capture folder, and keeps results as reviews. Ctrl+S lists every change; a second Ctrl+S saves.",
+            `Draft only, nothing is saved. Reads and writes are replaced with the folder ${prepared.folder} alone (no exact notes or tags), any exclusions stay, the save trigger is added and results stay reviews. A capture saved outside ${prepared.folder} would not be studied. Ctrl+S lists every change; a second Ctrl+S saves.`,
           );
         }
       } else if (key.name === "tab") {
