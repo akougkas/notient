@@ -67,6 +67,7 @@ import {
   proposalStatementRows,
 } from "./proposalStorage";
 import { stagePendingProposal } from "./proposalWriter";
+import { reviewEffectFingerprint } from "./reviewIdentity";
 import { normalizeRejectionReason } from "./rejectionReason";
 import {
   pageReviews,
@@ -310,119 +311,154 @@ export class ApprovalService {
     const empty = { proposalIds: [] as string[], previewId: null, previewRevision: null };
     if (job.policy.mode === "report" && !job.preview) return empty;
     if (!plan.changes.length && !plan.relationships.length) return empty;
-    const identity = reviewRevision([
-      plan.pipeline,
-      [...plan.sources].sort((a, b) => a.path.localeCompare(b.path)),
-    ]);
-    return this.withIntentTurn(`review:${identity}`, async () => {
+    const sources = [...plan.sources].sort((a, b) => a.path.localeCompare(b.path));
+    const legacyId = reviewRevision([plan.pipeline, sources]);
+    const specificId = reviewRevision([plan.pipeline, sources, reviewEffectFingerprint(plan.changes, plan.relationships)]);
+    const terminal = (review: ReviewProposal | null) =>
+      review !== null &&
+      (review.state === "rejected" || review.state === "approved" || review.appliedHistory.length > 0);
+    return this.withIntentTurn(`review:${specificId}`, async () => {
       signal.throwIfAborted();
-      const existing = await readReview(this.options.db, identity);
-      if (
-        existing?.state === "rejected" ||
-        existing?.state === "approved" ||
-        existing?.appliedHistory.length
-      )
-        return empty;
-      const reader = new NoteReadService(this.options.vault);
-      for (const source of plan.sources) await reader.read(source);
-      const edgeIds: string[] = [];
-      const relationshipChanges: PipelinePlan["changes"] = [];
-      for (const suggestion of plan.relationships) {
-        signal.throwIfAborted();
-        const from = await lookupNoteByPath(this.options.db, suggestion.source.path);
-        const to = await lookupNoteByPath(this.options.db, suggestion.target.path);
-        if (!from || !to)
-          throw new NoteApiError(
-            "CONFLICT",
-            "relationship source has not been structurally indexed",
-          );
-        const producer =
-          job.pipeline === "contradictions"
-            ? "pipeline-contradictions"
-            : job.pipeline === "inbox"
-              ? "pipeline-inbox"
-              : "pipeline-relate";
-        const provenance: ProposalProvenance = {
+      const specific = await readReview(this.options.db, specificId);
+      if (terminal(specific)) return empty;
+      const legacy = await readReview(this.options.db, legacyId);
+      if (legacy !== null && !terminal(legacy))
+        return this.withIntentTurn(`review:${legacyId}`, async () => {
+          const current = await readReview(this.options.db, legacyId);
+          if (terminal(current)) return empty;
+          return this.stageReview(legacyId, current, job, plan, changes, signal);
+        });
+      if (legacy !== null && (await this.samePlanAsStored(legacy, plan, changes, job.caller))) return empty;
+      return this.stageReview(specificId, specific, job, plan, changes, signal);
+    });
+  }
+
+  private async samePlanAsStored(
+    stored: ReviewProposal,
+    plan: PipelinePlan,
+    changes: ChangeService,
+    caller: PipelineJob["caller"],
+  ): Promise<boolean> {
+    if (stored.previewId === null) return true;
+    try {
+      const preview = await changes.get(stored.previewId, caller);
+      return (
+        reviewEffectFingerprint(preview.changeSet.changes, []) ===
+        reviewEffectFingerprint(plan.changes, plan.relationships)
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  private async stageReview(
+    identity: string,
+    existing: ReviewProposal | null,
+    job: PipelineJob,
+    plan: PipelinePlan,
+    changes: ChangeService,
+    signal: AbortSignal,
+  ): Promise<{ proposalIds: string[]; previewId: string | null; previewRevision: string | null }> {
+    const empty = { proposalIds: [] as string[], previewId: null, previewRevision: null };
+    const reader = new NoteReadService(this.options.vault);
+    for (const source of plan.sources) await reader.read(source);
+    const edgeIds: string[] = [];
+    const relationshipChanges: PipelinePlan["changes"] = [];
+    for (const suggestion of plan.relationships) {
+      signal.throwIfAborted();
+      const from = await lookupNoteByPath(this.options.db, suggestion.source.path);
+      const to = await lookupNoteByPath(this.options.db, suggestion.target.path);
+      if (!from || !to)
+        throw new NoteApiError(
+          "CONFLICT",
+          "relationship source has not been structurally indexed",
+        );
+      const producer =
+        job.pipeline === "contradictions"
+          ? "pipeline-contradictions"
+          : job.pipeline === "inbox"
+            ? "pipeline-inbox"
+            : "pipeline-relate";
+      const provenance: ProposalProvenance = {
+        pipeline: job.pipeline,
+        jobId: job.id,
+        configurationRevision: job.configurationRevision,
+        sources: [suggestion.source, suggestion.target],
+        evidence: suggestion.evidence,
+        rationale: suggestion.rationale,
+        score: { kind: "model-assessment", value: suggestion.assessment },
+      };
+      const staged = await stagePendingProposal(this.options.db, {
+        relation: suggestion.relation,
+        from,
+        to,
+        source: producer,
+        agent: producer,
+        confidence: suggestion.assessment,
+        provenance,
+      });
+      if (staged.kind === "unavailable")
+        throw new NoteApiError("CONFLICT", "relationship endpoint disappeared during staging");
+      if (staged.kind === "rejected" || staged.state === "applied") continue;
+      const edgeId = staged.edge.recordId.toString();
+      edgeIds.push(edgeId);
+      relationshipChanges.push({
+        kind: "relationship",
+        source: suggestion.source,
+        target: suggestion.target,
+        edgeId,
+      });
+    }
+    // Relationship writes need their sources at the original paths, so they
+    // precede the first move. From that move on, the pipeline's order is
+    // kept: completion markers are authored last and apply last.
+    const firstMove = plan.changes.findIndex(
+      (change) =>
+        change.kind === "move" || change.kind === "archive" || change.kind === "unarchive",
+    );
+    const split = firstMove < 0 ? plan.changes.length : firstMove;
+    const all = [
+      ...plan.changes.slice(0, split),
+      ...relationshipChanges,
+      ...plan.changes.slice(split),
+    ];
+    if (!all.length) return empty;
+    const preview = await changes.preview(
+      { idempotencyKey: `pipeline-${job.id}`, changes: all },
+      job.caller,
+    );
+    const proposal = await saveReview(
+      this.options.db,
+      {
+        id: identity,
+        revision: "0".repeat(64),
+        state: "pending",
+        previewId: preview.previewId,
+        previewRevision: preview.revision,
+        edgeIds,
+        provenance: {
           pipeline: job.pipeline,
           jobId: job.id,
           configurationRevision: job.configurationRevision,
-          sources: [suggestion.source, suggestion.target],
-          evidence: suggestion.evidence,
-          rationale: suggestion.rationale,
-          score: { kind: "model-assessment", value: suggestion.assessment },
-        };
-        const staged = await stagePendingProposal(this.options.db, {
-          relation: suggestion.relation,
-          from,
-          to,
-          source: producer,
-          agent: producer,
-          confidence: suggestion.assessment,
-          provenance,
-        });
-        if (staged.kind === "unavailable")
-          throw new NoteApiError("CONFLICT", "relationship endpoint disappeared during staging");
-        if (staged.kind === "rejected" || staged.state === "applied") continue;
-        const edgeId = staged.edge.recordId.toString();
-        edgeIds.push(edgeId);
-        relationshipChanges.push({
-          kind: "relationship",
-          source: suggestion.source,
-          target: suggestion.target,
-          edgeId,
-        });
-      }
-      // Relationship writes need their sources at the original paths, so they
-      // precede the first move. From that move on, the pipeline's order is
-      // kept: completion markers are authored last and apply last.
-      const firstMove = plan.changes.findIndex(
-        (change) =>
-          change.kind === "move" || change.kind === "archive" || change.kind === "unarchive",
-      );
-      const split = firstMove < 0 ? plan.changes.length : firstMove;
-      const all = [
-        ...plan.changes.slice(0, split),
-        ...relationshipChanges,
-        ...plan.changes.slice(split),
-      ];
-      if (!all.length) return empty;
-      const preview = await changes.preview(
-        { idempotencyKey: `pipeline-${job.id}`, changes: all },
-        job.caller,
-      );
-      const proposal = await saveReview(
-        this.options.db,
-        {
-          id: identity,
-          revision: "0".repeat(64),
-          state: "pending",
-          previewId: preview.previewId,
-          previewRevision: preview.revision,
-          edgeIds,
-          provenance: {
-            pipeline: job.pipeline,
-            jobId: job.id,
-            configurationRevision: job.configurationRevision,
-            sources: plan.sources,
-            evidence: plan.findings.flatMap((finding) => finding.evidence).slice(0, 500),
-            rationale: plan.findings
-              .map((finding) => `${finding.title}: ${finding.explanation}`)
-              .join("\n\n"),
-            score: null,
-          },
-          createdAt: existing?.createdAt ?? Date.now(),
-          decidedAt: null,
-          decidedBy: null,
-          appliedHistory: [],
+          sources: plan.sources,
+          evidence: plan.findings.flatMap((finding) => finding.evidence).slice(0, 500),
+          rationale: plan.findings
+            .map((finding) => `${finding.title}: ${finding.explanation}`)
+            .join("\n\n"),
+          score: null,
         },
-        existing?.revision ?? null,
-      );
-      return {
-        proposalIds: [proposal.id],
-        previewId: proposal.previewId,
-        previewRevision: proposal.previewRevision,
-      };
-    });
+        createdAt: existing?.createdAt ?? Date.now(),
+        decidedAt: null,
+        decidedBy: null,
+        appliedHistory: [],
+      },
+      existing?.revision ?? null,
+    );
+    return {
+      proposalIds: [proposal.id],
+      previewId: proposal.previewId,
+      previewRevision: proposal.previewRevision,
+    };
   }
 
   /**
