@@ -541,13 +541,18 @@ export class PipelineContext {
       if (overview) this.overviews.set(note.note.path, overview);
       const runs: SuppliedVisibleRun[] = [];
       const segments: Array<{ id: string; part: "overview" | "content" | "metadata"; content: string }> = [];
+      const sectionStarts = note.structure.headings
+        .filter((heading) => heading.level <= 2)
+        .map((heading) => heading.range.start);
       const addTextPassage = (input: SuppliedTextPassage, part: "overview" | "content") => {
         const visible = visibleSourceRuns(input, note.body);
         let segmentIndex = 0;
         for (const run of visible) {
           const bodyStart = note.structure.frontmatter.range?.end ?? 0;
           const passages = splitVisibleRunAt(run, bodyStart);
-          for (const segment of passages.flatMap(splitVisibleRun)) {
+          for (const segment of passages
+            .flatMap((passage) => splitVisibleRunAtHeadings(passage, sectionStarts))
+            .flatMap(splitVisibleRun)) {
             const id = `g${generation}-d${index}-${part === "overview" ? "o" : "p"}${segmentIndex}`;
             segmentIndex += 1;
             const end = segment.start + segment.content.length;
@@ -777,6 +782,21 @@ function splitVisibleRunAt(run: SuppliedVisibleRun, boundary: number): SuppliedV
     { start: run.start, content: run.content.slice(0, offset) },
     { start: boundary, content: run.content.slice(offset) },
   ].filter((part) => part.content.length > 0);
+}
+
+function splitVisibleRunAtHeadings(
+  run: SuppliedVisibleRun,
+  headings: readonly number[],
+): SuppliedVisibleRun[] {
+  const boundaries = headings.filter(
+    (start) => start > run.start && start < run.start + run.content.length,
+  );
+  if (!boundaries.length) return [run];
+  const offsets = [0, ...boundaries.map((start) => start - run.start), run.content.length];
+  return offsets.slice(0, -1).map((offset, index) => ({
+    start: run.start + offset,
+    content: run.content.slice(offset, offsets[index + 1]),
+  }));
 }
 
 function splitVisibleRun(run: SuppliedVisibleRun): SuppliedVisibleRun[] {
