@@ -209,6 +209,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const stateRef = useRef(state);
   stateRef.current = state;
   const askScrollSavedRef = useRef<number | null>(null);
+  const noteReturnModeRef = useRef<"editing" | "navigation" | null>(null);
   const dispatch = useCallback<React.Dispatch<Action>>((action) => {
     if (
       (action.type === "view/set" || action.type === "view/cycle") &&
@@ -220,7 +221,19 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
     }
     if (action.type === "ask/new" || action.type === "ask/restore" || action.type === "ask/reset")
       askScrollSavedRef.current = null;
+    if (
+      action.type === "ask/new" ||
+      action.type === "ask/restore" ||
+      action.type === "view/cycle" ||
+      (action.type === "view/set" && action.view !== "ask" && action.view !== "explore")
+    )
+      noteReturnModeRef.current = null;
     rawDispatch(action);
+    if (action.type === "view/set" && action.view === "ask" && noteReturnModeRef.current !== null) {
+      const mode = noteReturnModeRef.current;
+      noteReturnModeRef.current = null;
+      if (mode === "navigation") rawDispatch({ type: "ask/composer", mode });
+    }
   }, []);
   useEffect(() => {
     if (state.view !== "ask" || askScrollSavedRef.current === null) return;
@@ -509,6 +522,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       quote?: string,
       keepPane?: boolean,
     ): Promise<void> => {
+      if (stateRef.current.view === "ask") noteReturnModeRef.current = stateRef.current.ask.composerMode;
       const request = ++noteRequestRef.current;
       const update: React.Dispatch<Action> = (action) => {
         if (noteRequestRef.current === request) dispatch(action);
