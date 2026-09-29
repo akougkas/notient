@@ -94,7 +94,7 @@ export function WritingView(props: Props) {
             ? "Your unsaved draft is restored. Save or discard it before starting another."
             : next.base
               ? "Edit your Markdown below. Review the changes before saving."
-              : `Write the thought. Ctrl+S saves it to the folder below. Draft kept privately. ${note ?? ""}`.trim(),
+              : `Ctrl+S saves to the folder below; your draft is kept privately. ${note ?? ""}`.trim(),
         );
       } catch (error) {
         if (!cancelled) report(error);
@@ -597,17 +597,21 @@ async function captureDestination(rpc: NotientRpc) {
     const { policy } = entry;
     return {
       folder: policy.destinations.inbox,
-      note: (path: string) =>
-        !policy.enabled || catalog.paused || !policy.triggers.includes("save")
-          ? "Background Inbox work is off, so saving only stores the note."
-          : scopeAllows({ ...policy.readScope, tags: [], excludeTags: [] }, path, [])
-            ? "This folder is your Inbox: your background save trigger applies."
-            : "This folder is outside your background scope, so saving only stores the note.",
+      note: (path: string) => {
+        if (!policy.enabled || catalog.paused || !policy.triggers.includes("save"))
+          return "Inbox workflow is off in current settings; other workflows may still study it.";
+        const scope = { ...policy.readScope, tags: [], excludeTags: [] };
+        if (!scopeAllows(scope, path, []))
+          return "Current settings keep the Inbox workflow out of this folder.";
+        if (policy.readScope.tags.length || policy.readScope.excludeTags.length)
+          return "Inbox workflow scope also depends on tags, so pickup is not certain.";
+        return "Current settings let the Inbox workflow consider it; not a guarantee.";
+      },
     };
   } catch {
     return {
       folder: DEFAULT_CAPTURE_FOLDER,
-      note: () => "Background settings were unavailable, so the Inbox folder is a default.",
+      note: () => "Inbox workflow settings were unavailable; this folder is a default.",
     };
   }
 }
