@@ -324,7 +324,7 @@ export class MethodologySuggestionService {
 
 1. Body observations: Return exactly one bodyObservations entry for each supplied documents[].index. Each entry has that index as note, up to two concise observations of what the note body does, and for each one an exact substantive body witness from the same document. Use exactly one selector per witness: copied passages[].id or a contiguous quote from that document's passages[].content. Do not use frontmatter, headings alone, repeated identifiers, or folder names as observations. If no body function can be observed, return an empty observations array and a concise insufficiencyReason; otherwise set insufficiencyReason to null. Never invent IDs, join passages, or paraphrase quotes.
 
-2. Functional comparison: Only after body observations, set sharedFunction when substantive observations from at least two supplied notes support the same useful purpose. Different subjects, activities, values, results, or approval routes may share a capture, reporting, evidence, review, retrieval, or qualification function when the passages show it. State material differences. Set prospectiveBenefit only when the examples support a concrete reuse benefit; otherwise set it to null. This is a bounded note-design judgment about future capture, interpretation, retrieval, or retention, not a claim that future use already occurred or was externally verified. The authors need not request a convention or endorse your suggestion. A shared author or capture process limits generalization but does not automatically rule out a narrow, qualified practice for this vault. Record missing or limited support in limitations. Do not infer recurrence from shared headings or an attractive analogy.
+2. Functional comparison: Only after body observations, set sharedFunction when substantive observations from at least two supplied notes support the same useful purpose. Different subjects, activities, values, results, or approval routes may share a capture, reporting, evidence, review, retrieval, or qualification function when the passages show it. State material differences. Set prospectiveBenefit only when the examples support a concrete reuse benefit; otherwise set it to null. This is a bounded note-design judgment about future capture, interpretation, retrieval, or retention, not a claim that future use already occurred or was externally verified. The authors need not request a convention or endorse your suggestion. A shared author or capture process limits generalization but does not automatically rule out a narrow, qualified practice for this vault. Record missing or limited support in limitations. repeatedBodyLabels lists line labels that occur in more than one complete supplied note body, with the exact line from each. Use them as leads to check against the passages and cite only passages. A shared label can hide a different purpose, and an empty list does not show that no practice is shared. Do not infer recurrence from shared headings or an attractive analogy.
 
 3. Separate assessments: For organization, use the selected note's exact current path. Choose move only when an existing candidateFolders entry is clearly better under the active methodology; otherwise choose no-move. A reference can also contain observations or next steps. Do not create folders, rename, split, merge, or rewrite content. Give organization its own grounded reason and exact evidence.
 
@@ -347,6 +347,7 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
                   roles: inferNoteRoles(note),
                 })),
                 configuredConventions: methodology.conventions,
+                repeatedBodyLabels: repeatedBodyLabels(context),
               },
               {
                 instructionProfile: "methodology",
@@ -1114,6 +1115,41 @@ function uniqueEvidence(evidence: SourceReference[]): SourceReference[] {
 
 function methodologyName(mode: string, name: string): string {
   return mode === "custom" ? name : mode === "ai-managed" ? "AI-managed" : mode.toUpperCase();
+}
+
+const BODY_LABEL_LINE =
+  /^(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?([A-Za-z][A-Za-z0-9 /&'()-]{1,40}?)(?:\*\*|__)?\s*:(?:\*\*|__)?\s+\S/;
+const MAX_BODY_LABELS = 6;
+const MAX_LABEL_EXAMPLE_CHARS = 160;
+
+function repeatedBodyLabels(
+  context: PipelineContext,
+): { label: string; notes: number[]; examples: { note: number; line: string }[] }[] {
+  const byLabel = new Map<string, Map<number, string>>();
+  context.documents.forEach((note, index) => {
+    if (!context.isComplete(note)) return;
+    const body = note.body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+    let fenced = false;
+    for (const raw of body.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line.startsWith("```") || line.startsWith("~~~")) fenced = !fenced;
+      if (fenced || line.startsWith("#")) continue;
+      const label = BODY_LABEL_LINE.exec(line)?.[1]?.trim().toLowerCase();
+      if (!label) continue;
+      const seen = byLabel.get(label) ?? new Map<number, string>();
+      if (!seen.has(index)) seen.set(index, line.slice(0, MAX_LABEL_EXAMPLE_CHARS));
+      byLabel.set(label, seen);
+    }
+  });
+  return [...byLabel.entries()]
+    .filter(([, seen]) => seen.size >= 2)
+    .sort((left, right) => right[1].size - left[1].size || left[0].localeCompare(right[0]))
+    .slice(0, MAX_BODY_LABELS)
+    .map(([label, seen]) => ({
+      label,
+      notes: [...seen.keys()],
+      examples: [...seen.entries()].map(([note, line]) => ({ note, line })),
+    }));
 }
 
 function folderOf(path: string): string {
