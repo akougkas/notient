@@ -43,18 +43,18 @@ export function HomeView({
   const vitalsTitle =
     state.stats === null
       ? state.statsError === null && state.connection.connected
-        ? "vitals"
-        : "vitals (unavailable)"
+        ? "vault counts"
+        : "vault counts (unavailable)"
       : state.statsError === null && state.connection.connected
-        ? "vitals"
-        : "vitals (stale)";
+        ? "vault counts"
+        : "vault counts (stale)";
 
   return (
     <box width={layout.width} flexDirection="column" flexGrow={1}>
       <IndexingStatus state={state} layout={layout} />
       <Panel title={vitalsTitle} width={layout.vitalsWidth} height={layout.vitalsHeight}>
         {cards.length === 0 ? (
-          <EmptyLine text={state.statsError ?? "waiting for the first vault.stats reading…"} />
+          <EmptyLine text={state.statsError ?? "waiting for the first vault count reading…"} />
         ) : (
           <box flexDirection="row" flexWrap="wrap">
             {cards.map((card) => (
@@ -108,9 +108,9 @@ export function HomeView({
       </box>
 
       <box width={layout.width} height={layout.bottomHeight} minHeight={0} flexDirection="row">
-        <Panel title="typed edges" width={layout.typedEdgesWidth} height={layout.bottomHeight}>
+        <Panel title="typed links" width={layout.typedEdgesWidth} height={layout.bottomHeight}>
           {breakdown.length === 0 ? (
-            <EmptyLine text="no typed edges yet" />
+            <EmptyLine text="no typed links counted, approved or proposed" />
           ) : (
             <scrollbox
               width={layout.edgeScrollWidth}
@@ -139,14 +139,14 @@ export function HomeView({
           )}
         </Panel>
         <Panel
-          title="recent discoveries"
+          title="swarm events · session"
           width={layout.discoveriesWidth}
           height={layout.bottomHeight}
         >
           {discoveries.length === 0 ? (
             <EmptyLine
               text={truncate(
-                "your notes have made no new connections yet",
+                "no relationship events seen this session · counts are under typed links",
                 layout.discoveryRowsWidth,
               )}
             />

@@ -136,13 +136,13 @@ export function buildVitalsCards(
     { label: "notes", value: String(stats.notes) },
     { label: "blocks", value: String(stats.blocks) },
     { label: "chunks", value: String(stats.chunks) },
-    { label: "concepts", value: String(stats.concepts) },
-    { label: "claims", value: String(stats.claims) },
-    { label: "questions", value: String(stats.questions) },
+    { label: "ai concepts", value: String(stats.concepts) },
+    { label: "ai claims", value: String(stats.claims) },
+    { label: "ai questions", value: String(stats.questions) },
     { label: "wikilinks", value: String(stats.wikilinks) },
-    { label: "typed edges", value: `${stats.typedEdgesApproved} approved` },
-    { label: "pending", value: `${pending.proposals} edges` },
-    { label: "approvals", value: String(pending.approvals) },
+    { label: "typed links", value: `${stats.typedEdgesApproved} approved` },
+    { label: "proposed", value: `${pending.proposals} links` },
+    { label: "approvals", value: `${pending.approvals} waiting` },
   ];
 }
 
