@@ -1,4 +1,3 @@
-import { MethodologyView, type MethodologySession } from "./views/MethodologyView";
 import { z } from "zod";
 import { inferenceAttemptSchema } from "../../api/pipelines";
 import type { NoteSelector } from "../../api/schema";
@@ -7,6 +6,7 @@ import { noteOutline } from "./viewModels";
 import { type AnalysisSession, AnalysisView } from "./views/AnalysisView";
 import { type BriefSession, BriefView } from "./views/BriefView";
 import { HistoryView } from "./views/HistoryView";
+import { type MethodologySession, MethodologyView } from "./views/MethodologyView";
 /**
  * TUI shell.
  *
@@ -26,8 +26,6 @@ import type { Conversation } from "../../core/chat/types";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import type { AgentEventWire, ChatApproveResult } from "../../daemon/wire";
 import { type ClientHandle, connectClient } from "../client";
-import { findNotePaths } from "./rpc";
-import type { ConventionDraft } from "./methodologyConvention";
 import type { Emitter } from "../output";
 import type { ChatLine } from "./ChatView";
 import {
@@ -48,7 +46,9 @@ import {
 } from "./history";
 import { type Intent, resolveKey } from "./keymap";
 import { type TuiLayout, deriveTuiLayout } from "./layout";
+import type { ConventionDraft } from "./methodologyConvention";
 import { navigationMatches } from "./navigation";
+import { findNotePaths } from "./rpc";
 import {
   type NotientRpc,
   RpcCallError,
@@ -81,9 +81,9 @@ import { AskView } from "./views/AskView";
 import { DisconnectedBanner, KeyHintBar, NoticeLine, PromptLine, TopBar } from "./views/Chrome";
 import { ExploreView } from "./views/ExploreView";
 import { HomeView } from "./views/HomeView";
-import { IntelligenceView } from "./views/IntelligenceView";
 import { InboxView } from "./views/InboxView";
-import { ReviewView, type ReviewReadingSession } from "./views/ReviewView";
+import { IntelligenceView } from "./views/IntelligenceView";
+import { type ReviewReadingSession, ReviewView } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { StreamView } from "./views/StreamView";
 import { WritingView } from "./views/WritingView";
@@ -185,6 +185,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const statusPollRef = useRef<Promise<void> | null>(null);
   const probeNoticeRef = useRef<string | null>(null);
   const statsPollRef = useRef<Promise<void> | null>(null);
+  const developmentsPollRef = useRef<Promise<void> | null>(null);
+  const findNoteRef = useRef<(query: string) => Promise<void>>(async () => {});
   const inboxPollRef = useRef<Promise<void> | null>(null);
   const eventPollRef = useRef<Promise<void> | null>(null);
   const pendingTransitionFlightsRef = useRef(new Map<string, Promise<void>>());
@@ -364,6 +366,31 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const loadStats = useCallback(
     (): Promise<void> => runSingleFlight(statsPollRef, fetchStats),
     [fetchStats],
+  );
+
+  const fetchDevelopments = useCallback(async (): Promise<void> => {
+    try {
+      const [digest, catalog] = await Promise.all([
+        rpcRef.current.cultivationDigest({ limit: 5 }),
+        rpcRef.current.pipelines(),
+      ]);
+      dispatch({
+        type: "developments/loaded",
+        digest,
+        enabledPipelines: catalog.pipelines.filter((entry) => entry.policy.enabled).length,
+      });
+    } catch (error) {
+      if (isDisconnect(error)) return fail(error, "cultivation.digest");
+      dispatch({
+        type: "developments/failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [fail]);
+
+  const loadDevelopments = useCallback(
+    (): Promise<void> => runSingleFlight(developmentsPollRef, fetchDevelopments),
+    [fetchDevelopments],
   );
 
   const refreshStats = useCallback(
@@ -550,6 +577,14 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
 
   // The pending badge is global, so its sole authority must stay fresh in
   // every view rather than only while Home is visible.
+  useEffect(() => {
+    if (!state.connection.connected) return;
+    void loadDevelopments();
+    void findNotePaths(rpcRef.current, "", 3)
+      .then((paths) => dispatch({ type: "developments/samples", samples: paths }))
+      .catch(() => {});
+  }, [loadDevelopments, state.connection.connected]);
+  usePoll(state.connection.connected && state.view === "ask", 15_000, loadDevelopments);
   usePoll(state.connection.connected, STATS_POLL_MS, loadStats);
   usePoll(state.connection.connected, STATS_POLL_MS, loadStatus);
   usePoll(state.view === "inbox" && state.connection.connected, INBOX_POLL_MS, loadInbox);
@@ -573,6 +608,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
           getLastAssistant: () => lastAssistantText(stateRef.current),
           openConversations,
           newConversation,
+          runIntent: (intent) => intentRef.current(intent),
+          findNote: (query) => findNoteRef.current(query),
         },
         dispatch,
         onExit,
@@ -764,6 +801,38 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
     [fail, openNote],
   );
 
+  findNoteRef.current = openPickedNote;
+
+  const setBackgroundPaused = useCallback(
+    async (paused: boolean): Promise<void> => {
+      try {
+        const catalog = await rpcRef.current.pipelines();
+        if (catalog.paused === paused) {
+          dispatch({
+            type: "notice",
+            text: paused ? "Cultivation is already paused." : "Cultivation is not paused.",
+          });
+        } else {
+          await rpcRef.current.pauseBackground({
+            paused,
+            revision: catalog.revision,
+            idempotencyKey: crypto.randomUUID(),
+          });
+          dispatch({
+            type: "notice",
+            text: paused
+              ? "Cultivation paused. Reading, capture and search are unaffected."
+              : "Cultivation resumed within your saved scope and budget.",
+          });
+        }
+        await loadDevelopments();
+      } catch (error) {
+        fail(error, paused ? "Pausing cultivation" : "Resuming cultivation");
+      }
+    },
+    [fail, loadDevelopments],
+  );
+
   const submitPrompt = useCallback(async (): Promise<void> => {
     const current = stateRef.current;
     const { kind, buffer, matches, cursor } = current.prompt;
@@ -927,6 +996,17 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         });
         return;
       }
+      if (intent.kind === "help") {
+        dispatch({ type: "prompt/close" });
+        dispatch({ type: "view/set", view: "ask" });
+        void runCommand("/help");
+        return;
+      }
+      if (intent.kind === "pause-background") {
+        dispatch({ type: "prompt/close" });
+        void setBackgroundPaused(intent.paused);
+        return;
+      }
       if (intent.kind === "toggle-activity") {
         dispatch({ type: "ask/activity" });
         return;
@@ -983,6 +1063,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       submitPrompt,
       openConversations,
       newConversation,
+      runCommand,
+      setBackgroundPaused,
     ],
   );
 
@@ -1371,6 +1453,9 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
             );
           }}
           onToggleActivity={() => dispatch({ type: "ask/activity" })}
+          onOpenDevelopment={(item) => {
+            void openNote(item.path);
+          }}
           onSubmit={(final) => {
             void submitAsk(final);
           }}

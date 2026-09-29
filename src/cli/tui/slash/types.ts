@@ -1,4 +1,5 @@
 import type { ClientHandle } from "../../../cli/client";
+import type { Intent } from "../keymap";
 
 export interface ProposalListItem {
   id: string;
@@ -33,6 +34,8 @@ export interface SlashContext {
   readonly getLastAssistant?: () => string | null;
   readonly openConversations?: () => Promise<void>;
   readonly newConversation?: () => Promise<void>;
+  readonly runIntent?: (intent: Intent) => void;
+  readonly findNote?: (query: string) => Promise<void>;
 }
 
 export interface SlashOutcome {

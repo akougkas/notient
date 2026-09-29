@@ -44,6 +44,8 @@ export type Intent =
   | { readonly kind: "full-note" }
   | { readonly kind: "conversations" }
   | { readonly kind: "new-conversation" }
+  | { readonly kind: "help" }
+  | { readonly kind: "pause-background"; readonly paused: boolean }
   | { readonly kind: "quit" }
   | { readonly kind: "reconnect" }
   | { readonly kind: "view"; readonly view: (typeof VIEW_IDS)[number] }
@@ -70,10 +72,9 @@ export interface KeyHint {
   readonly label: string;
 }
 
-const GLOBAL_HINTS: KeyHint[] = [
-  { keys: "Ctrl+P", label: "menu" },
-  { keys: "Ctrl+O", label: "threads" },
-];
+const MENU_HINT: KeyHint = { keys: "Ctrl+P", label: "menu" };
+
+const GLOBAL_HINTS: KeyHint[] = [MENU_HINT, { keys: "Ctrl+O", label: "threads" }];
 
 const VIEW_HINTS: Record<AppState["view"], KeyHint[]> = {
   home: [
@@ -90,10 +91,11 @@ const VIEW_HINTS: Record<AppState["view"], KeyHint[]> = {
     { keys: "/", label: "filter" },
   ],
   ask: [
+    MENU_HINT,
+    { keys: "Ctrl+B/Alt+C", label: "capture" },
+    { keys: "Alt+O", label: "find" },
+    { keys: "Ctrl+S/Alt+S", label: "save answer" },
     { keys: "Enter", label: "send" },
-    { keys: "Ctrl+P", label: "menu" },
-    { keys: "Ctrl+B", label: "capture" },
-    { keys: "Ctrl+S", label: "save answer" },
     { keys: "Esc", label: "navigate" },
   ],
   explore: [
@@ -123,22 +125,25 @@ export function keyHints(state: AppState): KeyHint[] {
   }
   if (state.view === "ask" && state.ask.busy)
     return [
+      MENU_HINT,
       { keys: "Esc", label: "stop turn" },
+      { keys: "Ctrl+B/Alt+C", label: "capture" },
       { keys: "Ctrl+T", label: "activity" },
-      { keys: "Ctrl+B", label: "capture" },
     ];
   if (state.view === "ask" && state.ask.composerMode === "editing") {
     return VIEW_HINTS.ask;
   }
   if (state.view === "ask" && state.ask.composerMode === "navigation") {
     return [
+      MENU_HINT,
       { keys: "i", label: "write" },
       { keys: "o", label: "source" },
+      { keys: "d", label: "developments" },
       { keys: "j/k", label: "select" },
-      ...GLOBAL_HINTS,
+      { keys: "Ctrl+O", label: "threads" },
     ];
   }
-  return [...VIEW_HINTS[state.view], ...GLOBAL_HINTS];
+  return [MENU_HINT, ...VIEW_HINTS[state.view], ...GLOBAL_HINTS.slice(1)];
 }
 
 function digitView(name: string): (typeof VIEW_IDS)[number] | null {
@@ -166,6 +171,12 @@ function resolveAlwaysOn(state: AppState, key: KeyPress): Intent | null {
   if (key.ctrl === true && !key.repeat && key.name === "b") return { kind: "capture" };
   if (key.ctrl === true && !key.repeat && key.name === "s" && state.view === "ask")
     return { kind: "save-answer" };
+  if (key.meta === true && key.ctrl !== true && !key.repeat) {
+    if (key.name === "c") return { kind: "capture" };
+    if (key.name === "s" && state.view === "ask") return { kind: "save-answer" };
+    if (key.name === "o" && state.prompt.kind === null)
+      return { kind: "prompt-open", prompt: "note-picker" };
+  }
   if (key.ctrl === true && key.name === "c") return { kind: "quit" };
   if (!state.connection.connected && !state.connection.reconnecting) return { kind: "reconnect" };
   if (key.ctrl === true && !key.repeat && key.name === "p") return { kind: "navigation" };
@@ -213,6 +224,7 @@ const VIEW_KEYS: Record<AppState["view"], ViewResolver> = {
   ask: (key) => {
     if (key.name === "i" || key.name === "return") return { kind: "compose" };
     if (key.name === "o") return { kind: "open-in-explore" };
+    if (key.name === "d") return { kind: "intelligence" };
     return null;
   },
   explore: (key) => {

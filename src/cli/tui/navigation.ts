@@ -1,38 +1,134 @@
 import type { Intent } from "./keymap";
 
-const ACTIONS: ReadonlyArray<{ label: string; intent: Intent }> = [
-  { label: "Vault intelligence — findings and background work", intent: { kind: "intelligence" } },
+export interface NavigationAction {
+  readonly label: string;
+  readonly intent: Intent;
+  readonly keys?: string;
+  readonly slash?: string;
+}
+
+export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
+  {
+    label: "Vault intelligence — findings and background work",
+    intent: { kind: "intelligence" },
+    slash: "developments",
+  },
   {
     label: "Discuss this note — bring it into your conversation",
     intent: { kind: "discuss-note" },
+    keys: "a in Notes",
+    slash: "discuss",
   },
-  { label: "Capture a thought — write or resume your draft", intent: { kind: "capture" } },
-  { label: "Save this answer — review it as a note", intent: { kind: "save-answer" } },
-  { label: "Edit the open note — review before saving", intent: { kind: "edit-note" } },
-  { label: "Chat — return to your conversation", intent: { kind: "view", view: "ask" } },
+  {
+    label: "Capture a thought — write or resume your draft",
+    intent: { kind: "capture" },
+    keys: "Ctrl+B or Alt+C",
+    slash: "capture",
+  },
+  {
+    label: "Save this answer — review it as a note",
+    intent: { kind: "save-answer" },
+    keys: "Ctrl+S or Alt+S",
+    slash: "save",
+  },
+  {
+    label: "Edit the open note — review before saving",
+    intent: { kind: "edit-note" },
+    keys: "e in Notes",
+    slash: "edit",
+  },
+  {
+    label: "Chat — return to your conversation",
+    intent: { kind: "view", view: "ask" },
+    keys: "Esc in Notes",
+    slash: "chat",
+  },
   {
     label: "Find a note — search names and saved text",
     intent: { kind: "prompt-open", prompt: "note-picker" },
+    keys: "Alt+O",
+    slash: "find",
   },
-  { label: "Conversations — continue a saved thread", intent: { kind: "conversations" } },
-  { label: "New conversation — start a fresh thread", intent: { kind: "new-conversation" } },
-  { label: "Review changes — proposals and approvals", intent: { kind: "view", view: "inbox" } },
+  {
+    label: "Conversations — continue a saved thread",
+    intent: { kind: "conversations" },
+    keys: "Ctrl+O",
+    slash: "threads",
+  },
+  {
+    label: "New conversation — start a fresh thread",
+    intent: { kind: "new-conversation" },
+    keys: "Ctrl+N",
+    slash: "new",
+  },
+  {
+    label: "Review changes — proposals and approvals",
+    intent: { kind: "view", view: "inbox" },
+    slash: "review",
+  },
   {
     label: "Compare notes — understand their differences",
     intent: { kind: "analysis", mode: "compare" },
+    slash: "compare",
   },
   {
     label: "Find connections — explore one note’s ideas",
     intent: { kind: "analysis", mode: "correlate" },
+    slash: "connections",
   },
-  { label: "Methodology suggestions — study organization and recurring conventions", intent: { kind: "methodology" } },
-  { label: "Brief me — get up to speed with source evidence", intent: { kind: "brief" } },
-  { label: "Change history — inspect earlier versions and undo", intent: { kind: "history" } },
-  { label: "Vault status — indexing and connections", intent: { kind: "view", view: "home" } },
-  { label: "Preferences — background work, scope and resources", intent: { kind: "settings" } },
-  { label: "Activity — see what happened", intent: { kind: "view", view: "stream" } },
-  { label: "Command — run a slash command", intent: { kind: "prompt-open", prompt: "command" } },
+  {
+    label: "Methodology suggestions — study organization and recurring conventions",
+    intent: { kind: "methodology" },
+    slash: "methodology",
+  },
+  {
+    label: "Brief me — get up to speed with source evidence",
+    intent: { kind: "brief" },
+    slash: "brief",
+  },
+  {
+    label: "Change history — inspect earlier versions and undo",
+    intent: { kind: "history" },
+    slash: "changes",
+  },
+  {
+    label: "Vault status — indexing and connections",
+    intent: { kind: "view", view: "home" },
+    slash: "status",
+  },
+  {
+    label: "Pause cultivation — stop background work now",
+    intent: { kind: "pause-background", paused: true },
+    slash: "pause",
+  },
+  {
+    label: "Resume cultivation — continue within your scope and budget",
+    intent: { kind: "pause-background", paused: false },
+    slash: "unpause",
+  },
+  {
+    label: "Preferences — background work, scope and resources",
+    intent: { kind: "settings" },
+    slash: "preferences",
+  },
+  {
+    label: "Activity — see what happened",
+    intent: { kind: "view", view: "stream" },
+    slash: "activity",
+  },
+  {
+    label: "Help — every action and its keys",
+    intent: { kind: "help" },
+    slash: "help",
+  },
+  {
+    label: "Command — run a slash command",
+    intent: { kind: "prompt-open", prompt: "command" },
+    keys: ":",
+  },
 ];
+
+const ACTIONS = NAVIGATION_ACTIONS;
 
 /**
  * A name match outranks a description match, and a name that starts with the

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { normalizeAgentId } from "../core/auth/agentIdentity";
-import { withPairedCredentialFile } from "./client";
 import { VERSION } from "../version";
+import { withPairedCredentialFile } from "./client";
 import { runAnalysisCommand } from "./commands/analysis";
 import { runApiCommand } from "./commands/api";
 import { parseAskFormat, parseAskMaxRounds, parseAskScope, runAskCommand } from "./commands/ask";
@@ -59,6 +59,7 @@ import {
 } from "./commands/session";
 import { runSetupCommand } from "./commands/setup";
 import { runVitalsCommand } from "./commands/vitals";
+import { type EntryResult, prepareRootEntry } from "./entry";
 import { defaultStateLoader, resolveVault } from "./env";
 import { type Emitter, type EmitterMode, defaultMode, makeEmitter } from "./output";
 import { selectRootEntry } from "./rootEntry";
@@ -226,7 +227,7 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (rootEntry === "tui") {
     if (resolveCredentialFile(parsed) !== undefined)
       throw new Error("INVALID_PARAMS: --credential-file requires an explicit CLI command");
-    return await dispatchChat({ ...parsed, command: "chat" }, emitter, undefined);
+    return await dispatchRootWorkspace(parsed, emitter);
   }
   const command = parsed.command;
   if (command === null) throw new Error("INTERNAL: command root entry did not select a command");
@@ -971,6 +972,34 @@ async function dispatchUndo(
   });
 }
 
+async function dispatchRootWorkspace(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  let entry: EntryResult;
+  try {
+    entry = await prepareRootEntry({
+      flagVault: typeof parsed.flags.vault === "string" ? parsed.flags.vault : null,
+      env: process.env as Record<string, string | undefined>,
+      cwd: process.cwd(),
+      stateLoader: defaultStateLoader(),
+      emitter,
+      ask: (question) => terminal.question(question),
+      say: (line) => process.stderr.write(`${line}\n`),
+      setup: (vaultPath) =>
+        runSetupCommand({
+          vaultPathArg: vaultPath,
+          cwd: process.cwd(),
+          emitter,
+          ask: (question) => terminal.question(question),
+        }),
+    });
+  } finally {
+    terminal.close();
+  }
+  if (entry.kind === "exit") return entry.code;
+  await runChatTui({ vaultPath: entry.vaultPath, emitter, clientIdentity: undefined });
+  return 0;
+}
+
 async function dispatchChat(
   parsed: ParsedArgs,
   emitter: Emitter,
@@ -1432,7 +1461,7 @@ async function requireVault(parsed: ParsedArgs): Promise<string> {
   const vaultPath = await resolveVaultForDaemon(parsed);
   if (!vaultPath) {
     throw new Error(
-      "No vault. Pass --vault, set NOTIENT_VAULT, or run 'notient init <path>' first.",
+      "No vault selected. Run notient to choose one, notient setup <folder>, pass --vault <folder>, or set NOTIENT_VAULT.",
     );
   }
   return vaultPath;

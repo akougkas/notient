@@ -6,6 +6,8 @@
  * next to each other.
  */
 
+import type { Intent } from "./keymap";
+import { NAVIGATION_ACTIONS } from "./navigation";
 import { createRpc } from "./rpc";
 import { rpcGraph, rpcPulse } from "./slash/graph";
 import { copyLastAssistant, rpcHistory, rpcUndo } from "./slash/history";
@@ -40,16 +42,10 @@ export function parseSlashCommand(line: string): { verb: string; rest: string } 
   };
 }
 
-const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
-  ["/threads", "choose a saved conversation (Ctrl+O)"],
-  ["/new", "start a new conversation (Ctrl+N)"],
-  ["/read <path>", "read a vault note"],
-  ["/search <query>", "balanced search"],
+const ADVANCED_HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["/awaken", "index the vault"],
   ["/vitals <path>", "note health snapshot"],
   ["/health", "substrate status"],
-  ["/model", "show endpoint, model, embed, context"],
-  ["/model list", "list models on the active endpoint"],
   ["/approve <id>", "approve a pending tool call"],
   ["/deny <id> [reason]", "deny a pending tool call"],
   ["/proposals [page]", "list pending edge proposals"],
@@ -65,18 +61,49 @@ const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["/pipelines", "inspect built-in pipelines and current policies"],
   ["/pipeline <JSON request>", "start a bounded live pipeline and return its job"],
   ["/job <id> [pause|resume|cancel|retry <revision> <key>]", "inspect or control a durable job"],
-  ["/copy", "save the last reply from your notes"],
-  ["/clear", "clear the transcript"],
-  ["/help", "show this table"],
   ["/quit", "exit the TUI"],
 ];
 
+const EXTRA_HELP_ROWS: ReadonlyArray<readonly [string, string, string]> = [
+  ["/read <path>", "", "read a vault note here in the conversation"],
+  ["/search <query>", "", "search saved text"],
+  ["/model", "", "show the model, embeddings and context in use"],
+  ["/copy", "", "copy the last reply"],
+  ["/clear", "", "clear this transcript"],
+  ["/quit", "Ctrl+C", "leave the workspace"],
+];
+
+export function buildHelpText(): string {
+  const actions = NAVIGATION_ACTIONS.filter((action) => action.slash !== undefined).map(
+    (action) => {
+      const [name, description] = action.label.split(" — ");
+      return [`/${action.slash}`, action.keys ?? "", `${name}: ${description}`] as const;
+    },
+  );
+  const rows = [...actions, ...EXTRA_HELP_ROWS];
+  const slashWidth = rows.reduce((max, [slash]) => Math.max(max, slash.length), 0);
+  const keysWidth = rows.reduce((max, [, keys]) => Math.max(max, keys.length), 0);
+  return [
+    "Ask, capture a thought, or find a note. Everything below is also in the menu (Ctrl+P).",
+    "",
+    "Type a question and press Enter. Bring a note into it with @path. Esc moves around the chat.",
+    "",
+    ...rows.map(
+      ([slash, keys, description]) =>
+        `${slash.padEnd(slashWidth)}  ${keys.padEnd(keysWidth)}  ${description}`,
+    ),
+    "",
+    "Alt+C, Alt+S and Alt+O work where a terminal or tmux takes Ctrl+B or Ctrl+S.",
+    "/help advanced lists reviewed-change, job and graph commands.",
+  ].join("\n");
+}
+
 export function buildHelpTable(): string {
-  const verbWidth = HELP_ROWS.reduce((max, [verb]) => Math.max(max, verb.length), 0);
-  const descWidth = HELP_ROWS.reduce((max, [, desc]) => Math.max(max, desc.length), 0);
+  const verbWidth = ADVANCED_HELP_ROWS.reduce((max, [verb]) => Math.max(max, verb.length), 0);
+  const descWidth = ADVANCED_HELP_ROWS.reduce((max, [, desc]) => Math.max(max, desc.length), 0);
   const top = `┌${"─".repeat(verbWidth + 2)}┬${"─".repeat(descWidth + 2)}┐`;
   const bottom = `└${"─".repeat(verbWidth + 2)}┴${"─".repeat(descWidth + 2)}┘`;
-  const rows = HELP_ROWS.map(
+  const rows = ADVANCED_HELP_ROWS.map(
     ([verb, desc]) => `│ ${verb.padEnd(verbWidth)} │ ${desc.padEnd(descWidth)} │`,
   );
   return [top, ...rows, bottom].join("\n");
@@ -94,7 +121,9 @@ const VERB_TABLE: Record<string, SlashHandler> = {
     return { message: "" };
   },
   quit: async () => ({ message: "bye.", exit: true }),
-  help: async () => ({ message: buildHelpTable() }),
+  help: async (rest) => ({
+    message: rest.trim() === "advanced" ? buildHelpTable() : buildHelpText(),
+  }),
   clear: async () => ({ message: "", resetTranscript: true }),
   read: async (rest, context) =>
     rest.length === 0 ? { message: "/read needs a path" } : rpcReadNote(context, rest),
@@ -123,6 +152,26 @@ const VERB_TABLE: Record<string, SlashHandler> = {
   copy: async (_rest, context) => copyLastAssistant(context),
   model: async (rest, context) => modelVerb(rest, context),
 };
+
+VERB_TABLE.menu = async (_rest, context) => openIntent(context, { kind: "navigation" });
+VERB_TABLE.find = async (rest, context) => {
+  if (rest.length > 0 && context.findNote) {
+    await context.findNote(rest);
+    return { message: "" };
+  }
+  return openIntent(context, { kind: "prompt-open", prompt: "note-picker" });
+};
+for (const action of NAVIGATION_ACTIONS) {
+  const verb = action.slash;
+  if (verb !== undefined && VERB_TABLE[verb] === undefined)
+    VERB_TABLE[verb] = async (_rest, context) => openIntent(context, action.intent);
+}
+
+function openIntent(context: SlashContext, intent: Intent): SlashOutcome {
+  if (!context.runIntent) return { message: "Open the TUI to use this." };
+  context.runIntent(intent);
+  return { message: "" };
+}
 
 export async function dispatchSlashCommand(
   line: string,

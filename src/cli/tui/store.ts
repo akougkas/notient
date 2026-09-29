@@ -1,3 +1,4 @@
+import type { CultivationDigest } from "../../api/cultivation";
 import type { GraphNeighbors } from "../../api/graph";
 import type { NoteStructure, SourceReference } from "../../api/schema";
 import type { WritingRequest } from "./draft";
@@ -83,6 +84,14 @@ export interface AskState {
   readonly citationCursor: number;
   /** Text stays text until Esc explicitly enters navigation. */
   readonly composerMode: "editing" | "navigation";
+  readonly resumed: boolean;
+}
+
+export interface DevelopmentsState {
+  readonly digest: CultivationDigest | null;
+  readonly enabledPipelines: number | null;
+  readonly samples: ReadonlyArray<string>;
+  readonly error: string | null;
 }
 
 export interface ExploreState {
@@ -167,6 +176,7 @@ export interface AppState {
   readonly explore: ExploreState;
   readonly stream: StreamState;
   readonly intelligence: IntelligenceSession;
+  readonly developments: DevelopmentsState;
   readonly prompt: PromptState;
   /** Output of the last `:` command, newest last. */
   readonly commandOutput: ReadonlyArray<string>;
@@ -204,6 +214,7 @@ export function initialState(vaultPath: string): AppState {
       sourceCalls: new Map(),
       citationCursor: 0,
       composerMode: "editing",
+      resumed: false,
     },
     explore: {
       structure: null,
@@ -235,6 +246,7 @@ export function initialState(vaultPath: string): AppState {
       pages: [null],
       scroll: { developments: 0, work: 0, detail: 0 },
     },
+    developments: { digest: null, enabledPipelines: null, samples: [], error: null },
     prompt: { kind: null, buffer: "", matches: [], cursor: 0 },
     commandOutput: [],
     notice: null,
@@ -309,6 +321,9 @@ export type Action =
   | { type: "stream/events"; events: AgentEventWire[]; cursor: string | null }
   | { type: "stream/filter"; filter: string }
   | { type: "intelligence/session"; session: IntelligenceSession }
+  | { type: "developments/loaded"; digest: CultivationDigest; enabledPipelines: number }
+  | { type: "developments/failed"; message: string }
+  | { type: "developments/samples"; samples: string[] }
   | { type: "prompt/open"; kind: PromptKind; buffer?: string }
   | { type: "prompt/buffer"; buffer: string }
   | { type: "prompt/matches"; matches: string[] }
@@ -529,6 +544,7 @@ export function reducer(state: AppState, action: Action): AppState {
         prompt: { kind: null, buffer: "", matches: [], cursor: 0 },
         ask: {
           ...initialState(state.vaultPath).ask,
+          resumed: lines.length > 0,
           conversationId: action.conversation.id,
           notePath: action.conversation.notePath,
           topic: conversationTitle(action.conversation),
@@ -546,6 +562,20 @@ export function reducer(state: AppState, action: Action): AppState {
         prompt: { kind: null, buffer: "", matches: [], cursor: 0 },
         ask: initialState(state.vaultPath).ask,
       };
+    case "developments/loaded":
+      return {
+        ...state,
+        developments: {
+          ...state.developments,
+          digest: action.digest,
+          enabledPipelines: action.enabledPipelines,
+          error: null,
+        },
+      };
+    case "developments/samples":
+      return { ...state, developments: { ...state.developments, samples: action.samples } };
+    case "developments/failed":
+      return { ...state, developments: { ...state.developments, error: action.message } };
     case "ask/activity":
       return { ...state, ask: { ...state.ask, showActivity: !state.ask.showActivity } };
     case "ask/buffer":

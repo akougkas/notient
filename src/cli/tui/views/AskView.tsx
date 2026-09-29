@@ -7,9 +7,18 @@
 
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type React from "react";
+import type { CultivationDigestItem } from "../../../api/cultivation";
 import type { SourceReference } from "../../../api/schema";
 import { ChatView } from "../ChatView";
 import { InputBar } from "../InputBar";
+import {
+  buildDevelopmentsStrip,
+  capabilityRows,
+  capabilitySegments,
+  developmentRowLimit,
+  threadLine,
+  welcomeText,
+} from "../entryChrome";
 import { computeInputHeight } from "../inputBindings";
 import type { AskLayout } from "../layout";
 import { sourceLabel } from "../sources";
@@ -27,6 +36,7 @@ export interface AskViewProps {
   onOpenCitation?: (target: string) => void;
   onOpenSource?: (source: SourceReference) => void;
   onToggleActivity?: () => void;
+  onOpenDevelopment?: (item: CultivationDigestItem) => void;
 }
 
 export function AskView({
@@ -38,6 +48,7 @@ export function AskView({
   onOpenCitation,
   onOpenSource,
   onToggleActivity,
+  onOpenDevelopment,
   elapsedSeconds = 0,
 }: AskViewProps): React.ReactNode {
   const inputHeight = computeInputHeight(state.ask.buffer, layout.inputTextWidth, 6);
@@ -54,7 +65,18 @@ export function AskView({
     (line) => line.kind === "tool" && !line.text.startsWith("done "),
   ).length;
   const activityRows = toolCalls > 0 || state.ask.busy ? 1 : 0;
-  const chatHeight = Math.max(1, layout.height - inputHeight - 4 - citationRows - activityRows);
+  const compact = layout.height < 12;
+  const strip = compact
+    ? null
+    : buildDevelopmentsStrip(state, developmentRowLimit(layout.height), layout.conversationWidth);
+  const stripRows = strip === null ? 0 : 1 + strip.rows.length;
+  const capability = capabilitySegments(state, layout.conversationWidth);
+  const capabilityHeight = capabilityRows(capability, layout.conversationWidth);
+  const headerRows = 2 + capabilityHeight + stripRows;
+  const chatHeight = Math.max(
+    1,
+    layout.height - inputHeight - 2 - headerRows - citationRows - activityRows,
+  );
   const focused = state.ask.composerMode !== "navigation" && state.prompt.kind === null;
   return (
     <box
@@ -63,14 +85,35 @@ export function AskView({
       paddingLeft={layout.inset}
       flexDirection="column"
     >
-      <box width={layout.conversationWidth} height={2} paddingTop={1}>
-        <text fg={COLOR.dim} wrapMode="none">
-          {truncate(
-            state.ask.topic || "A place to think with your notes",
-            layout.conversationWidth - 1,
-          )}
-        </text>
-      </box>
+      <box width={layout.conversationWidth} height={1} />
+      <text height={1} fg={COLOR.dim} wrapMode="none">
+        {truncate(threadLine(state), layout.conversationWidth - 1)}
+      </text>
+      <text height={capabilityHeight} wrapMode="word">
+        {capability.map((segment, index) => (
+          <span key={segment.text} fg={COLOR[segment.tone]}>
+            {`${index === 0 ? "" : " · "}${segment.text}`}
+          </span>
+        ))}
+      </text>
+      {strip === null ? null : (
+        <box width={layout.conversationWidth} height={stripRows} flexDirection="column">
+          <text height={1} fg={COLOR.label} wrapMode="none">
+            {truncate(strip.heading, layout.conversationWidth - 1)}
+          </text>
+          {strip.rows.map((row) => (
+            <text
+              key={row.id}
+              height={1}
+              fg={COLOR.text}
+              wrapMode="none"
+              onMouseUp={() => (row.item ? onOpenDevelopment?.(row.item) : undefined)}
+            >
+              {`  ${row.text}`}
+            </text>
+          ))}
+        </box>
+      )}
       <ChatView
         lines={
           state.ask.lines.length
@@ -78,7 +121,7 @@ export function AskView({
             : [
                 {
                   kind: "system",
-                  text: "Your notes, within reach.\n\nAsk a question. Bring a source with @path.\nPick up where you left off with Ctrl+O.",
+                  text: welcomeText(state),
                 },
               ]
         }
