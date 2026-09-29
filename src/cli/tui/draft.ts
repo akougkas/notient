@@ -9,7 +9,7 @@ export interface WritingRequest {
   path?: string;
   text?: string;
   title?: string;
-  action?: "delete" | "append";
+  action?: "delete" | "append" | "move";
 }
 
 export function keptAnswerSection(text: string, date: string): string {
@@ -24,6 +24,7 @@ export function withKeptAnswer(body: string, text: string, date: string): string
 
 export function requestLabel(request: WritingRequest): string {
   if (request.action === "delete") return `delete ${request.path ?? "the open note"}`;
+  if (request.action === "move") return `move ${request.path ?? "the open note"}`;
   if (request.action === "append") return `keep this answer on ${request.path ?? "the open note"}`;
   if (request.path) return `edit ${request.path}`;
   if (request.text) return "save this answer";

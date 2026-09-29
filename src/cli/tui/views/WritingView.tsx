@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangePreview } from "../../../api/changes";
 import { type NoteDraft, draftChangeSet, newDraft } from "../../../api/drafts";
 import { scopeAllows } from "../../../api/scope";
+import { notePathSchema } from "../../../api/schema";
 import { noteFilename } from "../../../core/vault/noteFilename";
 import { Markdown } from "../Markdown";
 import {
@@ -46,7 +47,9 @@ export function WritingView(props: Props) {
     [props.vaultPath, props.identity],
   );
   const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const [phase, setPhase] = useState<"edit" | "preview" | "discard" | "delete" | "deleted">("edit");
+  const [phase, setPhase] = useState<
+    "edit" | "preview" | "discard" | "delete" | "deleted" | "move" | "move-review" | "moved"
+  >("edit");
   const [focusPath, setFocusPath] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -54,6 +57,7 @@ export function WritingView(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [persisted, setPersisted] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(false);
+  const [moveTo, setMoveTo] = useState("");
   const [removal, setRemoval] = useState<{
     preview: ChangePreview;
     key: string;
@@ -104,6 +108,17 @@ export function WritingView(props: Props) {
               ? "Edit your Markdown below. Review the changes before saving."
               : `Ctrl+S saves to the folder below; your draft is kept privately. ${note ?? ""}`.trim(),
         );
+        if (props.request.action === "move" && redirect === null && next.base) {
+          setMoveTo(next.base.path);
+          if (hasUnsavedEdits(next))
+            setError(
+              "This note has unsaved edits. Ctrl+S saves them after review, or Ctrl+X discards the draft. Then move the note.",
+            );
+          else {
+            setPhase("move");
+            setMessage("Choose the note's new path. Nothing changes until you review and apply.");
+          }
+        }
       } catch (error) {
         if (!cancelled) report(error);
       } finally {
@@ -246,6 +261,100 @@ export function WritingView(props: Props) {
       setBusy(false);
     }
   };
+  const cancelMove = async () => {
+    if (flight.current) return;
+    flight.current = true;
+    try {
+      if (current.current && !hasUnsavedEdits(current.current)) {
+        await store.save(null);
+        current.current = null;
+      }
+      props.onClose();
+    } catch (error) {
+      report(error);
+    } finally {
+      flight.current = false;
+    }
+  };
+  const previewMove = async () => {
+    const value = current.current;
+    if (flight.current || busy || !value?.base) return;
+    const destination = moveTo.trim();
+    if (!notePathSchema.safeParse(destination).success) {
+      setError("Use a relative Markdown path ending in .md, such as Projects/Note.md.");
+      return;
+    }
+    if (destination === value.base.path) {
+      setError("That is the current path. Enter a different one.");
+      return;
+    }
+    if (hasUnsavedEdits(value)) {
+      setError("This note has unsaved edits. Save or discard them, then move the note.");
+      return;
+    }
+    flight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const key = randomUUID();
+      const preview = await props.rpc().previewChanges({
+        idempotencyKey: `${key}:move`,
+        changes: [
+          {
+            kind: "move",
+            source: { path: value.base.path, revision: value.base.revision },
+            destination,
+            updateReferences: true,
+          },
+        ],
+      });
+      if (preview.conflicts.length)
+        throw new Error(
+          `Resolve these before moving: ${preview.conflicts.map((item) => `${item.path}: ${item.reason}`).join("; ")}`,
+        );
+      setRemoval({ preview, key, historyIds: [] });
+      setPhase("move-review");
+    } catch (error) {
+      report(error);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
+  const confirmMove = async () => {
+    if (flight.current || busy || !removal) return;
+    flight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await props.rpc().applyChanges({
+        previewId: removal.preview.previewId,
+        previewRevision: removal.preview.revision,
+        idempotencyKey: `${removal.key}:move-apply`,
+      });
+      const historyIds = result.effects.flatMap((effect) =>
+        effect.state === "applied" && effect.historyId ? [effect.historyId] : [],
+      );
+      setRemoval({ ...removal, historyIds });
+      if (!result.ok || result.state !== "applied")
+        throw new Error(
+          `${
+            result.effects
+              .map((effect) => effect.message)
+              .filter(Boolean)
+              .join("; ") || `Move ${result.state}`
+          }. ${historyIds.length ? "Applied steps can be undone with Ctrl+Z." : "The note is unchanged."}`,
+        );
+      await store.save(null);
+      current.current = null;
+      setPhase("moved");
+    } catch (error) {
+      report(error);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
   const confirmDelete = async () => {
     if (flight.current || busy || !removal) return;
     if (current.current && hasUnsavedEdits(current.current)) {
@@ -373,13 +482,17 @@ export function WritingView(props: Props) {
         if (phase === "edit" && draft?.base) void reviewDelete();
         return;
       case "z":
-        if (phase === "delete" || phase === "deleted") void undoDelete();
+        if (["delete", "deleted", "move-review", "moved"].includes(phase)) void undoDelete();
         return;
     }
   };
   useKeyboard((key: KeyEvent) => {
     if (key.eventType !== "press") return;
-    if (phase === "preview" && scrollPreview(key, scroll.current, props.height)) return;
+    if (
+      (phase === "preview" || phase === "move-review") &&
+      scrollPreview(key, scroll.current, props.height)
+    )
+      return;
     if (key.repeated) return;
     const alt = (key.meta || key.option) && !key.ctrl && key.name === "s";
     if (
@@ -395,6 +508,15 @@ export function WritingView(props: Props) {
       if (busy) return;
       if (phase === "edit") void leave();
       else if (phase === "deleted") props.onClose();
+      else if (phase === "moved")
+        props.onSaved(
+          removal?.preview.effects.find((effect) => effect.kind === "move")?.destination ??
+            draft?.path ??
+            "",
+          removal?.historyIds[0] ?? null,
+        );
+      else if (phase === "move") void cancelMove();
+      else if (phase === "move-review") flushSync(() => setPhase("move"));
       else
         flushSync(() => {
           setPhase("edit");
@@ -402,10 +524,11 @@ export function WritingView(props: Props) {
         });
       return;
     }
-    if (phase === "edit") return;
+    if (phase === "edit" || phase === "move") return;
     key.preventDefault();
     if (phase === "discard" && key.name === "return") void discard();
     if (phase === "delete" && key.name === "return") void confirmDelete();
+    if (phase === "move-review" && key.name === "return") void confirmMove();
     if (phase === "preview" && key.name === "tab") flushSync(() => setShowDiff(!showDiff));
   });
 
@@ -417,6 +540,7 @@ export function WritingView(props: Props) {
         ? "draft kept locally"
         : "keeping draft…";
   const preview = draft?.preview;
+  const isMovePhase = phase === "move" || phase === "move-review" || phase === "moved";
   const contentHeight = Math.max(1, props.height - 11);
   return (
     <box
@@ -445,7 +569,9 @@ export function WritingView(props: Props) {
           <b>
             {phase === "preview"
               ? "Ready to become a note"
-              : draft?.base
+              : isMovePhase
+                ? "Move or rename a note"
+                : draft?.base
                 ? "Edit note"
                 : "Capture a thought"}
           </b>
@@ -494,6 +620,57 @@ export function WritingView(props: Props) {
               Nothing is erased: the note keeps its exact content in Trash and Ctrl+Z restores it.
               Enter moves it · Esc cancels
             </text>
+          </box>
+        ) : phase === "move" ? (
+          <box height={contentHeight} width={column} flexDirection="column">
+            <text fg={COLOR.warn}>Move or rename {draft?.base?.path}</text>
+            <text fg={COLOR.dim} wrapMode="word">
+              New path, relative to the vault. Missing folders are created. Links to this note are
+              rewritten only after you review them.
+            </text>
+            <input
+              width={Math.max(1, column - 1)}
+              value={moveTo}
+              focused={!busy}
+              onInput={(value) => setMoveTo(value)}
+              onSubmit={() => void previewMove()}
+              backgroundColor={COLOR.bg}
+              focusedBackgroundColor={COLOR.panel}
+              textColor={COLOR.accent}
+            />
+            <text fg={COLOR.label}>Enter reviews the move · Esc cancels</text>
+          </box>
+        ) : phase === "move-review" && removal ? (
+          <scrollbox
+            ref={scroll}
+            width={column}
+            height={contentHeight}
+            horizontalScrollbarOptions={HORIZONTAL_SCROLLBAR_OPTIONS}
+            verticalScrollbarOptions={VERTICAL_SCROLLBAR_OPTIONS}
+          >
+            <box width={Math.max(1, column - 1)} flexDirection="column">
+              <text fg={COLOR.warn} wrapMode="word">
+                Move {draft?.base?.path} to{" "}
+                {removal.preview.effects.find((e) => e.kind === "move")?.destination}?
+              </text>
+              {removal.preview.effects.map((effect) => (
+                <text key={`${effect.path}:${effect.reason}`} fg={COLOR.text} wrapMode="word">
+                  {effect.kind === "move" ? "Move" : "Rewrite links in"} {effect.path}:{" "}
+                  {effect.reason}
+                </text>
+              ))}
+              <text fg={COLOR.label} wrapMode="word">
+                The note keeps its exact content. Ctrl+Z undoes every step. Enter applies · Esc
+                edits the path
+              </text>
+            </box>
+          </scrollbox>
+        ) : phase === "moved" ? (
+          <box height={contentHeight} width={column} flexDirection="column">
+            <text fg={COLOR.accent} wrapMode="word">
+              Moved to {removal?.preview.effects.find((e) => e.kind === "move")?.destination}
+            </text>
+            <text fg={COLOR.label}>Ctrl+Z undoes it · Esc opens the note at its new path</text>
           </box>
         ) : phase === "deleted" ? (
           <box height={contentHeight} width={column} flexDirection="column">
@@ -556,12 +733,16 @@ export function WritingView(props: Props) {
           {error ??
             (phase === "preview"
               ? `${showDiff ? "Changes" : "Reading preview"} · Tab switches view · source revision checked on save`
-              : "Ctrl+G think with Notient · Ctrl+X discard · Ctrl+R reconnect")}
+              : isMovePhase
+                ? "Nothing is written until you apply the review. The source revision is checked on apply."
+                : "Ctrl+G think with Notient · Ctrl+X discard · Ctrl+R reconnect")}
         </text>
         <text height={1} width={column} fg={COLOR.label}>
           {phase === "preview"
             ? "Ctrl+S/Alt+S save note · Esc keep editing"
-            : draft?.base
+            : isMovePhase
+              ? "Enter continues · Ctrl+Z undoes applied steps · Esc goes back"
+              : draft?.base
               ? "Ctrl+S/Alt+S review changes · Ctrl+D delete · Esc keep draft"
               : "Ctrl+S/Alt+S save to Inbox · Ctrl+O preview · Ctrl+L destination · Esc keep draft"}
         </text>

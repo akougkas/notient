@@ -994,6 +994,16 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         else dispatch({ type: "writing/open", request: { path, text, action: "append" } });
         return;
       }
+      if (intent.kind === "move-note") {
+        const path = stateRef.current.explore.notePath;
+        if (path) dispatch({ type: "writing/open", request: { path, action: "move" } });
+        else
+          dispatch({
+            type: "notice",
+            text: "Open a note first. Moving always shows a review before anything changes.",
+          });
+        return;
+      }
       if (intent.kind === "delete-note") {
         const path = stateRef.current.explore.notePath;
         if (path) dispatch({ type: "writing/open", request: { path, action: "delete" } });

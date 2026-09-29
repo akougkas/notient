@@ -38,6 +38,7 @@ export type Intent =
   | { readonly kind: "capture" }
   | { readonly kind: "edit-note" }
   | { readonly kind: "delete-note" }
+  | { readonly kind: "move-note" }
   | { readonly kind: "keep-answer" }
   | { readonly kind: "save-answer" }
   | { readonly kind: "navigation" }

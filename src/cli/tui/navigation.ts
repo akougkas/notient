@@ -43,6 +43,11 @@ export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
     slash: "edit",
   },
   {
+    label: "Move or rename the open note — choose a path, review links, then apply",
+    intent: { kind: "move-note" },
+    slash: "move",
+  },
+  {
     label: "Delete the open note — review, then move it to Trash",
     intent: { kind: "delete-note" },
     keys: "Ctrl+D in editor",
