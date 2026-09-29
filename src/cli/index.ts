@@ -32,6 +32,7 @@ import {
 } from "./commands/graphDump";
 import { runGraphStatsCommand } from "./commands/graphStats";
 import { runHealthCommand } from "./commands/health";
+import { parseContributionKind, runContributionsCommand } from "./commands/contributions";
 import { parseHistoryLimit, runHistoryCommand } from "./commands/history";
 import { runInit } from "./commands/init";
 import { type LinksAuditMode, runLinksAuditCommand } from "./commands/linksAudit";
@@ -131,6 +132,7 @@ const COMMAND_NAMES = [
   "doctor",
   "history",
   "undo",
+  "contributions",
   "chat",
   "ask",
   "brief",
@@ -186,6 +188,8 @@ const COMMAND_DISPATCHERS = {
   history: ({ parsed, emitter, clientIdentity }) =>
     dispatchHistory(parsed, emitter, clientIdentity),
   undo: ({ parsed, emitter, clientIdentity }) => dispatchUndo(parsed, emitter, clientIdentity),
+  contributions: ({ parsed, emitter, clientIdentity }) =>
+    dispatchContributions(parsed, emitter, clientIdentity),
   chat: ({ parsed, emitter, clientIdentity }) => dispatchChat(parsed, emitter, clientIdentity),
   ask: ({ parsed, emitter, clientIdentity }) => dispatchAsk(parsed, emitter, clientIdentity),
   brief: ({ parsed, emitter, clientIdentity }) => dispatchBrief(parsed, emitter, clientIdentity),
@@ -366,6 +370,17 @@ const VERB_HELP: Record<string, VerbHelp> = {
   undo: {
     usage: "notient undo [historyId] --vault <path>",
     flags: ["--vault <path>"],
+  },
+  contributions: {
+    usage: "notient contributions --vault <path> [--note <path>] [--state <status>] [--review <id>]",
+    flags: [
+      "--vault <path>",
+      "--note <path>",
+      "--state pending|awaiting-review|retained|rejected|stale|dismissed",
+      "--kind contribution|feedback",
+      "--review <review id>",
+      "--limit <number>",
+    ],
   },
   chat: {
     usage: "notient chat [prompt] --vault <path> [--approve auto|ask]",
@@ -953,6 +968,31 @@ async function dispatchHistory(
     limit: parseHistoryLimit(parsed.flags.limit),
     emitter,
     clientIdentity,
+  });
+}
+
+async function dispatchContributions(
+  parsed: ParsedArgs,
+  emitter: Emitter,
+  clientIdentity: string | undefined,
+): Promise<number> {
+  const vaultPath = await requireVault(parsed);
+  const text = (name: string): string | undefined => {
+    const value = parsed.flags[name];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || value.length === 0)
+      throw new Error(`INVALID_PARAMS: --${name} requires a value`);
+    return value;
+  };
+  return await runContributionsCommand({
+    vaultPath,
+    emitter,
+    clientIdentity,
+    kind: parseContributionKind(text("kind")),
+    state: text("state"),
+    note: text("note"),
+    review: text("review"),
+    limit: parseHistoryLimit(parsed.flags.limit),
   });
 }
 

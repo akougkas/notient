@@ -255,6 +255,38 @@ export function makeEmitter(options: EmitterOptions): Emitter {
         );
         return;
       }
+      if (event.type === "contributions:empty") {
+        write("No contributions or feedback match.");
+        return;
+      }
+      if (event.type === "contributions:more") {
+        write(`More items are available. Continue with the cursor ${formatValue(event.cursor)}.`);
+        return;
+      }
+      if (event.type === "contributions:entry") {
+        const meaning: Record<string, string> = {
+          pending: "private and not yet staged for review",
+          "awaiting-review": "staged; a human or vault owner has not decided",
+          retained: "approved and written to the note",
+          rejected: "review rejected; the note was not changed",
+          stale: "its evidence changed before a decision; nothing was applied",
+          dismissed: "dismissed before review",
+        };
+        const status = String(event.status);
+        const statement = String(event.statement).replace(/\s+/g, " ");
+        const lines = [
+          `${status}  ${String(event.kind)}${event.contributionKind ? ` (${String(event.contributionKind)})` : ""}  ${String(event.note)}  · ${String(event.contributor)}`,
+          `  ${meaning[status] ?? status}${event.reason ? ` · ${String(event.reason)}` : ""}`,
+          `  ${statement.length > 200 ? `${statement.slice(0, 199)}…` : statement}`,
+          `  ${String(event.id)}`,
+        ];
+        if (typeof event.reviewId === "string")
+          lines.push(
+            `  Review ${event.reviewId}: read it with notient api proposals.get --input '{"id":"${event.reviewId}"}', or open /review in the workspace.`,
+          );
+        write(lines.join("\n"));
+        return;
+      }
       if (event.type === "history:undone") {
         const entry = historyEntrySchema.parse(event.entry);
         write(`Restored ${entry.target}. The original change remains in history.`);
