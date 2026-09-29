@@ -7,7 +7,13 @@ import { type NoteDraft, draftChangeSet, newDraft } from "../../../api/drafts";
 import { scopeAllows } from "../../../api/scope";
 import { noteFilename } from "../../../core/vault/noteFilename";
 import { Markdown } from "../Markdown";
-import { DraftStore, type WritingRequest, previewDiff, redirectNotice } from "../draft";
+import {
+  DraftStore,
+  type WritingRequest,
+  previewDiff,
+  redirectNotice,
+  withKeptAnswer,
+} from "../draft";
 import { readingColumn } from "../layout";
 import type { NotientRpc } from "../rpc";
 import {
@@ -92,7 +98,9 @@ export function WritingView(props: Props) {
             ? redirect
             : restored
             ? "Your unsaved draft is restored. Save or discard it before starting another."
-            : next.base
+            : next.base && props.request.action === "append"
+              ? "The answer is added at the end, labelled unverified. Edit it freely. Ctrl+S shows the exact change; nothing saves until you approve it."
+              : next.base
               ? "Edit your Markdown below. Review the changes before saving."
               : `Ctrl+S saves to the folder below; your draft is kept privately. ${note ?? ""}`.trim(),
         );
@@ -574,10 +582,14 @@ async function openWritingDraft(store: DraftStore, rpc: NotientRpc, request: Wri
   if (existing) return { draft: existing, restored: true };
   if (request.path) {
     const source = await rpc.noteBody(request.path);
+    const saved = source.body.replace(/^\ufeff/, "").replace(/\r\n/g, "\n");
     const draft: NoteDraft = {
       id: randomUUID(),
       path: source.note.path,
-      body: source.body.replace(/^\ufeff/, "").replace(/\r\n/g, "\n"),
+      body:
+        request.action === "append" && request.text
+          ? withKeptAnswer(saved, request.text, new Date().toISOString().slice(0, 10))
+          : saved,
       base: { ...source.note, body: source.body },
       preview: null,
     };

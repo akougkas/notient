@@ -9,11 +9,22 @@ export interface WritingRequest {
   path?: string;
   text?: string;
   title?: string;
-  action?: "delete";
+  action?: "delete" | "append";
+}
+
+export function keptAnswerSection(text: string, date: string): string {
+  return `## Kept from conversation\n\n> Model-generated answer kept by you on ${date}. It is unverified until you support it with a source.\n\n${text.trim()}\n`;
+}
+
+export function withKeptAnswer(body: string, text: string, date: string): string {
+  const lead =
+    body.length === 0 ? "" : body.endsWith("\n\n") ? "" : body.endsWith("\n") ? "\n" : "\n\n";
+  return `${body}${lead}${keptAnswerSection(text, date)}`;
 }
 
 export function requestLabel(request: WritingRequest): string {
   if (request.action === "delete") return `delete ${request.path ?? "the open note"}`;
+  if (request.action === "append") return `keep this answer on ${request.path ?? "the open note"}`;
   if (request.path) return `edit ${request.path}`;
   if (request.text) return "save this answer";
   return "capture a new thought";
@@ -21,7 +32,8 @@ export function requestLabel(request: WritingRequest): string {
 
 export function redirectNotice(request: WritingRequest, draft: NoteDraft): string | null {
   const matches = request.path
-    ? draft.base?.path === request.path
+    ? draft.base?.path === request.path &&
+      (request.action !== "append" || (!!request.text && draft.body.includes(request.text.trim())))
     : draft.base === null && (request.text === undefined || draft.body === request.text);
   if (matches) return null;
   const held = draft.base ? `edit of ${draft.base.path}` : `capture ${draft.path}`;

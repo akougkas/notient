@@ -975,6 +975,24 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         else dispatch({ type: "notice", text: "Open a note first, then press e to edit it." });
         return;
       }
+      if (intent.kind === "keep-answer") {
+        const path = stateRef.current.explore.notePath;
+        const draft = lastPreparedDraft(stateRef.current.ask.lines);
+        const text = draft?.markdown ?? lastAssistantText(stateRef.current);
+        if (stateRef.current.ask.busy) {
+          dispatch({ type: "notice", text: "Wait for the answer to finish before keeping it." });
+          return;
+        }
+        if (!path)
+          dispatch({
+            type: "notice",
+            text: "Open a note first, then keep the answer on it. Ctrl+S saves it as a new note.",
+          });
+        else if (!text)
+          dispatch({ type: "notice", text: "There is no answer to keep yet." });
+        else dispatch({ type: "writing/open", request: { path, text, action: "append" } });
+        return;
+      }
       if (intent.kind === "delete-note") {
         const path = stateRef.current.explore.notePath;
         if (path) dispatch({ type: "writing/open", request: { path, action: "delete" } });

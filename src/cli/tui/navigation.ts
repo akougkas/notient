@@ -32,6 +32,11 @@ export const NAVIGATION_ACTIONS: ReadonlyArray<NavigationAction> = [
     slash: "save",
   },
   {
+    label: "Keep this answer on the open note — review the addition first",
+    intent: { kind: "keep-answer" },
+    slash: "keep",
+  },
+  {
     label: "Edit the open note — review before saving",
     intent: { kind: "edit-note" },
     keys: "e in Notes",
