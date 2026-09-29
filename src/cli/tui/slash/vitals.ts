@@ -41,13 +41,13 @@ export async function rpcVitals(context: SlashContext, path: string): Promise<Sl
     const snapshot = (await createRpc(context.client).vitals(path)).snapshot;
     const conditions = [
       snapshot.connectivityCount === 0
-        ? "No approved link connects this note to another. /connections finds candidates to review."
+        ? "No approved link connects this note to another."
         : null,
       snapshot.wordCount < 20
-        ? "The note is too short to study for structure. /edit develops it, or /capture a fuller thought."
+        ? "Under 20 words, so the structural proxies have little to measure. This says nothing about its value."
         : null,
       snapshot.freshness < 0.25
-        ? "The note has not been edited for a long time. /read it and decide whether it still holds."
+        ? `The note has not been edited for a long time. /read ${path} shows its current text.`
         : null,
     ].filter((line): line is string => line !== null);
     return {
