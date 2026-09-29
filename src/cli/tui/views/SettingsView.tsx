@@ -10,6 +10,13 @@ import {
   policyFields,
 } from "../../../api/policyEditor";
 import type { OperationResult } from "../../../api/results";
+import {
+  CAPTURE_WORKFLOWS,
+  activationConsequence,
+  captureDraft,
+  captureExplanation,
+  captureRowSummary,
+} from "../cultivationActivation";
 import { readingColumn } from "../layout";
 import type { NotientRpc } from "../rpc";
 import type { ConventionDraft } from "../methodologyConvention";
@@ -135,7 +142,11 @@ export function SettingsView(props: Props) {
             (f) =>
               `${f.label}: ${policyFieldText(entry.policy, f).replaceAll("\n", ", ") || "empty"} → ${policyFieldText(draft, f).replaceAll("\n", ", ") || "empty"}`,
           );
-        setConfirmation([...changes, ...result.issues.map((i) => i.message)]);
+        setConfirmation([
+          ...changes,
+          ...activationConsequence(entry.title, entry.policy, draft),
+          ...result.issues.map((i) => i.message),
+        ]);
         setError(false);
         setNotice("Review these permissions. Ctrl+S saves; Esc keeps editing.");
       } else {
@@ -297,6 +308,21 @@ export function SettingsView(props: Props) {
           setSection(0);
           setCursor(0);
         }
+        if (
+          key.name === "s" &&
+          !key.ctrl &&
+          entry &&
+          CAPTURE_WORKFLOWS.includes(entry.id) &&
+          key.eventType !== "repeat"
+        ) {
+          setDraft(captureDraft(entry.policy));
+          setSection(0);
+          setCursor(0);
+          setError(false);
+          setNotice(
+            "Draft only, nothing is saved. It turns the workflow on for saves, limits reads and writes to your capture folder, and keeps results as reviews. Ctrl+S lists every change; a second Ctrl+S saves.",
+          );
+        }
       } else if (key.name === "tab") {
         setSection((section + (key.shift ? 4 : 1)) % sections.length);
         setCursor(0);
@@ -320,7 +346,7 @@ export function SettingsView(props: Props) {
   const rows = Math.max(3, props.height - 14);
   const start = Math.max(0, cursor - rows + 1);
   const rowHeight = props.height < 28 ? 1 : 2;
-  const listRows = Math.max(1, Math.floor((props.height - 11) / rowHeight));
+  const listRows = Math.max(1, Math.floor((props.height - 15) / rowHeight));
   const listStart = Math.max(0, selected - listRows + 1);
   return (
     <box
@@ -439,7 +465,7 @@ export function SettingsView(props: Props) {
               key={p.id}
               height={rowHeight}
               fg={listStart + i === selected ? COLOR.accent : COLOR.text}
-            >{`${listStart + i === selected ? "›" : " "} ${p.title}   ${p.policy.enabled ? "on" : "off"} · ${p.policy.mode === "propose" ? "review" : p.policy.mode}`}</text>
+            >{`${listStart + i === selected ? "›" : " "} ${p.title}   ${captureRowSummary(p, catalog?.paused ?? false)}`}</text>
           ))}
           {chat ? (
             <text
@@ -459,12 +485,13 @@ export function SettingsView(props: Props) {
             </text>
           ) : null}
           <text width={column.width} wrapMode="word" fg={COLOR.dim}>
-            {entry?.description ??
-              (chat
+            {entry
+              ? `${entry.description}\n${captureExplanation(catalog?.pipelines ?? [], entry, catalog?.paused ?? false)}`
+              : selected === (catalog?.pipelines.length ?? 0)
                 ? "Limits for each chat answer: model calls, tokens, time and the largest single generation."
-                : cultivation
+                : selected === (catalog?.pipelines.length ?? 0) + 1
                   ? "What eligible notes should receive attention, how often to revisit them, and the methodology and conventions that guide interpretation."
-                  : "")}
+                  : captureExplanation(catalog?.pipelines ?? [], undefined, catalog?.paused ?? false)}
           </text>
         </box>
       )}
@@ -487,7 +514,7 @@ export function SettingsView(props: Props) {
               ? "Ctrl+S save settings · Esc edit · F5 inspect current"
               : draft
                 ? "↑/↓ choose · Enter edit · Tab section · Ctrl+S review · Esc back"
-                : "↑/↓ choose · Enter customize · p pause/resume · F5 refresh · Esc back"}
+                : "↑/↓ choose · Enter customize · s prepare capture cultivation · p pause/resume · F5 refresh · Esc back"}
       </text>
     </box>
   );
