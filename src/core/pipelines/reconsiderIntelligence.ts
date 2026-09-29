@@ -94,6 +94,11 @@ function changedSources(context: PipelineContext, record: IntelligenceRecord, co
     .slice(0, 20);
 }
 
+function authoredEnd(body: string, marker: number): number {
+  const heading = body.slice(0, marker).match(/(^|\n)( {0,3}##[ \t]+[^\r\n]*)[ \t\r\n]*$/u);
+  return heading?.index === undefined ? marker : heading.index + heading[1]!.length;
+}
+
 function questionForCandidate(
   context: PipelineContext,
   candidate: ReconsiderationCandidate,
@@ -110,7 +115,7 @@ function questionForCandidate(
     .slice(0, 30)
     .flatMap((source) => {
       const marker = source.body.indexOf("<!-- notient-intelligence:");
-      let end = Math.min(1000, marker < 0 ? source.body.length : marker);
+      let end = Math.min(1000, marker < 0 ? source.body.length : authoredEnd(source.body, marker));
       if (/[\uD800-\uDBFF]/u.test(source.body[end - 1] ?? "")) end--;
       return end > 0 && source.body.slice(0, end).trim()
         ? [{ ...source.note, quote: source.body.slice(0, end), range: sourceRange(source.body, 0, end) }]

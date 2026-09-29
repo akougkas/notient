@@ -50,6 +50,7 @@ export async function createCultivationDigest(
     .sort((left, right) => right.updatedAt - left.updatedAt);
   const candidates: DigestCandidate[] = [];
   const seen = new Set<string>();
+  const seenReviews = new Set<string>();
   let checkedReferences = 0;
   const referenceLimit = options.limit * 30 * 4;
 
@@ -133,6 +134,13 @@ export async function createCultivationDigest(
       if (seen.has(identity)) continue;
       seen.add(identity);
       const itemDisposition = dispositionForPath(job, route.note.path, disposition);
+      if (itemDisposition === "awaiting-review" && job.proposalIds.length > 0) {
+        const reviewKeys = job.proposalIds.map((id) =>
+          JSON.stringify([id, route.note.path, finding.kind, finding.title.trim().toLowerCase()]),
+        );
+        if (reviewKeys.some((key) => seenReviews.has(key))) continue;
+        for (const key of reviewKeys) seenReviews.add(key);
+      }
       if (
         itemDisposition === "report-only" &&
         suppressedByFeedback(job, finding, assessment.documents, route, currentNotes)
