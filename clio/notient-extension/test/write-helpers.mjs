@@ -8,7 +8,7 @@ export function writerFixture(t) {
   const temporary = mkdtempSync(path.join(tmpdir(), 'notient-write-'));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, 'vault');
-  const directory = path.join(temporary, 'state');
+  const directory = path.join(temporary, 'state/notient');
   mkdirSync(root);
   const vault = { id: vaultId(root), path: root, role: 'operator', readOnly: false };
   atomicJson(path.join(directory, 'config.json'), { version: 1, vaults: [vault] });

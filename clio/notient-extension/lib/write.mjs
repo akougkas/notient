@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, wr
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES } from './paths.mjs';
-import { selectVault } from './config.mjs';
+import { selectVault, readConfig } from './config.mjs';
+import { createGitAdapter } from './git.mjs';
+import { statusSnapshot } from './status.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -218,4 +220,34 @@ export function coordinatePlan(vault, directory, buildPlan, { adapter, ...option
       throw error;
     }
   });
+}
+
+export function recoverVault(vault, directory, options = {}) {
+  const pending = listRecords(directory, vault).filter(record => !['committed', 'aborted'].includes(record.state) || record.state === 'committed' && record.indexState === 'pending');
+  if (!pending.length) return { results: [], remaining: [], busy: false };
+  try {
+    return withWriterLock(directory, vault, () => ({ ...recoverPending(vault, directory, createGitAdapter(vault, directory), options), busy: false }));
+  } catch (error) {
+    return { results: [{ operationId: null, result: error.code ?? 'RECOVERY_ERROR', commit: null, conflicts: [], error: error.message }], remaining: pending.map(record => record.id), busy: error.code === 'WRITER_BUSY' };
+  }
+}
+
+export function commandStatusSnapshot(directory, input = {}) {
+  const config = readConfig(directory);
+  const selected = input.vault ? config.vaults.filter(vault => vault.id === input.vault || vault.path === input.vault) : config.vaults;
+  const recovery = new Map();
+  for (const vault of selected) {
+    try { recovery.set(vault.id, recoverVault(vault, directory)); }
+    catch (error) { recovery.set(vault.id, { results: [{ operationId: null, result: error.code ?? 'RECOVERY_ERROR', commit: null, conflicts: [], error: error.message }], busy: false }); }
+  }
+  const snapshot = statusSnapshot(directory, input);
+  snapshot.stage = 2;
+  snapshot.recovery = 'Command status reconciles authorized pending writes. Runtime observations remain read-only.';
+  snapshot.recovered = [];
+  for (const vault of snapshot.vaults) {
+    const result = recovery.get(vault.id);
+    if (vault.journal && result) { vault.journal.recoveryResults = result.results; vault.journal.busy = result.busy; vault.journal.remaining = result.remaining ?? []; }
+    snapshot.recovered.push(...(result?.results ?? []));
+  }
+  return snapshot;
 }

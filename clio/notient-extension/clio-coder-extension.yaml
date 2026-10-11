@@ -11,10 +11,10 @@
     "tools": [
       {
         "name": "status",
-        "description": "Show registered Sentient Note vaults, index freshness, recovery state and last commit. Reads only.",
+        "description": "Show registered vaults, FTS5 support and journal state. Reconcile authorized pending writes; runtime observations read only.",
         "runtime": "node",
         "entrypoint": "tools/status.mjs",
-        "timeoutMs": 60000,
+        "timeoutMs": 300000,
         "maxOutputBytes": 1048576,
         "inputSchema": {
           "type": "object",
