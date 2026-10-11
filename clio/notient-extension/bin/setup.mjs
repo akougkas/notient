@@ -56,18 +56,21 @@ function main() {
   let role = 'operator';
   let readOnly = false;
   let createOwn = false;
+  let access;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
-    if (flag === '--vault' || flag === '--role') {
+    if (flag === '--vault' || flag === '--role' || flag === '--access') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value.`);
       if (flag === '--vault') vaultPath = value;
-      else role = value;
+      else if (flag === '--role') role = value;
+      else access = value;
     } else if (flag === '--read-only') readOnly = true;
     else if (flag === '--create-own') createOwn = true;
     else throw new Error('Usage: setup.mjs --vault <path> [--role operator|own] [--read-only], or --create-own.');
   }
   if (createOwn && vaultPath) throw new Error('Use --create-own or --vault, not both.');
+  if (access !== undefined && (!['read-only', 'read-write'].includes(access) || createOwn || readOnly || args.includes('--role'))) throw new Error('--access requires read-only or read-write and an existing --vault registration.');
   if (!['operator', 'own'].includes(role)) throw new Error('Role must be operator or own.');
   if (createOwn) {
     vaultPath = path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local/share'), 'notient/clio-vault');
@@ -82,12 +85,18 @@ function main() {
   if (!lstatSync(root).isDirectory()) throw new Error('Vault path must be a directory.');
   if (contained(root, directory) || (existsSync(directory) && contained(root, realpathSync(directory)))) throw new Error('Notient data must be outside every vault.');
   const config = readConfig(directory);
+  if (access !== undefined) {
+    const registered = config.vaults.find(vault => vault.path === root);
+    if (!registered) throw new Error('--access changes only an already registered vault.');
+    role = registered.role;
+    readOnly = access === 'read-only';
+  }
   if (config.vaults.some(v => v.path !== root && (contained(root, v.path) || contained(v.path, root)))) throw new Error('Registered vaults cannot contain one another.');
   if (config.vaults.some(v => contained(v.path, directory))) throw new Error('Notient data must be outside every vault.');
   if (config.vaults.length >= 15 && !config.vaults.some(v => v.path === root)) throw new Error('The read-only runtime supports at most 15 registered vaults.');
   let gitInitialized = false;
   let conventionsCreated = false;
-  if (!readOnly) {
+  if (!readOnly && access === undefined) {
     for (const part of ['Notient', 'Notient/Conventions.md', 'Notient/Inbox', 'Notient/Log', 'Notient/Plans']) {
       const target = path.join(root, part);
       if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new Error(`Setup refuses a symbolic link at ${part}.`);

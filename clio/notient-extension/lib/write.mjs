@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, renameSync, unlinkSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, renameSync, unlinkSync, chmodSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES } from './paths.mjs';
-import { selectVault, readConfig } from './config.mjs';
-import { createGitAdapter } from './git.mjs';
+import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
+import { selectVault, readConfig, dataDirectory } from './config.mjs';
+import { createGitAdapter, preflightGit } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
+import { documentSpans } from './markdown.mjs';
+import { repairCommittedIndex } from './index.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -170,13 +172,16 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     adapter.publish(record);
     options.barrier?.('afterRef', record);
   }
-  const installed = adapter.reconcileIndex(record);
+  const installed = record.git.indexInstalled || adapter.reconcileIndex(record);
   record.git.indexInstalled = installed;
-  record.indexState = installed ? 'updated' : 'pending';
+  record.indexState = 'pending';
   if (installed) {
     record.state = 'committed'; record.conflicts = []; record.error = null;
     saveRecord(directory, vault, record, sync);
     cleanupSiblings(vault, record, sync);
+    try { if (repairCommittedIndex(vault, directory, record)) record.indexState = 'updated'; }
+    catch (error) { record.error = { code: 'INDEX_REPAIR_PENDING', message: error.message }; }
+    saveRecord(directory, vault, record, sync);
   } else saveRecord(directory, vault, record, sync);
   return { operationId: record.id, result: published ? 'already_committed' : states.every(item => item.state === 'before') ? 'resumed_from_intent' : states.every(item => item.state === 'after') ? 'committed_after_apply' : 'completed_partial_apply', commit: record.git.commit, conflicts: [] };
 }
@@ -250,4 +255,183 @@ export function commandStatusSnapshot(directory, input = {}) {
     snapshot.recovered.push(...(result?.results ?? []));
   }
   return snapshot;
+}
+
+function inputFor(tool, raw) {
+  const input = { ...raw, requestId: raw.requestId ?? randomUUID(), dryRun: raw.dryRun ?? false };
+  if (!requestIdPattern.test(input.requestId)) refuse('INVALID_INPUT', 'requestId must contain 8 to 64 permitted characters.');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(input.batch ?? '')) refuse('INVALID_INPUT', 'A portable batch label of at most 80 characters is required.');
+  if (!input.authorization || !['operator', 'clio', 'unattended'].includes(input.authorization.origin) || typeof input.authorization.request !== 'string' || !validText(input.authorization.request).trim() || input.authorization.request.length > 2000) refuse('INVALID_AUTHORIZATION', 'Supply an origin and exact nonblank request of at most 2000 characters.');
+  if (input.planHash !== undefined && !/^[a-f0-9]{64}$/.test(input.planHash)) refuse('INVALID_INPUT', 'planHash must be a lowercase SHA-256 revision.');
+  if (tool === 'capture') {
+    portableName(input.name);
+    if (input.name.length > 120 || /\.md$/i.test(input.name)) refuse('INVALID_INPUT', 'Capture name must be a basename without .md, of at most 120 characters.');
+    validText(input.content, 'Capture content');
+    if (!input.content.length || input.content.length > 48000) refuse('INVALID_INPUT', 'Capture content must contain 1 to 48000 characters.');
+    documentSpans(Buffer.from(input.content));
+  } else refuse('OPERATION_UNAVAILABLE', 'This operation is not implemented in the current stage 2a step.');
+  return input;
+}
+
+export function unifiedDiff(name, before, after) {
+  if (before !== null && after !== null && before.equals(after)) return '';
+  const oldLines = (before?.toString('utf8') ?? '').match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const newLines = (after?.toString('utf8') ?? '').match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let prefix = 0;
+  while (prefix < Math.min(oldLines.length, newLines.length) && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < Math.min(oldLines.length, newLines.length) - prefix && oldLines.at(-suffix - 1) === newLines.at(-suffix - 1)) suffix++;
+  const start = Math.max(0, prefix - 3);
+  const oldEnd = Math.min(oldLines.length, oldLines.length - suffix + 3);
+  const newEnd = Math.min(newLines.length, newLines.length - suffix + 3);
+  const show = (line, mark) => `${mark}${line.replaceAll('\r', '\\r').replace(/\n$/, '')}\n${line.endsWith('\n') ? '' : '\\ No newline at end of file\n'}`;
+  const context = oldLines.slice(start, prefix).map(line => show(line, ' ')).join('');
+  const removed = oldLines.slice(prefix, oldLines.length - suffix).map(line => show(line, '-')).join('');
+  const added = newLines.slice(prefix, newLines.length - suffix).map(line => show(line, '+')).join('');
+  const tail = oldLines.slice(oldLines.length - suffix, oldEnd).map(line => show(line, ' ')).join('');
+  return `Display encoding: CR is shown as \\r.\n--- ${before === null ? '/dev/null' : `a/${name}`}\n+++ ${after === null ? '/dev/null' : `b/${name}`}\n@@ -${oldEnd > start ? start + 1 : start},${oldEnd - start} +${newEnd > start ? start + 1 : start},${newEnd - start} @@\n${context}${removed}${added}${tail}`;
+}
+
+function auditJson(value) {
+  return JSON.stringify(value).replace(/"(?:\\.|[^"\\])*"/g, token => token.replaceAll('[', '\\u005b').replaceAll(']', '\\u005d'));
+}
+
+function plannedLog(vault, input, operation, source, files, createdAt, undo) {
+  const name = `Notient/Log/${createdAt.slice(0, 7)}.md`;
+  const current = currentFile(vault.path, name);
+  const ending = current.bytes?.toString('utf8').match(/\r?\n/)?.[0] ?? '\n';
+  const line = `- ${auditJson({ time: createdAt, id: input.requestId, operation, note: source, destination: null, batch: input.batch, origin: input.authorization.origin, request: input.authorization.request, files: files.map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after) })), undo: undo.targets })}`;
+  const separator = current.bytes?.length && !current.bytes.toString('utf8').endsWith('\n') ? ending : '';
+  const after = Buffer.concat([current.bytes ?? Buffer.alloc(0), Buffer.from(`${separator}${line}${ending}`)]);
+  return { file: { path: name, role: 'log', before: current.bytes, after, mode: current.mode }, log: { path: name, line } };
+}
+
+function captureFiles(vault, input) {
+  const base = 'Notient/Inbox';
+  const probe = writePath(vault.path, `${base}/notient-probe-${randomUUID()}.md`);
+  const names = existsSync(path.dirname(probe)) ? new Set(readdirSync(path.dirname(probe)).map(portableFold)) : new Set();
+  for (let suffix = 1; suffix <= 9999; suffix++) {
+    const name = `${input.name}${suffix === 1 ? '' : `-${suffix}`}.md`;
+    if (names.has(portableFold(name))) continue;
+    const filename = `${base}/${name}`;
+    if (currentFile(vault.path, filename).revision !== null) continue;
+    return [{ path: filename, role: 'note', before: null, after: Buffer.from(input.content), mode: 0o600, splices: [] }];
+  }
+  refuse('CAPTURE_COLLISIONS', 'No available capture name remains within 9999 candidates.');
+}
+
+export function buildWritePlan(tool, vault, directory, input) {
+  const started = performance.now();
+  const operation = tool === 'capture' ? 'capture' : input.operation;
+  const files = captureFiles(vault, input);
+  requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
+  const createdAt = new Date().toISOString();
+  const undo = { targets: [], commits: [] };
+  const source = files[0].path;
+  const audit = plannedLog(vault, input, operation, source, files, createdAt, undo);
+  files.push(audit.file);
+  const gitStarted = performance.now();
+  const git = preflightGit(vault, files);
+  const gitMs = performance.now() - gitStarted;
+  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads: [], inventoryHash: null, ref: git.ref, baseHead: git.baseHead, log: { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } }));
+  if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
+  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit.log, undo, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+}
+
+export function byteSplices(before, after) {
+  if (before === null || after === null || before.equals(after)) return [];
+  let prefix = 0;
+  while (prefix < Math.min(before.length, after.length) && before[prefix] === after[prefix]) prefix++;
+  while (prefix > 0 && (before[prefix] & 0xc0) === 0x80) prefix--;
+  let suffix = 0;
+  while (suffix < Math.min(before.length, after.length) - prefix && before[before.length - suffix - 1] === after[after.length - suffix - 1]) suffix++;
+  while (suffix > 0 && ((before[before.length - suffix] & 0xc0) === 0x80 || (after[after.length - suffix] & 0xc0) === 0x80)) suffix--;
+  return [{ startByte: prefix, endByte: before.length - suffix, replacement: after.subarray(prefix, after.length - suffix).toString('utf8') }];
+}
+
+function outputChanges(files, preview) {
+  return files.map(file => ({ path: file.path, action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), diff: preview ? unifiedDiff(file.path, file.before, file.after) : '', splices: file.splices ?? byteSplices(file.before, file.after) }));
+}
+
+function warnings(record, durability) {
+  const result = [{ code: 'QUIESCENT_FILES_REQUIRED', message: 'Affected files must remain quiescent. A save between the final revision check and rename can be overwritten.' }];
+  if (record?.durability === 'directory-sync-unavailable') result.push({ code: 'DIRECTORY_SYNC_UNAVAILABLE', message: 'Directory fsync is unsupported on this filesystem; power-loss durability is limited.' });
+  if (durability && !durability.fsync) result.push({ code: 'GIT_FSYNC_UNAVAILABLE', message: `${durability.version} lacks core.fsync=committed; proceeding with the available Git durability.` });
+  if (record && !record.git.indexInstalled) result.push({ code: 'INDEX_UPDATE_PENDING', message: 'The commit is published. Normal Git index reconciliation remains pending and status will retry it.' });
+  else if (record?.indexState === 'pending') result.push({ code: 'STRUCTURAL_INDEX_PENDING', message: 'The vault commit is durable. Refresh the structural index and use status to finish its recorded repair.' });
+  return result;
+}
+
+function recordResult(vault, directory, record, recovery, outcome, duration, durability) {
+  return {
+    ok: true, tool: record.tool, operation: record.operation, vault: vault.id, requestId: record.id, operationId: record.id,
+    outcome, batch: record.batch, planHash: record.planHash,
+    changes: outputChanges(record.files.map(file => ({ ...file, before: file.before === null ? null : readBlob(directory, vault, record.id, file.before), after: file.after === null ? null : readBlob(directory, vault, record.id, file.after) })), false),
+    commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
+    log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
+    indexState: record.indexState, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+  };
+}
+
+export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
+  const started = performance.now();
+  let input;
+  let vault;
+  let record;
+  let adapter;
+  let recovery = [];
+  try {
+    input = inputFor(tool, raw);
+    vault = selectVault(input.vault, directory);
+    const digest = requestDigest(vault, tool, input);
+    const existing = () => {
+      if (!existsSync(path.join(operationDirectory(directory, vault, input.requestId), 'record.json'))) return null;
+      const found = readRecord(directory, vault, input.requestId);
+      if (found.requestDigest !== digest) refuse('REQUEST_ID_REUSED', 'The request ID was already used for different input.');
+      return found;
+    };
+    existing();
+    if (input.dryRun) {
+      if (listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) refuse('RECOVERY_REQUIRED', 'Complete pending recovery before previewing a new change.');
+      const plan = buildWritePlan(tool, vault, directory, input);
+      const result = { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: 'preview', batch: plan.batch, planHash: plan.planHash, changes: outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+      if (Buffer.byteLength(JSON.stringify(result)) > 900000) refuse('PREVIEW_TOO_LARGE', 'The complete preview exceeds 900000 bytes.');
+      return result;
+    }
+    requireAuthority(vault, input.authorization, []);
+    return withWriterLock(directory, vault, lockWaitMs => {
+      existing();
+      adapter = createGitAdapter(vault, directory);
+      const recovered = recoverPending(vault, directory, adapter, options);
+      recovery = recovered.results;
+      if (recovered.remaining.length || recovery.some(item => item.error || item.result === 'conflict_preserved')) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents new writes.');
+      record = existing();
+      if (record) {
+        if (record.state === 'aborted') refuse('OPERATION_ABORTED', 'The original operation was aborted. Use a fresh preview and request ID.');
+        if (!adapter.recognize(record)) refuse('RECOVERY_REQUIRED', 'The requested operation has not published a verified commit.');
+        return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
+      }
+      const plan = buildWritePlan(tool, vault, directory, input);
+      const journalStarted = performance.now();
+      record = persistPlan(vault, directory, plan, options.sync);
+      record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
+      const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
+      if (result.result === 'conflict_preserved') refuse('REVISION_CONFLICT', 'The operation encountered changed bytes.', result.conflicts.map(item => item.path));
+      record.timings.totalMs = performance.now() - started;
+      saveRecord(directory, vault, record, options.sync);
+      return recordResult(vault, directory, record, recovery, 'committed', performance.now() - started, adapter.durability);
+    });
+  } catch (error) {
+    if (record && !['committed', 'aborted'].includes(record.state)) {
+      record.error = { code: error.code ?? 'WRITE_FAILED', message: error.message };
+      try { saveRecord(directory, vault, record, options.sync); } catch {}
+    }
+    let partial = false;
+    let commit = null;
+    if (record) {
+      try { partial = record.files.some(file => currentFile(vault.path, file.path).revision !== file.before); } catch { partial = true; }
+      try { if (adapter?.recognize(record)) commit = record.git.commit; } catch {}
+    }
+    return { ok: false, tool, vault: vault?.id ?? null, requestId: input?.requestId ?? raw.requestId ?? null, operationId: record?.id ?? null, state: ['intent', 'applied', 'conflicted'].includes(record?.state) ? record.state : 'refused', error: { code: error.code ?? 'WRITE_FAILED', message: error.message, retryable: error.retryable ?? false, paths: (error.paths ?? []).slice(0, 100) }, recovery, partial, commit };
+  }
 }

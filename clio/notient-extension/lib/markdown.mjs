@@ -1,4 +1,25 @@
 import path from 'node:path';
+import { refuse, validText } from './paths.mjs';
+
+export function documentSpans(bytes) {
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { refuse('INVALID_UTF8', 'The document must be valid UTF-8.'); }
+  validText(text, 'Document');
+  const bom = text.startsWith('\uFEFF') ? 1 : 0;
+  const lines = [];
+  let offset = bom;
+  for (const raw of text.slice(bom).match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    const ending = raw.endsWith('\r\n') ? '\r\n' : raw.endsWith('\n') ? '\n' : '';
+    lines.push({ start: offset, end: offset + raw.length, content: raw.slice(0, raw.length - ending.length), ending });
+    offset += raw.length;
+  }
+  let closing = -1;
+  if (/^---[ \t]*$/.test(lines[0]?.content ?? '')) {
+    closing = lines.findIndex((line, i) => i > 0 && /^(---|\.\.\.)[ \t]*$/.test(line.content));
+    if (closing < 0) refuse('FRONTMATTER_INVALID', 'Frontmatter has no closing delimiter.');
+  }
+  return { text, bom, lines, closing, bodyStart: closing < 0 ? bom : lines[closing].end, newline: lines.find(line => line.ending)?.ending ?? '\n' };
+}
 
 export function sourceRange(text, start, end) {
   return {
@@ -122,7 +143,7 @@ export function parseMarkdown(text, filename = '') {
   }
   let bodyStart = 0;
   let frontmatter = '';
-  if (lines[0]?.text.replace(/^\uFEFF/, '') === '---') {
+  if (/^---[ \t]*$/.test(lines[0]?.text.replace(/^\uFEFF/, '') ?? '')) {
     const end = lines.findIndex((line, i) => i > 0 && /^(---|\.\.\.)\s*$/.test(line.text));
     if (end < 0) throw new Error('Frontmatter has no closing delimiter.');
     bodyStart = lines[end].end;

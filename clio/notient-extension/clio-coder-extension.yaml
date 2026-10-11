@@ -128,6 +128,281 @@
           ],
           "additionalProperties": false
         }
+      },
+      {
+        "name": "capture",
+        "description": "Capture exact Markdown in Notient/Inbox with revision-safe journaling, Git and an audit line.",
+        "runtime": "node",
+        "entrypoint": "tools/capture.mjs",
+        "timeoutMs": 300000,
+        "maxOutputBytes": 1048576,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vault",
+            "batch",
+            "authorization",
+            "name",
+            "content"
+          ],
+          "properties": {
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 64
+            },
+            "batch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "authorization": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "origin",
+                "request"
+              ],
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "operator",
+                    "clio",
+                    "unattended"
+                  ]
+                },
+                "request": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              }
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "planHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48000
+            }
+          }
+        }
+      },
+      {
+        "name": "revise",
+        "description": "Preview or apply a unique body replacement or top-level frontmatter change with the read revision.",
+        "runtime": "node",
+        "entrypoint": "tools/revise.mjs",
+        "timeoutMs": 300000,
+        "maxOutputBytes": 1048576,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vault",
+            "batch",
+            "authorization",
+            "operation",
+            "path",
+            "revision"
+          ],
+          "properties": {
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 64
+            },
+            "batch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "authorization": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "origin",
+                "request"
+              ],
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "operator",
+                    "clio",
+                    "unattended"
+                  ]
+                },
+                "request": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              }
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "planHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "replace",
+                "frontmatter"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "oldText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 24000
+            },
+            "newText": {
+              "type": "string",
+              "maxLength": 24000
+            },
+            "set": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "valueJson"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "valueJson": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                }
+              }
+            },
+            "unset": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "undo",
+        "description": "Preview or undo one committed Notient operation while preserving audit history and unrelated staged entries.",
+        "runtime": "node",
+        "entrypoint": "tools/undo.mjs",
+        "timeoutMs": 300000,
+        "maxOutputBytes": 1048576,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vault",
+            "batch",
+            "authorization",
+            "opId"
+          ],
+          "properties": {
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 64
+            },
+            "batch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "authorization": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "origin",
+                "request"
+              ],
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "operator",
+                    "clio",
+                    "unattended"
+                  ]
+                },
+                "request": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              }
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "planHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "opId": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 64
+            }
+          }
+        }
       }
     ]
   },

@@ -14,7 +14,12 @@ function validate(value, schema, name = 'input') {
     if (!Number.isInteger(value) || value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity)) throw new Error(`${name} is outside its integer bounds.`);
   } else if (schema.type === 'string') {
     if (typeof value !== 'string' || value.length < (schema.minLength ?? 0) || value.length > (schema.maxLength ?? Infinity)) throw new Error(`${name} is outside its string bounds.`);
+    if (schema.pattern && !new RegExp(schema.pattern).test(value)) throw new Error(`${name} does not match its required pattern.`);
+  } else if (schema.type === 'array') {
+    if (!Array.isArray(value) || value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity)) throw new Error(`${name} is outside its array bounds.`);
+    value.forEach((item, i) => validate(item, schema.items, `${name}[${i}]`));
   } else if (schema.type === 'boolean' && typeof value !== 'boolean') throw new Error(`${name} must be a boolean.`);
+  if (schema.enum && !schema.enum.includes(value)) throw new Error(`${name} must be one of its declared values.`);
 }
 
 export async function runCommand(name, handler) {
@@ -27,8 +32,11 @@ export async function runCommand(name, handler) {
     const output = JSON.stringify(await handler(input));
     if (Buffer.byteLength(output) > 900000) throw new Error('Response exceeds its byte bound. Request less content.');
     process.stdout.write(`${output}\n`);
+    if (JSON.parse(output)?.ok === false) process.exitCode = 1;
   } catch (error) {
-    process.stdout.write(`${JSON.stringify({ error: error.message })}\n`);
+    const write = ['capture', 'revise', 'undo'].includes(name);
+    const result = write ? { ok: false, tool: name, vault: null, requestId: null, operationId: null, state: 'refused', error: { code: 'INVALID_INPUT', message: error.message, retryable: false, paths: [] }, recovery: [], partial: false, commit: null } : { error: error.message };
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exitCode = 1;
   }
 }

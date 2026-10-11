@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { indexPath } from './config.mjs';
 import { listNotes } from './vault.mjs';
-import { readNote, revision } from './paths.mjs';
+import { readNote, revision, currentFile } from './paths.mjs';
+import { readBlob } from './journal.mjs';
 import { parseMarkdown, resolveLink } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 
@@ -62,6 +63,7 @@ export function openIndex(directory, vault, writable = false) {
           path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(path, tag)
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS own_revisions (path TEXT NOT NULL, revision TEXT, operation TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(path, operation));
         CREATE TABLE IF NOT EXISTS served (
           id INTEGER PRIMARY KEY, call_id TEXT NOT NULL, at TEXT NOT NULL,
           path TEXT NOT NULL, revision TEXT NOT NULL, source TEXT NOT NULL,
@@ -168,6 +170,41 @@ export function indexSummary(vault, directory, checkFiles = true) {
     pending += records.size;
     return { state: 'ready', ...counts, refreshedAt, pending, skippedCount: scan.skipped.length, freshness: pending ? 'changed since refresh' : 'current by file metadata' };
   } finally { db.close(); }
+}
+
+export function repairCommittedIndex(vault, directory, record) {
+  if (!record.git.indexInstalled || !existsSync(indexPath(directory, vault)) || !probeFts5()) return false;
+  const db = openIndex(directory, vault, true);
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    for (const file of record.files) {
+      db.prepare('INSERT OR REPLACE INTO own_revisions VALUES (?, ?, ?, ?)').run(file.path, file.after, record.id, record.createdAt);
+      const current = currentFile(vault.path, file.path);
+      if (current.revision !== file.after) continue;
+      deleteNote(db, file.path);
+      if (file.after === null) continue;
+      const bytes = readBlob(directory, vault, record.id, file.after);
+      const parsed = parseMarkdown(bytes.toString('utf8'), file.path);
+      db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(file.path, file.after, current.stat.size, current.stat.mtimeMs, current.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      const blocks = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(file.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
+      for (const chunk of parsed.chunks) {
+        const id = db.prepare('INSERT INTO chunks(path, block, heading, source, passage) VALUES (?, ?, ?, ?, ?)').run(file.path, blocks[chunk.block], JSON.stringify(chunk.headingPath), JSON.stringify(chunk.source), chunk.passage).lastInsertRowid;
+        db.prepare('INSERT INTO chunks_fts(rowid, passage) VALUES (?, ?)').run(id, chunk.passage);
+      }
+      for (const link of parsed.links) db.prepare('INSERT INTO links(path, payload, resolution, candidates) VALUES (?, ?, ?, ?)').run(file.path, JSON.stringify(link), 'unresolved', '[]');
+      for (const tag of parsed.tags) db.prepare('INSERT INTO tags VALUES (?, ?)').run(file.path, tag);
+    }
+    const notes = db.prepare('SELECT path, aliases FROM notes').all().map(note => ({ path: note.path, aliases: JSON.parse(note.aliases) }));
+    const update = db.prepare('UPDATE links SET target_path = ?, resolution = ?, candidates = ? WHERE id = ?');
+    for (const row of db.prepare('SELECT id, path, payload FROM links').all()) {
+      const resolved = resolveLink(JSON.parse(row.payload), row.path, notes);
+      update.run(resolved.resolution === 'resolved' ? resolved.candidates[0] : null, resolved.resolution, JSON.stringify(resolved.candidates), row.id);
+    }
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
+    db.exec('COMMIT');
+    return true;
+  } catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error; }
+  finally { db.close(); }
 }
 
 export function searchIndex(vault, directory, { query, limit = 10, sourcePath }) {
