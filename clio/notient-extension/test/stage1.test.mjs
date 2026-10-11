@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { atomicJson, indexPath, readConfig, selectVault } from '../lib/config.mjs';
 import { revision, vaultId } from '../lib/paths.mjs';
 import { parseMarkdown } from '../lib/markdown.mjs';
-import { refreshIndex, searchIndex, openIndex } from '../lib/index.mjs';
+import { refreshIndex, searchIndex, openIndex, probeFts5 } from '../lib/index.mjs';
 import { inspectNote } from '../lib/note.mjs';
 import { statusSnapshot } from '../lib/status.mjs';
 
@@ -122,6 +123,8 @@ test('toy vault tools return verified storage passages without changing vault by
   assert.ok(note.value.tags.includes('storage'));
   const status = command(f, 'status', {});
   assert.equal(status.status, 0, status.stderr);
+  assert.equal(status.value.fts5, true);
+  assert.equal(status.value.nodeVersion, process.version);
   assert.equal(status.value.vaults[0].index.pending, 0);
   assert.deepEqual(snapshot(f.vault.path), before);
   assert.ok(existsSync(indexPath(f.directory, f.vault)));
@@ -288,4 +291,90 @@ test('read-only status and note do not change index or create missing state', t 
   statusSnapshot(f.directory, { runtime: true });
   inspectNote(f.vault, f.directory, { path: 'One.md' });
   assert.deepEqual(snapshot(f.directory), before);
+});
+
+test('FTS5 probe retries capability detection and closes each in-memory database', t => {
+  const execute = DatabaseSync.prototype.exec;
+  const close = DatabaseSync.prototype.close;
+  let fail = false;
+  let closed = 0;
+  const calls = [];
+  t.mock.method(DatabaseSync.prototype, 'exec', function (sql) {
+    calls.push(sql);
+    if (fail) throw new Error('no such module: fts5');
+    return execute.call(this, sql);
+  });
+  t.mock.method(DatabaseSync.prototype, 'close', function () { closed++; return close.call(this); });
+  assert.equal(probeFts5(), true);
+  fail = true;
+  assert.equal(probeFts5(), false);
+  fail = false;
+  assert.equal(probeFts5(), true);
+  assert.deepEqual(calls, Array(3).fill('CREATE VIRTUAL TABLE temp.x USING fts5(a)'));
+  assert.equal(closed, 3);
+});
+
+test('missing FTS5 reports versioned status and unknown coverage without touching an index', t => {
+  const f = fixture(t);
+  put(f, 'One.md', '# One\n\nStorage evidence.\n');
+  refreshIndex(f.vault, f.directory);
+  const before = snapshot(f.temporary);
+  t.mock.method(DatabaseSync.prototype, 'exec', function (sql) {
+    assert.equal(sql, 'CREATE VIRTUAL TABLE temp.x USING fts5(a)');
+    throw new Error('no such module: fts5');
+  });
+  const coverage = {
+    state: 'unknown', indexing: { state: 'unavailable', reason: 'fts5_unavailable' },
+    message: 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.',
+  };
+  for (const runtime of [false, true]) {
+    const status = statusSnapshot(f.directory, { runtime });
+    assert.equal(status.fts5, false);
+    assert.equal(status.nodeVersion, process.version);
+    assert.equal(status.vaults[0].error, undefined);
+    assert.equal(status.vaults[0].index.state, 'unavailable');
+    assert.equal(status.vaults[0].index.notes, null);
+    assert.deepEqual(status.vaults[0].index.coverage, coverage);
+  }
+  for (const directory of [f.directory, path.join(f.temporary, 'missing-state')]) {
+    const search = searchIndex(f.vault, directory, { query: 'storage', sourcePath: 'One.md' });
+    assert.equal(search.fts5, false);
+    assert.equal(search.nodeVersion, process.version);
+    assert.deepEqual(search.coverage, coverage);
+    assert.deepEqual(search.hits, []);
+    assert.deepEqual(search.stalePaths, []);
+    assert.equal(search.excludedSource, 'One.md');
+    assert.equal(search.refreshRequired, false);
+  }
+  assert.deepEqual(snapshot(f.temporary), before);
+});
+
+test('command tools return degraded FTS5 results with exit zero', t => {
+  const f = fixture(t);
+  const before = snapshot(f.temporary);
+  const injected = `
+    import { DatabaseSync } from 'node:sqlite';
+    const execute = DatabaseSync.prototype.exec;
+    DatabaseSync.prototype.exec = function (sql) {
+      if (sql === 'CREATE VIRTUAL TABLE temp.x USING fts5(a)') throw new Error('no such module: fts5');
+      return execute.call(this, sql);
+    };
+    await import(process.argv[1]);
+  `;
+  for (const [name, input] of [['status', {}], ['search', { query: 'storage' }]]) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', injected, path.join(root, `tools/${name}.mjs`), JSON.stringify(input)], {
+      encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory), AI_AGENT: 'test' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const value = JSON.parse(result.stdout);
+    assert.equal(value.fts5, false);
+    assert.equal(value.nodeVersion, process.version);
+    assert.equal(value.error, undefined);
+    if (name === 'search') {
+      assert.equal(value.coverage.state, 'unknown');
+      assert.equal(value.coverage.message, 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.');
+      assert.deepEqual(value.hits, []);
+    }
+  }
+  assert.deepEqual(snapshot(f.temporary), before);
 });

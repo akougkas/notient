@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { readConfig } from './config.mjs';
-import { indexSummary, openIndex } from './index.mjs';
+import { indexSummary, openIndex, probeFts5, unavailableFts5Coverage } from './index.mjs';
 import { journalStatus, spoolCount } from './journal.mjs';
 import { lastCommit } from './git.mjs';
 import { notePath } from './paths.mjs';
@@ -29,21 +29,23 @@ function logTail(vault) {
 }
 
 export function statusSnapshot(directory, { vault: selector, runtime = false } = {}) {
+  const fts5 = probeFts5();
   const config = readConfig(directory);
   const selected = selector ? config.vaults.filter(v => v.id === selector || v.path === selector) : config.vaults;
   if (selector && !selected.length) throw new Error('Vault is not registered. Ask the operator to run setup.');
   const vaults = selected.map(vault => {
     try {
       let commit = null;
-      if (runtime) {
+      if (runtime && fts5) {
         const db = openIndex(directory, vault);
         try { commit = JSON.parse(db?.prepare("SELECT value FROM meta WHERE key = 'lastCommit'").get()?.value ?? 'null'); }
         finally { db?.close(); }
-      } else commit = lastCommit(vault.path);
-      return { ...vault, name: path.basename(vault.path), index: indexSummary(vault, directory, !runtime), journal: journalStatus(directory, vault.id), lastCommit: commit, lastCommitSource: runtime ? 'last refresh snapshot' : 'git log', log: logTail(vault) };
+      } else if (!runtime) commit = lastCommit(vault.path);
+      const index = fts5 ? indexSummary(vault, directory, !runtime) : { state: 'unavailable', notes: null, chunks: null, refreshedAt: null, freshness: 'FTS5 unavailable; structural index coverage is unknown', coverage: unavailableFts5Coverage() };
+      return { ...vault, name: path.basename(vault.path), index, journal: journalStatus(directory, vault.id), lastCommit: commit, lastCommitSource: runtime ? 'last refresh snapshot' : 'git log', log: logTail(vault) };
     } catch (error) {
       return { ...vault, name: path.basename(vault.path), error: error.message };
     }
   });
-  return { stage: 1, dataDirectory: directory, vaultCount: vaults.length, vaults, spoolCount: spoolCount(directory), recovery: 'Stage 1 observes journal state. Recovery and vault writes arrive in stage 2.' };
+  return { stage: 1, fts5, nodeVersion: process.version, dataDirectory: directory, vaultCount: vaults.length, vaults, spoolCount: spoolCount(directory), recovery: 'Stage 1 observes journal state. Recovery and vault writes arrive in stage 2.' };
 }

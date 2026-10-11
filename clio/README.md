@@ -8,6 +8,8 @@ Stage 1 is implemented on `clio-mvp`. The extension exposes `status`, `refresh`,
 
 Use Node 22.19 or newer and Clio Coder 0.6.2 or newer. Verification used Node v24.20.0 and Clio Coder 0.6.2. Both packages use Node standard library modules and `node:sqlite`. Neither package has a dependency manifest, installed dependencies or a vendored parser.
 
+A Node release that satisfies the engine range can still lack SQLite FTS5, including Node 23.x. Each status and search invocation probes support with `CREATE VIRTUAL TABLE temp.x USING fts5(a)` in an in-memory database. Status reports `fts5` and `nodeVersion`. When FTS5 is unavailable, status reports unavailable index counts and the runtime shows a warning. Search exits 0 with `hits: []` and `coverage: { state: "unknown", indexing: { state: "unavailable", reason: "fts5_unavailable" }, message: "Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes." }`. This degraded response leaves the index untouched. Its empty hits must not be treated as evidence of absence.
+
 Persistent state defaults to `${XDG_STATE_HOME:-~/.local/state}/notient/`. `config.json` is mode 0600 and records canonical vault paths, their IDs, roles and read-only registration. Each index lives at `vaults/<sha256(realpath)[0:16]>/index.db`, outside the vault. `journal/<vault-id>/` is reserved for stage 2. The index includes notes, blocks, chunks, FTS5, links, tags and a bounded log of the last 1,000 served passages.
 
 Setup initializes a vault's own git repository when needed and writes the PARA default to `Notient/Conventions.md` only when absent. It creates `Notient/Inbox`, `Notient/Log` and `Notient/Plans`. Setup is an explicit bootstrap action; stage 1 does not commit these files or provide journaled content writes. Existing conventions are preserved byte for byte. `--read-only` skips every vault mutation, including git initialization and conventions creation.
@@ -146,6 +148,8 @@ ok: package notient is valid (1 resource checked)
 ```
 
 The complete envelope output is retained locally in `.local/stage1-extension-validate.txt`. It declares `fs.write: []`, `exec: false` and `net: false`. Its empty runtime `tools` list is intentional; the four model-callable declarations are under `capabilities.tools`. Registration validation starts package code under the declared permissions but does not activate the runtime or invoke handlers. The two runtime tests invoke handlers with Clio's extension test host.
+
+The subsequent FTS5 degradation fix was verified on Node v24.20.0 with an injected probe failure. The Node tests reported 19 passed and zero failed, the runtime tests reported three passed and zero failed, and extension validation reported Valid with Registration check passed. The added cases cover probe retries and database cleanup, unavailable status counts, the exact unknown-coverage message, successful command exits, unchanged index bytes and the runtime warning. A real Node 23 invocation was not part of this check.
 
 The first Node invocation failed with `Cannot find module '/home/akougkas/projects/notient/clio/notient-extension/test'`. `test/index.js` now makes that exact directory command work. The next run found an incorrect test expectation: the CRLF fixture's heading was on line 5, while the test requested line 6. Correcting the requested line made the byte-range assertion pass. No product source-range change was needed for that failure.
 

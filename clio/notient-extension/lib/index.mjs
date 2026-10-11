@@ -8,6 +8,23 @@ import { readNote, revision } from './paths.mjs';
 import { parseMarkdown, resolveLink } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 
+export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
+
+export function probeFts5() {
+  let db;
+  try {
+    db = new DatabaseSync(':memory:');
+    db.exec('CREATE VIRTUAL TABLE temp.x USING fts5(a)');
+    return true;
+  } catch {
+    return false;
+  } finally { db?.close(); }
+}
+
+export function unavailableFts5Coverage() {
+  return { state: 'unknown', indexing: { state: 'unavailable', reason: 'fts5_unavailable' }, message: unknownCoverageMessage };
+}
+
 export function openIndex(directory, vault, writable = false) {
   const filename = indexPath(directory, vault);
   if (!writable && !existsSync(filename)) return null;
@@ -160,9 +177,17 @@ export function searchIndex(vault, directory, { query, limit = 10, sourcePath })
   const allTerms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
   const terms = allTerms.slice(0, 32);
   if (!terms.length) throw new Error('Search query must include a word or number.');
+  const callId = randomUUID();
+  if (!probeFts5()) {
+    return {
+      vault: vault.id, callId, query, terms, termsTruncated: allTerms.length > terms.length,
+      excludedSource: sourcePath ?? null, hits: [], stalePaths: [], refreshRequired: false,
+      candidateLimitReached: false, fts5: false, nodeVersion: process.version,
+      coverage: unavailableFts5Coverage(), durationMs: Math.round((performance.now() - started) * 100) / 100,
+    };
+  }
   if (!existsSync(indexPath(directory, vault))) throw new Error('Index is missing. Run refresh for this vault first.');
   const db = openIndex(directory, vault, true);
-  const callId = randomUUID();
   try {
     const match = terms.map(term => `"${term}"`).join(' OR ');
     const hits = [];

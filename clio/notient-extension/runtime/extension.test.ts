@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { createExtensionTestHost } from '@iowarp/clio-coder/extensions/testing';
 import { atomicJson, indexPath } from '../lib/config.mjs';
 import { vaultId, revision } from '../lib/paths.mjs';
@@ -55,6 +56,35 @@ test('runtime shows real index, pending journal and five log lines without writi
     assert.match(result.text, /operation 7/);
     assert.doesNotMatch(result.text, /operation 2/);
     assert.equal(revision(readFileSync(indexPath(directory, vault))), before);
+  } finally {
+    await host.dispose();
+    if (previous === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previous;
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('runtime reports missing FTS5 with the Node version and unknown note count', async t => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'notient-runtime-'));
+  const previous = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = path.join(temporary, 'state');
+  const directory = path.join(process.env.XDG_STATE_HOME, 'notient');
+  const vaultPath = path.join(temporary, 'vault');
+  const vault = { id: vaultId(vaultPath), path: vaultPath, role: 'operator', readOnly: true };
+  mkdirSync(vaultPath);
+  atomicJson(path.join(directory, 'config.json'), { version: 1, vaults: [vault] });
+  const before = revision(readFileSync(path.join(directory, 'config.json')));
+  const host = await createExtensionTestHost(fileURLToPath(new URL('../', import.meta.url)));
+  t.mock.method(DatabaseSync.prototype, 'exec', () => { throw new Error('no such module: fts5'); });
+  try {
+    const result = await host.command('status');
+    assert.ok(result.text?.includes(`FTS5 unavailable on Node ${process.version}.`));
+    assert.ok(result.text?.includes('Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.'));
+    assert.match(result.text ?? '', /note count unavailable/);
+    assert.doesNotMatch(result.text ?? '', /0 notes/);
+    assert.equal(result.status?.tone, 'warning');
+    assert.match(result.status?.text ?? '', /FTS5 unavailable/);
+    assert.equal(revision(readFileSync(path.join(directory, 'config.json'))), before);
   } finally {
     await host.dispose();
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
