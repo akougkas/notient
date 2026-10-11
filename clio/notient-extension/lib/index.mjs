@@ -170,8 +170,8 @@ export function searchIndex(vault, directory, { query, limit = 10, sourcePath })
     const files = new Map();
     let examined = 0;
     const rows = db.prepare(`SELECT c.*, n.revision, bm25(chunks_fts) AS score
-      FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN notes n ON n.path = c.path
-      WHERE chunks_fts MATCH ? AND (? IS NULL OR c.path != ?)
+      FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN notes n ON n.path = c.path JOIN blocks b ON b.id = c.block
+      WHERE chunks_fts MATCH ? AND b.kind != 'heading' AND (? IS NULL OR c.path != ?)
       ORDER BY score, c.path, c.id LIMIT 1000`).iterate(match, sourcePath ?? null, sourcePath ?? null);
     for (const row of rows) {
       examined++;

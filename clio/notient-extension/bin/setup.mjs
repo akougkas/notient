@@ -84,6 +84,7 @@ function main() {
   const config = readConfig(directory);
   if (config.vaults.some(v => v.path !== root && (contained(root, v.path) || contained(v.path, root)))) throw new Error('Registered vaults cannot contain one another.');
   if (config.vaults.some(v => contained(v.path, directory))) throw new Error('Notient data must be outside every vault.');
+  if (config.vaults.length >= 15 && !config.vaults.some(v => v.path === root)) throw new Error('The read-only runtime supports at most 15 registered vaults.');
   let gitInitialized = false;
   let conventionsCreated = false;
   if (!readOnly) {
@@ -103,7 +104,6 @@ function main() {
   chmodSync(directory, 0o700);
   const vault = { id: vaultId(root), path: root, role, readOnly };
   config.vaults = [...config.vaults.filter(v => v.id !== vault.id), vault];
-  if (config.vaults.length > 15) throw new Error('The read-only runtime supports at most 15 registered vaults.');
   mkdirSync(path.join(directory, 'vaults', vault.id), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(directory, 'journal', vault.id), { recursive: true, mode: 0o700 });
   atomicJson(path.join(directory, 'config.json'), config);

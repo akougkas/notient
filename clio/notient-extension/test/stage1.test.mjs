@@ -114,6 +114,7 @@ test('toy vault tools return verified storage passages without changing vault by
     assert.equal(bytes.subarray(hit.source.startByte, hit.source.endByte).toString('utf8'), hit.passage);
     assert.ok(hit.passage.length <= 1200);
     assert.ok(hit.headingPath.length);
+    assert.ok(!/^#{1,6}\s+[^\n]+\n?$/.test(hit.passage));
   }
   const note = command(f, 'note', { path: '3-resources/storage/Key-Value Store Design.md' });
   assert.equal(note.status, 0, note.stderr);
@@ -235,6 +236,17 @@ test('notes reject traversal and symlinks while refresh reports skipped links', 
   assert.equal(refreshIndex(f.vault, f.directory).skippedCount, 2);
 });
 
+test('reference links resolve definitions and literal visitor markers in a code fence do not hide authored text', t => {
+  const f = fixture(t);
+  put(f, 'Target.md', '# Target\n');
+  put(f, 'Source.md', '# Source\n\n[Named][ref] and ![ref][] and [ref].\n\n[ref]: Target.md#Fragment\n\n```text\n<!-- notient:begin -->\nexample\n<!-- notient:end -->\n```\n\nvisibleafterfence proof\n');
+  refreshIndex(f.vault, f.directory);
+  const note = inspectNote(f.vault, f.directory, { path: 'Source.md' });
+  assert.equal(note.linksOut.length, 3);
+  assert.ok(note.linksOut.every(link => link.resolution === 'resolved' && link.fragment === 'Fragment'));
+  assert.equal(searchIndex(f.vault, f.directory, { query: 'visibleafterfence' }).hits.length, 1);
+});
+
 test('unreadable note formats are reported without serving stale content', t => {
   const f = fixture(t);
   put(f, 'Broken.md', '# Good\n\nstorage proof\n');
@@ -259,6 +271,9 @@ test('unregistered vaults and data inside a vault are refused', t => {
   const f = fixture(t);
   assert.throws(() => selectVault('/unregistered', f.directory), /registered vault/);
   assert.throws(() => indexPath(f.vault.path, f.vault), /external index/);
+  const linked = path.join(f.temporary, 'linked-state');
+  symlinkSync(f.vault.path, linked);
+  assert.throws(() => indexPath(linked, f.vault), /external index/);
 });
 
 test('read-only status and note do not change index or create missing state', t => {

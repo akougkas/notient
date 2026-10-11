@@ -52,6 +52,10 @@ export function atomicJson(filename, value) {
 }
 
 export function indexPath(directory, vault) {
-  if (vault.id !== vaultId(vault.path) || contained(vault.path, directory)) throw new Error('Invalid external index location.');
-  return path.join(directory, 'vaults', vault.id, 'index.db');
+  const filename = path.join(directory, 'vaults', vault.id, 'index.db');
+  let ancestor = filename;
+  while (!existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+  const destination = path.join(realpathSync(ancestor), path.relative(ancestor, filename));
+  if (vault.id !== vaultId(vault.path) || contained(vault.path, filename) || contained(vault.path, destination)) throw new Error('Invalid external index location.');
+  return filename;
 }
