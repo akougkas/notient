@@ -5,7 +5,7 @@ import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NO
 import { selectVault, readConfig, dataDirectory } from './config.mjs';
 import { createGitAdapter, preflightGit } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
-import { documentSpans } from './markdown.mjs';
+import { documentSpans, replaceBody, editFrontmatter } from './markdown.mjs';
 import { repairCommittedIndex } from './index.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
 
@@ -269,6 +269,21 @@ function inputFor(tool, raw) {
     validText(input.content, 'Capture content');
     if (!input.content.length || input.content.length > 48000) refuse('INVALID_INPUT', 'Capture content must contain 1 to 48000 characters.');
     documentSpans(Buffer.from(input.content));
+  } else if (tool === 'revise') {
+    if (!['replace', 'frontmatter'].includes(input.operation)) refuse('INVALID_INPUT', 'Stage 2a supports replace and frontmatter.');
+    if (typeof input.path !== 'string' || !/^[a-f0-9]{64}$/.test(input.revision ?? '')) refuse('INVALID_INPUT', 'A note path and lowercase read revision are required.');
+    if (input.path.startsWith('Notient/Log/')) refuse('MANAGED_LOG', 'Direct revision of managed audit logs is refused.', [input.path]);
+    const fields = input.operation === 'replace' ? ['oldText', 'newText'] : ['set', 'unset'];
+    const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'operation', 'path', 'revision', ...fields]);
+    if (Object.keys(raw).some(key => !allowed.has(key))) refuse('INVALID_INPUT', 'Fields belonging to another revision mode are refused.');
+    if (input.operation === 'replace') {
+      validText(input.oldText, 'oldText'); validText(input.newText, 'newText');
+      if (!input.oldText.length || input.oldText.length > 24000 || input.newText.length > 24000) refuse('INVALID_INPUT', 'Replacement strings exceed their declared bounds.');
+    } else {
+      input.set ??= []; input.unset ??= [];
+      if (!Array.isArray(input.set) || !Array.isArray(input.unset) || input.set.length > 32 || input.unset.length > 32 || !input.set.length && !input.unset.length) refuse('INVALID_INPUT', 'Supply at least one set or unset entry, with at most 32 of each.');
+      if (input.set.some(item => !item || Object.keys(item).some(key => !['key', 'valueJson'].includes(key)))) refuse('INVALID_INPUT', 'Frontmatter set entries have closed fields.');
+    }
   } else refuse('OPERATION_UNAVAILABLE', 'This operation is not implemented in the current stage 2a step.');
   return input;
 }
@@ -323,19 +338,29 @@ function captureFiles(vault, input) {
 export function buildWritePlan(tool, vault, directory, input) {
   const started = performance.now();
   const operation = tool === 'capture' ? 'capture' : input.operation;
-  const files = captureFiles(vault, input);
+  let files;
+  if (tool === 'capture') files = captureFiles(vault, input);
+  else {
+    const current = currentFile(vault.path, input.path);
+    if (current.revision === null) refuse('NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
+    if (current.revision !== input.revision) refuse('REVISION_CONFLICT', 'The note changed since its read revision.', [input.path], true);
+    const edited = input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
+    if (edited.bytes.length > MAX_NOTE_BYTES) refuse('NOTE_TOO_LARGE', 'The result exceeds 4 MiB.', [input.path]);
+    files = [{ path: input.path, role: 'note', before: current.bytes, after: edited.bytes, mode: current.mode, splices: edited.splices }];
+  }
   requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
   const createdAt = new Date().toISOString();
   const undo = { targets: [], commits: [] };
   const source = files[0].path;
-  const audit = plannedLog(vault, input, operation, source, files, createdAt, undo);
-  files.push(audit.file);
+  const noop = files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
+  const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
+  if (audit) files.push(audit.file);
   const gitStarted = performance.now();
   const git = preflightGit(vault, files);
   const gitMs = performance.now() - gitStarted;
-  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads: [], inventoryHash: null, ref: git.ref, baseHead: git.baseHead, log: { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } }));
+  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads: [], inventoryHash: null, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit.log, undo, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -373,6 +398,10 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
   };
 }
 
+function previewResult(tool, vault, input, plan, started) {
+  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+}
+
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
   const started = performance.now();
   let input;
@@ -394,11 +423,15 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
     if (input.dryRun) {
       if (listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) refuse('RECOVERY_REQUIRED', 'Complete pending recovery before previewing a new change.');
       const plan = buildWritePlan(tool, vault, directory, input);
-      const result = { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: 'preview', batch: plan.batch, planHash: plan.planHash, changes: outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+      const result = previewResult(tool, vault, input, plan, started);
       if (Buffer.byteLength(JSON.stringify(result)) > 900000) refuse('PREVIEW_TOO_LARGE', 'The complete preview exceeds 900000 bytes.');
       return result;
     }
     requireAuthority(vault, input.authorization, []);
+    if (tool === 'revise' && !existing() && !listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) {
+      const plan = buildWritePlan(tool, vault, directory, input);
+      if (plan.noop) return previewResult(tool, vault, input, plan, started);
+    }
     return withWriterLock(directory, vault, lockWaitMs => {
       existing();
       adapter = createGitAdapter(vault, directory);
@@ -412,6 +445,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
       }
       const plan = buildWritePlan(tool, vault, directory, input);
+      if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
       const journalStarted = performance.now();
       record = persistPlan(vault, directory, plan, options.sync);
       record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };

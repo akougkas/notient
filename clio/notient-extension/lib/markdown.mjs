@@ -21,6 +21,193 @@ export function documentSpans(bytes) {
   return { text, bom, lines, closing, bodyStart: closing < 0 ? bom : lines[closing].end, newline: lines.find(line => line.ending)?.ending ?? '\n' };
 }
 
+export function replaceBody(bytes, oldText, newText) {
+  validText(oldText, 'oldText'); validText(newText, 'newText');
+  if (!oldText.length) refuse('INVALID_INPUT', 'oldText cannot be empty.');
+  const document = documentSpans(bytes);
+  const matches = [];
+  let offset = document.bodyStart;
+  for (;;) {
+    offset = document.text.indexOf(oldText, offset);
+    if (offset < 0) break;
+    matches.push(offset);
+    if (matches.length > 1) refuse('QUOTE_AMBIGUOUS', 'The body contains more than one overlapping or separate occurrence. Quote a longer unique passage.');
+    offset++;
+  }
+  if (!matches.length) refuse('QUOTE_NOT_FOUND', 'oldText is not an exact supplied body quotation. Preserve punctuation and whitespace.');
+  const startByte = Buffer.byteLength(document.text.slice(0, matches[0]));
+  const endByte = startByte + Buffer.byteLength(oldText);
+  return { bytes: Buffer.concat([bytes.subarray(0, startByte), Buffer.from(newText), bytes.subarray(endByte)]), splices: [{ startByte, endByte, replacement: newText }] };
+}
+
+function yamlKey(raw) {
+  if (raw.startsWith('"')) { try { const key = JSON.parse(raw); if (typeof key === 'string') return key; } catch {} }
+  else if (raw.startsWith("'")) { if (raw.endsWith("'")) return raw.slice(1, -1).replaceAll("''", "'"); }
+  else if (/^[\p{L}\p{N}_][\p{L}\p{N}_ .-]*$/u.test(raw)) return raw;
+  refuse('FRONTMATTER_UNSUPPORTED', 'Only ordinary string mapping keys can be changed safely.');
+}
+
+function yamlLex(text, allowOpen = false) {
+  let quote = null;
+  const flow = [];
+  let comment = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote === "'") {
+      if (c === "'" && text[i + 1] === "'") { i++; continue; }
+      if (c === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '\\') {
+        const escape = text[++i];
+        if ('0abtnvfre "_NLP\\/\n\r'.includes(escape ?? '\0')) continue;
+        const digits = { x: 2, u: 4, U: 8 }[escape];
+        if (!digits || !new RegExp(`^[a-f0-9]{${digits}}$`, 'i').test(text.slice(i + 1, i + 1 + digits))) refuse('FRONTMATTER_INVALID', 'Malformed YAML string escape.');
+        i += digits;
+      } else if (c === '"') quote = null;
+      continue;
+    }
+    if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      if (comment < 0) comment = i;
+      const end = text.indexOf('\n', i);
+      i = end < 0 ? text.length : end;
+      continue;
+    }
+    const boundary = i === 0 || /[\s,[{:]/.test(text[i - 1]);
+    if ((c === '"' || c === "'") && boundary) { quote = c; continue; }
+    if ('&*!'.includes(c) && boundary) refuse('FRONTMATTER_UNSUPPORTED', 'YAML anchors, aliases and custom tags are unsupported.');
+    if (c === '[' || c === '{') flow.push({ kind: c, keys: new Set(), keyStart: i + 1, needsKey: c === '{' });
+    else if (c === ',' && flow.at(-1)?.kind === '{') { flow.at(-1).needsKey = true; flow.at(-1).keyStart = i + 1; }
+    else if (c === ':' && flow.at(-1)?.kind === '{' && flow.at(-1).needsKey) {
+      const frame = flow.at(-1);
+      const key = yamlKey(text.slice(frame.keyStart, i).trim());
+      if (frame.keys.has(key)) refuse('FRONTMATTER_INVALID', 'Duplicate flow mapping keys are unsupported.');
+      frame.keys.add(key); frame.needsKey = false;
+    }
+    else if (c === ']' || c === '}') {
+      if (flow.pop()?.kind !== (c === ']' ? '[' : '{')) refuse('FRONTMATTER_INVALID', 'Unbalanced YAML flow collection.');
+    }
+  }
+  if (!allowOpen && (quote || flow.length)) refuse('FRONTMATTER_INVALID', 'Unclosed YAML quote or flow collection.');
+  return allowOpen ? { comment, open: Boolean(quote || flow.length) } : comment;
+}
+
+function headerParts(line) {
+  const match = /^((?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^:#]+?))([ \t]*:[ \t]*)(.*)$/.exec(line.content);
+  if (!match || /^\s|^[-?]|^<</.test(match[1]) || (match[3] && !/[ \t]$/.test(match[2]))) refuse('FRONTMATTER_UNSUPPORTED', 'A top-level mapping boundary is ambiguous.');
+  return { key: yamlKey(match[1].trim()), prefix: match[1] + match[2], value: match[3] };
+}
+
+export function frontmatterFields(document) {
+  if (document.closing < 0) return [];
+  if (Buffer.byteLength(document.text.slice(0, document.bodyStart)) > 65536) refuse('FRONTMATTER_UNSUPPORTED', 'Frontmatter editing is bounded to 64 KiB.');
+  const fields = [];
+  const names = new Set();
+  let active = null;
+  for (let i = 1; i < document.closing; i++) {
+    const line = document.lines[i];
+    if (active && !active.block && yamlLex([active.value, ...active.continuation].join('\n'), true).open) {
+      active.end = line.end;
+      active.continuation.push(line.content);
+      continue;
+    }
+    if (!line.content.trim() || /^\s*#/.test(line.content)) continue;
+    if (/^[ \t]|^-\s/.test(line.content)) {
+      if (!active || /^\t|^ +\t/.test(line.content) || (/^-\s/.test(line.content) && !active.list)) refuse('FRONTMATTER_UNSUPPORTED', 'An indented field boundary is ambiguous.');
+      active.end = line.end;
+      if (!active.block) {
+        if (/^\s*(?:\?|<<\s*:)/.test(line.content)) refuse('FRONTMATTER_UNSUPPORTED', 'Complex and merge keys are unsupported.');
+        active.continuation.push(line.content);
+      }
+      continue;
+    }
+    const parts = headerParts(line);
+    if (names.has(parts.key)) refuse('FRONTMATTER_INVALID', 'Duplicate top-level frontmatter keys are unsupported.');
+    names.add(parts.key);
+    active = { ...parts, start: line.start, valueStart: line.start + parts.prefix.length, end: line.end, ending: line.ending, continuation: [], block: /^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:[ \t]+#.*)?$/.test(parts.value), list: !parts.value.trim() || /^#/.test(parts.value.trim()) };
+    fields.push(active);
+    if (fields.length > 512) refuse('FRONTMATTER_UNSUPPORTED', 'Frontmatter editing is bounded to 512 fields.');
+  }
+  for (const field of fields) {
+    const header = field.value;
+    if (field.block) {
+      const comment = header.indexOf('#');
+      let start = comment;
+      while (start > 0 && /[ \t]/.test(header[start - 1])) start--;
+      field.comment = comment < 0 ? '' : header.slice(start);
+      continue;
+    }
+    const value = [header, ...field.continuation].join('\n');
+    yamlLex(value);
+    if (/^["']/.test(value.trim()) && !/^(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')(?:\s*(?:#[^\n]*)?)*$/.test(value.trim())) refuse('FRONTMATTER_INVALID', 'A quoted scalar has trailing or malformed content.');
+    const comment = yamlLex(header, true).comment;
+    let end = comment < 0 ? header.length : comment;
+    while (end > 0 && /[ \t]/.test(header[end - 1])) end--;
+    field.comment = `${comment === 0 ? ' ' : ''}${header.slice(end)}`;
+    if (/^[|>]/.test(header.trim())) refuse('FRONTMATTER_INVALID', 'Malformed YAML block scalar indicator.');
+  }
+  return fields;
+}
+
+function jsonValue(source) {
+  validText(source, 'valueJson');
+  let value;
+  try { value = JSON.parse(source); } catch { refuse('INVALID_VALUE_JSON', 'valueJson must encode one JSON value.'); }
+  function check(item, depth) {
+    if (depth > 4) refuse('INVALID_VALUE_JSON', 'Decoded JSON depth exceeds four.');
+    if (typeof item === 'number' && !Number.isFinite(item)) refuse('INVALID_VALUE_JSON', 'JSON numbers must be finite.');
+    if (typeof item === 'string') validText(item, 'Decoded JSON string');
+    if (Array.isArray(item)) item.forEach(child => check(child, depth + 1));
+    else if (item && typeof item === 'object') Object.entries(item).forEach(([key, child]) => { validText(key, 'Decoded JSON key'); check(child, depth + 1); });
+  }
+  check(value, 0);
+  const encoded = JSON.stringify(value);
+  if (Buffer.byteLength(encoded) > 4096 || Buffer.byteLength(source) > 4096) refuse('INVALID_VALUE_JSON', 'A JSON value exceeds 4096 UTF-8 bytes.');
+  return encoded;
+}
+
+export function editFrontmatter(bytes, set = [], unset = []) {
+  const document = documentSpans(bytes);
+  const fields = frontmatterFields(document);
+  const changes = new Map();
+  const removed = new Set();
+  for (const item of set) {
+    if (!item || !/^[A-Za-z_][A-Za-z0-9_-]{0,79}$/.test(item.key) || changes.has(item.key)) refuse('INVALID_INPUT', 'Set keys must be valid and unique.');
+    changes.set(item.key, jsonValue(item.valueJson));
+  }
+  for (const key of unset) {
+    if (!/^[A-Za-z_][A-Za-z0-9_-]{0,79}$/.test(key) || removed.has(key) || changes.has(key)) refuse('INVALID_INPUT', 'Unset keys must be valid, unique and disjoint from set.');
+    removed.add(key);
+  }
+  const edits = [];
+  const offset = position => Buffer.byteLength(document.text.slice(0, position));
+  if (document.closing < 0) {
+    if (!changes.size) return { bytes, splices: [] };
+    const generated = `---${document.newline}${[...changes].map(([key, value]) => `${key}: ${value}${document.newline}`).join('')}---${document.newline}`;
+    edits.push({ startByte: offset(document.bom), endByte: offset(document.bom), replacement: generated });
+  } else {
+    for (const field of fields) {
+      if (removed.has(field.key)) edits.push({ startByte: offset(field.start), endByte: offset(field.end), replacement: '' });
+      else if (changes.has(field.key)) {
+        const value = changes.get(field.key);
+        const replacement = `${field.prefix.endsWith(':') ? ' ' : ''}${value}${field.comment}${field.ending}`;
+        edits.push({ startByte: offset(field.valueStart), endByte: offset(field.end), replacement });
+        changes.delete(field.key);
+      }
+    }
+    if (changes.size) edits.push({ startByte: offset(document.lines[document.closing].start), endByte: offset(document.lines[document.closing].start), replacement: [...changes].map(([key, value]) => `${key}: ${value}${document.newline}`).join('') });
+  }
+  const chunks = [];
+  let start = 0;
+  for (const splice of edits.sort((a, b) => a.startByte - b.startByte)) {
+    chunks.push(bytes.subarray(start, splice.startByte), Buffer.from(splice.replacement));
+    start = splice.endByte;
+  }
+  chunks.push(bytes.subarray(start));
+  return { bytes: Buffer.concat(chunks), splices: edits };
+}
+
 export function sourceRange(text, start, end) {
   return {
     startLine: 1 + (text.slice(0, start).match(/\n/g)?.length ?? 0),
