@@ -141,6 +141,8 @@ export function createGitAdapter(vault, directory) {
     const changed = run(record, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', record.git.commit], { raw: true }).toString('utf8').split('\0').filter(Boolean).sort();
     if (JSON.stringify(changed) !== JSON.stringify(record.files.map(file => file.path).sort())) refuse('JOURNAL_CORRUPT', 'The Git commit delta differs from the recorded path set.');
     for (const file of record.files) {
+      const before = treeEntry(root, record.git.baseHead, file.path);
+      if (file.before === null ? before !== null : before?.oid !== object(record, file.before) || before.mode !== (file.mode & 0o111 ? '100755' : '100644')) refuse('JOURNAL_CORRUPT', 'A commit parent blob differs from the recorded before bytes.', [file.path]);
       const after = treeEntry(root, record.git.tree, file.path);
       if (file.after === null ? after !== null : after?.oid !== object(record, file.after) || after.mode !== (file.mode & 0o111 ? '100755' : '100644')) refuse('JOURNAL_CORRUPT', 'A commit blob differs from its recorded after bytes.', [file.path]);
     }

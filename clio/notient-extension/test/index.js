@@ -3,3 +3,4 @@ import './journal.test.mjs';
 import './git-write.test.mjs';
 import './capture.test.mjs';
 import './revise.test.mjs';
+import './undo.test.mjs';

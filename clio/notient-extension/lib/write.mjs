@@ -3,10 +3,11 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
 import { selectVault, readConfig, dataDirectory } from './config.mjs';
-import { createGitAdapter, preflightGit } from './git.mjs';
+import { createGitAdapter, preflightGit, git } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
-import { documentSpans, replaceBody, editFrontmatter } from './markdown.mjs';
+import { documentSpans, replaceBody, editFrontmatter, parseMarkdown, resolveLink } from './markdown.mjs';
 import { repairCommittedIndex } from './index.mjs';
+import { listNotes } from './vault.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -118,7 +119,7 @@ export function newRecord(vault, plan) {
     tool: plan.tool, operation: plan.operation, requestDigest: plan.requestDigest, batch: plan.batch,
     authorization: plan.authorization, createdAt: plan.createdAt, updatedAt: plan.createdAt,
     state: 'intent', planHash: plan.planHash, source: plan.source ?? null, destination: null,
-    reads: [], inventoryHash: null, files, applyOrder: files.map(file => file.path), createdDirectories: [],
+    reads: plan.reads ?? [], inventoryHash: plan.inventoryHash ?? null, files, applyOrder: files.map(file => file.path), createdDirectories: [],
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
@@ -152,9 +153,17 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     return { operationId: record.id, result: 'conflict_preserved', commit: null, conflicts: record.conflicts };
   }
   if (!published) {
-    try { adapter.checkBase(record); }
+    try {
+      adapter.checkBase(record);
+      for (const read of record.reads) if (currentFile(vault.path, read.path).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+      if (record.inventoryHash) {
+        const names = new Set(listNotes(vault.path).notes.map(note => note.path));
+        for (const file of record.files) { if (file.before === null) names.delete(file.path); else names.add(file.path); }
+        if (revision(canonicalJson([...names].sort())) !== record.inventoryHash) refuse('DEPENDENCY_CHANGED', 'The reviewed note inventory changed.');
+      }
+    }
     catch (error) {
-      if (states.every(item => item.state === 'before') && error.code === 'GIT_HEAD_CHANGED') {
+      if (states.every(item => item.state === 'before') && ['GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code)) {
         record.state = 'aborted'; record.error = { code: error.code, message: error.message };
         saveRecord(directory, vault, record, sync);
         cleanupSiblings(vault, record, sync);
@@ -171,6 +180,11 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     options.barrier?.('afterPublish', record);
     adapter.publish(record);
     options.barrier?.('afterRef', record);
+  }
+  for (const id of record.undo.targets) {
+    const original = readRecord(directory, vault, id);
+    if (original.undoneBy && original.undoneBy !== record.id) refuse('UNDO_CONFLICT', 'The original operation was already undone by another operation.');
+    if (original.undoneBy !== record.id) { original.undoneBy = record.id; saveRecord(directory, vault, original, sync); }
   }
   const installed = record.git.indexInstalled || adapter.reconcileIndex(record);
   record.git.indexInstalled = installed;
@@ -284,7 +298,11 @@ function inputFor(tool, raw) {
       if (!Array.isArray(input.set) || !Array.isArray(input.unset) || input.set.length > 32 || input.unset.length > 32 || !input.set.length && !input.unset.length) refuse('INVALID_INPUT', 'Supply at least one set or unset entry, with at most 32 of each.');
       if (input.set.some(item => !item || Object.keys(item).some(key => !['key', 'valueJson'].includes(key)))) refuse('INVALID_INPUT', 'Frontmatter set entries have closed fields.');
     }
-  } else refuse('OPERATION_UNAVAILABLE', 'This operation is not implemented in the current stage 2a step.');
+  } else if (tool === 'undo') {
+    if (!requestIdPattern.test(input.opId ?? '')) refuse('INVALID_INPUT', 'An original operation ID is required.');
+    const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'opId']);
+    if (Object.keys(raw).some(key => !allowed.has(key))) refuse('INVALID_INPUT', 'Stage 2a undo accepts one opId and no batch selector.');
+  } else refuse('OPERATION_UNAVAILABLE', 'Unknown write tool.');
   return input;
 }
 
@@ -335,11 +353,73 @@ function captureFiles(vault, input) {
   refuse('CAPTURE_COLLISIONS', 'No available capture name remains within 9999 candidates.');
 }
 
+function inverseFiles(vault, directory, input) {
+  const filename = path.join(operationDirectory(directory, vault, input.opId), 'record.json');
+  if (!existsSync(filename)) refuse('OPERATION_NOT_FOUND', 'No journal operation has that ID.');
+  const original = readRecord(directory, vault, input.opId);
+  if (original.operation === 'undo') refuse('UNDO_OF_UNDO', 'Undo of an undo is outside stage 2a.');
+  if (original.state !== 'committed') refuse('OPERATION_NOT_COMMITTED', 'The original operation must be committed before undo.');
+  requireAuthority(vault, input.authorization, original.files, { dryRun: input.dryRun });
+  if (original.undoneBy) {
+    const inverse = readRecord(directory, vault, original.undoneBy);
+    createGitAdapter(vault, directory).verify(inverse);
+    try { git(vault.path, ['merge-base', '--is-ancestor', inverse.git.commit, 'HEAD']); }
+    catch { refuse('UNDO_HISTORY_CHANGED', 'The recorded inverse commit is no longer reachable from this branch.'); }
+    return { files: [], source: original.source, noop: true, undo: { targets: [inverse.id], commits: [inverse.git.commit] }, reads: [], inventoryHash: null };
+  }
+  const adapter = createGitAdapter(vault, directory);
+  adapter.verify(original);
+  try { git(vault.path, ['merge-base', '--is-ancestor', original.git.commit, 'HEAD']); }
+  catch { refuse('UNDO_HISTORY_CHANGED', 'The original commit is not reachable from the current branch.'); }
+  const targets = new Set(original.files.filter(file => file.role === 'note').map(file => file.path));
+  for (const later of listRecords(directory, vault)) {
+    if (later.id === original.id || later.state !== 'committed' || !later.files.some(file => file.role === 'note' && targets.has(file.path))) continue;
+    try {
+      git(vault.path, ['merge-base', '--is-ancestor', original.git.commit, later.git.commit]);
+      git(vault.path, ['merge-base', '--is-ancestor', later.git.commit, 'HEAD']);
+    } catch { continue; }
+    refuse('UNDO_LATER_WRITE', 'A later unselected Notient operation touches the same path.', [...targets]);
+  }
+  const files = original.files.filter(file => file.role === 'note').map(file => {
+    const current = currentFile(vault.path, file.path);
+    if (current.revision !== file.after) refuse('UNDO_CONFLICT', 'Current note bytes differ from the original operation after-state.', [file.path]);
+    return { path: file.path, role: 'note', before: current.bytes, after: file.before === null ? null : readBlob(directory, vault, original.id, file.before), mode: file.mode };
+  });
+  const reads = [];
+  let inventoryHash = null;
+  if (files.some(file => file.after === null)) {
+    if (!input.dryRun && !input.planHash) refuse('PLAN_HASH_REQUIRED', 'Deleting a capture requires its preceding dry-run planHash.');
+    const scan = listNotes(vault.path);
+    if (scan.skipped.length || scan.notes.length > 10000) refuse('UNDO_SCAN_INCOMPLETE', 'Reference completeness cannot be established for this vault.');
+    const notes = [];
+    let bytes = 0;
+    for (const note of scan.notes) {
+      const current = currentFile(vault.path, note.path);
+      bytes += current.bytes?.length ?? 0;
+      if (!current.bytes || bytes > 256 * 1024 * 1024) refuse('UNDO_SCAN_INCOMPLETE', 'The undo reference scan exceeds its bound or encountered a missing note.');
+      const parsed = parseMarkdown(current.bytes.toString('utf8'), note.path);
+      notes.push({ path: note.path, aliases: parsed.aliases, links: parsed.links });
+      if (!targets.has(note.path) && !note.path.startsWith('Notient/Log/')) reads.push({ path: note.path, revision: current.revision });
+    }
+    for (const note of notes) {
+      if (targets.has(note.path)) continue;
+      for (const link of note.links) {
+        const resolved = resolveLink(link, note.path, notes);
+        if (resolved.candidates.some(name => targets.has(name))) refuse('UNDO_REFERENCE_CONFLICT', 'Deleting this capture would leave a live incoming reference.', [note.path]);
+      }
+    }
+    inventoryHash = revision(canonicalJson(scan.notes.map(note => note.path).sort()));
+  }
+  return { files, source: original.source, noop: false, undo: { targets: [original.id], commits: [original.git.commit] }, reads, inventoryHash };
+}
+
 export function buildWritePlan(tool, vault, directory, input) {
   const started = performance.now();
-  const operation = tool === 'capture' ? 'capture' : input.operation;
+  const operation = tool === 'capture' ? 'capture' : tool === 'undo' ? 'undo' : input.operation;
   let files;
+  let inverse;
   if (tool === 'capture') files = captureFiles(vault, input);
+  else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input); files = inverse.files; }
   else {
     const current = currentFile(vault.path, input.path);
     if (current.revision === null) refuse('NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
@@ -350,17 +430,19 @@ export function buildWritePlan(tool, vault, directory, input) {
   }
   requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
   const createdAt = new Date().toISOString();
-  const undo = { targets: [], commits: [] };
-  const source = files[0].path;
-  const noop = files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
+  const undo = inverse?.undo ?? { targets: [], commits: [] };
+  const source = inverse?.source ?? files[0].path;
+  const noop = inverse?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
   const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
   if (audit) files.push(audit.file);
   const gitStarted = performance.now();
   const git = preflightGit(vault, files);
   const gitMs = performance.now() - gitStarted;
-  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads: [], inventoryHash: null, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
+  const reads = inverse?.reads ?? [];
+  const inventoryHash = inverse?.inventoryHash ?? null;
+  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -451,6 +533,8 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
       record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
       const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
       if (result.result === 'conflict_preserved') refuse('REVISION_CONFLICT', 'The operation encountered changed bytes.', result.conflicts.map(item => item.path));
+      if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
+      if (!record.git.commit || !adapter.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'A write cannot succeed before its exact commit is verified as published.');
       record.timings.totalMs = performance.now() - started;
       saveRecord(directory, vault, record, options.sync);
       return recordResult(vault, directory, record, recovery, 'committed', performance.now() - started, adapter.durability);
