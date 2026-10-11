@@ -1,0 +1,198 @@
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync, mkdirSync, chmodSync } from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { indexPath } from './config.mjs';
+import { listNotes } from './vault.mjs';
+import { readNote, revision } from './paths.mjs';
+import { parseMarkdown, resolveLink } from './markdown.mjs';
+import { lastCommit } from './git.mjs';
+
+export function openIndex(directory, vault, writable = false) {
+  const filename = indexPath(directory, vault);
+  if (!writable && !existsSync(filename)) return null;
+  if (writable) mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const db = new DatabaseSync(filename, { readOnly: !writable });
+  try {
+    db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+    const version = db.prepare('PRAGMA user_version').get().user_version;
+    if (version !== 0 && version !== 1) throw new Error('Unsupported index version.');
+    if (version === 0 && !writable) throw new Error('Index is incomplete. Run refresh.');
+    if (writable) {
+      chmodSync(filename, 0o600);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notes (
+          path TEXT PRIMARY KEY, revision TEXT NOT NULL, size INTEGER NOT NULL,
+          mtime REAL NOT NULL, ctime REAL NOT NULL, aliases TEXT NOT NULL, outline TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS blocks (
+          id INTEGER PRIMARY KEY, path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE,
+          kind TEXT NOT NULL, heading TEXT NOT NULL, source TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chunks (
+          id INTEGER PRIMARY KEY, path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE,
+          block INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+          heading TEXT NOT NULL, source TEXT NOT NULL, passage TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(passage, tokenize='unicode61 remove_diacritics 2');
+        CREATE TABLE IF NOT EXISTS links (
+          id INTEGER PRIMARY KEY, path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE,
+          payload TEXT NOT NULL, target_path TEXT, resolution TEXT NOT NULL, candidates TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS links_target ON links(target_path);
+        CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
+        CREATE TABLE IF NOT EXISTS tags (
+          path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(path, tag)
+        );
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS served (
+          id INTEGER PRIMARY KEY, call_id TEXT NOT NULL, at TEXT NOT NULL,
+          path TEXT NOT NULL, revision TEXT NOT NULL, source TEXT NOT NULL,
+          passage TEXT NOT NULL, passage_hash TEXT NOT NULL
+        );
+        PRAGMA user_version = 1;
+      `);
+    } else db.exec('PRAGMA query_only = ON;');
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+function deleteNote(db, name) {
+  db.prepare('DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE path = ?)').run(name);
+  db.prepare('DELETE FROM notes WHERE path = ?').run(name);
+}
+
+function sameStat(record, stat) {
+  return record.size === stat.size && record.mtime === stat.mtimeMs && record.ctime === stat.ctimeMs;
+}
+
+export function refreshIndex(vault, directory, { force = false } = {}) {
+  const started = performance.now();
+  const scan = listNotes(vault.path);
+  const db = openIndex(directory, vault, true);
+  let changed = 0;
+  let unchanged = 0;
+  let deleted = 0;
+  let hashed = 0;
+  const errors = [];
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    const previous = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
+    const present = new Set(scan.notes.map(note => note.path));
+    for (const oldPath of previous.keys()) {
+      if (!present.has(oldPath)) { deleteNote(db, oldPath); deleted++; }
+    }
+    for (const entry of scan.notes) {
+      const old = previous.get(entry.path);
+      if (!force && old && sameStat(old, entry.stat)) { unchanged++; continue; }
+      let content;
+      let parsed;
+      try {
+        content = readNote(vault.path, entry.path);
+        hashed++;
+        if (old?.revision === content.revision) {
+          db.prepare('UPDATE notes SET size = ?, mtime = ?, ctime = ? WHERE path = ?').run(content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, entry.path);
+          unchanged++;
+          continue;
+        }
+        parsed = parseMarkdown(content.text, entry.path);
+      } catch (error) {
+        deleteNote(db, entry.path);
+        errors.push({ path: entry.path, reason: error.message });
+        continue;
+      }
+      deleteNote(db, entry.path);
+      db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(entry.path, content.revision, content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      const blockIds = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(entry.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
+      for (const chunk of parsed.chunks) {
+        const id = db.prepare('INSERT INTO chunks(path, block, heading, source, passage) VALUES (?, ?, ?, ?, ?)').run(entry.path, blockIds[chunk.block], JSON.stringify(chunk.headingPath), JSON.stringify(chunk.source), chunk.passage).lastInsertRowid;
+        db.prepare('INSERT INTO chunks_fts(rowid, passage) VALUES (?, ?)').run(id, chunk.passage);
+      }
+      for (const link of parsed.links) db.prepare('INSERT INTO links(path, payload, resolution, candidates) VALUES (?, ?, ?, ?)').run(entry.path, JSON.stringify(link), 'unresolved', '[]');
+      for (const tag of parsed.tags) db.prepare('INSERT INTO tags VALUES (?, ?)').run(entry.path, tag);
+      changed++;
+    }
+    if (changed || deleted || errors.length) {
+      const notes = db.prepare('SELECT path, aliases FROM notes').all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) }));
+      for (const row of db.prepare('SELECT id, path, payload FROM links').all()) {
+        const resolved = resolveLink(JSON.parse(row.payload), row.path, notes);
+        db.prepare('UPDATE links SET target_path = ?, resolution = ?, candidates = ? WHERE id = ?').run(resolved.resolution === 'resolved' ? resolved.candidates[0] : null, resolved.resolution, JSON.stringify(resolved.candidates), row.id);
+      }
+    }
+    const completedAt = new Date().toISOString();
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
+    db.exec('COMMIT');
+    return { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, durationMs: Math.round((performance.now() - started) * 100) / 100 };
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw error;
+  } finally { db.close(); }
+}
+
+export function indexSummary(vault, directory, checkFiles = true) {
+  const db = openIndex(directory, vault);
+  if (!db) return { state: 'missing', notes: 0, chunks: 0, refreshedAt: null, freshness: 'never indexed' };
+  try {
+    const counts = {};
+    for (const table of ['notes', 'blocks', 'chunks', 'links', 'tags', 'served']) counts[table] = db.prepare(`SELECT count(*) AS count FROM ${table}`).get().count;
+    const refreshedAt = db.prepare("SELECT value FROM meta WHERE key = 'refreshedAt'").get()?.value ?? null;
+    if (!checkFiles) return { state: 'ready', ...counts, refreshedAt, freshness: 'last refresh only; files not scanned' };
+    const records = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
+    const scan = listNotes(vault.path);
+    let pending = 0;
+    for (const note of scan.notes) {
+      if (!records.has(note.path) || !sameStat(records.get(note.path), note.stat)) pending++;
+      records.delete(note.path);
+    }
+    pending += records.size;
+    return { state: 'ready', ...counts, refreshedAt, pending, skippedCount: scan.skipped.length, freshness: pending ? 'changed since refresh' : 'current by file metadata' };
+  } finally { db.close(); }
+}
+
+export function searchIndex(vault, directory, { query, limit = 10, sourcePath }) {
+  const started = performance.now();
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('Search limit must be between 1 and 20.');
+  if (typeof query !== 'string' || query.length > 4000) throw new Error('Search query must contain at most 4000 characters.');
+  const allTerms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
+  const terms = allTerms.slice(0, 32);
+  if (!terms.length) throw new Error('Search query must include a word or number.');
+  if (!existsSync(indexPath(directory, vault))) throw new Error('Index is missing. Run refresh for this vault first.');
+  const db = openIndex(directory, vault, true);
+  const callId = randomUUID();
+  try {
+    const match = terms.map(term => `"${term}"`).join(' OR ');
+    const hits = [];
+    const stale = new Set();
+    const files = new Map();
+    let examined = 0;
+    const rows = db.prepare(`SELECT c.*, n.revision, bm25(chunks_fts) AS score
+      FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN notes n ON n.path = c.path
+      WHERE chunks_fts MATCH ? AND (? IS NULL OR c.path != ?)
+      ORDER BY score, c.path, c.id LIMIT 1000`).iterate(match, sourcePath ?? null, sourcePath ?? null);
+    for (const row of rows) {
+      examined++;
+      if (!files.has(row.path)) {
+        try { files.set(row.path, readNote(vault.path, row.path)); } catch { files.set(row.path, null); }
+      }
+      const current = files.get(row.path);
+      const source = JSON.parse(row.source);
+      if (!current || current.revision !== row.revision || current.bytes.subarray(source.startByte, source.endByte).toString('utf8') !== row.passage) {
+        stale.add(row.path);
+        continue;
+      }
+      hits.push({ path: row.path, revision: row.revision, headingPath: JSON.parse(row.heading), source, passage: row.passage, score: row.score, evidence: 'vault text; unverified', memory: vault.role === 'own' ? 'unverified memory' : null });
+      if (hits.length === limit) break;
+    }
+    db.exec('BEGIN IMMEDIATE');
+    for (const hit of hits) db.prepare('INSERT INTO served(call_id, at, path, revision, source, passage, passage_hash) VALUES (?, ?, ?, ?, ?, ?, ?)').run(callId, new Date().toISOString(), hit.path, hit.revision, JSON.stringify(hit.source), hit.passage, revision(hit.passage));
+    db.exec('DELETE FROM served WHERE id NOT IN (SELECT id FROM served ORDER BY id DESC LIMIT 1000); COMMIT;');
+    return { vault: vault.id, callId, query, terms, termsTruncated: allTerms.length > terms.length, excludedSource: sourcePath ?? null, hits, stalePaths: [...stale], refreshRequired: stale.size > 0, candidateLimitReached: examined === 1000 && hits.length < limit, durationMs: Math.round((performance.now() - started) * 100) / 100 };
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw error;
+  } finally { db.close(); }
+}

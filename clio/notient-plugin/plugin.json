@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "notient",
+  "version": "0.1.0",
+  "description": "Sentient Notes carry durable intelligence. Clio visits registered vaults and answers from cited passages.",
+  "extensions": {
+    "ai.iowarp.clio": {
+      "manifestVersion": 1,
+      "compatibility": { "clio": ">=0.6.2" },
+      "resources": { "skills": "skills" }
+    }
+  }
+}
