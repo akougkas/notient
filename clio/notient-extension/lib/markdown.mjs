@@ -99,6 +99,28 @@ function headerParts(line) {
   return { key: yamlKey(match[1].trim()), prefix: match[1] + match[2], value: match[3] };
 }
 
+function nestedMappingKeys(field) {
+  if (field.block || field.value.trim() && !field.value.trim().startsWith('#')) return;
+  const levels = [];
+  const previous = [field.value];
+  for (const content of field.continuation) {
+    const inFlow = yamlLex(previous.join('\n'), true).open;
+    previous.push(content);
+    if (inFlow) continue;
+    let row = content.trimStart();
+    if (!row || row.startsWith('#')) continue;
+    const item = /^-\s+/.exec(row);
+    const indent = content.length - row.length + (item?.[0].length ?? 0);
+    if (item) { row = row.slice(item[0].length); while (levels.length && levels.at(-1).indent >= indent) levels.pop(); }
+    if (!/^(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[\p{L}\p{N}_][^:#]*?)[ \t]*:[ \t]*(?:$|\S)/u.test(row)) continue;
+    const key = headerParts({ content: row }).key;
+    while (levels.length && levels.at(-1).indent > indent) levels.pop();
+    if (!levels.length || levels.at(-1).indent !== indent) levels.push({ indent, keys: new Set() });
+    if (levels.at(-1).keys.has(key)) refuse('FRONTMATTER_INVALID', 'Duplicate nested mapping keys are unsupported.');
+    levels.at(-1).keys.add(key);
+  }
+}
+
 export function frontmatterFields(document) {
   if (document.closing < 0) return [];
   if (Buffer.byteLength(document.text.slice(0, document.bodyStart)) > 65536) refuse('FRONTMATTER_UNSUPPORTED', 'Frontmatter editing is bounded to 64 KiB.');
@@ -110,12 +132,19 @@ export function frontmatterFields(document) {
     if (active && !active.block && yamlLex([active.value, ...active.continuation].join('\n'), true).open) {
       active.end = line.end;
       active.continuation.push(line.content);
+      active.spans.push({ start: line.start, end: line.end });
+      continue;
+    }
+    if (active?.block && /^[ \t]+\S/.test(line.content)) {
+      active.end = line.end;
+      active.spans.push({ start: line.start, end: line.end });
       continue;
     }
     if (!line.content.trim() || /^\s*#/.test(line.content)) continue;
     if (/^[ \t]|^-\s/.test(line.content)) {
       if (!active || /^\t|^ +\t/.test(line.content) || (/^-\s/.test(line.content) && !active.list)) refuse('FRONTMATTER_UNSUPPORTED', 'An indented field boundary is ambiguous.');
       active.end = line.end;
+      active.spans.push({ start: line.start, end: line.end });
       if (!active.block) {
         if (/^\s*(?:\?|<<\s*:)/.test(line.content)) refuse('FRONTMATTER_UNSUPPORTED', 'Complex and merge keys are unsupported.');
         active.continuation.push(line.content);
@@ -125,11 +154,12 @@ export function frontmatterFields(document) {
     const parts = headerParts(line);
     if (names.has(parts.key)) refuse('FRONTMATTER_INVALID', 'Duplicate top-level frontmatter keys are unsupported.');
     names.add(parts.key);
-    active = { ...parts, start: line.start, valueStart: line.start + parts.prefix.length, end: line.end, ending: line.ending, continuation: [], block: /^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:[ \t]+#.*)?$/.test(parts.value), list: !parts.value.trim() || /^#/.test(parts.value.trim()) };
+    active = { ...parts, start: line.start, valueStart: line.start + parts.prefix.length, end: line.end, firstEnd: line.end, ending: line.ending, continuation: [], spans: [], block: /^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:[ \t]+#.*)?$/.test(parts.value), list: !parts.value.trim() || /^#/.test(parts.value.trim()) };
     fields.push(active);
     if (fields.length > 512) refuse('FRONTMATTER_UNSUPPORTED', 'Frontmatter editing is bounded to 512 fields.');
   }
   for (const field of fields) {
+    nestedMappingKeys(field);
     const header = field.value;
     if (field.block) {
       const comment = header.indexOf('#');
@@ -188,11 +218,15 @@ export function editFrontmatter(bytes, set = [], unset = []) {
     edits.push({ startByte: offset(document.bom), endByte: offset(document.bom), replacement: generated });
   } else {
     for (const field of fields) {
-      if (removed.has(field.key)) edits.push({ startByte: offset(field.start), endByte: offset(field.end), replacement: '' });
+      if (removed.has(field.key)) {
+        edits.push({ startByte: offset(field.start), endByte: offset(field.firstEnd), replacement: '' });
+        for (const span of field.spans) edits.push({ startByte: offset(span.start), endByte: offset(span.end), replacement: '' });
+      }
       else if (changes.has(field.key)) {
         const value = changes.get(field.key);
         const replacement = `${field.prefix.endsWith(':') ? ' ' : ''}${value}${field.comment}${field.ending}`;
-        edits.push({ startByte: offset(field.valueStart), endByte: offset(field.end), replacement });
+        edits.push({ startByte: offset(field.valueStart), endByte: offset(field.firstEnd), replacement });
+        for (const span of field.spans) edits.push({ startByte: offset(span.start), endByte: offset(span.end), replacement: '' });
         changes.delete(field.key);
       }
     }
@@ -323,12 +357,14 @@ function scanLinks(text, start, end, definitions = new Map()) {
 
 export function parseMarkdown(text, filename = '') {
   const lines = [];
+  const bomLength = text.startsWith('\uFEFF') ? 1 : 0;
   let offset = 0;
   for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
-    lines.push({ text: line.replace(/\r?\n$/, ''), start: offset, end: offset + line.length });
+    const content = line.replace(/\r?\n$/, '');
+    lines.push({ text: offset === 0 ? content.replace(/^\uFEFF/, '') : content, start: offset === 0 ? bomLength : offset, end: offset + line.length });
     offset += line.length;
   }
-  let bodyStart = 0;
+  let bodyStart = bomLength;
   let frontmatter = '';
   if (/^---[ \t]*$/.test(lines[0]?.text.replace(/^\uFEFF/, '') ?? '')) {
     const end = lines.findIndex((line, i) => i > 0 && /^(---|\.\.\.)\s*$/.test(line.text));

@@ -121,3 +121,36 @@ test('actual command status resumes a durable Git operation in a fresh process',
   assert.equal(recovered?.result, 'resumed_from_intent');
   assert.equal(recovered?.commit, git(f.vault.path, ['rev-parse', 'HEAD']));
 });
+
+test('Git index version four preserves Unicode path identity and unrelated staging', t => {
+  const f = writerFixture(t);
+  baseline(f, ['One.md', 'Café One.md', 'Café Two.md']);
+  git(f.vault.path, ['update-index', '--index-version', '4']);
+  put(f, 'Café Two.md', 'Unrelated staged café bytes.\n');
+  git(f.vault.path, ['add', '--', 'Café Two.md']);
+  const before = git(f.vault.path, ['ls-files', '--stage', '-z', '--', 'Café Two.md'], { raw: true });
+  const plan = planWithGit(f);
+  const result = coordinatePlan(f.vault, f.directory, () => plan, { adapter: createGitAdapter(f.vault, f.directory) });
+  assert.equal(result.record.state, 'committed');
+  assert.deepEqual(git(f.vault.path, ['ls-files', '--stage', '-z', '--', 'Café Two.md'], { raw: true }), before);
+  assert.ok(normalIndexEntries(f.vault.path).entries.has('Café One.md'));
+});
+
+test('Git preserves CRLF under autocrlf settings and refuses encoding transforms and split indexes', t => {
+  for (const setting of ['true', 'false']) {
+    const f = writerFixture(t);
+    put(f, 'One.md', '# Note\r\nExact CRLF bytes.\r\n');
+    baseline(f);
+    git(f.vault.path, ['config', 'core.autocrlf', setting]);
+    const plan = planWithGit(f, { files: [{ path: 'One.md', before: readFileSync(path.join(f.vault.path, 'One.md')), after: Buffer.from('# Note\r\nChanged CRLF bytes.\r\n'), mode: 0o644 }] });
+    const result = coordinatePlan(f.vault, f.directory, () => plan, { adapter: createGitAdapter(f.vault, f.directory) });
+    assert.equal(result.record.state, 'committed');
+    assert.deepEqual(git(f.vault.path, ['cat-file', 'blob', 'HEAD:One.md'], { raw: true }), plan.files[0].after);
+    put(f, '.gitattributes', 'One.md filter=blocked\n');
+    assert.throws(() => planWithGit(f), error => error.code === 'GIT_ENCODING_MISMATCH');
+  }
+  const f = writerFixture(t);
+  baseline(f);
+  git(f.vault.path, ['update-index', '--split-index']);
+  assert.throws(() => planWithGit(f), error => error.code === 'GIT_INDEX_UNSUPPORTED');
+});

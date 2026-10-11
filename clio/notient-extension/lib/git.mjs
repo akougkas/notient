@@ -21,20 +21,20 @@ export function gitDurability(root, version = git(root, ['version'])) {
   return { version, fsync: Boolean(match && (Number(match[1]) > 2 || Number(match[1]) === 2 && Number(match[2]) >= 36)) };
 }
 
-export function normalIndexEntries(root) {
+export function normalIndexEntries(root, call = git) {
   const filename = path.join(root, '.git/index');
   if (!existsSync(filename)) return { bytes: null, entries: new Map() };
   if (!lstatSync(filename).isFile() || lstatSync(filename).isSymbolicLink()) refuse('GIT_INDEX_UNSUPPORTED', 'The Git index must be an ordinary file.');
   const bytes = readFileSync(filename);
   let format;
-  try { format = git(root, ['rev-parse', '--show-object-format']); } catch { format = 'sha1'; }
+  try { format = call(root, ['rev-parse', '--show-object-format']); } catch (error) { if (error.code === 'GIT_TIMEOUT') throw error; format = 'sha1'; }
   const oidBytes = format === 'sha256' ? 32 : 20;
   const algorithm = format === 'sha256' ? 'sha256' : 'sha1';
-  if (bytes.subarray(0, 4).toString() !== 'DIRC' || ![2, 3, 4].includes(bytes.readUInt32BE(4)) || !createHash(algorithm).update(bytes.subarray(0, -oidBytes)).digest().equals(bytes.subarray(-oidBytes))) refuse('GIT_INDEX_UNSUPPORTED', 'The Git index format or checksum is invalid.');
+  if (bytes.length < 12 + oidBytes || bytes.subarray(0, 4).toString() !== 'DIRC' || ![2, 3, 4].includes(bytes.readUInt32BE(4)) || !createHash(algorithm).update(bytes.subarray(0, -oidBytes)).digest().equals(bytes.subarray(-oidBytes))) refuse('GIT_INDEX_UNSUPPORTED', 'The Git index format or checksum is invalid.');
   const version = bytes.readUInt32BE(4);
   const entries = new Map();
   let offset = 12;
-  let previousName = '';
+  let previousName = Buffer.alloc(0);
   for (let i = 0; i < bytes.readUInt32BE(8); i++) {
     const start = offset;
     const mode = bytes.readUInt32BE(offset + 24);
@@ -50,9 +50,10 @@ export function normalIndexEntries(root) {
     }
     const end = bytes.indexOf(0, offset);
     if (end < offset || end >= bytes.length - oidBytes) refuse('GIT_INDEX_UNSUPPORTED', 'The Git index pathname is invalid.');
-    const suffix = bytes.subarray(offset, end).toString('utf8');
-    const name = version === 4 ? previousName.slice(0, previousName.length - strip) + suffix : suffix;
-    previousName = name;
+    const suffix = bytes.subarray(offset, end);
+    const nameBytes = version === 4 ? Buffer.concat([previousName.subarray(0, previousName.length - strip), suffix]) : suffix;
+    const name = nameBytes.toString('utf8');
+    previousName = nameBytes;
     offset = version === 4 ? end + 1 : start + Math.ceil((end + 1 - start) / 8) * 8;
     const stage = (flags >> 12) & 3;
     if (stage !== 0 || mode === 0o040000) refuse('GIT_INDEX_UNSUPPORTED', 'Unmerged and sparse indexes are unsupported.');
@@ -67,25 +68,25 @@ export function normalIndexEntries(root) {
   return { bytes, entries };
 }
 
-export function gitState(root) {
+export function gitState(root, call = git) {
   const directory = path.join(root, '.git');
   if (!existsSync(directory) || !lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink()) refuse('GIT_VAULT_REQUIRED', 'The vault must have its own ordinary .git directory.');
-  if (git(root, ['rev-parse', '--show-toplevel']) !== root || git(root, ['rev-parse', '--is-bare-repository']) !== 'false' || git(root, ['rev-parse', '--git-common-dir']) !== '.git') refuse('GIT_VAULT_REQUIRED', 'Bare repositories and shared worktrees are unsupported.');
+  if (call(root, ['rev-parse', '--show-toplevel']) !== root || call(root, ['rev-parse', '--is-bare-repository']) !== 'false' || call(root, ['rev-parse', '--git-common-dir']) !== '.git') refuse('GIT_VAULT_REQUIRED', 'Bare repositories and shared worktrees are unsupported.');
   for (const name of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']) if (existsSync(path.join(directory, name))) refuse('GIT_STATE_UNSUPPORTED', 'Finish the active Git operation before writing.');
   let ref;
-  try { ref = git(root, ['symbolic-ref', '--quiet', 'HEAD']); } catch { refuse('GIT_STATE_UNSUPPORTED', 'A symbolic local branch is required.'); }
+  try { ref = call(root, ['symbolic-ref', '--quiet', 'HEAD']); } catch (error) { if (error.code === 'GIT_TIMEOUT') throw error; refuse('GIT_STATE_UNSUPPORTED', 'A symbolic local branch is required.'); }
   if (!ref.startsWith('refs/heads/')) refuse('GIT_STATE_UNSUPPORTED', 'A local branch is required.');
   let baseHead = null;
-  try { baseHead = git(root, ['rev-parse', '--verify', 'HEAD']); } catch (error) { if (![1, 128].includes(error.status)) throw error; }
+  try { baseHead = call(root, ['rev-parse', '--verify', 'HEAD']); } catch (error) { if (![1, 128].includes(error.status)) throw error; }
   let split = '';
-  try { split = git(root, ['rev-parse', '--shared-index-path']); } catch {}
+  try { split = call(root, ['rev-parse', '--shared-index-path']); } catch (error) { if (error.code === 'GIT_TIMEOUT') throw error; }
   if (split) refuse('GIT_INDEX_UNSUPPORTED', 'Split indexes are unsupported.');
-  return { ref, baseHead, index: normalIndexEntries(root), durability: gitDurability(root) };
+  return { ref, baseHead, index: normalIndexEntries(root, call), durability: gitDurability(root, call(root, ['version'])) };
 }
 
-function treeEntry(root, head, name) {
+function treeEntry(root, head, name, call = git) {
   if (!head) return null;
-  const line = git(root, ['ls-tree', '-z', head, '--', name], { raw: true }).toString('utf8').replace(/\0$/, '');
+  const line = call(root, ['ls-tree', '-z', head, '--', name], { raw: true }).toString('utf8').replace(/\0$/, '');
   if (!line) return null;
   const match = /^(\d+) blob ([a-f0-9]+)\t/.exec(line);
   if (!match) refuse('GIT_TARGET_UNSUPPORTED', 'Affected paths must be ordinary Git blobs.', [name]);
@@ -118,15 +119,18 @@ const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 
 export function createGitAdapter(vault, directory) {
   const root = vault.path;
   const durability = gitDurability(root);
-  const deadline = performance.now() + 60000;
+  let operationId = null;
+  let usedMs = 0;
+  let depth = 0;
+  let phaseStarted = 0;
   function run(record, args, options = {}) {
-    if (performance.now() >= deadline) refuse('GIT_TIMEOUT', 'The Git phase exceeded 60 seconds.', [], true);
-    const started = performance.now();
-    try { return git(root, args, { fsync: durability.fsync, timeout: Math.min(15000, Math.max(1, deadline - started)), ...options }); }
+    const remaining = 60000 - usedMs - (depth ? performance.now() - phaseStarted : 0);
+    if (remaining <= 0) refuse('GIT_TIMEOUT', 'The Git phase exceeded 60 seconds.', [], true);
+    try { return git(root, args, { fsync: durability.fsync, timeout: Math.max(1, Math.min(15000, Math.floor(remaining))), ...options }); }
     catch (error) {
       if (error.code === 'ETIMEDOUT' || error.signal) refuse('GIT_TIMEOUT', 'A Git subprocess exceeded its deadline.', [], true);
       throw error;
-    } finally { record.timings.gitMs += performance.now() - started; }
+    }
   }
   function object(record, hash, write = false) { return run(record, ['hash-object', '--no-filters', ...(write ? ['-w'] : []), '--stdin'], { input: readBlob(directory, vault, record.id, hash) }); }
   function matches(entry, record, file, hash) {
@@ -141,24 +145,25 @@ export function createGitAdapter(vault, directory) {
     const changed = run(record, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', record.git.commit], { raw: true }).toString('utf8').split('\0').filter(Boolean).sort();
     if (JSON.stringify(changed) !== JSON.stringify(record.files.map(file => file.path).sort())) refuse('JOURNAL_CORRUPT', 'The Git commit delta differs from the recorded path set.');
     for (const file of record.files) {
-      const before = treeEntry(root, record.git.baseHead, file.path);
+      const call = (target, args, options) => run(record, args, options);
+      const before = treeEntry(root, record.git.baseHead, file.path, call);
       if (file.before === null ? before !== null : before?.oid !== object(record, file.before) || before.mode !== (file.mode & 0o111 ? '100755' : '100644')) refuse('JOURNAL_CORRUPT', 'A commit parent blob differs from the recorded before bytes.', [file.path]);
-      const after = treeEntry(root, record.git.tree, file.path);
+      const after = treeEntry(root, record.git.tree, file.path, call);
       if (file.after === null ? after !== null : after?.oid !== object(record, file.after) || after.mode !== (file.mode & 0o111 ? '100755' : '100644')) refuse('JOURNAL_CORRUPT', 'A commit blob differs from its recorded after bytes.', [file.path]);
     }
   }
-  return {
+  const adapter = {
     durability,
     recognize(record) {
       if (!record.git.commit) return false;
-      const state = gitState(root);
+      const state = gitState(root, (target, args, options) => run(record, args, options));
       if (state.ref !== record.git.ref) refuse('GIT_HEAD_CHANGED', 'The vault branch changed while an operation was pending.');
       verify(record);
       try { run(record, ['merge-base', '--is-ancestor', record.git.commit, record.git.ref]); return true; }
       catch (error) { if (error.status === 1 || error.status === 128) return false; throw error; }
     },
     checkBase(record) {
-      const state = gitState(root);
+      const state = gitState(root, (target, args, options) => run(record, args, options));
       if (state.ref !== record.git.ref || state.baseHead !== record.git.baseHead) refuse('GIT_HEAD_CHANGED', 'HEAD differs from the frozen operation base.', [], true);
       for (const file of record.files) if (!matches(state.index.entries.get(file.path), record, file, file.before) && !matches(state.index.entries.get(file.path), record, file, file.after)) refuse('DIRTY_TARGET', 'An affected staged entry differs from both recorded states.', [file.path]);
     },
@@ -167,7 +172,7 @@ export function createGitAdapter(vault, directory) {
       const root = operationDirectory(directory, vault, record.id);
       const filename = path.join(root, 'commit-index');
       const env = { GIT_INDEX_FILE: filename };
-      const normal = normalIndexEntries(vault.path).bytes;
+      const normal = normalIndexEntries(vault.path, (target, args, options) => run(record, args, options)).bytes;
       if (normal && !existsSync(path.join(root, 'git-index.before'))) durableFile(path.join(root, 'git-index.before'), normal);
       record.git.indexBeforeHash = normal ? revision(normal) : null;
       run(record, ['read-tree', ...(record.git.baseHead ? [record.git.baseHead] : ['--empty'])], { env });
@@ -182,7 +187,7 @@ export function createGitAdapter(vault, directory) {
       record.git.commit = run(record, ['commit-tree', record.git.tree, ...(record.git.baseHead ? ['-p', record.git.baseHead] : [])], { env: identity, input: message });
       chmodPrivate(filename);
       const fd = openSync(filename, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
-      syncDirectory(root);
+      if (!syncDirectory(root)) record.durability = 'directory-sync-unavailable';
       verify(record);
     },
     publish(record) {
@@ -192,7 +197,7 @@ export function createGitAdapter(vault, directory) {
       if (!this.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'The candidate commit was not verified as published.', [], true);
     },
     reconcileIndex(record) {
-      const state = gitState(root);
+      const state = gitState(root, (target, args, options) => run(record, args, options));
       if (state.ref !== record.git.ref) refuse('COMMITTED_INDEX_CONFLICT', 'The branch changed before index reconciliation.');
       for (const file of record.files) if (!matches(state.index.entries.get(file.path), record, file, file.before) && !matches(state.index.entries.get(file.path), record, file, file.after)) refuse('COMMITTED_INDEX_CONFLICT', 'An affected entry changed independently after publication.', [file.path]);
       const until = performance.now() + 2000;
@@ -210,16 +215,34 @@ export function createGitAdapter(vault, directory) {
           }
         }
       }
-      const current = normalIndexEntries(root);
+      const current = normalIndexEntries(root, (target, args, options) => run(record, args, options));
       for (const file of record.files) if (!matches(current.entries.get(file.path), record, file, file.after)) refuse('COMMITTED_INDEX_CONFLICT', 'A planned stage-zero entry failed verification.', [file.path]);
       record.git.indexAfterHash = current.bytes ? revision(current.bytes) : null;
       const filename = path.join(root, '.git/index');
       if (existsSync(filename)) { const fd = openSync(filename, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } }
-      syncDirectory(path.join(root, '.git'));
+      if (!syncDirectory(path.join(root, '.git'))) record.durability = 'directory-sync-unavailable';
       return true;
     },
     verify,
+    consume(id, milliseconds) { operationId = id; usedMs = milliseconds; },
   };
+  for (const name of ['recognize', 'checkBase', 'prepare', 'publish', 'reconcileIndex', 'verify']) {
+    const method = adapter[name];
+    adapter[name] = function (record, ...args) {
+      const outer = depth === 0;
+      if (outer) {
+        if (operationId !== record.id) { operationId = record.id; usedMs = 0; }
+        phaseStarted = performance.now();
+      }
+      depth++;
+      try { return method.call(this, record, ...args); }
+      finally {
+        depth--;
+        if (outer) { const elapsed = performance.now() - phaseStarted; usedMs += elapsed; record.timings.gitMs += elapsed; }
+      }
+    };
+  }
+  return adapter;
 }
 
 function chmodPrivate(filename) {

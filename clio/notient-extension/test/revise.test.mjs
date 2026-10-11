@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { replaceBody, editFrontmatter, documentSpans } from '../lib/markdown.mjs';
+import { replaceBody, editFrontmatter, documentSpans, parseMarkdown } from '../lib/markdown.mjs';
 import { writeOperation } from '../lib/write.mjs';
 import { revision } from '../lib/paths.mjs';
 import { atomicJson } from '../lib/config.mjs';
@@ -37,6 +37,15 @@ test('body replacement preserves BOM, frontmatter, Unicode and exact supplied li
   }
 });
 
+test('a BOM without frontmatter stays outside the body and does not hide the first heading', () => {
+  const text = '\uFEFF# Café\r\nAuthored bytes.';
+  const parsed = parseMarkdown(text);
+  assert.equal(parsed.bodyStart, 1);
+  assert.equal(parsed.outline[0].title, 'Café');
+  assert.equal(parsed.chunks[0].source.startByte, 3);
+  assert.deepEqual(replaceBody(Buffer.from(text), 'Authored', 'Revised').bytes, Buffer.from('\uFEFF# Café\r\nRevised bytes.'));
+});
+
 test('literal witness rejects missing, multiple, overlapping and frontmatter-only matches', () => {
   for (const [text, oldText, code] of [['aaa', 'aa', 'QUOTE_AMBIGUOUS'], ['same same', 'same', 'QUOTE_AMBIGUOUS'], ['body', 'missing', 'QUOTE_NOT_FOUND'], ['---\ntitle: phrase\n---\n', 'phrase', 'QUOTE_NOT_FOUND'], ['---\nunclosed', 'unclosed', 'FRONTMATTER_INVALID']]) {
     assert.throws(() => replaceBody(Buffer.from(text), oldText, 'new'), error => error.code === code);
@@ -67,9 +76,19 @@ test('frontmatter supports missing blocks, empty values, flow collections and qu
 });
 
 test('unsafe frontmatter and ambiguous JSON values are refused before any splice', () => {
-  for (const text of ['---\na: 1\na: 2\n---\n', '---\na: &anchor value\n---\n', '---\na: *alias\n---\n', '---\n<<: {a: 1}\n---\n', '---\n? complex\n: key\n---\n', '---\na: !custom x\n---\n', '---\na: "unclosed\n---\n', '---\na: "closed" trailing\n---\n', '---\na: {x: 1, x: 2}\n---\n']) assert.throws(() => editFrontmatter(Buffer.from(text), [{ key: 'title', valueJson: '"new"' }]));
+  for (const text of ['---\na: 1\na: 2\n---\n', '---\na:\n  child: 1\n  child: 2\n---\n', '---\na: &anchor value\n---\n', '---\na: *alias\n---\n', '---\n<<: {a: 1}\n---\n', '---\n? complex\n: key\n---\n', '---\na: !custom x\n---\n', '---\na: "unclosed\n---\n', '---\na: "closed" trailing\n---\n', '---\na: {x: 1, x: 2}\n---\n']) assert.throws(() => editFrontmatter(Buffer.from(text), [{ key: 'title', valueJson: '"new"' }]));
   for (const valueJson of ['not JSON', '1e1000', '[[[[[[]]]]]]', '"\\u0000"', '"\\ud800"']) assert.throws(() => editFrontmatter(Buffer.from('Body'), [{ key: 'title', valueJson }]));
   for (const [set, unset] of [[[{ key: 'title', valueJson: '1' }, { key: 'title', valueJson: '2' }], []], [[{ key: 'title', valueJson: '1' }], ['title']], [[], ['title', 'title']]]) assert.throws(() => editFrontmatter(Buffer.from('Body'), set, unset));
+});
+
+test('frontmatter splices preserve independent comments between continuation lines', () => {
+  const source = Buffer.from('---\nsummary: |\n  old text\n# independent\n  # literal block content\n  more old text\n\nkeep: true\n---\nBody bytes.');
+  const expected = Buffer.from('---\nsummary: "new"\n# independent\n\nkeep: true\n---\nBody bytes.');
+  const result = editFrontmatter(source, [{ key: 'summary', valueJson: '"new"' }]);
+  assert.deepEqual(result.bytes, expected);
+  const commentStart = source.indexOf('# independent');
+  const commentEnd = commentStart + Buffer.byteLength('# independent\n');
+  assert.ok(result.splices.every(splice => splice.endByte <= commentStart || splice.startByte >= commentEnd));
 });
 
 test('real revisions commit body and frontmatter changes with exact index evidence', t => {

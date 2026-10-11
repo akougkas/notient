@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, chmodSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, chmodSync, realpathSync, fchmodSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,12 +31,16 @@ export function ensureDirectories(directory, sync = syncDirectory) {
   let ancestor = directory;
   while (!existsSync(ancestor)) { missing.unshift(ancestor); ancestor = path.dirname(ancestor); }
   if (!lstatSync(ancestor).isDirectory() || lstatSync(ancestor).isSymbolicLink()) refuse('UNSAFE_STATE', 'State directories cannot be symbolic links.');
+  for (let current = ancestor; ; current = path.dirname(current)) {
+    if (lstatSync(current).isSymbolicLink() || !lstatSync(current).isDirectory()) refuse('UNSAFE_STATE', 'State directory ancestors cannot be symbolic links.');
+    if (path.dirname(current) === current) break;
+  }
   for (const name of missing) { mkdirSync(name, { mode: 0o700 }); sync(name); sync(path.dirname(name)); }
 }
 
 export function durableFile(filename, bytes, { exclusive = true, mode = 0o600, sync = syncDirectory } = {}) {
   const fd = openSync(filename, (exclusive ? 'wx' : 'w'), mode);
-  try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+  try { fchmodSync(fd, mode); writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   sync(path.dirname(filename));
 }
 
@@ -59,6 +63,11 @@ export function validateRecord(record, vault) {
     seen.add(file.path);
   }
   if (!record.git || !Array.isArray(record.undo?.targets) || !Array.isArray(record.conflicts) || !['pending', 'updated'].includes(record.indexState)) refuse('JOURNAL_CORRUPT', 'The operation metadata is invalid.');
+  const oid = value => value === null || typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+  if (typeof record.batch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(record.batch) || ![record.createdAt, record.updatedAt].every(value => typeof value === 'string' && Number.isFinite(Date.parse(value))) || !Array.isArray(record.reads) || record.reads.some(read => typeof read.path !== 'string' || !hashPattern.test(read.revision)) || record.inventoryHash !== null && !hashPattern.test(record.inventoryHash)) refuse('JOURNAL_CORRUPT', 'Recorded request and dependency fields are invalid.');
+  if (![record.git.baseHead, record.git.tree, record.git.commit].every(oid) || typeof record.git.indexInstalled !== 'boolean' || record.git.lockSeed !== null || ![record.git.indexBeforeHash, record.git.indexAfterHash].every(value => value === null || hashPattern.test(value)) || record.git.ref !== null && (typeof record.git.ref !== 'string' || !/^refs\/heads\/[^\s\x00-\x1f]+$/.test(record.git.ref))) refuse('JOURNAL_CORRUPT', 'Recorded Git fields are invalid.');
+  if (!record.log || typeof record.log.path !== 'string' || typeof record.log.line !== 'string' || !record.log.line.startsWith('- ') || /[\r\n]/.test(record.log.line) || !Array.isArray(record.undo.commits) || !record.undo.targets.every(id => requestIdPattern.test(id)) || !record.undo.commits.every(value => value !== null && oid(value)) || record.undoneBy !== null && !requestIdPattern.test(record.undoneBy) || !['full', 'directory-sync-unavailable'].includes(record.durability)) refuse('JOURNAL_CORRUPT', 'Recorded audit and undo fields are invalid.');
+  if (!Array.isArray(record.createdDirectories) || !record.createdDirectories.every(name => typeof name === 'string') || !record.timings || !['scanMs', 'lockWaitMs', 'journalMs', 'applyMs', 'gitMs', 'totalMs'].every(key => Number.isFinite(record.timings[key]) && record.timings[key] >= 0) || record.error !== null && (typeof record.error?.code !== 'string' || typeof record.error?.message !== 'string')) refuse('JOURNAL_CORRUPT', 'Recorded durability and timing fields are invalid.');
   return record;
 }
 
@@ -122,7 +131,13 @@ export function persistIntent(directory, vault, record, blobs, sync = syncDirect
 }
 
 export function listRecords(directory, vault, verifyBlobs = true) {
-  const root = path.join(journalRoot(directory, vault), 'ops');
+  const journal = journalRoot(directory, vault);
+  if (existsSync(journal)) {
+    for (const entry of readdirSync(journal, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) refuse('JOURNAL_CORRUPT', 'Legacy journal records are observable but cannot authorize recovery or new writes.');
+    }
+  }
+  const root = path.join(journal, 'ops');
   if (!existsSync(root)) return [];
   if (lstatSync(root).isSymbolicLink()) refuse('JOURNAL_CORRUPT', 'The operation directory is a symbolic link.');
   return readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory() || entry.isSymbolicLink()).map(entry => readRecord(directory, vault, entry.name, verifyBlobs)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
@@ -133,6 +148,10 @@ export function withWriterLock(directory, vault, handler, { create = true } = {}
   const filename = path.join(root, 'writer.db');
   if (!create && !existsSync(filename)) return handler(0);
   ensureDirectories(root);
+  for (const suffix of ['', '-journal', '-wal', '-shm']) {
+    const artifact = `${filename}${suffix}`;
+    if (existsSync(artifact) && (!lstatSync(artifact).isFile() || lstatSync(artifact).isSymbolicLink() || lstatSync(artifact).nlink !== 1)) refuse('UNSAFE_STATE', 'SQLite writer artifacts must be ordinary private files.');
+  }
   const db = new DatabaseSync(filename);
   chmodSync(filename, 0o600);
   const started = performance.now();
@@ -167,7 +186,7 @@ export function journalStatus(directory, id) {
       const item = JSON.parse(readFileSync(filename, 'utf8'));
       if (item.version !== 1) refuse('JOURNAL_CORRUPT', 'Unknown operation version.');
       operations.push({ id: item.id, batch: item.batch, state: item.state, commit: item.git?.commit ?? null, undoneBy: item.undoneBy, createdAt: item.createdAt, indexState: item.indexState });
-      if (!['committed', 'aborted'].includes(item.state) || item.indexState === 'pending') pending.push({ id: item.id, state: item.state });
+      if (!['committed', 'aborted'].includes(item.state) || item.state === 'committed' && item.indexState === 'pending') pending.push({ id: item.id, state: item.state });
     }
   }
   return { pending: pending.slice(0, 100), pendingCount: pending.length, operations: operations.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50), recoveryResults: [], recoveryAvailable: true, busy: false };

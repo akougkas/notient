@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, renameSync, unlinkSync, chmodSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, renameSync, unlinkSync, chmodSync, readdirSync, fchmodSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
@@ -69,7 +69,7 @@ export function prepareSiblings(vault, directory, record, sync = syncDirectory) 
   }
 }
 
-export function applyRecord(vault, directory, record, { barrier = () => {}, sync = syncDirectory, deadline = Infinity } = {}) {
+export function applyRecord(vault, directory, record, { observe = () => {}, sync = syncDirectory, deadline = Infinity } = {}) {
   for (const name of record.applyOrder) {
     if (performance.now() > deadline) refuse('WRITE_TIMEOUT', 'The cooperative write deadline expired.', [], true);
     const file = record.files.find(candidate => candidate.path === name);
@@ -78,19 +78,19 @@ export function applyRecord(vault, directory, record, { barrier = () => {}, sync
     if (current.revision !== file.before) refuse('REVISION_CONFLICT', 'The file no longer matches its planned revision.', [name], true);
     ensureVaultParents(vault, record, file, sync);
     const filename = writePath(vault.path, name);
-    barrier('beforeRecheck', record, file);
+    observe('beforeRecheck', record, file);
     const checked = currentFile(vault.path, name);
     if (checked.revision !== file.before || (current.stat && (checked.stat?.ino !== current.stat.ino || checked.stat?.dev !== current.stat.dev))) refuse('REVISION_CONFLICT', 'The file changed before its final publication check.', [name], true);
-    barrier('afterRecheck', record, file);
+    observe('afterRecheck', record, file);
     if (file.action === 'delete') unlinkSync(filename);
     else if (file.action === 'replace') renameSync(path.join(vault.path, file.temp), filename);
     else {
       const fd = openSync(filename, 'wx', file.mode);
-      try { writeFileSync(fd, readBlob(directory, vault, record.id, file.after)); fsyncSync(fd); }
+      try { fchmodSync(fd, file.mode); writeFileSync(fd, readBlob(directory, vault, record.id, file.after)); fsyncSync(fd); }
       finally { closeSync(fd); }
     }
     sync(path.dirname(filename));
-    barrier('afterFilePublish', record, file);
+    observe('afterFilePublish', record, file);
     current = currentFile(vault.path, name);
     if (current.revision !== file.after) refuse('REVISION_CONFLICT', 'The published file changed before verification.', [name], true);
     file.progress = 'applied';
@@ -112,6 +112,14 @@ export function cleanupSiblings(vault, record, sync = syncDirectory) {
   }
 }
 
+function checkDependencies(vault, record) {
+  for (const read of record.reads) if (currentFile(vault.path, read.path).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+  if (!record.inventoryHash) return;
+  const names = new Set(listNotes(vault.path).notes.map(note => note.path));
+  for (const file of record.files) { if (file.before === null) names.delete(file.path); else names.add(file.path); }
+  if (revision(canonicalJson([...names].sort())) !== record.inventoryHash) refuse('DEPENDENCY_CHANGED', 'The reviewed note inventory changed.');
+}
+
 export function newRecord(vault, plan) {
   const files = plan.files.map((file, ordinal) => ({ path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
   return {
@@ -128,6 +136,11 @@ export function newRecord(vault, plan) {
 
 export function persistPlan(vault, directory, plan, sync = syncDirectory) {
   const record = newRecord(vault, plan);
+  for (const file of record.files) {
+    if (!file.temp) continue;
+    try { lstatSync(path.join(vault.path, file.temp)); refuse('TEMP_CONFLICT', 'A reserved temporary sibling already exists before intent.', [file.temp]); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
   const blobs = new Map();
   for (const file of plan.files) {
     for (const bytes of [file.before, file.after]) {
@@ -155,15 +168,10 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
   if (!published) {
     try {
       adapter.checkBase(record);
-      for (const read of record.reads) if (currentFile(vault.path, read.path).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
-      if (record.inventoryHash) {
-        const names = new Set(listNotes(vault.path).notes.map(note => note.path));
-        for (const file of record.files) { if (file.before === null) names.delete(file.path); else names.add(file.path); }
-        if (revision(canonicalJson([...names].sort())) !== record.inventoryHash) refuse('DEPENDENCY_CHANGED', 'The reviewed note inventory changed.');
-      }
+      checkDependencies(vault, record);
     }
     catch (error) {
-      if (states.every(item => item.state === 'before') && ['GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code)) {
+      if (states.every(item => item.state === 'before') && ['GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code) && !adapter.recognize(record)) {
         record.state = 'aborted'; record.error = { code: error.code, message: error.message };
         saveRecord(directory, vault, record, sync);
         cleanupSiblings(vault, record, sync);
@@ -174,11 +182,17 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     if (!record.git.commit) { adapter.prepare(record); saveRecord(directory, vault, record, sync); }
     prepareSiblings(vault, directory, record, sync);
     options.barrier?.('afterIntent', record);
+    checkDependencies(vault, record);
     const started = performance.now();
     applyRecord(vault, directory, record, options);
     record.timings.applyMs += performance.now() - started;
+    saveRecord(directory, vault, record, sync);
     options.barrier?.('afterPublish', record);
+    const afterStates = classifyFiles(vault, record);
+    if (afterStates.some(item => item.state !== 'after')) refuse('REVISION_CONFLICT', 'A file changed after publication and before the Git ref.', afterStates.filter(item => item.state !== 'after').map(item => item.file.path), true);
+    checkDependencies(vault, record);
     adapter.publish(record);
+    saveRecord(directory, vault, record, sync);
     options.barrier?.('afterRef', record);
   }
   for (const id of record.undo.targets) {
@@ -204,12 +218,19 @@ export function recoverPending(vault, directory, adapter, options = {}) {
   const results = [];
   const records = listRecords(directory, vault);
   const pending = records.filter(record => !['committed', 'aborted'].includes(record.state) || (record.state === 'committed' && record.indexState === 'pending'));
-  for (const record of pending.slice(0, 20)) {
+  const limit = Math.max(0, Math.min(20, options.limit ?? 20));
+  for (const record of pending.slice(0, limit)) {
+    if (performance.now() > (options.deadline ?? Infinity)) {
+      results.push({ operationId: record.id, result: 'WRITE_TIMEOUT', commit: record.git.commit, conflicts: [], error: 'The cooperative recovery deadline expired.' });
+      break;
+    }
     try {
       freshAuthority(vault, directory, record);
       results.push(finishRecord(vault, directory, record, adapter, options));
     } catch (error) {
-      results.push({ operationId: record.id, result: error.code ?? 'RECOVERY_ERROR', commit: record.git.commit, conflicts: [], error: error.message });
+      let commit = null;
+      try { if (adapter.recognize(record)) commit = record.git.commit; } catch {}
+      results.push({ operationId: record.id, result: error.code ?? 'RECOVERY_ERROR', commit, conflicts: record.conflicts.map(conflict => ({ path: conflict.path, reason: conflict.reason })), error: error.message });
       break;
     }
     if (results.at(-1).result === 'conflict_preserved') break;
@@ -229,6 +250,7 @@ export function coordinatePlan(vault, directory, buildPlan, { adapter, ...option
     record.timings.lockWaitMs = lockWaitMs;
     record.timings.journalMs = performance.now() - journalStarted;
     try {
+      adapter?.consume?.(record.id, plan.timings?.gitMs ?? 0);
       const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
       record.timings.totalMs = performance.now() - started;
       saveRecord(directory, vault, record, options.sync);
@@ -242,21 +264,29 @@ export function coordinatePlan(vault, directory, buildPlan, { adapter, ...option
 }
 
 export function recoverVault(vault, directory, options = {}) {
+  const started = performance.now();
   const pending = listRecords(directory, vault).filter(record => !['committed', 'aborted'].includes(record.state) || record.state === 'committed' && record.indexState === 'pending');
   if (!pending.length) return { results: [], remaining: [], busy: false };
+  if (options.limit === 0) return { results: [], remaining: pending.map(record => record.id), busy: false };
   try {
-    return withWriterLock(directory, vault, () => ({ ...recoverPending(vault, directory, createGitAdapter(vault, directory), options), busy: false }));
+    return withWriterLock(directory, vault, () => ({ ...recoverPending(vault, directory, createGitAdapter(vault, directory), { deadline: started + 240000, ...options }), busy: false }));
   } catch (error) {
     return { results: [{ operationId: null, result: error.code ?? 'RECOVERY_ERROR', commit: null, conflicts: [], error: error.message }], remaining: pending.map(record => record.id), busy: error.code === 'WRITER_BUSY' };
   }
 }
 
 export function commandStatusSnapshot(directory, input = {}) {
+  const deadline = performance.now() + 240000;
+  let remainingBudget = 20;
   const config = readConfig(directory);
   const selected = input.vault ? config.vaults.filter(vault => vault.id === input.vault || vault.path === input.vault) : config.vaults;
   const recovery = new Map();
   for (const vault of selected) {
-    try { recovery.set(vault.id, recoverVault(vault, directory)); }
+    try {
+      const result = recoverVault(vault, directory, { deadline, limit: remainingBudget });
+      remainingBudget -= result.results.filter(item => item.operationId !== null).length;
+      recovery.set(vault.id, result);
+    }
     catch (error) { recovery.set(vault.id, { results: [{ operationId: null, result: error.code ?? 'RECOVERY_ERROR', commit: null, conflicts: [], error: error.message }], busy: false }); }
   }
   const snapshot = statusSnapshot(directory, input);
@@ -461,7 +491,7 @@ function outputChanges(files, preview) {
 }
 
 function warnings(record, durability) {
-  const result = [{ code: 'QUIESCENT_FILES_REQUIRED', message: 'Affected files must remain quiescent. A save between the final revision check and rename can be overwritten.' }];
+  const result = [{ code: 'QUIESCENT_FILES_REQUIRED', message: 'Affected files must remain quiescent. A save between the final revision check and rename or unlink can be overwritten or removed.' }];
   if (record?.durability === 'directory-sync-unavailable') result.push({ code: 'DIRECTORY_SYNC_UNAVAILABLE', message: 'Directory fsync is unsupported on this filesystem; power-loss durability is limited.' });
   if (durability && !durability.fsync) result.push({ code: 'GIT_FSYNC_UNAVAILABLE', message: `${durability.version} lacks core.fsync=committed; proceeding with the available Git durability.` });
   if (record && !record.git.indexInstalled) result.push({ code: 'INDEX_UPDATE_PENDING', message: 'The commit is published. Normal Git index reconciliation remains pending and status will retry it.' });
@@ -515,35 +545,51 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
       if (plan.noop) return previewResult(tool, vault, input, plan, started);
     }
     return withWriterLock(directory, vault, lockWaitMs => {
-      existing();
-      adapter = createGitAdapter(vault, directory);
-      const recovered = recoverPending(vault, directory, adapter, options);
-      recovery = recovered.results;
-      if (recovered.remaining.length || recovery.some(item => item.error || item.result === 'conflict_preserved')) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents new writes.');
-      record = existing();
-      if (record) {
-        if (record.state === 'aborted') refuse('OPERATION_ABORTED', 'The original operation was aborted. Use a fresh preview and request ID.');
-        if (!adapter.recognize(record)) refuse('RECOVERY_REQUIRED', 'The requested operation has not published a verified commit.');
-        return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
+      try {
+        existing();
+        adapter = createGitAdapter(vault, directory);
+        const recovered = recoverPending(vault, directory, adapter, { deadline: started + 240000, ...options });
+        recovery = recovered.results;
+        if (recovered.remaining.length || recovery.some(item => item.error || item.result === 'conflict_preserved')) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents new writes.');
+        record = existing();
+        if (record) {
+          if (record.state === 'aborted') refuse('OPERATION_ABORTED', 'The original operation was aborted. Use a fresh preview and request ID.');
+          if (!adapter.recognize(record)) refuse('RECOVERY_REQUIRED', 'The requested operation has not published a verified commit.');
+          return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
+        }
+        const plan = buildWritePlan(tool, vault, directory, input);
+        if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
+        const journalStarted = performance.now();
+        record = persistPlan(vault, directory, plan, options.sync);
+        record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
+        adapter.consume(record.id, plan.timings.gitMs);
+        const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
+        if (result.result === 'conflict_preserved') refuse('REVISION_CONFLICT', 'The operation encountered changed bytes.', result.conflicts.map(item => item.path));
+        if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
+        if (!record.git.commit || !adapter.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'A write cannot succeed before its exact commit is verified as published.');
+        record.timings.totalMs = performance.now() - started;
+        saveRecord(directory, vault, record, options.sync);
+        return recordResult(vault, directory, record, recovery, 'committed', performance.now() - started, adapter.durability);
+      } catch (error) {
+        if (record && !['committed', 'aborted'].includes(record.state)) {
+          let published = false;
+          try { published = adapter?.recognize(record) ?? false; } catch {}
+          if (!published && ['REVISION_CONFLICT', 'GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code)) {
+            try {
+              const states = classifyFiles(vault, record);
+              if (states.some(item => item.state !== 'before')) {
+                record.state = 'conflicted';
+                record.conflicts = states.filter(item => item.state !== 'before').map(({ file, current }) => ({ path: file.path, expectedBefore: file.before, expectedAfter: file.after, actual: current.revision, reason: error.message }));
+              }
+            } catch {}
+          }
+          record.error = { code: error.code ?? 'WRITE_FAILED', message: error.message };
+          try { saveRecord(directory, vault, record, options.sync); } catch {}
+        }
+        throw error;
       }
-      const plan = buildWritePlan(tool, vault, directory, input);
-      if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
-      const journalStarted = performance.now();
-      record = persistPlan(vault, directory, plan, options.sync);
-      record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
-      const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
-      if (result.result === 'conflict_preserved') refuse('REVISION_CONFLICT', 'The operation encountered changed bytes.', result.conflicts.map(item => item.path));
-      if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
-      if (!record.git.commit || !adapter.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'A write cannot succeed before its exact commit is verified as published.');
-      record.timings.totalMs = performance.now() - started;
-      saveRecord(directory, vault, record, options.sync);
-      return recordResult(vault, directory, record, recovery, 'committed', performance.now() - started, adapter.durability);
     });
   } catch (error) {
-    if (record && !['committed', 'aborted'].includes(record.state)) {
-      record.error = { code: error.code ?? 'WRITE_FAILED', message: error.message };
-      try { saveRecord(directory, vault, record, options.sync); } catch {}
-    }
     let partial = false;
     let commit = null;
     if (record) {

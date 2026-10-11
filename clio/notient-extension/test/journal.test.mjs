@@ -89,3 +89,16 @@ test('shared coordinator freezes plans and records directory fsync degradation',
   assert.equal(result.record.durability, 'directory-sync-unavailable');
   assert.equal(result.record.files[0].after, revision(plan.files[0].after));
 });
+
+test('state symlinks and foreign temporary siblings are refused before intent', t => {
+  const f = writerFixture(t);
+  const plan = testPlan(f);
+  put(f, 'One.md', plan.files[0].before);
+  put(f, `.notient-${plan.id}-0.tmp`, plan.files[0].after);
+  const before = snapshot(f.vault.path);
+  assert.throws(() => persistPlan(f.vault, f.directory, plan), error => error.code === 'TEMP_CONFLICT');
+  assert.deepEqual(snapshot(f.vault.path), before);
+  const stateLink = path.join(f.temporary, 'linked-state');
+  symlinkSync(f.directory, stateLink);
+  assert.throws(() => withWriterLock(stateLink, f.vault, () => 'must not run'), error => error.code === 'UNSAFE_STATE');
+});

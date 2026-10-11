@@ -9,6 +9,9 @@ import { createExtensionTestHost } from '@iowarp/clio-coder/extensions/testing';
 import { atomicJson, indexPath } from '../lib/config.mjs';
 import { vaultId, revision } from '../lib/paths.mjs';
 import { refreshIndex } from '../lib/index.mjs';
+import { buildWritePlan, persistPlan } from '../lib/write.mjs';
+import { initializeGit, git } from '../lib/git.mjs';
+import { writerFixture, put, snapshot } from '../test/write-helpers.mjs';
 
 test('read-only runtime registers status, log and session observations', async () => {
   const temporary = mkdtempSync(path.join(tmpdir(), 'notient-runtime-'));
@@ -90,5 +93,33 @@ test('runtime reports missing FTS5 with the Node version and unknown note count'
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;
     rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('runtime observations preserve pending notes, journals, Git and state bytes', async t => {
+  const f = writerFixture(t);
+  const previous = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = path.dirname(f.directory);
+  put(f, 'One.md', '# One\nOriginal bytes.\n');
+  initializeGit(f.vault.path);
+  git(f.vault.path, ['add', '--', 'One.md']);
+  git(f.vault.path, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'fixture baseline']);
+  refreshIndex(f.vault, f.directory);
+  const input = { vault: f.vault.id, requestId: 'runtime-pending-001', batch: 'runtime-observation', authorization: { origin: 'operator', request: 'Replace Original with Changed.' }, operation: 'replace', path: 'One.md', revision: revision(readFileSync(path.join(f.vault.path, 'One.md'))), oldText: 'Original', newText: 'Changed', dryRun: false };
+  persistPlan(f.vault, f.directory, buildWritePlan('revise', f.vault, f.directory, input));
+  const before = snapshot(f.temporary);
+  const host = await createExtensionTestHost(fileURLToPath(new URL('../', import.meta.url)));
+  try {
+    for (const name of ['status', 'log']) {
+      const result = await host.command(name);
+      assert.match(result.status?.text ?? '', /1 pending recovery/);
+    }
+    await host.observe({ event: 'session_open', reason: 'startup' });
+    await host.observe({ event: 'session_close', reason: 'exit' });
+    assert.deepEqual(snapshot(f.temporary), before);
+  } finally {
+    await host.dispose();
+    if (previous === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previous;
   }
 });
