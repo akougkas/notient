@@ -83,6 +83,34 @@ test('V1 refresh explicitly rebuilds obsolete word counts with unchanged file me
   assert.deepEqual(snapshot(f.vault.path), before);
 });
 
+test('V2 parser retains exact visible source spans on both sides of HTML comments', () => {
+  for (const [text, words] of [
+    ['Visible <!-- hidden --> prose.\n', 2],
+    ['naïve<!-- hidden --> déjà.\r\n', 2],
+    ['Before <!--\nhidden\n--> after.\n', 2],
+    ['Before <!-- hidden --> middle <!-- hidden --> after.\n', 3],
+    ['`<!-- hidden -->` Visible prose.\n', 2],
+  ]) {
+    const bytes = Buffer.from(text); const parsed = parseMarkdown(text);
+    assert.deepEqual(proseMetrics(bytes, parsed), { words, chunkCoverage: 1 }, text);
+    for (const chunk of parsed.chunks) assert.equal(bytes.subarray(chunk.source.startByte, chunk.source.endByte).toString('utf8'), chunk.passage);
+    if (!text.startsWith('`')) assert.equal(parsed.chunks.some(chunk => chunk.passage.includes('hidden')), false);
+  }
+});
+
+test('V2 refresh indexes visible comment-adjacent evidence without hidden prose or links', t => {
+  const f = writerFixture(t); const text = 'Visible <!-- hidden [[Secret]] #hidden --> prose.\r\n'; put(f, 'One.md', text);
+  const before = snapshot(f.vault.path); refreshIndex(f.vault, f.directory);
+  const db = openIndex(f.directory, f.vault);
+  assert.equal(db.prepare('SELECT word_count FROM note_vitals').get().word_count, 2);
+  const chunks = db.prepare('SELECT source,passage FROM chunks').all();
+  assert.deepEqual(chunks.map(chunk => chunk.passage), ['Visible ', ' prose.\r\n']);
+  for (const chunk of chunks) { const source = JSON.parse(chunk.source); assert.equal(Buffer.from(text).subarray(source.startByte, source.endByte).toString(), chunk.passage); }
+  assert.equal(db.prepare('SELECT count(*) AS n FROM links').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM tags').get().n, 0); db.close();
+  assert.deepEqual(snapshot(f.vault.path), before);
+});
+
 test('structural migration preserves version one rows and vault bytes and installs bounded cascading derived tables idempotently', t => {
   const f = writerFixture(t); put(f, 'One.md', '# One\n\nPreserved original prose.\n'); refreshIndex(f.vault, f.directory);
   const before = snapshot(f.vault.path);
