@@ -223,6 +223,17 @@ test('toy vault tools return verified storage passages without changing vault by
   assert.ok(existsSync(indexPath(f.directory, f.vault)));
 });
 
+test('a refused note range keeps its typed stdout and exposes its diagnostic to command hosts on stderr', t => {
+  const f = fixture(t, true);
+  const before = snapshot(f.vault.path);
+  const refused = command(f, 'note', { path: '3-resources/storage/Key-Value Store Design.md', startLine: 1, endLine: 45 });
+  assert.equal(refused.status, 1);
+  assert.equal(refused.value.ok, false);
+  assert.ok(refused.stderr.includes(refused.value.error.code));
+  assert.ok(refused.stderr.includes(refused.value.error.message));
+  assert.deepEqual(snapshot(f.vault.path), before);
+});
+
 test('incremental refresh changes, deletes and relinks notes without stale FTS rows', t => {
   const f = fixture(t);
   put(f, 'Source.md', '# Source\n\n[[Target]] has storage.\n');

@@ -71,6 +71,8 @@ The model-facing capability names are:
 
 Every tool accepts a registered vault ID or exact canonical absolute path. Status, refresh, search and note may omit `vault` only with one registered vault. Candidates, vitals and all write tools require it. Every input schema is closed and direct command invocation validates the same schema. Read failures now return `ok: false` with `error: { code, message, retryable, paths }` and exit 1; clients that read the old error string must use error.message. An absent registration returns configured:false with setupHint and exit 0. Direct scripts take one JSON argument, for example `node clio/notient-extension/tools/status.mjs '{}'`.
 
+Refused commands also emit a bounded code/message summary on stderr so Clio can show the reason when its command host discards failed stdout. Typed stdout and exit 1 remain intact. Note line ranges must come from current served source bounds; omit both range fields to request the full bounded note instead of guessing endpoints.
+
 ## Evidence and practical limits
 
 Search tokenizes up to 32 words into an FTS5 OR query, ranks substantive chunks with BM25 and excludes standalone headings. Each passage is at most 1,200 JavaScript characters and includes the file revision, heading path and source range. Lines are one-based and inclusive. UTF-8 byte ranges are zero-based and end-exclusive. The tool re-reads each candidate file, checks its SHA-256 revision and verifies that the byte slice exactly equals the returned passage. Stale matches are withheld and request refresh. Queries examine at most 1,000 candidates and report when that bound prevents filling the result limit.

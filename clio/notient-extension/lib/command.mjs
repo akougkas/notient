@@ -22,6 +22,13 @@ function validate(value, schema, name = 'input') {
   if (schema.enum && !schema.enum.includes(value)) throw new Error(`${name} must be one of its declared values.`);
 }
 
+function diagnostic(name, error) {
+  const clean = value => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
+  const code = clean(error?.code ?? 'INVALID_INPUT').slice(0, 100);
+  const message = clean(error?.message ?? 'The operation was refused.').slice(0, 2048);
+  process.stderr.write(`Notient ${name}: ${code}: ${message}\n`);
+}
+
 export async function runCommand(name, handler) {
   try {
     if (process.argv.length !== 3 || Buffer.byteLength(process.argv[2]) > 65536) throw new Error('Pass one JSON object of at most 64 KiB.');
@@ -29,14 +36,16 @@ export async function runCommand(name, handler) {
     const schema = manifest.capabilities.tools.find(tool => tool.name === name).inputSchema;
     const input = JSON.parse(process.argv[2]);
     validate(input, schema);
-    const output = JSON.stringify(await handler(input));
+    const result = await handler(input);
+    const output = JSON.stringify(result);
     if (Buffer.byteLength(output) > 900000) throw new Error('Response exceeds its byte bound. Request less content.');
     process.stdout.write(`${output}\n`);
-    if (JSON.parse(output)?.ok === false) process.exitCode = 1;
+    if (result?.ok === false) { diagnostic(name, result.error); process.exitCode = 1; }
   } catch (error) {
     const write = ['capture', 'revise', 'undo'].includes(name);
     const result = write ? { ok: false, tool: name, vault: null, requestId: null, operationId: null, state: 'refused', error: { code: 'INVALID_INPUT', message: error.message, retryable: false, paths: [] }, recovery: [], partial: false, commit: null } : { ok: false, tool: name, vault: null, error: { code: error.code ?? 'INVALID_INPUT', message: error.message, retryable: error.retryable ?? false, paths: error.paths ?? [] } };
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    diagnostic(name, result.error);
     process.exitCode = 1;
   }
 }
