@@ -3,7 +3,7 @@ import { openIndex, probeFts5, unavailableFts5Coverage } from './index.mjs';
 import { vectorState, openVectorSnapshot, markVectorFailure } from './vector-store.mjs';
 import { readConfig } from './config.mjs';
 import { configuredAdapter } from './embedding-adapter.mjs';
-import { embeddingInput } from './embedding-config.mjs';
+import { embeddingInput, embeddingSpace } from './embedding-config.mjs';
 import { defaultSearchMode, readCoverage } from './embedding-off.mjs';
 import { embeddingReason, semanticCoverage } from './candidates.mjs';
 import { normalizedTerms, significantTerms, lexicalSignal, semanticSignal, combinedSeparation, rankOrder } from './separation.mjs';
@@ -72,7 +72,7 @@ function recordServed(vault, directory, callId, hits, stalePaths) {
   });
 }
 
-export async function searchHybrid(vault, directory, input, { now = () => performance.now(), beforeServe = () => {} } = {}) {
+export async function searchHybrid(vault, directory, input, { now = () => performance.now(), beforeServe = () => {}, beforeInference = () => {} } = {}) {
   const started = now(); const limit = input.limit ?? 10; const callId = randomUUID();
   validText(input.query, 'Query');
   if (input.query.length > 4000 || !Number.isInteger(limit) || limit < 1 || limit > 20 || input.workspace !== undefined && (typeof input.workspace !== 'string' || !input.workspace.length || input.workspace.length > 255)) refuse('INVALID_INPUT', 'Search query, limit or workspace is outside its bounds.');
@@ -91,14 +91,17 @@ export async function searchHybrid(vault, directory, input, { now = () => perfor
     if (!reason) {
       const profile = readConfig(directory).embeddings;
       try {
-        const query = embeddingInput(profile, input.query, 'query'); const queryStarted = now(); const adapter = configuredAdapter(vault, directory);
+        const query = embeddingInput(profile, input.query, 'query'); const queryStarted = now(); beforeInference(); const adapter = configuredAdapter(vault, directory, { profile });
+        if (adapter.describe().spaceId !== embeddingSpace(profile)) refuse('EMBEDDING_STALE_MODEL', 'The query adapter differs from the frozen scan space.');
         const response = await adapter.embed([query]); queryMs = now() - queryStarted;
+        if (response.model !== profile.model || response.responseModel !== profile.responseModel || response.dimension !== profile.dimension || adapter.describe().spaceId !== embeddingSpace(profile)) refuse('EMBEDDING_STALE_MODEL', 'The query response differs from the frozen scan space.');
         const scanStarted = now(); semantic = semanticArm(vault, directory, profile, response.vectors[0], input, cap, { now, memory }); scanMs = now() - scanStarted;
       } catch (error) {
         if (error.code?.endsWith('_SCAN_LIMIT')) throw error;
         reason = error.code === 'EMBEDDING_STALE_MODEL' ? 'stale_model' : 'embedding_unavailable';
         if (error.code === 'EMBEDDING_STALE_MODEL' || /^EMBEDDING_(?:HTTP|TIMEOUT|UNAVAILABLE|RESPONSE_)/.test(error.code ?? '')) markVectorFailure(vault, directory, profile, error.code, error.retryable);
         embedding = vectorState(vault, directory);
+        if (embedding.state === 'stale-model') reason = 'stale_model';
         if (['VECTOR_PACK_INVALID', 'VECTOR_INVALID'].includes(error.code)) embedding.state = 'unavailable';
       }
     }

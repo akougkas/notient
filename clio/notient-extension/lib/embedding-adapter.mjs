@@ -4,10 +4,11 @@ import { revision } from './paths.mjs';
 import { readConfig } from './config.mjs';
 
 const cap = 16 * 1024 * 1024;
-export function configuredAdapter(vault, directory) {
+export function configuredAdapter(vault, directory, { profile } = {}) {
   const config = readConfig(directory);
   const selected = config.vaults.find(value => value.id === vault.id && value.path === vault.path);
   if (!selected?.embeddings || !config.embeddings) refuse('EMBEDDING_OFF', 'This vault has no enabled embedding profile.');
+  if (profile && JSON.stringify(config.embeddings) !== JSON.stringify(profile)) refuse('EMBEDDING_CONFIG_CHANGED', 'Embedding configuration differs from the frozen inference profile.', [], true);
   const fingerprint = revision(JSON.stringify([config.embeddings, selected]));
   return createOpenAIAdapter(config.embeddings, { isCurrent: () => {
     const current = readConfig(directory);

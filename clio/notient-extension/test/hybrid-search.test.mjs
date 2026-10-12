@@ -8,7 +8,7 @@ import { refreshVectors } from '../lib/embed-refresh.mjs';
 import { searchHybrid, fuseArms } from '../lib/hybrid-search.mjs';
 import { semanticSignal, lexicalSignal, combinedSeparation, normalizedTerms, significantTerms } from '../lib/separation.mjs';
 import { openIndex } from '../lib/index.mjs';
-import { indexPath } from '../lib/config.mjs';
+import { indexPath, readConfig, atomicJson } from '../lib/config.mjs';
 import { quantizeVector, reconstructedVector, cosine } from '../lib/vector-math.mjs';
 
 test('separation covers fewer than ten, constant tails, exact z boundary and inspectable arm precedence without nonfinite JSON', () => {
@@ -94,6 +94,12 @@ test('oversized derived scan context reports the 64 MiB limit without a truncate
   const f = await embeddingFixture(t, { files: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`N${i}.md`, `Small authored evidence ${i}.\n`])) }); await refreshVectors(f.vault, f.directory, { tier: 'embed' });
   const db = openIndex(f.directory, f.vault, true); db.prepare('UPDATE chunks SET heading=?').run(JSON.stringify(['x'.repeat(2 * 1024 * 1024)])); db.close();
   await assert.rejects(() => searchHybrid(f.vault, f.directory, { query: 'Small', mode: 'semantic', limit: 20 }), error => error.code === 'SEARCH_SCAN_LIMIT');
+});
+
+test('E8 a profile switch between scan snapshot and adapter creation cannot mix new query vectors with the old pack', async t => {
+  const f = await embeddingFixture(t); await refreshVectors(f.vault, f.directory, { tier: 'embed' }); const requests = f.stub.requests.length;
+  const result = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' }, { beforeInference() { const config = readConfig(f.directory); config.embeddings.model = 'another-wire-profile'; atomicJson(path.join(f.directory, 'config.json'), config); } });
+  assert.equal(result.reason, 'stale_model'); assert.equal(result.separation.semantic, null); assert.equal(result.hits[0].path, 'Source.md'); assert.equal(f.stub.requests.length, requests); assert.equal(result.embedding.state, 'stale-model');
 });
 
 test('int8 exhaustive top ten agrees with the float32 reference on 200 deterministic fixture queries', () => {
