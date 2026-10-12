@@ -561,7 +561,7 @@ function inverseFiles(vault, directory, input) {
     reads = guarded.reads;
     inventoryHash = revision(canonicalJson(guarded.inventory));
   }
-  return { files, source, noop: !files.length, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs };
+  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs };
 }
 
 export function buildWritePlan(tool, vault, directory, input, { now = () => new Date() } = {}) {
@@ -593,7 +593,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
   const undo = inverse?.undo ?? { targets: [], commits: [] };
   const source = inverse?.source ?? move?.source ?? captured?.source ?? files[0].path;
-  const noop = inverse?.noop || captured?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
+  const noop = inverse?.noop ?? captured?.noop ?? files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
   const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
   if (audit) files.push(audit.file);
   if (move || inverse?.structural) {

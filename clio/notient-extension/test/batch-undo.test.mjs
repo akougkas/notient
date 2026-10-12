@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { writeOperation } from '../lib/write.mjs';
+import { writeOperation, commandStatusSnapshot } from '../lib/write.mjs';
 import { simulateUndo } from '../lib/undo.mjs';
 import { revision } from '../lib/paths.mjs';
 import { readRecord } from '../lib/journal.mjs';
@@ -187,4 +187,50 @@ test('S5 unattended batch undo ignores a previously cancelled outside move', t =
   assert.equal(existsSync(path.join(f.vault.path, capture.capture.path)), false);
   const again = writeOperation('undo', { ...inverse, requestId: 'selection-closed-again', dryRun: true }, { directory: f.directory });
   assert.equal(again.ok, true, JSON.stringify(again)); assert.equal(again.outcome, 'noop');
+});
+
+test('S7 a zero-delta active batch commits its audit and closes originals before an earlier undo', t => {
+  const f = moveFixture(t);
+  put(f, 'Staged.md', 'Unrelated staged bytes.\n'); git(f.vault.path, ['add', '--', 'Staged.md']);
+  const initial = body(f, 'old/One.md');
+  const earlier = replace(f, 'old/One.md', '# One', '# Earlier', 'zero-earlier-op', 'earlier-task');
+  const stable = body(f, 'old/One.md');
+  const first = replace(f, 'old/One.md', '# Earlier', '# Temporary', 'zero-first-op', 'zero-task');
+  const second = replace(f, 'old/One.md', '# Temporary', '# Earlier', 'zero-second-op', 'zero-task');
+  const staged = normalIndexEntries(f.vault.path).entries.get('Staged.md').bytes;
+  const input = { requestId: 'zero-inverse-op', batch: 'zero-inverse', authorization, targetBatch: 'zero-task' };
+  const preview = writeOperation('undo', { ...input, dryRun: true }, { directory: f.directory });
+  assert.equal(preview.ok, true, JSON.stringify(preview)); assert.equal(preview.outcome, 'preview');
+  assert.equal(preview.changes.length, 1); assert.match(preview.changes[0].path, /^Notient\/Log\/\d{4}-\d{2}\.md$/);
+  const inverse = reviewedUndo(f, input);
+  assert.deepEqual(body(f, 'old/One.md'), stable);
+  assert.deepEqual(normalIndexEntries(f.vault.path).entries.get('Staged.md').bytes, staged);
+  assert.deepEqual(git(f.vault.path, ['diff-tree', '--no-commit-id', '--name-only', '-r', inverse.commit.oid]).split('\n'), [inverse.log.path]);
+  for (const original of [first, second]) assert.equal(readRecord(f.directory, f.vault, original.operationId).undoneBy, inverse.operationId);
+  assert.deepEqual(inverse.undo.operationIds, [second.operationId, first.operationId]);
+  assert.equal(body(f, inverse.log.path).toString().split('\n').filter(line => line.startsWith('- ')).length, 4);
+  const count = git(f.vault.path, ['rev-list', '--count', 'HEAD']);
+  assert.equal(writeOperation('undo', { ...input, planHash: preview.planHash }, { directory: f.directory }).commit.oid, inverse.commit.oid);
+  const again = writeOperation('undo', { ...input, requestId: 'zero-inverse-again', dryRun: true }, { directory: f.directory });
+  assert.equal(again.outcome, 'noop'); assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), count);
+  const undoneEarlier = writeOperation('undo', { requestId: 'zero-undo-earlier', batch: 'earlier-inverse', authorization, opId: earlier.operationId }, { directory: f.directory });
+  assert.equal(undoneEarlier.ok, true, JSON.stringify(undoneEarlier)); assert.deepEqual(body(f, 'old/One.md'), initial);
+});
+
+test('S7 audit-only inverse recovery closes originals once after intent or ref publication', t => {
+  for (const barrier of ['afterIntent', 'afterRef']) {
+    const f = moveFixture(t);
+    const first = replace(f, 'Peer.md', 'Peer', 'Temporary', 'zero-recover-first', 'zero-recover-task');
+    const second = replace(f, 'Peer.md', 'Temporary', 'Peer', 'zero-recover-second', 'zero-recover-task');
+    const input = { requestId: 'zero-recover-inverse', batch: 'zero-recover-inverse', authorization, targetBatch: 'zero-recover-task' };
+    const preview = writeOperation('undo', { ...input, dryRun: true }, { directory: f.directory });
+    const stopped = writeOperation('undo', { ...input, planHash: preview.planHash }, { directory: f.directory, barrier(name) { if (name === barrier) throw Object.assign(new Error('Stop audit-only inverse.'), { code: 'INJECTED_STOP' }); } });
+    assert.equal(stopped.error.code, 'INJECTED_STOP', JSON.stringify(stopped));
+    const recovered = commandStatusSnapshot(f.directory).recovered[0];
+    assert.equal(recovered.result, barrier === 'afterRef' ? 'already_committed' : 'resumed_from_intent');
+    for (const original of [first, second]) assert.equal(readRecord(f.directory, f.vault, original.operationId).undoneBy, input.requestId);
+    assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), '4');
+    commandStatusSnapshot(f.directory);
+    assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), '4');
+  }
 });
