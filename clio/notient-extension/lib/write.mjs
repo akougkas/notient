@@ -14,6 +14,7 @@ import { captureDocument, captureBodyHash, captureReviewBytes, captureReceipt } 
 import { planLink } from './link.mjs';
 import { planRelate } from './relate.mjs';
 import { freezeEditAges } from './vitals-write.mjs';
+import { inverseOrigins } from './vitals-index.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile, freezeIntentSet, prepareFileIntents, readFileIntents, claimFileIntent, markFileApplied } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -583,12 +584,14 @@ function inverseFiles(vault, directory, input, budget) {
     reads = guarded.reads;
     inventoryHash = revision(canonicalJson(guarded.inventory));
   }
-  const restoredAges = files.filter(file => file.before === null && file.after !== null).flatMap(file => {
+  const restoredAges = files.filter(file => file.role === 'note' && file.after !== null).flatMap(file => {
     const original = [...selected].reverse().find(record => record.version === 2 && record.files.some(changed => changed.path === file.path && changed.before === revision(file.after)));
     const value = original?.vitalsBefore.find(value => value.path === file.path);
     return Number.isFinite(value?.lastUserEditMs) ? [{ ...value, fallback: original.vitalsFallbackPaths?.includes(file.path) ?? false }] : [];
   });
-  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, restoredAges, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
+  const origins = inverseOrigins({ operation: 'undo', files }, file => file.path, selected);
+  const restoredOrigins = files.filter(file => file.role === 'note' && file.after !== null && origins.has(file.path)).map(file => ({ path: file.path, origin: origins.get(file.path) }));
+  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, restoredAges, restoredOrigins, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
 }
 
 export function buildWritePlan(tool, vault, directory, input, { now = () => new Date(), gitClock, gitCall, gitBudget } = {}) {
@@ -632,7 +635,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
     if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
   }
   const git = preflightGit(vault, files, { budget });
-  const { vitalsBefore, vitalsFallbackPaths } = noop ? { vitalsBefore: [], vitalsFallbackPaths: [] } : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null);
+  const { vitalsBefore, vitalsFallbackPaths } = noop ? { vitalsBefore: [], vitalsFallbackPaths: [] } : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null, inverse?.restoredOrigins);
   budget.check();
   const gitMs = budget.usedMs;
   const reads = inverse?.reads ?? move?.reads ?? relationship?.reads ?? [];

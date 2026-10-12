@@ -24,7 +24,7 @@ export function movedFiles(record) {
   return source && destination ? { source, destination } : null;
 }
 
-function inverseOrigins(record, previous, originals) {
+export function inverseOrigins(record, previous, originals) {
   const origins = new Map(record.files.filter(file => file.role === 'note' && file.before !== null).map(file => [file.path, previous(file)]));
   if (record.operation === 'undo') for (const original of originals) {
     const moved = movedFiles(original);
@@ -92,10 +92,12 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
     let provenance = null;
     const published = record?.files.find(file => file.role === 'note' && file.path === row.path && file.after === row.revision);
     if (published) {
+      const restored = inverse.get(row.path);
+      if (restored) old = restored;
       const pair = movedFiles(record);
       const moved = pair?.destination.path === row.path ? pair.source : null;
       const candidate = previous.get(row.path) ?? (moved ? previous.get(moved.path) : null);
-      const before = candidate?.revision === (moved?.before ?? published.before) ? candidate : null;
+      const before = restored ?? (candidate?.revision === (moved?.before ?? published.before) ? candidate : null);
       if (!old && before) old = before;
       if (!old && published.before === null && inverse.has(row.path)) old = inverse.get(row.path);
       const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === row.path)?.lastUserEditMs : null;

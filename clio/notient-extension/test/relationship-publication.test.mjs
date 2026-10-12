@@ -231,3 +231,30 @@ test('V13 move identity preserves age and earned maturity when outgoing referenc
   unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
   assert.equal(inspectNote(f.vault, f.directory, { path: source }).vitals.values.lastUserEditAt, after.lastUserEditAt);
 });
+
+test('V17 batch inverse restores each note identity when another note occupied its original path', t => {
+  const f = writerFixture(t); const a = Buffer.from('Authored A prose.\n'); const c = Buffer.from('# C\n');
+  put(f, 'A.md', a); put(f, 'C.md', c); baseline(f, ['A.md', 'C.md', 'Other.md']);
+  utimesSync(path.join(f.vault.path, 'A.md'), new Date(timestamp - 14 * 86400000), new Date(timestamp - 14 * 86400000));
+  utimesSync(path.join(f.vault.path, 'C.md'), new Date(timestamp - 86400000), new Date(timestamp - 86400000));
+  refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  const db = openIndex(f.directory, f.vault, true); db.prepare("UPDATE note_vitals SET maturity='synthesis-ready' WHERE path='A.md'").run(); db.close();
+  for (const [pathName, destination] of [['A.md', 'B.md'], ['C.md', 'A.md']]) {
+    const input = { vault: f.vault.id, requestId: `identity-move-${pathName[0]}`, batch: 'identities', authorization, operation: 'move', path: pathName, destination, revision: revision(bytes(f, pathName)) };
+    const preview = writeOperation('revise', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
+    const moved = writeOperation('revise', { ...input, planHash: preview.planHash }, options(f)); assert.equal(moved.ok, true, JSON.stringify(moved));
+  }
+  const input = { vault: f.vault.id, requestId: 'identity-batch-inverse', batch: 'inverse', authorization, targetBatch: 'identities' };
+  const preview = writeOperation('undo', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
+  const undone = writeOperation('undo', { ...input, planHash: preview.planHash }, options(f)); assert.equal(undone.ok, true, JSON.stringify(undone));
+  const record = readRecord(f.directory, f.vault, undone.operationId);
+  assert.equal(record.vitalsBefore.find(value => value.path === 'A.md').lastUserEditMs, timestamp - 14 * 86400000);
+  assert.equal(record.vitalsBefore.find(value => value.path === 'C.md').lastUserEditMs, timestamp - 86400000);
+  assert.deepEqual(bytes(f, 'A.md'), a); assert.deepEqual(bytes(f, 'C.md'), c);
+  const restoredA = inspectNote(f.vault, f.directory, { path: 'A.md' }).vitals.values; const restoredC = inspectNote(f.vault, f.directory, { path: 'C.md' }).vitals.values;
+  assert.equal(restoredA.lastUserEditAt, new Date(timestamp - 14 * 86400000).toISOString()); assert.equal(restoredA.maturity, 'synthesis-ready');
+  assert.equal(restoredC.lastUserEditAt, new Date(timestamp - 86400000).toISOString()); assert.equal(restoredC.maturity, 'raw');
+  unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  assert.equal(inspectNote(f.vault, f.directory, { path: 'A.md' }).vitals.values.lastUserEditAt, restoredA.lastUserEditAt);
+  assert.equal(inspectNote(f.vault, f.directory, { path: 'C.md' }).vitals.values.lastUserEditAt, restoredC.lastUserEditAt);
+});
