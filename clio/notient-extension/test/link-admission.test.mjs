@@ -41,7 +41,11 @@ const table = [
   ['G09 a stored NaN distance refuses', [NaN, 0, 0, 0], ['N0.md'], 'CANDIDATE_STALE'],
   ['G10 a stored infinite distance refuses', [Infinity, 0, 0, 0], ['N0.md'], 'CANDIDATE_STALE'],
   ['G11 an out-of-range unselected stored distance refuses', [0, 0, 0, 3], ['N0.md'], 'CANDIDATE_STALE'],
+  ['E12 a negative stored bestDistance refuses without any mutation', [-0.01, 0, 0, 0], ['N0.md'], 'CANDIDATE_STALE'],
 ];
+test('E12 the admission case table covers negative bestDistance', () => {
+  assert.equal(table.some(([, distances, , expected]) => distances.some(distance => distance < 0) && expected === 'CANDIDATE_STALE'), true);
+});
 for (const [name, distances, names, expected] of table) test(name, async t => {
   const f = await fixture(t); modify(f, payload => payload.targets.forEach((target, index) => { target.bestDistance = distances[index] ?? 0; }));
   const input = { ...f.input, link: { candidateSet: f.receipt.candidateSet, edges: names.map(edge) } }; const before = snapshot(f.temporary);
