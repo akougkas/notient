@@ -71,3 +71,40 @@ approve 509e8f4f for item 4's legacy-history traversal.
 approve 81b4825b for item 5.
 
 block 97072019: missing-manifest integrity bypass (item 12), move provenance loss (item 13), and stale cached age publication (item 14); approve 509e8f4f for item 4 and 81b4825b for item 5.
+
+## 27386e2c: V6 fix for item 6
+
+15. **A Setext title beginning with triple-backtick inline code still permits an outside-target no-op.** `clio/notient-extension/lib/link.mjs:78` skips every candidate title beginning with three or more backticks before reaching the uncertainty refusal at `:83`. **Violates 04 §6's next-visible-H1/H2 section boundary and outside-occurrence rule, W22, and the standing rule that uncertain syntax refuses.** Consider this source, with a final LF and a live `Target.md`:
+
+~~~~text
+## Related
+
+- [[Other]]
+
+```Next section```
+============
+
+[[Target]]
+~~~~
+
+The title contains a complete inline-code span, not a fence opener: `lib/move.mjs:155` rejects a backtick fence whose info contains backticks, then masks only the inline span at `:173` through `:184`. The Setext underline and later target remain visible. However, the new section scan skips the title without recognizing the heading or refusing uncertainty. Related therefore extends to EOF, `hasReference` at `lib/link.mjs:94` accepts the outside target, and `planLink` at `:180` returns unchanged success. Consequently, the requested relationship is still omitted from Related. The plain-title witness from item 6 is fixed, but this boundary defect remains through `cd63f033`.
+
+block 27386e2c: missed Setext boundary for a triple-backtick inline-code title (item 15).
+
+## 43166601: V7 fix for item 7
+
+approve 43166601 for item 7.
+
+## 5b3767c8: V8 fix for item 8
+
+approve 5b3767c8 for item 8.
+
+## 0270e1dd: V9 fix for item 9
+
+approve 0270e1dd for item 9.
+
+## cd63f033: V10 fix for item 10
+
+approve cd63f033 for item 10.
+
+block 27386e2c: missed Setext boundary for a triple-backtick inline-code title (item 15); approve 43166601 for item 7, 5b3767c8 for item 8, 0270e1dd for item 9, and cd63f033 for item 10.
