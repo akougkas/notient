@@ -49,6 +49,18 @@ test('V5 uncertain nested container continuation refuses with its source line an
   assert.deepEqual(inventory.notes[0].bytes, Buffer.from(before));
 });
 
+test('V15 Setext inline-code titles with long backtick runs never let Related swallow outside targets', () => {
+  for (const newline of ['\n', '\r\n']) for (const underline of ['====', '----']) for (const title of ['```inline title```', '````inline ` title````', '   ```inline title```']) {
+    const before = ['## Related', '', '- [[Other]]', '', title, underline, '', '[[Target]]', ''].join(newline);
+    let result;
+    try { result = planLink(scan(before), 'Source.md', [edge]); }
+    catch (error) { assert.equal(error.code, 'AMBIGUOUS_REFERENCE'); assert.match(error.message, /line 5/); assert.deepEqual(error.paths, ['Source.md']); continue; }
+    assert.notDeepEqual(result.bytes, Buffer.from(before), title);
+    assert.equal(result.bytes.toString().indexOf('- [[Target]]') < result.bytes.toString().indexOf(title), true);
+    assert.deepEqual(applySplices(Buffer.from(before), result.splices), result.bytes);
+  }
+});
+
 test('V6 visible Setext H1 and H2 end Related and outside targets do not satisfy presence', () => {
   for (const underline of ['============', '------------']) for (const newline of ['\n', '\r\n']) {
     const before = ['## Related', '', '- [[Other]]', '', 'Next section', underline, '', '[[Target]]', ''].join(newline);

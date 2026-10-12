@@ -75,7 +75,7 @@ function sectionLayout(bytes, source) {
     const marker = underline.start + /^ */.exec(underline.content)[0].length;
     if (!tokenized.visible[marker] || headings.some(heading => heading.line.start === line.start)) continue;
     const content = line.content.replace(/^\uFEFF/, '');
-    if (/^ {0,3}(?:[-+*][ \t]+|\d{1,9}[.)][ \t]+|>|`{3,}|~{3,})/.test(content)) continue;
+    if (/^ {0,3}(?:[-+*][ \t]+|\d{1,9}[.)][ \t]+|>|~{3,})/.test(content)) continue;
     const bom = line.start === document.bodyStart && line.content.startsWith('\uFEFF') ? 1 : 0;
     const heading = outline.find(value => value.line === row && value.level <= 2);
     const prior = document.lines[row - 2];
