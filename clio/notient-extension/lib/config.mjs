@@ -24,7 +24,9 @@ export function dataDirectory(env = process.env) {
 export function readConfig(directory = dataDirectory()) {
   const filename = path.join(directory, 'config.json');
   if (!existsSync(filename)) return { version: 1, vaults: [] };
-  const config = JSON.parse(readFileSync(filename, 'utf8'));
+  let config;
+  try { config = JSON.parse(readFileSync(filename, 'utf8')); }
+  catch { throw new Error('Invalid Notient configuration. Run operator setup.'); }
   if (config.version !== 1 || !Array.isArray(config.vaults)) throw new Error('Unsupported Notient configuration. Run operator setup.');
   const ids = new Set();
   for (const vault of config.vaults) {
@@ -32,6 +34,8 @@ export function readConfig(directory = dataDirectory()) {
       throw new Error('Invalid registered vault configuration. Run operator setup.');
     }
     ids.add(vault.id);
+    if (vault.embeddings !== undefined && typeof vault.embeddings !== 'boolean') throw new Error('Each vault embeddings setting must be a boolean. Run operator setup.');
+    vault.embeddings ??= false;
     if (contained(vault.path, directory)) throw new Error('Notient data must be outside every vault.');
   }
   return config;

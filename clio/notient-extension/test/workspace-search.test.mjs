@@ -21,7 +21,7 @@ test('T9 frozen search schema and semantic validation share the 255-character wo
     const command = spawnSync(process.execPath, [fileURLToPath(new URL('../tools/search.mjs', import.meta.url)), JSON.stringify({ query: 'quartz', workspace })], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: f.directory.slice(0, -'/notient'.length) } });
     assert.equal(command.status, expected, command.stdout);
     if (expected === 0) assert.equal(JSON.parse(command.stdout).hits[0].path, 'Bound.md');
-    else assert.match(JSON.parse(command.stdout).error, /workspace.*bounds/);
+    else assert.match(JSON.parse(command.stdout).error.message, /workspace.*bounds/);
   }
 });
 

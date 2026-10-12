@@ -28,3 +28,4 @@ import './vitals-read.test.mjs';
 import './link-writeback.test.mjs';
 import './relate-writeback.test.mjs';
 import './relationship-publication.test.mjs';
+import './stage4-contract.test.mjs';

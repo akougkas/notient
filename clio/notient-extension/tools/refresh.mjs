@@ -1,8 +1,5 @@
 import { runCommand } from '../lib/command.mjs';
-import { dataDirectory, selectVault } from '../lib/config.mjs';
-import { refreshIndex } from '../lib/index.mjs';
+import { withReadVault } from '../lib/read-command.mjs';
+import { refreshWithEmbeddingOff } from '../lib/embedding-off.mjs';
 
-await runCommand('refresh', input => {
-  const directory = dataDirectory();
-  return refreshIndex(selectVault(input.vault, directory), directory, input);
-});
+await runCommand('refresh', input => withReadVault('refresh', input, refreshWithEmbeddingOff));

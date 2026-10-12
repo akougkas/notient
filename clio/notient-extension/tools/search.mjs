@@ -1,8 +1,5 @@
 import { runCommand } from '../lib/command.mjs';
-import { dataDirectory, selectVault } from '../lib/config.mjs';
-import { searchIndex } from '../lib/index.mjs';
+import { withReadVault } from '../lib/read-command.mjs';
+import { searchWithEmbeddingOff } from '../lib/embedding-off.mjs';
 
-await runCommand('search', input => {
-  const directory = dataDirectory();
-  return searchIndex(selectVault(input.vault, directory), directory, input);
-});
+await runCommand('search', input => withReadVault('search', input, searchWithEmbeddingOff));

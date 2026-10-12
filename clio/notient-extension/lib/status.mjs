@@ -5,6 +5,7 @@ import { indexSummary, openIndex, probeFts5, unavailableFts5Coverage } from './i
 import { journalStatus, spoolCount } from './journal.mjs';
 import { lastCommit } from './git.mjs';
 import { notePath } from './paths.mjs';
+import { offEmbedding, retainedPackBytes } from './embedding-off.mjs';
 
 function logTail(vault) {
   const root = path.join(vault.path, 'Notient/Log');
@@ -43,7 +44,7 @@ export function statusSnapshot(directory, { vault: selector, runtime = false } =
         finally { db?.close(); }
       } else if (!runtime) commit = lastCommit(vault.path);
       const index = fts5 ? indexSummary(vault, directory, !runtime) : { state: 'unavailable', notes: null, chunks: null, refreshedAt: null, freshness: 'FTS5 unavailable; structural index coverage is unknown', coverage: unavailableFts5Coverage() };
-      return { ...vault, name: path.basename(vault.path), index, journal: journalStatus(directory, vault.id), lastCommit: commit, lastCommitSource: runtime ? 'last refresh snapshot' : 'git log', log: logTail(vault) };
+      return { ...vault, name: path.basename(vault.path), index, embedding: offEmbedding(), retainedPackBytes: retainedPackBytes(directory, vault), journal: journalStatus(directory, vault.id), lastCommit: commit, lastCommitSource: runtime ? 'last refresh snapshot' : 'git log', log: logTail(vault) };
     } catch (error) {
       return { ...vault, name: path.basename(vault.path), error: error.message };
     }
