@@ -338,10 +338,11 @@ export function resolveMoveTarget(token, source, index) {
   } else if (target.includes('/')) {
     absolute = posix.normalize(target);
     candidates = exact(absolute);
+    const rootMatched = candidates.length > 0;
     if (!candidates.length) candidates = index.names.filter(name => noMd(name).endsWith(`/${noMd(target)}`));
     const relative = exact(lexical(source, target));
     candidates = sorted([...candidates, ...relative]);
-    alternatives = sorted([...folded(absolute), ...folded(lexical(source, target)), ...index.names.filter(name => portableFold(noMd(name)).endsWith(`/${portableFold(noMd(target))}`))]);
+    alternatives = sorted([...folded(absolute), ...folded(lexical(source, target)), ...(rootMatched ? [] : index.names.filter(name => portableFold(noMd(name)).endsWith(`/${portableFold(noMd(target))}`)))]);
   } else {
     candidates = index.basenames.get(noMd(target)) ?? [];
     alternatives = index.names.filter(name => portableFold(noMd(posix.basename(name))) === portableFold(noMd(target)));

@@ -13,6 +13,23 @@ import { baseline } from './git-write.test.mjs';
 const scan = values => ({ notes: Object.entries(values).filter(([name]) => /\.md$/i.test(name)).map(([name, text]) => ({ path: name, bytes: Buffer.from(text), revision: revision(text), mode: 0o644 })), inventory: Object.keys(values).sort(), blockers: [] });
 const after = (plan, name) => plan.files.find(file => file.path === name)?.after?.toString();
 
+test('S4 exact root paths outrank deep suffixes while relative and case conflicts still refuse', () => {
+  const exact = planMove(scan({ 'old/One.md': 'Source', 'deep/old/One.md': 'Other', 'deeper/OLD/One.md': 'Folded suffix', 'From.md': '[[old/One]]\n' }), 'old/One.md', 'new/Two.md');
+  assert.equal(exact.ok, true, JSON.stringify(exact.blockers));
+  assert.equal(after(exact, 'From.md'), '[[Two]]\n');
+  const suffix = planMove(scan({ 'deep/old/One.md': 'Source', 'From.md': '[[old/One]]\n' }), 'deep/old/One.md', 'new/Two.md');
+  assert.equal(suffix.ok, true, JSON.stringify(suffix.blockers));
+  for (const values of [
+    { 'old/One.md': 'Source', 'folder/old/One.md': 'Other', 'folder/From.md': '[[old/One]]\n' },
+    { 'old/One.md': 'Source', 'OLD/One.md': 'Other', 'From.md': '[[old/One]]\n' },
+    { 'deep/old/One.md': 'Source', 'deeper/old/One.md': 'Other', 'From.md': '[[old/One]]\n' },
+  ]) {
+    const source = Object.keys(values).find(name => values[name] === 'Source');
+    const result = planMove(scan(values), source, 'new/Two.md');
+    assert.equal(result.ok, false); assert.equal(result.blockers[0].code, 'AMBIGUOUS_REFERENCE'); assert.deepEqual(result.files, []);
+  }
+});
+
 const goldens = [
   ['M01 unique basename', { 'From.md': '[[One]]\n' }, '[[Two]]\n'],
   ['M02 display alias', { 'From.md': '[[One|  Exact 🧠 alias ]]\n' }, '[[Two|  Exact 🧠 alias ]]\n'],
