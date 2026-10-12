@@ -6,8 +6,8 @@ import { vectorState, openVectorSnapshot, metaValue } from './vector-store.mjs';
 import { readCoverage, undeterminedSeparation } from './embedding-off.mjs';
 import { readNote, refuse, portableName, validText, revision } from './paths.mjs';
 import { cosine } from './vector-math.mjs';
-import { evidenceFor, inventoryHash } from './retrieval-evidence.mjs';
-import { semanticSignal, combinedSeparation, retainBest } from './separation.mjs';
+import { evidenceFor, inventoryHash, scanBudget } from './retrieval-evidence.mjs';
+import { semanticSignal, combinedSeparation } from './separation.mjs';
 import { withIndexWriter } from './index-lock.mjs';
 
 export const embeddingReason = state => ({ off: 'embedding_off', building: 'embedding_building', 'stale-model': 'stale_model', unavailable: 'embedding_unavailable' })[state] ?? null;
@@ -33,6 +33,7 @@ export function findCandidates(vault, directory, input, { now = () => performanc
   const unavailable = embeddingReason(state.state); if (unavailable) return empty(unavailable);
   const profile = readConfig(directory).embeddings; let reader;
   let scanned = 0; const best = []; let indexGeneration; let scanEnded;
+  const memory = scanBudget('CANDIDATE_LIMIT');
   try {
     reader = openVectorSnapshot(vault, directory, profile);
     const sourceChunks = [];
@@ -41,12 +42,13 @@ export function findCandidates(vault, directory, input, { now = () => performanc
       if (chunk.revision !== source.revision) refuse('REVISION_CONFLICT', 'The indexed source revision changed; refresh first.', [input.source], true);
       const metadata = reader.metadata(chunk); if (!metadata) return empty('source_vectors_missing');
       sourceChunks.push({ chunk, vector: reader.vector(metadata) });
+      memory.add(sourceChunks.at(-1));
       if (sourceChunks.length > 64) refuse('CANDIDATE_LIMIT', 'Candidates requires at most 64 source chunks; split this note before retrying.', [input.source]);
     }
     if (!sourceChunks.length) return empty('source_vectors_missing');
     const excluded = exclusions(reader.db, input.source);
     let current = null;
-    const finish = () => { if (current) retainBest(best, current, 50); };
+    const finish = () => { if (current) memory.retain(best, current, 50); };
     for (const chunk of reader.chunks({ sourcePath: input.source })) {
       if (++scanned % 32 === 1 && now() >= deadline) refuse('CANDIDATE_TIMEOUT', 'The exhaustive candidate scan exceeded 25 seconds; no receipt was created.', [], true);
       if (!chunk.eligible || excluded.has(chunk.path)) continue;

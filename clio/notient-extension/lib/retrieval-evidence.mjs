@@ -1,6 +1,16 @@
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { readNote, revision, refuse } from './paths.mjs';
+import { retainBest } from './separation.mjs';
+
+export function scanBudget(code) {
+  const held = new Map(); let bytes = 0;
+  return {
+    add(row) { if (held.has(row)) held.get(row).refs++; else { const size = Buffer.byteLength(JSON.stringify(row)) * 2; held.set(row, { refs: 1, size }); bytes += size; } if (bytes > 64 * 1024 * 1024) refuse(code, 'The exhaustive scan exceeds the 64 MiB buffer bound; no truncated set is returned.'); },
+    remove(row) { const value = held.get(row); if (--value.refs === 0) { bytes -= value.size; held.delete(row); } },
+    retain(rows, row, limit) { const change = retainBest(rows, row, limit); if (!change) return; if (change.removed) this.remove(change.removed); this.add(change.added); },
+  };
+}
 
 export function inventoryHash(root) {
   const names = [];

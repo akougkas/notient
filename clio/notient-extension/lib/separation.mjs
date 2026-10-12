@@ -29,5 +29,6 @@ export function combinedSeparation(semantic = null, lexical = null) {
 export const rankOrder = (a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.ordinal - b.ordinal;
 export function retainBest(rows, row, limit, compare = rankOrder) {
   if (rows.length >= limit && compare(row, rows.at(-1)) >= 0) return;
-  rows.push(row); rows.sort(compare); if (rows.length > limit) rows.pop();
+  rows.push(row); rows.sort(compare); const removed = rows.length > limit ? rows.pop() : null;
+  return { added: row, removed };
 }
