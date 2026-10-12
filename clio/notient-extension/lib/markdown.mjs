@@ -382,6 +382,7 @@ export function parseMarkdown(text, filename = '') {
     frontmatter = text.slice(0, bodyStart);
   }
   const outline = [];
+  for (const line of lines) if (line.start === bodyStart && line.text.startsWith('\uFEFF')) line.text = line.text.slice(1);
   const blocks = [];
   const links = [];
   const tags = new Set(frontmatterList(frontmatter, 'tags').map(tag => tag.replace(/^#/, '')));
@@ -449,7 +450,8 @@ export function parseMarkdown(text, filename = '') {
     const kind = fence || isFence ? 'code' : heading || setext ? 'heading' : 'paragraph';
     const end = setext ? lines[row].end : line.end;
     if (kind !== 'code') links.push(...scanLinks(text, line.start, end, definitions).map(link => ({ ...link, evidenceExcluded: excluded })));
-    if (excluded || !line.text.trim()) { finish(); continue; }
+    const linkOnly = kind === 'paragraph' && /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(?:!?\[\[[^\r\n]+?\]\][ \t]*)+$/.test(line.text);
+    if (excluded || linkOnly || !line.text.trim()) { finish(); continue; }
     if (current && current.kind !== kind) finish();
     if (!current) current = { kind, start: line.start, end, headingPath: headings.map(h => h.title) };
     else current.end = end;

@@ -12,7 +12,7 @@ import { provenanceWorkspace } from './capture.mjs';
 import { migrateIndex, indexVersion } from './index-schema.mjs';
 import { proseMetrics } from './vitals.mjs';
 import { storedVitals, installVitals } from './vitals-index.mjs';
-import { tokenizeMove } from './move.mjs';
+import { tokenizeMove, inventoryIndex, resolveMoveTarget } from './move.mjs';
 
 export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
 
@@ -104,7 +104,13 @@ function snapshotLinks(bytes, parsed) {
   const tokenized = tokenizeMove(bytes, { visibility: true });
   const text = bytes.toString('utf8');
   const wiki = tokenized.tokens.filter(token => token.kind === 'wiki' && !token.unsafe).map(token => ({ kind: 'wiki', target: token.target, fragment: token.fragment ? token.fragment.slice(1) : null, alias: token.alias, embed: token.embed, source: sourceRange(text, text.lastIndexOf('[[', token.start), token.finish) }));
-  return { links: [...parsed.links.filter(link => link.kind !== 'wiki'), ...wiki], metrics: proseMetrics(bytes, parsed, tokenized), issues: tokenized.issues.length };
+  return { links: [...parsed.links.filter(link => link.kind !== 'wiki'), ...wiki], metrics: proseMetrics(bytes, parsed, tokenized), issues: tokenized.issues.length + tokenized.tokens.filter(token => token.unsafe).length };
+}
+
+function resolveSnapshotLink(link, source, notes, index) {
+  if (link.kind !== 'wiki') return resolveLink(link, source, notes);
+  const result = resolveMoveTarget({ kind: 'wiki', target: link.target, fragment: link.fragment ? `#${link.fragment}` : '' }, source, index);
+  return { resolution: result.state === 'missing' ? 'unresolved' : result.state, candidates: result.candidates };
 }
 
 export function refreshIndex(vault, directory, { force = false, now = () => Date.now() } = {}) {
@@ -122,7 +128,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     const priorVitals = storedVitals(db);
     const metrics = new Map();
     const graphIssues = new Map(Object.entries(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')));
-    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== 'visible-wiki-v1';
+    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== 'exact-wiki-v2';
     const rebuild = db.prepare("SELECT value FROM meta WHERE key='vitalsInitialized'").get()?.value !== '1';
     const previous = new Map(db.prepare('SELECT n.*, w.path AS workspaceIndexed FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path').all().map(row => [row.path, row]));
     const present = new Set(scan.notes.map(note => note.path));
@@ -138,15 +144,11 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
       try {
         content = readNote(vault.path, entry.path);
         hashed++;
-        if (old?.revision === content.revision) {
-          if (rebuildGraph || priorVitals.get(entry.path)?.revision !== content.revision) {
+        if (old?.revision === content.revision && !rebuildGraph) {
+          if (priorVitals.get(entry.path)?.revision !== content.revision) {
             const structural = snapshotLinks(content.bytes, parseMarkdown(content.text, entry.path));
             metrics.set(entry.path, structural.metrics);
             if (structural.issues) graphIssues.set(entry.path, structural.issues); else graphIssues.delete(entry.path);
-            if (rebuildGraph) {
-              db.prepare('DELETE FROM links WHERE path=?').run(entry.path);
-              for (const link of structural.links) db.prepare('INSERT INTO links(path,payload,resolution,candidates) VALUES (?,?,?,?)').run(entry.path, JSON.stringify(link), 'unresolved', '[]');
-            }
           }
           db.prepare('UPDATE notes SET size = ?, mtime = ?, ctime = ? WHERE path = ?').run(content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, entry.path);
           db.prepare('INSERT OR REPLACE INTO note_workspaces VALUES (?, ?)').run(entry.path, provenanceWorkspace(content.bytes));
@@ -173,12 +175,13 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
       }
       for (const link of structural.links) db.prepare('INSERT INTO links(path, payload, resolution, candidates) VALUES (?, ?, ?, ?)').run(entry.path, JSON.stringify(link), 'unresolved', '[]');
       for (const tag of parsed.tags) db.prepare('INSERT INTO tags VALUES (?, ?)').run(entry.path, tag);
-      changed++;
+      if (old?.revision === content.revision) unchanged++; else changed++;
     }
     if (rebuildGraph || changed || deleted || errors.length) {
       const notes = db.prepare('SELECT path, aliases FROM notes').all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) }));
+      const index = inventoryIndex(notes.map(note => note.path), notes);
       for (const row of db.prepare('SELECT id, path, payload FROM links').all()) {
-        const resolved = resolveLink(JSON.parse(row.payload), row.path, notes);
+        const resolved = resolveSnapshotLink(JSON.parse(row.payload), row.path, notes, index);
         db.prepare('UPDATE links SET target_path = ?, resolution = ?, candidates = ? WHERE id = ?').run(resolved.resolution === 'resolved' ? resolved.candidates[0] : null, resolved.resolution, JSON.stringify(resolved.candidates), row.id);
       }
     }
@@ -187,7 +190,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('indexGeneration', ?)").run(String(Number(db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get()?.value ?? 0) + 1));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('structuralErrors', ?)").run(JSON.stringify({ skipped: scan.skipped.length, errors: errors.length }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphIssuePaths', ?)").run(JSON.stringify(Object.fromEntries(graphIssues)));
-    db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', 'visible-wiki-v1')").run();
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', 'exact-wiki-v2')").run();
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
     db.exec('COMMIT');
@@ -250,9 +253,10 @@ export function repairCommittedIndex(vault, directory, record) {
       for (const tag of parsed.tags) db.prepare('INSERT INTO tags VALUES (?, ?)').run(file.path, tag);
     }
     const notes = db.prepare('SELECT path, aliases FROM notes').all().map(note => ({ path: note.path, aliases: JSON.parse(note.aliases) }));
+    const index = inventoryIndex(notes.map(note => note.path), notes);
     const update = db.prepare('UPDATE links SET target_path = ?, resolution = ?, candidates = ? WHERE id = ?');
     for (const row of db.prepare('SELECT id, path, payload FROM links').all()) {
-      const resolved = resolveLink(JSON.parse(row.payload), row.path, notes);
+      const resolved = resolveSnapshotLink(JSON.parse(row.payload), row.path, notes, index);
       update.run(resolved.resolution === 'resolved' ? resolved.candidates[0] : null, resolved.resolution, JSON.stringify(resolved.candidates), row.id);
     }
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));

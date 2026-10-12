@@ -21,7 +21,7 @@ export function structuralCoverage(db, vault) {
   const skipped = Math.max(scan.skipped.length, previous.skipped ?? 0);
   const errors = previous.errors ?? 0;
   const graphIssues = Object.values(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')).reduce((count, value) => count + value, 0);
-  const graphBackfill = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== 'visible-wiki-v1';
+  const graphBackfill = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== 'exact-wiki-v2';
   const state = pending || skipped || errors || missingVitals || graphIssues || graphBackfill ? 'incomplete' : 'current';
   return { state, indexing: { state: 'ready', pending, skipped, errors, missingVitals, graphIssues, graphBackfill }, message: state === 'current' ? null : 'Structural metrics use a refresh snapshot; changed or skipped notes prevent complete graph coverage.' };
 }

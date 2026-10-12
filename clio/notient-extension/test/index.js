@@ -25,3 +25,4 @@ import './memory.test.mjs';
 import './git-budget.test.mjs';
 import './vitals-arithmetic.test.mjs';
 import './vitals-read.test.mjs';
+import './link-writeback.test.mjs';

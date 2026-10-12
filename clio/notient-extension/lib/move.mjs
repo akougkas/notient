@@ -126,9 +126,11 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
   const contexts = new Map();
   for (const [ordinal, line] of lines.entries()) {
     if (line.start < bodyStart) continue;
-    const quotePrefix = /^(?:[ \t]*>[ \t]?)+/.exec(line.content)?.[0] ?? '';
+    const bodyBom = line.start === bodyStart && line.content.startsWith('\uFEFF') ? 1 : 0;
+    const bodyLine = line.content.slice(bodyBom);
+    const quotePrefix = /^(?:[ \t]*>[ \t]?)+/.exec(bodyLine)?.[0] ?? '';
     const depth = (quotePrefix.match(/>/g) ?? []).length;
-    const content = line.content.slice(quotePrefix.length);
+    const content = bodyLine.slice(quotePrefix.length);
     const indent = /^ */.exec(content)[0].length;
     if (fence && content.trim() && (depth !== fence.depth || indent < fence.indent)) fence = null;
     if (fence) {
@@ -146,12 +148,12 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
         else containers.push({ content: marker[0].length });
       }
       const base = containers.at(-1)?.content ?? 0;
-      const offset = quotePrefix.length + (marker && containers.length ? marker[0].length : Math.min(base, indent));
+      const offset = bodyBom + quotePrefix.length + (marker && containers.length ? marker[0].length : Math.min(base, indent));
       contexts.set(line.start, offset);
       const remainder = line.content.slice(offset);
       const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(remainder);
       if (opening && visible[line.start + offset] && !(opening[1][0] === '`' && opening[2].includes('`'))) {
-        fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base };
+        fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base, line: ordinal + 1, newline: line.ending || document.newline };
         mask(line.start, line.end); continue;
       }
       if (indentation(remainder) >= 4) { mask(line.start, line.end); continue; }
@@ -304,7 +306,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
   return { tokens, issues, aliases: parseMarkdown(text).aliases, ...(visibility ? { visible, contexts, unclosedFence: fence } : {}) };
 }
 
-function inventoryIndex(names, notes) {
+export function inventoryIndex(names, notes) {
   const exact = new Set(names);
   const folded = new Map();
   const basenames = new Map();
