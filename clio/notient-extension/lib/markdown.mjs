@@ -32,10 +32,10 @@ export function replaceBody(bytes, oldText, newText) {
     offset = document.text.indexOf(oldText, offset);
     if (offset < 0) break;
     matches.push(offset);
-    if (matches.length > 1) refuse('QUOTE_AMBIGUOUS', 'The body contains more than one overlapping or separate occurrence. Quote a longer unique passage.');
+    if (matches.length > 1) refuse('QUOTE_AMBIGUOUS', 'occurs more than once; quote a longer contiguous passage identifying one occurrence');
     offset++;
   }
-  if (!matches.length) refuse('QUOTE_NOT_FOUND', 'oldText is not an exact supplied body quotation. Preserve punctuation and whitespace.');
+  if (!matches.length) refuse('QUOTE_NOT_FOUND', 'not an exact supplied quotation; copy a contiguous passage verbatim, preserving punctuation and whitespace');
   if (oldText === newText) return { bytes, splices: [] };
   const conventions = new Set(oldText.match(/\r?\n/g) ?? []);
   if (conventions.size > 1 && newText.includes('\n')) refuse('MIXED_NEWLINE_EDIT', 'A multiline replacement cannot choose a convention for a mixed-style matched span.');

@@ -57,6 +57,13 @@ test('a BOM without frontmatter stays outside the body and does not hide the fir
   assert.deepEqual(replaceBody(Buffer.from(text), 'Authored', 'Revised').bytes, Buffer.from('\uFEFF# Café\r\nRevised bytes.'));
 });
 
+test('R11 quotation refusals use the inherited wording verbatim', () => {
+  for (const [text, quote, message] of [
+    ['aaa', 'aa', 'occurs more than once; quote a longer contiguous passage identifying one occurrence'],
+    ['One.\n', 'one.', 'not an exact supplied quotation; copy a contiguous passage verbatim, preserving punctuation and whitespace'],
+  ]) assert.throws(() => replaceBody(Buffer.from(text), quote, 'Replacement'), error => error.message === message);
+});
+
 test('literal witness rejects missing, multiple, overlapping and frontmatter-only matches', () => {
   for (const [text, oldText, code] of [['aaa', 'aa', 'QUOTE_AMBIGUOUS'], ['same same', 'same', 'QUOTE_AMBIGUOUS'], ['body', 'missing', 'QUOTE_NOT_FOUND'], ['---\ntitle: phrase\n---\n', 'phrase', 'QUOTE_NOT_FOUND'], ['---\nunclosed', 'unclosed', 'FRONTMATTER_INVALID']]) {
     assert.throws(() => replaceBody(Buffer.from(text), oldText, 'new'), error => error.code === code);
