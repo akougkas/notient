@@ -1,6 +1,6 @@
 # Stage 6: dispatchable gardener, plans and digest
 
-Status: architecture for manager review; product questions are isolated in section 10.
+Status: approved stage 6 design; provisional manager decisions G1 through G4 are recorded in section 10.
 Scope: NOTIENT.md sections 2, 3, 7.3, 7.4 and B6 stage 6; extends the amended 02, 03 and 04 contracts.
 Prerequisites: accepted earlier stages and their real use, installed stage 4 tools, operator-selected vault and native Clio worker target. This document authorizes no installation, live write or timer activation.
 
@@ -147,6 +147,7 @@ Undo: one operation through extension_notient__undo; the executed receipt suppli
 
 ## 8. Hand runs, attended scheduling and systemd
 
+- Initial deployment is one fixture or own vault, hourly, using an operator-selected native target. No Vaultex enablement by default. This provisional G1 scope applies to both attended scheduling and the timer; the existing hand-run acceptance and explicit operator activation remain required.
 - Operator creates a stable workbench outside every vault and registers/installs the reviewed packages and schemas. Observe the installed recipe in `clio-coder agents --json`; restart sessions after command-schema changes. Resolve a native target from actual operator configuration. Never change provider credentials, permission policy, routing or registration to make a demonstration pass.
 - First dispatch by hand in the attended session: `Dispatch notient-gardener on vault <id>, using native target <target>, for one bounded unattended maintenance run. Do additive work only, propose structural work, and return the digest and receipts.` Calls must retain origin unattended despite the operator initiating the run. Use the same recipe and command contracts later.
 - Require at least three inspected hand runs on the live fixture: one useful additive change plus a structural proposal; one unchanged replay without duplicate work; one interrupted/refused run followed by reconciled receipts. Inspect every diff, raw byte hashes, audit line and Git delta. Operator executes one proposal via go and reverses both execution and garden batches separately. Then do a headless hand run before enabling any timer.
@@ -181,11 +182,11 @@ clio-coder run --agent notient-gardener --target <verified-native-target> --tool
 - Headless JSON must begin with `{type:"session",mode:"agent",agentId:"notient-gardener",schemaVersion,...}` and end with `{type:"receipt",receipt:{...}}`. Correlate native tool_execution_start/end pairs by toolCallId; decode gateway capability/args/details where wrapped. Require observed status, garden begin/settle/propose/finish as applicable, note/search evidence and revise preview/application receipts. Worker events are runtime-shaped; do not require main-agent turn_end fields or accept narrated calls.
 - Record Clio/Node versions, package/recipe digests, model/target/runtime, canonical workspace and vault ID, host run/loop job/systemd invocation IDs, start/end/exit, tool count, measured duration and reported cost or unknown. Join garden run/batch IDs to journal OIDs and raw plan/digest revisions. Inspect git log/show, monthly Notient/Log and unrelated staging before/after; verify bytes and zero unexpected paths.
 - For a run with no eligible work, record actual begin/finish results and counts; do not demand a fabricated note edit. For the useful-run acceptance require a real additive revision, a saved plan, an operator-go revision and their operator-requested undo. The dispatch receipt alone proves neither the note change nor correctness of the judgment.
-- Start on the registered live fixture. Vaultex retains B7's named-note/baseline constraints until the operator explicitly selects a wider gardener scope and quiescent files. No fixture or fault harness writes Vaultex. Timer activation follows the owner decision below; this design records no successful live run.
+- Start acceptance on the registered live fixture; the initial scheduled target may be that fixture or the own vault under provisional G1. Vaultex retains B7's named-note/baseline constraints until the operator explicitly selects a wider gardener scope and quiescent files. No fixture or fault harness writes Vaultex. Timer activation requires the operator's act after hand acceptance; this design records no successful live run.
 
-## 10. Product questions for the manager
+## 10. Provisional manager decisions
 
-- **G1, deployment:** after the three hand runs and one headless hand run, which vaults may be enabled, at what interval, and what spending limit applies? Recommend one fixture/own vault first, hourly, with operator-selected native inference; no default Vaultex enablement. Examples above do not activate a schedule.
-- **G2, metadata scope:** is the first unattended frontmatter surface limited to additive tags plus typed relations sufficient, or should designated additional keys be eligible? Recommend the bounded first surface. Broader keys need an explicit allowlist and rules that cannot encode archival or replace authored metadata; until decided they become proposals.
-- **G3, edited owned reports:** when an operator edits a plan/digest, should later automation remain stopped or offer explicit adoption? Recommend preserve and stop through this release. Any adoption must be a separate operator action binding the current revision, never inferred from content or a timer.
-- **G4, retention/capacity:** keep queue/run receipts and reports through this release, as journal/history already are, or approve a retention policy? Recommend retain with visible capacity refusal. No automatic history pruning or report replacement is enabled by this design.
+- **G1, deployment:** one fixture or own vault first, hourly, with an operator-selected native target; no Vaultex by default. Preserve the operator's configured Clio cost ceiling. Three inspected hand runs and one headless hand run precede scheduling; examples do not activate a schedule.
+- **G2, metadata scope:** use the bounded first surface in section 4: additive tags and typed relations, alongside the separately permitted link append. Additional frontmatter keys remain structural proposals; no broader unattended metadata authority is granted.
+- **G3, edited owned reports:** preserve and stop. An operator edit to a plan/digest blocks further automated publication to that document; retain the visible refusal and external run receipt. No automatic adoption, overwrite or alternate report path.
+- **G4, retention/capacity:** retain queue/run receipts and reports through the MVP, together with journal/history, and refuse visibly at the stated capacity bounds. No automatic history pruning or report replacement.
