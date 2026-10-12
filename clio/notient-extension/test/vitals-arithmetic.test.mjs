@@ -111,6 +111,15 @@ test('V11 comments are removed before link tokenization without exposing destina
   for (const text of ['- [la<!-- hidden -->bel](hidden.md)\n', '- [la<!-- hidden\ncontinued -->bel](hidden.md)\n']) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: 0, chunkCoverage: 0 }, text);
 });
 
+test('V16 displayed link text participates in the surrounding maximal visible word', () => {
+  for (const [text, words] of [
+    ['well-[known](T.md)\n', 1], ['un[known](T.md)\n', 1], ['[known](T.md)ness\n', 1],
+    ["don'[t](T.md)\n", 1], ['well-[[T|known]]\r\n', 1], ['un[known][id]\n\n[id]: T.md\n', 1],
+    ['pre[la<!-- hidden -->bel](T.md)post\n', 1], ['pre[la<!-- hidden\ncontinued -->bel](T.md)post\n', 1],
+    ['pre[label `hidden code`](T.md)post\n', 2], ['one [two](private/secret.md) three\n', 3],
+  ]) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words, chunkCoverage: 1 }, text);
+});
+
 test('V11 refresh backfills comment-filtered labels with exact visible evidence and unchanged vault bytes', t => {
   const f = writerFixture(t); const text = 'See [la<!-- hidden [[Fake]] #hidden -->bel `hidden code`](hidden(a(b)).md).\r\n';
   put(f, 'Source.md', text); const before = snapshot(f.vault.path); refreshIndex(f.vault, f.directory);
