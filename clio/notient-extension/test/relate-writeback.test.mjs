@@ -101,7 +101,7 @@ test('relations preserve multiline flow member comments including trailing comma
 
 test('relations refuse self absent and unsafe targets unsupported relations origins and value overflow', () => {
   for (const input of [{ target: 'Source.md', relation: 'supports' }, { target: '../Target.md', relation: 'supports' }, { target: 'Absent.md', relation: 'supports' }, { target: 'Target.md', relation: 'related_to' }, { target: 'Target.md', relation: 'supports', confidence: 1 }]) assert.throws(() => planRelate(scan('Body\n'), 'Source.md', input));
-  assert.throws(() => planRelate(scan('Body\n'), 'Source.md', { target: 'Target.md', relation: 'supports' }, { origin: 'clio' }), error => error.code === 'EMBEDDING_OFF');
+  assert.deepEqual(planRelate(scan('Body\n'), 'Source.md', { target: 'Target.md', relation: 'supports' }, { origin: 'clio' }).bytes, planRelate(scan('Body\n'), 'Source.md', { target: 'Target.md', relation: 'supports' }).bytes);
   const before = `---\nnotient: {supports: ["${'x'.repeat(4090)}"]}\n---\nBody\n`;
   assert.throws(() => planRelate(scan(before), 'Source.md', { target: 'Target.md', relation: 'supports' }), error => error.code === 'RELATION_LIMIT');
 });

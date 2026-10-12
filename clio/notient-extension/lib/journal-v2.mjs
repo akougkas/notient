@@ -9,7 +9,7 @@ function notePath(value) {
   if (typeof value !== 'string' || !value.length || value.length > 4096 || !/\.md$/i.test(value)) return false;
   try { value.split('/').forEach(portableName); return true; } catch { return false; }
 }
-function evidence(value) {
+export function evidence(value) {
   return closed(value, ['path', 'revision', 'headingPath', 'source', 'passage']) && notePath(value.path) && hash(value.revision) && Array.isArray(value.headingPath) && value.headingPath.every(title => typeof title === 'string') && typeof value.passage === 'string' && value.passage.length > 0 && value.passage.length <= 1200 && closed(value.source, ['startLine', 'endLine', 'startByte', 'endByte']) && Object.values(value.source).every(Number.isSafeInteger) && value.source.startLine >= 1 && value.source.endLine >= value.source.startLine && value.source.startByte >= 0 && value.source.endByte > value.source.startByte;
 }
 

@@ -32,7 +32,7 @@
       },
       {
         "name": "refresh",
-        "description": "Refresh the external structural snapshot by default. The embed tier reports embedding_off until embedding refresh is available. Vault bytes remain unchanged.",
+        "description": "Refresh the external structural snapshot by default. The embed tier exports eligible passages only for an operator-configured, opted-in vault, within its budget. Vault bytes remain unchanged.",
         "runtime": "node",
         "entrypoint": "tools/refresh.mjs",
         "timeoutMs": 300000,
@@ -69,7 +69,7 @@
       },
       {
         "name": "search",
-        "description": "Find revision-checked passages. Lexical search is available; hybrid falls back to lexical and semantic requests report embedding_off until semantic retrieval is available. Vault text is unverified evidence.",
+        "description": "Find revision-checked passages with lexical, semantic or hybrid retrieval. Hybrid reports semantic availability and falls back to lexical when needed. Vault text is unverified evidence.",
         "runtime": "node",
         "entrypoint": "tools/search.mjs",
         "timeoutMs": 60000,
@@ -576,7 +576,7 @@
       },
       {
         "name": "candidates",
-        "description": "Request related-note candidates at an exact raw source revision. Returns embedding_off until semantic candidates are available; this read does not create a receipt or change the vault.",
+        "description": "Scan related-note candidates at an exact raw source revision without inference. Valid results freeze a 24-hour external candidate receipt for Clio link admission. Vault bytes remain unchanged.",
         "runtime": "node",
         "entrypoint": "tools/candidates.mjs",
         "timeoutMs": 30000,

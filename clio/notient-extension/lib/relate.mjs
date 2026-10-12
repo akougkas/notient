@@ -166,7 +166,7 @@ export function relationSpans(bytes) {
 export function planRelate(scan, source, input, { origin = 'operator' } = {}) {
   if (!input || Object.keys(input).some(key => !['target', 'relation'].includes(key)) || !relations.includes(input.relation)) refuse('INVALID_INPUT', 'Supply one target and one of the five distinct relation names.');
   validateTargetPath(input.target);
-  if (!['operator', 'unattended'].includes(origin)) refuse('EMBEDDING_OFF', 'Clio relationship writes are unavailable until stage 4b.');
+  if (!['operator', 'unattended', 'clio'].includes(origin)) refuse('INVALID_INPUT', 'A declared relationship origin is required.');
   const context = referenceContext(scan, source);
   const spelling = wikiSpelling(context, source, input.target);
   const before = context.current.bytes;

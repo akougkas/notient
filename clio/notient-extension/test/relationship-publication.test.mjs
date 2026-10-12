@@ -179,7 +179,7 @@ test('legacy pending recovery stays version one and own authority relaxes only u
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, role: 'own', readOnly: true }] });
   assert.equal(writeOperation('revise', request(f, 'relate', 'readonly-relation'), options(f)).error.code, 'READ_ONLY_VAULT');
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [f.vault] });
-  assert.equal(writeOperation('revise', request(f, 'link', 'clio-admission-off', { authorization: { origin: 'clio', request: 'Add the relationship.' } }), options(f)).error.code, 'EMBEDDING_OFF');
+  assert.equal(writeOperation('revise', request(f, 'link', 'clio-admission-off', { authorization: { origin: 'clio', request: 'Add the relationship.' } }), options(f)).error.code, 'CANDIDATE_STALE');
 });
 
 test('capture frontmatter move replace and aggregate inverse freeze edit ages for every changed note', t => {

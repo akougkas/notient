@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { indexPath } from './config.mjs';
 import { listNotes } from './vault.mjs';
 import { readNote, revision, currentFile } from './paths.mjs';
@@ -33,11 +34,12 @@ export function unavailableFts5Coverage() {
   return { state: 'unknown', indexing: { state: 'unavailable', reason: 'fts5_unavailable' }, message: unknownCoverageMessage };
 }
 
-export function openIndex(directory, vault, writable = false) {
+export function openIndex(directory, vault, writable = false, { immutable = false } = {}) {
   const filename = indexPath(directory, vault);
   if (!writable && !existsSync(filename)) return null;
   if (writable) mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(filename, { readOnly: !writable });
+  if (immutable && writable) throw new Error('Immutable index reads cannot be writable.');
+  const db = new DatabaseSync(immutable ? `${pathToFileURL(filename).href}?immutable=1` : filename, { readOnly: !writable });
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
     const version = db.prepare('PRAGMA user_version').get().user_version;

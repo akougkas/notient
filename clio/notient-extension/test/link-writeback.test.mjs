@@ -156,7 +156,7 @@ test('link admission validates all edges before writing and refuses unsafe synta
   const inventory = scan('Unchanged source.\n'); const before = inventory.notes.map(note => Buffer.from(note.bytes));
   const bad = [[], Array(5).fill(edge), [edge, edge], [{ ...edge, rationale: ' ' }], [{ ...edge, rationale: 'x'.repeat(241) }], [{ ...edge, targetNotePath: 'Source.md' }], [{ ...edge, targetNotePath: '../Target.md' }], [{ ...edge, targetNotePath: 'Absent.md' }], [{ ...edge, heading: 'Absent' }], [{ ...edge, heading: 'Part', block: 'block-id' }], [{ ...edge, heading: 'Part]]\nInjected' }], [{ ...edge, confidence: 1 }]];
   for (const edges of bad) assert.throws(() => planLink(inventory, 'Source.md', edges));
-  assert.throws(() => planLink(inventory, 'Source.md', [edge], { origin: 'clio' }), error => error.code === 'EMBEDDING_OFF');
+  assert.throws(() => planLink(inventory, 'Source.md', [edge], { origin: 'clio' }), error => error.code === 'CANDIDATE_STALE');
   assert.equal(planLink(inventory, 'Source.md', [{ ...edge, rationale: 'x'.repeat(240) }], { origin: 'unattended' }).link.admitted[0].basis, 'unattended');
   assert.deepEqual(inventory.notes.map(note => note.bytes), before);
   for (const text of ['## Related\r\n\r\n- [[Other]]\r\nNext\n', 'Bare\rCR', '> ```\n> unfinished\n', '- Item\n  ```\n  unfinished\n']) assert.throws(() => planLink(scan(text), 'Source.md', [edge]), error => ['MIXED_NEWLINE_EDIT', 'UNSAFE_FENCE', 'AMBIGUOUS_REFERENCE'].includes(error.code));

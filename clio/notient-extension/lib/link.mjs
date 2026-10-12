@@ -48,12 +48,16 @@ function visibleHeading(line, bodyStart, visible) {
   return { level: match[1].length, title: match[2], line, atx: true };
 }
 
-export function requireAnchor(note, edge) {
+export function validateQualifier(edge, name) {
   for (const key of ['heading', 'block']) if (edge[key] !== undefined) {
     validText(edge[key], key);
-    if (!edge[key].trim() || edge[key].length > (key === 'heading' ? 200 : 80) || /[\[\]|#\r\n]/.test(edge[key]) || key === 'heading' && /[*`<>\\]/.test(edge[key]) || key === 'block' && !/^[A-Za-z0-9_-]+$/.test(edge[key])) refuse('INVALID_QUALIFIER', 'Use one safe plain heading or block identifier.', [note.path]);
+    if (!edge[key].trim() || edge[key].length > (key === 'heading' ? 200 : 80) || /[\[\]|#\r\n]/.test(edge[key]) || key === 'heading' && /[*`<>\\]/.test(edge[key]) || key === 'block' && !/^[A-Za-z0-9_-]+$/.test(edge[key])) refuse('INVALID_QUALIFIER', 'Use one safe plain heading or block identifier.', [name]);
   }
-  if (edge.heading !== undefined && edge.block !== undefined) refuse('INVALID_QUALIFIER', 'Heading and block qualifiers are mutually exclusive.', [note.path]);
+  if (edge.heading !== undefined && edge.block !== undefined) refuse('INVALID_QUALIFIER', 'Heading and block qualifiers are mutually exclusive.', [name]);
+}
+
+export function requireAnchor(note, edge) {
+  validateQualifier(edge, note.path);
   if (edge.heading === undefined && edge.block === undefined) return;
   const document = documentSpans(note.bytes);
   const tokenized = tokenizeMove(note.bytes, { visibility: true });
@@ -154,20 +158,31 @@ function insertion(layout, bullets, hadTerminal, source) {
   return { offset: anchor.end, replacement };
 }
 
-export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
+export function validateLinkEdges(source, edges, origin = 'operator') {
   if (!['operator', 'unattended', 'clio'].includes(origin) || !Array.isArray(edges) || edges.length < 1 || edges.length > 4) refuse('INVALID_INPUT', 'Supply one to four relationship edges with a declared origin.');
   const seen = new Set();
   for (const edge of edges) {
     if (!edge || Object.keys(edge).some(key => !['targetNotePath', 'rationale', 'heading', 'block'].includes(key))) refuse('INVALID_INPUT', 'Relationship edges have closed fields.');
     validateTargetPath(edge.targetNotePath); validText(edge.rationale, 'Rationale');
     if (!edge.rationale.trim() || edge.rationale.length > 240) refuse('INVALID_RATIONALE', 'A rationale must contain 1 to 240 nonblank characters.');
-    if (seen.has(edge.targetNotePath)) refuse('DUPLICATE_TARGET', 'Duplicate relationship targets are refused.', [edge.targetNotePath]);
-    seen.add(edge.targetNotePath);
+    validateQualifier(edge, edge.targetNotePath);
+    const identity = portableFold(edge.targetNotePath);
+    if (seen.has(identity)) refuse('DUPLICATE_TARGET', 'Duplicate relationship targets are refused.', [edge.targetNotePath]);
+    seen.add(identity);
     if (edge.targetNotePath === source) refuse('SELF_LINK', 'A relationship must name another note.', [source]);
   }
-  if (origin === 'clio') refuse('EMBEDDING_OFF', 'Clio candidate admission is unavailable until stage 4b.');
+}
+
+export function planLink(scan, source, edges, { origin = 'operator', admission } = {}) {
+  validateLinkEdges(source, edges, origin);
+  if (origin === 'clio' && !admission) refuse('CANDIDATE_STALE', 'Clio link planning requires a verified live candidate receipt.');
+  const chosen = origin === 'clio' ? edges.filter(edge => admission.link.admitted.some(value => value.targetNotePath === edge.targetNotePath)) : edges;
   const context = referenceContext(scan, source);
-  const rendered = edges.map(edge => {
+  const link = origin === 'clio' ? admission.link : { admitted: edges.map(edge => ({ targetNotePath: edge.targetNotePath, relation: 'related_to', confidence: null, basis: origin, rationale: edge.rationale })), dropped: [], candidateSet: null };
+  const evidence = origin === 'clio' ? admission.semanticEvidence : null;
+  const result = { link, semanticEvidence: evidence, reads: context.reads, inventory: context.inventory };
+  if (!chosen.length) return { bytes: context.current.bytes, splices: [], ...result };
+  const rendered = chosen.map(edge => {
     const spelling = wikiSpelling(context, source, edge.targetNotePath);
     requireAnchor(context.notes.find(note => note.path === edge.targetNotePath), edge);
     return { edge, bullet: `- [[${spelling}${fragment(edge)}]]` };
@@ -177,8 +192,7 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
   let layout = sectionLayout(before, source);
   if (layout.tokenized.issues.length) refuse('AMBIGUOUS_REFERENCE', `Source context is uncertain: ${JSON.stringify(layout.tokenized.issues)}`, [source]);
   const needed = rendered.filter(({ edge }) => !hasReference(layout, source, edge.targetNotePath, fragment(edge), context.index));
-  const link = { admitted: edges.map(edge => ({ targetNotePath: edge.targetNotePath, relation: 'related_to', confidence: null, basis: origin, rationale: edge.rationale })), dropped: [], candidateSet: null };
-  if (!needed.length) return { bytes: before, splices: [], link, reads: context.reads, inventory: context.inventory };
+  if (!needed.length) return { bytes: before, splices: [], ...result };
   const hadTerminal = before.toString('utf8').endsWith('\n');
   let closing = '';
   const fence = layout.tokenized.unclosedFence;
@@ -202,5 +216,5 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
   const after = applySplices(before, splices);
   const checked = sectionLayout(after, source);
   if (rendered.some(({ edge }) => !hasReference(checked, source, edge.targetNotePath, fragment(edge), context.index))) refuse('AMBIGUOUS_REFERENCE', 'The rendered relationships do not parse as live references.', [source]);
-  return { bytes: after, splices, link, reads: context.reads, inventory: context.inventory };
+  return { bytes: after, splices, ...result };
 }

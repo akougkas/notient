@@ -12,6 +12,7 @@ import { scanMoveVault, planMove, moveInventory, guardInverseReferences } from '
 import { simulateUndo, certifyCancellation, hydrateOperation } from './undo.mjs';
 import { captureDocument, captureBodyHash, captureReviewBytes, captureReceipt } from './capture.mjs';
 import { planLink } from './link.mjs';
+import { admitClioLink } from './link-admission.mjs';
 import { planRelate } from './relate.mjs';
 import { freezeEditAges } from './vitals-write.mjs';
 import { inverseOrigins } from './vitals-index.mjs';
@@ -609,8 +610,9 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input, budget); files = inverse.files; }
   else {
     const current = currentFile(vault.path, input.path);
-    if (current.revision === null) refuse('NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
-    if (current.revision !== input.revision) refuse('REVISION_CONFLICT', 'The note changed since its read revision.', [input.path], true);
+    const semanticLink = input.operation === 'link' && input.authorization.origin === 'clio';
+    if (current.revision === null) refuse(semanticLink ? 'CANDIDATE_STALE' : 'NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
+    if (current.revision !== input.revision) refuse(semanticLink ? 'CANDIDATE_STALE' : 'REVISION_CONFLICT', 'The note changed since its read revision.', [input.path], true);
     if (input.operation === 'move') {
       if (vault.role === 'operator' && input.authorization.origin === 'unattended') refuse('UNATTENDED_REFUSED', 'Unattended moves in operator vaults are refused.', [input.path, input.destination]);
       writePath(vault.path, input.destination);
@@ -618,7 +620,8 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
       if (!move.ok) refuse(move.blockers.some(blocker => blocker.code === 'AUDIT_LINK_BLOCKER') ? 'AUDIT_LINK_BLOCKER' : move.blockers[0].code, `${move.blockerCount} move blockers: ${JSON.stringify(move.blockers)}`, move.blockers.map(blocker => blocker.path));
       files = move.files;
     } else {
-      const edited = input.operation === 'link' || input.operation === 'relate' ? (relationship = input.operation === 'link' ? planLink(scanMoveVault(vault.path), input.path, input.link.edges, { origin: input.authorization.origin }) : planRelate(scanMoveVault(vault.path), input.path, input.relate, { origin: input.authorization.origin })) : input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
+      const admission = input.operation === 'link' && input.authorization.origin === 'clio' ? admitClioLink(vault, directory, input, { at: Date.parse(createdAt) }) : undefined;
+      const edited = input.operation === 'link' || input.operation === 'relate' ? (relationship = input.operation === 'link' ? planLink(scanMoveVault(vault.path), input.path, input.link.edges, { origin: input.authorization.origin, admission }) : planRelate(scanMoveVault(vault.path), input.path, input.relate, { origin: input.authorization.origin })) : input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
       if (relationship && !relationship.reads.some(read => read.path === input.path && read.revision === input.revision)) refuse('REVISION_CONFLICT', 'The source changed during the fresh relationship scan.', [input.path], true);
       if (edited.bytes.length > MAX_NOTE_BYTES) refuse('NOTE_TOO_LARGE', 'The result exceeds 4 MiB.', [input.path]);
       files = [{ path: input.path, role: 'note', before: current.bytes, after: edited.bytes, mode: current.mode, splices: edited.splices }];
@@ -642,7 +645,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   const inventoryHash = inverse?.inventoryHash ?? (move || relationship ? revision(canonicalJson((move ?? relationship).inventory)) : null);
   const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: null, vitalsBefore, vitalsFallbackPaths, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
+  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: relationship?.semanticEvidence ?? null, vitalsBefore, vitalsFallbackPaths, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -750,6 +753,10 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
         adapter.consume(plan.id, plan.timings.gitMs);
         const journalStarted = performance.now();
+        if (plan.semanticEvidence) {
+          const admission = admitClioLink(vault, directory, input);
+          if (canonicalJson(admission.semanticEvidence) !== canonicalJson(plan.semanticEvidence) || canonicalJson(admission.link) !== canonicalJson(plan.link)) refuse('CANDIDATE_STALE', 'The semantic admission changed before intent; retrieve candidates again.', [], true);
+        }
         record = persistPlan(vault, directory, plan, options.sync);
         record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
         const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
