@@ -196,12 +196,15 @@ export function createGitAdapter(vault, directory) {
       catch (error) { if (this.recognize(record)) return; refuse('GIT_HEAD_CHANGED', `Git refused the expected-old-OID ref publication: ${error.message}`, [], true); }
       if (!this.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'The candidate commit was not verified as published.', [], true);
     },
-    reconcileIndex(record) {
+    reconcileIndex(record, { barrier = () => {} } = {}) {
       const state = gitState(root, (target, args, options) => run(record, args, options));
       if (state.ref !== record.git.ref) refuse('COMMITTED_INDEX_CONFLICT', 'The branch changed before index reconciliation.');
       for (const file of record.files) if (!matches(state.index.entries.get(file.path), record, file, file.before) && !matches(state.index.entries.get(file.path), record, file, file.after)) refuse('COMMITTED_INDEX_CONFLICT', 'An affected entry changed independently after publication.', [file.path]);
-      const until = performance.now() + 2000;
+      let until = null;
       for (const file of record.files) {
+        const live = normalIndexEntries(root, (target, args, options) => run(record, args, options)).entries.get(file.path);
+        if (matches(live, record, file, file.after)) continue;
+        if (!matches(live, record, file, file.before)) refuse('COMMITTED_INDEX_CONFLICT', 'An affected stage-zero entry changed before its repair.', [file.path]);
         const oid = file.after === null ? null : object(record, file.after);
         for (let attempt = 0; ; attempt++) {
           try {
@@ -210,10 +213,12 @@ export function createGitAdapter(vault, directory) {
           } catch (error) {
             const locked = /index\.lock.*(?:exists|File exists)|Unable to create .*index\.lock/is.test(error.stderr?.toString() ?? error.message);
             if (!locked) throw error;
+            until ??= performance.now() + 2000;
             if (attempt >= 3 || performance.now() + [100, 250, 500][attempt] >= until) return false;
             wait([100, 250, 500][attempt]);
           }
         }
+        barrier('duringIndex', record, file);
       }
       const current = normalIndexEntries(root, (target, args, options) => run(record, args, options));
       for (const file of record.files) if (!matches(current.entries.get(file.path), record, file, file.after)) refuse('COMMITTED_INDEX_CONFLICT', 'A planned stage-zero entry failed verification.', [file.path]);

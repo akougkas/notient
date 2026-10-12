@@ -8,3 +8,4 @@ import './fault.test.mjs';
 import './move.test.mjs';
 import './move-publication.test.mjs';
 import './batch-undo.test.mjs';
+import './structural-fault.test.mjs';

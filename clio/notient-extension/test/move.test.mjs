@@ -88,6 +88,23 @@ test('move preserves single-quoted YAML scalar escaping and exact byte ranges', 
   assert.equal(after(plan, 'From.md'), "---\nrelated: '[[O''Brien|display]]'\n---\n");
 });
 
+test('move ignores blockquoted fences and indented code while retaining later visible links', () => {
+  const source = '> ~~~~md\n> [[One]]\n> ~~~~\n>     [[One]]\n> ```md\n> [[One]]\n# Outside the quote\n[[One]]\n';
+  const plan = planMove(scan({ 'One.md': 'Source', 'From.md': source }), 'One.md', 'Two.md');
+  assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+  assert.equal(after(plan, 'From.md'), source.replace('# Outside the quote\n[[One]]', '# Outside the quote\n[[Two]]'));
+});
+
+test('move refuses alias-only discovery with case or normalization alternatives', () => {
+  const source = '---\naliases: [Café]\n---\nSource';
+  for (const target of ['CAFÉ', 'Cafe\u0301']) {
+    const plan = planMove(scan({ 'One.md': source, 'From.md': `[[${target}]]` }), 'One.md', 'Two.md');
+    assert.equal(plan.ok, false);
+    assert.match(plan.blockers[0].reason, /Alias-only/);
+    assert.deepEqual(plan.files, []);
+  }
+});
+
 test('move refuses affected folded YAML, malformed encoding, case collisions, and managed history', () => {
   for (const [values, code] of [
     [{ 'From.md': '---\nrelated: >\n  [[One]]\n---\n' }, 'AMBIGUOUS_REFERENCE'],

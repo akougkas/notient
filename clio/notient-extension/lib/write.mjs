@@ -38,7 +38,7 @@ export function freshAuthority(vault, directory, record) {
 
 export function classifyFiles(vault, record) {
   return record.files.map(file => {
-    const current = currentFile(vault.path, file.path);
+    const current = currentFile(vault.path, file.path, { raw: true });
     return { file, current, state: current.revision === file.after ? 'after' : current.revision === file.before ? 'before' : 'conflict' };
   });
 }
@@ -72,30 +72,40 @@ export function prepareSiblings(vault, directory, record, sync = syncDirectory) 
   }
 }
 
-export function applyRecord(vault, directory, record, { observe = () => {}, sync = syncDirectory, deadline = Infinity } = {}) {
+export function applyRecord(vault, directory, record, { observe = () => {}, barrier = () => {}, sync = syncDirectory, deadline = Infinity } = {}) {
   for (const name of record.applyOrder) {
     if (performance.now() > deadline) refuse('WRITE_TIMEOUT', 'The cooperative write deadline expired.', [], true);
     const file = record.files.find(candidate => candidate.path === name);
-    let current = currentFile(vault.path, name);
+    if (record.intentSet) freshAuthority(vault, directory, record);
+    let current = currentFile(vault.path, name, { raw: true });
     if (current.revision === file.after) { markFileApplied(directory, vault, record, file); file.progress = 'applied'; continue; }
     if (current.revision !== file.before) refuse('REVISION_CONFLICT', 'The file no longer matches its planned revision.', [name], true);
     ensureVaultParents(vault, record, file, sync);
     const filename = writePath(vault.path, name);
     claimFileIntent(directory, vault, record, file);
     observe('beforeRecheck', record, file);
-    const checked = currentFile(vault.path, name);
+    const checked = currentFile(vault.path, name, { raw: true });
     if (checked.revision !== file.before || (current.stat && (checked.stat?.ino !== current.stat.ino || checked.stat?.dev !== current.stat.dev))) refuse('REVISION_CONFLICT', 'The file changed before its final publication check.', [name], true);
     observe('afterRecheck', record, file);
     if (file.action === 'delete') unlinkSync(filename);
     else if (file.action === 'replace') renameSync(path.join(vault.path, file.temp), filename);
     else {
       const fd = openSync(filename, 'wx', file.mode);
-      try { fchmodSync(fd, file.mode); writeFileSync(fd, readBlob(directory, vault, record.id, file.after)); fsyncSync(fd); }
+      try {
+        fchmodSync(fd, file.mode);
+        const bytes = readBlob(directory, vault, record.id, file.after);
+        const split = Math.ceil(bytes.length / 2);
+        writeFileSync(fd, bytes.subarray(0, split));
+        barrier('duringCreate', record, file);
+        writeFileSync(fd, bytes.subarray(split));
+        fsyncSync(fd);
+      }
       finally { closeSync(fd); }
     }
     sync(path.dirname(filename));
+    if (record.intentSet) barrier('afterMovePath', record, file);
     observe('afterFilePublish', record, file);
-    current = currentFile(vault.path, name);
+    current = currentFile(vault.path, name, { raw: true });
     if (current.revision !== file.after) refuse('REVISION_CONFLICT', 'The published file changed before verification.', [name], true);
     markFileApplied(directory, vault, record, file);
     file.progress = 'applied';
@@ -118,7 +128,12 @@ export function cleanupSiblings(vault, record, sync = syncDirectory) {
 }
 
 function checkDependencies(vault, record) {
-  for (const read of record.reads) if ((record.intentSet ? readNote(vault.path, read.path) : currentFile(vault.path, read.path)).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+  for (const read of record.reads) {
+    let actual;
+    try { actual = (record.intentSet ? readNote(vault.path, read.path) : currentFile(vault.path, read.path)).revision; }
+    catch { refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency is no longer readable.', [read.path]); }
+    if (actual !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+  }
   if (!record.inventoryHash) return;
   const names = new Set(record.intentSet ? moveInventory(vault.path) : listNotes(vault.path).notes.map(note => note.path));
   for (const file of record.files) { if (file.before === null) names.delete(file.path); else names.add(file.path); }
@@ -165,7 +180,7 @@ export function persistPlan(vault, directory, plan, sync = syncDirectory) {
 export function finishRecord(vault, directory, record, adapter, options = {}) {
   if (!adapter) refuse('GIT_UNAVAILABLE', 'The Git write adapter is required.');
   const sync = name => { const supported = (options.sync ?? syncDirectory)(name); if (!supported) record.durability = 'directory-sync-unavailable'; return supported; };
-  prepareFileIntents(directory, vault, record, record.intentSet && record.files.every(file => currentFile(vault.path, file.path).revision === file.before));
+  prepareFileIntents(directory, vault, record, record.intentSet && record.files.every(file => currentFile(vault.path, file.path, { raw: true }).revision === file.before));
   const intents = record.intentSet ? readFileIntents(directory, vault, record) : null;
   const published = adapter.recognize(record);
   const states = published ? [] : classifyFiles(vault, record);
@@ -191,8 +206,9 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
       }
       throw error;
     }
-    if (!record.git.commit) { adapter.prepare(record); saveRecord(directory, vault, record, sync); }
+    if (!record.git.commit) { adapter.prepare(record); saveRecord(directory, vault, record, sync); options.barrier?.('afterCandidate', record); }
     prepareSiblings(vault, directory, record, sync);
+    if (record.intentSet) freshAuthority(vault, directory, record);
     const first = states.find(item => item.state === 'before');
     if (first) claimFileIntent(directory, vault, record, first.file);
     options.barrier?.('afterIntent', record);
@@ -202,6 +218,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     record.timings.applyMs += performance.now() - started;
     saveRecord(directory, vault, record, sync);
     options.barrier?.('afterPublish', record);
+    options.barrier?.('afterAllAfterBytes', record);
     const afterStates = classifyFiles(vault, record);
     if (afterStates.some(item => item.state !== 'after')) refuse('REVISION_CONFLICT', 'A file changed after publication and before the Git ref.', afterStates.filter(item => item.state !== 'after').map(item => item.file.path), true);
     checkDependencies(vault, record);
@@ -214,12 +231,13 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     if (original.undoneBy && original.undoneBy !== record.id) refuse('UNDO_CONFLICT', 'The original operation was already undone by another operation.');
     if (original.undoneBy !== record.id) { original.undoneBy = record.id; saveRecord(directory, vault, original, sync); }
   }
-  const installed = record.git.indexInstalled || adapter.reconcileIndex(record);
+  const installed = record.git.indexInstalled || adapter.reconcileIndex(record, { barrier: options.barrier });
   record.git.indexInstalled = installed;
   record.indexState = 'pending';
   if (installed) {
     record.state = 'committed'; record.conflicts = []; record.error = null;
     saveRecord(directory, vault, record, sync);
+    options.barrier?.('afterCommitted', record);
     cleanupSiblings(vault, record, sync);
     try { if (repairCommittedIndex(vault, directory, record)) record.indexState = 'updated'; }
     catch (error) { record.error = { code: 'INDEX_REPAIR_PENDING', message: error.message }; }
@@ -234,17 +252,18 @@ export function recoverPending(vault, directory, adapter, options = {}) {
   const pending = records.filter(record => !['committed', 'aborted'].includes(record.state) || (record.state === 'committed' && record.indexState === 'pending'));
   const limit = Math.max(0, Math.min(20, options.limit ?? 20));
   for (const record of pending.slice(0, limit)) {
+    const recoveryStarted = performance.now();
     if (performance.now() > (options.deadline ?? Infinity)) {
-      results.push({ operationId: record.id, result: 'WRITE_TIMEOUT', commit: record.git.commit, conflicts: [], error: 'The cooperative recovery deadline expired.' });
+      results.push({ operationId: record.id, result: 'WRITE_TIMEOUT', commit: record.git.commit, conflicts: [], elapsedMs: performance.now() - recoveryStarted, error: 'The cooperative recovery deadline expired.' });
       break;
     }
     try {
       freshAuthority(vault, directory, record);
-      results.push(finishRecord(vault, directory, record, adapter, options));
+      results.push({ ...finishRecord(vault, directory, record, adapter, options), elapsedMs: performance.now() - recoveryStarted });
     } catch (error) {
       let commit = null;
       try { if (adapter.recognize(record)) commit = record.git.commit; } catch {}
-      results.push({ operationId: record.id, result: error.code ?? 'RECOVERY_ERROR', commit, conflicts: record.conflicts.map(conflict => ({ path: conflict.path, reason: conflict.reason })), error: error.message });
+      results.push({ operationId: record.id, result: error.code ?? 'RECOVERY_ERROR', commit, conflicts: record.conflicts.map(conflict => ({ path: conflict.path, reason: conflict.reason })), elapsedMs: performance.now() - recoveryStarted, error: error.message });
       break;
     }
     if (results.at(-1).result === 'conflict_preserved') break;

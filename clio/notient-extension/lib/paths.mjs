@@ -51,7 +51,7 @@ export function writePath(root, relative) {
   return current;
 }
 
-export function currentFile(root, relative) {
+export function currentFile(root, relative, { raw = false } = {}) {
   const filename = writePath(root, relative);
   let fd;
   try { fd = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -63,8 +63,10 @@ export function currentFile(root, relative) {
     const after = fstatSync(fd);
     const live = lstatSync(filename);
     if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || live.dev !== before.dev || live.ino !== before.ino) refuse('REVISION_CONFLICT', 'The file changed during its read.', [relative], true);
-    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { refuse('INVALID_UTF8', 'The note is not valid UTF-8.', [relative]); }
-    if (bytes.includes(0)) refuse('INVALID_UTF8', 'The note contains NUL.', [relative]);
+    if (!raw) {
+      try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { refuse('INVALID_UTF8', 'The note is not valid UTF-8.', [relative]); }
+      if (bytes.includes(0)) refuse('INVALID_UTF8', 'The note contains NUL.', [relative]);
+    }
     return { bytes, revision: revision(bytes), stat: after, mode: after.mode & 0o777 };
   } finally { closeSync(fd); }
 }

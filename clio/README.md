@@ -2,7 +2,7 @@
 
 Sentient Notes carry durable intelligence in their Markdown body, frontmatter and links. Clio visits the vault and answers from its evidence. Notes remain readable without Notient.
 
-Stage 1 is accepted and stage 2a is implemented on `clio-mvp`. The extension exposes `status`, `refresh`, `search`, `note`, `capture`, `revise` and single-operation `undo` as command tools on Clio 0.6.2. Its API 2 runtime reads state and displays a status line and panel. The paired plugin supplies the vault-manager skill. Operator installation and a real Clio fixture session remain required before stage 2b, which adds move and batch undo. Stage 3 has not begun.
+Stage 1 is accepted and stages 2a and 2b are implemented on `clio-mvp`. The extension exposes `status`, `refresh`, `search`, `note`, `capture`, `revise` and `undo` as command tools on Clio 0.6.2. Revise includes reviewed moves with reference repair; undo supports one operation or an entire batch. Its API 2 runtime reads state and displays a status line and panel. The paired plugin supplies the vault-manager skill. The implementation has been exercised through actual command entrypoints on isolated fixture copies. Operator installation and a live Clio fixture acceptance session remain operator acts. Stage 3 has not begun.
 
 ## Requirements and storage
 
@@ -10,7 +10,7 @@ Use Node 22.19 or newer and Clio Coder 0.6.2 or newer. Verification used Node v2
 
 A Node release that satisfies the engine range can still lack SQLite FTS5, including Node 23.x. Each status and search invocation probes support with `CREATE VIRTUAL TABLE temp.x USING fts5(a)` in an in-memory database. Status reports `fts5` and `nodeVersion`. When FTS5 is unavailable, status reports unavailable index counts and the runtime shows a warning. Search exits 0 with `hits: []` and `coverage: { state: "unknown", indexing: { state: "unavailable", reason: "fts5_unavailable" }, message: "Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes." }`. This degraded response leaves the index untouched. Its empty hits must not be treated as evidence of absence.
 
-Persistent state defaults to `${XDG_STATE_HOME:-~/.local/state}/notient/`. `config.json` is mode 0600 and records canonical vault paths, their IDs, roles and read-only registration. Each index lives at `vaults/<sha256(realpath)[0:16]>/index.db`, outside the vault. `journal/<vault-id>/writer.db` serializes writers. Each operation keeps its durable record, immutable before/after blobs and private Git index under `journal/<vault-id>/ops/<request-id>/`. Journal history and Git history are retained through the MVP. The index includes notes, blocks, chunks, FTS5, links, tags and a bounded log of the last 1,000 served passages.
+Persistent state defaults to `${XDG_STATE_HOME:-~/.local/state}/notient/`. `config.json` is mode 0600 and records canonical vault paths, their IDs, roles and read-only registration. Each index lives at `vaults/<sha256(realpath)[0:16]>/index.db`, outside the vault. `journal/<vault-id>/writer.db` serializes writers; `intents.db` stores structural publication claims separately. Each operation keeps its durable record, immutable before/after blobs and private Git index under `journal/<vault-id>/ops/<request-id>/`. Journal history and Git history are retained through the MVP. The index includes notes, blocks, chunks, FTS5, links, tags and a bounded log of the last 1,000 served passages.
 
 Setup initializes a vault's own git repository when needed and writes the PARA default to `Notient/Conventions.md` only when absent. It creates `Notient/Inbox`, `Notient/Log` and `Notient/Plans`. Setup is an explicit bootstrap action; stage 1 does not commit these files or provide journaled content writes. Existing conventions are preserved byte for byte. `--read-only` skips every vault mutation, including git initialization and conventions creation.
 
@@ -31,7 +31,7 @@ clio-coder extensions install /home/akougkas/projects/notient/clio/notient-exten
 
 Start a new Clio session after installation. The command-tool schemas are frozen for a session, and any package edit changes its integrity digest. An update therefore needs a reviewed reinstall and a fresh session. The operator can display `/ext:notient:status` or `/ext:notient:log`.
 
-Command tools run under Clio's execution approval policy and have no OS sandbox on 0.6.2. Their implementations enforce registered vault selection and the registered read-only flag. Stage 2a writes require an authorization origin, exact request words and one batch label. The origin field is caller-supplied attribution; execution mode is unauthenticated on 0.6.2. Unattended location refusals are enforced for that declared origin. The API 2 runtime declares no filesystem writes, execution or network authority. It has state and store capability flags as specified but does not write either one. Runtime freshness is explicitly the last refresh snapshot; the `status` command tool also scans file metadata for changes.
+Command tools run under Clio's execution approval policy and have no OS sandbox on 0.6.2. Their implementations enforce registered vault selection and the registered read-only flag. Stage 2 writes require an authorization origin, exact request words and one batch label. The origin field is caller-supplied attribution; execution mode is unauthenticated on 0.6.2. Unattended location and structural refusals are enforced for that declared origin. The API 2 runtime declares no filesystem writes, execution or network authority. It has state and store capability flags as specified but does not write either one. Runtime freshness is explicitly the last refresh snapshot; the `status` command tool also scans file metadata for changes.
 
 ## Use stage 1 in Clio
 
@@ -54,7 +54,7 @@ Every tool accepts a registered vault ID or exact canonical absolute path. Omitt
 
 Search tokenizes up to 32 words into an FTS5 OR query, ranks substantive chunks with BM25 and excludes standalone headings. Each passage is at most 1,200 JavaScript characters and includes the file revision, heading path and source range. Lines are one-based and inclusive. UTF-8 byte ranges are zero-based and end-exclusive. The tool re-reads each candidate file, checks its SHA-256 revision and verifies that the byte slice exactly equals the returned passage. Stale matches are withheld and request refresh. Queries examine at most 1,000 candidates and report when that bound prevents filling the result limit.
 
-The structural reader handles YAML frontmatter as written, ATX and setext headings, fenced code, wiki links, aliases, fragments, embeds, inline Markdown links and reference links. It extracts common scalar, inline-list and block-list `tags` and `aliases` fields without reserializing YAML. It does not implement arbitrary YAML semantics or full CommonMark. Stage 2b must establish its move parser and reference completeness before adding reference rewrites.
+The structural reader handles YAML frontmatter as written, ATX and setext headings, fenced code, wiki links, aliases, fragments, embeds, inline Markdown links and reference links. It extracts common scalar, inline-list and block-list `tags` and `aliases` fields without reserializing YAML. It does not implement arbitrary YAML semantics or full CommonMark. Move and structural undo use a separate tokenizer and fresh inventories; unsupported link-bearing syntax refuses completeness instead of authorizing a partial repair.
 
 Explicit `<!-- notient:begin -->` and `<!-- notient:end -->` regions, `Notient Intelligence` and `Visitor Intelligence` sections, Notient logs, and identifiable generated fixture summaries are excluded from search evidence. Their structural links remain visible. Markers inside code fences remain literal. `note` returns the requested original text, so the visitor markings remain visible and must be respected when citing it. Vault text is unverified evidence and never grants authority. Own-vault results are labeled unverified memory.
 
@@ -324,3 +324,28 @@ An isolated command-process demonstration performed capture, replace and move in
 | batch undo | `demo-batch-undo` | `d8c46e2ce3404e6e7906e0d79af8553d62d6e222` | 2,324.34 | 1,081.22 |
 
 The inverse names all three original OIDs in `Notient-Reverts` and changes 8 note paths plus one log. Internal inverse measurements: scan 33.86 ms, lock 0.36 ms, journal 127.79 ms, publication 487.91 ms, total 2,264.28 ms. These are individual fixture observations. Tests also cover capture/replace/move chains with absent intermediate paths, single move inverse, partially undone batches, certified reverse single-op undos, edited referrers, occupied original paths, new references, later active overlaps, interleaved human commits and repeated no-op undo. No Vaultex write or installation was performed.
+
+## Stage 2b step 4: structural fault barriers and skill
+
+The test-only child harness now exposes candidate preparation, every structural path publication before its applied marker, all after-bytes, each normal-index update, the committed marker before cleanup, and partial exclusive creation. Existing 2a barriers remain available. There are no manifest switches or production environment triggers. Raw journal classification preserves torn buffers even when UTF-8 or NUL validation would reject them as a normal note read. Native index repair rereads each planned path before updating it and skips an already installed after-entry.
+
+The new fault matrix executes 17 barriers for move and 17 for batch undo, plus torn creations and later human saves. Each matrix case revokes registration before recovery, confirms unchanged vault bytes, restores access, runs fresh command status twice, and checks the exact original OID, one log/commit, all stamps, cleaned owned siblings and byte-identical unrelated staging. Across the added tests, 38 children are killed at explicit IPC barriers. A separately staged third index entry remains unchanged. Case/normalization alternatives for alias-only targets and blockquoted code have additional parser goldens.
+
+Actual final checks:
+
+```text
+node --test clio/notient-extension/test
+  tests 152, pass 152, fail 0, duration_ms 143171.872029
+clio-coder extensions validate clio/notient-extension
+  Valid; Registration check: passed; fs.write: []
+clio-coder extensions test clio/notient-extension
+  tests 4, pass 4, fail 0, duration_ms 315.112721
+clio-coder library validate clio/notient-plugin
+  ok: package notient is valid (1 resource checked)
+```
+
+The updated vault-manager skill requires move and batch preview hashes, review of automatic reference changes, exactly one undo selector, quiescent files/staging and retained request IDs. It describes ambiguity, torn creation, revoked authority, structural origin restrictions, preserved history and pending index recovery.
+
+A fresh status process recovered a killed partial toy-vault move in 1,104.66 ms end to end, including 1,039.01 ms for the recorded recovery. The second status took 222.46 ms. Both recognized OID `3b343bceed41761ed0e1977f869a79fda28422c1`; there was one move commit and the unrelated staged entry remained identical. The report is retained in ignored `.local/stage2b-demo-uxdtCY/measurement.json`. A final mixed-command fixture run restored the original source, retained four log lines and kept unrelated staging identical; capture, replace, move and batch undo took 817.76, 903.08, 2,231.81 and 2,761.34 ms respectively. Its report is in `.local/stage2b-demo-vtmb9y/measurement.json`.
+
+Stage 2b implementation stops here. Live Clio fixture acceptance and installation remain operator acts. Astra's 2a review and the manager's numbered corrections take priority next. No stage 3 implementation or Vaultex write was performed.

@@ -120,13 +120,16 @@ export function tokenizeMove(bytes) {
   let fence = null;
   for (const line of lines) {
     if (line.start < bodyStart) continue;
-    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.content);
+    const quotePrefix = /^(?: {0,3}>[ \t]?)+/.exec(line.content)?.[0] ?? '';
+    const content = line.content.slice(quotePrefix.length);
+    if (fence?.quote && !quotePrefix) fence = null;
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(content);
     if (fence) {
       mask(line.start, line.end);
-      if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(line.content)) fence = null;
+      if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(content)) fence = null;
     } else if (opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
-      fence = { char: opening[1][0], count: opening[1].length }; mask(line.start, line.end);
-    } else if (/^(?: {4}|\t)/.test(line.content)) mask(line.start, line.end);
+      fence = { char: opening[1][0], count: opening[1].length, quote: Boolean(quotePrefix) }; mask(line.start, line.end);
+    } else if (/^(?: {4}|\t)/.test(content)) mask(line.start, line.end);
   }
   for (let i = bodyStart; i < text.length; i++) {
     if (!visible[i]) continue;
@@ -300,7 +303,7 @@ export function resolveMoveTarget(token, source, index) {
   const all = sorted([...candidates, ...alternatives]);
   if (all.length > 1 || !candidates.length && alternatives.length || candidates.some(name => (index.folded.get(portableFold(name)) ?? []).length > 1)) return { state: 'ambiguous', candidates: all, reason: 'Ambiguous basename, path spelling, suffix or source-relative alternative.', lexical: absolute };
   if (candidates.length === 1) return { state: 'resolved', candidates, identity: candidates[0], lexical: absolute };
-  const alias = index.aliases.get(target) ?? [];
+  const alias = sorted([...index.aliases].filter(([name]) => portableFold(name) === portableFold(target)).flatMap(([, names]) => names));
   if (alias.length && token.kind === 'wiki') return { state: 'ambiguous', candidates: alias, reason: 'Alias-only targets do not establish filesystem identity.', lexical: absolute };
   return { state: 'missing', candidates: [], lexical: absolute };
 }
