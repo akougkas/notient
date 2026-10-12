@@ -69,6 +69,17 @@ test('V8 missing relation follows the complete kept block-scalar sibling includi
   check(before, before.replace('\n\n---', '\n\n  supports: ["[[Target]]"]\n---'));
 });
 
+test('V9 implicit null containers without colon padding initialize valid indented YAML', () => {
+  for (const newline of ['\n', '\r\n']) for (const bom of ['', '\uFEFF']) {
+    const before = `${bom}---${newline}notient:${newline}tags: [keep]${newline}---${newline}Body without terminal newline`;
+    const expected = before.replace(`notient:${newline}`, `notient:${newline}  supports: ["[[Target]]"]${newline}`);
+    check(before, expected);
+    const nested = `${bom}---${newline}notient:${newline}  supports:${newline}  sibling: kept${newline}---${newline}Body without terminal newline`;
+    const nestedExpected = nested.replace(`  supports:${newline}`, `  supports:${newline}    - "[[Target]]"${newline}`);
+    check(nested, nestedExpected);
+  }
+});
+
 test('relations append to block and flow containers while preserving order nested siblings and single quotes', () => {
   const before = "---\nnotient: {supports: ['unmatched', '[[Earlier]]'], extra: {deep: [1, 2]}, text: 'Don''t change'}\n---\nBody.\n";
   check(before, before.replace("'[[Earlier]]']", "'[[Earlier]]', \"[[Target]]\"]"));

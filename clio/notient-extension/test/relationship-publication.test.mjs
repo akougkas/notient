@@ -94,6 +94,14 @@ test('coordinator W20 relation alias noop and W21 wrong-type refusal preserve ev
   }
 });
 
+test('V9 empty-colon map and relation list publish valid YAML and undo exact buffers', t => {
+  for (const [index, before] of ['---\r\nnotient:\r\n---\r\nBody.\r\n', '---\nnotient:\n  supports:\n  sibling: kept\n---\nBody.\n'].entries()) {
+    const f = fixture(t, before); const result = writeOperation('revise', request(f, 'relate', `implicit-null-${index}`), options(f)); assert.equal(result.ok, true, JSON.stringify(result));
+    assert.match(bytes(f).toString(), index === 0 ? /notient:\r\n  supports: \["\[\[Target\]\]"\]/ : /supports:\n    - "\[\[Target\]\]"\n  sibling: kept/);
+    const inverse = writeOperation('undo', { vault: f.vault.id, requestId: `implicit-inverse-${index}`, batch: 'inverses', authorization, opId: result.operationId }, options(f)); assert.equal(inverse.ok, true, JSON.stringify(inverse)); assert.deepEqual(bytes(f), Buffer.from(before));
+  }
+});
+
 test('relationship dependencies and structural hashes bind target bytes and inventory while attribution stays outside', t => {
   const f = fixture(t, 'Body.\n'); const input = request(f, 'link', 'relationship-hash-one');
   const preview = writeOperation('revise', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));

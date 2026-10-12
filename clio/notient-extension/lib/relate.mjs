@@ -182,7 +182,10 @@ export function planRelate(scan, source, input, { origin = 'operator' } = {}) {
   const spans = yamlSpans(document, field);
   const root = spans.root;
   const changes = [];
-  if (root.type === 'null') changes.push({ start: root.start, end: root.end, replacement: `{${JSON.stringify(input.relation)}: [${quoted}]}${document.text[root.end] === '#' ? ' ' : ''}` });
+  if (root.type === 'null') {
+    const implicit = root.start === root.end && /[\r\n]/.test(document.text[root.start]);
+    changes.push({ start: root.start, end: root.end, replacement: implicit ? `${localNewline(document, root.line)}  ${input.relation}: [${quoted}]` : `{${JSON.stringify(input.relation)}: [${quoted}]}${document.text[root.end] === '#' ? ' ' : ''}` });
+  }
   else {
     if (root.type !== 'map') refuse('RELATION_TYPE', 'Frontmatter notient must be a map or null.');
     const relation = root.properties.get(input.relation);
@@ -192,7 +195,10 @@ export function planRelate(scan, source, input, { origin = 'operator' } = {}) {
         const newline = localNewline(document, root.lastLine);
         changes.push({ start: root.lastLine.end, end: root.lastLine.end, replacement: `${root.lastLine.ending ? '' : newline}${' '.repeat(root.indent)}${input.relation}: [${quoted}]${newline}` });
       }
-    } else if (relation.type === 'null') changes.push({ start: relation.start, end: relation.end, replacement: `[${quoted}]${document.text[relation.end] === '#' ? ' ' : ''}` });
+    } else if (relation.type === 'null') {
+      const implicit = relation.start === relation.end && /[\r\n]/.test(document.text[relation.start]);
+      changes.push({ start: relation.start, end: relation.end, replacement: implicit ? `${localNewline(document, relation.line)}${' '.repeat(spans.indent(relation.line) + 2)}- ${quoted}` : `[${quoted}]${document.text[relation.end] === '#' ? ' ' : ''}` });
+    }
     else {
       if (relation.type !== 'list' || relation.items.some(item => item.type !== 'string')) refuse('RELATION_TYPE', 'A relation must be a string list or null.');
       const matching = relation.items.some(item => {
