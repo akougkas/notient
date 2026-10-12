@@ -9,10 +9,11 @@ import { readBlob } from './journal.mjs';
 import { parseMarkdown, resolveLink, sourceRange } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 import { provenanceWorkspace } from './capture.mjs';
-import { migrateIndex, indexVersion } from './index-schema.mjs';
+import { migrateIndex, indexVersion, graphRule } from './index-schema.mjs';
 import { proseMetrics } from './vitals.mjs';
 import { storedVitals, installVitals } from './vitals-index.mjs';
 import { tokenizeMove, inventoryIndex, resolveMoveTarget } from './move.mjs';
+import { relationSpans } from './relate.mjs';
 
 export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
 
@@ -103,7 +104,8 @@ function sameStat(record, stat) {
 function snapshotLinks(bytes, parsed) {
   const tokenized = tokenizeMove(bytes, { visibility: true });
   const text = bytes.toString('utf8');
-  const wiki = tokenized.tokens.filter(token => token.kind === 'wiki' && !token.unsafe).map(token => ({ kind: 'wiki', target: token.target, fragment: token.fragment ? token.fragment.slice(1) : null, alias: token.alias, embed: token.embed, source: sourceRange(text, text.lastIndexOf('[[', token.start), token.finish) }));
+  const typed = relationSpans(bytes);
+  const wiki = tokenized.tokens.filter(token => token.kind === 'wiki' && !token.unsafe).map(token => ({ kind: 'wiki', target: token.yamlQuote === "'" ? token.target.replaceAll("''", "'") : token.target, fragment: token.fragment ? token.fragment.slice(1) : null, alias: token.alias, embed: token.embed, source: sourceRange(text, text.lastIndexOf('[[', token.start), token.finish), ...(typed.find(span => span.start <= token.start && span.end >= token.finish) ? { relation: typed.find(span => span.start <= token.start && span.end >= token.finish).relation } : {}) }));
   return { links: [...parsed.links.filter(link => link.kind !== 'wiki'), ...wiki], metrics: proseMetrics(bytes, parsed, tokenized), issues: tokenized.issues.length + tokenized.tokens.filter(token => token.unsafe).length };
 }
 
@@ -128,7 +130,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     const priorVitals = storedVitals(db);
     const metrics = new Map();
     const graphIssues = new Map(Object.entries(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')));
-    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== 'exact-wiki-v2';
+    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule;
     const rebuild = db.prepare("SELECT value FROM meta WHERE key='vitalsInitialized'").get()?.value !== '1';
     const previous = new Map(db.prepare('SELECT n.*, w.path AS workspaceIndexed FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path').all().map(row => [row.path, row]));
     const present = new Set(scan.notes.map(note => note.path));
@@ -190,7 +192,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('indexGeneration', ?)").run(String(Number(db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get()?.value ?? 0) + 1));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('structuralErrors', ?)").run(JSON.stringify({ skipped: scan.skipped.length, errors: errors.length }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphIssuePaths', ?)").run(JSON.stringify(Object.fromEntries(graphIssues)));
-    db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', 'exact-wiki-v2')").run();
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', ?)").run(graphRule);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
     db.exec('COMMIT');

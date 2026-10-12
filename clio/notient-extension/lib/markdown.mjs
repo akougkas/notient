@@ -49,7 +49,7 @@ export function replaceBody(bytes, oldText, newText) {
   return { bytes: Buffer.concat([bytes.subarray(0, startByte), Buffer.from(newText), bytes.subarray(endByte)]), splices: [{ startByte, endByte, replacement: newText }] };
 }
 
-function yamlKey(raw) {
+export function yamlKey(raw) {
   if (raw.startsWith('"')) { try { const key = JSON.parse(raw); if (typeof key === 'string') return key; } catch {} }
   else if (raw.startsWith("'")) { if (raw.endsWith("'")) return raw.slice(1, -1).replaceAll("''", "'"); }
   else if (/^[\p{L}\p{N}_][\p{L}\p{N}_ .-]*$/u.test(raw)) return raw;
@@ -102,7 +102,7 @@ function yamlLex(text, allowOpen = false) {
   return allowOpen ? { comment, open: Boolean(quote || flow.length) } : comment;
 }
 
-function headerParts(line) {
+export function headerParts(line) {
   const match = /^((?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^:#]+?))([ \t]*:[ \t]*)(.*)$/.exec(line.content);
   if (!match || /^\s|^[-?]|^<</.test(match[1]) || (match[3] && !/[ \t]$/.test(match[2]))) refuse('FRONTMATTER_UNSUPPORTED', 'A top-level mapping boundary is ambiguous.');
   return { key: yamlKey(match[1].trim()), prefix: match[1] + match[2], value: match[3] };
