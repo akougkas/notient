@@ -87,7 +87,7 @@ function convention(document, anchors = []) {
   return crlf === lf ? document.newline : crlf > lf ? '\r\n' : '\n';
 }
 
-function insertion(layout, bullets, hadTerminal) {
+function insertion(layout, bullets, hadTerminal, source) {
   const { document, related, end, headings, tokenized } = layout;
   if (!related) {
     const newline = convention(document, document.lines.slice(-2));
@@ -103,17 +103,33 @@ function insertion(layout, bullets, hadTerminal) {
   if (listAt >= 0) {
     list = true;
     const marker = /^ *(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(lines[listAt].content)[0];
-    const base = marker.length;
+    let base = marker.length;
+    let separated = false;
+    let paragraph = false;
+    let nested = false;
+    const blockStart = content => /^(?:#{1,6}[ \t]+|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-+*][ \t]+|\d{1,9}[.)][ \t]+|<|%%|\$\$)/.test(content.trimStart());
     for (const line of lines.slice(listAt)) {
-      if (!line.content.trim()) continue;
-      if (!/^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.test(line.content) && /^ */.exec(line.content)[0].length < base) break;
+      if (!line.content.trim()) { separated = true; continue; }
+      const live = line.content.split('').some((char, offset) => /\S/.test(char) && tokenized.visible[line.start + offset]);
+      const markerCandidate = live ? /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(line.content) : null;
+      const nextMarker = markerCandidate && /^ */.exec(line.content)[0].length < base ? markerCandidate : null;
+      if (markerCandidate && !nextMarker) nested = true;
+      if (!nextMarker && /^ */.exec(line.content)[0].length < base) {
+        if (separated || /^(?:#{1,6}[ \t]+|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$)/.test(line.content.trimStart())) break;
+        if (!paragraph || !live || blockStart(line.content)) refuse('AMBIGUOUS_REFERENCE', `A list continuation on line ${document.lines.findIndex(value => value.start === line.start) + 1} has uncertain container context.`, [source]);
+      }
+      if (nextMarker) { base = nextMarker[0].length; nested = false; }
+      const content = nextMarker ? line.content.slice(base) : line.content;
+      paragraph = live && !nested && Boolean(content.trim()) && !blockStart(content);
+      separated = false;
       anchor = line;
     }
   } else {
     for (const line of lines) if (line.content.trim() && line.content.split('').some((char, i) => /\S/.test(char) && tokenized.visible[line.start + i])) anchor = line;
   }
   const next = document.lines.find(line => line.start === anchor.end);
-  const newline = convention(document, [anchor, next]);
+  const previous = list ? document.lines[document.lines.findIndex(line => line.start === anchor.start) - 1] : null;
+  const newline = convention(document, [previous, anchor, next]);
   const atEnd = anchor.end === document.text.length;
   let replacement = `${anchor.ending ? '' : newline}${list ? '' : newline}${bullets.join(newline)}`;
   if (!atEnd || hadTerminal) replacement += newline;
@@ -156,7 +172,7 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
     layout = sectionLayout(Buffer.concat([before, Buffer.from(closing)]));
   }
   const afterNeeded = needed.filter(({ edge }) => !hasReference(layout, source, edge.targetNotePath, fragment(edge), context.index));
-  const insert = afterNeeded.length ? insertion(layout, afterNeeded.map(item => item.bullet), hadTerminal) : null;
+  const insert = afterNeeded.length ? insertion(layout, afterNeeded.map(item => item.bullet), hadTerminal, source) : null;
   const splices = [];
   if (insert && insert.offset >= before.toString('utf8').length) {
     const offset = insert.offset - before.toString('utf8').length;

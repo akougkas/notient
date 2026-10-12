@@ -32,6 +32,23 @@ export const goldens = [
   ['W24 present before later unclosed fence', '## Related\n\n- [[Target]]\n\n```\nunfinished', '## Related\n\n- [[Target]]\n\n```\nunfinished'],
 ];
 
+test('V5 first-list insertion follows unindented lazy paragraph continuations without changing attachment', () => {
+  for (const newline of ['\n', '\r\n']) for (const terminal of [false, true]) {
+    const before = ['## Related', '', '- Existing item', 'continued authored prose', 'another continuation'].join(newline) + (terminal ? newline : '');
+    const plan = planLink(scan(before), 'Source.md', [edge]);
+    const expected = before + (terminal ? '' : newline) + '- [[Target]]' + (terminal ? newline : '');
+    assert.deepEqual(plan.bytes, Buffer.from(expected)); assert.deepEqual(applySplices(Buffer.from(before), plan.splices), plan.bytes);
+  }
+  const before = '## Related\n\n1. Existing item\ncontinued authored prose\n\nOutside prose.\n';
+  assert.equal(planLink(scan(before), 'Source.md', [edge]).bytes.toString(), '## Related\n\n1. Existing item\ncontinued authored prose\n- [[Target]]\n\nOutside prose.\n');
+});
+
+test('V5 uncertain nested container continuation refuses with its source line and unchanged bytes', () => {
+  const before = '## Related\n\n- First item\n  - Nested item\nuncertain continuation\n'; const inventory = scan(before);
+  assert.throws(() => planLink(inventory, 'Source.md', [edge]), error => error.code === 'AMBIGUOUS_REFERENCE' && /line 5/.test(error.message) && error.paths.includes('Source.md'));
+  assert.deepEqual(inventory.notes[0].bytes, Buffer.from(before));
+});
+
 for (const [name, before, expected] of goldens) test(`link writeback ${name}`, () => {
   const inventory = scan(before); const plan = planLink(inventory, 'Source.md', [edge]);
   assert.deepEqual(plan.bytes, Buffer.from(expected)); assert.deepEqual(applySplices(Buffer.from(before), plan.splices), plan.bytes);
