@@ -409,3 +409,33 @@ Stage 3 piece 1 reuses operator-only `setup.mjs --create-own` and the shared own
 Stage 3 piece 2 adds two read-only API 2 hooks with 250 ms timeouts and pass on timeout/error. Orientation checks at most 64 KiB of registration metadata and emits the exact 475-character model reminder at turn start. Grounding filters the full search/note names and emits the exact 397-character annotation after the first qualifying call, including a failed call. Independent `ctx.state` flags use conditional versions with at most two attempts, survive resumed state, and defer without a session. Cancellation and state errors pass; a successful stamp followed by a crash can omit the advisory as specified in 03. The Clio test host admits both effect kinds and tests eight competing callbacks per hook. Runtime tests changed from four passing and five failing to nine passing in 285.568 ms. The combined state/abort and stage 1 run passed 22 tests in 795.919 ms; validation passed. Live effect delivery and fresh cross-repository sessions still require reviewed operator reinstallation.
 
 Stage 3 piece 3 adds readable memory fixtures and protocol goldens over the existing tools. The fixture protocol uses canonical body Source tuples, checks a unique final append marker and the 16,000-character body bound, and prepares exact replace quotations. It adds no command schema or second writer. Independent LF/CRLF append and correction files verify earlier byte preservation. Cases cover known/unknown sessions, multiple observed fixture IDs, same-day headings, session-independent dedup, changed-content collisions, duplicate markers/tuples, skipped and interrupted summary refresh, body acceptance with pending normal/search indexes, batch undo, Markdown index rebuild from another fixture workspace, and malicious prose returned as unverified inert evidence. The targeted run passed 18 tests in 12,098.618 ms; five strengthened document goldens passed in 2,075.035 ms. Validation and nine runtime tests passed; the merged plugin validates with two resources. These are fixture observations; live task-bank recall, installed hook delivery and the actual A/B session check remain operator acceptance work.
+
+The third manager review fixes T1 through T9 follow the stage 3 fixture commit. Replacement fallback retains the dominant file convention by manager decision.
+
+| Group | Commit | Targeted passing tests | Duration ms |
+| --- | --- | ---: | ---: |
+| T1 | 21c0f491 | 49 | 3,662.130 |
+| T2 | c620c0be | 50 | 3,581.138 |
+| T3 | 222d97de | 46 | 40,811.452 |
+| T4 | dcd9bbbc | 23 | 21,348.593 |
+| T5 | ec8ecb40 | 68 | 40,411.231 |
+| T6 | 6ecda5ae | 52 | 23,380.832 |
+| T7 | 32474a0b | 25 | 24,272.844 |
+| T8 | 1fe34ee8 | 31 | 4,323.300 |
+| T9 | 134f378d | 32 | 4,405.475 |
+
+Every group has a regression that failed before its fix. T1 counts tab columns, honors backslash parity and ends inline spans at blank paragraphs; uncertain container/block boundaries refuse. T2 refuses unsupported escaped labels and internal character-reference/backslash destinations with source lines in both move directions. T3 checks the live executable mode against the Git baseline before undo intent. T4 follows a capture's subsequent active moves through first-parent commit order and stops at path ownership replacement, rather than trusting timestamps or matching an earlier source path. T5 shares one 60-second Git allowance across preflight, capture lineage and all original/inverse verification; it carries preliminary preflight cost into locked planning and checks the remaining allowance before durable intent. The deadline tests advance an injected clock while running actual Git calls, so their simulated 60-second totals are enforcement evidence, not latency measurements.
+
+T6 always writes `created_by: clio` and keeps authorization origin in journal/audit/Git attribution. T7 refuses non-string tag items while preserving quoted strings. T8 filters on the workspace frontmatter property alone, exactly and case-sensitively, with old workspace-cache values invalidated for backfill. T9 matches the frozen schema and semantic validator at 255 characters. Extension validation passed after every group. The latest runtime check passed nine tests in 323.104 ms, and plugin validation reported two resources.
+
+After T1 through T9, the complete Node run passed 232 tests, zero failures, in 216,687.468 ms. The stage 3 setup, state and memory cases are included. The earlier stage 3 run, before this review, passed 219 tests in 193,062.749 ms. All source changes are committed separately by piece/group; stage 3 implementation is ready for operator acceptance.
+
+Operator setup and installation from this checkout remain explicit operator acts. Setup creates/registers the shared own vault, bootstraps conventions, and updates the exact runtime read roots; run it outside an AI_AGENT environment. Review the source envelope after setup, then install the plugin and replace the extension to admit both hooks and the corrected search bound:
+
+```sh
+node /home/akougkas/projects/notient/clio/notient-extension/bin/setup.mjs --create-own
+clio-coder library install /home/akougkas/projects/notient/clio/notient-plugin
+clio-coder extensions install /home/akougkas/projects/notient/clio/notient-extension --user --force
+```
+
+These commands have not been executed against the operator's installation or real own vault. Astra's skill changes were merged verbatim. The live check in design 03 section 7 remains pending: authorized real repositories A and B, fresh Clio sessions, actual nonsecret task-bank entry IDs, a confirmed own-vault body commit, hook delivery receipts, a later current search/note citation, tuple retry and an observed correction. The command fixture using a different workspace proves library/command behavior, not actual task-bank recall or model grounding. No Vaultex writes, installation, private-memory-file reads, embeddings or stage 4 implementation occurred.
