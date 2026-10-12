@@ -157,7 +157,6 @@ export function createGitAdapter(vault, directory) {
     recognize(record) {
       if (!record.git.commit) return false;
       const state = gitState(root, (target, args, options) => run(record, args, options));
-      if (state.ref !== record.git.ref) refuse('GIT_HEAD_CHANGED', 'The vault branch changed while an operation was pending.');
       verify(record);
       try { run(record, ['merge-base', '--is-ancestor', record.git.commit, record.git.ref]); return true; }
       catch (error) { if (error.status === 1 || error.status === 128) return false; throw error; }

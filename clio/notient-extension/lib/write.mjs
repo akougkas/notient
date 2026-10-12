@@ -34,6 +34,7 @@ export function freshAuthority(vault, directory, record) {
   const selected = selectVault(vault.id, directory);
   if (selected.path !== vault.path) refuse('RECOVERY_BLOCKED_AUTHORIZATION', 'The registered vault root changed.');
   requireAuthority(selected, record.authorization, record.files, { recovery: true });
+  requireAuthority({ ...selected, role: record.roleAtIntent ?? selected.role }, record.authorization, record.files, { recovery: true });
   if ((selected.role === 'operator' || record.roleAtIntent === 'operator') && record.authorization.origin === 'unattended' && (record.operation === 'move' || record.undo.targets.some(id => readRecord(directory, vault, id).operation === 'move'))) refuse('RECOVERY_BLOCKED_AUTHORIZATION', 'Unattended structural work cannot be recovered in an operator vault.');
 }
 
@@ -95,6 +96,7 @@ export function applyRecord(vault, directory, record, { observe = () => {}, barr
     const checked = currentFile(vault.path, name, { raw: true });
     if (checked.revision !== file.before || (current.stat && (checked.stat?.ino !== current.stat.ino || checked.stat?.dev !== current.stat.dev))) refuse('REVISION_CONFLICT', 'The file changed before its final publication check.', [name], true);
     observe('afterRecheck', record, file);
+    freshAuthority(vault, directory, record);
     if (file.action === 'delete') unlinkSync(filename);
     else if (file.action === 'replace') renameSync(path.join(vault.path, file.temp), filename);
     else {
@@ -235,6 +237,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     const afterStates = classifyFiles(vault, record);
     if (afterStates.some(item => item.state !== 'after')) refuse('REVISION_CONFLICT', 'A file changed after publication and before the Git ref.', afterStates.filter(item => item.state !== 'after').map(item => item.file.path), true);
     checkDependencies(vault, record);
+    freshAuthority(vault, directory, record);
     adapter.publish(record);
     saveRecord(directory, vault, record, sync);
     options.barrier?.('afterRef', record);
@@ -297,6 +300,9 @@ export function recoverPending(vault, directory, adapter, options = {}) {
 export function coordinatePlan(vault, directory, buildPlan, { adapter, ...options } = {}) {
   const started = performance.now();
   return withWriterLock(directory, vault, lockWaitMs => {
+    const current = selectVault(vault.id, directory);
+    if (current.path !== vault.path) refuse('VAULT_CHANGED', 'The registered vault root changed while waiting for the writer lock.');
+    vault = current;
     const recovery = recoverPending(vault, directory, adapter, options);
     if (recovery.results.some(result => result.result === 'conflict_preserved' || result.error) || recovery.blocking.length) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents a new write.');
     const plan = buildPlan();
@@ -670,6 +676,11 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
     }
     return withWriterLock(directory, vault, lockWaitMs => {
       try {
+        options.barrier?.('afterWriterLock', null);
+        const current = selectVault(vault.id, directory);
+        if (current.path !== vault.path) refuse('VAULT_CHANGED', 'The registered vault root changed while waiting for the writer lock.');
+        vault = current;
+        requireAuthority(vault, input.authorization, []);
         existing();
         adapter = createGitAdapter(vault, directory);
         const recovered = recoverPending(vault, directory, adapter, { deadline: started + 240000, ...options });
