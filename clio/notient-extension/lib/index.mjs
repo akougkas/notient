@@ -122,7 +122,7 @@ export function refreshIndex(vault, directory, options = {}) {
   return withIndexWriter(vault, directory, () => refreshLocked(vault, directory, options));
 }
 
-function refreshLocked(vault, directory, { force = false, now = () => Date.now() } = {}) {
+function refreshLocked(vault, directory, { force = false, now = () => Date.now(), maxChanged = Infinity, budgetMs = Infinity, promotionEpoch, promotionLimit = Infinity } = {}) {
   const started = performance.now();
   const scan = listNotes(vault.path);
   const db = openIndex(directory, vault, true);
@@ -132,6 +132,7 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
   let deleted = 0;
   let hashed = 0;
   const errors = [];
+  let remaining = 0; let cursor = null;
   try {
     db.exec('BEGIN IMMEDIATE');
     const priorVitals = storedVitals(db);
@@ -147,12 +148,14 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     for (const entry of scan.notes) {
       const old = previous.get(entry.path);
       if (!force && !rebuildGraph && old?.workspaceIndexed && priorVitals.get(entry.path)?.revision === old.revision && sameStat(old, entry.stat)) { unchanged++; continue; }
+      if (hashed >= maxChanged || performance.now() - started >= budgetMs) { remaining++; continue; }
       let content;
       let parsed;
       let structural;
       try {
         content = readNote(vault.path, entry.path);
         hashed++;
+        cursor = entry.path;
         if (old?.revision === content.revision && !rebuildGraph) {
           if (priorVitals.get(entry.path)?.revision !== content.revision) {
             const structural = snapshotLinks(content.bytes, parseMarkdown(content.text, entry.path));
@@ -195,7 +198,8 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
       }
     }
     const completedAt = new Date().toISOString();
-    installVitals(db, vault, directory, priorVitals, metrics, computedAt, { advance: true, rebuild });
+    const promoted = installVitals(db, vault, directory, priorVitals, metrics, computedAt, { advance: true, rebuild, promotionEpoch, promotionLimit });
+    if (promotionEpoch) db.prepare("INSERT OR REPLACE INTO meta VALUES ('gardenScan',?)").run(JSON.stringify({ runId: promotionEpoch, cursor, remaining }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('indexGeneration', ?)").run(String(Number(db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get()?.value ?? 0) + 1));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('structuralErrors', ?)").run(JSON.stringify({ skipped: scan.skipped.length, errors: errors.length }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphIssuePaths', ?)").run(JSON.stringify(Object.fromEntries(graphIssues)));
@@ -204,7 +208,7 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
     db.exec('COMMIT');
-    return { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, durationMs: Math.round((performance.now() - started) * 100) / 100 };
+    return { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, ...(promotionEpoch ? { cursor, remaining, promoted } : {}), durationMs: Math.round((performance.now() - started) * 100) / 100 };
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK');
     throw error;

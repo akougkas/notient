@@ -36,7 +36,11 @@ export function ensureDirectories(directory, sync = syncDirectory) {
     if (lstatSync(current).isSymbolicLink() || !lstatSync(current).isDirectory()) refuse('UNSAFE_STATE', 'State directory ancestors cannot be symbolic links.');
     if (path.dirname(current) === current) break;
   }
-  for (const name of missing) { mkdirSync(name, { mode: 0o700 }); sync(name); sync(path.dirname(name)); }
+  for (const name of missing) {
+    try { mkdirSync(name, { mode: 0o700 }); }
+    catch (error) { if (error.code !== 'EEXIST' || !lstatSync(name).isDirectory() || lstatSync(name).isSymbolicLink()) throw error; }
+    sync(name); sync(path.dirname(name));
+  }
 }
 
 export function durableFile(filename, bytes, { exclusive = true, mode = 0o600, sync = syncDirectory } = {}) {

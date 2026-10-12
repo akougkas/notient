@@ -612,6 +612,103 @@
             }
           }
         }
+      },
+      {
+        "name": "garden",
+        "description": "Begin bounded unattended maintenance, settle leased reviews and publish constrained plan or digest reports. No scheduler or model call.",
+        "runtime": "node",
+        "entrypoint": "tools/garden.mjs",
+        "timeoutMs": 300000,
+        "maxOutputBytes": 1048576,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "begin",
+                "settle",
+                "propose",
+                "finish"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 48
+            },
+            "request": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "leaseToken": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "deferred",
+                "failed"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "operationIds": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 64
+              }
+            },
+            "findingJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 8000
+            },
+            "proposalsJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 24000
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 6,
+              "maxLength": 64
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "planHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "vault",
+            "action"
+          ],
+          "additionalProperties": false
+        }
       }
     ]
   },

@@ -79,7 +79,7 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
   return result;
 }
 
-export function installVitals(db, vault, directory, previous, metrics, now, { advance = false, rebuild = false, record = null } = {}) {
+export function installVitals(db, vault, directory, previous, metrics, now, { advance = false, rebuild = false, record = null, promotionEpoch, promotionLimit = Infinity } = {}) {
   const rows = db.prepare('SELECT path,revision,mtime FROM notes').all();
   const missing = rows.filter(row => previous.get(row.path)?.revision !== row.revision && !record?.files.some(file => file.role === 'note' && file.path === row.path && file.after === row.revision));
   const recovered = recoverEditAges(vault, directory, missing, now);
@@ -87,6 +87,10 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
   const put = db.prepare('INSERT OR REPLACE INTO note_vitals VALUES (?,?,?,?,?,?)');
   const inverse = record?.operation === 'undo' ? inverseOrigins(record, file => { const value = previous.get(file.path); return value?.revision === file.before ? value : undefined; }, record.undo.targets.map(id => readRecord(directory, vault, id, false))) : new Map();
   const fallback = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name)));
+  const epoch = JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get()?.value ?? 'null');
+  const advanced = new Set(epoch && epoch.runId === promotionEpoch ? epoch.paths : []);
+  const selected = new Set(rows.filter(row => !advanced.has(row.path)).sort((a, b) => (metrics.get(b.path)?.words ?? previous.get(b.path)?.word_count ?? 0) - (metrics.get(a.path)?.words ?? previous.get(a.path)?.word_count ?? 0) || a.path.localeCompare(b.path)).slice(0, Math.max(0, promotionLimit - advanced.size)).map(row => row.path));
+  let promoted = 0;
   for (const row of rows) {
     let old = previous.get(row.path);
     let provenance = null;
@@ -108,9 +112,13 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
     if (provenance) { if (provenance.fallback) fallback.add(row.path); else fallback.delete(row.path); }
     const counts = metrics.get(row.path) ?? (old?.revision === row.revision ? { words: old.word_count, chunkCoverage: old.word_count > 0 ? 1 : 0 } : null);
     if (!counts) continue;
-    const values = arithmeticVitals({ ...counts, ...graph.get(row.path), lastUserEditMs: at, maturity: old?.maturity ?? 'raw' }, now, { advance, rebuild });
+    const shouldAdvance = advance && (!promotionEpoch || selected.has(row.path));
+    const values = arithmeticVitals({ ...counts, ...graph.get(row.path), lastUserEditMs: at, maturity: old?.maturity ?? 'raw' }, now, { advance: shouldAdvance, rebuild: rebuild && (!promotionEpoch || selected.has(row.path)) });
+    if (promotionEpoch && shouldAdvance) { advanced.add(row.path); if (values.maturity !== (old?.maturity ?? 'raw')) promoted++; }
     put.run(row.path, row.revision, values.words, at, values.maturity, new Date(now).toISOString());
   }
   db.prepare("INSERT OR REPLACE INTO meta VALUES ('editAgeFallbackPaths', ?)").run(JSON.stringify([...fallback].sort()));
   db.prepare("INSERT OR REPLACE INTO meta VALUES ('vitalsInitialized', '1')").run();
+  if (promotionEpoch) db.prepare("INSERT OR REPLACE INTO meta VALUES ('gardenPromotions',?)").run(JSON.stringify({ runId: promotionEpoch, paths: [...advanced] }));
+  return promoted;
 }
