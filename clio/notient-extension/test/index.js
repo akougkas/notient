@@ -5,3 +5,4 @@ import './capture.test.mjs';
 import './revise.test.mjs';
 import './undo.test.mjs';
 import './fault.test.mjs';
+import './move.test.mjs';

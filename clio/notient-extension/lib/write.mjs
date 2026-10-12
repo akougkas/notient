@@ -8,6 +8,7 @@ import { statusSnapshot } from './status.mjs';
 import { documentSpans, replaceBody, editFrontmatter, parseMarkdown, resolveLink } from './markdown.mjs';
 import { repairCommittedIndex } from './index.mjs';
 import { listNotes } from './vault.mjs';
+import { scanMoveVault, planMove } from './move.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -314,15 +315,18 @@ function inputFor(tool, raw) {
     if (!input.content.length || input.content.length > 48000) refuse('INVALID_INPUT', 'Capture content must contain 1 to 48000 characters.');
     documentSpans(Buffer.from(input.content));
   } else if (tool === 'revise') {
-    if (!['replace', 'frontmatter'].includes(input.operation)) refuse('INVALID_INPUT', 'Stage 2a supports replace and frontmatter.');
+    if (!['replace', 'frontmatter', 'move'].includes(input.operation)) refuse('INVALID_INPUT', 'Choose replace, frontmatter or move.');
     if (typeof input.path !== 'string' || !/^[a-f0-9]{64}$/.test(input.revision ?? '')) refuse('INVALID_INPUT', 'A note path and lowercase read revision are required.');
     if (input.path.startsWith('Notient/Log/')) refuse('MANAGED_LOG', 'Direct revision of managed audit logs is refused.', [input.path]);
-    const fields = input.operation === 'replace' ? ['oldText', 'newText'] : ['set', 'unset'];
+    const fields = input.operation === 'replace' ? ['oldText', 'newText'] : input.operation === 'move' ? ['destination'] : ['set', 'unset'];
     const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'operation', 'path', 'revision', ...fields]);
     if (Object.keys(raw).some(key => !allowed.has(key))) refuse('INVALID_INPUT', 'Fields belonging to another revision mode are refused.');
     if (input.operation === 'replace') {
       validText(input.oldText, 'oldText'); validText(input.newText, 'newText');
       if (!input.oldText.length || input.oldText.length > 24000 || input.newText.length > 24000) refuse('INVALID_INPUT', 'Replacement strings exceed their declared bounds.');
+    } else if (input.operation === 'move') {
+      if (typeof input.destination !== 'string' || !input.destination.length || input.destination.startsWith('Notient/Log/')) refuse('INVALID_INPUT', 'Move requires a destination outside managed logs.');
+      if (!input.dryRun) refuse('STAGE_NOT_ENABLED', 'Move publication is not enabled yet; use dryRun: true.');
     } else {
       input.set ??= []; input.unset ??= [];
       if (!Array.isArray(input.set) || !Array.isArray(input.unset) || input.set.length > 32 || input.unset.length > 32 || !input.set.length && !input.unset.length) refuse('INVALID_INPUT', 'Supply at least one set or unset entry, with at most 32 of each.');
@@ -363,7 +367,7 @@ function plannedLog(vault, input, operation, source, files, createdAt, undo) {
   const name = `Notient/Log/${createdAt.slice(0, 7)}.md`;
   const current = currentFile(vault.path, name);
   const ending = current.bytes?.toString('utf8').match(/\r?\n/)?.[0] ?? '\n';
-  const line = `- ${auditJson({ time: createdAt, id: input.requestId, operation, note: source, destination: null, batch: input.batch, origin: input.authorization.origin, request: input.authorization.request, files: files.map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after) })), undo: undo.targets })}`;
+  const line = `- ${auditJson({ time: createdAt, id: input.requestId, operation, note: source, destination: operation === 'move' ? input.destination : null, batch: input.batch, origin: input.authorization.origin, request: input.authorization.request, files: files.map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after) })), undo: undo.targets })}`;
   const separator = current.bytes?.length && !current.bytes.toString('utf8').endsWith('\n') ? ending : '';
   const after = Buffer.concat([current.bytes ?? Buffer.alloc(0), Buffer.from(`${separator}${line}${ending}`)]);
   return { file: { path: name, role: 'log', before: current.bytes, after, mode: current.mode }, log: { path: name, line } };
@@ -448,31 +452,40 @@ export function buildWritePlan(tool, vault, directory, input) {
   const operation = tool === 'capture' ? 'capture' : tool === 'undo' ? 'undo' : input.operation;
   let files;
   let inverse;
+  let move;
   if (tool === 'capture') files = captureFiles(vault, input);
   else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input); files = inverse.files; }
   else {
     const current = currentFile(vault.path, input.path);
     if (current.revision === null) refuse('NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
     if (current.revision !== input.revision) refuse('REVISION_CONFLICT', 'The note changed since its read revision.', [input.path], true);
-    const edited = input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
-    if (edited.bytes.length > MAX_NOTE_BYTES) refuse('NOTE_TOO_LARGE', 'The result exceeds 4 MiB.', [input.path]);
-    files = [{ path: input.path, role: 'note', before: current.bytes, after: edited.bytes, mode: current.mode, splices: edited.splices }];
+    if (input.operation === 'move') {
+      if (vault.role === 'operator' && input.authorization.origin === 'unattended') refuse('UNATTENDED_REFUSED', 'Unattended moves in operator vaults are refused.', [input.path, input.destination]);
+      writePath(vault.path, input.destination);
+      move = planMove(scanMoveVault(vault.path), input.path, input.destination);
+      if (!move.ok) refuse(move.blockers.some(blocker => blocker.code === 'AUDIT_LINK_BLOCKER') ? 'AUDIT_LINK_BLOCKER' : move.blockers[0].code, `${move.blockerCount} move blockers: ${JSON.stringify(move.blockers)}`, move.blockers.map(blocker => blocker.path));
+      files = move.files;
+    } else {
+      const edited = input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
+      if (edited.bytes.length > MAX_NOTE_BYTES) refuse('NOTE_TOO_LARGE', 'The result exceeds 4 MiB.', [input.path]);
+      files = [{ path: input.path, role: 'note', before: current.bytes, after: edited.bytes, mode: current.mode, splices: edited.splices }];
+    }
   }
   requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
   const createdAt = new Date().toISOString();
   const undo = inverse?.undo ?? { targets: [], commits: [] };
-  const source = inverse?.source ?? files[0].path;
+  const source = inverse?.source ?? move?.source ?? files[0].path;
   const noop = inverse?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
   const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
   if (audit) files.push(audit.file);
   const gitStarted = performance.now();
   const git = preflightGit(vault, files);
   const gitMs = performance.now() - gitStarted;
-  const reads = inverse?.reads ?? [];
-  const inventoryHash = inverse?.inventoryHash ?? null;
-  const planHash = revision(canonicalJson({ files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
+  const reads = inverse?.reads ?? move?.reads ?? [];
+  const inventoryHash = inverse?.inventoryHash ?? (move ? revision(canonicalJson(move.inventory)) : null);
+  const planHash = revision(canonicalJson({ ...(move ? { request: { vault: vault.id, operation, source, destination: input.destination, batch: input.batch, authorization: input.authorization } } : {}), files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, files, source, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
 }
 
 export function byteSplices(before, after) {

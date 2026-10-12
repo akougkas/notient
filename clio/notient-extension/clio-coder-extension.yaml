@@ -208,7 +208,7 @@
       },
       {
         "name": "revise",
-        "description": "Preview or apply a unique body replacement or top-level frontmatter change with the read revision.",
+        "description": "Preview a move with reference repairs, or preview and apply body or frontmatter changes with the read revision.",
         "runtime": "node",
         "entrypoint": "tools/revise.mjs",
         "timeoutMs": 300000,
@@ -275,7 +275,8 @@
               "type": "string",
               "enum": [
                 "replace",
-                "frontmatter"
+                "frontmatter",
+                "move"
               ]
             },
             "path": {
@@ -287,6 +288,11 @@
               "type": "string",
               "minLength": 64,
               "maxLength": 64
+            },
+            "destination": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
             },
             "oldText": {
               "type": "string",

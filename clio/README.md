@@ -258,4 +258,28 @@ Timings below are individual observations, with a fresh Node command process for
 
 Keep the affected fixture files quiescent. Run operator setup and the two installation commands above, then start a new Clio session. Ask Clio to refresh and search the fixture with a cited passage, capture a note using `extension_notient__capture`, read it with `note`, preview and apply a unique replacement, and undo that replacement by its operation ID. Exercise a frontmatter change and its single-operation undo. Use a separate fresh capture for the reviewed capture-deletion check, because later overlapping writes refuse an earlier operation's standalone undo.
 
-Record actual gateway calls, returned request and operation IDs, Git OIDs, batch, paths and raw before/after/undo revisions here. A prose claim of a call is insufficient. Stage 2b starts only after this live fixture check is used and accepted. Move and batch undo remain absent from the schemas. Vaultex is read only throughout this checkout's work; its named-note write and Windows Git latency checks remain outside the performed observations.
+Record actual gateway calls, returned request and operation IDs, Git OIDs, batch, paths and raw before/after/undo revisions here. A prose claim of a call is insufficient. The manager authorized stage 2b after verifying 2a on the clean tree and merging the designs at `77c0e90f`. Installation and live gateway evidence remain operator acts. Vaultex remains read only throughout this checkout's work.
+
+## Stage 2b step 1: move preview
+
+The move planner scans live Markdown and attachment paths, retains destination byte ranges, repairs against both inventories and reparses the proposed bytes. `revise` accepts `operation: "move"` with `destination` and `dryRun: true`; real publication returns `STAGE_NOT_ENABLED` at this step. Any blocker returns no file changes. The pure planner reports each reason and byte range, capped at 100 displayed blockers with the full count. Tool refusals carry the same details in the error message and name their paths.
+
+Actual checks on 2026-10-11:
+
+```text
+node --test clio/notient-extension/test
+  tests 94, pass 94, fail 0, duration_ms 35895.97558
+clio-coder extensions validate clio/notient-extension
+  Valid; Registration check: passed; fs.write: []
+```
+
+The added cases cover all M01 through M14, exact BOM/CRLF/Unicode splices, YAML escaping, code/comments, visitor links, attachments, explicit missing outgoing targets, new competing basenames, source-relative alternatives, normalization/case collisions and managed history. Audit regressions replay Vaultex's ambiguous `agent-memory`, alias-only `PDSW25` and malformed nested ContextOS link. One ambiguous reference in each of three referrers blocks every path; whole-workspace snapshots prove previews and refusals leave all bytes unchanged.
+
+Read-only individual planner measurements, with reports retained in ignored `.local/`:
+
+| Vault and proposed source | Notes | Visible file paths | Markdown bytes | Scan ms | Plan ms | Total ms | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Toy, `3-resources/storage/Key-Value Store Design.md` | 12 | 76 | 8,905 | 5.13 | 28.81 | 33.94 | 7 changed note paths, 5 destination splices, 0 blockers |
+| Vaultex, `agent-memory.md` in external_sources | 994 | 2,343 | 16,738,690 | 35,970.65 | 13,185.78 | 49,156.44 | Refused, 1,000 blockers counted, 100 reported, 0 changes |
+
+The Vaultex run refused unsupported link-bearing syntax as well as affected ambiguity. These are observations of one proposed move, not an estimate of accepted moves or a throughput percentile. No file in either vault was published or installed.
