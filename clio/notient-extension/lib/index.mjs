@@ -34,14 +34,14 @@ export function unavailableFts5Coverage() {
   return { state: 'unknown', indexing: { state: 'unavailable', reason: 'fts5_unavailable' }, message: unknownCoverageMessage };
 }
 
-export function openIndex(directory, vault, writable = false, { immutable = false } = {}) {
+export function openIndex(directory, vault, writable = false, { immutable = false, deadline = Infinity, now = () => performance.now() } = {}) {
   const filename = indexPath(directory, vault);
   if (!writable && !existsSync(filename)) return null;
   if (writable) mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   if (immutable && writable) throw new Error('Immutable index reads cannot be writable.');
   const db = new DatabaseSync(immutable ? `${pathToFileURL(filename).href}?immutable=1` : filename, { readOnly: !writable });
   try {
-    db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.min(5000, Math.floor(deadline - now())))}; PRAGMA foreign_keys = ON;`);
     const version = db.prepare('PRAGMA user_version').get().user_version;
     if (![0, 1, indexVersion].includes(version)) throw new Error('Unsupported index version.');
     if (version === 0 && !writable) throw new Error('Index is incomplete. Run refresh.');

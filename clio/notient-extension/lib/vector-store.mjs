@@ -62,13 +62,13 @@ function counts(db, profile, space) {
   return { eligible, embedded, missing: eligible - embedded, skipped };
 }
 
-export function vectorState(vault, directory, { db: supplied } = {}) {
+export function vectorState(vault, directory, { db: supplied, ...options } = {}) {
   const config = readConfig(directory); const selected = config.vaults.find(value => value.id === vault.id && value.path === vault.path);
   const result = configuredEmbedding(config, selected ?? { embeddings: false });
   if (result.state === 'off') return result;
   let db = supplied;
   try {
-    db ??= openIndex(directory, vault);
+    db ??= openIndex(directory, vault, false, options);
     if (!db || db.prepare('PRAGMA user_version').get().user_version !== 2) return result;
     const space = db.prepare('SELECT * FROM vector_spaces WHERE space_id=?').get(result.spaceId);
     const active = metaValue(db, 'activeSpace');
@@ -171,11 +171,11 @@ export function publishVectors(vault, directory, profile, chunks, vectors, { bar
   });
 }
 
-export function markVectorFailure(vault, directory, profile, code, retryable) {
+export function markVectorFailure(vault, directory, profile, code, retryable, options = {}) {
   return withIndexWriter(vault, directory, () => {
     const config = readConfig(directory);
     if (!config.vaults.find(value => value.id === vault.id && value.path === vault.path)?.embeddings || JSON.stringify(config.embeddings) !== JSON.stringify(profile)) return;
-    const db = openIndex(directory, vault, true);
+    const db = openIndex(directory, vault, true, options);
     try {
       db.exec('BEGIN IMMEDIATE'); const space = spaceRow(db, profile);
       db.prepare('UPDATE vector_spaces SET state=? WHERE space_id=?').run(code === 'EMBEDDING_STALE_MODEL' ? 'stale-model' : 'unavailable', space.space_id);
@@ -183,7 +183,7 @@ export function markVectorFailure(vault, directory, profile, code, retryable) {
       db.exec('COMMIT');
     } catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error; }
     finally { db.close(); }
-  });
+  }, options);
 }
 
 export function verifyVectorConfiguration(vault, directory, profile) {

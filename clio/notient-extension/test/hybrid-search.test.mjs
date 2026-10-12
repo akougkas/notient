@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { truncateSync } from 'node:fs';
 import path from 'node:path';
 import { embeddingFixture, embeddingCommand } from './embedding-candidates.test.mjs';
@@ -125,6 +126,22 @@ test('E10 hybrid lexical fallback reports weighted ranks while explicit lexical 
   const f = await embeddingFixture(t); const hybrid = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' });
   assert.equal(hybrid.reason, 'embedding_building'); assert.equal(hybrid.hits[0].score, 0.3 / 61);
   const lexical = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'lexical' }); assert.ok(lexical.hits[0].score < 0);
+});
+
+for (const phase of ['failure recording', 'served recording']) test(`E14 ${phase} lock wait shares the remaining fallback deadline`, async t => {
+  let lock; let fail = false;
+  const f = await embeddingFixture(t, { handler(request, response, body) {
+    if (fail) { lock.exec('BEGIN IMMEDIATE'); response.writeHead(429); response.end('fixture unavailable'); }
+    else response.end(JSON.stringify({ model: 'stub-pinned', data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) }));
+  } });
+  if (phase === 'failure recording') await refreshVectors(f.vault, f.directory, { tier: 'embed' });
+  lock = new DatabaseSync(path.join(path.dirname(indexPath(f.directory, f.vault)), 'index-writer.db'));
+  try {
+    if (phase === 'failure recording') fail = true; else lock.exec('BEGIN IMMEDIATE');
+    const started = performance.now(); const result = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' }, { budgetMs: 200 });
+    assert.equal(result.hits[0].path, 'Source.md'); assert.ok(performance.now() - started < 500);
+    assert.equal(result.warnings.filter(warning => warning.code === 'SEARCH_RECORDING_DEFERRED').length, phase === 'failure recording' ? 2 : 1);
+  } finally { if (lock.isTransaction) lock.exec('ROLLBACK'); lock.close(); }
 });
 
 test('int8 exhaustive top ten agrees with the float32 reference on 200 deterministic fixture queries', () => {

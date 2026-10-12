@@ -59,9 +59,9 @@ export function fuseArms(semantic, lexical, mode = 'hybrid') {
   return [...fused.values()].sort(rankOrder);
 }
 
-function recordServed(vault, directory, callId, hits, stalePaths) {
+function recordServed(vault, directory, callId, hits, stalePaths, options) {
   withIndexWriter(vault, directory, () => {
-    const db = openIndex(directory, vault, true);
+    const db = openIndex(directory, vault, true, options);
     try {
       db.exec('BEGIN IMMEDIATE'); const insert = db.prepare('INSERT INTO served(call_id,at,path,revision,source,passage,passage_hash) VALUES (?,?,?,?,?,?,?)');
       for (const hit of hits) insert.run(callId, new Date().toISOString(), hit.path, hit.revision, JSON.stringify(hit.source), hit.passage, revision(hit.passage));
@@ -69,13 +69,20 @@ function recordServed(vault, directory, callId, hits, stalePaths) {
       db.exec('DELETE FROM served WHERE id NOT IN (SELECT id FROM served ORDER BY id DESC LIMIT 1000); COMMIT;');
     } catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error; }
     finally { db.close(); }
-  });
+  }, options);
 }
 
 export async function searchHybrid(vault, directory, input, { now = () => performance.now(), beforeServe = () => {}, beforeInference = () => {}, budgetMs = 60000 } = {}) {
   const started = now(); const limit = input.limit ?? 10; const callId = randomUUID();
   if (!Number.isInteger(budgetMs) || budgetMs < 1 || budgetMs > 60000) refuse('INVALID_INPUT', 'The internal search allowance must fit the sixty-second command deadline.');
   const semanticDeadline = started + budgetMs - Math.min(6000, budgetMs / 10);
+  const tail = { deadline: started + budgetMs, now }; const warnings = [];
+  const recordWithinBudget = action => {
+    try { action(); } catch (error) {
+      if (error.code !== 'INDEX_BUSY' && !(error.code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test(error.message))) throw error;
+      warnings.push({ code: 'SEARCH_RECORDING_DEFERRED', message: 'Evidence is returned; derived recording could not finish within the remaining command allowance.' });
+    }
+  };
   validText(input.query, 'Query');
   if (input.query.length > 4000 || !Number.isInteger(limit) || limit < 1 || limit > 20 || input.workspace !== undefined && (typeof input.workspace !== 'string' || !input.workspace.length || input.workspace.length > 255)) refuse('INVALID_INPUT', 'Search query, limit or workspace is outside its bounds.');
   if (input.sourcePath !== undefined) { validText(input.sourcePath, 'Source path'); input.sourcePath.split('/').forEach(portableName); }
@@ -106,8 +113,8 @@ export async function searchHybrid(vault, directory, input, { now = () => perfor
         if (scanStarted !== undefined) scanMs = now() - scanStarted;
         if (error.code?.endsWith('_SCAN_LIMIT')) throw error;
         reason = error.code === 'EMBEDDING_STALE_MODEL' ? 'stale_model' : 'embedding_unavailable';
-        if (error.code === 'EMBEDDING_STALE_MODEL' || /^EMBEDDING_(?:HTTP|TIMEOUT|UNAVAILABLE|RESPONSE_)/.test(error.code ?? '')) markVectorFailure(vault, directory, profile, error.code, error.retryable);
-        embedding = vectorState(vault, directory);
+        if (error.code === 'EMBEDDING_STALE_MODEL' || /^EMBEDDING_(?:HTTP|TIMEOUT|UNAVAILABLE|RESPONSE_)/.test(error.code ?? '')) recordWithinBudget(() => markVectorFailure(vault, directory, profile, error.code, error.retryable, tail));
+        embedding = vectorState(vault, directory, tail);
         if (embedding.state === 'stale-model') reason = 'stale_model';
         if (['VECTOR_PACK_INVALID', 'VECTOR_INVALID'].includes(error.code)) embedding.state = 'unavailable';
       }
@@ -123,8 +130,8 @@ export async function searchHybrid(vault, directory, input, { now = () => perfor
     catch { stale.add(row.path); continue; }
     if (hits.length === limit) break;
   }
-  if (fts5 && (lexical?.available || semantic?.available)) recordServed(vault, directory, callId, hits, [...stale]);
+  if (fts5 && (lexical?.available || semantic?.available)) recordWithinBudget(() => recordServed(vault, directory, callId, hits, [...stale], tail));
   if (stale.size) coverage = { ...coverage, state: coverage.state === 'unknown' ? 'unknown' : 'incomplete', message: coverage.state === 'unknown' ? coverage.message : 'Selected evidence changed after the snapshot; refresh before relying on absence.' };
   if (mode !== 'lexical') coverage = semanticCoverage(coverage, reason ?? (embedding.missing || embedding.skipped ? 'incomplete' : null));
-  return { ok: true, tool: 'search', vault: vault.id, callId, query: input.query, terms, termsTruncated: allTerms.length > terms.length, excludedSource: input.sourcePath ?? null, mode, reason, hits, stalePaths: [...stale], refreshRequired: stale.size > 0, candidateLimitReached: (lexical?.candidates ?? 0) > cap || (semantic?.candidates ?? 0) > cap, embedding, separation, coverage, fts5, nodeVersion: process.version, timings: { lexicalMs: lexicalEnded - started, queryMs, scanMs, fusionMs, verifyMs: now() - verifyStarted, totalMs: now() - started }, durationMs: Math.round((now() - started) * 100) / 100 };
+  return { ok: true, tool: 'search', vault: vault.id, callId, query: input.query, terms, termsTruncated: allTerms.length > terms.length, excludedSource: input.sourcePath ?? null, mode, reason, hits, stalePaths: [...stale], refreshRequired: stale.size > 0, candidateLimitReached: (lexical?.candidates ?? 0) > cap || (semantic?.candidates ?? 0) > cap, embedding, separation, coverage, fts5, nodeVersion: process.version, warnings, timings: { lexicalMs: lexicalEnded - started, queryMs, scanMs, fusionMs, verifyMs: now() - verifyStarted, totalMs: now() - started }, durationMs: Math.round((now() - started) * 100) / 100 };
 }
