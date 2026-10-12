@@ -51,3 +51,23 @@ block b6bbd350: comment-split link labels expose hidden destinations to word cou
 approve b45069f1 for item 3.
 
 block c78b91ea, 1f4144c4 and b6bbd350: changed block-scalar sibling value (item 8), refused implicit-null initialization (item 9), restored code in link labels (item 10), and hidden destination counting across comments (item 11); approve b45069f1 for item 3.
+
+## 97072019: coordinator integration and version:2 journal
+
+12. **Published version:2 records can bypass immutable-manifest verification.** `clio/notient-extension/lib/journal.mjs:57` requires `intentSet` only for move operations; the version:2 validator does not require it either. **Violates 04 §6's required integrity coverage of admission, splices and vitalsBefore, and 02 §2's refusal of missing or corrupt authoritative journal data.** Removing `intentSet` from a published link, relate or other nonmove version:2 record skips the manifest check, while `prepareFileIntents` at `:129` skips the SQL row verification. Git recognition verifies the committed bytes and operation ID, but does not bind the new admission or edit-age fields. Consequently, an altered rationale or frozen age can pass validation and be returned by a committed retry or adopted during index rebuilding. Unpublished records refuse later in `finishRecord`; that guard does not protect already published records.
+
+13. **Moves that rebase outgoing references lose edit-age provenance and earned maturity.** `clio/notient-extension/lib/vitals-write.mjs:27` identifies a newly created move destination only by equality between its after-bytes and a deleted source's before-bytes. **Violates 04 §6's requirement to freeze provenance for every changed path and §7's preservation of prior edit age and earned maturity through Notient writes.** Moving `Folder/Source.md`, containing `[ref](../Target.md)`, to `Source.md` changes that reference to `[ref](Target.md)`. The equality fails, so the destination receives `vitalsBefore.lastUserEditMs:null`. The same inference at `lib/vitals-index.mjs:86` prevents transferring the prior row, assigning publication-time age and raw maturity. The inverse-origin mapping at `:74` also fails for that move, and rebuilding cannot recover the source through the unequal-byte heuristic. Consequently, a supported move and its inverse can discard provenance even though the operation already records explicit source and destination identities. The added move fixture uses unchanged body bytes and does not cover rebased outgoing links.
+
+14. **The new freezing path can make a stale cached edit age authoritative.** `clio/notient-extension/lib/vitals-write.mjs:18` accepts a cached age when the index's global lastCommit equals the current HEAD. **Violates 04 §6's frozen-provenance requirement and §7's requirement for verified attribution without crossing intervening operator edits.** Capture and index bytes A at T0; let the operator commit B and then restore A at T1; run explicit refresh; then perform a Notient replacement A to C. The existing matching-revision path retains T0 in `lib/vitals-index.mjs:95`, while `lib/index.mjs:198` updates the global lastCommit to the operator's new HEAD. The new freezing code therefore accepts T0 without checking the intervening path history and stores it in the version:2 record. Consequently, the falsely old age survives a subsequent index rebuild and can satisfy the seven-day maturity threshold. This is a separate cache-to-journal path that remains after V4 repairs the legacy-history traversal.
+
+block 97072019: optional integrity manifest on published version:2 records (item 12), lost provenance on moves with rewritten outgoing references (item 13), and stale cached age frozen into new history (item 14).
+
+## 509e8f4f: V4 fix for item 4
+
+approve 509e8f4f for item 4's legacy-history traversal.
+
+## 81b4825b: V5 fix for item 5
+
+approve 81b4825b for item 5.
+
+block 97072019: missing-manifest integrity bypass (item 12), move provenance loss (item 13), and stale cached age publication (item 14); approve 509e8f4f for item 4 and 81b4825b for item 5.
