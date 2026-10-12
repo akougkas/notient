@@ -153,3 +153,19 @@ code
 block 1244bc6c: completed fence followed by a thematic break breaks link idempotency (item 19).
 
 block stage 4a at 1244bc6c: batch-undo provenance loss (item 17), artificial word boundaries around link labels (item 16), premature hybrid default selection (item 18), and the closing-fence/thematic-break regression (item 19); the original item 15 witness is resolved.
+
+## 78a25274: V16 fix for item 16
+
+approve 78a25274 for item 16.
+
+## 2b5c26ab: V17 fix for item 17
+
+20. **Rebuilding retained version:1 batch-undo history still follows the displaced note's age.** `clio/notient-extension/lib/vitals-index.mjs:66` enters inverse-origin recovery only when the restored path has null before-bytes; `:73` otherwise follows that path's before-hash. **Violates 04 §6's version:1 history compatibility and §7's requirement to recover the restored note's edit-age attribution from its contiguous verified history.** Retain version:1 captures of A.md fourteen days ago and C.md one day ago, followed by the same batch as item 17: move A.md to B.md, move C.md to A.md, then undo the batch before upgrading. The committed inverse replaces A.md's C bytes with original A bytes, deletes B.md and recreates C.md. On index rebuild, the inverse has no frozen vitalsBefore, and A.md's non-null before-hash takes the branch at `:73`. Traversal then follows C's move to A and C's capture, with every hash, commit and path-history check succeeding. Consequently, restored A receives C's one-day age with fallback:false instead of its own fourteen-day age; freshness and maturity eligibility use the wrong note's provenance. The new version:2 inverse and immediate index update are corrected by V17, but retained version:1 history still reproduces the identity error. Line references remain unchanged at `f72adea4`.
+
+block 2b5c26ab: retained version:1 batch-undo attribution follows a reused path instead of the restored note (item 20).
+
+## f72adea4: V18 fix for item 18
+
+approve f72adea4 for item 18.
+
+block all of stage 4a at f72adea4: closing-fence/thematic-break regression (item 19) and retained version:1 batch-undo edit-age misattribution (item 20).
