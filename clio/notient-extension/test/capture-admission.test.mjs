@@ -16,6 +16,18 @@ import { readRecord } from '../lib/journal.mjs';
 const input = (f, n = 0) => ({ vault: f.vault.id, requestId: `r6-capture-${n}`, batch: 'r6-capture', authorization: { origin: 'operator', request: 'Capture the supplied fixture body.' }, name: 'Admission', content: `# Body ${n}\n` });
 const run = (f, raw, options = {}) => writeOperation('capture', raw, { directory: f.directory, ...options });
 
+test('T7 capture tag items must be strings rather than mappings, nested collections or typed scalars', t => {
+  for (const tags of ['\n  - key: value', '[key: value]', '\n  - - nested', '\n  - 1_000', '[0b101]', '[false]', '[null]', '[{}]', '[[]]']) {
+    assert.throws(() => captureDocument({ content: `---\ntags: ${tags}\n---\nBody\n`, authorization: { origin: 'clio' } }, '2026-10-11T12:00:00.000Z'), error => error.code === 'CAPTURE_TAGS_INVALID', tags);
+  }
+  for (const tags of ['["key: value", "1_000", "false", "null"]', "\n  - 'key: value'\n  - 'project:clio'", '[]']) {
+    assert.doesNotThrow(() => captureDocument({ content: `---\ntags: ${tags}\n---\nBody\n`, authorization: { origin: 'clio' } }, '2026-10-11T12:00:00.000Z'), tags);
+  }
+  const f = moveFixture(t); const before = snapshot(f.vault.path);
+  const refused = run(f, { ...input(f, 300), content: '---\ntags:\n  - key: value\n---\nDo not capture.\n' });
+  assert.equal(refused.error.code, 'CAPTURE_TAGS_INVALID'); assert.equal(refused.operationId, null); assert.deepEqual(snapshot(f.vault.path), before);
+});
+
 test('T6 Clio is the capture contributor while journal, audit and Git retain authorization origin', t => {
   const f = moveFixture(t);
   for (const [i, origin] of ['operator', 'clio', 'unattended'].entries()) {

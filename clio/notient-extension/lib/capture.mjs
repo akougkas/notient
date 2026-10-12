@@ -30,7 +30,7 @@ function stringTag(raw) {
   }
   else {
     text = text.replace(/\s+#.*$/, '').trim();
-    if (!text || /^[\[\]{},]|^(?:null|true|false|~|[-+]?(?:0x[\da-f]+|0o[0-7]+|(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?|\.inf|\.nan))$/i.test(text)) refuse('CAPTURE_TAGS_INVALID', 'Capture tags must be strings, not other YAML values.');
+    if (!text || /^[\[\]{},]|^[-?:](?:\s|$)|:(?:\s|$)|^(?:null|true|false|~|[-+]?(?:0[xob][\da-f_]+|(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[-+]?\d[\d_]*)?|\.inf|\.nan))$|^\d{4}-\d{1,2}-\d{1,2}(?:[Tt ]|$)/i.test(text)) refuse('CAPTURE_TAGS_INVALID', 'Capture tags must be strings, not other YAML values.');
     value = text;
   }
   if (typeof value !== 'string') refuse('CAPTURE_TAGS_INVALID', 'Capture tags must be strings.');
