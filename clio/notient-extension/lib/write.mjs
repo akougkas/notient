@@ -114,11 +114,11 @@ export function applyRecord(vault, directory, record, { observe = () => {}, barr
     ensureVaultParents(vault, record, file, sync);
     const filename = writePath(vault.path, name);
     claimFileIntent(directory, vault, record, file);
+    freshAuthority(vault, directory, record);
     observe('beforeRecheck', record, file);
     const checked = currentFile(vault.path, name, { raw: true });
     if (checked.revision !== file.before || (current.stat && (checked.stat?.ino !== current.stat.ino || checked.stat?.dev !== current.stat.dev))) refuse('REVISION_CONFLICT', 'The file changed before its final publication check.', [name], true);
     observe('afterRecheck', record, file);
-    freshAuthority(vault, directory, record);
     if (file.action === 'delete') unlinkSync(filename);
     else if (file.action === 'replace') renameSync(path.join(vault.path, file.temp), filename);
     else {

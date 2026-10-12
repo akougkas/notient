@@ -38,3 +38,4 @@ import './garden-queue.test.mjs';
 import './garden-documents.test.mjs';
 import './garden-authority.test.mjs';
 import './plan-execution.test.mjs';
+import './garden-review.test.mjs';

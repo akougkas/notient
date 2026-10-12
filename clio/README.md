@@ -553,3 +553,5 @@ Stage 6 step 4 binds an operator go to a verified retained proposal, the exact c
 The final digest check includes retained poison from earlier runs as a count plus at most ten inert examples. All 12 managed-document fixtures passed in 11,469.320 ms, zero failures, before the targeted retained-poison assertion. Final complete-suite verification follows on the committed deterministic core.
 
 The first complete stage 6 run passed 515 of 516 tests in 387,428.716 ms. Its sole failure was the retained stage 4 exact-schema fixture, which had not accounted for stage 6's authorized gardenRun and plan additions. The fixture now checks those two closed objects exactly and compares the remaining revise schema against the original frozen contract; its focused run passed in 77.786 ms. Full verification is repeated after this fixture correction.
+
+G1 moves every garden authority scan before the final raw revision and identity check. The command regression counted 14 vault-state reads between that check and rename before the correction and zero afterwards. The review and assigned-action run passed 10 tests, zero failures, in 7,816.240 ms.
