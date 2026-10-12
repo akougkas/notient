@@ -21,3 +21,4 @@ import './recovery-recognition.test.mjs';
 import './structural-hash.test.mjs';
 import './own-vault.test.mjs';
 import './reminder-state.test.mjs';
+import './memory.test.mjs';
