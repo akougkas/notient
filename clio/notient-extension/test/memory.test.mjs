@@ -11,7 +11,7 @@ import { inspectNote } from '../lib/note.mjs';
 import { revision } from '../lib/paths.mjs';
 import { readRecord } from '../lib/journal.mjs';
 import { git } from '../lib/git.mjs';
-import { documentSpans } from '../lib/markdown.mjs';
+import { documentSpans, frontmatterFields } from '../lib/markdown.mjs';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 import { baseline } from './git-write.test.mjs';
 import { contribution, memoryDocument, readMemory, appendMemory, marker, bodyLimit } from './memory-workflow.mjs';
@@ -125,6 +125,58 @@ test('memory committed body survives skipped and interrupted optional summary re
     const preview = writeOperation('undo', { ...undo, dryRun: true }, { directory: f.directory });
     const inverse = writeOperation('undo', { ...undo, planHash: preview.planHash }, { directory: f.directory });
     assert.equal(inverse.ok, true, JSON.stringify(inverse)); assert.equal(existsSync(path.join(f.vault.path, name)), false);
+  }
+});
+
+test('memory later optional summary repair rereads through tools and preserves canonical bytes and summary-only repositories', t => {
+  for (const fixture of ['storage.md', 'storage-crlf.md']) {
+    const f = own(t);
+    const existingRepositories = ['/work/summary-only', source.repository, '/work/summary-only'];
+    const initial = Buffer.from(fixtureBytes(fixture).toString().replace('repositories: ["/work/repository-a"]', `repositories: ${JSON.stringify(existingRepositories)}`));
+    put(f, 'Memory.md', initial);
+    git(f.vault.path, ['add', '--', 'Memory.md']); git(f.vault.path, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'memory summary fixture']);
+    const tool = (name, input, status = 0) => {
+      const command = spawnSync(process.execPath, [fileURLToPath(new URL(`../tools/${name}.mjs`, import.meta.url)), JSON.stringify(input)], { encoding: 'utf8', cwd: f.vault.path, env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) } });
+      assert.equal(command.status, status, command.stderr || command.stdout);
+      return JSON.parse(command.stdout);
+    };
+    const original = tool('note', { vault: f.vault.id, path: 'Memory.md' });
+    const bodyCommit = append(f, 'Memory.md');
+    const before = readFileSync(path.join(f.vault.path, 'Memory.md'));
+    const metadata = { vault: f.vault.id, requestId: 'memory-summary-skipped', batch: 'memory-task', authorization, operation: 'frontmatter', path: 'Memory.md', revision: original.revision, set: [{ key: 'updated', valueJson: JSON.stringify(later.date) }, { key: 'repositories', valueJson: JSON.stringify([source.repository, later.repository]) }], unset: [] };
+    const skipped = tool('revise', metadata, 1);
+    assert.equal(skipped.ok, false); assert.equal(skipped.error.code, 'REVISION_CONFLICT'); assert.equal(skipped.operationId, null);
+    assert.deepEqual(readFileSync(path.join(f.vault.path, 'Memory.md')), before);
+    assert.equal(readRecord(f.directory, f.vault, bodyCommit.operationId).state, 'committed');
+    assert.equal(appendMemory(before, { ...later, session: 'later-session' }).noop, true);
+    const fresh = tool('note', { vault: f.vault.id, path: 'Memory.md' });
+    assert.notEqual(fresh.revision, original.revision); assert.equal(fresh.revision, revision(before));
+    const fields = frontmatterFields(documentSpans(Buffer.from(fresh.frontmatter)));
+    const canonical = readMemory(Buffer.from(fresh.frontmatter + fresh.body));
+    assert.equal(canonical.entries.some(entry => entry.repository === '/work/summary-only'), false);
+    const repositories = [...new Set([...JSON.parse(fields.find(field => field.key === 'repositories').value), ...canonical.entries.map(entry => entry.repository)])].sort();
+    const updated = canonical.entries.map(entry => entry.date).sort().at(-1);
+    const repair = { ...metadata, requestId: 'memory-summary-later-repair', revision: fresh.revision, set: [{ key: 'updated', valueJson: JSON.stringify(updated) }, { key: 'repositories', valueJson: JSON.stringify(repositories) }] };
+    const preview = tool('revise', { ...repair, dryRun: true }); assert.equal(preview.ok, true, JSON.stringify(preview));
+    const repaired = tool('revise', { ...repair, planHash: preview.planHash }); assert.equal(repaired.ok, true, JSON.stringify(repaired));
+    assert.equal(repaired.operationId, repair.requestId); assert.notEqual(repaired.operationId, metadata.requestId);
+    assert.equal(readRecord(f.directory, f.vault, repaired.operationId).state, 'committed');
+    const after = readFileSync(path.join(f.vault.path, 'Memory.md'));
+    const parsed = documentSpans(after);
+    const summary = frontmatterFields(parsed);
+    assert.equal(JSON.parse(summary.find(field => field.key === 'updated').value), later.date);
+    assert.deepEqual(JSON.parse(summary.find(field => field.key === 'repositories').value), [source.repository, later.repository, '/work/summary-only']);
+    const bodyBytes = bytes => bytes.subarray(Buffer.byteLength(documentSpans(bytes).text.slice(0, documentSpans(bytes).bodyStart)));
+    assert.deepEqual(bodyBytes(after), bodyBytes(before));
+    const sourceLines = bytes => Buffer.from([...bytes.toString().matchAll(/^Source:[^\r\n]*(?:\r?\n|$)/gm)].map(match => match[0]).join(''));
+    assert.deepEqual(sourceLines(after), sourceLines(before));
+    const fieldBytes = (bytes, key) => {
+      const document = documentSpans(bytes); const field = frontmatterFields(document).find(field => field.key === key);
+      return bytes.subarray(Buffer.byteLength(document.text.slice(0, field.start)), Buffer.byteLength(document.text.slice(0, field.end)));
+    };
+    for (const key of ['created', 'tags']) assert.deepEqual(fieldBytes(after, key), fieldBytes(before, key));
+    assert.deepEqual(readMemory(after).entries, readMemory(before).entries);
+    if (fixture.includes('crlf')) assert.equal(after.toString().replaceAll('\r\n', '').includes('\n'), false);
   }
 });
 
