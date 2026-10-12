@@ -12,7 +12,7 @@ function scan(text, extras = {}) {
   const files = { 'Source.md': text, 'Target.md': '# Target\n\n## Part\n\nBlock paragraph. ^block-id\n', ...extras };
   return { notes: Object.entries(files).filter(([name]) => /\.md$/i.test(name)).map(([name, text]) => { const bytes = Buffer.from(text); return { path: name, bytes, revision: revision(bytes), mode: 0o644 }; }), inventory: Object.keys(files).sort(), blockers: [] };
 }
-const goldens = [
+export const goldens = [
   ['W01 LF without Related', '# Source\n\nBody.\n', '# Source\n\nBody.\n\n## Related\n\n- [[Target]]\n'],
   ['W02 CRLF', '# Source\r\n\r\nBody.\r\n', '# Source\r\n\r\nBody.\r\n\r\n## Related\r\n\r\n- [[Target]]\r\n'],
   ['W03 heading inside closed fence', '```md\n## Related\n```\n', '```md\n## Related\n```\n\n## Related\n\n- [[Target]]\n'],
@@ -31,6 +31,7 @@ const goldens = [
   ['W23 empty body', '', '## Related\n\n- [[Target]]\n'],
   ['W24 present before later unclosed fence', '## Related\n\n- [[Target]]\n\n```\nunfinished', '## Related\n\n- [[Target]]\n\n```\nunfinished'],
 ];
+
 for (const [name, before, expected] of goldens) test(`link writeback ${name}`, () => {
   const inventory = scan(before); const plan = planLink(inventory, 'Source.md', [edge]);
   assert.deepEqual(plan.bytes, Buffer.from(expected)); assert.deepEqual(applySplices(Buffer.from(before), plan.splices), plan.bytes);

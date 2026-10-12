@@ -27,3 +27,4 @@ import './vitals-arithmetic.test.mjs';
 import './vitals-read.test.mjs';
 import './link-writeback.test.mjs';
 import './relate-writeback.test.mjs';
+import './relationship-publication.test.mjs';

@@ -1,4 +1,4 @@
-import { listRecords } from './journal.mjs';
+import { listRecords, readRecord } from './journal.mjs';
 import { createGitAdapter, createGitBudget } from './git.mjs';
 import { arithmeticVitals } from './vitals.mjs';
 
@@ -17,13 +17,12 @@ export function storedVitals(db) {
   return new Map(db.prepare('SELECT * FROM note_vitals').all().map(row => [row.path, row]));
 }
 
-export function recoverEditAges(vault, directory, rows, now) {
+export function recoverEditAges(vault, directory, rows, now, { budget = createGitBudget(), strictBudget = false } = {}) {
   const result = new Map(rows.map(row => [row.path, { at: Math.min(now, row.mtime), fallback: false }]));
   if (!rows.length) return result;
   try {
     const records = listRecords(directory, vault, false).filter(record => record.git.commit && record.state !== 'aborted');
     if (!records.length) return result;
-    const budget = createGitBudget();
     const order = budget.call(vault.path, ['rev-list', '--first-parent', 'HEAD']).split('\n');
     const positions = new Map(order.map((oid, index) => [oid, index]));
     const history = records.filter(record => positions.has(record.git.commit)).sort((a, b) => positions.get(a.git.commit) - positions.get(b.git.commit));
@@ -53,7 +52,7 @@ export function recoverEditAges(vault, directory, rows, now) {
         } else after = changed.before;
       }
     }
-  } catch { for (const value of result.values()) value.fallback = true; }
+  } catch (error) { if (strictBudget && error.code === 'GIT_TIMEOUT') throw error; for (const value of result.values()) value.fallback = true; }
   return result;
 }
 
@@ -63,6 +62,21 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
   const recovered = recoverEditAges(vault, directory, missing, now);
   const graph = graphDegrees(db);
   const put = db.prepare('INSERT OR REPLACE INTO note_vitals VALUES (?,?,?,?,?,?)');
+  const inverseOrigins = new Map();
+  if (record?.operation === 'undo') {
+    for (const file of record.files.filter(file => file.role === 'note' && file.before !== null)) {
+      const value = previous.get(file.path); if (value?.revision === file.before) inverseOrigins.set(file.path, value);
+    }
+    for (const id of record.undo.targets) {
+      const original = readRecord(directory, vault, id, false);
+      if (original.operation !== 'move') continue;
+      const from = original.files.find(file => file.role === 'note' && file.after === null);
+      const to = original.files.find(file => file.role === 'note' && file.before === null && file.after === from?.before);
+      if (!from || !to) continue;
+      const value = inverseOrigins.get(to.path); inverseOrigins.delete(to.path);
+      if (value) inverseOrigins.set(from.path, value);
+    }
+  }
   const fallback = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name)));
   for (const row of rows) {
     let old = previous.get(row.path);
@@ -73,6 +87,7 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
       const candidate = previous.get(row.path) ?? (moved ? previous.get(moved.path) : null);
       const before = candidate?.revision === (moved?.before ?? published.before) ? candidate : null;
       if (!old && before) old = before;
+      if (!old && published.before === null && inverseOrigins.has(row.path)) old = inverseOrigins.get(row.path);
       const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === row.path)?.lastUserEditMs : null;
       const at = record.operation === 'capture' && published.before === null ? Date.parse(record.createdAt) : Number.isFinite(frozen) ? frozen : before?.last_user_edit_ms ?? row.mtime;
       provenance = { at: Math.min(now, at), fallback: !Number.isFinite(frozen) && !before && record.operation !== 'capture' };

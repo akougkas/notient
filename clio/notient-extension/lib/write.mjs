@@ -11,6 +11,9 @@ import { listNotes } from './vault.mjs';
 import { scanMoveVault, planMove, moveInventory, guardInverseReferences } from './move.mjs';
 import { simulateUndo, certifyCancellation, hydrateOperation } from './undo.mjs';
 import { captureDocument, captureBodyHash, captureReviewBytes, captureReceipt } from './capture.mjs';
+import { planLink } from './link.mjs';
+import { planRelate } from './relate.mjs';
+import { freezeEditAges } from './vitals-write.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile, freezeIntentSet, prepareFileIntents, readFileIntents, claimFileIntent, markFileApplied } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -156,9 +159,9 @@ function checkDependencies(vault, directory, record) {
 }
 
 export function newRecord(vault, plan) {
-  const files = plan.files.map((file, ordinal) => ({ intentId: randomUUID(), path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
+  const files = plan.files.map((file, ordinal) => ({ intentId: randomUUID(), path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending', splices: [...(file.splices ?? byteSplices(file.before, file.after))].sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte).map(splice => ({ startByte: splice.startByte, endByte: splice.endByte, replacementHash: revision(splice.replacement), replacementBytes: Buffer.byteLength(splice.replacement) })) }));
   const record = {
-    version: 1, id: plan.id, vaultId: vault.id, vaultPath: vault.path,
+    version: 2, id: plan.id, vaultId: vault.id, vaultPath: vault.path,
     tool: plan.tool, operation: plan.operation, requestDigest: plan.requestDigest, batch: plan.batch,
     authorization: plan.authorization, createdAt: plan.createdAt, updatedAt: plan.createdAt,
     state: 'intent', planHash: plan.planHash, source: plan.source ?? null, destination: plan.destination ?? null,
@@ -167,6 +170,8 @@ export function newRecord(vault, plan) {
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', derivedIndexState: 'pending', capture: plan.capture ?? null, durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
+    link: plan.link ?? null, relate: plan.relate ?? null, semanticEvidence: plan.semanticEvidence ?? null,
+    vitalsBefore: plan.vitalsBefore ?? plan.files.filter(file => file.role !== 'log').map(file => ({ path: file.path, lastUserEditMs: file.before === null ? null : currentFile(vault.path, file.path).stat?.mtimeMs ?? null })),
   };
   freezeIntentSet(record);
   return record;
@@ -232,7 +237,15 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     const first = states.find(item => item.state === 'before');
     if (first) claimFileIntent(directory, vault, record, first.file);
     options.barrier?.('afterIntent', record);
-    checkDependencies(vault, directory, record);
+    try { adapter.checkBase(record); checkDependencies(vault, directory, record); }
+    catch (error) {
+      if (['GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code) && classifyFiles(vault, record).every(item => item.state === 'before') && !adapter.recognize(record)) {
+        record.state = 'aborted'; record.error = { code: error.code, message: error.message };
+        saveRecord(directory, vault, record, sync); cleanupSiblings(vault, record, sync);
+        return { operationId: record.id, result: 'aborted_unapplied', commit: null, conflicts: [] };
+      }
+      throw error;
+    }
     const started = performance.now();
     applyRecord(vault, directory, record, options);
     record.timings.applyMs += performance.now() - started;
@@ -381,10 +394,10 @@ function inputFor(tool, raw) {
     if (!input.content.length || input.content.length > 48000) refuse('INVALID_INPUT', 'Capture content must contain 1 to 48000 characters.');
     documentSpans(Buffer.from(input.content));
   } else if (tool === 'revise') {
-    if (!['replace', 'frontmatter', 'move'].includes(input.operation)) refuse('INVALID_INPUT', 'Choose replace, frontmatter or move.');
+    if (!['replace', 'frontmatter', 'move', 'link', 'relate'].includes(input.operation)) refuse('INVALID_INPUT', 'Choose replace, frontmatter, move, link or relate.');
     if (typeof input.path !== 'string' || !/^[a-f0-9]{64}$/.test(input.revision ?? '')) refuse('INVALID_INPUT', 'A note path and lowercase read revision are required.');
     if (input.path.startsWith('Notient/Log/')) refuse('MANAGED_LOG', 'Direct revision of managed audit logs is refused.', [input.path]);
-    const fields = input.operation === 'replace' ? ['oldText', 'newText'] : input.operation === 'move' ? ['destination'] : ['set', 'unset'];
+    const fields = input.operation === 'replace' ? ['oldText', 'newText'] : input.operation === 'move' ? ['destination'] : input.operation === 'link' ? ['link'] : input.operation === 'relate' ? ['relate'] : ['set', 'unset'];
     const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'operation', 'path', 'revision', ...fields]);
     if (Object.keys(raw).some(key => !allowed.has(key))) refuse('INVALID_INPUT', 'Fields belonging to another revision mode are refused.');
     if (input.operation === 'replace') {
@@ -393,6 +406,10 @@ function inputFor(tool, raw) {
     } else if (input.operation === 'move') {
       if (typeof input.destination !== 'string' || !input.destination.length || input.destination.startsWith('Notient/Log/')) refuse('INVALID_INPUT', 'Move requires a destination outside managed logs.');
       if (!input.dryRun && !input.planHash) refuse('PLAN_HASH_REQUIRED', 'A real move requires its preceding dry-run planHash.');
+    } else if (input.operation === 'link') {
+      if (!input.link || Array.isArray(input.link) || Object.keys(input.link).some(key => !['candidateSet', 'edges'].includes(key)) || !Array.isArray(input.link.edges) || input.link.candidateSet !== undefined && (typeof input.link.candidateSet !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(input.link.candidateSet))) refuse('INVALID_INPUT', 'Link requires edges and an optional candidate receipt UUID with closed fields.');
+    } else if (input.operation === 'relate') {
+      if (!input.relate || Array.isArray(input.relate) || typeof input.relate !== 'object') refuse('INVALID_INPUT', 'Relate requires a target and relation.');
     } else {
       input.set ??= []; input.unset ??= [];
       if (!Array.isArray(input.set) || !Array.isArray(input.unset) || input.set.length > 32 || input.unset.length > 32 || !input.set.length && !input.unset.length) refuse('INVALID_INPUT', 'Supply at least one set or unset entry, with at most 32 of each.');
@@ -431,11 +448,11 @@ function auditJson(value) {
   return JSON.stringify(value).replace(/"(?:\\.|[^"\\])*"/g, token => token.replaceAll('[', '\\u005b').replaceAll(']', '\\u005d'));
 }
 
-function plannedLog(vault, input, operation, source, files, createdAt, undo) {
+function plannedLog(vault, input, operation, source, files, createdAt, undo, relationship) {
   const name = `Notient/Log/${createdAt.slice(0, 7)}.md`;
   const current = currentFile(vault.path, name);
   const ending = current.bytes?.toString('utf8').match(/\r?\n/)?.[0] ?? '\n';
-  const line = `- ${auditJson({ time: createdAt, id: input.requestId, operation, note: source, destination: operation === 'move' ? input.destination : null, batch: input.batch, origin: input.authorization.origin, request: input.authorization.request, files: files.map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after) })), undo: undo.targets })}`;
+  const line = `- ${auditJson({ time: createdAt, id: input.requestId, operation, note: source, destination: operation === 'move' ? input.destination : null, batch: input.batch, origin: input.authorization.origin, request: input.authorization.request, files: files.map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after) })), undo: undo.targets, ...(relationship ? { link: relationship.link ?? null, relate: relationship.relate ?? null } : {}) })}`;
   const separator = current.bytes?.length && !current.bytes.toString('utf8').endsWith('\n') ? ending : '';
   const after = Buffer.concat([current.bytes ?? Buffer.alloc(0), Buffer.from(`${separator}${line}${ending}`)]);
   return { file: { path: name, role: 'log', before: current.bytes, after, mode: current.mode }, log: { path: name, line } };
@@ -565,7 +582,12 @@ function inverseFiles(vault, directory, input, budget) {
     reads = guarded.reads;
     inventoryHash = revision(canonicalJson(guarded.inventory));
   }
-  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
+  const restoredAges = files.filter(file => file.before === null && file.after !== null).flatMap(file => {
+    const original = [...selected].reverse().find(record => record.version === 2 && record.files.some(changed => changed.path === file.path && changed.before === revision(file.after)));
+    const value = original?.vitalsBefore.find(value => value.path === file.path);
+    return Number.isFinite(value?.lastUserEditMs) ? [value] : [];
+  });
+  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, restoredAges, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
 }
 
 export function buildWritePlan(tool, vault, directory, input, { now = () => new Date(), gitClock, gitCall, gitBudget } = {}) {
@@ -577,6 +599,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   let inverse;
   let move;
   let captured;
+  let relationship;
   const createdAt = now().toISOString();
   if (tool === 'capture') { captured = captureFiles(vault, directory, input, createdAt, budget); files = captured.files; }
   else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input, budget); files = inverse.files; }
@@ -591,7 +614,8 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
       if (!move.ok) refuse(move.blockers.some(blocker => blocker.code === 'AUDIT_LINK_BLOCKER') ? 'AUDIT_LINK_BLOCKER' : move.blockers[0].code, `${move.blockerCount} move blockers: ${JSON.stringify(move.blockers)}`, move.blockers.map(blocker => blocker.path));
       files = move.files;
     } else {
-      const edited = input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
+      const edited = input.operation === 'link' || input.operation === 'relate' ? (relationship = input.operation === 'link' ? planLink(scanMoveVault(vault.path), input.path, input.link.edges, { origin: input.authorization.origin }) : planRelate(scanMoveVault(vault.path), input.path, input.relate, { origin: input.authorization.origin })) : input.operation === 'replace' ? replaceBody(current.bytes, input.oldText, input.newText) : editFrontmatter(current.bytes, input.set, input.unset);
+      if (relationship && !relationship.reads.some(read => read.path === input.path && read.revision === input.revision)) refuse('REVISION_CONFLICT', 'The source changed during the fresh relationship scan.', [input.path], true);
       if (edited.bytes.length > MAX_NOTE_BYTES) refuse('NOTE_TOO_LARGE', 'The result exceeds 4 MiB.', [input.path]);
       files = [{ path: input.path, role: 'note', before: current.bytes, after: edited.bytes, mode: current.mode, splices: edited.splices }];
     }
@@ -600,20 +624,21 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   const undo = inverse?.undo ?? { targets: [], commits: [] };
   const source = inverse?.source ?? move?.source ?? captured?.source ?? files[0].path;
   const noop = inverse?.noop ?? captured?.noop ?? files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
-  const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
+  const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo, relationship);
   if (audit) files.push(audit.file);
   if (move || inverse?.structural) {
     const blobs = new Map(files.flatMap(file => [file.before, file.after]).filter(bytes => bytes !== null).map(bytes => [revision(bytes), bytes]));
     if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
   }
   const git = preflightGit(vault, files, { budget });
+  const vitalsBefore = noop ? [] : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, git.baseHead, inverse?.restoredAges);
   budget.check();
   const gitMs = budget.usedMs;
-  const reads = inverse?.reads ?? move?.reads ?? [];
-  const inventoryHash = inverse?.inventoryHash ?? (move ? revision(canonicalJson(move.inventory)) : null);
+  const reads = inverse?.reads ?? move?.reads ?? relationship?.reads ?? [];
+  const inventoryHash = inverse?.inventoryHash ?? (move || relationship ? revision(canonicalJson((move ?? relationship).inventory)) : null);
   const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
+  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: null, vitalsBefore, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -645,15 +670,26 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
   return {
     ok: true, tool: record.tool, operation: record.operation, vault: vault.id, requestId: record.id, operationId: record.id,
     outcome, batch: record.batch, planHash: record.planHash,
-    changes: outputChanges(record.files.map(file => ({ ...file, before: file.before === null ? null : readBlob(directory, vault, record.id, file.before), after: file.after === null ? null : readBlob(directory, vault, record.id, file.after) })), false),
+    changes: outputChanges(record.files.map(file => {
+      const before = file.before === null ? null : readBlob(directory, vault, record.id, file.before);
+      const after = file.after === null ? null : readBlob(directory, vault, record.id, file.after);
+      let delta = 0;
+      const splices = record.version === 2 ? file.splices.map(splice => {
+        const replacement = after?.subarray(splice.startByte + delta, splice.startByte + delta + splice.replacementBytes) ?? Buffer.alloc(0);
+        if (revision(replacement) !== splice.replacementHash) refuse('JOURNAL_CORRUPT', 'A recorded splice does not match the immutable after bytes.', [file.path]);
+        delta += splice.replacementBytes - (splice.endByte - splice.startByte);
+        return { startByte: splice.startByte, endByte: splice.endByte, replacement: replacement.toString('utf8') };
+      }) : undefined;
+      return { ...file, before, after, splices };
+    }), false),
     commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
     log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
-    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), link: record.link ?? null, relate: record.relate ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
   };
 }
 
 function previewResult(tool, vault, input, plan, started) {
-  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: captureReceipt(plan.capture), warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: captureReceipt(plan.capture), link: plan.link ?? null, relate: plan.relate ?? null, warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
 }
 
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
@@ -714,7 +750,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
         const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
         if (result.result === 'conflict_preserved') refuse(result.conflicts.some(item => item.reason.startsWith('UNSTAMPED_AFTER')) ? 'UNSTAMPED_AFTER' : 'REVISION_CONFLICT', 'The operation encountered unstamped or changed bytes.', result.conflicts.map(item => item.path));
-        if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
+        if (result.result === 'aborted_unapplied') refuse(record.error?.code === 'DEPENDENCY_CHANGED' ? 'DEPENDENCY_CHANGED' : 'OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
         if (!record.git.commit || !adapter.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'A write cannot succeed before its exact commit is verified as published.');
         record.timings.totalMs = performance.now() - started;
         saveRecord(directory, vault, record, options.sync);
