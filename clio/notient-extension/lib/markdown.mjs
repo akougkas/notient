@@ -85,7 +85,11 @@ function yamlLex(text, allowOpen = false) {
     }
     const boundary = i === 0 || /[\s,[{:]/.test(text[i - 1]);
     if ((c === '"' || c === "'") && boundary) { quote = c; continue; }
-    if ('&*!'.includes(c) && boundary) refuse('FRONTMATTER_UNSUPPORTED', 'YAML anchors, aliases and custom tags are unsupported.');
+    if ('&*!'.includes(c) && boundary) {
+      const prefix = text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trimStart();
+      const plainAmpersand = c === '&' && flow.length === 0 && /^[\p{L}\p{N}_][^:\r\n]*[ \t]+$/u.test(prefix) && /[ \t]/.test(text[i + 1] ?? '');
+      if (!plainAmpersand) refuse('FRONTMATTER_UNSUPPORTED', 'YAML anchors, aliases and custom tags are unsupported.');
+    }
     if (c === '[' || c === '{') flow.push({ kind: c, keys: new Set(), keyStart: i + 1, needsKey: c === '{' });
     else if (c === ',' && flow.at(-1)?.kind === '{') { flow.at(-1).needsKey = true; flow.at(-1).keyStart = i + 1; }
     else if (c === ':' && flow.at(-1)?.kind === '{' && flow.at(-1).needsKey) {
