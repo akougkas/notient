@@ -34,22 +34,25 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
       const file = latest?.files.find(file => file.role === 'note' && file.path === row.path);
       if (!file || file.after !== row.revision) { result.get(row.path).fallback = false; continue; }
       result.get(row.path).fallback = true;
-      if (budget.call(vault.path, ['rev-list', '--first-parent', '-1', 'HEAD', '--', row.path]) !== latest.git.commit) continue;
       let name = row.path;
       let after = row.revision;
+      let head = 'HEAD';
       for (const record of history.slice(history.indexOf(latest))) {
         const changed = record.files.find(file => file.role === 'note' && file.path === name);
         if (!changed) continue;
-        if (changed.after !== after) break;
+        if (changed.after !== after || budget.call(vault.path, ['rev-list', '--first-parent', '-1', head, '--', name]) !== record.git.commit) break;
         verify(record);
         const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === name)?.lastUserEditMs : null;
         if (Number.isFinite(frozen)) { result.set(row.path, { at: Math.min(now, frozen), fallback: false }); break; }
         if (record.operation === 'capture' && changed.before === null) { result.set(row.path, { at: Math.min(now, Date.parse(record.createdAt)), fallback: false }); break; }
         if (changed.before === null) {
-          const prior = record.files.find(file => file.role === 'note' && file.after === null && file.before === changed.after);
-          if (!prior) break;
+          const matches = record.files.filter(file => file.role === 'note' && file.after === null && file.before === changed.after);
+          if (matches.length !== 1) break;
+          const prior = matches[0];
           name = prior.path; after = prior.before;
         } else after = changed.before;
+        head = record.git.baseHead;
+        if (head === null) break;
       }
     }
   } catch (error) { if (strictBudget && error.code === 'GIT_TIMEOUT') throw error; for (const value of result.values()) value.fallback = true; }

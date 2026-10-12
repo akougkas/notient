@@ -21,6 +21,36 @@ const day = 86400000;
 const at = () => now;
 const age = (f, name, days) => utimesSync(path.join(f.vault.path, name), new Date(now - days * day), new Date(now - days * day));
 
+function legacyRecord(f, id) {
+  const record = readRecord(f.directory, f.vault, id); const prepared = record.intentSet.prepared; record.version = 1;
+  for (const key of ['link', 'relate', 'semanticEvidence', 'vitalsBefore']) delete record[key];
+  freezeIntentSet(record); record.intentSet.prepared = prepared; saveRecord(f.directory, f.vault, record);
+  const intents = new DatabaseSync(path.join(journalRoot(f.directory, f.vault), 'intents.db'));
+  intents.prepare('UPDATE intents SET manifest_hash=? WHERE operation_id=?').run(record.intentSet.manifestHash, record.id); intents.close();
+}
+
+for (const variant of ['restored path', 'moved restored path', 'unrelated path']) test(`V4 legacy edit-age rebuild verifies a contiguous path history for ${variant}`, t => {
+  const f = writerFixture(t); baseline(f);
+  const capturedAt = now - 14 * day;
+  const capture = writeOperation('capture', { vault: f.vault.id, requestId: 'legacy-age-capture', batch: 'age', authorization: { origin: 'operator', request: 'Capture the age fixture.' }, name: 'Contiguous age', content: 'Original stored prose.\n' }, { directory: f.directory, now: () => new Date(capturedAt) }); assert.equal(capture.ok, true, JSON.stringify(capture)); legacyRecord(f, capture.operationId);
+  const name = capture.capture.path; const original = readFileSync(path.join(f.vault.path, name));
+  const changedPath = variant === 'unrelated path' ? 'Other.md' : name;
+  for (const [index, bytes] of [Buffer.from('Intervening operator bytes.\n'), variant === 'unrelated path' ? Buffer.from('Restored unrelated bytes.\n') : original].entries()) {
+    put(f, changedPath, bytes); git(f.vault.path, ['add', '--', changedPath]); git(f.vault.path, ['-c', 'user.name=Operator', '-c', 'user.email=operator@localhost', 'commit', '-m', `operator intervening ${index}`]);
+  }
+  age(f, name, 3);
+  const operation = variant.startsWith('moved') ? 'move' : 'replace';
+  const input = { vault: f.vault.id, requestId: 'legacy-age-latest', batch: 'age', authorization: { origin: 'operator', request: 'Apply the final fixture change.' }, operation, path: name, revision: revision(original), ...(operation === 'move' ? { destination: 'Moved/Legacy.md' } : { oldText: 'Original', newText: 'Later' }) };
+  if (operation === 'move') { const preview = writeOperation('revise', { ...input, dryRun: true }, { directory: f.directory }); assert.equal(preview.ok, true, JSON.stringify(preview)); input.planHash = preview.planHash; }
+  const written = writeOperation('revise', input, { directory: f.directory }); assert.equal(written.ok, true, JSON.stringify(written)); legacyRecord(f, written.operationId);
+  const pathName = operation === 'move' ? input.destination : name; const journal = snapshot(path.join(f.directory, 'journal'));
+  refreshIndex(f.vault, f.directory, { now: at });
+  const expected = variant === 'unrelated path' ? capturedAt : now;
+  assert.equal(inspectNote(f.vault, f.directory, { path: pathName }, { now: at }).vitals.values.lastUserEditAt, new Date(expected).toISOString());
+  assert.equal(indexSummary(f.vault, f.directory).editAgeFallbackPaths.includes(pathName), variant !== 'unrelated path');
+  assert.deepEqual(snapshot(path.join(f.directory, 'journal')), journal);
+});
+
 test('vitals count unique directed wiki edges and typed frontmatter while ignoring embeds self Markdown and code', t => {
   const f = writerFixture(t);
   put(f, 'A.md', '# A\n\nAuthored alpha prose.\n\n- [[B]]\n- [[B|alias]]\n- [[B#Part]]\n- ![[C]]\n- [[Missing]]\n- [[A]]\n\n[Only markdown](D.md)\n\n    [[C]]\n\n> ```\n> [[C]]\n> ```\n\n%% [[C]] %%\n');
