@@ -87,3 +87,25 @@ approve b6111e15 for item 6.
 approve ea232e24 for item 7.
 
 block the reviewed 4b implementation through ea232e24: pending hybrid space identity, deadline and scoring fixes (items 8 through 10), incomplete frozen evidence for selected retrieved drops (item 11), missing required negative-distance fixture (item 12), and the remaining host input contract (item 13, superseding item 2).
+
+## 4edcb374: E8 fix for item 8
+
+approve 4edcb374 for item 8, checked through 80d59f5a.
+
+## 2ed7a5eb: E9 fix for item 9
+
+14. **Two independent index-lock waits can consume more than the fallback reserve.** `clio/notient-extension/lib/hybrid-search.mjs:78` reserves six seconds after the semantic allowance, but failure recording at `:109` and served-result recording at `:126` each use `clio/notient-extension/lib/index-lock.mjs:18`, which starts a separate five-second lock wait without the remaining command deadline. **Violates 04 §4's lexical fallback requirement in the deadline scenario addressed by item 9.** With a configured inference timeout of 60000 ms, query inference can abort at elapsed second 54. Let a concurrent indexing process release its writer lock at second 58.9: failure recording acquires it after 4.9 seconds and commits quickly. If the indexing process reacquires that lock before served-result recording, search begins another five-second wait near second 59. The unchanged 60-second host timeout can then kill the command before it returns its already-computed lexical fallback. The witness uses serial index-writer ownership and the existing bounded waits; it does not require slow file reads or simultaneous writers inside the lock. E9 fixes the original independent query timeout and fresh scan allowance, but its fallback tail still lacks a shared remaining deadline. References are pinned to 80d59f5a.
+
+block 2ed7a5eb on the remaining fallback deadline (item 14, the residual of item 9).
+
+## 4b3e0bbc: E10 fix for item 10
+
+approve 4b3e0bbc for item 10, checked through 80d59f5a.
+
+## 80d59f5a: verification record and final stage 4b status
+
+No additional divergence in this record-only commit. The reported command outputs were not rerun during static review. The record explicitly leaves real endpoint and real Clio-session acceptance pending; those checks remain operator work under 04 §8.
+
+Items 11 and 12 are unchanged in this range. Item 13 remains at `clio/notient-extension/lib/embedding-adapter.mjs:97`; the input array still contains strings rather than typed host text inputs. Their previously recorded findings remain open without duplication here.
+
+block all of stage 4b through 80d59f5a: incomplete frozen evidence for selected retrieved drops (item 11), missing required negative-distance fixture (item 12), remaining host input contract (item 13), and fallback index-lock waits outside the shared deadline (item 14).
