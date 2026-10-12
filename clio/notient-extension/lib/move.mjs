@@ -115,6 +115,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
   const document = documentSpans(bytes);
   const { text, lines, bodyStart } = document;
   const visible = new Uint8Array(text.length).fill(1);
+  const fenceMask = visibility ? new Uint8Array(text.length) : null;
   const yamlQuotes = new Uint8Array(text.length);
   const unsafe = [];
   const issues = [];
@@ -135,6 +136,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     if (fence && content.trim() && (depth !== fence.depth || indent < fence.indent)) fence = null;
     if (fence) {
       mask(line.start, line.end);
+      fenceMask?.fill(1, line.start, line.end);
       if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(content.slice(fence.indent))) fence = null;
       continue;
     }
@@ -154,6 +156,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(remainder);
       if (opening && visible[line.start + offset] && !(opening[1][0] === '`' && opening[2].includes('`'))) {
         fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base, line: ordinal + 1, newline: line.ending || document.newline };
+        fenceMask?.fill(1, line.start, line.end);
         mask(line.start, line.end); continue;
       }
       if (indentation(remainder) >= 4) { mask(line.start, line.end); continue; }
@@ -303,7 +306,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     i = end;
   }
   for (const entries of definitions.values()) if (entries.length > 1) for (const token of entries) token.duplicate = true;
-  return { tokens, issues, aliases: parseMarkdown(text).aliases, ...(visibility ? { visible, contexts, unclosedFence: fence } : {}) };
+  return { tokens, issues, aliases: parseMarkdown(text).aliases, ...(visibility ? { visible, fenceMask, contexts, unclosedFence: fence } : {}) };
 }
 
 export function inventoryIndex(names, notes) {

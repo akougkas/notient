@@ -61,6 +61,19 @@ test('V15 Setext inline-code titles with long backtick runs never let Related sw
   }
 });
 
+test('V19 a completed code fence followed by a thematic break preserves an already present target byte-identically', () => {
+  for (const newline of ['\n', '\r\n']) for (const fence of ['```', '````', '~~~~']) {
+    const before = ['## Related', '', '- [[Target]]', '', `${fence}md`, 'code', fence, '---', ''].join(newline);
+    const result = planLink(scan(before), 'Source.md', [edge]);
+    assert.deepEqual(result.bytes, Buffer.from(before));
+    assert.deepEqual(result.splices, []);
+    const missing = before.replace('[[Target]]', '[[Other]]');
+    const inserted = planLink(scan(missing), 'Source.md', [edge]);
+    assert.deepEqual(inserted.bytes, Buffer.from(missing.replace('- [[Other]]' + newline, '- [[Other]]' + newline + '- [[Target]]' + newline)));
+    assert.deepEqual(applySplices(Buffer.from(missing), inserted.splices), inserted.bytes);
+  }
+});
+
 test('V6 visible Setext H1 and H2 end Related and outside targets do not satisfy presence', () => {
   for (const underline of ['============', '------------']) for (const newline of ['\n', '\r\n']) {
     const before = ['## Related', '', '- [[Other]]', '', 'Next section', underline, '', '[[Target]]', ''].join(newline);
