@@ -19,3 +19,4 @@ import './tokenizer-review.test.mjs';
 import './historical-logs.test.mjs';
 import './recovery-recognition.test.mjs';
 import './structural-hash.test.mjs';
+import './own-vault.test.mjs';

@@ -7,6 +7,10 @@ import { contained, vaultId } from './paths.mjs';
 
 export const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 
+export function ownVaultPath(env = process.env, homeDirectory = homedir()) {
+  return path.resolve(env.XDG_DATA_HOME || path.join(homeDirectory, '.local/share'), 'notient/clio-vault');
+}
+
 export function notConfigured() {
   return { configured: false, unavailable: 'not-configured', setupHint: `Run node ${JSON.stringify(path.join(packageRoot, 'bin/setup.mjs'))} --vault <absolute-vault-path> as the operator.` };
 }

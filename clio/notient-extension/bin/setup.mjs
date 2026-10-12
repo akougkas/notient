@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import path from 'node:path';
-import { homedir } from 'node:os';
-import { atomicJson, dataDirectory, packageRoot, readConfig } from '../lib/config.mjs';
+import { atomicJson, dataDirectory, packageRoot, readConfig, ownVaultPath } from '../lib/config.mjs';
 import { contained, vaultId } from '../lib/paths.mjs';
 import { initializeGit } from '../lib/git.mjs';
 
@@ -30,7 +29,9 @@ Use status values inbox, active, evergreen and archived. Archive only after revi
 
 ## Frontmatter and evidence
 
-Use title, type, status, tags, aliases, created and updated when relevant. Memory notes also carry session, repository, date and source_entry_ids. Keep authored prose and frontmatter bytes outside an approved change intact.
+Use title, type, status, tags, aliases, created and updated when relevant. Memory frontmatter uses type: memory, created, updated, repositories and tags. Its dated body contributions carry one Source: line with session, canonical repository and observed entry IDs. The body is canonical; updated and repositories are convenience summaries. Keep authored prose and frontmatter bytes outside an approved change intact.
+
+Ordinary memory contributions remain searchable. Use a readable topic heading, date headings and exactly one <!-- notient-memory:append --> marker. Record corrections as later contributions and preserve the earlier claim. Deduplicate by canonical repository, entry ID and UTC contribution date. Limit the complete memory body to 16,000 characters; defer automatic extension when it would exceed the bound.
 
 Mark visitor contributions with a Notient Intelligence heading or between the literal markers below. Their content is excluded from search evidence.
 
@@ -40,7 +41,7 @@ Visitor contribution with source and attribution.
 <!-- notient:end -->
 \`\`\`
 
-Read before editing. Keep one batch label for each task. Review structural work on an operator vault. Unattended work stays inside Notient until plan execution exists. Own-vault work remains journaled and committed.
+Read before editing. Keep one batch label for each task. Review structural work on an operator vault. Unattended work in an operator vault stays inside Notient until plan execution exists. Own role relaxes only unattended location and move restrictions; read-only access, revision checks, journal and Git requirements still apply.
 `;
 
 function quote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
@@ -73,7 +74,7 @@ function main() {
   if (access !== undefined && (!['read-only', 'read-write'].includes(access) || createOwn || readOnly || args.includes('--role'))) throw new Error('--access requires read-only or read-write and an existing --vault registration.');
   if (!['operator', 'own'].includes(role)) throw new Error('Role must be operator or own.');
   if (createOwn) {
-    vaultPath = path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local/share'), 'notient/clio-vault');
+    vaultPath = ownVaultPath();
     role = 'own';
   }
   if (!vaultPath) throw new Error('Name a vault with --vault <path>, or use --create-own.');
