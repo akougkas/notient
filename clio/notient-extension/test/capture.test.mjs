@@ -8,6 +8,7 @@ import { atomicJson } from '../lib/config.mjs';
 import { initializeGit, git } from '../lib/git.mjs';
 import { refreshIndex, searchIndex, openIndex } from '../lib/index.mjs';
 import { writeOperation } from '../lib/write.mjs';
+import { documentSpans } from '../lib/markdown.mjs';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -15,7 +16,7 @@ const captureInput = f => ({ vault: f.vault.id, batch: 'capture-test', authoriza
 
 function captureFixture(t) { const f = writerFixture(t); initializeGit(f.vault.path); refreshIndex(f.vault, f.directory); return f; }
 
-test('capture preserves complete document buffers and mints retryable request IDs', t => {
+test('capture preserves caller body and fields while adding provenance and minting retryable IDs', t => {
   for (const content of ['# LF\nBody\n', '# CRLF\r\nBody\r\n', '\uFEFF--- \r\ntitle: Original\r\n...\r\n# Body\nMixed ending.', 'No final newline', '---\ntitle: Empty body\n---\n']) {
     const f = captureFixture(t);
     const input = { ...captureInput(f), content };
@@ -23,7 +24,15 @@ test('capture preserves complete document buffers and mints retryable request ID
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.outcome, 'committed');
     assert.match(result.requestId, /^[a-f0-9-]{36}$/);
-    assert.deepEqual(readFileSync(path.join(f.vault.path, result.changes[0].path)), Buffer.from(content));
+    const stored = readFileSync(path.join(f.vault.path, result.changes[0].path));
+    const parsed = documentSpans(stored);
+    const supplied = documentSpans(Buffer.from(content));
+    assert.equal(parsed.text.slice(parsed.bodyStart), supplied.text.slice(supplied.bodyStart).replaceAll('\r\n', '\n'));
+    assert.match(parsed.text, /created_by: "operator"/);
+    assert.match(parsed.text, /tags: \[\]/);
+    assert.equal(result.capture.workspace, path.basename(process.cwd()));
+    assert.match(result.capture.path, /^Notient\/Inbox\/\d{4}-\d{2}-\d{2}-/);
+    assert.equal(result.capture.revision, result.changes[0].after);
     assert.equal(result.indexState, 'updated');
     const retried = writeOperation('capture', { ...input, requestId: result.requestId }, { directory: f.directory });
     assert.equal(retried.outcome, 'already_committed');
@@ -38,11 +47,12 @@ test('capture preserves complete document buffers and mints retryable request ID
 
 test('capture allocates case-folded collision suffixes and binds explicit retry IDs', t => {
   const f = captureFixture(t);
-  put(f, 'Notient/Inbox/new note.md', 'Unrelated existing note.');
+  const date = new Date().toISOString().slice(0, 10);
+  put(f, `Notient/Inbox/${date}-new note.md`, 'Unrelated existing note.');
   const input = { ...captureInput(f), requestId: 'operator.capture_001' };
   const result = writeOperation('capture', input, { directory: f.directory });
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.changes[0].path, 'Notient/Inbox/New Note-2.md');
+  assert.equal(result.changes[0].path, `Notient/Inbox/${date}-New Note-2.md`);
   assert.equal(result.requestId, input.requestId);
   const before = snapshot(f.temporary);
   const reused = writeOperation('capture', { ...input, content: 'Different request.' }, { directory: f.directory });
@@ -63,7 +73,7 @@ test('capture previews create no artifacts and plan hashes reject later HEAD cha
   assert.equal(existsSync(path.join(f.vault.path, 'Notient')), false);
   const applied = writeOperation('capture', { ...input, planHash: preview.planHash }, { directory: f.directory });
   assert.equal(applied.ok, true, JSON.stringify(applied));
-  const changed = writeOperation('capture', { ...input, requestId: 'capture-preview-002', planHash: preview.planHash }, { directory: f.directory });
+  const changed = writeOperation('capture', { ...input, content: `${input.content}\nDifferent body.`, requestId: 'capture-preview-002', planHash: preview.planHash }, { directory: f.directory });
   assert.equal(changed.error.code, 'PLAN_CHANGED');
 });
 
@@ -93,7 +103,8 @@ test('capture refuses invalid input, read-only writes and publication collisions
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [f.vault] });
   const collision = writeOperation('capture', { ...captureInput(f), requestId: 'capture-race-001' }, { directory: f.directory, barrier(name, record) { if (name === 'afterIntent') put(f, record.files[0].path, 'Third-party exclusive destination.'); } });
   assert.equal(collision.ok, false);
-  assert.equal(readFileSync(path.join(f.vault.path, 'Notient/Inbox/New Note.md'), 'utf8'), 'Third-party exclusive destination.');
+  const collided = `Notient/Inbox/${new Date().toISOString().slice(0, 10)}-New Note.md`;
+  assert.equal(readFileSync(path.join(f.vault.path, collided), 'utf8'), 'Third-party exclusive destination.');
 });
 
 test('capture command uses closed schemas, enum checks and structured refusals', t => {
@@ -111,6 +122,7 @@ test('capture command uses closed schemas, enum checks and structured refusals',
 
 test('setup access changes registration without touching vault bytes or git', t => {
   const f = writerFixture(t);
+  atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, captureLimitPerHour: 6 }] });
   const packageCopy = path.join(f.temporary, 'package');
   cpSync(packageRoot, packageCopy, { recursive: true });
   put(f, 'One.md', 'Operator bytes.');
@@ -122,6 +134,8 @@ test('setup access changes registration without touching vault bytes or git', t 
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(snapshot(f.vault.path), before);
     assert.deepEqual(readdirSync(f.vault.path), ['One.md']);
-    assert.equal(JSON.parse(readFileSync(path.join(f.directory, 'config.json'))).vaults[0].readOnly, access === 'read-only');
+    const registered = JSON.parse(readFileSync(path.join(f.directory, 'config.json'))).vaults[0];
+    assert.equal(registered.readOnly, access === 'read-only');
+    assert.equal(registered.captureLimitPerHour, 6);
   }
 });

@@ -97,7 +97,7 @@ test('undo preserves later edits and refuses later overlapping Notient writes ev
 test('capture deletion refuses new incoming links and unknown operation IDs', t => {
   const f = fixture(t);
   const capture = writeOperation('capture', { vault: f.vault.id, batch: 'linked-capture', authorization, name: 'Referenced', content: '# Referenced\n' }, { directory: f.directory });
-  put(f, 'New referrer.md', '[[Referenced]] now has a live incoming link.\n');
+  put(f, 'New referrer.md', `[[${capture.changes[0].path.replace(/\.md$/, '')}]] now has a live incoming link.\n`);
   const before = snapshot(f.temporary);
   const result = writeOperation('undo', inputFor(f, capture.operationId, { dryRun: true }), { directory: f.directory });
   assert.equal(result.error.code, 'UNDO_REFERENCE_CONFLICT');

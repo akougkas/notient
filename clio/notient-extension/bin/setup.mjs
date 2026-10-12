@@ -111,7 +111,7 @@ function main() {
   }
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const vault = { id: vaultId(root), path: root, role, readOnly };
+  const vault = { ...config.vaults.find(item => item.path === root), id: vaultId(root), path: root, role, readOnly };
   config.vaults = [...config.vaults.filter(v => v.id !== vault.id), vault];
   mkdirSync(path.join(directory, 'vaults', vault.id), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(directory, 'journal', vault.id), { recursive: true, mode: 0o700 });

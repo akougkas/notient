@@ -10,6 +10,7 @@ import { repairCommittedIndex } from './index.mjs';
 import { listNotes } from './vault.mjs';
 import { scanMoveVault, planMove, moveInventory, guardInverseReferences } from './move.mjs';
 import { simulateUndo, certifyCancellation, hydrateOperation } from './undo.mjs';
+import { captureDocument, captureBodyHash, captureReviewBytes, captureReceipt } from './capture.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile, freezeIntentSet, prepareFileIntents, readFileIntents, claimFileIntent, markFileApplied } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -429,16 +430,40 @@ function plannedLog(vault, input, operation, source, files, createdAt, undo) {
   return { file: { path: name, role: 'log', before: current.bytes, after, mode: current.mode }, log: { path: name, line } };
 }
 
-function captureFiles(vault, input) {
+function captureFiles(vault, directory, input, createdAt) {
+  const content = captureDocument(input, createdAt);
+  const records = listRecords(directory, vault);
+  for (const original of records.filter(record => record.operation === 'capture' && record.state === 'committed' && !record.undoneBy)) {
+    const note = original.files.find(file => file.role === 'note' && file.after !== null);
+    if (!note) continue;
+    const originalHash = original.capture?.bodyHash ?? captureBodyHash(readBlob(directory, vault, original.id, note.after));
+    if (originalHash !== content.bodyHash) continue;
+    let name = original.capture?.path ?? note.path;
+    for (const move of records.filter(record => record.operation === 'move' && record.state === 'committed' && !record.undoneBy)) if (move.source === name) name = move.destination;
+    let current;
+    try { current = currentFile(vault.path, name); } catch { continue; }
+    try { if (current.bytes === null || captureBodyHash(current.bytes) !== content.bodyHash) continue; }
+    catch { continue; }
+    return { files: [], source: name, noop: true, capture: { path: name, bodyHash: content.bodyHash, workspace: original.capture?.workspace ?? content.workspace, capturedAt: original.capture?.capturedAt ?? original.createdAt, revision: current.revision, duplicateOf: original.id, limitPerHour: original.capture?.limitPerHour ?? 12 } };
+  }
+  const config = readConfig(directory);
+  const limitPerHour = vault.captureLimitPerHour ?? config.captureLimitPerHour ?? 12;
+  if (!Number.isSafeInteger(limitPerHour) || limitPerHour < 1) refuse('INVALID_CONFIGURATION', 'captureLimitPerHour must be a positive integer.');
+  const now = Date.parse(createdAt);
+  const recent = records.filter(record => record.operation === 'capture' && record.state !== 'aborted' && Date.parse(record.createdAt) > now - 3600000 && Date.parse(record.createdAt) <= now);
+  if (recent.length >= limitPerHour) {
+    const retryAt = new Date(recent.map(record => Date.parse(record.createdAt)).sort((a, b) => a - b)[recent.length - limitPerHour] + 3600000).toISOString();
+    refuse('CAPTURE_RATE_LIMIT', `The rolling capture limit is ${limitPerHour} per hour; retry at ${retryAt}.`);
+  }
   const base = 'Notient/Inbox';
   const probe = writePath(vault.path, `${base}/notient-probe-${randomUUID()}.md`);
   const names = existsSync(path.dirname(probe)) ? new Set(readdirSync(path.dirname(probe)).map(portableFold)) : new Set();
   for (let suffix = 1; suffix <= 9999; suffix++) {
-    const name = `${input.name}${suffix === 1 ? '' : `-${suffix}`}.md`;
+    const name = `${createdAt.slice(0, 10)}-${input.name}${suffix === 1 ? '' : `-${suffix}`}.md`;
     if (names.has(portableFold(name))) continue;
     const filename = `${base}/${name}`;
     if (currentFile(vault.path, filename).revision !== null) continue;
-    return [{ path: filename, role: 'note', before: null, after: Buffer.from(input.content), mode: 0o600, splices: [] }];
+    return { files: [{ path: filename, role: 'note', before: null, after: content.bytes, mode: 0o600, splices: [] }], source: filename, noop: false, capture: { path: filename, bodyHash: content.bodyHash, workspace: content.workspace, capturedAt: content.capturedAt, revision: revision(content.bytes), duplicateOf: null, limitPerHour } };
   }
   refuse('CAPTURE_COLLISIONS', 'No available capture name remains within 9999 candidates.');
 }
@@ -527,13 +552,15 @@ function inverseFiles(vault, directory, input) {
   return { files, source, noop: !files.length, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs };
 }
 
-export function buildWritePlan(tool, vault, directory, input) {
+export function buildWritePlan(tool, vault, directory, input, { now = () => new Date() } = {}) {
   const started = performance.now();
   const operation = tool === 'capture' ? 'capture' : tool === 'undo' ? 'undo' : input.operation;
   let files;
   let inverse;
   let move;
-  if (tool === 'capture') files = captureFiles(vault, input);
+  let captured;
+  const createdAt = now().toISOString();
+  if (tool === 'capture') { captured = captureFiles(vault, directory, input, createdAt); files = captured.files; }
   else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input); files = inverse.files; }
   else {
     const current = currentFile(vault.path, input.path);
@@ -552,10 +579,9 @@ export function buildWritePlan(tool, vault, directory, input) {
     }
   }
   requireAuthority(vault, input.authorization, files, { dryRun: input.dryRun });
-  const createdAt = new Date().toISOString();
   const undo = inverse?.undo ?? { targets: [], commits: [] };
-  const source = inverse?.source ?? move?.source ?? files[0].path;
-  const noop = inverse?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
+  const source = inverse?.source ?? move?.source ?? captured?.source ?? files[0].path;
+  const noop = inverse?.noop || captured?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
   const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
   if (audit) files.push(audit.file);
   if (move || inverse?.structural) {
@@ -567,9 +593,9 @@ export function buildWritePlan(tool, vault, directory, input) {
   const gitMs = performance.now() - gitStarted + (inverse?.gitMs ?? 0);
   const reads = inverse?.reads ?? move?.reads ?? [];
   const inventoryHash = inverse?.inventoryHash ?? (move ? revision(canonicalJson(move.inventory)) : null);
-  const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
+  const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -604,12 +630,12 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
     changes: outputChanges(record.files.map(file => ({ ...file, before: file.before === null ? null : readBlob(directory, vault, record.id, file.before), after: file.after === null ? null : readBlob(directory, vault, record.id, file.after) })), false),
     commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
     log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
-    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: record.capture ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
   };
 }
 
 function previewResult(tool, vault, input, plan, started) {
-  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: plan.capture ?? null, warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: captureReceipt(plan.capture), warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
 }
 
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
@@ -632,14 +658,14 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
     existing();
     if (input.dryRun) {
       if (listRecords(directory, vault).some(blocksWrites)) refuse('RECOVERY_REQUIRED', 'Complete pending recovery before previewing a new change.');
-      const plan = buildWritePlan(tool, vault, directory, input);
+      const plan = buildWritePlan(tool, vault, directory, input, options);
       const result = previewResult(tool, vault, input, plan, started);
       if (Buffer.byteLength(JSON.stringify(result)) > 900000) refuse('PREVIEW_TOO_LARGE', 'The complete preview exceeds 900000 bytes.');
       return result;
     }
     requireAuthority(vault, input.authorization, []);
     if (tool === 'revise' && (input.operation !== 'move' || input.path === input.destination) && !existing() && !listRecords(directory, vault).some(blocksWrites)) {
-      const plan = buildWritePlan(tool, vault, directory, input);
+      const plan = buildWritePlan(tool, vault, directory, input, options);
       if (plan.noop) return previewResult(tool, vault, input, plan, started);
     }
     return withWriterLock(directory, vault, lockWaitMs => {
@@ -655,7 +681,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
           if (!adapter.recognize(record)) refuse('RECOVERY_REQUIRED', 'The requested operation has not published a verified commit.');
           return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
         }
-        const plan = buildWritePlan(tool, vault, directory, input);
+        const plan = buildWritePlan(tool, vault, directory, input, options);
         if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
         const journalStarted = performance.now();
         record = persistPlan(vault, directory, plan, options.sync);
