@@ -51,10 +51,10 @@ export function admitClioLink(vault, directory, input, { at = Date.now(), read =
     files.set(target.path, live);
     try { literal(vault, target.sourceEvidence, files); literal(vault, target.targetEvidence, files); }
     catch { stale('The receipt literal evidence changed; retrieve candidates again.'); }
+    targets.push({ path: target.path, revision: target.revision, bestDistance: target.bestDistance, sourceEvidence: target.sourceEvidence, targetEvidence: target.targetEvidence });
     const similarity = 1 - target.bestDistance;
     if (similarity <= 0) { dropped.push({ targetNotePath: edge.targetNotePath, reason: 'nonpositive_similarity' }); continue; }
     admitted.push({ targetNotePath: target.path, relation: 'related_to', confidence: Math.min([0.95, 0.85, 0.75, 0.65][admitted.length], similarity), basis: 'clio-candidate', rationale: edge.rationale });
-    targets.push({ path: target.path, revision: target.revision, bestDistance: target.bestDistance, sourceEvidence: target.sourceEvidence, targetEvidence: target.targetEvidence });
   }
   return { link: { admitted, dropped, candidateSet: input.link.candidateSet }, semanticEvidence: { version: 1, candidateSet: input.link.candidateSet, sourceRevision: input.revision, spaceId: payload.spaceId, indexGeneration: payload.indexGeneration, createdAt: payload.createdAt, expiresAt: payload.expiresAt, targets } };
 }

@@ -13,7 +13,7 @@ import { admitClioLink } from '../lib/link-admission.mjs';
 import { readNote, revision } from '../lib/paths.mjs';
 import { readConfig, atomicJson, indexPath } from '../lib/config.mjs';
 import { writeOperation, recoverVault } from '../lib/write.mjs';
-import { readRecord, validateRecord, operationDirectory } from '../lib/journal.mjs';
+import { readRecord, validateRecord, operationDirectory, freezeIntentSet } from '../lib/journal.mjs';
 
 const edge = targetNotePath => ({ targetNotePath, rationale: 'This fixture passage supplies related evidence.' });
 async function fixture(t) {
@@ -48,7 +48,7 @@ for (const [name, distances, names, expected] of table) test(name, async t => {
   if (typeof expected === 'string') assert.throws(() => admitClioLink(f.vault, f.directory, input), error => error.code === expected);
   else {
     const result = admitClioLink(f.vault, f.directory, input); assert.deepEqual(result.link.admitted.map(value => value.confidence), expected);
-    assert.equal(result.link.admitted.every(value => value.basis === 'clio-candidate'), true); assert.equal(result.semanticEvidence.targets.length, expected.length);
+    assert.equal(result.link.admitted.every(value => value.basis === 'clio-candidate'), true); assert.equal(result.semanticEvidence.targets.length, names.filter(name => f.receipt.candidates.some(target => target.path === name)).length);
     if (name.startsWith('G04')) assert.equal(result.link.dropped[0].reason, 'not_retrieved');
     if (name.startsWith('G05') || name.startsWith('G07') || name.startsWith('G08')) assert.equal(result.link.dropped[0].reason, 'nonpositive_similarity');
   }
@@ -112,6 +112,25 @@ test('idempotent published retry keeps frozen admission after receipt loss and s
   const retry = writeOperation('revise', f.input, { directory: f.directory }); assert.equal(retry.outcome, 'already_committed'); assert.deepEqual(retry.link, result.link); assert.equal(f.stub.requests.length, requests);
   const record = readRecord(f.directory, f.vault, f.input.requestId); record.semanticEvidence.targets[0].bestDistance = 0.5; writeFileSync(path.join(operationDirectory(f.directory, f.vault, f.input.requestId), 'record.json'), JSON.stringify(record));
   assert.throws(() => readRecord(f.directory, f.vault, f.input.requestId), error => error.code === 'JOURNAL_CORRUPT');
+});
+
+test('E11 mixed admission freezes the dropped retrieved evidence after receipt loss', async t => {
+  const f = await fixture(t); modify(f, payload => { payload.targets.find(target => target.path === 'N0.md').bestDistance = 1.25; });
+  const input = { ...f.input, link: { candidateSet: f.receipt.candidateSet, edges: [edge('N0.md'), edge('Invented.md'), edge('N1.md')] } };
+  const result = await embeddingCommand(f, 'revise', input); assert.equal(result.status, 0, JSON.stringify(result)); assert.equal(result.value.outcome, 'committed');
+  const record = readRecord(f.directory, f.vault, input.requestId);
+  assert.deepEqual(record.semanticEvidence.targets.map(target => [target.path, target.bestDistance]), [['N0.md', 1.25], ['N1.md', 0]]);
+  for (const target of record.semanticEvidence.targets) {
+    assert.equal(readNote(f.vault.path, target.path).text.includes(target.targetEvidence.passage), true);
+    assert.equal(target.sourceEvidence.passage, record.semanticEvidence.targets[0].sourceEvidence.passage);
+  }
+  validateRecord(record, f.vault);
+  const db = openIndex(f.directory, f.vault, true); db.exec('DELETE FROM candidate_sets'); db.close();
+  const retry = await embeddingCommand(f, 'revise', input); assert.equal(retry.value.outcome, 'already_committed'); assert.deepEqual(retry.value.link, result.value.link);
+  for (const mutate of [value => { value.semanticEvidence.targets.shift(); }, value => { value.semanticEvidence.targets[0].bestDistance = 0.5; }]) {
+    const damaged = structuredClone(record); mutate(damaged); freezeIntentSet(damaged);
+    assert.throws(() => validateRecord(damaged, f.vault), error => error.code === 'JOURNAL_CORRUPT');
+  }
 });
 
 test('recovery uses frozen semantic evidence after durable intent despite expired receipts or an index rebuild', async t => {
