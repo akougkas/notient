@@ -67,6 +67,9 @@ export function openIndex(directory, vault, writable = false, { immutable = fals
           payload TEXT NOT NULL, target_path TEXT, resolution TEXT NOT NULL, candidates TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS links_target ON links(target_path);
+        CREATE INDEX IF NOT EXISTS links_path ON links(path);
+        CREATE INDEX IF NOT EXISTS blocks_path ON blocks(path);
+        CREATE INDEX IF NOT EXISTS chunks_block ON chunks(block);
         CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
         CREATE TABLE IF NOT EXISTS tags (
           path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(path, tag)
