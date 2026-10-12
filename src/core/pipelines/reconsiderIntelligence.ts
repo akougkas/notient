@@ -76,6 +76,25 @@ export function hasQuestionForRecord(records: readonly IntelligenceRecord[], rec
   );
 }
 
+function assessesSameClaim(assessment: IntelligenceRecord, captured: IntelligenceRecord): boolean {
+  const evidenceIdentity = (record: IntelligenceRecord) => JSON.stringify({
+    sources: record.evidence.map((entry) => entry.source),
+    dependencies: record.dependencies,
+    relationships: record.relationships,
+  });
+  return captured.capturedContribution === true &&
+    assessment.assessmentOf === intelligenceRecordId(captured) &&
+    assessment.status !== "superseded" &&
+    assessment.kind === captured.kind &&
+    assessment.statement === captured.statement &&
+    evidenceIdentity(assessment) === evidenceIdentity(captured);
+}
+
+function qualificationTargets(candidate: ReconsiderationCandidate): string[] {
+  const captured = candidate.retained.find((record) => assessesSameClaim(candidate.record, record));
+  return [candidate.recordId, ...(captured ? [intelligenceRecordId(captured)] : [])];
+}
+
 function changedSources(context: PipelineContext, record: IntelligenceRecord, confirmedMissing: ReadonlySet<string>) {
   const observed = new Set(context.documents.map((source) => source.note.path));
   return changedIntelligenceDependencies(
@@ -137,7 +156,8 @@ function questionForCandidate(
     evidence: [],
     qualifications: [
       `Supporting evidence changed or became unavailable. The earlier finding is historical and needs fresh assessment. Sources: ${paths.join(", ").slice(0, 1800)}${paths.some((path) => confirmedMissing.has(path)) ? ". A source reported missing by the vault read was unavailable; this does not prove the retained statement false." : ""}`,
-      `This qualifies retained record ${candidate.recordId}; it does not establish that the conclusion is false.`,
+      ...qualificationTargets(candidate).map((id) =>
+        `This qualifies retained record ${id}; it does not establish that the conclusion is false.`),
       ...(candidate.record.kind === "decision"
         ? ["Preserve the historical decision and its context; changed evidence is a reason to review its continuing applicability."]
         : []),
@@ -457,7 +477,8 @@ function contextQuestion(
     qualifications: [
       `A bounded semantic recheck found these current passages materially relevant: ${assessment.rationale}`.slice(0, 2000),
       "The passages are current authored context, not a before-and-after diff. They do not prove the earlier understanding false or externally verify it.",
-      `This qualifies retained record ${recheck.candidate.recordId}; it does not establish that the conclusion is false.`,
+      ...qualificationTargets(recheck.candidate).map((id) =>
+        `This qualifies retained record ${id}; it does not establish that the conclusion is false.`),
       ...(recheck.candidate.record.kind === "decision"
         ? ["Preserve the historical decision and its context; review its continuing applicability without rewriting it."]
         : []),
@@ -606,6 +627,7 @@ export async function reconsiderPipelineIntelligence(context: PipelineContext, p
       if (record.kind === "feedback" || record.kind === "question" || record.status === "superseded") continue;
       const recordId = intelligenceRecordId(record);
       if (seenRecords.has(recordId) || hasQuestionForRecord(retained, recordId)) continue;
+      if (retained.some((assessment) => assessesSameClaim(assessment, record))) continue;
       seenRecords.add(recordId);
       const candidate = { note, record, recordId, retained };
       const key = `${note.note.path}\u0000${recordId}`;
