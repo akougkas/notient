@@ -4,14 +4,15 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { openSync, writeSync, closeSync } from 'node:fs';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 import { embeddingStub, profile } from './embedding-helpers.mjs';
-import { atomicJson, readConfig } from '../lib/config.mjs';
+import { atomicJson, readConfig, indexPath } from '../lib/config.mjs';
 import { normalizeEmbeddings } from '../lib/embedding-config.mjs';
 import { openIndex, refreshIndex } from '../lib/index.mjs';
 import { refreshVectors } from '../lib/embed-refresh.mjs';
 import { findCandidates } from '../lib/candidates.mjs';
-import { vectorState, vectorChunks, publishVectors } from '../lib/vector-store.mjs';
+import { vectorState, vectorChunks, publishVectors, rebuildVectorGeneration, openVectorSnapshot } from '../lib/vector-store.mjs';
 import { revision } from '../lib/paths.mjs';
 import { semanticSignal } from '../lib/separation.mjs';
 
@@ -127,4 +128,15 @@ test('candidate separation uses per-note scores before limit one and keeps flat 
   const f = await embeddingFixture(t, { files }); await refreshVectors(f.vault, f.directory, { tier: 'embed' });
   const result = findCandidates(f.vault, f.directory, { source: 'Source.md', revision: f.sourceRevision, limit: 1 }); assert.equal(result.candidates.length, 1); assert.equal(result.separation.state, 'flat'); assert.equal(result.separation.semantic.candidates, 12); assert.equal(result.separation.semantic.value, 0); assert.equal(result.separation.semantic.calibrated, false);
   assert.equal(semanticSignal([1, ...Array(9).fill(0)]).reason, 'zero_variance_gap');
+});
+
+test('E3 force rebuild validates reused bytes and recomputes a zero vector instead of republishing it as ready', async t => {
+  const f = await embeddingFixture(t); await refreshVectors(f.vault, f.directory, { tier: 'embed' }); const requests = f.stub.requests.length;
+  const db = openIndex(f.directory, f.vault); const space = db.prepare('SELECT * FROM vector_spaces').get(); const row = db.prepare("SELECT * FROM vec_meta WHERE path='Source.md'").get(); db.close();
+  const fd = openSync(path.join(path.dirname(indexPath(f.directory, f.vault)), space.pack_file), 'r+'); writeSync(fd, Buffer.alloc(space.dim), 0, space.dim, row.slot * space.dim); closeSync(fd);
+  assert.throws(() => rebuildVectorGeneration(f.vault, f.directory, f.profile), error => ['VECTOR_INVALID', 'VECTOR_SOURCE_MISSING'].includes(error.code));
+  const result = await refreshVectors(f.vault, f.directory, { tier: 'embed', force: true }); assert.equal(result.embedding.state, 'ready'); assert.equal(result.embedding.embeddedThisCall, 1); assert.equal(f.stub.requests.length, requests + 1);
+  const reader = openVectorSnapshot(f.vault, f.directory, f.profile);
+  try { for (const chunk of reader.chunks()) assert.ok(reader.vector(reader.metadata(chunk)).some(value => value !== 0)); }
+  finally { reader.close(); }
 });

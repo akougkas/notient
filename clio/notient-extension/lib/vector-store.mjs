@@ -83,13 +83,13 @@ export function vectorState(vault, directory, { db: supplied } = {}) {
   finally { if (!supplied) db?.close(); }
 }
 
-export function openVectorSnapshot(vault, directory, profile) {
+export function openVectorSnapshot(vault, directory, profile, { allowBuilding = false } = {}) {
   const db = openIndex(directory, vault); let fd; let closed = false;
   try {
     if (!db) refuse('VECTOR_PACK_UNAVAILABLE', 'A structural index is required.');
     db.exec('BEGIN');
     const id = embeddingSpace(profile); const space = db.prepare('SELECT * FROM vector_spaces WHERE space_id=?').get(id);
-    if (!space || metaValue(db, 'activeSpace') !== id || !['ready', 'incomplete'].includes(space.state)) refuse('VECTOR_PACK_UNAVAILABLE', 'No active pack matches the configured vector space.');
+    if (!space || !space.pack_file || !allowBuilding && metaValue(db, 'activeSpace') !== id || !(allowBuilding ? ['building', 'ready', 'incomplete', 'unavailable'] : ['ready', 'incomplete']).includes(space.state)) refuse('VECTOR_PACK_UNAVAILABLE', 'No usable pack matches the configured vector space.');
     verifySpace(space, profile);
     ({ fd } = openPack(directory, vault, space));
     const packed = metadata => {
@@ -211,6 +211,7 @@ export function rebuildVectorGeneration(vault, directory, profile, { barrier = (
         if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector generation rebuild exceeded its deadline.', [], true);
         if (!chunk.eligible) continue;
         const row = snapshot.metadata(chunk); if (!row) refuse('VECTOR_SOURCE_MISSING', 'Complete eligible vectors are required before rebuilding a generation.');
+        snapshot.vector(row);
         const packed = { bytes: snapshot.packed(row), scale: row.scale };
         if ((slots + 1) * profile.dimension > maxPackBytes) refuse('VECTOR_PACK_LIMIT', 'The rebuilt active pack cannot exceed 1 GiB.');
         writeAll(fd, packed.bytes, slots * profile.dimension); metadata.push({ ...row, slot: slots++, scale: packed.scale });

@@ -4,7 +4,7 @@ import { embeddingSpace } from './embedding-config.mjs';
 import { refreshIndex, openIndex } from './index.mjs';
 import { readCoverage } from './embedding-off.mjs';
 import { withIndexWriter } from './index-lock.mjs';
-import { vectorState, vectorChunks, vectorMetadata, publishVectors, rebuildVectorGeneration, markVectorFailure } from './vector-store.mjs';
+import { vectorState, vectorChunks, publishVectors, rebuildVectorGeneration, markVectorFailure, openVectorSnapshot } from './vector-store.mjs';
 import { readNote, refuse } from './paths.mjs';
 
 export function reclaimExpired(vault, directory, at = Date.now()) {
@@ -16,18 +16,23 @@ export function reclaimExpired(vault, directory, at = Date.now()) {
 }
 
 function missingBatch(vault, directory, profile) {
-  const db = openIndex(directory, vault); const batch = [];
+  let reader;
+  try { reader = openVectorSnapshot(vault, directory, profile, { allowBuilding: true }); }
+  catch (error) { if (!['VECTOR_PACK_INVALID', 'VECTOR_PACK_UNAVAILABLE', 'ENOENT'].includes(error.code)) throw error; }
+  const db = reader?.db ?? openIndex(directory, vault); const batch = [];
   try {
-    db.exec('BEGIN'); const space = db.prepare('SELECT * FROM vector_spaces WHERE space_id=?').get(embeddingSpace(profile));
+    if (!reader) db.exec('BEGIN');
     const files = new Map();
     for (const chunk of vectorChunks(db, profile)) {
-      if (!chunk.eligible || space && vectorMetadata(db, space, chunk)) continue;
+      if (!chunk.eligible) continue;
+      try { const row = reader?.metadata(chunk); if (row) { reader.vector(row); continue; } }
+      catch (error) { if (!['VECTOR_INVALID', 'VECTOR_PACK_INVALID'].includes(error.code)) throw error; }
       if (!files.has(chunk.path)) files.set(chunk.path, readNote(vault.path, chunk.path).revision);
       if (files.get(chunk.path) !== chunk.revision) refuse('STRUCTURAL_REFRESH_REQUIRED', 'A note changed before inference; refresh the structural snapshot first.', [chunk.path], true);
       batch.push(chunk); if (batch.length === profile.batch) break;
     }
     return batch;
-  } finally { if (db?.isTransaction) db.exec('ROLLBACK'); db?.close(); }
+  } finally { if (reader) reader.close(); else { if (db?.isTransaction) db.exec('ROLLBACK'); db?.close(); } }
 }
 
 export async function refreshVectors(vault, directory, input = {}, { now = () => performance.now(), adapter: supplied } = {}) {
