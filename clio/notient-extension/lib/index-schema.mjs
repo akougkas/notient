@@ -1,5 +1,5 @@
 export const indexVersion = 2;
-export const wordCountVersion = 'unicode-prose-v1';
+export const wordCountVersion = 'unicode-prose-v2';
 export const graphRule = 'typed-wiki-v3';
 
 export function migrateIndex(db) {
@@ -37,9 +37,9 @@ export function migrateIndex(db) {
       );
       INSERT OR REPLACE INTO meta VALUES ('schemaVersion', '2');
       INSERT OR IGNORE INTO meta VALUES ('preprocessingVersion', '1');
-      INSERT OR IGNORE INTO meta VALUES ('wordCountVersion', 'unicode-prose-v1');
       PRAGMA user_version = 2;
     `);
+    db.prepare("INSERT OR IGNORE INTO meta VALUES ('wordCountVersion', ?)").run(wordCountVersion);
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }

@@ -23,6 +23,7 @@ export function arithmeticVitals({ words, inbound, outbound, chunkCoverage, last
 export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { visibility: true })) {
   const { visible } = tokenized;
   const text = bytes.toString('utf8');
+  const links = parsed.links.map(link => ({ ...link, start: bytes.subarray(0, link.source.startByte).toString('utf8').length, end: bytes.subarray(0, link.source.endByte).toString('utf8').length }));
   const wordPattern = /[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu;
   let words = 0;
   const eligibleBlocks = new Set();
@@ -30,8 +31,19 @@ export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { vi
     if (block.kind !== 'paragraph') continue;
     const start = block.start ?? Buffer.from(bytes.subarray(0, block.source.startByte)).toString('utf8').length;
     const end = block.end ?? Buffer.from(bytes.subarray(0, block.source.endByte)).toString('utf8').length;
-    const masked = text.slice(start, end).split('').map((char, offset) => visible[start + offset] ? char : ' ').join('');
-    const prose = masked.split(/\r?\n/).filter(line => !/^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?(?:!?\[\[[^\r\n]+?\]\][ \t]*)+$/.test(line)).join('\n').replace(/!?\[([^\]\n]+)\]\([^\n]*?\)/g, '$1');
+    const masked = text.slice(start, end).split('').map((char, offset) => visible[start + offset] ? char : ' ');
+    let lineOffset = 0;
+    for (const line of masked.join('').match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+      if (/^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?(?:!?\[\[[^\r\n]+?\]\][ \t]*)+\r?\n?$/.test(line)) masked.fill(' ', lineOffset, lineOffset + line.length);
+      lineOffset += line.length;
+    }
+    for (const link of links) {
+      if (link.start < start || link.end > end || masked[link.start - start] === ' ') continue;
+      const display = link.alias ?? `${link.target}${link.fragment === null ? '' : `#${link.fragment}`}`;
+      masked.fill(' ', link.start - start, link.end - start);
+      for (let offset = 0; offset < display.length; offset++) masked[link.start - start + offset] = display[offset];
+    }
+    const prose = masked.join('');
     const count = [...prose.matchAll(wordPattern)].length;
     words += count;
     if (count) eligibleBlocks.add(index);

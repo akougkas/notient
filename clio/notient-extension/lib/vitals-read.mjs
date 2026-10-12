@@ -3,7 +3,7 @@ import { listNotes } from './vault.mjs';
 import { readNote, portableName } from './paths.mjs';
 import { arithmeticVitals, maturities, connectivityTiers } from './vitals.mjs';
 import { graphDegrees } from './vitals-index.mjs';
-import { graphRule } from './index-schema.mjs';
+import { graphRule, wordCountVersion } from './index-schema.mjs';
 
 export const unknownVitalsCoverage = () => ({ state: 'unknown', indexing: { state: 'unavailable', reason: 'structural_index_missing' }, message: unknownCoverageMessage });
 
@@ -23,8 +23,9 @@ export function structuralCoverage(db, vault) {
   const errors = previous.errors ?? 0;
   const graphIssues = Object.values(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')).reduce((count, value) => count + value, 0);
   const graphBackfill = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule;
-  const state = pending || skipped || errors || missingVitals || graphIssues || graphBackfill ? 'incomplete' : 'current';
-  return { state, indexing: { state: 'ready', pending, skipped, errors, missingVitals, graphIssues, graphBackfill }, message: state === 'current' ? null : 'Structural metrics use a refresh snapshot; changed or skipped notes prevent complete graph coverage.' };
+  const wordCountBackfill = db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get()?.value !== wordCountVersion;
+  const state = pending || skipped || errors || missingVitals || graphIssues || graphBackfill || wordCountBackfill ? 'incomplete' : 'current';
+  return { state, indexing: { state: 'ready', pending, skipped, errors, missingVitals, graphIssues, graphBackfill, wordCountBackfill }, message: state === 'current' ? null : 'Structural metrics use a refresh snapshot; changed or skipped notes prevent complete graph coverage.' };
 }
 
 function valueFor(row, graph, db, now) {

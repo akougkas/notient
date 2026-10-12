@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { arithmeticVitals, proseMetrics } from '../lib/vitals.mjs';
-import { migrateIndex } from '../lib/index-schema.mjs';
+import { migrateIndex, wordCountVersion } from '../lib/index-schema.mjs';
 import { parseMarkdown } from '../lib/markdown.mjs';
 import { openIndex, refreshIndex } from '../lib/index.mjs';
 import { indexPath } from '../lib/config.mjs';
@@ -55,6 +55,34 @@ test('vitals prose counts nonoverlapping visible Unicode words and substantive c
   for (const text of ['# Heading only\n', '- [[Target]]\n', '```\ncode only\n```\n', '    code only\n', '<!-- notient:begin -->\nvisitor text\n<!-- notient:end -->\n']) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: 0, chunkCoverage: 0 });
 });
 
+test('V1 prose counts displayed link text without hidden destinations or titles', () => {
+  for (const text of [
+    'See [[Hidden target|label]].\n',
+    'See [label](folder/hidden(nested(destination)).md "hidden title").\n',
+    'See [label](<folder/hidden destination.md> "hidden title").\n',
+    'See [label][hidden id].\n\n[hidden id]: folder/hidden.md "hidden title"\n',
+    'See [[Hidden target#Hidden heading|label]] and [shown label](folder/hidden(a(b(c))).md).\n',
+    'See [[Hidden target|𐐀label]] and [shown label](folder/hidden(a(b(c))).md).\n',
+  ]) {
+    const expected = text.includes(' and ') ? 5 : 2;
+    assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: expected, chunkCoverage: 1 }, text);
+  }
+});
+
+test('V1 refresh explicitly rebuilds obsolete word counts with unchanged file metadata', t => {
+  const f = writerFixture(t); put(f, 'One.md', 'See [[Hidden target|label]].\n'); refreshIndex(f.vault, f.directory);
+  const before = snapshot(f.vault.path);
+  const db = openIndex(f.directory, f.vault, true);
+  db.prepare("UPDATE meta SET value='unicode-prose-v1' WHERE key='wordCountVersion'").run();
+  db.prepare('UPDATE note_vitals SET word_count=4').run(); db.close();
+  const result = refreshIndex(f.vault, f.directory);
+  assert.equal(result.hashed, 1); assert.equal(result.unchanged, 1);
+  const after = openIndex(f.directory, f.vault);
+  assert.equal(after.prepare('SELECT word_count FROM note_vitals').get().word_count, 2);
+  assert.equal(after.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get().value, wordCountVersion); after.close();
+  assert.deepEqual(snapshot(f.vault.path), before);
+});
+
 test('structural migration preserves version one rows and vault bytes and installs bounded cascading derived tables idempotently', t => {
   const f = writerFixture(t); put(f, 'One.md', '# One\n\nPreserved original prose.\n'); refreshIndex(f.vault, f.directory);
   const before = snapshot(f.vault.path);
@@ -64,7 +92,7 @@ test('structural migration preserves version one rows and vault bytes and instal
   migrateIndex(db); migrateIndex(db);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
   assert.deepEqual(db.prepare('SELECT * FROM notes').all(), notes); assert.deepEqual(db.prepare('SELECT * FROM chunks').all(), chunks);
-  assert.equal(db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get().value, 'unicode-prose-v1');
+  assert.equal(db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get().value, wordCountVersion);
   db.prepare('INSERT INTO vector_spaces(space_id,provider,model,dim,state,corpus_generation,created_at) VALUES (?,?,?,?,?,?,?)').run('space', 'fixture', 'model', 2, 'off', 1, new Date(now).toISOString());
   const insert = db.prepare('INSERT INTO vec_meta VALUES (?,?,?,?,?,?,?,?,?)');
   insert.run('space', chunks[0].id, 'One.md', notes[0].revision, 'hash', 0, 0.1, 'model', 2);

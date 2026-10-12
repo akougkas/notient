@@ -9,7 +9,7 @@ import { readBlob } from './journal.mjs';
 import { parseMarkdown, resolveLink, sourceRange } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 import { provenanceWorkspace } from './capture.mjs';
-import { migrateIndex, indexVersion, graphRule } from './index-schema.mjs';
+import { migrateIndex, indexVersion, graphRule, wordCountVersion } from './index-schema.mjs';
 import { proseMetrics } from './vitals.mjs';
 import { storedVitals, installVitals } from './vitals-index.mjs';
 import { tokenizeMove, inventoryIndex, resolveMoveTarget } from './move.mjs';
@@ -130,7 +130,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     const priorVitals = storedVitals(db);
     const metrics = new Map();
     const graphIssues = new Map(Object.entries(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')));
-    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule;
+    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule || db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get()?.value !== wordCountVersion;
     const rebuild = db.prepare("SELECT value FROM meta WHERE key='vitalsInitialized'").get()?.value !== '1';
     const previous = new Map(db.prepare('SELECT n.*, w.path AS workspaceIndexed FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path').all().map(row => [row.path, row]));
     const present = new Set(scan.notes.map(note => note.path));
@@ -193,6 +193,7 @@ export function refreshIndex(vault, directory, { force = false, now = () => Date
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('structuralErrors', ?)").run(JSON.stringify({ skipped: scan.skipped.length, errors: errors.length }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphIssuePaths', ?)").run(JSON.stringify(Object.fromEntries(graphIssues)));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', ?)").run(graphRule);
+    db.prepare("INSERT OR REPLACE INTO meta VALUES ('wordCountVersion', ?)").run(wordCountVersion);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
     db.exec('COMMIT');
