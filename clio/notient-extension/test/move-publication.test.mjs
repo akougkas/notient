@@ -107,13 +107,11 @@ test('move final source recheck preserves a concurrent source save and recovery 
   assert.equal(commandStatusSnapshot(f.directory, { vault: f.vault.id }).recovered[0].result, 'completed_partial_apply');
 });
 
-test('move hash binds origin, request, inventory including attachments and unaffected note revisions', t => {
-  for (const change of ['origin', 'request', 'attachment', 'dependency']) {
+test('move hash binds inventory including attachments and unaffected note revisions', t => {
+  for (const change of ['attachment', 'dependency']) {
     const f = moveFixture(t);
     const input = moveInput(f);
     const preview = writeOperation('revise', { ...input, dryRun: true }, { directory: f.directory });
-    if (change === 'origin') input.authorization = { ...input.authorization, origin: 'clio' };
-    if (change === 'request') input.authorization = { ...input.authorization, request: 'Different exact words.' };
     if (change === 'attachment') put(f, 'media/new.png', 'new');
     if (change === 'dependency') put(f, 'Peer.md', 'External dependency save.');
     const before = snapshot(f.vault.path);

@@ -207,6 +207,9 @@ export function createGitAdapter(vault, directory) {
         if (!matches(live, record, file, file.before)) refuse('COMMITTED_INDEX_CONFLICT', 'An affected stage-zero entry changed before its repair.', [file.path]);
         const oid = file.after === null ? null : object(record, file.after);
         for (let attempt = 0; ; attempt++) {
+          const retryEntry = normalIndexEntries(root, (target, args, options) => run(record, args, options)).entries.get(file.path);
+          if (matches(retryEntry, record, file, file.after)) break;
+          if (!matches(retryEntry, record, file, file.before)) refuse('COMMITTED_INDEX_CONFLICT', 'An affected stage-zero entry changed while waiting for its repair.', [file.path]);
           try {
             run(record, file.after === null ? ['update-index', '--force-remove', '--', file.path] : ['update-index', '--add', '--cacheinfo', file.mode & 0o111 ? '100755' : '100644', oid, file.path]);
             break;
@@ -215,6 +218,7 @@ export function createGitAdapter(vault, directory) {
             if (!locked) throw error;
             until ??= performance.now() + 2000;
             if (attempt >= 3 || performance.now() + [100, 250, 500][attempt] >= until) return false;
+            barrier('indexRetry', record, file, { attempt });
             wait([100, 250, 500][attempt]);
           }
         }

@@ -349,3 +349,9 @@ The updated vault-manager skill requires move and batch preview hashes, review o
 A fresh status process recovered a killed partial toy-vault move in 1,104.66 ms end to end, including 1,039.01 ms for the recorded recovery. The second status took 222.46 ms. Both recognized OID `3b343bceed41761ed0e1977f869a79fda28422c1`; there was one move commit and the unrelated staged entry remained identical. The report is retained in ignored `.local/stage2b-demo-uxdtCY/measurement.json`. A final mixed-command fixture run restored the original source, retained four log lines and kept unrelated staging identical; capture, replace, move and batch undo took 817.76, 903.08, 2,231.81 and 2,761.34 ms respectively. Its report is in `.local/stage2b-demo-vtmb9y/measurement.json`.
 
 Stage 2b implementation stops here. Live Clio fixture acceptance and installation remain operator acts. Astra's 2a review and the manager's numbered corrections take priority next. No stage 3 implementation or Vaultex write was performed.
+
+## Manager review corrections
+
+R1 rereads each affected normal-index entry before every attempt, including attempts following a foreign lock. An installed after-entry is skipped with its raw cache entry preserved; a newly staged third value gives `COMMITTED_INDEX_CONFLICT` without overwriting it. The manager also narrowed the review-hash rule: vault ID and operation join byte deltas, dependencies, inventory, HEAD and log baseline; request words, batch and origin remain attribution outside the hash. Existing request-ID digest checks still bind identical retries.
+
+Actual R1 checks: `node --test clio/notient-extension/test/review-fixes.test.mjs` reported 18 passed, 0 failed, 11,533.67 ms, including the Git/publication fixtures it imports. The additional operation/no-op hash check reported 1 passed, 0 failed, 478.45 ms. Extension validation passed. These targeted checks follow the complete 152-test passing 2b run.
