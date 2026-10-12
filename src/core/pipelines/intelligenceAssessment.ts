@@ -87,7 +87,13 @@ export function assessPipelineFinding(
     return { source, relation: "supports", assessment: "unverified" };
   });
   let assessmentQualification: string;
-  if (sourceReport) {
+  if (finding.kind === "question") {
+    assessmentQualification = finding.evidence.length === 0
+      ? "This question remains open; no cited passage establishes a resolution."
+      : exactEvidence
+        ? "This question remains open. Its cited passages identify the issue to investigate; they do not establish a resolution."
+        : "This question remains open. Current source bytes did not verify every cited range and quotation; inspect the source before relying on its context.";
+  } else if (sourceReport) {
     assessmentQualification =
       "The retained statement is scoped to the cited source's report and its stated time and scope; it does not establish the underlying assertion, source independence, or external verification.";
   } else if (directSupport) {
