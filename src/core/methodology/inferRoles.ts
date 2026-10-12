@@ -1,5 +1,6 @@
 import type { NoteReadResult } from "../../api/schema";
 import type { NoteRole } from "./templates";
+import { parseAllIntelligenceRecords } from "../intelligence";
 
 export interface InferredNoteRole {
   role: NoteRole;
@@ -76,6 +77,13 @@ export function inferNoteRoles(note: NoteInput): InferredNoteRole[] {
     add("question", "an open question appears in the note");
   if (note.structure.links.length >= 3 || note.structure.headings.length >= 3)
     add("synthesis", "multiple sections or links support navigation across material");
+  let openQuestions = 0;
+  try {
+    openQuestions = parseAllIntelligenceRecords(note.body)
+      .filter((record) => record.kind === "question" && record.status === "open").length;
+  } catch {}
+  if (openQuestions > 0)
+    add("question", `${openQuestions} open note-resident question${openQuestions === 1 ? "" : "s"}`);
 
   return [...found]
     .map(([role, signals]) => {
