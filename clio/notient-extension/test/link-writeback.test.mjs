@@ -49,6 +49,31 @@ test('V5 uncertain nested container continuation refuses with its source line an
   assert.deepEqual(inventory.notes[0].bytes, Buffer.from(before));
 });
 
+test('V6 visible Setext H1 and H2 end Related and outside targets do not satisfy presence', () => {
+  for (const underline of ['============', '------------']) for (const newline of ['\n', '\r\n']) {
+    const before = ['## Related', '', '- [[Other]]', '', 'Next section', underline, '', '[[Target]]', ''].join(newline);
+    const expected = before.replace('- [[Other]]' + newline, '- [[Other]]' + newline + '- [[Target]]' + newline);
+    assert.deepEqual(planLink(scan(before), 'Source.md', [edge]).bytes, Buffer.from(expected));
+    assert.deepEqual(planLink(scan(expected), 'Source.md', [edge]).bytes, Buffer.from(expected));
+  }
+  for (const title of ['`Next section`', '𐐀 Next section']) {
+    const before = `## Related\n\n- [[Other]]\n\n${title}\n============\n\n[[Target]]\n`;
+    assert.equal(planLink(scan(before), 'Source.md', [edge]).bytes.toString(), before.replace('- [[Other]]\n', '- [[Other]]\n- [[Target]]\n'));
+  }
+});
+
+test('V6 code and comment Setext lookalikes do not end the live section and uncertain paragraphs refuse', () => {
+  for (const hidden of ['```md\nTitle\n====\n```\n', '<!--\nTitle\n====\n-->\n', '%%\nTitle\n====\n%%\n', '> ```md\n> Title\n> ====\n> ```\n', '    Title\n    ====\n']) {
+    const before = `## Related\n\n- [[Other]]\n\n${hidden}\n[[Target]]\n`;
+    assert.deepEqual(planLink(scan(before), 'Source.md', [edge]).bytes, Buffer.from(before));
+  }
+  for (const title of ['first title line\nsecond title line', 'Title <!-- hidden --> suffix', '    uncertain indented title']) {
+    const before = `## Related\n\n- [[Other]]\n\n${title}\n====\n\n[[Target]]\n`; const inventory = scan(before);
+    assert.throws(() => planLink(inventory, 'Source.md', [edge]), error => error.code === 'AMBIGUOUS_REFERENCE' && /line/.test(error.message));
+    assert.deepEqual(inventory.notes[0].bytes, Buffer.from(before));
+  }
+});
+
 for (const [name, before, expected] of goldens) test(`link writeback ${name}`, () => {
   const inventory = scan(before); const plan = planLink(inventory, 'Source.md', [edge]);
   assert.deepEqual(plan.bytes, Buffer.from(expected)); assert.deepEqual(applySplices(Buffer.from(before), plan.splices), plan.bytes);

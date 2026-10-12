@@ -45,7 +45,7 @@ function visibleHeading(line, bodyStart, visible) {
   if (!match) return null;
   const offset = line.start + bom + /^ */.exec(text)[0].length;
   if (!visible[offset] || !visible[offset + match[1].length]) return null;
-  return { level: match[1].length, title: match[2], line };
+  return { level: match[1].length, title: match[2], line, atx: true };
 }
 
 export function requireAnchor(note, edge) {
@@ -64,11 +64,27 @@ export function requireAnchor(note, edge) {
   if (matches.length !== 1 || !matches[0].exact) refuse('TARGET_ANCHOR', 'The requested target anchor must exist exactly once with exact spelling in live Markdown.', [note.path]);
 }
 
-function sectionLayout(bytes) {
+function sectionLayout(bytes, source) {
   const document = documentSpans(bytes);
   const tokenized = tokenizeMove(bytes, { visibility: true });
   const headings = document.lines.filter(line => line.start >= document.bodyStart).map(line => visibleHeading(line, document.bodyStart, tokenized.visible)).filter(Boolean);
-  const related = headings.find(heading => heading.level === 2 && /^Related$/i.test(heading.title));
+  const outline = parseMarkdown(document.text).outline;
+  for (let row = 1; row < document.lines.length; row++) {
+    const underline = document.lines[row]; const line = document.lines[row - 1];
+    if (line.start < document.bodyStart || !/^ {0,3}(=+|-+)[ \t]*$/.test(underline.content) || !line.content.trim()) continue;
+    const marker = underline.start + /^ */.exec(underline.content)[0].length;
+    if (!tokenized.visible[marker] || headings.some(heading => heading.line.start === line.start)) continue;
+    const content = line.content.replace(/^\uFEFF/, '');
+    if (/^ {0,3}(?:[-+*][ \t]+|\d{1,9}[.)][ \t]+|>|`{3,}|~{3,})/.test(content)) continue;
+    const bom = line.start === document.bodyStart && line.content.startsWith('\uFEFF') ? 1 : 0;
+    const heading = outline.find(value => value.line === row && value.level <= 2);
+    const prior = document.lines[row - 2];
+    const priorPlain = prior && prior.start >= document.bodyStart && prior.content.trim() && !/^ {0,3}(?:#{1,6}[ \t]+|[-+*][ \t]+|\d{1,9}[.)][ \t]+|>|`{3,}|~{3,})/.test(prior.content) && prior.content.split('').some((char, offset) => /\S/.test(char) && tokenized.visible[prior.start + offset]);
+    if (!heading || /^[ \t]{4,}|^\t/.test(content) || tokenized.contexts.get(line.start) !== bom || priorPlain) refuse('AMBIGUOUS_REFERENCE', `A Setext heading on line ${row} has uncertain paragraph or container context.`, [source]);
+    headings.push({ level: heading.level, title: heading.title, line: { ...line, end: underline.end }, atx: false });
+  }
+  headings.sort((a, b) => a.line.start - b.line.start);
+  const related = headings.find(heading => heading.atx && heading.level === 2 && /^Related$/i.test(heading.title));
   const end = related ? headings.find(heading => heading.line.start > related.line.start && heading.level <= 2)?.line.start ?? document.text.length : null;
   return { document, tokenized, related, end, headings };
 }
@@ -157,7 +173,7 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
   });
   const before = context.current.bytes;
   if (/\r(?!\n)/.test(before.toString('utf8'))) refuse('MIXED_NEWLINE_EDIT', 'Relationship writeback refuses bare CR.');
-  let layout = sectionLayout(before);
+  let layout = sectionLayout(before, source);
   if (layout.tokenized.issues.length) refuse('AMBIGUOUS_REFERENCE', `Source context is uncertain: ${JSON.stringify(layout.tokenized.issues)}`, [source]);
   const needed = rendered.filter(({ edge }) => !hasReference(layout, source, edge.targetNotePath, fragment(edge), context.index));
   const link = { admitted: edges.map(edge => ({ targetNotePath: edge.targetNotePath, relation: 'related_to', confidence: null, basis: origin, rationale: edge.rationale })), dropped: [], candidateSet: null };
@@ -169,7 +185,7 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
     if (fence.depth || fence.indent) refuse('UNSAFE_FENCE', `An unclosed container fence on line ${fence.line} cannot be repaired safely.`, [source]);
     convention(layout.document, [layout.document.lines.at(-1), { ending: fence.newline }]);
     closing = `${hadTerminal ? '' : fence.newline}${fence.char.repeat(fence.count)}${hadTerminal ? fence.newline : ''}`;
-    layout = sectionLayout(Buffer.concat([before, Buffer.from(closing)]));
+    layout = sectionLayout(Buffer.concat([before, Buffer.from(closing)]), source);
   }
   const afterNeeded = needed.filter(({ edge }) => !hasReference(layout, source, edge.targetNotePath, fragment(edge), context.index));
   const insert = afterNeeded.length ? insertion(layout, afterNeeded.map(item => item.bullet), hadTerminal, source) : null;
@@ -183,7 +199,7 @@ export function planLink(scan, source, edges, { origin = 'operator' } = {}) {
   }
   if (closing) splices.push({ startByte: before.length, endByte: before.length, replacement: closing });
   const after = applySplices(before, splices);
-  const checked = sectionLayout(after);
+  const checked = sectionLayout(after, source);
   if (rendered.some(({ edge }) => !hasReference(checked, source, edge.targetNotePath, fragment(edge), context.index))) refuse('AMBIGUOUS_REFERENCE', 'The rendered relationships do not parse as live references.', [source]);
   return { bytes: after, splices, link, reads: context.reads, inventory: context.inventory };
 }
