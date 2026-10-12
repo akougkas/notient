@@ -43,6 +43,13 @@ export function classifyFiles(vault, record) {
   });
 }
 
+export function reconcileFile(current, before, after, stamp) {
+  if (current === before && current === after) return { state: 'unchanged', code: null, claim: false };
+  if (current === before) return { state: 'before', code: null, claim: stamp === null };
+  if (current === after) return stamp === null ? { state: 'conflict', code: 'UNSTAMPED_AFTER', claim: false } : { state: 'after', code: null, claim: false };
+  return { state: 'conflict', code: 'NEWER_EDIT', claim: false };
+}
+
 function ensureVaultParents(vault, record, file, sync) {
   writePath(vault.path, file.path);
   let current = vault.path;
@@ -141,19 +148,19 @@ function checkDependencies(vault, record) {
 }
 
 export function newRecord(vault, plan) {
-  const files = plan.files.map((file, ordinal) => ({ ...(plan.structural ? { intentId: randomUUID() } : {}), path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
+  const files = plan.files.map((file, ordinal) => ({ intentId: randomUUID(), path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
   const record = {
     version: 1, id: plan.id, vaultId: vault.id, vaultPath: vault.path,
     tool: plan.tool, operation: plan.operation, requestDigest: plan.requestDigest, batch: plan.batch,
     authorization: plan.authorization, createdAt: plan.createdAt, updatedAt: plan.createdAt,
     state: 'intent', planHash: plan.planHash, source: plan.source ?? null, destination: plan.destination ?? null,
-    ...(plan.structural ? { roleAtIntent: vault.role } : {}),
+    roleAtIntent: vault.role,
     reads: plan.reads ?? [], inventoryHash: plan.inventoryHash ?? null, files, applyOrder: files.map(file => file.path), createdDirectories: [],
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
   };
-  if (plan.structural) freezeIntentSet(record);
+  freezeIntentSet(record);
   return record;
 }
 
@@ -184,7 +191,11 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
   const intents = record.intentSet ? readFileIntents(directory, vault, record) : null;
   const published = adapter.recognize(record);
   const states = published ? [] : classifyFiles(vault, record);
-  for (const item of states) if (intents && item.state === 'after' && item.file.before !== item.file.after && intents.get(item.file.path).write_started_at_ms === null) { item.state = 'conflict'; item.reason = 'UNSTAMPED_AFTER: matching bytes have no durable publication stamp.'; }
+  for (const item of states) {
+    const decision = reconcileFile(item.current.revision, item.file.before, item.file.after, intents?.get(item.file.path).write_started_at_ms ?? null);
+    item.state = decision.state;
+    if (decision.code) item.reason = `${decision.code}: current bytes cannot be adopted as a stamped publication.`;
+  }
   const conflicts = states.filter(item => item.state === 'conflict');
   if (conflicts.length) {
     record.state = 'conflicted';
@@ -193,6 +204,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     return { operationId: record.id, result: 'conflict_preserved', commit: null, conflicts: record.conflicts };
   }
   if (!published) {
+    if (!record.intentSet) refuse('JOURNAL_CORRUPT', 'An unpublished legacy intent lacks authoritative publication stamps.');
     try {
       adapter.checkBase(record);
       checkDependencies(vault, record);
@@ -635,7 +647,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
         adapter.consume(record.id, plan.timings.gitMs);
         const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
-        if (result.result === 'conflict_preserved') refuse('REVISION_CONFLICT', 'The operation encountered changed bytes.', result.conflicts.map(item => item.path));
+        if (result.result === 'conflict_preserved') refuse(result.conflicts.some(item => item.reason.startsWith('UNSTAMPED_AFTER')) ? 'UNSTAMPED_AFTER' : 'REVISION_CONFLICT', 'The operation encountered unstamped or changed bytes.', result.conflicts.map(item => item.path));
         if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
         if (!record.git.commit || !adapter.recognize(record)) refuse('GIT_PUBLICATION_UNCERTAIN', 'A write cannot succeed before its exact commit is verified as published.');
         record.timings.totalMs = performance.now() - started;
