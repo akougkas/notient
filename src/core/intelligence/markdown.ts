@@ -170,8 +170,10 @@ function recordsInSection(body: string, section?: string): IntelligenceRecord[] 
       if (endIndex >= range.endLine)
         throw new EditedIntelligenceRecordError(id, "its ending marker is missing");
       const visible = body.slice(lines[index]?.next ?? 0, lines[endIndex]?.start ?? 0);
+      const normalized = visible.replace(/\r\n/gu, "\n");
       const expected = `${renderRecordContent(record, "\n")}\n`;
-      if (visible.replace(/\r\n/gu, "\n") !== expected)
+      const original = `${renderRecordContent(record, "\n", false)}\n`;
+      if (normalized !== expected && normalized !== original)
         throw new EditedIntelligenceRecordError(id, "its visible content changed");
       if (!ids.has(id)) {
         ids.add(id);
@@ -201,7 +203,28 @@ function displayNoteTarget(path: string): string {
   return `[[${path}]]`;
 }
 
-function renderRecordContent(record: IntelligenceRecord, newline: string): string {
+function evidenceExcerpt(quote: string): string {
+  if (quote.length <= 600) return quote;
+  let start = 0;
+  for (const line of linesOf(quote)) {
+    const text = line.text.trim();
+    if (!text || /^#{1,6}[ \t]/u.test(text) || /^!\[[^\]]*\]\([^\r\n]*\)$/u.test(text)) {
+      start = line.next;
+      continue;
+    }
+    break;
+  }
+  if (start >= quote.length) start = 0;
+  let end = Math.min(quote.length, start + 600);
+  if (end < quote.length) {
+    const boundary = Math.max(quote.lastIndexOf(" ", end), quote.lastIndexOf("\n", end));
+    if (boundary > start + 450) end = boundary;
+    if (/^[\uDC00-\uDFFF]/u.test(quote.slice(end, end + 1))) end -= 1;
+  }
+  return quote.slice(start, end).trim();
+}
+
+function renderRecordContent(record: IntelligenceRecord, newline: string, compact = true): string {
   const lines = [
     `### ${record.kind.replaceAll("-", " ")} · ${record.status}`,
     "",
@@ -212,8 +235,13 @@ function renderRecordContent(record: IntelligenceRecord, newline: string): strin
   if (record.capturedContribution) lines.push("- **Capture:** submitted contribution");
   if (record.assessmentOf) lines.push(`- **Assessment of retained record:** ${record.assessmentOf}`);
   for (const evidence of record.evidence) {
+    const source = evidence.source;
+    const excerpt = compact ? evidenceExcerpt(source.quote) : source.quote;
+    const qualification = excerpt !== source.quote
+      ? ` Quoted excerpt; the complete quote is retained in this note's record. Source lines ${source.range.startLine}–${source.range.endLine}.`
+      : "";
     lines.push(
-      `- **Evidence (${evidence.relation}, ${evidence.assessment}):** ${displayNoteTarget(evidence.source.path)} — “${displayText(evidence.source.quote)}”`,
+      `- **Evidence (${evidence.relation}, ${evidence.assessment}):** ${displayNoteTarget(source.path)} — “${displayText(excerpt)}”${qualification}`,
     );
   }
   for (const qualification of record.qualifications)
