@@ -7,6 +7,7 @@ import { revision } from '../lib/paths.mjs';
 import { beginGarden } from './garden-helpers.mjs';
 import { gardenPath } from '../lib/garden-store.mjs';
 import { readRecord } from '../lib/journal.mjs';
+import { snapshot } from './write-helpers.mjs';
 
 test('G1 no vault state is read after the final revision check and before rename', async t => {
   const f = gardenFixture(t, { 'A.md': 'Authored source.\n', 'T.md': 'Target evidence.\n' });
@@ -16,6 +17,14 @@ test('G1 no vault state is read after the final revision check and before rename
   const input = { vault: f.vault.id, path: 'A.md', revision: revision(readFileSync(target)), operation: 'link', link: { edges: [{ targetNotePath: 'T.md', rationale: 'Append this named target.' }] }, authorization: { origin: 'unattended', request: 'Append the target without modifying authored prose.' }, batch: 'g1-fixture', requestId: 'g1-write-001' };
   const child = spawnSync(process.execPath, [entry, JSON.stringify(input)], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) } }); const result = JSON.parse(child.stdout);
   assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.fixtureReads, 0);
+});
+
+test('G2 unsupported text after a tags list is preserved and unattended admission refuses', async t => {
+  for (const tail of [' trailing authored text', '#unseparated authored text']) {
+    const f = gardenFixture(t, { 'A.md': `---\ntags: [alpha]${tail}\n---\nAuthored prose.\n` }); const before = snapshot(f.temporary);
+    const result = await gardenTool(f, 'revise', { path: 'A.md', revision: revision(readFileSync(path.join(f.vault.path, 'A.md'))), operation: 'frontmatter', set: [{ key: 'tags', valueJson: '["alpha","beta"]' }], authorization: { origin: 'unattended', request: 'Append a tag without replacing authored text.' }, batch: 'g2-fixture', requestId: 'g2-write-001' });
+    assert.equal(result.value.error?.code, 'UNATTENDED_REFUSED'); assert.deepEqual(snapshot(f.temporary), before);
+  }
 });
 
 test('G3 an export failure after publication returns a committed result with pending garden reconciliation', async t => {

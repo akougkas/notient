@@ -20,6 +20,8 @@ function tags(bytes) {
   if (!field) return [];
   const parsed = yamlSpans(document, field).root;
   if (parsed.type !== 'list' || parsed.items.some(item => item.type !== 'string')) denied('Unattended tags require an existing list of string members.');
+  const tail = document.text.slice(parsed.end, field.end);
+  if (tail.startsWith('#') && !/[\r\n \t]/.test(document.text[parsed.end - 1] ?? '') || tail.split(/\r?\n/).some(line => !/^[ \t]*(?:#.*)?$/.test(line))) denied('The supported tags list must consume its entire field without trailing authored text.');
   return parsed.items.map(item => item.value);
 }
 
