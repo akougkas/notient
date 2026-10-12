@@ -157,7 +157,7 @@ export function makeContributionHandlers(options: {
     } catch {
       throw new NoteApiError(
         "INVALID_PARAMS",
-        "target intelligence has no stable evidence or relationship identity for feedback",
+        "target intelligence has no stable claim, contributor, evidence or relationship identity for feedback",
       );
     }
     const targetDependencies = new Map<string, { path: string; revision: string }>();
@@ -567,7 +567,7 @@ function buildIntelligenceRecord(contribution: ContributionRecord): Intelligence
           ? ["Inherited quotations identify the targeted intelligence and do not prove this feedback reason."]
           : feedback.targetEvidence === undefined
             ? ["This earlier feedback item has no retained target quotations; its source-based suppression can be reconsidered only from its stored dependencies."]
-            : ["The targeted intelligence supplied no quoted source passages; its recorded subject is anchored by its relationship identity."]),
+            : ["The targeted intelligence supplied no quoted source passages. This feedback identifies its recorded claim; it does not independently establish or disprove it."]),
       ],
       relationships: [],
       dependencies: [...uniqueDependencies.values()],

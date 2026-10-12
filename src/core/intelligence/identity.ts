@@ -54,7 +54,8 @@ export function intelligenceRecordId(input: IntelligenceRecord): string {
 }
 
 export function intelligenceSuppressionSubject(
-  input: Pick<IntelligenceRecord, "kind" | "evidence" | "relationships">,
+  input: Pick<IntelligenceRecord, "kind" | "evidence" | "relationships"> &
+    Partial<Pick<IntelligenceRecord, "statement" | "attribution">>,
 ): string {
   const evidence = [...new Map(
     input.evidence.map((item) => [
@@ -72,8 +73,16 @@ export function intelligenceSuppressionSubject(
   ).values()].sort((left, right) =>
     `${left.target}\u0000${left.relation ?? ""}`.localeCompare(`${right.target}\u0000${right.relation ?? ""}`),
   );
-  if (evidence.length === 0 && relationships.length === 0)
-    throw new Error("feedback suppression subject requires evidence or a relationship");
+  if (evidence.length === 0 && relationships.length === 0) {
+    const statement = input.statement?.normalize("NFC").trim().replace(/\s+/gu, " ");
+    if (!statement || !input.attribution?.id || !input.attribution.kind)
+      throw new Error("unquoted feedback requires a recorded claim and contributor identity");
+    return `subject-v1:${digest(JSON.stringify(canonical({
+      kind: input.kind,
+      unquotedClaim: statement,
+      contributor: { kind: input.attribution.kind, id: input.attribution.id },
+    })))}`;
+  }
   return `subject-v1:${digest(JSON.stringify(canonical({ kind: input.kind, evidence, relationships })))}`;
 }
 
