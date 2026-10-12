@@ -138,12 +138,16 @@ export function cleanupSiblings(vault, record, sync = syncDirectory) {
   }
 }
 
-function checkDependencies(vault, record) {
+function checkDependencies(vault, directory, record) {
   for (const read of record.reads) {
     let actual;
     try { actual = (record.intentSet ? readNote(vault.path, read.path) : currentFile(vault.path, read.path)).revision; }
     catch { refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency is no longer readable.', [read.path]); }
-    if (actual !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+    if (actual !== read.revision) {
+      const file = record.files.find(candidate => candidate.path === read.path);
+      const stamp = file && record.intentSet ? readFileIntents(directory, vault, record).get(file.path).write_started_at_ms : null;
+      if (!file || actual !== file.after || stamp === null) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+    }
   }
   if (!record.inventoryHash) return;
   const names = new Set(record.intentSet ? moveInventory(vault.path) : listNotes(vault.path).notes.map(note => note.path));
@@ -211,7 +215,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     if (!record.intentSet) refuse('JOURNAL_CORRUPT', 'An unpublished legacy intent lacks authoritative publication stamps.');
     try {
       adapter.checkBase(record);
-      checkDependencies(vault, record);
+      checkDependencies(vault, directory, record);
     }
     catch (error) {
       if (states.every(item => item.state === 'before') && ['GIT_HEAD_CHANGED', 'DEPENDENCY_CHANGED'].includes(error.code) && !adapter.recognize(record)) {
@@ -228,7 +232,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     const first = states.find(item => item.state === 'before');
     if (first) claimFileIntent(directory, vault, record, first.file);
     options.barrier?.('afterIntent', record);
-    checkDependencies(vault, record);
+    checkDependencies(vault, directory, record);
     const started = performance.now();
     applyRecord(vault, directory, record, options);
     record.timings.applyMs += performance.now() - started;
@@ -236,7 +240,7 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     options.barrier?.('afterAllAfterBytes', record);
     const afterStates = classifyFiles(vault, record);
     if (afterStates.some(item => item.state !== 'after')) refuse('REVISION_CONFLICT', 'A file changed after publication and before the Git ref.', afterStates.filter(item => item.state !== 'after').map(item => item.file.path), true);
-    checkDependencies(vault, record);
+    checkDependencies(vault, directory, record);
     freshAuthority(vault, directory, record);
     adapter.publish(record);
     saveRecord(directory, vault, record, sync);
@@ -552,7 +556,7 @@ function inverseFiles(vault, directory, input) {
   if (structural || files.some(file => file.after === null)) {
     const scan = scanMoveVault(vault.path);
     const guarded = guardInverseReferences(scan, files);
-    if (guarded.blockerCount) refuse('UNDO_REFERENCE_CONFLICT', `${guarded.blockerCount} inverse reference blockers: ${JSON.stringify(guarded.blockers)}`, guarded.blockers.map(blocker => blocker.path));
+    if (guarded.blockerCount) refuse(guarded.blockers.some(blocker => blocker.code === 'AUDIT_LINK_BLOCKER') ? 'AUDIT_LINK_BLOCKER' : 'UNDO_REFERENCE_CONFLICT', `${guarded.blockerCount} inverse reference blockers: ${JSON.stringify(guarded.blockers)}`, guarded.blockers.map(blocker => blocker.path));
     reads = guarded.reads;
     inventoryHash = revision(canonicalJson(guarded.inventory));
   }

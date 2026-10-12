@@ -472,7 +472,7 @@ export function planMove(scan, source, destination) {
   ];
   if (files.length > 100) refuse('MOVE_PLAN_LIMIT', 'The move exceeds 100 changed note paths.');
   const changed = new Set(files.map(file => file.path));
-  return { ok: true, source, destination, files, repairs, blockers: [], blockerCount: 0, reads: scan.notes.filter(note => !changed.has(note.path) && !note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
+  return { ok: true, source, destination, files, repairs, blockers: [], blockerCount: 0, reads: scan.notes.filter(note => !changed.has(note.path) || note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
 }
 
 export function guardInverseReferences(scan, files) {
@@ -503,8 +503,8 @@ export function guardInverseReferences(scan, files) {
       const after = resolveMoveTarget(token, note.path, afterIndex);
       if (before.state === 'external') continue;
       const affected = before.state === 'resolved' ? after.state !== 'resolved' || after.identity !== before.identity : before.state === 'missing' ? after.state !== 'missing' : [...before.candidates, ...after.candidates].some(name => changedNames.has(name));
-      if (affected) blockers.push({ path: note.path, startByte: token.startByte, endByte: token.endByte, target: token.target, reason: 'The inverse would leave an unselected reference dangling, rebound or ambiguous.' });
+      if (affected) blockers.push({ path: note.path, startByte: token.startByte, endByte: token.endByte, target: token.target, code: note.path.startsWith('Notient/Log/') ? 'AUDIT_LINK_BLOCKER' : 'UNDO_REFERENCE_CONFLICT', reason: 'The inverse would leave an unselected reference dangling, rebound or ambiguous.' });
     }
   }
-  return { blockers: blockers.slice(0, 100), blockerCount: blockers.length, reads: scan.notes.filter(note => !changed.has(note.path) && !note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
+  return { blockers: blockers.slice(0, 100), blockerCount: blockers.length, reads: scan.notes.filter(note => !changed.has(note.path) || note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
 }
