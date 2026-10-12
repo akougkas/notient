@@ -1,8 +1,9 @@
 import { revision, refuse, validText } from './paths.mjs';
+import path from 'node:path';
 
 export const preprocessingVersion = '1';
 export const embeddingCanary = 'Notient embedding setup canary.';
-const keys = ['baseUrl', 'model', 'responseModel', 'dimension', 'apiKey', 'batch', 'timeoutMs', 'maxInputBytes', 'documentPrefix', 'queryPrefix', 'spaceVersion'];
+const keys = ['baseUrl', 'model', 'responseModel', 'dimension', 'apiKey', 'apiKeySocket', 'batch', 'timeoutMs', 'maxInputBytes', 'documentPrefix', 'queryPrefix', 'spaceVersion'];
 
 export function normalizeEmbeddings(value) {
   if (value === undefined || value === null) return null;
@@ -11,6 +12,7 @@ export function normalizeEmbeddings(value) {
   for (const [key, minimum, maximum] of [['dimension', 1, 8192], ['batch', 1, 32], ['timeoutMs', 1000, 60000], ['maxInputBytes', 64, 32768]]) if (!Number.isInteger(result[key]) || result[key] < minimum || result[key] > maximum) refuse('EMBEDDING_CONFIG', `Embedding ${key} is outside its bounds.`);
   for (const [key, minimum, maximum] of [['model', 1, 200], ['spaceVersion', 1, 200], ['documentPrefix', 0, 512], ['queryPrefix', 0, 512]]) if (typeof result[key] !== 'string' || result[key].length < minimum || result[key].length > maximum || result[key].includes('\0') || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(result[key])) refuse('EMBEDDING_CONFIG', `Embedding ${key} is invalid.`);
   if (result.apiKey !== null && (typeof result.apiKey !== 'string' || !result.apiKey.length || result.apiKey.length > 8192 || /[\r\n\0]/.test(result.apiKey)) || result.responseModel !== null && (typeof result.responseModel !== 'string' || !result.responseModel.length || result.responseModel.length > 200 || /[\r\n\0]/.test(result.responseModel))) refuse('EMBEDDING_CONFIG', 'Embedding credential or pinned identity is invalid.');
+  if (result.apiKeySocket !== undefined && (typeof result.apiKeySocket !== 'string' || !path.isAbsolute(result.apiKeySocket) || Buffer.byteLength(result.apiKeySocket) > 100 || /[\r\n\0]/.test(result.apiKeySocket))) refuse('EMBEDDING_CONFIG', 'Embedding credential socket path is invalid.');
   let url;
   try { if (typeof result.baseUrl !== 'string') throw new Error(); url = new URL(result.baseUrl); }
   catch { refuse('EMBEDDING_CONFIG', 'Embedding base URL must be an absolute HTTP or HTTPS destination.'); }

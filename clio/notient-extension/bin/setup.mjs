@@ -7,6 +7,7 @@ import { createBaseline } from '../lib/setup-baseline.mjs';
 import { normalizeEmbeddings, embeddingCanary } from '../lib/embedding-config.mjs';
 import { createOpenAIAdapter } from '../lib/embedding-adapter.mjs';
 import { verifyVectorConfiguration } from '../lib/vector-store.mjs';
+import { readCredentialSocket } from '../lib/credential-socket.mjs';
 
 const conventions = `---
 title: Notient Conventions
@@ -83,6 +84,7 @@ async function main() {
   const embeddingValues = {};
   let embeddingMode;
   let keyStdin = false;
+  let keySocket;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (embeddingFlags.has(flag)) {
@@ -92,6 +94,10 @@ async function main() {
     } else if (['--embeddings-on', '--embeddings-off'].includes(flag)) {
       if (embeddingMode) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
       embeddingMode = flag.endsWith('-on') ? 'on' : 'off';
+    } else if (flag === '--embeddings-key-socket') {
+      const value = args[++i];
+      if (!value || value.startsWith('--') || keySocket) throw new Error('Embedding credential socket requires one path.');
+      keySocket = value;
     } else if (flag === '--embeddings-key-stdin') {
       if (keyStdin) throw new Error('Embedding key stdin may be specified once.'); keyStdin = true;
     } else if (flag === '--vault' || flag === '--role' || flag === '--access') {
@@ -105,10 +111,10 @@ async function main() {
     else if (flag === '--baseline') baseline = true;
     else throw new Error('Usage: setup.mjs --vault <path> [--role operator|own] [--read-only | --baseline], or --create-own [--baseline].');
   }
-  const embeddingSetup = embeddingMode !== undefined || Object.keys(embeddingValues).length > 0 || keyStdin;
+  const embeddingSetup = embeddingMode !== undefined || Object.keys(embeddingValues).length > 0 || keyStdin || keySocket !== undefined;
   if (baseline && (readOnly || access !== undefined || embeddingSetup)) throw new Error('--baseline requires writable vault bootstrap, without --read-only, --access or embedding flags.');
   if (embeddingSetup && (createOwn || readOnly || access !== undefined || args.includes('--role'))) throw new Error('Embedding setup requires only an existing --vault registration.');
-  if (embeddingMode && (Object.keys(embeddingValues).length || keyStdin)) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
+  if (embeddingMode && (Object.keys(embeddingValues).length || keyStdin || keySocket)) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
   if (createOwn && vaultPath) throw new Error('Use --create-own or --vault, not both.');
   if (access !== undefined && (!['read-only', 'read-write'].includes(access) || createOwn || readOnly || args.includes('--role'))) throw new Error('--access requires read-only or read-write and an existing --vault registration.');
   if (!['operator', 'own'].includes(role)) throw new Error('Role must be operator or own.');
@@ -138,6 +144,10 @@ async function main() {
       } else {
         if (!['baseUrl', 'model', 'dimension', 'maxInputBytes'].every(key => Object.hasOwn(embeddingValues, key))) throw new Error('Embedding configuration requires URL, model, dimension and max input bytes together.');
         profile = normalizeEmbeddings({ ...embeddingValues, apiKey: keyStdin ? await secretLine() : null });
+        if (keySocket) {
+          if (!keyStdin || await readCredentialSocket(keySocket) !== profile.apiKey) throw new Error('The private credential session must match the key supplied on stdin.');
+          profile = normalizeEmbeddings({ ...profile, apiKey: null, apiKeySocket: keySocket });
+        }
       }
       const response = await createOpenAIAdapter(profile, { probe: embeddingMode !== 'on' }).embed([embeddingCanary]);
       if (revision(JSON.stringify(readConfig(directory))) !== baseline) throw new Error('Configuration changed during the probe; no settings were published.');

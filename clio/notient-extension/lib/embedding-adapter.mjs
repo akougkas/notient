@@ -2,6 +2,7 @@ import { normalizeEmbeddings, embeddingSpace } from './embedding-config.mjs';
 import { refuse, validText } from './paths.mjs';
 import { revision } from './paths.mjs';
 import { readConfig } from './config.mjs';
+import { readCredentialSocket } from './credential-socket.mjs';
 
 const cap = 16 * 1024 * 1024;
 export function configuredAdapter(vault, directory, { profile } = {}) {
@@ -45,7 +46,8 @@ export function createOpenAIAdapter(configuration, { probe = false, isCurrent = 
       const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
       try {
         const headers = { 'Content-Type': 'application/json' };
-        if (profile.apiKey) headers.Authorization = `Bearer ${profile.apiKey}`;
+        const apiKey = profile.apiKeySocket ? await readCredentialSocket(profile.apiKeySocket, { signal: combined }) : profile.apiKey;
+        if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
         const response = await fetch(`${profile.baseUrl}/embeddings`, { method: 'POST', headers, body: JSON.stringify({ model: profile.model, input: texts, encoding_format: 'float' }), signal: combined, redirect: 'manual' });
         if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); refuse('EMBEDDING_REDIRECT', 'Embedding redirects are refused.'); }
         if (!response.ok) { await response.body?.cancel(); refuse('EMBEDDING_HTTP', `Embedding request returned HTTP ${response.status}.`, [], response.status === 429 || response.status >= 500); }

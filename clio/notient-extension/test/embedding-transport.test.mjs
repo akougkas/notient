@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, writeFileSync, statSync, cpSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync, statSync, cpSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
+import { spawn, spawnSync } from 'node:child_process';
+import { readCredentialSocket } from '../lib/credential-socket.mjs';
 import path from 'node:path';
 import { createOpenAIAdapter, createHostAdapter, configuredAdapter } from '../lib/embedding-adapter.mjs';
 import { normalizeEmbeddings, embeddingSpace, embeddingInput, embeddingCanary } from '../lib/embedding-config.mjs';
@@ -10,6 +14,48 @@ import { writerFixture, put, snapshot } from './write-helpers.mjs';
 import { embeddingStub, profile, setupCommand } from './embedding-helpers.mjs';
 
 const flags = baseUrl => ['--embeddings-url', baseUrl, '--embeddings-model', 'stub-wire', '--embeddings-dimension', '2', '--embeddings-max-input-bytes', '1600'];
+
+test('operator embedding credentials can remain in memory with only a private socket reference persisted', async t => {
+  const stub = await embeddingStub(t); const f = writerFixture(t);
+  const socketPath = path.join(f.temporary, 'key.sock');
+  const server = createServer(socket => socket.end('fixture-memory-secret\n'));
+  server.listen(socketPath); await once(server, 'listening'); chmodSync(socketPath, 0o600);
+  t.after(() => server.close());
+  const result = await setupCommand(f, [...flags(stub.baseUrl), '--embeddings-key-stdin', '--embeddings-key-socket', socketPath], { key: 'fixture-memory-secret\n' });
+  assert.equal(result.status, 0, result.stderr);
+  const saved = readConfig(f.directory);
+  assert.equal(saved.embeddings.apiKey, null);
+  assert.equal(saved.embeddings.apiKeySocket, socketPath);
+  assert.equal(JSON.stringify(snapshot(f.directory)).includes('fixture-memory-secret'), false);
+  assert.equal(readFileSync(path.join(f.directory, 'config.json'), 'utf8').includes('fixture-memory-secret'), false);
+  assert.equal(result.stdout.includes('fixture-memory-secret'), false);
+  await configuredAdapter(f.vault, f.directory).embed(['Fixture query.']);
+  assert.equal(stub.requests.length, 2);
+  assert.ok(stub.requests.every(request => request.headers.authorization === 'Bearer fixture-memory-secret'));
+  chmodSync(socketPath, 0o666);
+  await assert.rejects(configuredAdapter(f.vault, f.directory).embed(['Refused query.']), error => error.code === 'EMBEDDING_CREDENTIAL');
+  assert.equal(stub.requests.length, 2);
+});
+
+test('the operator credential process serves stdin from memory, preserves files and refuses AI_AGENT', async t => {
+  const f = writerFixture(t); const filename = path.join(f.temporary, 'session.sock');
+  const script = new URL('../bin/credential-session.mjs', import.meta.url).pathname;
+  const before = snapshot(f.directory);
+  for (const agent of ['clio', '']) {
+    const refused = spawnSync(process.execPath, [script, '--socket', filename], { env: { ...process.env, AI_AGENT: agent }, input: 'fixture-secret\n', encoding: 'utf8' });
+    assert.equal(refused.status, 2); assert.match(refused.stderr, /refuses AI_AGENT/); assert.equal(refused.stdout, '');
+  }
+  const child = spawn(process.execPath, [script, '--socket', filename], { stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill('SIGTERM'));
+  child.stdin.end('fixture-secret\n');
+  const [bytes] = await once(child.stdout, 'data');
+  assert.equal(JSON.parse(bytes).ready, true); assert.equal(bytes.toString().includes('fixture-secret'), false);
+  assert.equal(statSync(filename).mode & 0o777, 0o600);
+  assert.equal(await readCredentialSocket(filename), 'fixture-secret');
+  assert.deepEqual(snapshot(f.directory), before);
+  child.kill('SIGTERM'); await once(child, 'exit');
+  await assert.rejects(readCredentialSocket(filename), error => error.code === 'EMBEDDING_CREDENTIAL');
+});
 
 test('embedding transport pins the canary, sends exact path and headers, and configuration setup never bootstraps', async t => {
   const stub = await embeddingStub(t); const f = writerFixture(t); put(f, 'Source.md', 'Fixture-only text.\n');
