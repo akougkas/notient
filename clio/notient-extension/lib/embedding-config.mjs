@@ -14,7 +14,7 @@ export function normalizeEmbeddings(value) {
   let url;
   try { if (typeof result.baseUrl !== 'string') throw new Error(); url = new URL(result.baseUrl); }
   catch { refuse('EMBEDDING_CONFIG', 'Embedding base URL must be an absolute HTTP or HTTPS destination.'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) refuse('EMBEDDING_CONFIG', 'Embedding destination cannot contain credentials, query or fragment.');
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || /[?#]/.test(url.href)) refuse('EMBEDDING_CONFIG', 'Embedding destination cannot contain credentials, query or fragment.');
   const pathname = url.pathname.replace(/\/+$/, '');
   url.pathname = pathname.endsWith('/v1') ? pathname : `${pathname}/v1`;
   result.baseUrl = url.toString().replace(/\/$/, '');

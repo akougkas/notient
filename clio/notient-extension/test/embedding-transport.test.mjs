@@ -76,6 +76,15 @@ test('space identity excludes credential and scheduling, prefixes are applied on
   for (const baseUrl of ['ftp://host/v1', 'http://key@host/v1', 'http://host/v1?key=secret', 'http://host/v1#secret']) assert.throws(() => normalizeEmbeddings({ ...base, baseUrl }), error => error.code === 'EMBEDDING_CONFIG');
 });
 
+test('E1 empty query and fragment delimiters refuse before probing and valid destinations use the exact embeddings suffix', async t => {
+  const stub = await embeddingStub(t); const f = writerFixture(t); const before = snapshot(f.temporary);
+  for (const delimiter of ['?', '#', '?#']) {
+    assert.throws(() => normalizeEmbeddings(profile(stub.baseUrl + delimiter)), error => error.code === 'EMBEDDING_CONFIG');
+    const refused = await setupCommand(f, flags(stub.baseUrl + delimiter)); assert.notEqual(refused.status, 0); assert.equal(stub.requests.length, 0); assert.deepEqual(snapshot(f.temporary), before);
+  }
+  await createOpenAIAdapter(profile(stub.baseUrl + '/')).embed(['fixture']); assert.equal(stub.requests.at(-1).path, '/v1/embeddings');
+});
+
 test('configuration drift discards in-flight results and the host seam splits at its advertised bound', async t => {
   let current = true;
   const stub = await embeddingStub(t, (request, response, body) => { current = false; response.end(JSON.stringify({ model: 'stub-pinned', data: body.input.map((text, index) => ({ index, embedding: [1, 0] })) })); });
