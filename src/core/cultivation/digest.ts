@@ -311,23 +311,21 @@ function suppressedByFeedback(
 ): boolean {
   if (documents === null || !job.plan) return false;
   try {
-    const relationships = job.plan.relationships
-      .filter(
-        (relationship) =>
-          relationship.rationale === finding.explanation &&
-          [relationship.source.path, relationship.target.path].includes(route.note.path),
-      )
+    const matchingRelationships = job.plan.relationships.filter(
+      (relationship) =>
+        relationship.rationale === finding.explanation &&
+        [relationship.source.path, relationship.target.path].includes(route.note.path),
+    );
+    const relationships = matchingRelationships
+      .filter((relationship) => relationship.source.path === route.note.path)
       .map((relationship) => ({
-        target:
-          relationship.source.path === route.note.path
-            ? relationship.target.path
-            : relationship.source.path,
+        target: relationship.target.path,
         relation: relationship.relation,
         meaning: `${relationship.source.path} ${relationship.relation} ${relationship.target.path}: ${relationship.rationale}`,
         provenance: "inferred" as const,
         evidence: relationship.evidence,
       }));
-    const retained = assessPipelineFinding(finding, documents, relationships.length > 0);
+    const retained = assessPipelineFinding(finding, documents, matchingRelationships.length > 0);
     const subject = intelligenceSuppressionSubject({
       kind: retained.kind,
       evidence: retained.evidence,

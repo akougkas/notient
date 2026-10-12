@@ -49,22 +49,26 @@ export function retainPipelineIntelligence(context: PipelineContext, plan: Pipel
       })
       .slice(0, 6);
     const records: IntelligenceRecord[] = findings.map((finding) => {
-      const relationships = plan.relationships
-        .filter((relationship) =>
-          relationship.rationale === finding.explanation &&
-          [relationship.source.path, relationship.target.path].includes(note.note.path),
-        )
+      const matchingRelationships = plan.relationships.filter((relationship) =>
+        relationship.rationale === finding.explanation &&
+        [relationship.source.path, relationship.target.path].includes(note.note.path),
+      );
+      const incomingQualifications = matchingRelationships
+        .filter((relationship) => relationship.target.path === note.note.path)
+        .map((relationship) =>
+          `Incoming relationship: ${relationship.source.path} ${relationship.relation} ${relationship.target.path}. This note is the target; the directed predicate is retained on the source note.`,
+        );
+      const relationships = matchingRelationships
+        .filter((relationship) => relationship.source.path === note.note.path)
         .map((relationship) => ({
-          target: relationship.source.path === note.note.path
-            ? relationship.target.path
-            : relationship.source.path,
+          target: relationship.target.path,
           relation: relationship.relation,
           meaning: `${relationship.source.path} ${relationship.relation} ${relationship.target.path}: ${relationship.rationale}`,
           provenance: "inferred" as const,
           evidence: relationship.evidence,
         }));
       const dependencies = new Map(finding.evidence.map((source) => [source.path, { path: source.path, revision: source.revision }]));
-      const assessment = assessPipelineFinding(finding, context.documents, relationships.length > 0);
+      const assessment = assessPipelineFinding(finding, context.documents, matchingRelationships.length > 0);
       const assessedContribution = finding.assessmentOf === undefined
         ? undefined
         : existing.find(
@@ -98,6 +102,7 @@ export function retainPipelineIntelligence(context: PipelineContext, plan: Pipel
         qualifications: [
           ...new Set([
             ...assessment.qualifications,
+            ...incomingQualifications,
             ...contributionQualifications,
             ...context.contextLimitations(),
           ]),
