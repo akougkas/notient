@@ -108,3 +108,76 @@ approve 0270e1dd for item 9.
 approve cd63f033 for item 10.
 
 block 27386e2c: missed Setext boundary for a triple-backtick inline-code title (item 15); approve 43166601 for item 7, 5b3767c8 for item 8, 0270e1dd for item 9, and cd63f033 for item 10.
+
+## d752fa82: V11 fix for item 11
+
+16. **Counting link labels separately splits one visible word into two.** `clio/notient-extension/lib/vitals.mjs:43` counts display text independently after masking the complete link at `:40`, then adds it to the surrounding prose count at `:47`. **Violates 04 §7's maximal visible-word rule, including internal apostrophes and hyphens.** For `well-[known](Target.md)`, the displayed text is `well-known`, one word. The new counting path instead counts `well-` as one word and `known` as another. Likewise, `un[known](Target.md)` counts two words instead of the single displayed word `unknown`. The earlier label substitution preserved adjacency to the preceding prose in these examples. Consequently, the V11 change inflates words, wordBand and health and can satisfy maturity word thresholds without the required visible prose. The comment-split destination witness from item 11 is fixed, but the new counting defect remains through `b1f96899`.
+
+block d752fa82: artificial word boundaries around link display text (item 16).
+
+## 976920a1: V12 fix for item 12
+
+approve 976920a1 for item 12.
+
+## a6ab3a13: V13 fix for item 13
+
+17. **Batch undo can freeze another note's edit age onto the restored note and discard its earned maturity.** `clio/notient-extension/lib/vitals-write.mjs:12` at `b1f96899` selects the current path's age whenever the inverse has non-null before-bytes. `lib/write.mjs:586` supplies restored ages only for newly recreated paths, and `lib/vitals-index.mjs:100` uses inverse identity only when no old row exists and the path is recreated. **Violates 04 §6's provenance requirement for every operation and §7's preservation of prior edit age and earned maturity through undo.** Start with A.md at a fourteen-day edit age and earned synthesis-ready maturity, and C.md at a one-day age and raw maturity. In one batch move A.md to B.md, then C.md to the vacant A.md. Both destinations are absent when each move runs. The supported batch inverse replaces A.md's current C bytes with original A bytes, deletes B.md and recreates C.md. Although `inverseOrigins` correctly maps restored A to B, the occupied-path branches retain C's one-day age and raw maturity for A.md. Consequently, the inverse records that incorrect age in its version:2 manifest, so rebuilding preserves the wrong attribution, and the original A loses its earned maturity. The single-move witness from item 13 is fixed; identity transfer remains incomplete when a batch reuses a vacated path.
+
+block a6ab3a13: batch-undo provenance follows an occupied path instead of the restored note (item 17).
+
+## 97d3029c: V14 fix for item 14
+
+approve 97d3029c for item 14's cache-to-journal attribution path.
+
+## b1f96899: frozen stage 4 tool contracts
+
+18. **Stage 4a can select hybrid search by default while embeddings remain off.** `clio/notient-extension/lib/embedding-off.mjs:42` selects hybrid whenever the registered vault's accepted `embeddings` boolean is true and the caller omits mode. **Violates 04 §4's explicit stage 4a requirement, "Default search stays lexical."** The configuration reader accepts a saved future embedding profile and opt-in bit, while every semantic path in this release still reports embedding state off. With a current structural index, an ordinary search under that configuration therefore returns `mode:hybrid`, `reason:embedding_off` and incomplete coverage instead of the required lexical default and its structural coverage. Consequently, a configuration bit changes the default read contract before stage 4b implements semantic retrieval.
+
+approve b1f96899 for the literal candidates, vitals and revise schemas, the prescribed search/refresh schema additions, and typed embedding_off results; block its stage 4a default-mode selection (item 18).
+
+block all of stage 4a at b1f96899: batch-undo provenance loss on reused paths (item 17), the unresolved Setext section boundary (item 15), artificial word boundaries around link labels (item 16), and premature hybrid default selection (item 18).
+
+## 1244bc6c: V15 fix for item 15
+
+19. **A real closing fence followed by a thematic break now refuses an already satisfied link.** `clio/notient-extension/lib/link.mjs:78` no longer skips backtick-prefixed lines, but the candidate scan checks only the underline's visibility before reaching the uncertainty refusal at `:83`. **Violates 04 §6's requirement to ignore fenced code during section recognition and preserve existing-edge idempotency on the original bytes.** For `## Related\n\n- [[Target]]\n\n` followed by this completed code block and thematic break, the requested bare target is already present:
+
+~~~~text
+```md
+code
+```
+---
+~~~~
+
+`lib/move.mjs:136` through `:139` correctly masks the closing fence and omits its context entry; the following thematic break remains visible. The revised section scan nevertheless considers that closing fence a Setext title, then refuses with AMBIGUOUS_REFERENCE before the existing-target check at `lib/link.mjs:178` through `:180`. Consequently, valid Markdown that previously returned byte-identical success now refuses. This boundary is already identified as fenced code; it is not an uncertain visible heading. The original item 15 witness now refuses safely, but real fence closures require a distinct exclusion.
+
+block 1244bc6c: completed fence followed by a thematic break breaks link idempotency (item 19).
+
+block stage 4a at 1244bc6c: batch-undo provenance loss (item 17), artificial word boundaries around link labels (item 16), premature hybrid default selection (item 18), and the closing-fence/thematic-break regression (item 19); the original item 15 witness is resolved.
+
+## 78a25274: V16 fix for item 16
+
+approve 78a25274 for item 16.
+
+## 2b5c26ab: V17 fix for item 17
+
+20. **Rebuilding retained version:1 batch-undo history still follows the displaced note's age.** `clio/notient-extension/lib/vitals-index.mjs:66` enters inverse-origin recovery only when the restored path has null before-bytes; `:73` otherwise follows that path's before-hash. **Violates 04 §6's version:1 history compatibility and §7's requirement to recover the restored note's edit-age attribution from its contiguous verified history.** Retain version:1 captures of A.md fourteen days ago and C.md one day ago, followed by the same batch as item 17: move A.md to B.md, move C.md to A.md, then undo the batch before upgrading. The committed inverse replaces A.md's C bytes with original A bytes, deletes B.md and recreates C.md. On index rebuild, the inverse has no frozen vitalsBefore, and A.md's non-null before-hash takes the branch at `:73`. Traversal then follows C's move to A and C's capture, with every hash, commit and path-history check succeeding. Consequently, restored A receives C's one-day age with fallback:false instead of its own fourteen-day age; freshness and maturity eligibility use the wrong note's provenance. The new version:2 inverse and immediate index update are corrected by V17, but retained version:1 history still reproduces the identity error. Line references remain unchanged at `f72adea4`.
+
+block 2b5c26ab: retained version:1 batch-undo attribution follows a reused path instead of the restored note (item 20).
+
+## f72adea4: V18 fix for item 18
+
+approve f72adea4 for item 18.
+
+block all of stage 4a at f72adea4: closing-fence/thematic-break regression (item 19) and retained version:1 batch-undo edit-age misattribution (item 20).
+
+## 92bd319b: V19 fix for item 19
+
+approve 92bd319b for item 19.
+
+block all of stage 4a at 92bd319b: retained version:1 batch-undo edit-age misattribution (item 20), unchanged in this fix and through 738e1bdf.
+
+## 951e2f86: V20 fix for item 20
+
+approve 951e2f86 for item 20.
+
+approve all of stage 4a through 951e2f86. Static review only; verification remains with the manager.

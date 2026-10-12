@@ -7,7 +7,7 @@
     "ai.iowarp.clio": {
       "manifestVersion": 1,
       "compatibility": { "clio": ">=0.6.2" },
-      "resources": { "skills": "skills" }
+      "resources": { "skills": "skills", "agents": "native/agents" }
     }
   }
 }
