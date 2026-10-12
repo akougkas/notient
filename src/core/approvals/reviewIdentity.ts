@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { PipelinePlan } from "../../api/pipelines";
-import { intelligenceRecordSchema, intelligenceSuppressionSubject } from "../intelligence";
+import { intelligenceSuppressionSubject, parseAllIntelligenceRecords, withoutRetainedIntelligence } from "../intelligence";
+import { WRITEBACK_EDGE_TABLES } from "../db/edgeTables";
+import { parseSurrealRelationRecordId } from "../db/recordId";
 
 type PlannedChange = PipelinePlan["changes"][number];
 
@@ -23,28 +25,35 @@ function digest(value: unknown): string {
 
 function appendSubjects(text: string): string[] {
   const subjects = new Set<string>();
-  for (const match of text.matchAll(START_MARKER)) {
-    try {
-      const record = intelligenceRecordSchema.parse(
-        JSON.parse(Buffer.from(match[1] ?? "", "base64url").toString("utf8")),
-      );
+  try {
+    const records = parseAllIntelligenceRecords(`## Notient understanding\n${text}`);
+    if (records.length !== [...text.matchAll(START_MARKER)].length || records.length === 0)
+      return [`text:${digest(text)}`];
+    for (const record of records) {
       subjects.add(
         record.evidence.length > 0 || record.relationships.length > 0
           ? intelligenceSuppressionSubject(record)
           : `record:${record.kind}:${digest(record)}`,
       );
-    } catch {
-      subjects.add(`raw:${digest(match[1] ?? "")}`);
     }
+    const authored = withoutRetainedIntelligence(text).split(/\r?\n/u)
+      .filter((line) => line.trim().length > 0).join("\n");
+    subjects.add(`authored:${digest(authored)}`);
+  } catch {
+    return [`text:${digest(text)}`];
   }
-  return subjects.size > 0 ? [...subjects].sort() : [`text:${digest(text)}`];
+  return [...subjects].sort();
 }
 
 function normalized(change: PlannedChange): unknown {
   if (change.kind === "append")
     return { kind: change.kind, source: change.source, subjects: appendSubjects(change.text) };
-  if (change.kind === "relationship")
-    return { kind: change.kind, source: change.source, target: change.target };
+  if (change.kind === "relationship") {
+    let relation: string;
+    try { relation = parseSurrealRelationRecordId(change.edgeId, WRITEBACK_EDGE_TABLES).table; }
+    catch { relation = change.edgeId; }
+    return { kind: change.kind, source: change.source, target: change.target, relation };
+  }
   return change;
 }
 
@@ -52,14 +61,16 @@ export function reviewEffectFingerprint(
   changes: readonly PlannedChange[],
   relationships: PipelinePlan["relationships"],
 ): string {
+  const firstMove = changes.findIndex((change) => ["move", "archive", "unarchive"].includes(change.kind));
+  const split = firstMove < 0 ? changes.length : firstMove;
   return digest(
     [
-      ...changes.map(normalized),
+      ...changes.slice(0, split).map(normalized),
       ...relationships.map((relationship) =>
-        normalized({ kind: "relationship", source: relationship.source, target: relationship.target, edgeId: "" } as PlannedChange),
+        ({ kind: "relationship", source: relationship.source, target: relationship.target, relation: relationship.relation }),
       ),
+      ...changes.slice(split).map(normalized),
     ]
-      .map((entry) => digest(entry))
-      .sort(),
+      .map((entry) => digest(entry)),
   );
 }

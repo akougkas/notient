@@ -322,13 +322,15 @@ export class ApprovalService {
       const specific = await readReview(this.options.db, specificId);
       if (terminal(specific)) return empty;
       const legacy = await readReview(this.options.db, legacyId);
-      if (legacy !== null && !terminal(legacy))
+      if (legacy !== null)
         return this.withIntentTurn(`review:${legacyId}`, async () => {
           const current = await readReview(this.options.db, legacyId);
-          if (terminal(current)) return empty;
-          return this.stageReview(legacyId, current, job, plan, changes, signal);
+          if (current !== null && (await this.samePlanAsStored(current, plan, changes, job.caller))) {
+            if (terminal(current)) return empty;
+            return this.stageReview(legacyId, current, job, plan, changes, signal);
+          }
+          return this.stageReview(specificId, specific, job, plan, changes, signal);
         });
-      if (legacy !== null && (await this.samePlanAsStored(legacy, plan, changes, job.caller))) return empty;
       return this.stageReview(specificId, specific, job, plan, changes, signal);
     });
   }
@@ -339,7 +341,6 @@ export class ApprovalService {
     changes: ChangeService,
     caller: PipelineJob["caller"],
   ): Promise<boolean> {
-    if (stored.previewId === null) return true;
     try {
       const preview = await changes.get(stored.previewId, caller);
       return (
@@ -347,7 +348,7 @@ export class ApprovalService {
         reviewEffectFingerprint(plan.changes, plan.relationships)
       );
     } catch {
-      return true;
+      throw new NoteApiError("CONFLICT", "The retained legacy review preview is unavailable; its effects cannot be compared safely.");
     }
   }
 
