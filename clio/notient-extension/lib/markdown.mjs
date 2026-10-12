@@ -392,6 +392,27 @@ function htmlCommentParts(text, line, state) {
   return parts;
 }
 
+function linkOnlyLine(text, line, parts, links) {
+  if (!links.length) return false;
+  const startByte = Buffer.byteLength(text.slice(0, line.start));
+  const bytes = Buffer.from(text.slice(line.start, line.end));
+  const visible = Buffer.alloc(bytes.length, 32);
+  for (const part of parts) {
+    const start = Buffer.byteLength(text.slice(line.start, part.start));
+    const end = Buffer.byteLength(text.slice(line.start, part.end));
+    bytes.copy(visible, start, start, end);
+  }
+  const prefix = /^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?/.exec(visible.toString('utf8'))[0];
+  let cursor = Buffer.byteLength(prefix);
+  for (const link of links) {
+    const start = link.source.startByte - startByte;
+    const end = link.source.endByte - startByte;
+    if (start < cursor || end > bytes.length || visible.subarray(cursor, start).toString('utf8').trim()) return false;
+    cursor = end;
+  }
+  return !visible.subarray(cursor).toString('utf8').trim();
+}
+
 export function parseMarkdown(text, filename = '') {
   const lines = [];
   const bomLength = text.startsWith('\uFEFF') ? 1 : 0;
@@ -476,8 +497,9 @@ export function parseMarkdown(text, filename = '') {
     const excluded = generated || visitor || visitorHeading !== null || /^>\s*(?:Context from referencing notes:|[-*]\s*\.\.\.)/.test(line.text);
     const kind = fence || isFence ? 'code' : heading || setext ? 'heading' : 'paragraph';
     const end = setext ? lines[row].end : line.end;
-    if (kind !== 'code') for (const part of parts) links.push(...scanLinks(text, part.start, setext ? end : part.end, definitions).map(link => ({ ...link, evidenceExcluded: excluded })));
-    const linkOnly = kind === 'paragraph' && /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(?:!?\[\[[^\r\n]+?\]\][ \t]*)+$/.test(visibleText);
+    const lineLinks = kind === 'code' ? [] : parts.flatMap(part => scanLinks(text, part.start, setext ? end : part.end, definitions).map(link => ({ ...link, evidenceExcluded: excluded })));
+    links.push(...lineLinks);
+    const linkOnly = kind === 'paragraph' && linkOnlyLine(text, line, parts, lineLinks);
     if (excluded || linkOnly || !visibleText.trim()) { finish(); continue; }
     if (split) {
       finish();

@@ -32,11 +32,6 @@ export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { vi
     const start = block.start ?? Buffer.from(bytes.subarray(0, block.source.startByte)).toString('utf8').length;
     const end = block.end ?? Buffer.from(bytes.subarray(0, block.source.endByte)).toString('utf8').length;
     const masked = text.slice(start, end).split('').map((char, offset) => visible[start + offset] ? char : ' ');
-    let lineOffset = 0;
-    for (const line of masked.join('').match(/[^\n]*\n|[^\n]+$/g) ?? []) {
-      if (/^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?(?:!?\[\[[^\r\n]+?\]\][ \t]*)+\r?\n?$/.test(line)) masked.fill(' ', lineOffset, lineOffset + line.length);
-      lineOffset += line.length;
-    }
     for (const link of links) {
       if (link.start < start || link.end > end || masked[link.start - start] === ' ') continue;
       const display = link.alias ?? `${link.target}${link.fragment === null ? '' : `#${link.fragment}`}`;

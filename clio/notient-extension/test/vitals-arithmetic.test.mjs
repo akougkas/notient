@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { arithmeticVitals, proseMetrics } from '../lib/vitals.mjs';
 import { migrateIndex, wordCountVersion } from '../lib/index-schema.mjs';
 import { parseMarkdown } from '../lib/markdown.mjs';
-import { openIndex, refreshIndex } from '../lib/index.mjs';
+import { openIndex, refreshIndex, searchIndex } from '../lib/index.mjs';
 import { indexPath } from '../lib/config.mjs';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 
@@ -108,6 +108,28 @@ test('V2 refresh indexes visible comment-adjacent evidence without hidden prose 
   for (const chunk of chunks) { const source = JSON.parse(chunk.source); assert.equal(Buffer.from(text).subarray(source.startByte, source.endByte).toString(), chunk.passage); }
   assert.equal(db.prepare('SELECT count(*) AS n FROM links').get().n, 0);
   assert.equal(db.prepare('SELECT count(*) AS n FROM tags').get().n, 0); db.close();
+  assert.deepEqual(snapshot(f.vault.path), before);
+});
+
+test('V3 link-only classification requires actual complete link tokens and whitespace', () => {
+  for (const [text, words, chunkCoverage] of [
+    ['- [[A]] supports [[B]]\n', 3, 1],
+    ['> - [[Hidden A|A]] supports [[Hidden B|B]]\r\n', 3, 1],
+    ['- [[A]]\t[[B]]\n', 0, 0],
+    ['- [A](hidden(a(b)).md) [[B|shown]]\n', 0, 0],
+    ['- [[A]] [[B\n', 2, 1],
+    ['- [[A]] <!-- hidden --> [[B]]\n', 0, 0],
+  ]) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words, chunkCoverage }, text);
+});
+
+test('V3 indexed authored prose between links remains evidence while pure token lists do not', t => {
+  const f = writerFixture(t); const text = '- [[A]] supports [[B]]\n\n- [[A]] [[B]]\n'; put(f, 'Source.md', text); put(f, 'A.md', '# A\n'); put(f, 'B.md', '# B\n');
+  const before = snapshot(f.vault.path); refreshIndex(f.vault, f.directory);
+  const db = openIndex(f.directory, f.vault);
+  assert.equal(db.prepare("SELECT word_count FROM note_vitals WHERE path='Source.md'").get().word_count, 3);
+  assert.deepEqual(db.prepare("SELECT passage FROM chunks WHERE path='Source.md'").all().map(row => row.passage), ['- [[A]] supports [[B]]\n']);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM links WHERE path='Source.md'").get().n, 4); db.close();
+  assert.equal(searchIndex(f.vault, f.directory, { query: 'supports' }).hits[0].passage, '- [[A]] supports [[B]]\n');
   assert.deepEqual(snapshot(f.vault.path), before);
 });
 
