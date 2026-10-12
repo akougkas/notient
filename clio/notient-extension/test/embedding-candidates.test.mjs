@@ -170,3 +170,11 @@ test('E6 an empty candidate scan with an eligible unembedded neighbor reports in
   const result = findCandidates(f.vault, f.directory, { source: 'Source.md', revision: f.sourceRevision });
   assert.equal(result.reason, 'no_candidates'); assert.deepEqual(result.candidates, []); assert.equal(result.candidateSet, null); assert.equal(result.embedding.missing, 1); assert.equal(result.coverage.state, 'incomplete');
 });
+
+test('E7 empty and oversized-only generation publications retain directory fsync warnings', async t => {
+  for (const body of ['# Heading only\n', 'oversized '.repeat(100)]) {
+    const f = await embeddingFixture(t, { maxInputBytes: 64, files: { 'Source.md': body } });
+    const result = await refreshVectors(f.vault, f.directory, { tier: 'embed' }, { sync: () => false });
+    assert.equal(result.embedding.embeddedThisCall, 0); assert.equal(f.stub.requests.length, 0); assert.equal(result.warnings[0]?.code, 'DIRECTORY_FSYNC_UNAVAILABLE');
+  }
+});

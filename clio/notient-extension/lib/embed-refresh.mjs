@@ -73,13 +73,13 @@ export async function refreshVectors(vault, directory, input = {}, { now = () =>
     } else for (;;) {
       if (now() >= deadline) { reason = 'budget_exhausted'; break; }
       const batch = missingBatch(vault, directory, profile);
-      if (!batch.length) { publishVectors(vault, directory, profile, [], []); break; }
+      if (!batch.length) { const published = publishVectors(vault, directory, profile, [], [], { sync }); warnings.push(...published.warnings); break; }
       const batchStarted = now();
       try {
         const response = await adapter.embed(batch.map(chunk => chunk.input), { signal: AbortSignal.timeout(Math.max(1, Math.ceil(deadline - now()))) });
         if (response.model !== profile.model || response.responseModel !== profile.responseModel || response.dimension !== profile.dimension || adapter.describe().spaceId !== embeddingSpace(profile)) refuse('EMBEDDING_STALE_MODEL', 'The inference identity differs from the frozen vector space.');
         if (now() >= deadline) { reason = 'budget_exhausted'; break; }
-        const published = publishVectors(vault, directory, profile, batch, response.vectors); embeddedThisCall += published.published; warnings.push(...published.warnings);
+        const published = publishVectors(vault, directory, profile, batch, response.vectors, { sync }); embeddedThisCall += published.published; warnings.push(...published.warnings);
         batchMs.push(now() - batchStarted);
         if (published.discarded) { reason = 'structural_refresh_required'; break; }
       } catch (error) {
