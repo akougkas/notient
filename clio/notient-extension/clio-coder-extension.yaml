@@ -341,7 +341,7 @@
       },
       {
         "name": "undo",
-        "description": "Preview or undo one committed Notient operation while preserving audit history and unrelated staged entries.",
+        "description": "Preview or undo one committed operation or targetBatch. Batch and move inverses require a preview planHash; audit history and unrelated staged entries are preserved.",
         "runtime": "node",
         "entrypoint": "tools/undo.mjs",
         "timeoutMs": 300000,
@@ -352,8 +352,7 @@
           "required": [
             "vault",
             "batch",
-            "authorization",
-            "opId"
+            "authorization"
           ],
           "properties": {
             "vault": {
@@ -406,6 +405,11 @@
               "type": "string",
               "minLength": 8,
               "maxLength": 64
+            },
+            "targetBatch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
             }
           }
         }

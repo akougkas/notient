@@ -300,3 +300,27 @@ clio-coder extensions validate clio/notient-extension
 A fresh command-process measurement on an isolated toy-vault copy committed `demo-move-001`, batch `stage2b-demo`, OID `5bd619dadba551b26ea734418e27879bcf3e3903`. Its delta contains 7 note paths plus one monthly log, with 5 reference splices. The unrelated staged entry stayed byte-identical. Preview took 156.72 ms; the real command took 1,679.99 ms end to end. Internal measurements: scan 22.40 ms, lock 11.66 ms, initial journal 136.06 ms, publication 440.94 ms, Git 843.53 ms, total 1,627.98 ms. The complete request/results and path set are retained in ignored `.local/stage2b-demo-ArOB9v/measurement.json`.
 
 Fixtures cover partial destination/referrer progress, one original candidate and log after recovery, exact after-bytes supplied without a stamp, torn destinations, final-source saves, changed dependencies/attachments, origin/request hash binding, all rows prepared before the first stamp, corrupt rows and revoked authority. No Vaultex write or installation was performed.
+
+## Stage 2b step 3: batch and move undo
+
+`undo` now accepts exactly one of `opId` or `targetBatch`. It verifies reachable original Git deltas, certifies fully cancelled later operation/inverse pairs, and simulates selected operations in reverse commit order. The final buffer/path delta is published as one new operation and commit. Batch and move inverses require a preceding preview hash; capture deletion retains the same requirement. A fresh inverse inventory scan refuses new incoming, dangling, rebound or ambiguous references without expanding the original write set. Old log lines remain unchanged and every selected original receives the inverse backlink after publication.
+
+Actual checks:
+
+```text
+node --test clio/notient-extension/test
+  tests 110, pass 110, fail 0, duration_ms 63434.277861
+clio-coder extensions validate clio/notient-extension
+  Valid; Registration check: passed; fs.write: []
+```
+
+An isolated command-process demonstration performed capture, replace and move in `stage2b-demo`, then one reviewed batch undo. The original storage-note SHA-256 was restored to `ebe36cf5779d4ecdf1d657bb3835e4f5d53bf1566f3db7c8e280a0cdd7a80509`. All 8 inverse note-path states matched their returned hashes or absence; the unrelated staged entry remained byte-identical. Four historical log lines remain. Full responses, hashes and paths are in ignored `.local/stage2b-demo-1he7iH/measurement.json`.
+
+| Operation | ID | OID | End-to-end ms | Git ms |
+| --- | --- | --- | ---: | ---: |
+| capture | `demo-batch-capture` | `0f538c4468a8cd75da85610e80bbe99be2e73f81` | 651.32 | 373.01 |
+| replace | `demo-batch-replace` | `2c20e88bb8995968165638f8f3e91d830a2ff6ff` | 749.45 | 422.36 |
+| move | `demo-move-001` | `76c23258d568515110aa08a42180a0941b3c2c60` | 1,903.63 | 921.54 |
+| batch undo | `demo-batch-undo` | `d8c46e2ce3404e6e7906e0d79af8553d62d6e222` | 2,324.34 | 1,081.22 |
+
+The inverse names all three original OIDs in `Notient-Reverts` and changes 8 note paths plus one log. Internal inverse measurements: scan 33.86 ms, lock 0.36 ms, journal 127.79 ms, publication 487.91 ms, total 2,264.28 ms. These are individual fixture observations. Tests also cover capture/replace/move chains with absent intermediate paths, single move inverse, partially undone batches, certified reverse single-op undos, edited referrers, occupied original paths, new references, later active overlaps, interleaved human commits and repeated no-op undo. No Vaultex write or installation was performed.

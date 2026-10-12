@@ -425,3 +425,37 @@ export function planMove(scan, source, destination) {
   const changed = new Set(files.map(file => file.path));
   return { ok: true, source, destination, files, repairs, blockers: [], blockerCount: 0, reads: scan.notes.filter(note => !changed.has(note.path) && !note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
 }
+
+export function guardInverseReferences(scan, files) {
+  const blockers = [...scan.blockers];
+  const changed = new Map(files.map(file => [file.path, file]));
+  const notes = scan.notes.map(note => {
+    try { return { ...note, ...tokenizeMove(note.bytes) }; }
+    catch (error) { blockers.push({ path: note.path, reason: error.message }); return { ...note, aliases: [], tokens: [], issues: [] }; }
+  });
+  const names = new Set(scan.inventory);
+  const proposed = notes.filter(note => !changed.has(note.path));
+  for (const file of files) {
+    if (file.after === null) names.delete(file.path);
+    else {
+      names.add(file.path);
+      try { proposed.push({ path: file.path, ...tokenizeMove(file.after) }); }
+      catch (error) { blockers.push({ path: file.path, reason: error.message }); }
+    }
+  }
+  const beforeIndex = inventoryIndex(scan.inventory, notes);
+  const afterIndex = inventoryIndex([...names].sort(), proposed);
+  const changedNames = new Set(files.filter(file => file.before === null || file.after === null).map(file => file.path));
+  for (const note of notes) {
+    if (changed.has(note.path)) continue;
+    for (const issue of note.issues) blockers.push({ path: note.path, reason: issue.reason });
+    for (const token of note.tokens) {
+      const before = resolveMoveTarget(token, note.path, beforeIndex);
+      const after = resolveMoveTarget(token, note.path, afterIndex);
+      if (before.state === 'external') continue;
+      const affected = before.state === 'resolved' ? after.state !== 'resolved' || after.identity !== before.identity : before.state === 'missing' ? after.state !== 'missing' : [...before.candidates, ...after.candidates].some(name => changedNames.has(name));
+      if (affected) blockers.push({ path: note.path, startByte: token.startByte, endByte: token.endByte, target: token.target, reason: 'The inverse would leave an unselected reference dangling, rebound or ambiguous.' });
+    }
+  }
+  return { blockers: blockers.slice(0, 100), blockerCount: blockers.length, reads: scan.notes.filter(note => !changed.has(note.path) && !note.path.startsWith('Notient/Log/')).map(note => ({ path: note.path, revision: note.revision })).sort((a, b) => a.path < b.path ? -1 : 1), inventory: scan.inventory };
+}
