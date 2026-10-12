@@ -143,7 +143,8 @@ test('move prepares all intents before first stamp and corrupt rows block recove
 test('move refuses unattended origin and revoked recovery while own role permits the same origin', t => {
   const f = moveFixture(t);
   const unattended = { origin: 'unattended', request: 'Move the selected note.' };
-  assert.equal(writeOperation('revise', { ...moveInput(f), authorization: unattended, dryRun: true }, { directory: f.directory }).error.code, 'UNATTENDED_REFUSED');
+  const preview = writeOperation('revise', { ...moveInput(f), authorization: unattended, dryRun: true }, { directory: f.directory }); assert.equal(preview.ok, true, JSON.stringify(preview));
+  assert.equal(writeOperation('revise', { ...moveInput(f), authorization: unattended, planHash: preview.planHash }, { directory: f.directory }).error.code, 'UNATTENDED_REFUSED');
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, role: 'own' }] });
   const pending = reviewedMove(f, { authorization: unattended }, { barrier(event) { if (event === 'afterIntent') throw new WriteError('INJECTED_STOP', 'Stop before publish.'); } });
   assert.equal(pending.ok, false);

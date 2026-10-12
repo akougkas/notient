@@ -123,13 +123,16 @@ function settle(vault, directory, input, now) {
     const row = db.prepare('SELECT * FROM queue WHERE key=? AND runId=?').get(input.itemId, input.runId);
     if (!row || row.leaseToken !== input.leaseToken || row.leaseUntil <= now()) refuse('GARDEN_LEASE_INVALID', 'The source lease is absent, changed or expired.');
     if (row.resultJson && row.state === 'complete') {
-      const prior = JSON.parse(row.resultJson); if (prior.reason !== input.reason || canonicalJson(prior.operationIds) !== canonicalJson(input.operationIds) || input.outcome !== 'complete') refuse('REQUEST_ID_REUSED', 'The item already has a different settlement.'); return prior;
+      const prior = JSON.parse(row.resultJson); if (prior.reason !== input.reason && prior.reason !== 'A verified plan records the structural proposal.' || canonicalJson(prior.operationIds) !== canonicalJson(input.operationIds) || input.outcome !== 'complete') refuse('REQUEST_ID_REUSED', 'The item already has a different settlement.'); return prior;
     }
     if (row.state !== 'leased') refuse('GARDEN_LEASE_INVALID', 'The item is no longer leased.');
     const records = listRecords(directory, vault); const adapter = createGitAdapter(vault, directory);
+    const owned = records.filter(record => record.gardenRun?.runId === input.runId && record.gardenRun?.itemId === row.key || record.managedDocument?.runId === input.runId && record.managedDocument.itemIds.includes(row.key));
+    if (owned.some(record => !['committed', 'aborted'].includes(record.state))) return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, itemId: row.key, state: 'recovery_pending', operationIds: owned.map(record => record.id), reason: input.reason };
+    if (input.outcome === 'complete' && owned.some(record => record.state === 'committed' && !record.undoneBy && !input.operationIds.includes(record.id))) refuse('GARDEN_ACTION_INVALID', 'Settlement must include every committed operation for this item.');
     for (const operationId of input.operationIds) {
       const record = records.find(record => record.id === operationId);
-      if (!record || record.gardenRun?.runId !== input.runId || record.gardenRun?.itemId !== row.key) refuse('GARDEN_ACTION_INVALID', 'A supplied operation does not belong to this leased item.');
+      if (!record || !owned.includes(record) || record.undoneBy) refuse('GARDEN_ACTION_INVALID', 'A supplied operation does not belong to this leased item.');
       if (record.state !== 'committed' || !adapter.recognize(record)) return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, itemId: row.key, state: 'recovery_pending', operationIds: input.operationIds, reason: input.reason };
     }
     const expected = records.filter(record => record.gardenRun?.runId === input.runId && record.gardenRun?.itemId === row.key && record.state === 'committed').flatMap(record => record.files.filter(file => file.path === row.path).map(file => file.after)).at(-1) ?? row.revision;

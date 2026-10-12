@@ -437,6 +437,38 @@
               "type": "string",
               "minLength": 64,
               "maxLength": 64
+            },
+            "gardenRun": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "minLength": 8,
+                  "maxLength": 48
+                },
+                "itemId": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "leaseToken": {
+                  "type": "string",
+                  "minLength": 36,
+                  "maxLength": 36
+                },
+                "slot": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3
+                }
+              },
+              "required": [
+                "runId",
+                "itemId",
+                "leaseToken",
+                "slot"
+              ],
+              "additionalProperties": false
             }
           }
         }

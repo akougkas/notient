@@ -19,7 +19,7 @@ export async function gardenTool(f, name, input, { imports = [], barrier } = {})
   let entrypoint = fileURLToPath(new URL(`../tools/${name}.mjs`, import.meta.url));
   if (barrier) {
     entrypoint = path.join(f.temporary, 'fault-command.mjs');
-    writeFileSync(entrypoint, `import {runCommand} from ${JSON.stringify(new URL('../lib/command.mjs', import.meta.url).href)}; import {gardenCommand} from ${JSON.stringify(new URL('../lib/garden.mjs', import.meta.url).href)}; await runCommand('garden', input=>gardenCommand(input,{barrier(name){if(name===${JSON.stringify(barrier)})process.kill(process.pid,'SIGKILL')}}));`);
+    writeFileSync(entrypoint, `import {runCommand} from ${JSON.stringify(new URL('../lib/command.mjs', import.meta.url).href)}; import {gardenCommand} from ${JSON.stringify(new URL('../lib/garden.mjs', import.meta.url).href)}; import {writeOperation} from ${JSON.stringify(new URL('../lib/write.mjs', import.meta.url).href)}; const options={barrier(name){if(name===${JSON.stringify(barrier)})process.kill(process.pid,'SIGKILL')}}; await runCommand(${JSON.stringify(name)}, input=>${JSON.stringify(name)}==='garden'?gardenCommand(input,options):writeOperation(${JSON.stringify(name)},input,options));`);
   }
   const child = spawn(process.execPath, [...imports.flatMap(filename => ['--import', filename]), entrypoint, JSON.stringify({ vault: f.vault.id, ...input })], { env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = ''; child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });

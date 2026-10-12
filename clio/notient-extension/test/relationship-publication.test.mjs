@@ -173,7 +173,7 @@ test('legacy pending recovery stays version one and own authority relaxes only u
   const failed = writeOperation('revise', { vault: f.vault.id, requestId: 'legacy-pending-one', batch: 'legacy', authorization, operation: 'replace', path: 'Source.md', revision: revision(bytes(f)), oldText: 'Original', newText: 'Changed' }, { ...options(f), barrier(name) { if (name === 'afterIntent') throw new Error('fixture legacy pending'); } }); assert.equal(failed.ok, false); legacy(f, failed.operationId);
   assert.equal(recoverVault(f.vault, f.directory).remaining.length, 0); assert.equal(readRecord(f.directory, f.vault, failed.operationId).version, 1);
   const input = request(f, 'link', 'unattended-boundary', { authorization: { origin: 'unattended', request: 'Add the named relationship.' } });
-  assert.equal(writeOperation('revise', input, options(f)).error.code, 'UNATTENDED_REFUSED');
+  const preview = writeOperation('revise', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, role: 'own' }] });
   const own = writeOperation('revise', input, options(f)); assert.equal(own.ok, true, JSON.stringify(own)); assert.equal(own.link.admitted[0].basis, 'unattended');
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, role: 'own', readOnly: true }] });

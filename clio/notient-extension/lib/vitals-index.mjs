@@ -89,7 +89,7 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
   const fallback = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name)));
   const epoch = JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get()?.value ?? 'null');
   const advanced = new Set(epoch && epoch.runId === promotionEpoch ? epoch.paths : []);
-  const selected = new Set(rows.filter(row => !advanced.has(row.path)).sort((a, b) => (metrics.get(b.path)?.words ?? previous.get(b.path)?.word_count ?? 0) - (metrics.get(a.path)?.words ?? previous.get(a.path)?.word_count ?? 0) || a.path.localeCompare(b.path)).slice(0, Math.max(0, promotionLimit - advanced.size)).map(row => row.path));
+  const selected = new Set(promotionEpoch ? rows.filter(row => !advanced.has(row.path)).sort((a, b) => (metrics.get(b.path)?.words ?? previous.get(b.path)?.word_count ?? 0) - (metrics.get(a.path)?.words ?? previous.get(a.path)?.word_count ?? 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, Math.max(0, promotionLimit - advanced.size)).map(row => row.path) : []);
   let promoted = 0;
   for (const row of rows) {
     let old = previous.get(row.path);

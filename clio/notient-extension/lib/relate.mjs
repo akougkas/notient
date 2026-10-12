@@ -6,7 +6,7 @@ import { refuse } from './paths.mjs';
 export const relations = ['supports', 'contradicts', 'extends', 'exemplifies', 'synthesizes'];
 const unsupported = message => refuse('FRONTMATTER_UNSUPPORTED', message);
 
-function yamlSpans(document, field) {
+export function yamlSpans(document, field) {
   const text = document.text;
   const limit = document.lines.find(line => line.start >= field.end && line.start > field.start && line.start < document.bodyStart && line.content.trim() && !/^[ \t]|^#/.test(line.content))?.start ?? document.lines[document.closing].start;
   let nodes = 0;
