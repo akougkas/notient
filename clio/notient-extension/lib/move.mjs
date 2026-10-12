@@ -8,6 +8,8 @@ const sorted = values => [...new Set(values)].sort();
 const noMd = name => name.replace(/\.md$/i, '');
 const labelKey = label => label.replace(/\\([\p{P}\p{S}])/gu, '$1').trim().replace(/\s+/g, ' ').toLowerCase();
 const external = target => /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target);
+const indentation = text => [...(/^[ \t]*/.exec(text)?.[0] ?? '')].reduce((column, char) => char === '\t' ? column + 4 - column % 4 : column + 1, 0);
+const escaped = (text, offset) => { let count = 0; while (offset > 0 && text[--offset] === '\\') count++; return count % 2 === 1; };
 
 export function moveInventory(root) {
   const names = [];
@@ -140,7 +142,7 @@ export function tokenizeMove(bytes) {
       if (content.trim()) while (containers.length && indent < containers.at(-1).content) containers.pop();
       const marker = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(content);
       if (marker && (indent <= 3 || containers.length)) {
-        if (marker[2].includes('\t')) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Tab-indented list container cannot be classified safely.' });
+        if (marker[2].includes('\t') || marker[2].length > 4) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'List container padding cannot be classified safely.' });
         else containers.push({ content: marker[0].length });
       }
       const base = containers.at(-1)?.content ?? 0;
@@ -152,8 +154,7 @@ export function tokenizeMove(bytes) {
         fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base };
         mask(line.start, line.end); continue;
       }
-      if (/^(?: {4}|\t)/.test(remainder) && !/^[ \t]*\t/.test(content)) { mask(line.start, line.end); continue; }
-      if (!containers.length && /^\t/.test(content)) { mask(line.start, line.end); continue; }
+      if (indentation(remainder) >= 4) { mask(line.start, line.end); continue; }
     }
     for (let i = line.start; i < line.end; i++) {
       if (!visible[i]) continue;
@@ -167,12 +168,19 @@ export function tokenizeMove(bytes) {
         const html = text.startsWith('<!--', i);
         comment = html ? '-->' : '%%';
         mask(i, i + (html ? 4 : 2)); i += (html ? 4 : 2) - 1;
-      } else if (text[i] === '`' && text[i - 1] !== '\\') {
+      } else if (text[i] === '`' && !escaped(text, i)) {
         let end = i; while (text[end] === '`') end++;
         const count = end - i;
+        const blank = /\r?\n(?:[ \t]*>[ \t]?)*[ \t]*\r?\n/g;
+        blank.lastIndex = end;
+        const limit = blank.exec(text)?.index ?? text.length;
         let close = text.indexOf('`'.repeat(count), end);
         while (close >= 0 && (text[close - 1] === '`' || text[close + count] === '`')) close = text.indexOf('`'.repeat(count), close + count);
-        if (close >= 0) { mask(i, close + count); i = close + count - 1; }
+        if (close >= 0 && close < limit) {
+          const span = text.slice(end, close);
+          if (/\n[ \t]*(?:>|[-+*] |\d+[.)] |`{3,}|~{3,})/.test(span)) issues.push({ start: i, end: close + count, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Inline code crosses an uncertain container or block boundary.' });
+          else { mask(i, close + count); i = close + count - 1; }
+        }
         else i = end - 1;
       }
     }

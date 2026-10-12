@@ -5,6 +5,23 @@ import { revision } from '../lib/paths.mjs';
 
 const scan = text => ({ inventory: ['From.md', 'old/One.md'], notes: [{ path: 'From.md', bytes: Buffer.from(text), revision: revision(text), mode: 0o644 }, { path: 'old/One.md', bytes: Buffer.from('Source\n'), revision: revision('Source\n'), mode: 0o644 }], blockers: [] });
 
+test('T1 root mixed-tab code and even-backslash inline code retain all their bytes', () => {
+  for (const text of [' \t[[One]]\n\n[[One]]\n', '\\\\`[[One]]`\n[[One]]\n']) {
+    const result = planMove(scan(text), 'old/One.md', 'new/Two.md');
+    assert.equal(result.ok, true, JSON.stringify(result.blockers));
+    assert.equal(result.files.find(file => file.path === 'From.md').after.toString(), text.slice(0, text.lastIndexOf('[[One]]')) + '[[Two]]\n');
+  }
+});
+
+test('T1 unmatched inline code never hides live references across a blank paragraph', () => {
+  for (const text of ['unmatched `\n\n[[One]]\n\n`\n', 'unmatched `\n \t\n[[One]]\n\n`\n', '\\` [[One]]\n']) {
+    const result = planMove(scan(text), 'old/One.md', 'new/Two.md');
+    assert.equal(result.ok, true, JSON.stringify(result.blockers));
+    assert.equal(result.files.find(file => file.path === 'From.md').after.toString(), text.replace('[[One]]', '[[Two]]'));
+    assert.ok(guardInverseReferences(scan(text), [{ path: 'old/One.md', before: Buffer.from('Source\n'), after: null }]).blockerCount);
+  }
+});
+
 for (const [name, before, expected] of [
   ['blockquote fence', '> ~~~\n> [[One]]\n> ~~~\n[[One]]\n', '> ~~~\n> [[One]]\n> ~~~\n[[Two]]\n'],
   ['Obsidian comments', '%% [[One]] %%\n%%\n![[One]]\n%%\n[[One]]\n', '%% [[One]] %%\n%%\n![[One]]\n%%\n[[Two]]\n'],
