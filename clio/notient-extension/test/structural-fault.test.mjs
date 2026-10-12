@@ -150,9 +150,9 @@ test('multi-path index repair preserves a same-path entry changed after an earli
     if (name !== 'duringIndex' || staged) return;
     staged = true; put(f, 'B.md', 'Operator staging during repair.'); git(f.vault.path, ['add', '--', 'B.md']);
   } });
-  assert.equal(moved.ok, false);
-  assert.equal(moved.error.code, 'COMMITTED_INDEX_CONFLICT');
-  assert.equal(moved.commit, git(f.vault.path, ['rev-parse', 'HEAD']));
+  assert.equal(moved.ok, true);
+  assert.ok(moved.warnings.some(warning => warning.code === 'COMMITTED_INDEX_CONFLICT'));
+  assert.equal(moved.commit.oid, git(f.vault.path, ['rev-parse', 'HEAD']));
   const operatorEntry = normalIndexEntries(f.vault.path).entries.get('B.md').bytes;
   commandStatusSnapshot(f.directory, { vault: f.vault.id });
   assert.deepEqual(normalIndexEntries(f.vault.path).entries.get('B.md').bytes, operatorEntry);

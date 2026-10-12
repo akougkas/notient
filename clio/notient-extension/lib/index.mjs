@@ -173,7 +173,7 @@ export function indexSummary(vault, directory, checkFiles = true) {
 }
 
 export function repairCommittedIndex(vault, directory, record) {
-  if (!record.git.indexInstalled || !existsSync(indexPath(directory, vault)) || !probeFts5()) return false;
+  if (!existsSync(indexPath(directory, vault)) || !probeFts5()) return false;
   const db = openIndex(directory, vault, true);
   try {
     db.exec('BEGIN IMMEDIATE');

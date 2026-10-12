@@ -64,6 +64,7 @@ export function validateRecord(record, vault) {
     seen.add(file.path);
   }
   if (!record.git || !Array.isArray(record.undo?.targets) || !Array.isArray(record.conflicts) || !['pending', 'updated'].includes(record.indexState)) refuse('JOURNAL_CORRUPT', 'The operation metadata is invalid.');
+  if (record.derivedIndexState !== undefined && !['pending', 'updated'].includes(record.derivedIndexState)) refuse('JOURNAL_CORRUPT', 'The searchable-index repair state is invalid.');
   const oid = value => value === null || typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
   if (typeof record.batch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(record.batch) || ![record.createdAt, record.updatedAt].every(value => typeof value === 'string' && Number.isFinite(Date.parse(value))) || !Array.isArray(record.reads) || record.reads.some(read => typeof read.path !== 'string' || !hashPattern.test(read.revision)) || record.inventoryHash !== null && !hashPattern.test(record.inventoryHash)) refuse('JOURNAL_CORRUPT', 'Recorded request and dependency fields are invalid.');
   if (![record.git.baseHead, record.git.tree, record.git.commit].every(oid) || typeof record.git.indexInstalled !== 'boolean' || record.git.lockSeed !== null || ![record.git.indexBeforeHash, record.git.indexAfterHash].every(value => value === null || hashPattern.test(value)) || record.git.ref !== null && (typeof record.git.ref !== 'string' || !/^refs\/heads\/[^\s\x00-\x1f]+$/.test(record.git.ref))) refuse('JOURNAL_CORRUPT', 'Recorded Git fields are invalid.');
@@ -162,6 +163,10 @@ export function readRecord(directory, vault, id, verifyBlobs = true) {
   try {
     if (lstatSync(root).isSymbolicLink() || !lstatSync(filename).isFile() || lstatSync(filename).isSymbolicLink() || lstatSync(filename).size > 8 * 1024 * 1024) refuse('JOURNAL_CORRUPT', 'The record is not a bounded regular file.');
     const record = validateRecord(JSON.parse(readFileSync(filename, 'utf8')), vault);
+    if (record.derivedIndexState === undefined) {
+      record.derivedIndexState = record.indexState;
+      record.indexState = record.git.indexInstalled ? 'updated' : 'pending';
+    }
     if (record.id !== id) refuse('JOURNAL_CORRUPT', 'The record ID differs from its directory.');
     if (verifyBlobs) {
       let size = 0;
@@ -270,8 +275,10 @@ export function journalStatus(directory, id) {
       if (!existsSync(filename) || lstatSync(filename).isSymbolicLink() || lstatSync(filename).size > 8 * 1024 * 1024) refuse('JOURNAL_CORRUPT', 'The operation projection is unreadable.');
       const item = JSON.parse(readFileSync(filename, 'utf8'));
       if (item.version !== 1) refuse('JOURNAL_CORRUPT', 'Unknown operation version.');
-      operations.push({ id: item.id, batch: item.batch, state: item.state, commit: item.git?.commit ?? null, undoneBy: item.undoneBy, createdAt: item.createdAt, indexState: item.indexState });
-      if (!['committed', 'aborted'].includes(item.state) || item.state === 'committed' && item.indexState === 'pending') pending.push({ id: item.id, state: item.state });
+      const derivedIndexState = item.derivedIndexState ?? item.indexState;
+      const indexState = item.git?.indexInstalled ? 'updated' : 'pending';
+      operations.push({ id: item.id, requestId: item.id, batch: item.batch, state: item.state, commit: item.git?.commit ?? null, undoneBy: item.undoneBy, createdAt: item.createdAt, indexState, derivedIndexState });
+      if (!['committed', 'aborted'].includes(item.state) || item.state === 'committed' && (indexState === 'pending' || derivedIndexState === 'pending')) pending.push({ id: item.id, state: item.state });
     }
   }
   return { pending: pending.slice(0, 100), pendingCount: pending.length, operations: operations.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50), recoveryResults: [], recoveryAvailable: true, busy: false };

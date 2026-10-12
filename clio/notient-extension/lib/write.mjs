@@ -158,7 +158,7 @@ export function newRecord(vault, plan) {
     reads: plan.reads ?? [], inventoryHash: plan.inventoryHash ?? null, files, applyOrder: files.map(file => file.path), createdDirectories: [],
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
-    indexState: 'pending', durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
+    indexState: 'pending', derivedIndexState: 'pending', capture: plan.capture ?? null, durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
   };
   freezeIntentSet(record);
   return record;
@@ -243,25 +243,35 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     if (original.undoneBy && original.undoneBy !== record.id) refuse('UNDO_CONFLICT', 'The original operation was already undone by another operation.');
     if (original.undoneBy !== record.id) { original.undoneBy = record.id; saveRecord(directory, vault, original, sync); }
   }
-  const installed = record.git.indexInstalled || adapter.reconcileIndex(record, { barrier: options.barrier });
-  record.git.indexInstalled = installed;
-  record.indexState = 'pending';
-  if (installed) {
-    record.state = 'committed'; record.conflicts = []; record.error = null;
-    saveRecord(directory, vault, record, sync);
-    options.barrier?.('afterCommitted', record);
-    cleanupSiblings(vault, record, sync);
-    try { if (repairCommittedIndex(vault, directory, record)) record.indexState = 'updated'; }
-    catch (error) { record.error = { code: 'INDEX_REPAIR_PENDING', message: error.message }; }
-    saveRecord(directory, vault, record, sync);
-  } else saveRecord(directory, vault, record, sync);
+  record.state = 'committed'; record.conflicts = []; record.error = null;
+  saveRecord(directory, vault, record, sync);
+  try { record.git.indexInstalled ||= adapter.reconcileIndex(record, { barrier: options.barrier }); }
+  catch (error) { record.error = { code: error.code ?? 'INDEX_UPDATE_PENDING', message: error.message }; }
+  record.indexState = record.git.indexInstalled ? 'updated' : 'pending';
+  record.derivedIndexState ??= 'pending';
+  saveRecord(directory, vault, record, sync);
+  options.barrier?.('afterCommitted', record);
+  cleanupSiblings(vault, record, sync);
+  if (record.derivedIndexState !== 'updated') {
+    try { if (repairCommittedIndex(vault, directory, record)) record.derivedIndexState = 'updated'; }
+    catch (error) { record.error ??= { code: 'INDEX_REPAIR_PENDING', message: error.message }; }
+  }
+  saveRecord(directory, vault, record, sync);
   return { operationId: record.id, result: published ? 'already_committed' : states.every(item => item.state === 'before') ? 'resumed_from_intent' : states.every(item => item.state === 'after') ? 'committed_after_apply' : 'completed_partial_apply', commit: record.git.commit, conflicts: [] };
+}
+
+function blocksWrites(record) {
+  return !['committed', 'aborted'].includes(record.state) || record.state === 'committed' && !record.git.indexInstalled;
+}
+
+function pendingRecord(record) {
+  return blocksWrites(record) || record.state === 'committed' && record.derivedIndexState === 'pending';
 }
 
 export function recoverPending(vault, directory, adapter, options = {}) {
   const results = [];
   const records = listRecords(directory, vault);
-  const pending = records.filter(record => !['committed', 'aborted'].includes(record.state) || (record.state === 'committed' && record.indexState === 'pending'));
+  const pending = records.filter(pendingRecord);
   const limit = Math.max(0, Math.min(20, options.limit ?? 20));
   for (const record of pending.slice(0, limit)) {
     const recoveryStarted = performance.now();
@@ -280,14 +290,14 @@ export function recoverPending(vault, directory, adapter, options = {}) {
     }
     if (results.at(-1).result === 'conflict_preserved') break;
   }
-  return { results, remaining: pending.slice(results.length).map(record => record.id) };
+  return { results, remaining: records.filter(pendingRecord).map(record => record.id), blocking: records.filter(blocksWrites).map(record => record.id) };
 }
 
 export function coordinatePlan(vault, directory, buildPlan, { adapter, ...options } = {}) {
   const started = performance.now();
   return withWriterLock(directory, vault, lockWaitMs => {
     const recovery = recoverPending(vault, directory, adapter, options);
-    if (recovery.results.some(result => result.result === 'conflict_preserved' || result.error) || recovery.remaining.length) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents a new write.');
+    if (recovery.results.some(result => result.result === 'conflict_preserved' || result.error) || recovery.blocking.length) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents a new write.');
     const plan = buildPlan();
     requireAuthority(vault, plan.authorization, plan.files);
     const journalStarted = performance.now();
@@ -310,7 +320,7 @@ export function coordinatePlan(vault, directory, buildPlan, { adapter, ...option
 
 export function recoverVault(vault, directory, options = {}) {
   const started = performance.now();
-  const pending = listRecords(directory, vault).filter(record => !['committed', 'aborted'].includes(record.state) || record.state === 'committed' && record.indexState === 'pending');
+  const pending = listRecords(directory, vault).filter(pendingRecord);
   if (!pending.length) return { results: [], remaining: [], busy: false };
   if (options.limit === 0) return { results: [], remaining: pending.map(record => record.id), busy: false };
   try {
@@ -341,7 +351,7 @@ export function commandStatusSnapshot(directory, input = {}) {
   for (const vault of snapshot.vaults) {
     const result = recovery.get(vault.id);
     if (vault.journal && result) { vault.journal.recoveryResults = result.results; vault.journal.busy = result.busy; vault.journal.remaining = result.remaining ?? []; }
-    snapshot.recovered.push(...(result?.results ?? []));
+    snapshot.recovered.push(...(result?.results ?? []).map(item => ({ vault: vault.id, ...item })));
   }
   return snapshot;
 }
@@ -578,7 +588,8 @@ function warnings(record, durability) {
   if (record?.durability === 'directory-sync-unavailable') result.push({ code: 'DIRECTORY_SYNC_UNAVAILABLE', message: 'Directory fsync is unsupported on this filesystem; power-loss durability is limited.' });
   if (durability && !durability.fsync) result.push({ code: 'GIT_FSYNC_UNAVAILABLE', message: `${durability.version} lacks core.fsync=committed; proceeding with the available Git durability.` });
   if (record && !record.git.indexInstalled) result.push({ code: 'INDEX_UPDATE_PENDING', message: 'The commit is published. Normal Git index reconciliation remains pending and status will retry it.' });
-  else if (record?.indexState === 'pending') result.push({ code: 'STRUCTURAL_INDEX_PENDING', message: 'The vault commit is durable. Refresh the structural index and use status to finish its recorded repair.' });
+  if (record?.derivedIndexState === 'pending') result.push({ code: 'STRUCTURAL_INDEX_PENDING', message: 'The vault commit is durable. Refresh the structural index and use status to finish its recorded repair.' });
+  if (record?.error?.code === 'COMMITTED_INDEX_CONFLICT') result.push(record.error);
   return result;
 }
 
@@ -589,12 +600,12 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
     changes: outputChanges(record.files.map(file => ({ ...file, before: file.before === null ? null : readBlob(directory, vault, record.id, file.before), after: file.after === null ? null : readBlob(directory, vault, record.id, file.after) })), false),
     commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
     log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
-    indexState: record.indexState, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: record.capture ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
   };
 }
 
 function previewResult(tool, vault, input, plan, started) {
-  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: plan.capture ?? null, warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
 }
 
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
@@ -616,14 +627,14 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
     };
     existing();
     if (input.dryRun) {
-      if (listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) refuse('RECOVERY_REQUIRED', 'Complete pending recovery before previewing a new change.');
+      if (listRecords(directory, vault).some(blocksWrites)) refuse('RECOVERY_REQUIRED', 'Complete pending recovery before previewing a new change.');
       const plan = buildWritePlan(tool, vault, directory, input);
       const result = previewResult(tool, vault, input, plan, started);
       if (Buffer.byteLength(JSON.stringify(result)) > 900000) refuse('PREVIEW_TOO_LARGE', 'The complete preview exceeds 900000 bytes.');
       return result;
     }
     requireAuthority(vault, input.authorization, []);
-    if (tool === 'revise' && (input.operation !== 'move' || input.path === input.destination) && !existing() && !listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) {
+    if (tool === 'revise' && (input.operation !== 'move' || input.path === input.destination) && !existing() && !listRecords(directory, vault).some(blocksWrites)) {
       const plan = buildWritePlan(tool, vault, directory, input);
       if (plan.noop) return previewResult(tool, vault, input, plan, started);
     }
@@ -633,7 +644,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         adapter = createGitAdapter(vault, directory);
         const recovered = recoverPending(vault, directory, adapter, { deadline: started + 240000, ...options });
         recovery = recovered.results;
-        if (recovered.remaining.length || recovery.some(item => item.error || item.result === 'conflict_preserved')) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents new writes.');
+        if (recovered.blocking.length || recovery.some(item => item.error || item.result === 'conflict_preserved')) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents new writes.');
         record = existing();
         if (record) {
           if (record.state === 'aborted') refuse('OPERATION_ABORTED', 'The original operation was aborted. Use a fresh preview and request ID.');
