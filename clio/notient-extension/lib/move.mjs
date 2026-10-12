@@ -8,7 +8,7 @@ const sorted = values => [...new Set(values)].sort();
 const noMd = name => name.replace(/\.md$/i, '');
 const labelKey = label => label.replace(/\\([\p{P}\p{S}])/gu, '$1').trim().replace(/\s+/g, ' ').toLowerCase();
 const external = target => /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target);
-const indentation = text => [...(/^[ \t]*/.exec(text)?.[0] ?? '')].reduce((column, char) => char === '\t' ? column + 4 - column % 4 : column + 1, 0);
+const indentation = (text, start = 0) => [...(/^[ \t]*/.exec(text)?.[0] ?? '')].reduce((column, char) => char === '\t' ? column + 4 - column % 4 : column + 1, start) - start;
 const escaped = (text, offset) => { let count = 0; while (offset > 0 && text[--offset] === '\\') count++; return count % 2 === 1; };
 
 export function moveInventory(root) {
@@ -111,6 +111,43 @@ function destinationAt(text, start, limit, inline) {
   return { start: begin, end, angle, titleStart, finish: inline ? i + 1 : limit };
 }
 
+function externalHtmlEnd(text, start) {
+  const tag = /^<(a|img)\b/i.exec(text.slice(start));
+  if (!tag) return null;
+  const target = tag[1].toLowerCase() === 'a' ? 'href' : 'src';
+  const allowed = new Set([target, 'id', 'class', 'title', 'alt', 'width', 'height', 'align', 'target', 'rel', 'loading', 'decoding', 'referrerpolicy', 'aria-label', 'aria-hidden']);
+  const attributes = new Map();
+  let cursor = start + tag[0].length;
+  while (cursor < text.length && cursor - start < 8192 && attributes.size <= 32) {
+    const whitespace = /^[ \t\r\n]*/.exec(text.slice(cursor))[0];
+    cursor += whitespace.length;
+    const close = /^(?:\/?>)/.exec(text.slice(cursor));
+    if (close) {
+      const value = attributes.get(target);
+      return value && (/^(?:https?:\/\/|\/\/|mailto:|tel:)/i.test(value) || target === 'href' && value.startsWith('#')) ? cursor + close[0].length : null;
+    }
+    if (!whitespace) return null;
+    const attribute = /^([a-z][a-z0-9-]*)[ \t\r\n]*=[ \t\r\n]*/i.exec(text.slice(cursor));
+    if (!attribute) return null;
+    const name = attribute[1].toLowerCase();
+    if (!allowed.has(name) || attributes.has(name)) return null;
+    cursor += attribute[0].length;
+    const quote = text[cursor];
+    let value;
+    if (quote === '"' || quote === "'") {
+      const end = text.indexOf(quote, cursor + 1);
+      if (end < 0) return null;
+      value = text.slice(cursor + 1, end); cursor = end + 1;
+    } else {
+      const unquoted = /^[^\s<>"'`=]+/.exec(text.slice(cursor));
+      if (!unquoted) return null;
+      value = unquoted[0]; cursor += value.length;
+    }
+    attributes.set(name, value);
+  }
+  return null;
+}
+
 export function tokenizeMove(bytes, { visibility = false } = {}) {
   const document = documentSpans(bytes);
   const { text, lines, bodyStart } = document;
@@ -123,43 +160,79 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
   let fence = null;
   let comment = null;
   let listDepth = null;
-  const containers = [];
+  let containers = [];
+  const containerLevels = new Map([[0, containers]]);
   const contexts = new Map();
+  function readQuote(line, limit = Infinity) {
+    let cursor = 0, column = 0, depth = 0, extra = 0;
+    while (depth < limit) {
+      const whitespace = /^[ \t]*/.exec(line.slice(cursor))[0];
+      const padding = indentation(whitespace, column);
+      if (line[cursor + whitespace.length] !== '>') break;
+      const parents = containerLevels.get(depth);
+      while (parents?.length && extra + padding < parents.at(-1).content) parents.pop();
+      if (extra + padding - (parents?.at(-1)?.content ?? 0) > 3) break;
+      cursor += whitespace.length + 1; column += padding + 1; depth++; extra = 0;
+      if (line[cursor] === ' ') { cursor++; column++; }
+      else if (line[cursor] === '\t') { const width = 4 - column % 4; cursor++; column += width; extra = width - 1; }
+    }
+    return { cursor, column, depth, extra };
+  }
   for (const [ordinal, line] of lines.entries()) {
     if (line.start < bodyStart) continue;
     const bodyBom = line.start === bodyStart && line.content.startsWith('\uFEFF') ? 1 : 0;
     const bodyLine = line.content.slice(bodyBom);
-    const quotePrefix = /^(?:[ \t]*>[ \t]?)+/.exec(bodyLine)?.[0] ?? '';
-    const depth = (quotePrefix.match(/>/g) ?? []).length;
-    const content = bodyLine.slice(quotePrefix.length);
-    const indent = /^ */.exec(content)[0].length;
-    if (fence && content.trim() && (depth !== fence.depth || indent < fence.indent)) fence = null;
+    let quote = readQuote(bodyLine, fence?.depth ?? Infinity);
+    let depth = quote.depth;
+    let content = bodyLine.slice(quote.cursor);
+    let whitespace = /^[ \t]*/.exec(content)[0];
+    let indent = quote.extra + indentation(content, quote.column);
+    if (fence && content.trim() && (depth !== fence.depth || indent < fence.indent)) {
+      fence = null; quote = readQuote(bodyLine); depth = quote.depth; content = bodyLine.slice(quote.cursor);
+      whitespace = /^[ \t]*/.exec(content)[0]; indent = quote.extra + indentation(content, quote.column);
+    }
     if (fence) {
       mask(line.start, line.end);
       fenceMask?.fill(1, line.start, line.end);
-      if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(content.slice(fence.indent))) fence = null;
+      if (indent - fence.indent <= 3 && new RegExp(`^${fence.char}{${fence.count},}[ \\t]*$`).test(content.slice(whitespace.length))) fence = null;
       continue;
     }
     if (!comment) {
-      if (listDepth !== depth) { containers.length = 0; listDepth = depth; }
-      if (containers.length && /^[ \t]*\t/.test(content)) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Tab-indented continuation cannot be classified safely.' });
+      if (listDepth !== depth) {
+        if (listDepth !== null) containerLevels.set(listDepth, containers);
+        for (const level of containerLevels.keys()) if (level > depth) containerLevels.delete(level);
+        containers = containerLevels.get(depth) ?? []; containerLevels.set(depth, containers); listDepth = depth;
+      }
       if (content.trim()) while (containers.length && indent < containers.at(-1).content) containers.pop();
-      const marker = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(content);
-      if (marker && (indent <= 3 || containers.length)) {
-        if (marker[2].includes('\t') || marker[2].length > 4) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'List container padding cannot be classified safely.' });
-        else containers.push({ content: marker[0].length });
+      const parent = containers.at(-1)?.content ?? 0;
+      const stripped = content.slice(whitespace.length);
+      const marker = /^(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(stripped);
+      const footnote = /^\[\^[^\]\r\n]+\]:[ \t]*/.exec(stripped);
+      let contentOffset = whitespace.length;
+      let contentIndent = Math.max(0, indent - parent);
+      if (marker && contentIndent <= 3) {
+        const width = marker[0].length - marker[1].length;
+        const padding = indentation(marker[1], quote.column + indent - quote.extra + width);
+        containers.push({ content: indent + width + (padding <= 4 ? padding : 1) });
+        contentOffset += marker[0].length;
+        contentIndent = padding <= 4 ? 0 : padding - 1;
+      } else if (footnote && contentIndent <= 3) {
+        containers.push({ content: indent + 4 });
+        contentOffset += footnote[0].length;
+        contentIndent = 0;
       }
       const base = containers.at(-1)?.content ?? 0;
-      const offset = bodyBom + quotePrefix.length + (marker && containers.length ? marker[0].length : Math.min(base, indent));
+      const offset = bodyBom + quote.cursor + contentOffset;
       contexts.set(line.start, offset);
+      if (!marker && !footnote && containers.length && content.trim() && contentIndent < 4 && /^(?=[ \t]* )(?=[ \t]*\t)/.test(content)) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Mixed tab and space container continuation cannot be classified safely.' });
       const remainder = line.content.slice(offset);
-      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(remainder);
+      const opening = contentIndent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(remainder) : null;
       if (opening && visible[line.start + offset] && !(opening[1][0] === '`' && opening[2].includes('`'))) {
-        fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base, line: ordinal + 1, newline: line.ending || document.newline };
+        fence = { char: opening[1][0], count: opening[1].length, depth, indent: base, line: ordinal + 1, newline: line.ending || document.newline };
         fenceMask?.fill(1, line.start, line.end);
         mask(line.start, line.end); continue;
       }
-      if (indentation(remainder) >= 4) { mask(line.start, line.end); continue; }
+      if (contentIndent >= 4) { mask(line.start, line.end); continue; }
     }
     for (let i = line.start; i < line.end; i++) {
       if (!visible[i]) continue;
@@ -222,7 +295,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
   const tokens = [];
   function add(kind, span, end, extra = {}) {
     const raw = text.slice(span.start, span.end);
-    if (!external(raw) && /[&\\]/.test(raw)) issues.push({ start: span.start, end: span.end, line: text.slice(0, span.start).split('\n').length, code: 'AMBIGUOUS_REFERENCE', reason: 'Escaped or character-reference destinations are unsupported.' });
+    if (!external(raw) && /\\|&(?=\S)/.test(raw)) issues.push({ start: span.start, end: span.end, line: text.slice(0, span.start).split('\n').length, code: 'AMBIGUOUS_REFERENCE', reason: 'Escaped or character-reference destinations are unsupported.' });
     const fragment = raw.indexOf('#');
     const pathEnd = fragment < 0 ? span.end : span.start + fragment;
     const token = { kind, start: span.start, end: pathEnd, target: text.slice(span.start, pathEnd), fragment: fragment < 0 ? '' : raw.slice(fragment), angle: span.angle ?? false, finish: end, ...extra };
@@ -247,6 +320,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     if (!visible[line.start + offset]) continue;
     const match = /^ {0,3}\[((?:\\.|[^\]\\\n])+)\]:[ \t]*/.exec(line.content.slice(offset));
     if (!match) continue;
+    if (match[1].startsWith('^')) continue;
     if (/\\[\[\]]/.test(match[1])) { issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing escaped brackets are unsupported.' }); mask(line.start, line.end); continue; }
     let last = ordinal;
     const begin = line.start + offset + match[0].length;
@@ -272,16 +346,31 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     if (!visible[i]) continue;
     if (text[i] === '\\') { i++; continue; }
     if (text[i] !== '[') {
-      if (text[i] === '<' && /^(?:<a\b[^>]*href\s*=|<img\b[^>]*src\s*=)/i.test(text.slice(i))) issues.push({ start: i, end: text.indexOf('>', i) + 1 || text.length, reason: 'HTML link-bearing syntax is unsupported.' });
+      if (text[i] === '<' && /^<[a-z][a-z0-9:-]*\b[^>]*\b(?:href|src|srcset|action|poster|background|style)\s*=/i.test(text.slice(i))) {
+        const end = externalHtmlEnd(text, i);
+        if (end !== null) { mask(i, end); i = end - 1; }
+        else issues.push({ start: i, end: text.indexOf('>', i) + 1 || text.length, reason: 'HTML link-bearing syntax is unsupported.' });
+      }
       continue;
     }
     if (text[i + 1] === '[') {
       const end = text.indexOf(']]', i + 2);
+      const lineEnd = text.indexOf('\n', i);
+      if (end < 0 || lineEnd >= 0 && end > lineEnd) {
+        const labelEnd = closingBracket(text, i + 1, visible);
+        const span = labelEnd >= 0 && text[labelEnd + 1] === '(' ? destinationAt(text, labelEnd + 2, text.length, true) : null;
+        const wrapper = span ? /^[ \t]*\]/.exec(text.slice(span.finish)) : null;
+        const wrapperEnd = wrapper ? span.finish + wrapper[0].length - 1 : -1;
+        if (wrapper && visible[wrapperEnd] && closingBracket(text, i, visible) === wrapperEnd) {
+          add('markdown', span, span.finish); i = wrapperEnd; continue;
+        }
+      }
       if (end < 0 || !visible[end] || text.slice(i + 2, end).includes('\n')) { issues.push({ start: i, end: end < 0 ? text.length : end + 2, reason: 'Unlocatable wiki destination.' }); continue; }
       const pipe = text.indexOf('|', i + 2);
       const pathEnd = pipe >= 0 && pipe < end ? pipe : end;
       add('wiki', { start: i + 2, end: pathEnd }, end + 2, { embed: text[i - 1] === '!', alias: pathEnd < end ? text.slice(pathEnd + 1, end) : null });
-      if (text.slice(i + 2, pathEnd).includes('[')) issues.push({ start: i, end: end + 2, reason: 'Nested wiki destination is unsupported.' });
+      const target = text.slice(i + 2, pathEnd).split('#')[0];
+      if (target.includes('[') && (!/^[^\[\]]*(?:\[[^\[\]]+\][^\[\]]*)*$/.test(target) || /\]\(/.test(target))) issues.push({ start: i, end: end + 2, reason: 'Nested wiki destination is unsupported.' });
       i = end + 1;
       continue;
     }

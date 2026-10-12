@@ -84,12 +84,9 @@ function yamlLex(text, allowOpen = false) {
       continue;
     }
     const boundary = i === 0 || /[\s,[{:]/.test(text[i - 1]);
-    if ((c === '"' || c === "'") && boundary) { quote = c; continue; }
-    if ('&*!'.includes(c) && boundary) {
-      const prefix = text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trimStart();
-      const plainAmpersand = c === '&' && flow.length === 0 && /^[\p{L}\p{N}_][^:\r\n]*[ \t]+$/u.test(prefix) && /[ \t]/.test(text[i + 1] ?? '');
-      if (!plainAmpersand) refuse('FRONTMATTER_UNSUPPORTED', 'YAML anchors, aliases and custom tags are unsupported.');
-    }
+    const inPlain = boundary && /["'&*!]/.test(c) && flow.length === 0 && /^[\p{L}\p{N}_][^:\r\n]*[ \t]+$/u.test(text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trimStart());
+    if ((c === '"' || c === "'") && boundary && !inPlain) { quote = c; continue; }
+    if ('&*!'.includes(c) && boundary && !inPlain) refuse('FRONTMATTER_UNSUPPORTED', 'YAML anchors, aliases and custom tags are unsupported.');
     if (c === '[' || c === '{') flow.push({ kind: c, keys: new Set(), keyStart: i + 1, needsKey: c === '{' });
     else if (c === ',' && flow.at(-1)?.kind === '{') { flow.at(-1).needsKey = true; flow.at(-1).keyStart = i + 1; }
     else if (c === ':' && flow.at(-1)?.kind === '{' && flow.at(-1).needsKey) {
@@ -183,7 +180,7 @@ export function frontmatterFields(document) {
     }
     const value = [header, ...field.continuation].join('\n');
     yamlLex(value);
-    if (/^["']/.test(value.trim()) && !/^(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')(?:\s*(?:#[^\n]*)?)*$/.test(value.trim())) refuse('FRONTMATTER_INVALID', 'A quoted scalar has trailing or malformed content.');
+    if (/^["']/.test(header.trim()) && !/^(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')(?:\s*(?:#[^\n]*)?)*$/.test(value.trim())) refuse('FRONTMATTER_INVALID', 'A quoted scalar has trailing or malformed content.');
     const comment = yamlLex(header, true).comment;
     let end = comment < 0 ? header.length : comment;
     while (end > 0 && /[ \t]/.test(header[end - 1])) end--;
@@ -507,7 +504,7 @@ export function parseMarkdown(text, filename = '') {
     if (group.code || !group.parts.length) continue;
     const filtered = group.parts.map(part => text.slice(part.start, part.end)).join('');
     const match = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))/.exec(filtered);
-    if (match) {
+    if (match && !match[1].startsWith('^')) {
       const key = match[1].trim().replace(/\s+/g, ' ').toLowerCase();
       if (!definitions.has(key)) definitions.set(key, { target: match[2] ?? match[3], source: sourceRange(text, group.parts[0].start, group.parts.at(-1).end) });
       for (const row of group.rows) definitionLines.add(lines[row].start);
