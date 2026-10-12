@@ -16,6 +16,33 @@ export function git(root, args, { input, env = {}, raw = false, fsync = false, t
   return raw ? output : output.trim();
 }
 
+export function createGitBudget({ usedMs = 0, now = () => performance.now(), call = git } = {}) {
+  let used = usedMs;
+  let started = null;
+  const budget = {
+    get usedMs() { return used + (started === null ? 0 : Math.max(0, now() - started)); },
+    check() { if (budget.usedMs >= 60000) refuse('GIT_TIMEOUT', 'The aggregate Git phase exceeded 60 seconds.', [], true); },
+    measure(work) {
+      budget.check();
+      const outer = started === null;
+      if (outer) started = now();
+      try { return work(); }
+      finally {
+        if (outer) { used += Math.max(0, now() - started); started = null; }
+        budget.check();
+      }
+    },
+    call(root, args, options = {}) {
+      return budget.measure(() => {
+        const timeout = Math.max(1, Math.min(15000, options.timeout ?? 15000, Math.floor(60000 - budget.usedMs)));
+        try { return call(root, args, { ...options, timeout }); }
+        catch (error) { if (error.code === 'ETIMEDOUT' || error.signal) refuse('GIT_TIMEOUT', 'A Git subprocess exceeded its remaining allowance.', [], true); throw error; }
+      });
+    },
+  };
+  return budget;
+}
+
 export function gitDurability(root, version = git(root, ['version'])) {
   const match = /git version (\d+)\.(\d+)/.exec(version);
   return { version, fsync: Boolean(match && (Number(match[1]) > 2 || Number(match[1]) === 2 && Number(match[2]) >= 36)) };
@@ -93,40 +120,43 @@ function treeEntry(root, head, name, call = git) {
   return { mode: match[1], oid: match[2] };
 }
 
-export function preflightGit(vault, files) {
-  const state = gitState(vault.path);
-  for (const file of files) {
-    const entry = state.index.entries.get(file.path);
-    const head = treeEntry(vault.path, state.baseHead, file.path);
-    const attributes = git(vault.path, ['check-attr', '-z', 'filter', 'working-tree-encoding', '--', file.path], { raw: true }).toString('utf8').split('\0');
-    for (let i = 0; i + 2 < attributes.length; i += 3) if (!['unspecified', 'unset'].includes(attributes[i + 2])) refuse('GIT_ENCODING_MISMATCH', 'Affected paths cannot use Git filters or working-tree encodings.', [file.path]);
-    if (entry && ((entry.flags & 0x8000) || (entry.extended & 0x4000))) refuse('DIRTY_TARGET', 'Affected paths cannot be assume-unchanged or skip-worktree.', [file.path]);
-    if (file.before === null) {
-      if (entry || head) refuse('DIRTY_TARGET', 'A new path is already tracked or staged.', [file.path]);
-      continue;
+export function preflightGit(vault, files, options = {}) {
+  const budget = options.budget ?? createGitBudget(options);
+  return budget.measure(() => {
+    const call = (root, args, options) => budget.call(root, args, options);
+    const state = gitState(vault.path, call);
+    for (const file of files) {
+      const entry = state.index.entries.get(file.path);
+      const head = treeEntry(vault.path, state.baseHead, file.path, call);
+      const attributes = call(vault.path, ['check-attr', '-z', 'filter', 'working-tree-encoding', '--', file.path], { raw: true }).toString('utf8').split('\0');
+      for (let i = 0; i + 2 < attributes.length; i += 3) if (!['unspecified', 'unset'].includes(attributes[i + 2])) refuse('GIT_ENCODING_MISMATCH', 'Affected paths cannot use Git filters or working-tree encodings.', [file.path]);
+      if (entry && ((entry.flags & 0x8000) || (entry.extended & 0x4000))) refuse('DIRTY_TARGET', 'Affected paths cannot be assume-unchanged or skip-worktree.', [file.path]);
+      if (file.before === null) {
+        if (entry || head) refuse('DIRTY_TARGET', 'A new path is already tracked or staged.', [file.path]);
+        continue;
+      }
+      if (!head || !entry || head.oid !== entry.oid || head.mode !== entry.mode) refuse('DIRTY_TARGET', 'Affected existing paths must match HEAD and the stage-zero index.', [file.path]);
+      const blob = call(vault.path, ['cat-file', 'blob', head.oid], { raw: true });
+      if (!blob.equals(file.before)) refuse('GIT_ENCODING_MISMATCH', 'Working bytes differ from the raw committed Git blob.', [file.path]);
+      const mode = lstatSync(path.join(vault.path, file.path)).mode & 0o111 ? '100755' : '100644';
+      if (mode !== head.mode) refuse('DIRTY_TARGET', 'Affected file mode differs from its Git baseline.', [file.path]);
     }
-    if (!head || !entry || head.oid !== entry.oid || head.mode !== entry.mode) refuse('DIRTY_TARGET', 'Affected existing paths must match HEAD and the stage-zero index.', [file.path]);
-    const blob = git(vault.path, ['cat-file', 'blob', head.oid], { raw: true });
-    if (!blob.equals(file.before)) refuse('GIT_ENCODING_MISMATCH', 'Working bytes differ from the raw committed Git blob.', [file.path]);
-    const mode = lstatSync(path.join(vault.path, file.path)).mode & 0o111 ? '100755' : '100644';
-    if (mode !== head.mode) refuse('DIRTY_TARGET', 'Affected file mode differs from its Git baseline.', [file.path]);
-  }
-  return state;
+    return state;
+  });
 }
 
 const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-export function createGitAdapter(vault, directory) {
+export function createGitAdapter(vault, directory, { budget: sharedBudget } = {}) {
   const root = vault.path;
-  const durability = gitDurability(root);
+  let budget = sharedBudget ?? createGitBudget();
+  const durability = gitDurability(root, budget.call(root, ['version']));
+  const bootstrapMs = budget.usedMs;
   let operationId = null;
-  let usedMs = 0;
   let depth = 0;
   let phaseStarted = 0;
   function run(record, args, options = {}) {
-    const remaining = 60000 - usedMs - (depth ? performance.now() - phaseStarted : 0);
-    if (remaining <= 0) refuse('GIT_TIMEOUT', 'The Git phase exceeded 60 seconds.', [], true);
-    try { return git(root, args, { fsync: durability.fsync, timeout: Math.max(1, Math.min(15000, Math.floor(remaining))), ...options }); }
+    try { return budget.call(root, args, { fsync: durability.fsync, ...options }); }
     catch (error) {
       if (error.code === 'ETIMEDOUT' || error.signal) refuse('GIT_TIMEOUT', 'A Git subprocess exceeded its deadline.', [], true);
       throw error;
@@ -232,21 +262,21 @@ export function createGitAdapter(vault, directory) {
       return true;
     },
     verify,
-    consume(id, milliseconds) { operationId = id; usedMs = milliseconds; },
+    consume(id, milliseconds) { operationId = id; if (!sharedBudget) budget = createGitBudget({ usedMs: milliseconds + bootstrapMs }); budget.check(); },
   };
   for (const name of ['recognize', 'checkBase', 'prepare', 'publish', 'reconcileIndex', 'verify']) {
     const method = adapter[name];
     adapter[name] = function (record, ...args) {
       const outer = depth === 0;
       if (outer) {
-        if (operationId !== record.id) { operationId = record.id; usedMs = 0; }
+        if (operationId !== record.id) { if (operationId !== null && !sharedBudget) budget = createGitBudget(); operationId = record.id; }
         phaseStarted = performance.now();
       }
       depth++;
-      try { return method.call(this, record, ...args); }
+      try { return budget.measure(() => method.call(this, record, ...args)); }
       finally {
         depth--;
-        if (outer) { const elapsed = performance.now() - phaseStarted; usedMs += elapsed; record.timings.gitMs += elapsed; }
+        if (outer) record.timings.gitMs += performance.now() - phaseStarted;
       }
     };
   }

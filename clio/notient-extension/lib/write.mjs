@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { currentFile, readNote, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
 import { selectVault, readConfig, dataDirectory, notConfigured } from './config.mjs';
-import { createGitAdapter, preflightGit, git } from './git.mjs';
+import { createGitAdapter, preflightGit, git, createGitBudget } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
 import { documentSpans, replaceBody, editFrontmatter, parseMarkdown, resolveLink } from './markdown.mjs';
 import { repairCommittedIndex } from './index.mjs';
@@ -311,12 +311,12 @@ export function coordinatePlan(vault, directory, buildPlan, { adapter, ...option
     if (recovery.results.some(result => result.result === 'conflict_preserved' || result.error) || recovery.blocking.length) refuse('RECOVERY_REQUIRED', 'Pending recovery prevents a new write.');
     const plan = buildPlan();
     requireAuthority(vault, plan.authorization, plan.files);
+    adapter?.consume?.(plan.id, plan.timings?.gitMs ?? 0);
     const journalStarted = performance.now();
     const record = persistPlan(vault, directory, plan, options.sync);
     record.timings.lockWaitMs = lockWaitMs;
     record.timings.journalMs = performance.now() - journalStarted;
     try {
-      adapter?.consume?.(record.id, plan.timings?.gitMs ?? 0);
       const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
       record.timings.totalMs = performance.now() - started;
       saveRecord(directory, vault, record, options.sync);
@@ -441,7 +441,7 @@ function plannedLog(vault, input, operation, source, files, createdAt, undo) {
   return { file: { path: name, role: 'log', before: current.bytes, after, mode: current.mode }, log: { path: name, line } };
 }
 
-function captureFiles(vault, directory, input, createdAt) {
+function captureFiles(vault, directory, input, createdAt, budget) {
   const content = captureDocument(input, createdAt);
   const records = listRecords(directory, vault);
   let history;
@@ -450,7 +450,7 @@ function captureFiles(vault, directory, input, createdAt) {
     if (!note) continue;
     const originalHash = original.capture?.bodyHash ?? captureBodyHash(readBlob(directory, vault, original.id, note.after));
     if (originalHash !== content.bodyHash) continue;
-    history ??= new Map(git(vault.path, ['rev-list', '--first-parent', 'HEAD']).split('\n').map((oid, ordinal) => [oid, ordinal]));
+    history ??= new Map(budget.call(vault.path, ['rev-list', '--first-parent', 'HEAD']).split('\n').map((oid, ordinal) => [oid, ordinal]));
     const origin = history.get(original.git.commit);
     if (origin === undefined) continue;
     let name = original.capture?.path ?? note.path;
@@ -489,7 +489,7 @@ function captureFiles(vault, directory, input, createdAt) {
   refuse('CAPTURE_COLLISIONS', 'No available capture name remains within 9999 candidates.');
 }
 
-function inverseFiles(vault, directory, input) {
+function inverseFiles(vault, directory, input, budget) {
   const records = listRecords(directory, vault);
   const matching = input.opId ? records.filter(record => record.id === input.opId) : records.filter(record => record.batch === input.targetBatch);
   if (!matching.length) refuse('OPERATION_NOT_FOUND', 'No journal operation matches the undo selector.');
@@ -504,19 +504,13 @@ function inverseFiles(vault, directory, input) {
   const filesForAuthority = active.flatMap(record => record.files);
   requireAuthority(vault, input.authorization, filesForAuthority, { dryRun: input.dryRun });
   if (vault.role === 'operator' && input.authorization.origin === 'unattended' && hasMove) refuse('UNATTENDED_REFUSED', 'Unattended undo containing a move is refused in an operator vault.');
-  let gitMs = 0;
-  const timeGit = handler => {
-    if (gitMs >= 60000) refuse('GIT_TIMEOUT', 'Undo verification exceeded the aggregate Git budget.');
-    const start = performance.now();
-    try { return handler(); } finally { gitMs += performance.now() - start; }
-  };
-  const order = timeGit(() => git(vault.path, ['rev-list', 'HEAD'])).split('\n');
+  const order = budget.call(vault.path, ['rev-list', 'HEAD']).split('\n');
   const position = new Map(order.map((oid, ordinal) => [oid, ordinal]));
-  const adapter = createGitAdapter(vault, directory);
+  const adapter = createGitAdapter(vault, directory, { budget });
   const verified = new Set();
   const verify = record => {
     if (!position.has(record.git.commit)) refuse('UNDO_HISTORY_CHANGED', 'An original or inverse commit is not reachable from this branch.');
-    if (!verified.has(record.id)) { timeGit(() => adapter.verify(record)); verified.add(record.id); }
+    if (!verified.has(record.id)) { adapter.verify(record); verified.add(record.id); }
   };
   const hydrate = record => hydrateOperation(record, (id, hash) => readBlob(directory, vault, id, hash));
   const byId = new Map(records.map(record => [record.id, record]));
@@ -546,7 +540,7 @@ function inverseFiles(vault, directory, input) {
   }
   const selected = active.sort((a, b) => position.get(a.git.commit) - position.get(b.git.commit));
   const source = input.targetBatch ? `batch:${input.targetBatch}` : eligible[0].source;
-  if (!selected.length) return { files: [], source, noop: true, undo: { targets: [...inverseIds].sort(), commits: [...inverseIds].sort().map(id => byId.get(id).git.commit) }, reads: [], inventoryHash: null, structural, gitMs };
+  if (!selected.length) return { files: [], source, noop: true, undo: { targets: [...inverseIds].sort(), commits: [...inverseIds].sort().map(id => byId.get(id).git.commit) }, reads: [], inventoryHash: null, structural, gitMs: budget.usedMs };
   const selectedIds = new Set(selected.map(record => record.id));
   const targets = new Set(selected.flatMap(record => record.files.filter(file => file.role === 'note').map(file => file.path)));
   const oldestByPath = new Map();
@@ -571,19 +565,21 @@ function inverseFiles(vault, directory, input) {
     reads = guarded.reads;
     inventoryHash = revision(canonicalJson(guarded.inventory));
   }
-  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs };
+  return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
 }
 
-export function buildWritePlan(tool, vault, directory, input, { now = () => new Date() } = {}) {
+export function buildWritePlan(tool, vault, directory, input, { now = () => new Date(), gitClock, gitCall, gitBudget } = {}) {
   const started = performance.now();
+  const budget = gitBudget ?? createGitBudget({ now: gitClock, call: gitCall });
+  const previousGitMs = budget.usedMs;
   const operation = tool === 'capture' ? 'capture' : tool === 'undo' ? 'undo' : input.operation;
   let files;
   let inverse;
   let move;
   let captured;
   const createdAt = now().toISOString();
-  if (tool === 'capture') { captured = captureFiles(vault, directory, input, createdAt); files = captured.files; }
-  else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input); files = inverse.files; }
+  if (tool === 'capture') { captured = captureFiles(vault, directory, input, createdAt, budget); files = captured.files; }
+  else if (tool === 'undo') { inverse = inverseFiles(vault, directory, input, budget); files = inverse.files; }
   else {
     const current = currentFile(vault.path, input.path);
     if (current.revision === null) refuse('NOTE_NOT_FOUND', 'The requested note does not exist.', [input.path]);
@@ -610,14 +606,14 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
     const blobs = new Map(files.flatMap(file => [file.before, file.after]).filter(bytes => bytes !== null).map(bytes => [revision(bytes), bytes]));
     if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
   }
-  const gitStarted = performance.now();
-  const git = preflightGit(vault, files);
-  const gitMs = performance.now() - gitStarted + (inverse?.gitMs ?? 0);
+  const git = preflightGit(vault, files, { budget });
+  budget.check();
+  const gitMs = budget.usedMs;
   const reads = inverse?.reads ?? move?.reads ?? [];
   const inventoryHash = inverse?.inventoryHash ?? (move ? revision(canonicalJson(move.inventory)) : null);
   const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -662,6 +658,7 @@ function previewResult(tool, vault, input, plan, started) {
 
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
   const started = performance.now();
+  options.gitBudget = createGitBudget({ now: options.gitClock, call: options.gitCall });
   let input;
   let vault;
   let record;
@@ -711,10 +708,10 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
         }
         const plan = buildWritePlan(tool, vault, directory, input, options);
         if (plan.noop) return { ...previewResult(tool, vault, input, plan, started), recovery };
+        adapter.consume(plan.id, plan.timings.gitMs);
         const journalStarted = performance.now();
         record = persistPlan(vault, directory, plan, options.sync);
         record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
-        adapter.consume(record.id, plan.timings.gitMs);
         const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });
         if (result.result === 'conflict_preserved') refuse(result.conflicts.some(item => item.reason.startsWith('UNSTAMPED_AFTER')) ? 'UNSTAMPED_AFTER' : 'REVISION_CONFLICT', 'The operation encountered unstamped or changed bytes.', result.conflicts.map(item => item.path));
         if (result.result === 'aborted_unapplied') refuse('OPERATION_ABORTED', 'The frozen operation was invalidated before publication. Use a fresh preview and request ID.');
