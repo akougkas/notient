@@ -29,7 +29,7 @@ export function findCandidates(vault, directory, input, { now = () => performanc
   const source = readNote(vault.path, input.source);
   if (source.revision !== input.revision) refuse('REVISION_CONFLICT', 'The source changed since its supplied raw revision.', [input.source], true);
   const state = vectorState(vault, directory); const coverage = readCoverage(vault, directory);
-  const empty = reason => ({ ok: true, tool: 'candidates', vault: vault.id, source: input.source, revision: source.revision, candidateSet: null, expiresAt: null, candidates: [], reason, embedding: state, coverage: semanticCoverage(coverage, reason === 'no_candidates' ? null : reason), separation: undeterminedSeparation(), timings: { scanMs: 0, verifyMs: now() - started, totalMs: now() - started } });
+  const empty = reason => ({ ok: true, tool: 'candidates', vault: vault.id, source: input.source, revision: source.revision, candidateSet: null, expiresAt: null, candidates: [], reason, embedding: state, coverage: semanticCoverage(coverage, reason === 'no_candidates' ? state.missing || state.skipped ? 'incomplete' : null : reason), separation: undeterminedSeparation(), timings: { scanMs: 0, verifyMs: now() - started, totalMs: now() - started } });
   const unavailable = embeddingReason(state.state); if (unavailable) return empty(unavailable);
   const profile = readConfig(directory).embeddings; let reader;
   let scanned = 0; const best = []; let indexGeneration; let scanEnded;

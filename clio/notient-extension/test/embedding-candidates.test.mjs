@@ -163,3 +163,10 @@ test('E5 a budgeted force build publishes no partial generation and reports its 
   const after = openIndex(f.directory, f.vault); assert.equal(after.prepare('SELECT generation FROM vector_spaces').get().generation, old.generation); after.close();
   const resumed = await refreshVectors(f.vault, f.directory, { tier: 'embed', force: true }); assert.equal(resumed.embedding.state, 'ready'); assert.equal(resumed.embedding.embeddedThisCall, 2);
 });
+
+test('E6 an empty candidate scan with an eligible unembedded neighbor reports incomplete semantic coverage', async t => {
+  const f = await embeddingFixture(t); await refreshVectors(f.vault, f.directory, { tier: 'embed' });
+  put(f, 'Target.md', 'Changed target without vectors.\n'); refreshIndex(f.vault, f.directory);
+  const result = findCandidates(f.vault, f.directory, { source: 'Source.md', revision: f.sourceRevision });
+  assert.equal(result.reason, 'no_candidates'); assert.deepEqual(result.candidates, []); assert.equal(result.candidateSet, null); assert.equal(result.embedding.missing, 1); assert.equal(result.coverage.state, 'incomplete');
+});
