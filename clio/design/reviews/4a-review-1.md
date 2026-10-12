@@ -136,3 +136,20 @@ approve 97d3029c for item 14's cache-to-journal attribution path.
 approve b1f96899 for the literal candidates, vitals and revise schemas, the prescribed search/refresh schema additions, and typed embedding_off results; block its stage 4a default-mode selection (item 18).
 
 block all of stage 4a at b1f96899: batch-undo provenance loss on reused paths (item 17), the unresolved Setext section boundary (item 15), artificial word boundaries around link labels (item 16), and premature hybrid default selection (item 18).
+
+## 1244bc6c: V15 fix for item 15
+
+19. **A real closing fence followed by a thematic break now refuses an already satisfied link.** `clio/notient-extension/lib/link.mjs:78` no longer skips backtick-prefixed lines, but the candidate scan checks only the underline's visibility before reaching the uncertainty refusal at `:83`. **Violates 04 §6's requirement to ignore fenced code during section recognition and preserve existing-edge idempotency on the original bytes.** For `## Related\n\n- [[Target]]\n\n` followed by this completed code block and thematic break, the requested bare target is already present:
+
+~~~~text
+```md
+code
+```
+---
+~~~~
+
+`lib/move.mjs:136` through `:139` correctly masks the closing fence and omits its context entry; the following thematic break remains visible. The revised section scan nevertheless considers that closing fence a Setext title, then refuses with AMBIGUOUS_REFERENCE before the existing-target check at `lib/link.mjs:178` through `:180`. Consequently, valid Markdown that previously returned byte-identical success now refuses. This boundary is already identified as fenced code; it is not an uncertain visible heading. The original item 15 witness now refuses safely, but real fence closures require a distinct exclusion.
+
+block 1244bc6c: completed fence followed by a thematic break breaks link idempotency (item 19).
+
+block stage 4a at 1244bc6c: batch-undo provenance loss (item 17), artificial word boundaries around link labels (item 16), premature hybrid default selection (item 18), and the closing-fence/thematic-break regression (item 19); the original item 15 witness is resolved.
