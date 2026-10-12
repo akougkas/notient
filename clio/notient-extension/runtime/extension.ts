@@ -2,6 +2,7 @@ import type { ExtensionApiV2, ExtensionOutputV2 } from '@iowarp/clio-coder/exten
 import { dataDirectory } from '../lib/config.mjs';
 import { statusSnapshot } from '../lib/status.mjs';
 import { unknownCoverageMessage } from '../lib/index.mjs';
+import { orientationReminder, groundingReminder } from '../lib/reminders.mjs';
 
 function render(showLog = false): ExtensionOutputV2 {
   try {
@@ -34,4 +35,6 @@ export default function extension(api: ExtensionApiV2): void {
   api.handle('log', () => render(true));
   api.on('session_open', () => render());
   api.on('session_close', () => render());
+  api.hook('turn_start', async (event, ctx) => event.point === 'turn_start' ? orientationReminder(ctx) : {});
+  api.hook('after_tool', (event, ctx) => groundingReminder(event, ctx));
 }

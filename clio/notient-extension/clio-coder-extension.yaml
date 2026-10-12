@@ -439,6 +439,10 @@
       "session_open",
       "session_close"
     ],
+    "hooks": [
+      { "on": "turn_start", "timeoutMs": 250, "onTimeout": "pass", "onError": "pass" },
+      { "on": "after_tool", "tools": ["extension_notient__search", "extension_notient__note"], "timeoutMs": 250, "onTimeout": "pass", "onError": "pass" }
+    ],
     "ui": [
       "status",
       "panel"
