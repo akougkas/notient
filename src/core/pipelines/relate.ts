@@ -132,7 +132,12 @@ export async function analyzeRelationships(
         });
       }
     }),
-    options.question ? { question: options.question } : undefined,
+    {
+      question: options.question ?? (contradictions
+        ? "Compare the selected notes and supplied candidates for incompatible claims under matching time, definitions, assumptions and scope."
+        : "Study the selected notes and supplied candidates for useful specific source-grounded relationships."),
+      selectedNoteIndexes: context.selected.map((note) => context.documents.indexOf(note)),
+    },
   );
   return relationshipReport(context, output);
 }
