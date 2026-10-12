@@ -221,7 +221,7 @@ export function searchIndex(vault, directory, { query, limit = 10, sourcePath, w
   const started = performance.now();
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('Search limit must be between 1 and 20.');
   if (typeof query !== 'string' || query.length > 4000) throw new Error('Search query must contain at most 4000 characters.');
-  if (workspace !== undefined && (typeof workspace !== 'string' || !workspace.length || workspace.length > 4096)) throw new Error('Workspace must contain between 1 and 4096 characters.');
+  if (workspace !== undefined && (typeof workspace !== 'string' || !workspace.length || workspace.length > 255)) throw new Error('Workspace must contain between 1 and 255 characters.');
   const allTerms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
   const terms = allTerms.slice(0, 32);
   if (!terms.length) throw new Error('Search query must include a word or number.');

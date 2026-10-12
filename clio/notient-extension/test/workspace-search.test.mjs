@@ -10,6 +10,21 @@ import { baseline } from './git-write.test.mjs';
 
 const provenance = workspace => `---\ncreated_by: "operator"\ncaptured_at: "2026-10-11T12:00:00.000Z"\nworkspace: ${JSON.stringify(workspace)}\n---\n`;
 
+test('T9 frozen search schema and semantic validation share the 255-character workspace bound', t => {
+  const f = writerFixture(t); const maximum = 'x'.repeat(255);
+  put(f, 'Bound.md', `---\nworkspace: "${maximum}"\n---\nquartz\n`); refreshIndex(f.vault, f.directory);
+  const manifest = JSON.parse(readFileSync(new URL('../clio-coder-extension.yaml', import.meta.url), 'utf8'));
+  assert.equal(manifest.capabilities.tools.find(tool => tool.name === 'search').inputSchema.properties.workspace.maxLength, 255);
+  assert.equal(searchIndex(f.vault, f.directory, { query: 'quartz', workspace: maximum }).hits[0].path, 'Bound.md');
+  assert.throws(() => searchIndex(f.vault, f.directory, { query: 'quartz', workspace: maximum + 'x' }), /255/);
+  for (const [workspace, expected] of [[maximum, 0], [maximum + 'x', 1]]) {
+    const command = spawnSync(process.execPath, [fileURLToPath(new URL('../tools/search.mjs', import.meta.url)), JSON.stringify({ query: 'quartz', workspace })], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: f.directory.slice(0, -'/notient'.length) } });
+    assert.equal(command.status, expected, command.stdout);
+    if (expected === 0) assert.equal(JSON.parse(command.stdout).hits[0].path, 'Bound.md');
+    else assert.match(JSON.parse(command.stdout).error, /workspace.*bounds/);
+  }
+});
+
 test('T8 exact workspace alone matches authored notes and backfills the older provenance-dependent cache', t => {
   const f = writerFixture(t);
   put(f, 'Authored.md', '---\nworkspace: repo\n---\nquartz\n');
