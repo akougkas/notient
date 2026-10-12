@@ -29,7 +29,7 @@ Read `Notient/Conventions.md` with `extension_notient__note` when present. It gu
 
 Call `extension_notient__search` with `{vault,query,limit:5}` over the entire own vault, using two to six topic words. Refresh missing or stale indexing with `extension_notient__refresh`. Try one alternative topic query when needed and read plausible candidates with `extension_notient__note`, including later corrections and Source lines.
 
-Current search has no `workspace` field. Do not restrict memory discovery to the current repository: older contributions may come from elsewhere. Unknown coverage, unavailable FTS5 or unresolved stale results cannot prove a topic absent; defer a new capture if that would risk duplicating an unread existing record.
+Search now accepts optional `workspace`, an exact case-sensitive capture-workspace filter applied before ranking and limit, for example `{vault,query:"storage lesson",workspace:"repository-a",limit:5}`. Use it when seeking captures originally made in that workspace. Keep topic discovery and deduplication across the entire own vault: a note retains its original capture workspace when later contributions come from other repositories, and a workspace basename does not identify a canonical repository. Confirm repository scope in served body Source lines. Unknown coverage, unavailable FTS5 or unresolved stale results cannot prove a topic absent; defer a new capture if that would risk duplicating an unread existing record.
 
 Dedup identity is exactly `(canonical repository, entry id, UTC date)`, checked per entry against body Source lines and their contribution heading. Session, request ID, frontmatter summaries and scores are excluded. If topic matching is uncertain, search an exact entry ID and read the hit.
 
@@ -89,7 +89,7 @@ Keep affected files, log and staging quiescent. The final revision recheck follo
 
 ## Best-effort metadata after an append
 
-After a confirmed body append, reread the note and use its new revision for one optional `extension_notient__revise` operation with `operation:"frontmatter"`. Use a new request ID in the same task batch. Set only:
+After a confirmed body append, resolve any `indexState:"pending"` through command status before another write; skip the optional metadata operation if Git index repair remains pending. Reread the note and use its new revision for one optional `extension_notient__revise` operation with `operation:"frontmatter"`. Use a new request ID in the same task batch. Set only:
 
 - `updated`: the latest canonical contribution date, JSON-encoded as a string in `valueJson`.
 - `repositories`: the sorted unique union of body Source repositories and existing summary entries, JSON-encoded as an array in `valueJson`.
@@ -102,9 +102,11 @@ If a summary exceeds the value bound or the operation is refused before intent, 
 
 On timeout or restart, inspect `extension_notient__status` and the note before retrying. Reuse the pending request ID for an identical request. Check the frozen dedup tuple in the canonical body; if present, never append it again. A later optional metadata repair uses a fresh revision and request ID without altering Source.
 
-A committed body remains saved when `indexState:"pending"` reports normal Git index repair; use command status. For `derivedIndexState:"pending"`, refresh and retry search. Report searchable availability separately. Conflicts and read-only registrations defer further writes without a fallback filesystem edit.
+A committed body remains saved when `indexState:"pending"` reports normal Git index repair; use command status and defer new writes until it resolves. For `derivedIndexState:"pending"`, refresh, call status to reconcile recorded repair, then retry search. Derived-only pending work does not itself block vault writes. Completed repairs use `"updated"`; previews and no-ops use `"unchanged"`. Report searchable availability separately and never repeat a body contribution to clear either index state. Conflicts and read-only registrations defer further writes without a fallback filesystem edit.
 
-Report `unverified memory`, vault and path, canonical repository/date, source entry IDs, body operation ID and OID, optional metadata outcome and IDs, and the shared batch. Include `You can ask: Undo batch <label>.` A skipped metadata operation adds nothing to undo.
+Write receipts use `operationId` and `commit.oid`. Each vault's status `journal.operations` entries use `id`, `requestId`, `state` and `commit` as an OID string, with separate `indexState` and `derivedIndexState`; `recovered` lists attempted recovery. Require `state:"committed"` before treating a status entry's candidate OID as published. Inspect those states rather than inferring that a pending count means the body was not committed. Preserve operator staging on `COMMITTED_INDEX_CONFLICT` and report the actual published OID.
+
+Report `unverified memory`, vault and path, canonical repository/date, source entry IDs, body operation ID and OID, optional metadata outcome and IDs, and the shared batch. Name `indexState` and `derivedIndexState` separately when either is pending. Include `You can ask: Undo batch <label>.` A skipped metadata operation adds nothing to undo.
 
 For an operator-requested undo, call `extension_notient__undo` with exactly one of `targetBatch` or `opId`, a new inverse-task `batch`, truthful authorization and a fresh request ID. Preview and apply with its `planHash`. Batch undo covers committed body and metadata work while retaining audit history; a batch containing unrelated task work also selects that work, so show the complete preview. Never silently undo a saved body to repair metadata.
 
@@ -112,7 +114,7 @@ For an operator-requested undo, call `extension_notient__undo` with exactly one 
 
 When asked what was learned, use `memory_recall` for task context as above, then search the same own vault with `extension_notient__search` for the topic. A task-bank hit is not proof that a vault contribution was saved. An ordinary recall question does not authorize rewriting old claims or recapturing retrieved memory.
 
-Read candidates with `extension_notient__note` at their current revisions, including later corrections and Source lines. Start with limit 5 and keep search limit at most 20. Search across repositories unless the operator explicitly asks for one; apply any repository restriction by checking served Source records under the current schema.
+Read candidates with `extension_notient__note` at their current revisions, including later corrections and Source lines. Start with limit 5 and keep search limit at most 20. For a repository-specific question, filter contributions by their served canonical Source repository; a `workspace`-filtered search alone can miss later contributions in a note captured elsewhere.
 
 Answer `Unverified memory from <repository/date>: ...` with the vault-relative path and exact served source lines. Quote only contiguous passages actually returned by search or note and retain their revision. Do not splice a quotation across headings, rely on a stale snippet, omit a known correction or claim that unknown session invalidates provenance.
 

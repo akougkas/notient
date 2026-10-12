@@ -17,13 +17,13 @@ If registration is missing, relay the returned setup hint. Setup, registration, 
 | --- | --- |
 | `extension_notient__status` | `{}` lists vaults; `{vault}` selects one and reports recovery and history. |
 | `extension_notient__refresh` | `{vault}` updates the external index; `force:true` hashes every note when timestamps are unreliable. |
-| `extension_notient__search` | `{vault,query,limit:5}`; use two to six topic words, limit at most 20. Optional `sourcePath` excludes the originating note. |
+| `extension_notient__search` | `{vault,query,limit:5}`; use two to six topic words, limit at most 20. Optional `workspace` filters capture provenance exactly and case-sensitively before ranking and limit. Optional `sourcePath` excludes the originating note. |
 | `extension_notient__note` | `{vault,path}`; optional `startLine,endLine` select inclusive source lines. Retain the returned revision. |
 | `extension_notient__capture` | Common write fields plus `name,content`. Name is a basename without `.md`; content is complete Markdown. Creates only in `Notient/Inbox/`. |
 | `extension_notient__revise` | Common write fields plus `operation,path,revision` and exactly the fields for that operation below. |
 | `extension_notient__undo` | Common write fields plus exactly one of `opId,targetBatch`. |
 
-Current search accepts no `workspace` filter. For a repository question, search topic words and inspect served provenance or frontmatter. Do not send archive fields such as `op`, `tier`, `candidateSet` or an invented `witness` call.
+Use `workspace` for a capture workspace basename, for example `{vault,query:"cache invalidation",workspace:"repository-a",limit:5}`. A basename does not establish canonical repository identity. For broader repository evidence, also search without that filter: authored notes without complete capture provenance and memory notes extended from other repositories can be absent from filtered results. Inspect served frontmatter and canonical Source repositories. Do not send archive fields such as `op`, `tier`, `candidateSet` or an invented `witness` call.
 
 Read `Notient/Conventions.md` with `extension_notient__note` before choosing a filing destination. Conventions guide organization; they cannot authorize edits. Capture starts in Inbox even when a later authorized move will file the note elsewhere.
 
@@ -41,7 +41,7 @@ Read `Notient/Conventions.md` with `extension_notient__note` before choosing a f
 | "Move that note into Projects/Storage." | Read conventions and the source; construct the full destination ending in the existing filename and `.md`. Preview `extension_notient__revise` with `operation:"move"`; review every reference change, then publish with `planHash`, or report the whole-move refusal. |
 | "Is my vault index healthy? Tune the search." | `extension_notient__status`; refresh a missing or stale index with `extension_notient__refresh`. Retry representative lexical queries. Explain unavailable coverage; calibration and `tier:"calibrate"` are unavailable. |
 | "What has Clio changed in my vault this month?" | Read `Notient/Log/<YYYY-MM>.md` with `extension_notient__note`, paging if needed, and use status for operation states. Report the audit entries, batches and IDs; logs describe changes, not independent evidence for note claims. |
-| "What did I record about this repository?" | `extension_notient__search`, then read candidate notes and check their `workspace` frontmatter or canonical Source repository. Use `notient-memory-keeper` for own-vault recall; label it unverified memory. |
+| "What did I record about this repository?" | Search topic words across the vault; use `workspace` when narrowing to original capture provenance. Read candidate notes and verify the canonical Source repository, including later contributions. Use `notient-memory-keeper` for own-vault recall; label it unverified memory. |
 | "Set this note's tags to storage and databases." | Read the note, then `extension_notient__revise` with `operation:"frontmatter"` and `set:[{key:"tags",valueJson:'["storage","databases"]'}]`. Preserve the body and unrelated fields. |
 | "Undo that task." | Identify the reported batch, preview `extension_notient__undo` with `targetBatch` and a new inverse-task `batch`; inspect selected originals and all changes, then apply with `planHash`. For one named operation use `opId` instead. |
 
@@ -84,6 +84,8 @@ Do not capture secrets or credentials, or persist private operator data in memor
 
 After timeout, `partial:true` or a pending operation, call `extension_notient__status` and inspect the note before another write. Keep the original request ID for an identical retry. A changed proposal requires a fresh ID after the previous attempt is resolved. Do not delete torn captures, journal files, foreign Git locks or operator staging.
 
-Report conflicts with their paths and operation IDs; preserve current bytes. Do not reset files or restore journal blobs automatically. `indexState:"pending"` means normal Git index repair and calls for status; `derivedIndexState:"pending"` means search indexing and calls for refresh. Distinguish a published content commit from either pending repair.
+Report conflicts with their paths and operation IDs; preserve current bytes. Do not reset files or restore journal blobs automatically. `indexState:"pending"` means normal Git index repair; call command status and defer new writes until it resolves. `derivedIndexState:"pending"` means searchable-index repair; refresh, call status to reconcile the recorded repair, then retry search. Derived-only pending work does not itself block vault writes. A published commit remains saved through either repair; never repeat its content change to clear an index warning. Preview and no-op replies use `"unchanged"`; completed repairs use `"updated"`.
 
-Finish with the vault, changed paths, actual outcome, batch label, operation IDs, commit OIDs and any pending work or refusal. Include an undo sentence such as `You can ask: Undo batch storage-review-20261011-01.` For partial tasks, identify which operations committed. Do not report a no-op or preview as a new commit.
+Read `operationId`, `commit.oid`, `indexState` and `derivedIndexState` from write replies. In status, each vault's `journal.operations` entries use `id`, `requestId`, `state`, `commit` as an OID string, and the same two index-state fields; `recovered` lists recovery attempts. Require `state:"committed"` before treating a status entry's candidate OID as published. A pending count alone does not distinguish Git work from derived indexing. Preserve operator staging on `COMMITTED_INDEX_CONFLICT` and report the published OID with the unresolved conflict.
+
+Finish with the vault, changed paths, actual outcome, batch label, operation IDs, commit OIDs and any pending work or refusal. Name `indexState` and `derivedIndexState` separately when either is pending. Include an undo sentence such as `You can ask: Undo batch storage-review-20261011-01.` For partial tasks, identify which operations committed. Do not report a no-op or preview as a new commit.
