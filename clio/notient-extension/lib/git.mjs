@@ -108,7 +108,7 @@ export function preflightGit(vault, files) {
     if (!head || !entry || head.oid !== entry.oid || head.mode !== entry.mode) refuse('DIRTY_TARGET', 'Affected existing paths must match HEAD and the stage-zero index.', [file.path]);
     const blob = git(vault.path, ['cat-file', 'blob', head.oid], { raw: true });
     if (!blob.equals(file.before)) refuse('GIT_ENCODING_MISMATCH', 'Working bytes differ from the raw committed Git blob.', [file.path]);
-    const mode = file.mode & 0o111 ? '100755' : '100644';
+    const mode = lstatSync(path.join(vault.path, file.path)).mode & 0o111 ? '100755' : '100644';
     if (mode !== head.mode) refuse('DIRTY_TARGET', 'Affected file mode differs from its Git baseline.', [file.path]);
   }
   return state;

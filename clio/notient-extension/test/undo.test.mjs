@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, chmodSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,22 @@ function fixture(t) { const f = writerFixture(t); baseline(f); refreshIndex(f.va
 const authorization = { origin: 'operator', request: 'Undo the one recorded operation.' };
 const inputFor = (f, opId, extra = {}) => ({ vault: f.vault.id, batch: 'single-undo', authorization, opId, ...extra });
 function replace(f, oldText, newText, requestId) { return writeOperation('revise', { vault: f.vault.id, batch: 'replace-chain', authorization: { origin: 'operator', request: 'Replace the named phrase.' }, requestId, operation: 'replace', path: 'One.md', revision: revision(readFileSync(path.join(f.vault.path, 'One.md'))), oldText, newText }, { directory: f.directory }); }
+
+test('T3 single and batch undo preserve an unstaged executable-bit change on replaced or captured notes', t => {
+  for (const capture of [false, true]) for (const batch of [false, true]) {
+    const f = fixture(t);
+    const original = capture ? writeOperation('capture', { name: 'Mode', content: 'Capture mode baseline.\n', batch: 'mode-target', authorization }, { directory: f.directory }) : replace(f, 'Baseline', 'Changed', 'mode-replace-original');
+    assert.equal(original.ok, true, JSON.stringify(original));
+    const name = capture ? original.capture.path : 'One.md';
+    chmodSync(path.join(f.vault.path, name), 0o755);
+    const before = snapshot(f.vault.path);
+    const input = { requestId: 'mode-inverse-refusal', batch: 'mode-inverse', authorization, dryRun: true, ...(batch ? { targetBatch: original.batch } : { opId: original.operationId }) };
+    const refused = writeOperation('undo', input, { directory: f.directory });
+    assert.equal(refused.ok, false, JSON.stringify(refused)); assert.equal(refused.error.code, 'DIRTY_TARGET'); assert.equal(refused.operationId, null);
+    assert.deepEqual(snapshot(f.vault.path), before); assert.ok(statSync(path.join(f.vault.path, name)).mode & 0o111);
+    assert.equal(readRecord(f.directory, f.vault, original.operationId).undoneBy, null);
+  }
+});
 
 test('single-operation undo restores exact note buffers and retains the original log prefix', t => {
   for (const bytes of ['# LF\nOriginal\n', '\uFEFF---\r\ntitle: Original\r\n...\r\n# Body\nOriginal', '# CRLF\r\nOriginal\r\n']) {
