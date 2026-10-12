@@ -169,3 +169,9 @@ block 2b5c26ab: retained version:1 batch-undo attribution follows a reused path 
 approve f72adea4 for item 18.
 
 block all of stage 4a at f72adea4: closing-fence/thematic-break regression (item 19) and retained version:1 batch-undo edit-age misattribution (item 20).
+
+## 92bd319b: V19 fix for item 19
+
+approve 92bd319b for item 19.
+
+block all of stage 4a at 92bd319b: retained version:1 batch-undo edit-age misattribution (item 20), unchanged in this fix and through 738e1bdf.
