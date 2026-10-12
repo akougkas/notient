@@ -28,19 +28,23 @@ export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { vi
   const wordPattern = /[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu;
   let words = 0;
   const eligibleBlocks = new Set();
+  const countedLinks = new Set();
   for (const [index, block] of parsed.blocks.entries()) {
     if (block.kind !== 'paragraph') continue;
     const start = block.start ?? Buffer.from(bytes.subarray(0, block.source.startByte)).toString('utf8').length;
     const end = block.end ?? Buffer.from(bytes.subarray(0, block.source.endByte)).toString('utf8').length;
     const masked = text.slice(start, end).split('').map((char, offset) => visible[start + offset] ? char : ' ');
+    let displayedWords = 0;
     for (const link of links) {
-      if (link.start < start || link.end > end || masked[link.start - start] === ' ') continue;
+      if (link.end <= start || link.start >= end || !visible[link.start]) continue;
+      masked.fill(' ', Math.max(link.start, start) - start, Math.min(link.end, end) - start);
+      if (countedLinks.has(link)) continue;
       const display = linkDisplaySpans(link).map(span => text.slice(span.start, span.end).split('').map((char, offset) => visible[span.start + offset] ? char : ' ').join('')).join('');
-      masked.fill(' ', link.start - start, link.end - start);
-      for (let offset = 0; offset < display.length; offset++) masked[link.start - start + offset] = display[offset];
+      displayedWords += [...display.matchAll(wordPattern)].length;
+      countedLinks.add(link);
     }
     const prose = masked.join('');
-    const count = [...prose.matchAll(wordPattern)].length;
+    const count = [...prose.matchAll(wordPattern)].length + displayedWords;
     words += count;
     if (count) eligibleBlocks.add(index);
   }

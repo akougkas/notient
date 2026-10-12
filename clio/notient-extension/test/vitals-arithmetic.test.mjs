@@ -93,6 +93,43 @@ test('V10 link display text keeps the visibility mask for inline code', () => {
   ]) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: text.includes('before') ? 3 : 2, chunkCoverage: 1 }, text);
 });
 
+test('V11 comments are removed before link tokenization without exposing destinations', () => {
+  for (const text of [
+    'See [la<!-- hidden -->bel](hidden destination.md).\n',
+    'See [[Hidden destination|la<!-- hidden -->bel]].\r\n',
+    'See [la<!-- hidden -->bel][id].\n\n[id]: hidden.md\n',
+    'See [la<!-- hidden\ncontinued -->bel](hidden(a(b)).md).\n',
+    '𐐀See [𐐀la<!-- one -->bel `hidden code`<!-- two -->](hidden.md).\n',
+  ]) {
+    const bytes = Buffer.from(text); const parsed = parseMarkdown(text);
+    assert.equal(parsed.links.length, 1, text);
+    assert.deepEqual(proseMetrics(bytes, parsed), { words: 2, chunkCoverage: 1 }, text);
+    for (const chunk of parsed.chunks) assert.equal(bytes.subarray(chunk.source.startByte, chunk.source.endByte).toString(), chunk.passage);
+    assert.equal(parsed.chunks.some(chunk => chunk.passage.includes('<!--')), false);
+    assert.equal(bytes.subarray(parsed.links[0].source.startByte, parsed.links[0].source.endByte).toString().startsWith('['), true);
+  }
+  for (const text of ['- [la<!-- hidden -->bel](hidden.md)\n', '- [la<!-- hidden\ncontinued -->bel](hidden.md)\n']) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: 0, chunkCoverage: 0 }, text);
+});
+
+test('V11 refresh backfills comment-filtered labels with exact visible evidence and unchanged vault bytes', t => {
+  const f = writerFixture(t); const text = 'See [la<!-- hidden [[Fake]] #hidden -->bel `hidden code`](hidden(a(b)).md).\r\n';
+  put(f, 'Source.md', text); const before = snapshot(f.vault.path); refreshIndex(f.vault, f.directory);
+  const db = openIndex(f.directory, f.vault, true);
+  db.prepare("UPDATE meta SET value='unicode-prose-v5' WHERE key='wordCountVersion'").run();
+  db.prepare('UPDATE note_vitals SET word_count=9').run(); db.close();
+  assert.equal(refreshIndex(f.vault, f.directory).hashed, 1);
+  const rebuilt = openIndex(f.directory, f.vault);
+  assert.equal(rebuilt.prepare('SELECT word_count FROM note_vitals').get().word_count, 2);
+  assert.equal(rebuilt.prepare('SELECT count(*) AS n FROM links').get().n, 1);
+  assert.equal(rebuilt.prepare('SELECT count(*) AS n FROM tags').get().n, 0);
+  for (const chunk of rebuilt.prepare('SELECT source,passage FROM chunks').all()) {
+    const source = JSON.parse(chunk.source);
+    assert.equal(Buffer.from(text).subarray(source.startByte, source.endByte).toString(), chunk.passage);
+    assert.equal(chunk.passage.includes('<!--'), false);
+  }
+  rebuilt.close(); assert.deepEqual(snapshot(f.vault.path), before);
+});
+
 test('V2 parser retains exact visible source spans on both sides of HTML comments', () => {
   for (const [text, words] of [
     ['Visible <!-- hidden --> prose.\n', 2],
