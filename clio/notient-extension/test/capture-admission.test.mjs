@@ -11,9 +11,26 @@ import { git } from '../lib/git.mjs';
 import { revision } from '../lib/paths.mjs';
 import { moveFixture } from './move-publication.test.mjs';
 import { snapshot } from './write-helpers.mjs';
+import { readRecord } from '../lib/journal.mjs';
 
 const input = (f, n = 0) => ({ vault: f.vault.id, requestId: `r6-capture-${n}`, batch: 'r6-capture', authorization: { origin: 'operator', request: 'Capture the supplied fixture body.' }, name: 'Admission', content: `# Body ${n}\n` });
 const run = (f, raw, options = {}) => writeOperation('capture', raw, { directory: f.directory, ...options });
+
+test('T6 Clio is the capture contributor while journal, audit and Git retain authorization origin', t => {
+  const f = moveFixture(t);
+  for (const [i, origin] of ['operator', 'clio', 'unattended'].entries()) {
+    const request = { ...input(f, 200 + i), authorization: { origin, request: 'Capture the observed contributor attribution.' } };
+    const captured = run(f, request); assert.equal(captured.ok, true, JSON.stringify(captured));
+    assert.match(readFileSync(path.join(f.vault.path, captured.capture.path), 'utf8'), /created_by: "clio"/);
+    assert.equal(readRecord(f.directory, f.vault, captured.operationId).authorization.origin, origin);
+    assert.equal(JSON.parse(captured.log.line.slice(2)).origin, origin);
+    assert.ok(git(f.vault.path, ['show', '-s', '--format=%B', captured.commit.oid]).includes(`Notient-Origin: ${origin}`));
+  }
+  const time = new Date(); const request = { ...input(f, 210), content: 'Preview origin-only change.\n', dryRun: true };
+  const first = run(f, request, { now: () => time });
+  const second = run(f, { ...request, authorization: { ...request.authorization, origin: 'clio' } }, { now: () => time });
+  assert.equal(first.planHash, second.planHash);
+});
 
 test('T4 capture dedup follows its own later moves when an inbox path is reused on the same UTC date', t => {
   const f = moveFixture(t); const time = new Date(); const now = () => time;
@@ -35,7 +52,7 @@ test('T4 capture dedup follows its own later moves when an inbox path is reused 
   assert.equal(moved.outcome, 'noop'); assert.equal(moved.capture.path, 'Archive/B.md'); assert.equal(moved.capture.duplicateOf, second.operationId);
 });
 
-test('R6 capture construction preserves caller fields, BOM, EOF and string tags with origin attribution', () => {
+test('R6 capture construction preserves caller fields, BOM, EOF and string tags with Clio attribution', () => {
   for (const tags of ['[]', '["a # b", \'c\'\'d\', plain]', '[\n  "one", # comment\n  "two"\n]', '\n  - "one" # inline\n  - plain']) {
     const content = `\uFEFF--- \r\ntitle: "Caller"\r\ntags: ${tags}\r\n...\r\n# Body\r\nExact EOF`;
     const result = captureDocument({ content, authorization: { origin: 'clio' } }, '2026-10-11T12:30:00.000Z', '/fixture/Workspace');

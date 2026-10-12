@@ -99,7 +99,7 @@ export function captureDocument(input, capturedAt, cwd = process.cwd()) {
   const tags = fields.find(field => field.key === 'tags');
   if (tags) validateTags(tags);
   const workspace = path.basename(cwd);
-  const set = [{ key: 'created_by', valueJson: JSON.stringify(input.authorization.origin) }, { key: 'captured_at', valueJson: JSON.stringify(capturedAt) }, { key: 'workspace', valueJson: JSON.stringify(workspace) }];
+  const set = [{ key: 'created_by', valueJson: JSON.stringify('clio') }, { key: 'captured_at', valueJson: JSON.stringify(capturedAt) }, { key: 'workspace', valueJson: JSON.stringify(workspace) }];
   if (!tags) set.push({ key: 'tags', valueJson: '[]' });
   const bytes = editFrontmatter(normalized, set).bytes;
   frontmatterFields(documentSpans(bytes));

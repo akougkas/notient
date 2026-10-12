@@ -28,7 +28,7 @@ test('capture preserves caller body and fields while adding provenance and minti
     const parsed = documentSpans(stored);
     const supplied = documentSpans(Buffer.from(content));
     assert.equal(parsed.text.slice(parsed.bodyStart), supplied.text.slice(supplied.bodyStart).replaceAll('\r\n', '\n'));
-    assert.match(parsed.text, /created_by: "operator"/);
+    assert.match(parsed.text, /created_by: "clio"/);
     assert.match(parsed.text, /tags: \[\]/);
     assert.equal(result.capture.workspace, path.basename(process.cwd()));
     assert.match(result.capture.path, /^Notient\/Inbox\/\d{4}-\d{2}-\d{2}-/);

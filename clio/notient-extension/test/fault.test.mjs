@@ -169,7 +169,7 @@ test('an exclusive capture killed before publication recovers its frozen name an
   const resumed = command(f, 'status');
   assert.equal(resumed.value.recovered[0].result, 'resumed_from_intent');
   assert.deepEqual(readFileSync(path.join(f.vault.path, capturedPath)), readBlob(f.directory, f.vault, intent.id, intent.files[0].after));
-  assert.match(readFileSync(path.join(f.vault.path, capturedPath), 'utf8'), /created_by: "operator"/);
+  assert.match(readFileSync(path.join(f.vault.path, capturedPath), 'utf8'), /created_by: "clio"/);
   const retry = command(f, 'capture', input);
   assert.equal(retry.value.outcome, 'already_committed');
   assert.equal(retry.value.commit.oid, resumed.value.recovered[0].commit);
