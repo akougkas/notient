@@ -14,6 +14,7 @@ import { proseMetrics } from './vitals.mjs';
 import { storedVitals, installVitals } from './vitals-index.mjs';
 import { tokenizeMove, inventoryIndex, resolveMoveTarget } from './move.mjs';
 import { relationSpans } from './relate.mjs';
+import { withIndexWriter } from './index-lock.mjs';
 
 export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
 
@@ -115,7 +116,11 @@ function resolveSnapshotLink(link, source, notes, index) {
   return { resolution: result.state === 'missing' ? 'unresolved' : result.state, candidates: result.candidates };
 }
 
-export function refreshIndex(vault, directory, { force = false, now = () => Date.now() } = {}) {
+export function refreshIndex(vault, directory, options = {}) {
+  return withIndexWriter(vault, directory, () => refreshLocked(vault, directory, options));
+}
+
+function refreshLocked(vault, directory, { force = false, now = () => Date.now() } = {}) {
   const started = performance.now();
   const scan = listNotes(vault.path);
   const db = openIndex(directory, vault, true);
@@ -228,6 +233,10 @@ export function indexSummary(vault, directory, checkFiles = true) {
 
 export function repairCommittedIndex(vault, directory, record) {
   if (!existsSync(indexPath(directory, vault)) || !probeFts5()) return false;
+  return withIndexWriter(vault, directory, () => repairLocked(vault, directory, record));
+}
+
+function repairLocked(vault, directory, record) {
   const db = openIndex(directory, vault, true);
   try {
     db.exec('BEGIN IMMEDIATE');

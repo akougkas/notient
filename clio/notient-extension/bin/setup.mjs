@@ -5,6 +5,7 @@ import { contained, vaultId, revision } from '../lib/paths.mjs';
 import { initializeGit } from '../lib/git.mjs';
 import { normalizeEmbeddings, embeddingCanary } from '../lib/embedding-config.mjs';
 import { createOpenAIAdapter } from '../lib/embedding-adapter.mjs';
+import { verifyVectorConfiguration } from '../lib/vector-store.mjs';
 
 const conventions = `---
 title: Notient Conventions
@@ -94,16 +95,7 @@ async function main() {
     } else if (flag === '--vault' || flag === '--role' || flag === '--access') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value.`);
-      if (embeddingFlags.has(flag)) {
-      const value = args[++i]; const key = embeddingFlags.get(flag);
-      if (value === undefined || value.startsWith('--') || Object.hasOwn(embeddingValues, key)) throw new Error('Embedding flags require one value per field.');
-      embeddingValues[key] = ['dimension', 'maxInputBytes', 'batch', 'timeoutMs'].includes(key) && /^\d+$/.test(value) ? Number(value) : value;
-    } else if (['--embeddings-on', '--embeddings-off'].includes(flag)) {
-      if (embeddingMode) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
-      embeddingMode = flag.endsWith('-on') ? 'on' : 'off';
-    } else if (flag === '--embeddings-key-stdin') {
-      if (keyStdin) throw new Error('Embedding key stdin may be specified once.'); keyStdin = true;
-    } else if (flag === '--vault') vaultPath = value;
+      if (flag === '--vault') vaultPath = value;
       else if (flag === '--role') role = value;
       else access = value;
     } else if (flag === '--read-only') readOnly = true;
@@ -150,6 +142,7 @@ async function main() {
     } else selected.embeddings = false;
     atomicJson(path.join(directory, 'config.json'), config);
     const profile = config.embeddings;
+    if (selected.embeddings) for (const vault of config.vaults.filter(value => value.embeddings && (embeddingMode !== 'on' || value.id === selected.id))) verifyVectorConfiguration(vault, directory, profile);
     process.stdout.write(`${JSON.stringify({ registered: selected, embedding: { enabled: selected.embeddings, model: profile?.model ?? null, responseModel: profile?.responseModel ?? null, dimension: profile?.dimension ?? null, destinationOrigin: selected.embeddings ? new URL(profile.baseUrl).origin : null }, affectedOptedInVaults: embeddingMode ? [selected.id] : [...new Set([...optedIn, selected.id])], purpose: 'Eligible note passages and queries are exported only for independently opted-in vaults.' })}\n`);
     return;
   }
