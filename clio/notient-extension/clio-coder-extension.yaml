@@ -469,6 +469,38 @@
                 "slot"
               ],
               "additionalProperties": false
+            },
+            "plan": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "revision": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "proposalId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "go": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "path",
+                "revision",
+                "proposalId",
+                "go"
+              ],
+              "additionalProperties": false
             }
           }
         }

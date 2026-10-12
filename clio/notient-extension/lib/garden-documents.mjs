@@ -1,5 +1,5 @@
 import { currentFile, revision, refuse, validText } from './paths.mjs';
-import { openGarden, liveGardenRun, gardenRun, gardenTransaction } from './garden-store.mjs';
+import { openGarden, liveGardenRun, gardenRun, gardenTransaction, queueCounts } from './garden-store.mjs';
 import { uniqueJson } from './closed-json.mjs';
 import { admitGardenEvidence } from './garden-evidence.mjs';
 import { buildWritePlan, writeOperation, canonicalJson, plannedLog, requestDigest, inputFor, unifiedDiff } from './write.mjs';
@@ -65,8 +65,9 @@ const readPlanProposalsFromRecord = (directory, vault, record) => readPlanPropos
 
 function digestBody(vault, directory, run, db) {
   const items = db.prepare('SELECT key AS itemId,path,state,lastError,resultJson FROM queue WHERE runId=? ORDER BY path').all(run.id);
+  const queue = { ...queueCounts(db), poisonExamples: db.prepare("SELECT path,revision,attempts,lastError FROM queue WHERE state='poison' ORDER BY enqueuedAt,path LIMIT 10").all() };
   const operations = listRecords(directory, vault).filter(record => record.state === 'committed' && record.batch === run.batch).map(record => ({ operationId: record.id, operation: record.operation, oid: record.git.commit, changes: record.files.filter(file => file.role !== 'log').map(file => file.path), indexState: record.indexState, derivedIndexState: record.derivedIndexState, link: record.link, relate: record.relate, undoneBy: record.undoneBy }));
-  return `\n## ${run.startedAt} · ${run.id}\n\nCoverage and duties:\n${inertBlock(canonicalJson(JSON.parse(run.deterministicJson)))}\nItems and attributed judgments:\n${inertBlock(canonicalJson(items))}\nVerified earlier operations:\n${inertBlock(canonicalJson(operations))}\nUndo this run with the undo tool's targetBatch:\n${inertBlock(run.batch)}\nReverse newer overlapping daily-report appends first. Model, usage, cost and host receipt are unobserved.\n`;
+  return `\n## ${run.startedAt} · ${run.id}\n\nCoverage and duties:\n${inertBlock(canonicalJson(JSON.parse(run.deterministicJson)))}\nQueue and retained poison:\n${inertBlock(canonicalJson(queue))}\nItems and attributed judgments:\n${inertBlock(canonicalJson(items))}\nVerified earlier operations:\n${inertBlock(canonicalJson(operations))}\nUndo this run with the undo tool's targetBatch:\n${inertBlock(run.batch)}\nReverse newer overlapping daily-report appends first. Model, usage, cost and host receipt are unobserved.\n`;
 }
 
 function documentPlan(vault, directory, input, operationInput) {

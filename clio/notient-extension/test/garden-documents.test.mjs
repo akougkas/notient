@@ -39,12 +39,13 @@ test('managed plan preview is pure, publication freezes inert evidence and prese
 
 test('no-change finish commits one digest, exports an unobserved host receipt and retry does not append again', async t => {
   const f = gardenFixture(t); const begin = await beginGarden(f); await settleUnchanged(f, begin.value);
+  editGarden(f, db => { db.prepare("INSERT INTO queue VALUES (?,? ,?,NULL,'review','gardener-v1',?,'poison',5,NULL,NULL,NULL,?,NULL)").run('a'.repeat(64), 'Prior.md', 'b'.repeat(64), begin.value.deadline, 'Five retained failures'); });
   const input = { action: 'finish', runId: begin.value.runId, revision: 'absent' }; const before = snapshot(f.temporary);
   const preview = await gardenTool(f, 'garden', { ...input, dryRun: true }); assert.equal(preview.status, 0, JSON.stringify(preview)); assert.deepEqual(snapshot(f.temporary), before);
   const result = await gardenTool(f, 'garden', { ...input, planHash: preview.value.planHash }); assert.equal(result.status, 0, JSON.stringify(result)); assert.equal(result.value.runState, 'complete');
   const record = readRecord(f.directory, f.vault, result.value.operationId); assert.equal(record.operation, 'garden_digest'); assert.equal(record.files.length, 2);
   const filename = path.join(path.dirname(gardenPath(f.directory, f.vault)), 'garden-runs', begin.value.runId, 'result.json'); const receipt = JSON.parse(readFileSync(filename, 'utf8')); assert.equal(receipt.state, 'complete'); assert.equal(receipt.hostReceipt, null); assert.equal(receipt.model, null); assert.equal(receipt.documents.digest.oid, result.value.commit.oid);
-  const text = readFileSync(path.join(f.vault.path, result.value.document.path), 'utf8'); assert.equal(text.includes(result.value.commit.oid), false);
+  const text = readFileSync(path.join(f.vault.path, result.value.document.path), 'utf8'); assert.equal(text.includes(result.value.commit.oid), false); assert.match(text, /"poison":1/); assert.match(text, /Five retained failures/);
   const unchanged = snapshot(f.vault.path); const retry = await gardenTool(f, 'garden', { ...input, planHash: preview.value.planHash }); assert.equal(retry.value.outcome, 'already_committed'); assert.deepEqual(snapshot(f.vault.path), unchanged);
 });
 

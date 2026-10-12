@@ -124,7 +124,6 @@ export function refreshIndex(vault, directory, options = {}) {
 
 function refreshLocked(vault, directory, { force = false, now = () => Date.now(), maxChanged = Infinity, budgetMs = Infinity, promotionEpoch, promotionLimit = Infinity } = {}) {
   const started = performance.now();
-  const scan = listNotes(vault.path);
   const db = openIndex(directory, vault, true);
   const computedAt = now();
   let changed = 0;
@@ -134,6 +133,11 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
   const errors = [];
   let remaining = 0; let cursor = null;
   try {
+    if (promotionEpoch) {
+      const cached = db.prepare('SELECT value FROM meta WHERE key=?').get(`gardenTick.${promotionEpoch}`);
+      if (cached) return JSON.parse(cached.value);
+    }
+    const scan = listNotes(vault.path);
     db.exec('BEGIN IMMEDIATE');
     const priorVitals = storedVitals(db);
     const metrics = new Map();
@@ -207,8 +211,11 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('wordCountVersion', ?)").run(wordCountVersion);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
-    db.exec('COMMIT');
-    return { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, ...(promotionEpoch ? { cursor, remaining, promoted } : {}), durationMs: Math.round((performance.now() - started) * 100) / 100 };
+    const visited = promotionEpoch ? JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get().value).paths.length : 0;
+    const vitalsRemaining = promotionEpoch ? db.prepare('SELECT count(*) AS n FROM notes').get().n - JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenVitalsCycle'").get().value).length : 0;
+    const result = { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, ...(promotionEpoch ? { cursor, remaining, promoted, vitalsVisited: visited, vitalsRemaining } : {}), durationMs: Math.round((performance.now() - started) * 100) / 100 };
+    if (promotionEpoch) db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run(`gardenTick.${promotionEpoch}`, JSON.stringify(result));
+    db.exec('COMMIT'); return result;
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK');
     throw error;

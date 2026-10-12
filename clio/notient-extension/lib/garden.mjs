@@ -54,7 +54,7 @@ function eligible(vault, directory) {
   } finally { db.close(); }
 }
 
-function begin(vault, directory, input, now) {
+function begin(vault, directory, input, now, options = {}) {
   const recovered = recoverVault(vault, directory);
   if (recovered.busy || recovered.blocking?.length || recovered.results.some(result => result.error || result.result === 'conflict_preserved')) return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, state: 'blocked', reason: 'recovery_required', recovery: recovered, items: [] };
   reconcileGarden(vault, directory);
@@ -82,8 +82,8 @@ function begin(vault, directory, input, now) {
   if (admitted.retry && (admitted.run.state !== 'active' || stamp > admitted.run.deadline)) refuse('GARDEN_RUN_EXPIRED', 'This interrupted run ID cannot be replayed.');
   const fts5 = probeFts5(); let structural = null; let coverage = unavailableFts5Coverage();
   if (fts5) { structural = refreshIndex(vault, directory, { maxChanged: 50, budgetMs: 60000, promotionEpoch: input.runId, promotionLimit: 50 }); coverage = readCoverage(vault, directory); }
-  const deterministic = { structural, vectors: { embedded: 0, reason: 'deterministic_core', remaining: null }, vitals: { promoted: structural?.promoted ?? 0, limit: 50 }, pruning: { expiredReceipts: 0 }, coverage };
-  if (fts5) {
+  const deterministic = admitted.run.deterministicJson ? JSON.parse(admitted.run.deterministicJson) : { structural, vectors: { embedded: 0, reason: 'deterministic_core', remaining: null }, vitals: { promoted: structural?.promoted ?? 0, visited: structural?.vitalsVisited ?? 0, remaining: structural?.vitalsRemaining ?? null, limit: 50 }, pruning: { expiredReceipts: 0 }, coverage };
+  if (fts5 && !admitted.run.deterministicJson) {
     withIndexWriter(vault, directory, () => {
     const db = openIndex(directory, vault, true);
     try {
@@ -93,6 +93,8 @@ function begin(vault, directory, input, now) {
     } finally { db.close(); }
     });
   }
+  gardenTransaction(directory, vault, db => { db.prepare('UPDATE runs SET deterministicJson=? WHERE id=?').run(JSON.stringify(deterministic), input.runId); });
+  options.barrier?.('afterGardenTick');
   const candidates = coverage.state === 'current' ? eligible(vault, directory) : [];
   return gardenTransaction(directory, vault, db => {
     const run = liveGardenRun(db, input.runId, now());
@@ -150,7 +152,7 @@ export function gardenCommand(raw, { directory = dataDirectory(), now = () => Da
     if (!readConfig(directory).vaults.length) return { ...notConfigured(), tool: 'garden', runId: input.runId, state: 'unavailable' };
     vault = selectVault(input.vault, directory);
     if (vault.readOnly) refuse('READ_ONLY_VAULT', 'Garden work requires a writable registered vault.');
-    if (input.action === 'begin') return begin(vault, directory, input, now);
+    if (input.action === 'begin') return begin(vault, directory, input, now, options);
     if (input.action === 'settle') return settle(vault, directory, input, now);
     return publishGardenDocument(vault, directory, input, options);
   } catch (error) {

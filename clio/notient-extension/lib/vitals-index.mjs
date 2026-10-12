@@ -89,9 +89,12 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
   const fallback = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name)));
   const epoch = JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get()?.value ?? 'null');
   const advanced = new Set(epoch && epoch.runId === promotionEpoch ? epoch.paths : []);
-  const selected = new Set(promotionEpoch ? rows.filter(row => !advanced.has(row.path)).sort((a, b) => (metrics.get(b.path)?.words ?? previous.get(b.path)?.word_count ?? 0) - (metrics.get(a.path)?.words ?? previous.get(a.path)?.word_count ?? 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, Math.max(0, promotionLimit - advanced.size)).map(row => row.path) : []);
+  const cycle = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenVitalsCycle'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name && (!metrics.has(name) || previous.get(name)?.revision === row.revision))));
+  if (cycle.size === rows.length && epoch?.runId !== promotionEpoch) cycle.clear();
+  const selected = new Set(promotionEpoch ? rows.filter(row => !advanced.has(row.path) && !cycle.has(row.path)).sort((a, b) => (metrics.get(b.path)?.words ?? previous.get(b.path)?.word_count ?? 0) - (metrics.get(a.path)?.words ?? previous.get(a.path)?.word_count ?? 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, Math.max(0, promotionLimit - advanced.size)).map(row => row.path) : []);
   let promoted = 0;
   for (const row of rows) {
+    if (promotionEpoch && !selected.has(row.path)) continue;
     let old = previous.get(row.path);
     let provenance = null;
     const published = record?.files.find(file => file.role === 'note' && file.path === row.path && file.after === row.revision);
@@ -114,11 +117,12 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
     if (!counts) continue;
     const shouldAdvance = advance && (!promotionEpoch || selected.has(row.path));
     const values = arithmeticVitals({ ...counts, ...graph.get(row.path), lastUserEditMs: at, maturity: old?.maturity ?? 'raw' }, now, { advance: shouldAdvance, rebuild: rebuild && (!promotionEpoch || selected.has(row.path)) });
-    if (promotionEpoch && shouldAdvance) { advanced.add(row.path); if (values.maturity !== (old?.maturity ?? 'raw')) promoted++; }
+    if (promotionEpoch && shouldAdvance) { advanced.add(row.path); cycle.add(row.path); if (values.maturity !== (old?.maturity ?? 'raw')) promoted++; }
     put.run(row.path, row.revision, values.words, at, values.maturity, new Date(now).toISOString());
   }
   db.prepare("INSERT OR REPLACE INTO meta VALUES ('editAgeFallbackPaths', ?)").run(JSON.stringify([...fallback].sort()));
   db.prepare("INSERT OR REPLACE INTO meta VALUES ('vitalsInitialized', '1')").run();
   if (promotionEpoch) db.prepare("INSERT OR REPLACE INTO meta VALUES ('gardenPromotions',?)").run(JSON.stringify({ runId: promotionEpoch, paths: [...advanced] }));
+  if (promotionEpoch) db.prepare("INSERT OR REPLACE INTO meta VALUES ('gardenVitalsCycle',?)").run(JSON.stringify([...cycle]));
   return promoted;
 }

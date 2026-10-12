@@ -93,6 +93,25 @@ test('a promotion epoch advances once even when begin is retried after its resul
   const db = openIndex(f.directory, f.vault, true); db.exec("UPDATE note_vitals SET maturity='raw'"); db.close();
   const first = await beginGarden(f); assert.equal(first.value.deterministic.vitals.promoted, 1);
   editGarden(f, db => { db.exec('UPDATE runs SET resultJson=NULL,deterministicJson=NULL'); });
-  const retried = await beginGarden(f); assert.equal(retried.value.deterministic.vitals.promoted, 0); assert.deepEqual(retried.value.items, first.value.items);
+  const retried = await beginGarden(f); assert.equal(retried.value.deterministic.vitals.promoted, 1); assert.deepEqual(retried.value.items, first.value.items); assert.deepEqual(retried.value.deterministic, first.value.deterministic);
   const index = openIndex(f.directory, f.vault); assert.equal(index.prepare('SELECT maturity FROM note_vitals').get().maturity, 'adolescent'); index.close();
+});
+
+test('begin SIGKILL after its deterministic checkpoint reuses the same index generation and claims once', async t => {
+  const f = gardenFixture(t); const input = { action: 'begin', runId: 'garden-tick-interrupt', request: 'Review the fixture once.' };
+  const killed = await gardenTool(f, 'garden', input, { barrier: 'afterGardenTick' }); assert.equal(killed.signal, 'SIGKILL');
+  let db = openIndex(f.directory, f.vault); const generation = db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get().value; db.close();
+  const resumed = await gardenTool(f, 'garden', input); assert.equal(resumed.status, 0, JSON.stringify(resumed)); assert.equal(resumed.value.items.length, 1); assert.equal(resumed.value.items[0].attempt, 1);
+  db = openIndex(f.directory, f.vault); assert.equal(db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get().value, generation); db.close();
+});
+
+test('vitals visits at most fifty notes per run in descending word order and continues its retained cycle', async t => {
+  const f = gardenFixture(t, Object.fromEntries(Array.from({ length: 110 }, (_, i) => [`N${String(i).padStart(3, '0')}.md`, 'word '.repeat(i + 1) + '\n']))); await gardenTool(f, 'refresh', {});
+  const db = openIndex(f.directory, f.vault, true); db.exec("UPDATE note_vitals SET maturity='raw'"); db.close();
+  for (const [ordinal, expected] of [[1, 50], [2, 50], [3, 10]]) {
+    const run = await beginGarden(f, `garden-vitals-${ordinal}`); assert.equal(run.status, 0, JSON.stringify(run)); assert.equal(run.value.deterministic.vitals.promoted, expected);
+    const index = openIndex(f.directory, f.vault); const epoch = JSON.parse(index.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get().value); assert.equal(epoch.paths.length, expected); if (ordinal === 1) assert.deepEqual(epoch.paths, Array.from({ length: 50 }, (_, i) => `N${String(109 - i).padStart(3, '0')}.md`).reverse()); index.close();
+    editGarden(f, db => { db.exec("UPDATE runs SET state='interrupted',leaseUntil=0; UPDATE queue SET leaseUntil=0 WHERE state='leased'"); });
+  }
+  const index = openIndex(f.directory, f.vault); assert.equal(index.prepare("SELECT count(*) AS n FROM note_vitals WHERE maturity='adolescent'").get().n, 110); index.close();
 });

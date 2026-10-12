@@ -18,6 +18,7 @@ import { freezeEditAges } from './vitals-write.mjs';
 import { inverseOrigins } from './vitals-index.mjs';
 import { reconcileGarden } from './garden-reconcile.mjs';
 import { guardAdditive, guardAdditiveInput, guardRecordAdditive, validateGardenRun, admitGardenAction } from './garden-authority.mjs';
+import { preparePlanExecution, validatePlanInput, checkPlanDelta, reservePlanExecution, checkFrozenPlanReservation } from './plan-execution.mjs';
 import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile, freezeIntentSet, prepareFileIntents, readFileIntents, claimFileIntent, markFileApplied } from './journal.mjs';
 
 export function canonicalJson(value) {
@@ -55,6 +56,7 @@ export function freshAuthority(vault, directory, record, { published = false } =
     } catch (error) { if (error.code === 'UNATTENDED_REFUSED') refuse('RECOVERY_BLOCKED_AUTHORIZATION', error.message, error.paths); throw error; }
   }
   if (!published) admitGardenAction(selected, directory, { gardenRun: record.gardenRun, path: record.source, revision: record.files.find(file => file.path === record.source)?.before, requestId: record.id, batch: record.batch, authorization: record.authorization }, record.requestDigest, { recovery: true });
+  if (!published) checkFrozenPlanReservation(selected, directory, record);
   if ((selected.role === 'operator' || record.roleAtIntent === 'operator') && record.authorization.origin === 'unattended' && (record.operation === 'move' || record.undo.targets.some(id => readRecord(directory, vault, id).operation === 'move'))) refuse('RECOVERY_BLOCKED_AUTHORIZATION', 'Unattended structural work cannot be recovered in an operator vault.');
 }
 
@@ -161,10 +163,10 @@ export function cleanupSiblings(vault, record, sync = syncDirectory) {
 function checkDependencies(vault, directory, record) {
   for (const read of record.reads) {
     let actual;
-    try { actual = (record.intentSet ? readNote(vault.path, read.path) : currentFile(vault.path, read.path)).revision; }
+    const file = record.files.find(candidate => candidate.path === read.path);
+    try { actual = (record.intentSet && !file ? readNote(vault.path, read.path) : currentFile(vault.path, read.path, { raw: true })).revision; }
     catch { refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency is no longer readable.', [read.path]); }
     if (actual !== read.revision) {
-      const file = record.files.find(candidate => candidate.path === read.path);
       const stamp = file && record.intentSet ? readFileIntents(directory, vault, record).get(file.path).write_started_at_ms : null;
       if (!file || actual !== file.after || stamp === null) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
     }
@@ -420,11 +422,16 @@ export function inputFor(tool, raw) {
     if (typeof input.path !== 'string' || !/^[a-f0-9]{64}$/.test(input.revision ?? '')) refuse('INVALID_INPUT', 'A note path and lowercase read revision are required.');
     if (input.path.startsWith('Notient/Log/')) refuse('MANAGED_LOG', 'Direct revision of managed audit logs is refused.', [input.path]);
     const fields = input.operation === 'replace' ? ['oldText', 'newText'] : input.operation === 'move' ? ['destination'] : input.operation === 'link' ? ['link'] : input.operation === 'relate' ? ['relate'] : ['set', 'unset'];
-    const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'operation', 'path', 'revision', 'gardenRun', ...fields]);
+    const allowed = new Set(['vault', 'requestId', 'batch', 'authorization', 'dryRun', 'planHash', 'operation', 'path', 'revision', 'gardenRun', 'plan', ...fields]);
     if (Object.keys(raw).some(key => !allowed.has(key))) refuse('INVALID_INPUT', 'Fields belonging to another revision mode are refused.');
     if (input.gardenRun !== undefined) {
       validateGardenRun(input.gardenRun);
       if (input.authorization.origin !== 'unattended' || !input.dryRun && !input.planHash) refuse('INVALID_AUTHORIZATION', 'Garden actions require unattended origin and the preview planHash for publication.');
+    }
+    if (input.plan !== undefined) {
+      validatePlanInput(input.plan);
+      if (input.gardenRun || input.authorization.origin !== 'operator') refuse('INVALID_AUTHORIZATION', 'Only an operator go without gardenRun may execute a plan.');
+      if (!input.dryRun && !input.planHash) refuse('PLAN_HASH_REQUIRED', 'Plan execution requires the complete fresh preview hash.');
     }
     if (input.operation === 'replace') {
       validText(input.oldText, 'oldText'); validText(input.newText, 'newText');
@@ -624,6 +631,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   const budget = gitBudget ?? createGitBudget({ now: gitClock, call: gitCall });
   const previousGitMs = budget.usedMs;
   const operation = tool === 'capture' ? 'capture' : tool === 'undo' ? 'undo' : input.operation;
+  const planAdmission = input.plan ? preparePlanExecution(vault, directory, input, { budget }).admission : null;
   let files;
   let inverse;
   let move;
@@ -657,6 +665,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
     guardAdditive(vault, operation, files, relationship ?? {});
     admitGardenAction(vault, directory, input, requestDigest(vault, tool, input));
   }
+  checkPlanDelta(vault, input, { files }, planAdmission);
   const undo = inverse?.undo ?? { targets: [], commits: [] };
   const source = inverse?.source ?? move?.source ?? captured?.source ?? files[0].path;
   const noop = inverse?.noop ?? captured?.noop ?? files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
@@ -670,11 +679,15 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
   const { vitalsBefore, vitalsFallbackPaths } = noop ? { vitalsBefore: [], vitalsFallbackPaths: [] } : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null, inverse?.restoredOrigins);
   budget.check();
   const gitMs = budget.usedMs;
-  const reads = inverse?.reads ?? move?.reads ?? relationship?.reads ?? [];
+  const reads = [...(inverse?.reads ?? move?.reads ?? relationship?.reads ?? [])];
+  if (planAdmission) {
+    for (const read of [{ path: planAdmission.path, revision: planAdmission.revision }, ...planAdmission.proposal.evidence.map(evidence => ({ path: evidence.path, revision: evidence.revision }))]) if (!reads.some(value => value.path === read.path && value.revision === read.revision)) reads.push(read);
+    reads.sort((a, b) => a.path < b.path ? -1 : 1);
+  }
   const inventoryHash = inverse?.inventoryHash ?? (move || relationship ? revision(canonicalJson((move ?? relationship).inventory)) : null);
   const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, gardenRun: input.gardenRun ?? null, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: relationship?.semanticEvidence ?? null, vitalsBefore, vitalsFallbackPaths, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
+  return { id: input.requestId, tool, operation, gardenRun: input.gardenRun ?? null, plan: planAdmission ? { path: planAdmission.path, revision: planAdmission.revision, proposalId: planAdmission.proposalId, go: planAdmission.go, actionDigest: planAdmission.actionDigest } : null, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: relationship?.semanticEvidence ?? null, vitalsBefore, vitalsFallbackPaths, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -720,12 +733,12 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
     }), false),
     commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
     log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
-    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), link: record.link ?? null, relate: record.relate ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), link: record.link ?? null, relate: record.relate ?? null, gardenRun: record.gardenRun ?? null, managedDocument: record.managedDocument ?? null, plan: record.plan ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
   };
 }
 
 function previewResult(tool, vault, input, plan, started) {
-  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: captureReceipt(plan.capture), link: plan.link ?? null, relate: plan.relate ?? null, warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
+  return { ok: true, tool, operation: plan.operation, vault: vault.id, requestId: input.requestId, operationId: null, outcome: plan.noop ? 'noop' : 'preview', batch: plan.batch, planHash: plan.planHash, changes: plan.noop ? [] : outputChanges(plan.files, true), commit: null, log: null, undo: { operationIds: plan.undo.targets, commits: plan.undo.commits }, recovery: [], indexState: 'unchanged', derivedIndexState: 'unchanged', capture: captureReceipt(plan.capture), link: plan.link ?? null, relate: plan.relate ?? null, gardenRun: plan.gardenRun ?? null, managedDocument: plan.managedDocument ?? null, plan: plan.plan ?? null, warnings: warnings(null, plan.git.durability), timings: { scanMs: plan.timings.scanMs, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: plan.timings.gitMs, totalMs: performance.now() - started } };
 }
 
 export function writeOperation(tool, raw, { directory = dataDirectory(), ...options } = {}) {
@@ -740,6 +753,23 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
     input = inputFor(tool, raw);
     if (!readConfig(directory).vaults.length) return { ...notConfigured(), tool, requestId: input.requestId, operationId: null, state: 'unavailable', commit: null, recovery: [] };
     vault = selectVault(input.vault, directory);
+    if (input.plan) {
+      const prepared = preparePlanExecution(vault, directory, input, { budget: options.gitBudget });
+      if (prepared.prior && input.dryRun) {
+        adapter = createGitAdapter(vault, directory);
+        if (!adapter.recognize(prepared.prior)) refuse('PLAN_EXECUTION_PENDING', 'The existing plan execution still requires recovery.', [], true);
+        return recordResult(vault, directory, prepared.prior, [], 'already_committed', performance.now() - started, adapter.durability);
+      }
+      if (prepared.prior) return withWriterLock(directory, vault, () => {
+        requireAuthority(selectVault(vault.id, directory), input.authorization, []);
+        adapter = createGitAdapter(vault, directory); const recovered = recoverPending(vault, directory, adapter, options); recovery = recovered.results;
+        record = readRecord(directory, vault, prepared.prior.id);
+        if (record.undoneBy) refuse('PLAN_ALREADY_UNDONE', 'This proposal was undone and requires a newly reviewed proposal.');
+        if (!adapter.recognize(record)) refuse('PLAN_EXECUTION_PENDING', 'Recover the existing operator intent before another execution.', [], true);
+        return recordResult(vault, directory, record, recovery, 'already_committed', performance.now() - started, adapter.durability);
+      });
+      input = prepared.input;
+    }
     const digest = requestDigest(vault, tool, input);
     const existing = () => {
       if (!existsSync(path.join(operationDirectory(directory, vault, input.requestId), 'record.json'))) return null;
@@ -787,6 +817,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
           if (canonicalJson(admission.semanticEvidence) !== canonicalJson(plan.semanticEvidence) || canonicalJson(admission.link) !== canonicalJson(plan.link)) refuse('CANDIDATE_STALE', 'The semantic admission changed before intent; retrieve candidates again.', [], true);
         }
         admitGardenAction(vault, directory, input, plan.requestDigest, { reserve: true });
+        reservePlanExecution(vault, directory, input, plan.requestDigest);
         record = persistPlan(vault, directory, plan, options.sync);
         record.timings = { ...record.timings, ...plan.timings, lockWaitMs, journalMs: performance.now() - journalStarted };
         const result = finishRecord(vault, directory, record, adapter, { deadline: started + 240000, ...options });

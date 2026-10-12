@@ -25,8 +25,15 @@ test('stage 4 frozen schemas match the design and retain the runtime authority b
   const schemas = [...readFileSync(new URL('../../design/04-links-and-relations.md', import.meta.url), 'utf8').matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
   const tools = new Map(manifest.capabilities.tools.map(tool => [tool.name, tool]));
   for (const [name, schema] of [['candidates', schemas[1]], ['vitals', schemas[2]], ['revise', schemas[3]]]) {
-    assert.ok(tools.has(name), name); assert.deepEqual(tools.get(name).inputSchema, schema);
+    assert.ok(tools.has(name), name); const actual = structuredClone(tools.get(name).inputSchema);
+    if (name === 'revise') {
+      assert.deepEqual(actual.properties.gardenRun, { type: 'object', properties: { runId: { type: 'string', minLength: 8, maxLength: 48 }, itemId: { type: 'string', minLength: 64, maxLength: 64 }, leaseToken: { type: 'string', minLength: 36, maxLength: 36 }, slot: { type: 'integer', minimum: 1, maximum: 3 } }, required: ['runId', 'itemId', 'leaseToken', 'slot'], additionalProperties: false });
+      assert.deepEqual(actual.properties.plan, { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 4096 }, revision: { type: 'string', minLength: 64, maxLength: 64 }, proposalId: { type: 'string', minLength: 1, maxLength: 80 }, go: { type: 'string', minLength: 1, maxLength: 500 } }, required: ['path', 'revision', 'proposalId', 'go'], additionalProperties: false });
+      delete actual.properties.gardenRun; delete actual.properties.plan;
+    }
+    assert.deepEqual(actual, schema);
   }
+  assert.equal(tools.get('garden').timeoutMs, 300000); assert.equal(tools.get('garden').maxOutputBytes, 1048576); assert.deepEqual(tools.get('garden').inputSchema.required, ['vault', 'action']); assert.equal(tools.get('garden').inputSchema.additionalProperties, false);
   assert.equal(tools.get('candidates').timeoutMs, 30000); assert.equal(tools.get('candidates').maxOutputBytes, 1048576);
   assert.deepEqual(tools.get('search').inputSchema.properties.mode, { type: 'string', enum: ['hybrid', 'lexical', 'semantic'] });
   assert.deepEqual(tools.get('refresh').inputSchema.properties.tier, { type: 'string', enum: ['structural', 'embed'] });
