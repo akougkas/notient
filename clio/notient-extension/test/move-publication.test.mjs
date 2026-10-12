@@ -152,3 +152,17 @@ test('move refuses unattended origin and revoked recovery while own role permits
   assert.equal(commandStatusSnapshot(f.directory, { vault: f.vault.id }).recovered[0].result, 'RECOVERY_BLOCKED_AUTHORIZATION');
   assert.deepEqual(snapshot(f.vault.path), before);
 });
+
+test('S8 move Git trailers carry the JSON destination while inverse trailers remain null', t => {
+  const f = moveFixture(t);
+  const destination = 'new/Café Two.md';
+  const moved = reviewedMove(f, { destination });
+  assert.equal(moved.ok, true, JSON.stringify(moved));
+  const message = git(f.vault.path, ['show', '-s', '--format=%B', moved.commit.oid]);
+  assert.equal(message.split('\n').find(line => line.startsWith('Notient-Destination: ')), `Notient-Destination: ${JSON.stringify(destination)}`);
+  const input = { requestId: 'destination-inverse', batch: 'destination-inverse', authorization: { origin: 'operator', request: 'Undo the attributed move.' }, opId: moved.operationId };
+  const preview = writeOperation('undo', { ...input, dryRun: true }, { directory: f.directory });
+  const inverse = writeOperation('undo', { ...input, planHash: preview.planHash }, { directory: f.directory });
+  assert.equal(inverse.ok, true, JSON.stringify(inverse));
+  assert.equal(git(f.vault.path, ['show', '-s', '--format=%B', inverse.commit.oid]).split('\n').find(line => line.startsWith('Notient-Destination: ')), 'Notient-Destination: null');
+});

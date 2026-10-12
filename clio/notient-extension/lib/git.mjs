@@ -181,7 +181,7 @@ export function createGitAdapter(vault, directory) {
       }
       record.git.tree = run(record, ['write-tree'], { env });
       const subject = `notient(${record.operation}): ${JSON.stringify(record.source ?? record.files.find(file => file.role === 'note')?.path)}`;
-      const message = `${subject}\n\nNotient-Operation: ${record.id}\nNotient-Vault: ${record.vaultId}\nNotient-Batch: ${record.batch}\nNotient-Origin: ${record.authorization.origin}\nNotient-Request: ${JSON.stringify(record.authorization.request)}\nNotient-Destination: null\nNotient-Reverts: ${JSON.stringify(record.undo.commits)}\n`;
+      const message = `${subject}\n\nNotient-Operation: ${record.id}\nNotient-Vault: ${record.vaultId}\nNotient-Batch: ${record.batch}\nNotient-Origin: ${record.authorization.origin}\nNotient-Request: ${JSON.stringify(record.authorization.request)}\nNotient-Destination: ${JSON.stringify(record.operation === 'move' ? record.destination : null)}\nNotient-Reverts: ${JSON.stringify(record.undo.commits)}\n`;
       const identity = { GIT_AUTHOR_NAME: 'Notient', GIT_AUTHOR_EMAIL: 'notient@localhost', GIT_COMMITTER_NAME: 'Notient', GIT_COMMITTER_EMAIL: 'notient@localhost', GIT_AUTHOR_DATE: record.createdAt, GIT_COMMITTER_DATE: record.createdAt };
       record.git.commit = run(record, ['commit-tree', record.git.tree, ...(record.git.baseHead ? ['-p', record.git.baseHead] : [])], { env: identity, input: message });
       chmodPrivate(filename);
