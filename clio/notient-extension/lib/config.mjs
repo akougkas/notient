@@ -7,6 +7,10 @@ import { contained, vaultId } from './paths.mjs';
 
 export const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 
+export function notConfigured() {
+  return { configured: false, unavailable: 'not-configured', setupHint: `Run node ${JSON.stringify(path.join(packageRoot, 'bin/setup.mjs'))} --vault <absolute-vault-path> as the operator.` };
+}
+
 export function dataDirectory(env = process.env) {
   if (env.XDG_STATE_HOME) return path.resolve(env.XDG_STATE_HOME, 'notient');
   const settings = JSON.parse(readFileSync(path.join(packageRoot, 'runtime/settings.json'), 'utf8'));

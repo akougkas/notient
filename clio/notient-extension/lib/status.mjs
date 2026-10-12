@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
-import { readConfig } from './config.mjs';
+import { readConfig, notConfigured } from './config.mjs';
 import { indexSummary, openIndex, probeFts5, unavailableFts5Coverage } from './index.mjs';
 import { journalStatus, spoolCount } from './journal.mjs';
 import { lastCommit } from './git.mjs';
@@ -31,6 +31,7 @@ function logTail(vault) {
 export function statusSnapshot(directory, { vault: selector, runtime = false } = {}) {
   const fts5 = probeFts5();
   const config = readConfig(directory);
+  if (!config.vaults.length) return { ...notConfigured(), stage: 1, fts5, nodeVersion: process.version, dataDirectory: directory, vaultCount: 0, vaults: [], spoolCount: spoolCount(directory) };
   const selected = selector ? config.vaults.filter(v => v.id === selector || v.path === selector) : config.vaults;
   if (selector && !selected.length) throw new Error('Vault is not registered. Ask the operator to run setup.');
   const vaults = selected.map(vault => {

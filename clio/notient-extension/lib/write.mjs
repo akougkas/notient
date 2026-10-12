@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, wr
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { currentFile, readNote, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
-import { selectVault, readConfig, dataDirectory } from './config.mjs';
+import { selectVault, readConfig, dataDirectory, notConfigured } from './config.mjs';
 import { createGitAdapter, preflightGit, git } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
 import { documentSpans, replaceBody, editFrontmatter, parseMarkdown, resolveLink } from './markdown.mjs';
@@ -342,6 +342,7 @@ export function commandStatusSnapshot(directory, input = {}) {
   let remainingBudget = 20;
   const config = readConfig(directory);
   const selected = input.vault ? config.vaults.filter(vault => vault.id === input.vault || vault.path === input.vault) : config.vaults;
+  if (!config.vaults.length) return { ...statusSnapshot(directory, input), stage: 2, recovered: [] };
   const recovery = new Map();
   for (const vault of selected) {
     try {
@@ -653,6 +654,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
   let recovery = [];
   try {
     input = inputFor(tool, raw);
+    if (!readConfig(directory).vaults.length) return { ...notConfigured(), tool, requestId: input.requestId, operationId: null, state: 'unavailable', commit: null, recovery: [] };
     vault = selectVault(input.vault, directory);
     const digest = requestDigest(vault, tool, input);
     const existing = () => {
