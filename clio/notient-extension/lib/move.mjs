@@ -359,7 +359,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       if (end < 0 || lineEnd >= 0 && end > lineEnd) {
         const labelEnd = closingBracket(text, i + 1, visible);
         const span = labelEnd >= 0 && text[labelEnd + 1] === '(' ? destinationAt(text, labelEnd + 2, text.length, true) : null;
-        const wrapper = span ? /^[ \t]*\]/.exec(text.slice(span.finish)) : null;
+        const wrapper = span ? /^[ \t\u00a0]*\]/.exec(text.slice(span.finish)) : null;
         const wrapperEnd = wrapper ? span.finish + wrapper[0].length - 1 : -1;
         if (wrapper && visible[wrapperEnd] && closingBracket(text, i, visible) === wrapperEnd) {
           add('markdown', span, span.finish); i = wrapperEnd; continue;
