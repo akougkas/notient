@@ -5,12 +5,9 @@ import { revision, refuse, validText } from './paths.mjs';
 export function provenanceWorkspace(bytes) {
   try {
     const fields = frontmatterFields(documentSpans(bytes));
-    const values = ['created_by', 'captured_at', 'workspace'].map(key => {
-      const field = fields.find(item => item.key === key);
-      if (!field || field.block || field.continuation.some(line => line.trim())) return null;
-      return stringTag(field.value);
-    });
-    return values.every(value => typeof value === 'string' && value.length) && Number.isFinite(Date.parse(values[1])) ? values[2] : null;
+    const field = fields.find(item => item.key === 'workspace');
+    if (!field || field.block || field.continuation.some(line => line.trim())) return null;
+    return stringTag(field.value);
   } catch { return null; }
 }
 

@@ -10,6 +10,22 @@ import { baseline } from './git-write.test.mjs';
 
 const provenance = workspace => `---\ncreated_by: "operator"\ncaptured_at: "2026-10-11T12:00:00.000Z"\nworkspace: ${JSON.stringify(workspace)}\n---\n`;
 
+test('T8 exact workspace alone matches authored notes and backfills the older provenance-dependent cache', t => {
+  const f = writerFixture(t);
+  put(f, 'Authored.md', '---\nworkspace: repo\n---\nquartz\n');
+  put(f, 'Incomplete.md', '---\nworkspace: "repo"\ncaptured_at: invalid\n---\nquartz\n');
+  put(f, 'Single quoted.md', "---\nworkspace: 'repo'\n---\nquartz\n");
+  put(f, 'Case.md', '---\nworkspace: Repo\n---\nquartz\n');
+  put(f, 'Prefix.md', '---\nworkspace: repo-extra\n---\nquartz\n');
+  put(f, 'Missing.md', '---\ncreated_by: clio\ncaptured_at: "2026-10-11T12:00:00.000Z"\n---\nquartz\n');
+  refreshIndex(f.vault, f.directory);
+  const expected = ['Authored.md', 'Incomplete.md', 'Single quoted.md'];
+  assert.deepEqual(searchIndex(f.vault, f.directory, { query: 'quartz', workspace: 'repo', limit: 20 }).hits.map(hit => hit.path).sort(), expected);
+  const db = openIndex(f.directory, f.vault, true);
+  db.exec("DELETE FROM meta WHERE key='workspaceRule'; UPDATE note_workspaces SET workspace=NULL"); db.close();
+  assert.deepEqual(searchIndex(f.vault, f.directory, { query: 'quartz', workspace: 'repo', limit: 20 }).hits.map(hit => hit.path).sort(), expected);
+});
+
 test('R9 workspace exact filter runs before ranking and the 1000-candidate ceiling', t => {
   const f = writerFixture(t);
   for (let i = 0; i < 1001; i++) put(f, `Other/${i}.md`, provenance('other') + 'quartz\n');

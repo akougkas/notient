@@ -80,7 +80,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "Exact capture provenance workspace, filtered before ranking."
+              "description": "Exact case-sensitive workspace frontmatter property, filtered before ranking."
             },
             "limit": {
               "type": "integer",

@@ -75,6 +75,9 @@ export function openIndex(directory, vault, writable = false) {
         );
         PRAGMA user_version = 1;
       `);
+      if (db.prepare("SELECT value FROM meta WHERE key='workspaceRule'").get()?.value !== 'property-v1') {
+        db.exec("BEGIN IMMEDIATE; DELETE FROM note_workspaces; INSERT OR REPLACE INTO meta VALUES ('workspaceRule','property-v1'); COMMIT");
+      }
     } else db.exec('PRAGMA query_only = ON;');
     return db;
   } catch (error) {
