@@ -8,6 +8,7 @@ import { readNote, revision, currentFile } from './paths.mjs';
 import { readBlob } from './journal.mjs';
 import { parseMarkdown, resolveLink } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
+import { provenanceWorkspace } from './capture.mjs';
 
 export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
 
@@ -62,6 +63,9 @@ export function openIndex(directory, vault, writable = false) {
         CREATE TABLE IF NOT EXISTS tags (
           path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(path, tag)
         );
+        CREATE TABLE IF NOT EXISTS note_workspaces (
+          path TEXT PRIMARY KEY REFERENCES notes(path) ON DELETE CASCADE, workspace TEXT
+        );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS own_revisions (path TEXT NOT NULL, revision TEXT, operation TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(path, operation));
         CREATE TABLE IF NOT EXISTS served (
@@ -99,14 +103,14 @@ export function refreshIndex(vault, directory, { force = false } = {}) {
   const errors = [];
   try {
     db.exec('BEGIN IMMEDIATE');
-    const previous = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
+    const previous = new Map(db.prepare('SELECT n.*, w.path AS workspaceIndexed FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path').all().map(row => [row.path, row]));
     const present = new Set(scan.notes.map(note => note.path));
     for (const oldPath of previous.keys()) {
       if (!present.has(oldPath)) { deleteNote(db, oldPath); deleted++; }
     }
     for (const entry of scan.notes) {
       const old = previous.get(entry.path);
-      if (!force && old && sameStat(old, entry.stat)) { unchanged++; continue; }
+      if (!force && old?.workspaceIndexed && sameStat(old, entry.stat)) { unchanged++; continue; }
       let content;
       let parsed;
       try {
@@ -114,6 +118,7 @@ export function refreshIndex(vault, directory, { force = false } = {}) {
         hashed++;
         if (old?.revision === content.revision) {
           db.prepare('UPDATE notes SET size = ?, mtime = ?, ctime = ? WHERE path = ?').run(content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, entry.path);
+          db.prepare('INSERT OR REPLACE INTO note_workspaces VALUES (?, ?)').run(entry.path, provenanceWorkspace(content.bytes));
           unchanged++;
           continue;
         }
@@ -125,6 +130,7 @@ export function refreshIndex(vault, directory, { force = false } = {}) {
       }
       deleteNote(db, entry.path);
       db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(entry.path, content.revision, content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      db.prepare('INSERT INTO note_workspaces VALUES (?, ?)').run(entry.path, provenanceWorkspace(content.bytes));
       const blockIds = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(entry.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
       for (const chunk of parsed.chunks) {
         const id = db.prepare('INSERT INTO chunks(path, block, heading, source, passage) VALUES (?, ?, ?, ?, ?)').run(entry.path, blockIds[chunk.block], JSON.stringify(chunk.headingPath), JSON.stringify(chunk.source), chunk.passage).lastInsertRowid;
@@ -186,6 +192,7 @@ export function repairCommittedIndex(vault, directory, record) {
       const bytes = readBlob(directory, vault, record.id, file.after);
       const parsed = parseMarkdown(bytes.toString('utf8'), file.path);
       db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(file.path, file.after, current.stat.size, current.stat.mtimeMs, current.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      db.prepare('INSERT INTO note_workspaces VALUES (?, ?)').run(file.path, provenanceWorkspace(bytes));
       const blocks = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(file.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
       for (const chunk of parsed.chunks) {
         const id = db.prepare('INSERT INTO chunks(path, block, heading, source, passage) VALUES (?, ?, ?, ?, ?)').run(file.path, blocks[chunk.block], JSON.stringify(chunk.headingPath), JSON.stringify(chunk.source), chunk.passage).lastInsertRowid;
@@ -207,10 +214,11 @@ export function repairCommittedIndex(vault, directory, record) {
   finally { db.close(); }
 }
 
-export function searchIndex(vault, directory, { query, limit = 10, sourcePath }) {
+export function searchIndex(vault, directory, { query, limit = 10, sourcePath, workspace }) {
   const started = performance.now();
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('Search limit must be between 1 and 20.');
   if (typeof query !== 'string' || query.length > 4000) throw new Error('Search query must contain at most 4000 characters.');
+  if (workspace !== undefined && (typeof workspace !== 'string' || !workspace.length || workspace.length > 4096)) throw new Error('Workspace must contain between 1 and 4096 characters.');
   const allTerms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
   const terms = allTerms.slice(0, 32);
   if (!terms.length) throw new Error('Search query must include a word or number.');
@@ -226,6 +234,7 @@ export function searchIndex(vault, directory, { query, limit = 10, sourcePath })
   if (!existsSync(indexPath(directory, vault))) throw new Error('Index is missing. Run refresh for this vault first.');
   const db = openIndex(directory, vault, true);
   try {
+    if (workspace !== undefined && db.prepare('SELECT count(*) AS count FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path WHERE w.path IS NULL').get().count) refreshIndex(vault, directory);
     const match = terms.map(term => `"${term}"`).join(' OR ');
     const hits = [];
     const stale = new Set();
@@ -234,7 +243,8 @@ export function searchIndex(vault, directory, { query, limit = 10, sourcePath })
     const rows = db.prepare(`SELECT c.*, n.revision, bm25(chunks_fts) AS score
       FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN notes n ON n.path = c.path JOIN blocks b ON b.id = c.block
       WHERE chunks_fts MATCH ? AND b.kind != 'heading' AND (? IS NULL OR c.path != ?)
-      ORDER BY score, c.path, c.id LIMIT 1000`).iterate(match, sourcePath ?? null, sourcePath ?? null);
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM note_workspaces w WHERE w.path=n.path AND w.workspace=?))
+      ORDER BY score, c.path, c.id LIMIT 1000`).iterate(match, sourcePath ?? null, sourcePath ?? null, workspace ?? null, workspace ?? null);
     for (const row of rows) {
       examined++;
       if (!files.has(row.path)) {

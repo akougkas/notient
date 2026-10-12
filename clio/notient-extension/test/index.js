@@ -13,3 +13,4 @@ import './review-fixes.test.mjs';
 import './cancelled-undo.test.mjs';
 import './capture-admission.test.mjs';
 import './authority-recheck.test.mjs';
+import './workspace-search.test.mjs';
