@@ -47,10 +47,10 @@ export function semanticArm(vault, directory, profile, queryVector, input, cap, 
 }
 
 export function fuseArms(semantic, lexical, mode = 'hybrid') {
-  if (mode === 'lexical' || !semantic?.available) return lexical?.rows ?? [];
-  if (mode === 'semantic' || !lexical?.available) return semantic.rows;
+  if (mode === 'lexical') return lexical?.rows ?? [];
+  if (mode === 'semantic') return semantic?.rows ?? [];
   const fused = new Map();
-  for (const [arm, weight] of [[semantic, 0.7], [lexical, 0.3]]) arm.rows.forEach((row, index) => {
+  for (const [arm, weight] of [[semantic, 0.7], [lexical, 0.3]]) if (arm?.available) arm.rows.forEach((row, index) => {
     const previous = fused.get(row.id);
     if (previous && (previous.revision !== row.revision || previous.path !== row.path || previous.passage !== row.passage)) return;
     if (!previous) fused.set(row.id, { ...row, score: 0 });
@@ -119,7 +119,7 @@ export async function searchHybrid(vault, directory, input, { now = () => perfor
   for (const row of ranked) {
     if (seen.has(row.path)) continue;
     seen.add(row.path);
-    try { const evidence = evidenceFor(vault, row); const score = row.cost !== undefined && !(mode === 'hybrid' && semantic?.available && lexical?.available) ? row.cost : row.score; hits.push({ ...evidence, score, evidence: 'vault text; unverified', memory: vault.role === 'own' ? 'unverified memory' : null }); }
+    try { const evidence = evidenceFor(vault, row); const score = mode === 'lexical' && row.cost !== undefined ? row.cost : row.score; hits.push({ ...evidence, score, evidence: 'vault text; unverified', memory: vault.role === 'own' ? 'unverified memory' : null }); }
     catch { stale.add(row.path); continue; }
     if (hits.length === limit) break;
   }

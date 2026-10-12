@@ -24,13 +24,16 @@ test('separation covers fewer than ten, constant tails, exact z boundary and ins
   assert.deepEqual(significantTerms(normalizedTerms('THE ＱＵＡＲＴＺ quartz and xx AMBER')), ['quartz', 'amber']);
 });
 
-test('RRF uses exact weights and one-based ranks by chunk with absent contributions zero', () => {
+test('E10 RRF uses exact weights and one-based ranks by chunk with absent contributions zero', () => {
   const a = { id: 1, path: 'A.md', ordinal: 0, revision: 'a', passage: 'a', score: 0.9 };
   const b = { id: 2, path: 'B.md', ordinal: 0, revision: 'b', passage: 'b', score: 0.8 };
   const c = { id: 3, path: 'C.md', ordinal: 0, revision: 'c', passage: 'c', score: 1 };
   const result = fuseArms({ available: true, rows: [a, b] }, { available: true, rows: [c, a] });
   assert.equal(result.find(row => row.id === 1).score, 0.7 / 61 + 0.3 / 62); assert.equal(result.find(row => row.id === 2).score, 0.7 / 62); assert.equal(result.find(row => row.id === 3).score, 0.3 / 61);
-  assert.deepEqual(fuseArms(null, { available: true, rows: [a] }), [a]);
+  assert.deepEqual(fuseArms(null, { available: true, rows: [a] }), [{ ...a, score: 0.3 / 61 }]);
+  assert.deepEqual(fuseArms({ available: true, rows: [a] }, null), [{ ...a, score: 0.7 / 61 }]);
+  assert.deepEqual(fuseArms(null, { available: true, rows: [a] }, 'lexical'), [a]);
+  assert.deepEqual(fuseArms({ available: true, rows: [a] }, null, 'semantic'), [a]);
 });
 
 test('lexical AND is precise, significant OR fires only at zero rows, and diagnostic labels do not depend on limit one', async t => {
@@ -116,6 +119,12 @@ test('E9 a late successful query cannot allocate a fresh twenty-five-second scan
   await refreshVectors(f.vault, f.directory, { tier: 'embed' });
   const result = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' }, { budgetMs: 200, now: () => clock });
   assert.equal(result.reason, 'embedding_unavailable'); assert.equal(result.separation.semantic, null); assert.equal(result.hits[0].path, 'Source.md');
+});
+
+test('E10 hybrid lexical fallback reports weighted ranks while explicit lexical keeps raw BM25', async t => {
+  const f = await embeddingFixture(t); const hybrid = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' });
+  assert.equal(hybrid.reason, 'embedding_building'); assert.equal(hybrid.hits[0].score, 0.3 / 61);
+  const lexical = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'lexical' }); assert.ok(lexical.hits[0].score < 0);
 });
 
 test('int8 exhaustive top ten agrees with the float32 reference on 200 deterministic fixture queries', () => {
