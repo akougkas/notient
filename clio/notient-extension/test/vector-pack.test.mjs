@@ -65,7 +65,7 @@ test('pack publication exposes only fsynced committed slots and records private 
   assert.deepEqual(snapshot(f.vault.path), before);
 });
 
-for (const operation of ['publish', 'rebuild']) for (const barrier of ['afterAppend', 'afterFsync', 'afterSQLCommit']) test(`pack process death ${operation} ${barrier} leaves a bounded recoverable prefix`, t => {
+for (const operation of ['publish', 'rebuild', 'force']) for (const barrier of ['afterAppend', 'afterFsync', 'afterSQLCommit']) test(`pack process death ${operation} ${barrier} leaves a bounded recoverable prefix`, t => {
   const f = fixture(t); publishAll(f); const before = pack(f); const oldBytes = readFileSync(before.filename); const vaultBefore = snapshot(f.vault.path);
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./vector-crash.mjs', import.meta.url)), operation, barrier, f.directory, f.vault.id], { encoding: 'utf8' });
   assert.equal(child.signal, 'SIGKILL', child.stderr);
@@ -82,7 +82,7 @@ for (const operation of ['publish', 'rebuild']) for (const barrier of ['afterApp
     assert.throws(() => reader.vector({ ...reader.metadata([...reader.chunks()][0]), slot: after.pack_slots }), error => error.code === 'VECTOR_PACK_INVALID'); }
   finally { reader.close(); }
   if (operation === 'publish' && barrier !== 'afterSQLCommit') { const selected = chunks(f).slice(0, 1); publishVectors(f.vault, f.directory, f.profile, selected, [[0, 0, 1]]); assert.equal(pack(f).pack_slots, 3); assert.equal(statSync(pack(f).filename).size, 9); }
-  else if (operation === 'rebuild' && barrier !== 'afterSQLCommit') { const rebuilt = rebuildVectorGeneration(f.vault, f.directory, f.profile); assert.equal(rebuilt.generation, before.generation + 2); }
+  else if (operation !== 'publish' && barrier !== 'afterSQLCommit') { const rebuilt = rebuildVectorGeneration(f.vault, f.directory, f.profile); assert.equal(rebuilt.generation, before.generation + 2); }
   assert.deepEqual(snapshot(f.vault.path), vaultBefore);
 });
 

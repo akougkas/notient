@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { openSync, writeSync, closeSync } from 'node:fs';
+import { openSync, writeSync, closeSync, unlinkSync, truncateSync, statSync } from 'node:fs';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 import { embeddingStub, profile } from './embedding-helpers.mjs';
 import { atomicJson, readConfig, indexPath } from '../lib/config.mjs';
@@ -139,4 +139,27 @@ test('E3 force rebuild validates reused bytes and recomputes a zero vector inste
   const reader = openVectorSnapshot(f.vault, f.directory, f.profile);
   try { for (const chunk of reader.chunks()) assert.ok(reader.vector(reader.metadata(chunk)).some(value => value !== 0)); }
   finally { reader.close(); }
+});
+
+for (const damage of ['deleted', 'truncated', 'full']) test(`E5 force refresh replaces a ${damage} old pack without publishing into it`, async t => {
+  const f = await embeddingFixture(t); await refreshVectors(f.vault, f.directory, { tier: 'embed' }); const requests = f.stub.requests.length;
+  const db = openIndex(f.directory, f.vault, true); const space = db.prepare('SELECT * FROM vector_spaces').get(); const filename = path.join(path.dirname(indexPath(f.directory, f.vault)), space.pack_file);
+  if (damage === 'deleted') unlinkSync(filename);
+  else if (damage === 'truncated') truncateSync(filename, 1);
+  else { truncateSync(filename, 1024 * 1024 * 1024); db.prepare('UPDATE vector_spaces SET pack_slots=?').run(512 * 1024 * 1024); put(f, 'Target.md', 'New target evidence.\n'); }
+  db.close(); if (damage === 'full') refreshIndex(f.vault, f.directory);
+  const before = snapshot(f.vault.path); const result = await refreshVectors(f.vault, f.directory, { tier: 'embed', force: true });
+  assert.equal(result.embedding.state, 'ready'); assert.equal(result.generation.slots, 2); assert.equal(result.embedding.embeddedThisCall, damage === 'full' ? 1 : 2); assert.equal(f.stub.requests.length, requests + 1);
+  const reader = openVectorSnapshot(f.vault, f.directory, f.profile); assert.equal(reader.space.pack_slots, 2); assert.equal(statSync(path.join(path.dirname(filename), reader.space.pack_file)).size, 4); reader.close();
+  if (damage !== 'deleted') assert.equal(statSync(filename).size, damage === 'full' ? 1024 * 1024 * 1024 : 1);
+  assert.deepEqual(snapshot(f.vault.path), before);
+});
+
+test('E5 a budgeted force build publishes no partial generation and reports its uncommitted missing allowance', async t => {
+  const f = await embeddingFixture(t, { batch: 1 }); await refreshVectors(f.vault, f.directory, { tier: 'embed' });
+  const db = openIndex(f.directory, f.vault); const old = db.prepare('SELECT * FROM vector_spaces').get(); db.close(); unlinkSync(path.join(path.dirname(indexPath(f.directory, f.vault)), old.pack_file));
+  let clock = 0; const adapter = { describe: () => ({ spaceId: old.space_id }), async embed(texts) { clock += 600; return { vectors: texts.map(() => [1, 0]), model: f.profile.model, responseModel: f.profile.responseModel, dimension: 2 }; } };
+  const result = await refreshVectors(f.vault, f.directory, { tier: 'embed', force: true, budgetMs: 1000 }, { now: () => clock, adapter }); assert.equal(result.reason, 'budget_exhausted'); assert.equal(result.embedding.embeddedThisCall, 0); assert.equal(result.embedding.remaining, 2); assert.equal(result.generation, null);
+  const after = openIndex(f.directory, f.vault); assert.equal(after.prepare('SELECT generation FROM vector_spaces').get().generation, old.generation); after.close();
+  const resumed = await refreshVectors(f.vault, f.directory, { tier: 'embed', force: true }); assert.equal(resumed.embedding.state, 'ready'); assert.equal(resumed.embedding.embeddedThisCall, 2);
 });

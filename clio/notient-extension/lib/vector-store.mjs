@@ -212,8 +212,8 @@ export function rebuildVectorGeneration(vault, directory, profile, { barrier = (
         if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector generation rebuild exceeded its deadline.', [], true);
         if (!chunk.eligible) continue;
         const row = snapshot.metadata(chunk); if (!row) refuse('VECTOR_SOURCE_MISSING', 'Complete eligible vectors are required before rebuilding a generation.');
-        snapshot.vector(row);
         const packed = { bytes: snapshot.packed(row), scale: row.scale };
+        reconstructedVector(packed.bytes, packed.scale, profile.dimension);
         if ((slots + 1) * profile.dimension > maxPackBytes) refuse('VECTOR_PACK_LIMIT', 'The rebuilt active pack cannot exceed 1 GiB.');
         const retained = { ...row, slot: slots++, scale: packed.scale }; memory.add(retained); metadata.push(retained);
         writeAll(fd, packed.bytes, retained.slot * profile.dimension);
@@ -230,3 +230,79 @@ export function rebuildVectorGeneration(vault, directory, profile, { barrier = (
     finally { if (fd !== undefined) closeSync(fd); snapshot.close(); db?.close(); }
   });
 }
+
+function currentProfile(vault, directory, profile) {
+  const config = readConfig(directory);
+  if (!config.vaults.find(value => value.id === vault.id && value.path === vault.path)?.embeddings || JSON.stringify(config.embeddings) !== JSON.stringify(profile)) refuse('EMBEDDING_CONFIG_CHANGED', 'Embedding configuration changed during generation build.', [], true);
+}
+
+export function beginGenerationBuild(vault, directory, profile, { deadline = Infinity, now = () => performance.now(), maxBufferBytes = 64 * 1024 * 1024 } = {}) {
+  return withIndexWriter(vault, directory, () => {
+    currentProfile(vault, directory, profile);
+    const writer = openIndex(directory, vault, true); let space;
+    try { space = spaceRow(writer, profile); } finally { writer.close(); }
+    if (space.state === 'stale-model') refuse('EMBEDDING_STALE_MODEL', 'The operator must re-probe the stale profile before rebuilding.');
+    const created = nextPack(directory, vault, space); let reader; let db;
+    try {
+      try { reader = openVectorSnapshot(vault, directory, profile, { allowBuilding: true }); }
+      catch (error) { if (!['VECTOR_PACK_INVALID', 'VECTOR_PACK_UNAVAILABLE', 'ENOENT'].includes(error.code)) throw error; }
+      db = reader?.db ?? openIndex(directory, vault); if (!reader) db.exec('BEGIN');
+      const items = []; const memory = scanBudget('VECTOR_REBUILD_LIMIT', maxBufferBytes); let reused = 0;
+      for (const chunk of vectorChunks(db, profile)) {
+        if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector generation build exceeded its deadline.', [], true);
+        if (!chunk.eligible) continue;
+        if ((items.length + 1) * profile.dimension > maxPackBytes) refuse('VECTOR_PACK_LIMIT', 'The fresh active generation cannot exceed 1 GiB.');
+        const item = { chunk, slot: items.length, scale: null };
+        try {
+          const row = reader?.metadata(chunk);
+          if (row) { const bytes = reader.packed(row); reconstructedVector(bytes, row.scale, profile.dimension); writeAll(created.fd, bytes, item.slot * profile.dimension); item.scale = row.scale; reused++; }
+        } catch (error) { if (!['VECTOR_INVALID', 'VECTOR_PACK_INVALID'].includes(error.code)) throw error; }
+        memory.add(item); items.push(item);
+      }
+      return { ...created, items, reused, baseGeneration: space.generation, profile, closed: false };
+    } catch (error) { closeSync(created.fd); throw error; }
+    finally { if (reader) reader.close(); else { if (db?.isTransaction) db.exec('ROLLBACK'); db?.close(); } }
+  });
+}
+
+export function writeGenerationBatch(build, items, vectors) {
+  if (build.closed || items.length !== vectors.length || items.length > 32) refuse('VECTOR_INVALID', 'A fresh generation requires aligned bounded vector batches.');
+  const packed = vectors.map(vector => quantizeVector(vector, build.profile.dimension));
+  for (const [index, item] of items.entries()) { if (build.items[item.slot] !== item || item.scale !== null) refuse('VECTOR_INVALID', 'A generation batch differs from its frozen slots.'); writeAll(build.fd, packed[index].bytes, item.slot * build.profile.dimension); item.scale = packed[index].scale; }
+}
+
+export function finishGenerationBuild(vault, directory, profile, build, { barrier = () => {}, sync = syncDirectory, deadline = Infinity, now = () => performance.now() } = {}) {
+  return withIndexWriter(vault, directory, () => {
+    currentProfile(vault, directory, profile);
+    if (build.closed || build.items.some(item => !Number.isFinite(item.scale) || item.scale <= 0)) refuse('VECTOR_SOURCE_MISSING', 'Every fresh-generation slot must have a valid vector before publication.');
+    if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector publication exceeded its deadline.', [], true);
+    barrier('afterAppend'); fsyncSync(build.fd); const durable = sync(build.root); barrier('afterFsync');
+    const db = openIndex(directory, vault, true);
+    try {
+      db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;');
+      const space = spaceRow(db, profile);
+      if (space.generation !== build.baseGeneration) refuse('EMBEDDING_CORPUS_CHANGED', 'Another generation was published during this build; retry explicitly.', [], true);
+      const planned = new Map(build.items.map(item => [item.chunk.id, item])); let count = 0; let previousPath; let previousRevision;
+      for (const chunk of vectorChunks(db, profile)) {
+        if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector publication verification exceeded its deadline.', [], true);
+        if (!chunk.eligible) continue;
+        const item = planned.get(chunk.id);
+        if (!item || item.chunk.path !== chunk.path || item.chunk.revision !== chunk.revision || item.chunk.textHash !== chunk.textHash) refuse('EMBEDDING_CORPUS_CHANGED', 'Eligible chunks changed during the fresh-generation build; refresh and retry.', [chunk.path], true);
+        if (previousPath !== chunk.path) { previousPath = chunk.path; previousRevision = readNote(vault.path, chunk.path).revision; }
+        if (previousRevision !== chunk.revision) refuse('EMBEDDING_CORPUS_CHANGED', 'A raw note changed during the fresh-generation build; refresh and retry.', [chunk.path], true);
+        count++;
+      }
+      if (count !== build.items.length) refuse('EMBEDDING_CORPUS_CHANGED', 'Eligible chunks disappeared during the fresh-generation build; refresh and retry.', [], true);
+      db.prepare('DELETE FROM vec_meta WHERE space_id=?').run(build.space.space_id);
+      const insert = db.prepare('INSERT INTO vec_meta VALUES (?,?,?,?,?,?,?,?,?)');
+      for (const item of build.items) insert.run(build.space.space_id, item.chunk.id, item.chunk.path, item.chunk.revision, item.chunk.textHash, item.slot, item.scale, profile.model, profile.dimension);
+      build.space.pack_slots = count;
+      db.prepare('UPDATE vector_spaces SET pack_file=?,pack_slots=?,generation=? WHERE space_id=?').run(build.space.pack_file, count, build.space.generation, build.space.space_id);
+      activate(db, profile, build.space); db.exec('COMMIT'); barrier('afterSQLCommit');
+      return { generation: build.space.generation, slots: count, reused: build.reused, warnings: durable ? [] : [{ code: 'DIRECTORY_FSYNC_UNAVAILABLE', message: 'The vector file is synced; directory fsync is unavailable.' }] };
+    } catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error; }
+    finally { db.close(); }
+  });
+}
+
+export function closeGenerationBuild(build) { if (build && !build.closed) { build.closed = true; closeSync(build.fd); } }
