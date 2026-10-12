@@ -31,3 +31,4 @@ import './relationship-publication.test.mjs';
 import './stage4-contract.test.mjs';
 import './embedding-transport.test.mjs';
 import './vector-pack.test.mjs';
+import './embedding-candidates.test.mjs';
