@@ -74,6 +74,22 @@ test('V6 code and comment Setext lookalikes do not end the live section and unce
   }
 });
 
+test('V7 new Related uses whole-file dominant separators and first-separator ties without normalizing bytes', () => {
+  for (const [before, newline] of [
+    ['first\nsecond\nthird\nfourth\nfifth\r\nsixth\r\n', '\n'],
+    ['first\r\nsecond\r\nthird\r\nfourth\r\nfifth\nsixth\n', '\r\n'],
+    ['a\nb\nc\nd\r\ne\n', '\n'],
+    ['first\r\nsecond\nthird\r\nfourth\n', '\r\n'],
+    ['first\nsecond\r\nthird\nfourth\r\n', '\n'],
+    ['\uFEFFNo separators', '\n'],
+  ]) {
+    const terminal = before.endsWith('\n');
+    const expected = before + (terminal ? newline : newline + newline) + ['## Related', '', '- [[Target]]'].join(newline) + (terminal ? newline : '');
+    const plan = planLink(scan(before), 'Source.md', [edge]); assert.deepEqual(plan.bytes, Buffer.from(expected));
+    assert.deepEqual(plan.bytes.subarray(0, Buffer.byteLength(before)), Buffer.from(before)); assert.deepEqual(planLink(scan(expected), 'Source.md', [edge]).bytes, plan.bytes);
+  }
+});
+
 for (const [name, before, expected] of goldens) test(`link writeback ${name}`, () => {
   const inventory = scan(before); const plan = planLink(inventory, 'Source.md', [edge]);
   assert.deepEqual(plan.bytes, Buffer.from(expected)); assert.deepEqual(applySplices(Buffer.from(before), plan.splices), plan.bytes);

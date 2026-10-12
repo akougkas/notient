@@ -106,7 +106,7 @@ function convention(document, anchors = []) {
 function insertion(layout, bullets, hadTerminal, source) {
   const { document, related, end, headings, tokenized } = layout;
   if (!related) {
-    const newline = convention(document, document.lines.slice(-2));
+    const newline = convention(document);
     const trailing = /(?:\r?\n)*$/.exec(document.text)[0];
     const separation = !document.text.length || document.text.length === document.bom ? '' : trailing.length ? /\r?\n\r?\n$/.test(trailing) ? '' : newline : newline + newline;
     return { offset: document.text.length, replacement: `${separation}## Related${newline}${newline}${bullets.join(newline)}${hadTerminal || document.text.length === document.bom ? newline : ''}` };
