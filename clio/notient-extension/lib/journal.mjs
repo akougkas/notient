@@ -54,7 +54,7 @@ export function validateRecord(record, vault) {
   const required = ['version', 'id', 'vaultId', 'vaultPath', 'tool', 'operation', 'requestDigest', 'batch', 'authorization', 'createdAt', 'updatedAt', 'state', 'planHash', 'source', 'destination', 'reads', 'inventoryHash', 'files', 'applyOrder', 'createdDirectories', 'git', 'log', 'undo', 'undoneBy', 'indexState', 'durability', 'conflicts', 'timings', 'error'];
   if (!record || required.some(key => !Object.hasOwn(record, key)) || ![1, 2].includes(record.version) || !requestIdPattern.test(record.id) || record.vaultId !== vault.id || record.vaultPath !== vault.path || !states.includes(record.state) || !hashPattern.test(record.requestDigest) || !hashPattern.test(record.planHash) || !Array.isArray(record.files) || record.files.length > 101) refuse('JOURNAL_CORRUPT', 'The operation record has an invalid schema.');
   if (!['capture', 'revise', 'undo'].includes(record.tool) || !['capture', 'replace', 'frontmatter', 'move', 'undo', ...(record.version === 2 ? ['link', 'relate'] : [])].includes(record.operation) || !['operator', 'clio', 'unattended'].includes(record.authorization?.origin) || typeof record.authorization.request !== 'string' || !record.authorization.request.trim()) refuse('JOURNAL_CORRUPT', 'The recorded authority or operation is invalid.');
-  if (record.operation === 'move' && !record.intentSet || record.intentSet && (typeof record.intentSet.prepared !== 'boolean' || record.intentSet.manifestHash !== structuralManifest(record) || !['operator', 'own'].includes(record.roleAtIntent) || record.files.some(file => typeof file.intentId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.intentId)) || new Set(record.files.map(file => file.intentId)).size !== record.files.length)) refuse('JOURNAL_CORRUPT', 'Structural publication intents are invalid.');
+  if ((record.operation === 'move' || record.version === 2) && !record.intentSet || record.intentSet && (typeof record.intentSet.prepared !== 'boolean' || record.intentSet.manifestHash !== structuralManifest(record) || !['operator', 'own'].includes(record.roleAtIntent) || record.files.some(file => typeof file.intentId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.intentId)) || new Set(record.files.map(file => file.intentId)).size !== record.files.length)) refuse('JOURNAL_CORRUPT', 'Structural publication intents are invalid.');
   if (!Array.isArray(record.applyOrder) || new Set(record.applyOrder).size !== record.files.length || record.files.some(file => !record.applyOrder.includes(file.path))) refuse('JOURNAL_CORRUPT', 'The recorded publication order is invalid.');
   const seen = new Set();
   for (const file of record.files) {
@@ -225,11 +225,11 @@ export function persistIntent(directory, vault, record, blobs, sync = syncDirect
   saveRecord(directory, vault, record, sync);
 }
 
-export function listRecords(directory, vault, verifyBlobs = true) {
+export function listRecords(directory, vault, verifyBlobs = true, { legacyObservations = false } = {}) {
   const journal = journalRoot(directory, vault);
   if (existsSync(journal)) {
     for (const entry of readdirSync(journal, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.json')) refuse('JOURNAL_CORRUPT', 'Legacy journal records are observable but cannot authorize recovery or new writes.');
+      if (!legacyObservations && entry.isFile() && entry.name.endsWith('.json')) refuse('JOURNAL_CORRUPT', 'Legacy journal records are observable but cannot authorize recovery or new writes.');
     }
   }
   const root = path.join(journal, 'ops');

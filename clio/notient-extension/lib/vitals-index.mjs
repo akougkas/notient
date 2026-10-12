@@ -21,7 +21,7 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
   const result = new Map(rows.map(row => [row.path, { at: Math.min(now, row.mtime), fallback: false }]));
   if (!rows.length) return result;
   try {
-    const records = listRecords(directory, vault, false).filter(record => record.git.commit && record.state !== 'aborted');
+    const records = listRecords(directory, vault, false, { legacyObservations: true }).filter(record => record.git.commit && record.state !== 'aborted');
     if (!records.length) return result;
     const order = budget.call(vault.path, ['rev-list', '--first-parent', 'HEAD']).split('\n');
     const positions = new Map(order.map((oid, index) => [oid, index]));
@@ -55,7 +55,7 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
         if (head === null) break;
       }
     }
-  } catch (error) { if (strictBudget && error.code === 'GIT_TIMEOUT') throw error; for (const value of result.values()) value.fallback = true; }
+  } catch (error) { if (error.code === 'JOURNAL_CORRUPT' || strictBudget && error.code === 'GIT_TIMEOUT') throw error; for (const value of result.values()) value.fallback = true; }
   return result;
 }
 

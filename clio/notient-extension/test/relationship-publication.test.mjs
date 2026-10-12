@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, utimesSync, unlinkSync } from 'node:fs';
+import { readFileSync, utimesSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { writerFixture, put, snapshot } from './write-helpers.mjs';
 import { baseline } from './git-write.test.mjs';
 import { goldens } from './link-writeback.test.mjs';
 import { writeOperation, recoverVault } from '../lib/write.mjs';
-import { readRecord, saveRecord, freezeIntentSet, journalRoot, validateRecord } from '../lib/journal.mjs';
+import { readRecord, saveRecord, freezeIntentSet, journalRoot, validateRecord, operationDirectory } from '../lib/journal.mjs';
 import { git, normalIndexEntries } from '../lib/git.mjs';
 import { revision } from '../lib/paths.mjs';
 import { refreshIndex, openIndex } from '../lib/index.mjs';
@@ -133,6 +133,27 @@ test('version two rejects altered admission ages ranges and unknown versions bef
     const altered = structuredClone(record); change(altered); assert.throws(() => validateRecord(altered, f.vault), error => error.code === 'JOURNAL_CORRUPT');
   }
   assert.deepEqual(snapshot(f.vault.path), vault); assert.deepEqual(snapshot(f.directory), state);
+});
+
+test('V12 a published version two record without its manifest refuses retry and rebuild', t => {
+  const f = fixture(t, 'Body.\n'); const input = request(f, 'link', 'missing-v2-manifest');
+  const written = writeOperation('revise', input, options(f)); assert.equal(written.ok, true, JSON.stringify(written));
+  const record = readRecord(f.directory, f.vault, written.operationId);
+  const altered = structuredClone(record); delete altered.intentSet; altered.link.admitted[0].rationale = 'Unverified replacement';
+  assert.throws(() => validateRecord(altered, f.vault), error => error.code === 'JOURNAL_CORRUPT');
+  for (const operation of ['capture', 'replace', 'frontmatter', 'move', 'undo', 'link', 'relate']) {
+    const missing = structuredClone(record); delete missing.intentSet; missing.operation = operation;
+    if (operation !== 'link') missing.link = null;
+    if (operation === 'relate') missing.relate = { target: 'Target.md', relation: 'supports' };
+    assert.throws(() => validateRecord(missing, f.vault), error => error.code === 'JOURNAL_CORRUPT', operation);
+  }
+  writeFileSync(path.join(operationDirectory(f.directory, f.vault, record.id), 'record.json'), JSON.stringify(altered));
+  const vault = snapshot(f.vault.path); const journal = snapshot(path.join(f.directory, 'journal'));
+  const retry = writeOperation('revise', input, options(f)); assert.equal(retry.ok, false); assert.equal(retry.error.code, 'JOURNAL_CORRUPT');
+  unlinkSync(indexPath(f.directory, f.vault));
+  assert.throws(() => refreshIndex(f.vault, f.directory), error => error.code === 'JOURNAL_CORRUPT');
+  const db = openIndex(f.directory, f.vault); assert.equal(db.prepare('SELECT count(*) AS n FROM note_vitals').get().n, 0); db.close();
+  assert.deepEqual(snapshot(f.vault.path), vault); assert.deepEqual(snapshot(path.join(f.directory, 'journal')), journal);
 });
 
 test('mixed version originals batch undo through one exact inverse including link and relate', t => {
