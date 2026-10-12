@@ -41,3 +41,49 @@ block 7c11b813: force refresh cannot recover a broken or full old pack (item 5),
 block 738e1bdf: query/pack vector-space mismatch during configuration change (item 8), missing shared command deadline (item 9), and raw scores in hybrid fallback (item 10).
 
 block the reviewed 4b implementation through 738e1bdf: endpoint and host-adapter contracts (items 1 and 2), invalid rebuild publication and memory bound (items 3 and 4), force recovery, empty coverage and durability reporting (items 5 through 7), and hybrid space identity, deadline and scoring (items 8 through 10).
+
+## d01698bf: Clio-origin link admission and frozen semantic evidence
+
+Static review of the requested commits through ea232e24; no tests or product execution. File references below are relative to the repository and remain valid at that pin. E8 through E10 are outside this pass.
+
+11. **A committed mixed request loses the receipt evidence for its nonpositive drop.** `clio/notient-extension/lib/link-admission.mjs:55` continues after recording a nonpositive drop, before `:57` adds the selected target's evidence to the frozen list. `clio/notient-extension/lib/journal-v2.mjs:41` requires that list to contain only as many targets as were admitted, and `:43` restricts membership to admitted targets. **Violates 04 §6's requirement to freeze exact receipt evidence/distances for selected retrieved targets before intent.** Supply `[N0.md, N1.md]` from a valid receipt with distances 1 and 0 respectively. N0 is dropped for `nonpositive_similarity`; N1 is admitted at .95 and its link is committed. The journal retains the N0 drop in `link.dropped`, but freezes only N1's distance and passages. Consequently, after the candidate receipt is deleted or the index is rebuilt, the durable operation cannot substantiate its recorded N0 decision from its own evidence. The omitted target was selected, retrieved and revision-checked; it differs from an unknown target with no receipt evidence. Dropped-only no-ops still require no journal record.
+
+12. **The required negative stored-distance boundary has no admission fixture.** `clio/notient-extension/test/link-admission.test.mjs:32` defines the admission case table; its corrupt-distance rows at `:41`, `:42` and `:43` supply NaN, Infinity and 3, but no negative `bestDistance`. **Violates 04 §8's explicit negative/nonfinite-distance corruption case.** Consequently, the required lower-bound rejection has no regression proof. `lib/link-admission.mjs:18` currently rejects negative values, so this is a missing prescribed test, not a demonstrated functional failure. The other inherited boundaries are covered by this table, the integration cases and the earlier shared-validation fixtures at `test/link-writeback.test.mjs:157` and `:160`; zero proposals correctly refuse under the frozen `minItems:1` schema.
+
+block d01698bf: incomplete frozen evidence for selected retrieved drops (item 11) and missing required negative-distance fixture (item 12).
+
+## 951e2f86: V20 fix for stage 4a item 20
+
+approve 951e2f86 for stage 4a item 20; approve all of stage 4a through this commit.
+
+## 820396eb: E1 fix for item 1
+
+approve 820396eb for item 1.
+
+## f3855636: E2 fix for item 2
+
+13. **The corrected host request still supplies the wrong input element type.** `clio/notient-extension/lib/embedding-adapter.mjs:95` takes a batch of strings, and `:96` passes it directly as `inputs` to `service.embed`. **Violates 04 §1's host-adapter seam and §2's requirement to implement the released context.embed contract.** The public request at `/home/akougkas/iowarp/clio-coder/src/domains/extensions/public-api-v2.ts:275` requires `EmbeddingInput[]`; its text variant at `src/domains/providers/embedding/types.ts:5` is `{kind:"text",text:string}`. The host validates each input's `kind` at `src/domains/providers/embedding/service.ts:131`. Consequently, passing the released context into this adapter makes even `embed(['a'])` fail for an unqualified undefined modality instead of producing a vector. The new test at `clio/notient-extension/test/embedding-transport.test.mjs:94` explicitly expects string arrays, so its stub preserves the remaining incompatibility. E2 corrects the outer object signature, eight-input bound and exact profile-identity check from item 2, but does not yet complete that contract. The seam must map strings to typed text inputs; selecting the host adapter remains deferred as designed.
+
+block f3855636 on the remaining host input contract (item 13, the residual of item 2).
+
+## d378b253: E3 fix for item 3
+
+approve d378b253 for item 3, including the later force path through ea232e24.
+
+## db84ba68: E4 fix for item 4
+
+approve db84ba68 for item 4, including the later force path through ea232e24.
+
+## e6442937: E5 fix for item 5
+
+approve e6442937 for item 5.
+
+## b6111e15: E6 fix for item 6
+
+approve b6111e15 for item 6.
+
+## ea232e24: E7 fix for item 7
+
+approve ea232e24 for item 7.
+
+block the reviewed 4b implementation through ea232e24: pending hybrid space identity, deadline and scoring fixes (items 8 through 10), incomplete frozen evidence for selected retrieved drops (item 11), missing required negative-distance fixture (item 12), and the remaining host input contract (item 13, superseding item 2).

@@ -175,3 +175,9 @@ block all of stage 4a at f72adea4: closing-fence/thematic-break regression (item
 approve 92bd319b for item 19.
 
 block all of stage 4a at 92bd319b: retained version:1 batch-undo edit-age misattribution (item 20), unchanged in this fix and through 738e1bdf.
+
+## 951e2f86: V20 fix for item 20
+
+approve 951e2f86 for item 20.
+
+approve all of stage 4a through 951e2f86. Static review only; verification remains with the manager.
