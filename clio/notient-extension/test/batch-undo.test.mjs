@@ -167,3 +167,24 @@ test('batch undo CLI enforces exactly one selector and unattended move prohibiti
   assert.equal(refused.error.code, 'UNATTENDED_REFUSED');
   assert.equal(writeOperation('undo', { ...input, targetBatch: 'unknown-task' }, { directory: f.directory }).error.code, 'OPERATION_NOT_FOUND');
 });
+
+test('S5 unattended batch undo ignores a previously cancelled outside move', t => {
+  const f = moveFixture(t);
+  const capture = writeOperation('capture', { requestId: 'selection-capture', batch: 'selection', authorization, name: 'Selection', content: 'Captured evidence for selection.\n' }, { directory: f.directory });
+  assert.equal(capture.ok, true, JSON.stringify(capture));
+  const input = { requestId: 'selection-move', batch: 'selection', authorization, operation: 'move', path: capture.capture.path, destination: 'Outside.md', revision: capture.capture.revision };
+  const preview = writeOperation('revise', { ...input, dryRun: true }, { directory: f.directory });
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  const moved = writeOperation('revise', { ...input, planHash: preview.planHash }, { directory: f.directory });
+  assert.equal(moved.ok, true, JSON.stringify(moved));
+  reviewedUndo(f, { requestId: 'selection-cancel-move', batch: 'cancel-move', authorization, opId: moved.operationId });
+  const inverse = { requestId: 'selection-close-batch', batch: 'close-selection', authorization: { origin: 'unattended', request: 'Undo the remaining managed capture.' }, targetBatch: 'selection' };
+  const remaining = writeOperation('undo', { ...inverse, dryRun: true }, { directory: f.directory });
+  assert.equal(remaining.ok, true, JSON.stringify(remaining));
+  assert.deepEqual(remaining.undo.operationIds, [capture.operationId]);
+  const closed = writeOperation('undo', { ...inverse, planHash: remaining.planHash }, { directory: f.directory });
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  assert.equal(existsSync(path.join(f.vault.path, capture.capture.path)), false);
+  const again = writeOperation('undo', { ...inverse, requestId: 'selection-closed-again', dryRun: true }, { directory: f.directory });
+  assert.equal(again.ok, true, JSON.stringify(again)); assert.equal(again.outcome, 'noop');
+});

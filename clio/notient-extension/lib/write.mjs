@@ -488,9 +488,10 @@ function inverseFiles(vault, directory, input) {
   if (input.opId && originals[0].state !== 'committed') refuse('OPERATION_NOT_COMMITTED', 'The original operation must be committed before undo.');
   const eligible = originals.filter(record => record.state === 'committed');
   if (!eligible.length) refuse('OPERATION_NOT_COMMITTED', 'The selected batch has no committed original operations.');
-  const hasMove = eligible.some(record => record.operation === 'move');
+  const active = eligible.filter(record => !record.undoneBy);
+  const hasMove = active.some(record => record.operation === 'move');
   const structural = !!input.targetBatch || hasMove;
-  const filesForAuthority = eligible.flatMap(record => record.files);
+  const filesForAuthority = active.flatMap(record => record.files);
   requireAuthority(vault, input.authorization, filesForAuthority, { dryRun: input.dryRun });
   if (vault.role === 'operator' && input.authorization.origin === 'unattended' && hasMove) refuse('UNATTENDED_REFUSED', 'Unattended undo containing a move is refused in an operator vault.');
   let gitMs = 0;
@@ -533,7 +534,7 @@ function inverseFiles(vault, directory, input) {
       inverseIds.add(original.undoneBy);
     }
   }
-  const selected = eligible.filter(record => !record.undoneBy).sort((a, b) => position.get(a.git.commit) - position.get(b.git.commit));
+  const selected = active.sort((a, b) => position.get(a.git.commit) - position.get(b.git.commit));
   const source = input.targetBatch ? `batch:${input.targetBatch}` : eligible[0].source;
   if (!selected.length) return { files: [], source, noop: true, undo: { targets: [...inverseIds].sort(), commits: [...inverseIds].sort().map(id => byId.get(id).git.commit) }, reads: [], inventoryHash: null, structural, gitMs };
   const selectedIds = new Set(selected.map(record => record.id));
