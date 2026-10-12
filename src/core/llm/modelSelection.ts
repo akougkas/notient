@@ -306,12 +306,16 @@ function chooseModel(input: {
   const configured = input.configured;
 
   if (configured.length > 0) {
-    const match = compatible.find((model) => model.id === configured);
+    const match = input.catalog.models.find((model) => model.id === configured);
     if (match !== undefined) {
       return {
         model: match.id,
         reason: `${kind}: configured model ${configured} is present in the endpoint catalog`,
-        warnings: [],
+        warnings: isCompatibleKind(match, kind)
+          ? []
+          : [
+              `${kind}: configured model ${configured} is listed, but its catalog metadata does not identify it as a compatible ${kind} model; using the configured ID verbatim`,
+            ],
       };
     }
     return {
@@ -488,5 +492,5 @@ function isCompatibleKind(model: EndpointModel, kind: "chat" | "embedding"): boo
 }
 
 function looksEmbeddingModel(id: string): boolean {
-  return /\b(embed|embedding|bge|nomic|e5|gte)\b/i.test(id);
+  return /\b(embed|embedding|embeddinggemma|bge|nomic|e5|gte)\b/i.test(id);
 }
