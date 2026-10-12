@@ -118,32 +118,63 @@ export function tokenizeMove(bytes) {
   const issues = [];
   const mask = (start, end) => visible.fill(0, start, end);
   let fence = null;
-  for (const line of lines) {
+  let comment = null;
+  let listDepth = null;
+  const containers = [];
+  const contexts = new Map();
+  for (const [ordinal, line] of lines.entries()) {
     if (line.start < bodyStart) continue;
-    const quotePrefix = /^(?: {0,3}>[ \t]?)+/.exec(line.content)?.[0] ?? '';
+    const quotePrefix = /^(?:[ \t]*>[ \t]?)+/.exec(line.content)?.[0] ?? '';
+    const depth = (quotePrefix.match(/>/g) ?? []).length;
     const content = line.content.slice(quotePrefix.length);
-    if (fence?.quote && !quotePrefix) fence = null;
-    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(content);
+    const indent = /^ */.exec(content)[0].length;
+    if (fence && content.trim() && (depth !== fence.depth || indent < fence.indent)) fence = null;
     if (fence) {
       mask(line.start, line.end);
-      if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(content)) fence = null;
-    } else if (opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
-      fence = { char: opening[1][0], count: opening[1].length, quote: Boolean(quotePrefix) }; mask(line.start, line.end);
-    } else if (/^(?: {4}|\t)/.test(content)) mask(line.start, line.end);
-  }
-  for (let i = bodyStart; i < text.length; i++) {
-    if (!visible[i]) continue;
-    if (text.startsWith('<!--', i)) {
-      const close = text.indexOf('-->', i + 4);
-      const end = close < 0 ? text.length : close + 3;
-      mask(i, end); i = end - 1;
-    } else if (text[i] === '`' && text[i - 1] !== '\\') {
-      let end = i; while (text[end] === '`') end++;
-      const count = end - i;
-      let close = text.indexOf('`'.repeat(count), end);
-      while (close >= 0 && (text[close - 1] === '`' || text[close + count] === '`')) close = text.indexOf('`'.repeat(count), close + count);
-      if (close >= 0 && visible[close]) { mask(i, close + count); i = close + count - 1; }
-      else i = end - 1;
+      if (new RegExp(`^ {0,3}${fence.char}{${fence.count},}[ \\t]*$`).test(content.slice(fence.indent))) fence = null;
+      continue;
+    }
+    if (!comment) {
+      if (listDepth !== depth) { containers.length = 0; listDepth = depth; }
+      if (containers.length && /^[ \t]*\t/.test(content)) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Tab-indented continuation cannot be classified safely.' });
+      if (content.trim()) while (containers.length && indent < containers.at(-1).content) containers.pop();
+      const marker = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(content);
+      if (marker && (indent <= 3 || containers.length)) {
+        if (marker[2].includes('\t')) issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Tab-indented list container cannot be classified safely.' });
+        else containers.push({ content: marker[0].length });
+      }
+      const base = containers.at(-1)?.content ?? 0;
+      const offset = quotePrefix.length + (marker && containers.length ? marker[0].length : Math.min(base, indent));
+      contexts.set(line.start, offset);
+      const remainder = line.content.slice(offset);
+      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(remainder);
+      if (opening && visible[line.start + offset] && !(opening[1][0] === '`' && opening[2].includes('`'))) {
+        fence = { char: opening[1][0], count: opening[1].length, depth, indent: marker ? marker[0].length : base };
+        mask(line.start, line.end); continue;
+      }
+      if (/^(?: {4}|\t)/.test(remainder) && !/^[ \t]*\t/.test(content)) { mask(line.start, line.end); continue; }
+      if (!containers.length && /^\t/.test(content)) { mask(line.start, line.end); continue; }
+    }
+    for (let i = line.start; i < line.end; i++) {
+      if (!visible[i]) continue;
+      if (comment) {
+        const close = text.indexOf(comment, i);
+        const end = close < 0 ? text.length : close + comment.length;
+        mask(i, Math.min(end, line.end));
+        if (end <= line.end) { comment = null; i = end - 1; }
+        else break;
+      } else if (text.startsWith('<!--', i) || text.startsWith('%%', i)) {
+        const html = text.startsWith('<!--', i);
+        comment = html ? '-->' : '%%';
+        mask(i, i + (html ? 4 : 2)); i += (html ? 4 : 2) - 1;
+      } else if (text[i] === '`' && text[i - 1] !== '\\') {
+        let end = i; while (text[end] === '`') end++;
+        const count = end - i;
+        let close = text.indexOf('`'.repeat(count), end);
+        while (close >= 0 && (text[close - 1] === '`' || text[close + count] === '`')) close = text.indexOf('`'.repeat(count), close + count);
+        if (close >= 0) { mask(i, close + count); i = close + count - 1; }
+        else i = end - 1;
+      }
     }
   }
   if (document.closing >= 0) {
@@ -195,17 +226,32 @@ export function tokenizeMove(bytes) {
     tokens.push(token);
     return token;
   }
-  for (const line of lines) {
-    if (line.start < bodyStart || !visible[line.start]) continue;
-    const match = /^ {0,3}\[([^\]\n]+)\]:[ \t]*/.exec(line.content);
+  for (let ordinal = 0; ordinal < lines.length; ordinal++) {
+    const line = lines[ordinal];
+    if (line.start < bodyStart) continue;
+    const offset = contexts.get(line.start) ?? 0;
+    if (!visible[line.start + offset]) continue;
+    const match = /^ {0,3}\[([^\]\n]+)\]:[ \t]*/.exec(line.content.slice(offset));
     if (!match) continue;
-    const span = destinationAt(text, line.start + match[0].length, line.start + line.content.length, false);
-    if (!span) { issues.push({ start: line.start, end: line.end, reason: 'Unlocatable reference definition destination.' }); mask(line.start, line.end); continue; }
+    let last = ordinal;
+    const begin = line.start + offset + match[0].length;
+    if (!text.slice(begin, line.start + line.content.length).trim()) {
+      const next = lines[last + 1];
+      if (next && /^ {0,3}\S/.test(next.content) && visible[next.start + /^ */.exec(next.content)[0].length]) last++;
+    }
+    const title = lines[last + 1];
+    if (title && /^ {0,3}["'(]/.test(title.content) && visible[title.start + /^ */.exec(title.content)[0].length]) last++;
+    const tail = lines[last];
+    const span = destinationAt(text, begin, tail.start + tail.content.length, false);
+    if (!span || span.start === span.end) {
+      issues.push({ start: line.start, end: tail.end, line: ordinal + 1, reason: 'Unlocatable reference definition destination.' }); mask(line.start, tail.end); continue;
+    }
     const label = labelKey(match[1]);
-    const token = add('reference', span, line.end, { label });
+    const token = add('reference', span, tail.end, { label });
     const entries = definitions.get(label) ?? [];
     entries.push(token); definitions.set(label, entries);
-    mask(line.start, line.end);
+    mask(line.start, tail.end);
+    ordinal = last;
   }
   for (let i = 0; i < text.length; i++) {
     if (!visible[i]) continue;
@@ -372,7 +418,7 @@ export function planMove(scan, source, destination) {
   for (const note of notes) {
     const afterPath = note.path === source ? destination : note.path;
     const splices = [];
-    for (const issue of note.issues) blockers.push({ path: note.path, startByte: Buffer.byteLength(note.bytes.toString('utf8').slice(0, issue.start)), endByte: Buffer.byteLength(note.bytes.toString('utf8').slice(0, issue.end)), reason: issue.reason, code: 'MOVE_SCAN_INCOMPLETE' });
+    for (const issue of note.issues) blockers.push({ path: note.path, line: issue.line ?? note.bytes.toString('utf8').slice(0, issue.start).split('\n').length, startByte: Buffer.byteLength(note.bytes.toString('utf8').slice(0, issue.start)), endByte: Buffer.byteLength(note.bytes.toString('utf8').slice(0, issue.end)), reason: issue.reason, code: issue.code ?? 'MOVE_SCAN_INCOMPLETE' });
     for (const token of note.tokens) {
       const before = resolveMoveTarget(token, note.path, oldIndex);
       const after = resolveMoveTarget(token, afterPath, newIndex);
