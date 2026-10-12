@@ -189,6 +189,7 @@ export function newRecord(vault, plan) {
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', derivedIndexState: 'pending', capture: plan.capture ?? null, durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
+    gardenReconciliation: { state: 'pending', error: null },
     link: plan.link ?? null, relate: plan.relate ?? null, semanticEvidence: plan.semanticEvidence ?? null,
     gardenRun: plan.gardenRun ?? null, managedDocument: plan.managedDocument ?? null, plan: plan.plan ?? null,
     vitalsFallbackPaths: plan.vitalsFallbackPaths ?? [],
@@ -299,8 +300,12 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     catch (error) { record.error ??= { code: 'INDEX_REPAIR_PENDING', message: error.message }; }
   }
   saveRecord(directory, vault, record, sync);
-  options.barrier?.('beforeGardenReconcile', record);
-  reconcileGarden(vault, directory, { barrier: options.barrier });
+  try {
+    options.barrier?.('beforeGardenReconcile', record);
+    reconcileGarden(vault, directory, { barrier: options.barrier });
+    record.gardenReconciliation = { state: 'updated', error: null };
+  } catch (error) { record.gardenReconciliation = { state: 'pending', error: { code: error.code ?? 'GARDEN_RECONCILIATION_PENDING', message: error.message } }; }
+  saveRecord(directory, vault, record, sync);
   return { operationId: record.id, result: published ? 'already_committed' : states.every(item => item.state === 'before') ? 'resumed_from_intent' : states.every(item => item.state === 'after') ? 'committed_after_apply' : 'completed_partial_apply', commit: record.git.commit, conflicts: [] };
 }
 
@@ -309,7 +314,7 @@ function blocksWrites(record) {
 }
 
 function pendingRecord(record) {
-  return blocksWrites(record) || record.state === 'committed' && record.derivedIndexState === 'pending';
+  return blocksWrites(record) || record.state === 'committed' && (record.derivedIndexState === 'pending' || record.gardenReconciliation?.state === 'pending');
 }
 
 export function recoverPending(vault, directory, adapter, options = {}) {
@@ -711,6 +716,7 @@ function warnings(record, durability) {
   if (durability && !durability.fsync) result.push({ code: 'GIT_FSYNC_UNAVAILABLE', message: `${durability.version} lacks core.fsync=committed; proceeding with the available Git durability.` });
   if (record && !record.git.indexInstalled) result.push({ code: 'INDEX_UPDATE_PENDING', message: 'The commit is published. Normal Git index reconciliation remains pending and status will retry it.' });
   if (record?.derivedIndexState === 'pending') result.push({ code: 'STRUCTURAL_INDEX_PENDING', message: 'The vault commit is durable. Refresh the structural index and use status to finish its recorded repair.' });
+  if (record?.gardenReconciliation?.state === 'pending') result.push({ code: 'GARDEN_RECONCILIATION_PENDING', message: 'The vault commit is durable. Garden bookkeeping or receipt export remains pending.' });
   if (record?.error?.code === 'COMMITTED_INDEX_CONFLICT') result.push(record.error);
   return result;
 }
@@ -733,7 +739,7 @@ function recordResult(vault, directory, record, recovery, outcome, duration, dur
     }), false),
     commit: { oid: record.git.commit, parent: record.git.baseHead, subject: `notient(${record.operation}): ${JSON.stringify(record.source)}` },
     log: record.log, undo: { operationIds: record.undo.targets, commits: record.undo.commits }, recovery,
-    indexState: record.indexState, derivedIndexState: record.derivedIndexState, capture: captureReceipt(record.capture), link: record.link ?? null, relate: record.relate ?? null, gardenRun: record.gardenRun ?? null, managedDocument: record.managedDocument ?? null, plan: record.plan ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
+    indexState: record.indexState, derivedIndexState: record.derivedIndexState, gardenReconciliation: record.gardenReconciliation ?? { state: 'updated', error: null }, capture: captureReceipt(record.capture), link: record.link ?? null, relate: record.relate ?? null, gardenRun: record.gardenRun ?? null, managedDocument: record.managedDocument ?? null, plan: record.plan ?? null, warnings: warnings(record, durability), timings: { ...record.timings, totalMs: duration },
   };
 }
 

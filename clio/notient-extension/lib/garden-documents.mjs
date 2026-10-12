@@ -112,7 +112,12 @@ export function publishGardenDocument(vault, directory, input, options = {}) {
     atomicJson(path.join(path.dirname(gardenPath(directory, vault)), 'garden-runs', run.id, 'result.json'), receipt);
   }
   const name = `Notient/${kind === 'plan' ? 'Plans' : 'Digest'}/${run.startedAt.slice(0, 10)}.md`;
-  const state = openGarden(directory, vault); let runState;
-  try { runState = gardenRun(state, run.id).state; } finally { state?.close(); }
+  let state; let runState;
+  try { state = openGarden(directory, vault); runState = gardenRun(state, run.id).state; }
+  catch (error) {
+    if (!result.ok || !result.commit) throw error;
+    runState = run.state;
+    result.gardenReconciliation = { state: 'pending', error: { code: error.code ?? 'GARDEN_RECONCILIATION_PENDING', message: error.message } };
+  } finally { state?.close(); }
   return { ...result, runId: run.id, document: { kind, path: name, revision: result.changes?.find(change => change.path === name)?.after ?? currentFile(vault.path, name).revision ?? 'absent' }, proposalIds: kind === 'plan' && result.ok ? uniqueJson(input.proposalsJson).map(value => value.id) : [], runState };
 }
