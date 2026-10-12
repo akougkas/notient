@@ -94,7 +94,7 @@ export function createHostAdapter(service, identity) {
       for (let offset = 0; offset < texts.length; offset += description.maxBatch) {
         if (signal?.aborted) refuse('EMBEDDING_TIMEOUT', 'The host call exceeded its caller deadline.', [], true);
         const batch = texts.slice(offset, offset + description.maxBatch);
-        const result = await service.embed({ inputs: batch, task, expectedProfileIdentity });
+        const result = await service.embed({ inputs: batch.map(text => ({ kind: 'text', text })), task, expectedProfileIdentity });
         if (signal?.aborted) refuse('EMBEDDING_TIMEOUT', 'The host call exceeded its caller deadline.', [], true);
         if (result?.profileIdentity !== expectedProfileIdentity || result.model !== undefined && result.model !== description.model || result.dimension !== undefined && result.dimension !== description.dimension) refuse('EMBEDDING_STALE_MODEL', 'Host embedding profile identity changed.');
         if (!Array.isArray(result.vectors)) refuse('EMBEDDING_RESPONSE_INVALID', 'The host returned invalid vectors.');

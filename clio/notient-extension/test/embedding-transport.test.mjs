@@ -85,13 +85,13 @@ test('E1 empty query and fragment delimiters refuse before probing and valid des
   await createOpenAIAdapter(profile(stub.baseUrl + '/')).embed(['fixture']); assert.equal(stub.requests.at(-1).path, '/v1/embeddings');
 });
 
-test('E2 host calls use the documented object contract and bind the exact expected profile identity', async () => {
+test('E2 E13 host calls use typed text inputs and bind the exact expected profile identity', async () => {
   const calls = []; let returnedIdentity = 'fixture-profile-a';
-  const context = { async embed(request) { calls.push(request); assert.equal(Array.isArray(request), false); return { profileIdentity: returnedIdentity, vectors: request.inputs.map(() => [1, 0]) }; } };
+  const context = { async embed(request) { calls.push(request); assert.equal(Array.isArray(request), false); for (const input of request.inputs) { assert.equal(input.kind, 'text'); assert.equal(typeof input.text, 'string'); assert.equal(Boolean(input.text.trim()), true); } return { profileIdentity: returnedIdentity, vectors: request.inputs.map(() => [1, 0]) }; } };
   const identity = { profileId: 'fixture-profile-a', profileIdentity: 'fixture-profile-a', model: 'same-model', dimension: 2, maxBatch: 2, maxInputBytes: 1600 };
   const adapter = createHostAdapter(context, identity);
   assert.equal((await adapter.embed(['a', 'b', 'c'], { task: 'query' })).vectors.length, 3);
-  assert.deepEqual(calls, [{ inputs: ['a', 'b'], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }, { inputs: ['c'], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }]);
+  assert.deepEqual(calls, [{ inputs: [{ kind: 'text', text: 'a' }, { kind: 'text', text: 'b' }], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }, { inputs: [{ kind: 'text', text: 'c' }], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }]);
   const other = createHostAdapter(context, { ...identity, profileIdentity: 'fixture-profile-b' }); assert.notEqual(other.describe().spaceId, adapter.describe().spaceId);
   returnedIdentity = 'fixture-profile-b'; await assert.rejects(adapter.embed(['a']), error => error.code === 'EMBEDDING_STALE_MODEL');
   const wide = createHostAdapter(context, { ...identity, profileIdentity: 'fixture-profile-b', maxBatch: 32 }); assert.equal(wide.describe().maxBatch, 8);
