@@ -85,12 +85,26 @@ test('E1 empty query and fragment delimiters refuse before probing and valid des
   await createOpenAIAdapter(profile(stub.baseUrl + '/')).embed(['fixture']); assert.equal(stub.requests.at(-1).path, '/v1/embeddings');
 });
 
+test('E2 host calls use the documented object contract and bind the exact expected profile identity', async () => {
+  const calls = []; let returnedIdentity = 'fixture-profile-a';
+  const context = { async embed(request) { calls.push(request); assert.equal(Array.isArray(request), false); return { profileIdentity: returnedIdentity, vectors: request.inputs.map(() => [1, 0]) }; } };
+  const identity = { profileId: 'fixture-profile-a', profileIdentity: 'fixture-profile-a', model: 'same-model', dimension: 2, maxBatch: 2, maxInputBytes: 1600 };
+  const adapter = createHostAdapter(context, identity);
+  assert.equal((await adapter.embed(['a', 'b', 'c'], { task: 'query' })).vectors.length, 3);
+  assert.deepEqual(calls, [{ inputs: ['a', 'b'], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }, { inputs: ['c'], task: 'query', expectedProfileIdentity: 'fixture-profile-a' }]);
+  const other = createHostAdapter(context, { ...identity, profileIdentity: 'fixture-profile-b' }); assert.notEqual(other.describe().spaceId, adapter.describe().spaceId);
+  returnedIdentity = 'fixture-profile-b'; await assert.rejects(adapter.embed(['a']), error => error.code === 'EMBEDDING_STALE_MODEL');
+  const wide = createHostAdapter(context, { ...identity, profileIdentity: 'fixture-profile-b', maxBatch: 32 }); assert.equal(wide.describe().maxBatch, 8);
+  const invalid = createHostAdapter({ async embed() { return { profileIdentity: 'fixture-profile-a', vectors: [[0, 0]] }; } }, identity);
+  await assert.rejects(invalid.embed(['a']), error => error.code === 'EMBEDDING_RESPONSE_INVALID');
+});
+
 test('configuration drift discards in-flight results and the host seam splits at its advertised bound', async t => {
   let current = true;
   const stub = await embeddingStub(t, (request, response, body) => { current = false; response.end(JSON.stringify({ model: 'stub-pinned', data: body.input.map((text, index) => ({ index, embedding: [1, 0] })) })); });
   const adapter = createOpenAIAdapter(profile(stub.baseUrl), { isCurrent: () => current });
   await assert.rejects(adapter.embed(['fixture']), error => error.code === 'EMBEDDING_CONFIG_CHANGED');
-  const calls = []; const host = createHostAdapter({ async embed(texts) { calls.push(texts); return { vectors: texts.map(() => [1, 0]), model: 'host-model', dimension: 2 }; } }, { profileId: 'fixture-host-v1', model: 'host-model', dimension: 2, maxBatch: 2, maxInputBytes: 1600 });
+  const calls = []; const host = createHostAdapter({ async embed({ inputs, expectedProfileIdentity }) { calls.push(inputs); return { vectors: inputs.map(() => [1, 0]), profileIdentity: expectedProfileIdentity }; } }, { profileIdentity: 'fixture-host-v1', model: 'host-model', dimension: 2, maxBatch: 2, maxInputBytes: 1600 });
   assert.equal((await host.embed(['a', 'b', 'c'])).vectors.length, 3); assert.deepEqual(calls.map(call => call.length), [2, 1]);
 });
 

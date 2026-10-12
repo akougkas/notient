@@ -77,18 +77,29 @@ export function createOpenAIAdapter(configuration, { probe = false, isCurrent = 
 }
 
 export function createHostAdapter(service, identity) {
-  if (!identity || typeof identity.profileId !== 'string' || !Number.isInteger(identity.dimension) || identity.dimension < 1 || identity.dimension > 8192 || !Number.isInteger(identity.maxBatch) || identity.maxBatch < 1 || typeof service.embed !== 'function') refuse('EMBEDDING_CONFIG', 'Host embedding identity is unavailable.');
+  if (!identity || typeof identity.profileIdentity !== 'string' || !identity.profileIdentity.length || identity.profileIdentity.length > 2048 || !Number.isInteger(identity.dimension) || identity.dimension < 1 || identity.dimension > 8192 || !Number.isInteger(identity.maxBatch) || identity.maxBatch < 1 || typeof service?.embed !== 'function') refuse('EMBEDDING_CONFIG', 'Host embedding identity is unavailable.');
+  validText(identity.profileIdentity, 'Host profile identity');
   const profile = normalizeEmbeddings({ baseUrl: 'http://host.invalid/v1', model: identity.model, responseModel: identity.responseModel ?? null, dimension: identity.dimension, maxInputBytes: identity.maxInputBytes });
-  const description = { provider: 'host', model: profile.model, responseModel: profile.responseModel, dimension: profile.dimension, spaceId: embeddingSpace({ ...profile, baseUrl: identity.profileId }, 'host'), maxBatch: identity.maxBatch, maxInputBytes: profile.maxInputBytes };
-  return { describe: () => ({ ...description }), async embed(texts, options) {
+  const expectedProfileIdentity = identity.profileIdentity;
+  const description = { provider: 'host', model: profile.model, responseModel: profile.responseModel, dimension: profile.dimension, spaceId: embeddingSpace({ ...profile, baseUrl: expectedProfileIdentity }, 'host'), maxBatch: Math.min(8, identity.maxBatch), maxInputBytes: profile.maxInputBytes };
+  let active = false;
+  return { describe: () => ({ ...description }), async embed(texts, { task = 'document', signal } = {}) {
+    if (active) refuse('EMBEDDING_BUSY', 'Only one embedding request may be active per adapter.', [], true);
+    if (!Array.isArray(texts) || !texts.length || texts.length > 32 || !['query', 'document'].includes(task)) refuse('EMBEDDING_INPUT_LIMIT', 'Host input count or task is outside its bound.');
+    for (const text of texts) { validText(text); if (Buffer.byteLength(text) > profile.maxInputBytes) refuse('EMBEDDING_INPUT_LIMIT', 'Embedding input exceeds the host byte bound.'); }
+    active = true;
     const vectors = [];
-    for (let offset = 0; offset < texts.length; offset += identity.maxBatch) {
-      const batch = texts.slice(offset, offset + identity.maxBatch);
-      for (const text of batch) { validText(text); if (Buffer.byteLength(text) > profile.maxInputBytes) refuse('EMBEDDING_INPUT_LIMIT', 'Embedding input exceeds the host byte bound.'); }
-      const result = await service.embed(batch, options);
-      if (result.model !== description.model || (result.responseModel ?? null) !== description.responseModel || result.dimension !== description.dimension) refuse('EMBEDDING_STALE_MODEL', 'Host embedding identity changed.');
-      vectors.push(...responseVectors({ data: result.vectors.map((embedding, index) => ({ index, embedding })) }, batch.length, description.dimension));
-    }
-    return { vectors, model: description.model, responseModel: description.responseModel, dimension: description.dimension };
+    try {
+      for (let offset = 0; offset < texts.length; offset += description.maxBatch) {
+        if (signal?.aborted) refuse('EMBEDDING_TIMEOUT', 'The host call exceeded its caller deadline.', [], true);
+        const batch = texts.slice(offset, offset + description.maxBatch);
+        const result = await service.embed({ inputs: batch, task, expectedProfileIdentity });
+        if (signal?.aborted) refuse('EMBEDDING_TIMEOUT', 'The host call exceeded its caller deadline.', [], true);
+        if (result?.profileIdentity !== expectedProfileIdentity || result.model !== undefined && result.model !== description.model || result.dimension !== undefined && result.dimension !== description.dimension) refuse('EMBEDDING_STALE_MODEL', 'Host embedding profile identity changed.');
+        if (!Array.isArray(result.vectors)) refuse('EMBEDDING_RESPONSE_INVALID', 'The host returned invalid vectors.');
+        vectors.push(...responseVectors({ data: result.vectors.map((embedding, index) => ({ index, embedding })) }, batch.length, description.dimension));
+      }
+      return { vectors, model: description.model, responseModel: description.responseModel, dimension: description.dimension };
+    } finally { active = false; }
   } };
 }
