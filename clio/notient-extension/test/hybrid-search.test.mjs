@@ -102,6 +102,22 @@ test('E8 a profile switch between scan snapshot and adapter creation cannot mix 
   assert.equal(result.reason, 'stale_model'); assert.equal(result.separation.semantic, null); assert.equal(result.hits[0].path, 'Source.md'); assert.equal(f.stub.requests.length, requests); assert.equal(result.embedding.state, 'stale-model');
 });
 
+test('E9 query inference uses the remaining command budget and returns lexical fallback before the configured timeout', async t => {
+  let slow = false;
+  const f = await embeddingFixture(t, { timeoutMs: 3000, handler: async (request, response, body) => { if (slow) await new Promise(resolve => setTimeout(resolve, 1000)); response.end(JSON.stringify({ model: 'stub-pinned', data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) })); } });
+  await refreshVectors(f.vault, f.directory, { tier: 'embed' }); slow = true; const started = performance.now();
+  const result = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' }, { budgetMs: 200 });
+  assert.equal(result.reason, 'embedding_unavailable'); assert.equal(result.separation.semantic, null); assert.equal(result.hits[0].path, 'Source.md'); assert.ok(performance.now() - started < 500);
+});
+
+test('E9 a late successful query cannot allocate a fresh twenty-five-second scan allowance', async t => {
+  let clock = 0;
+  const f = await embeddingFixture(t, { handler: (request, response, body) => { if (body.input[0] === 'Alpha') clock = 1000; response.end(JSON.stringify({ model: 'stub-pinned', data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) })); } });
+  await refreshVectors(f.vault, f.directory, { tier: 'embed' });
+  const result = await searchHybrid(f.vault, f.directory, { query: 'Alpha', mode: 'hybrid' }, { budgetMs: 200, now: () => clock });
+  assert.equal(result.reason, 'embedding_unavailable'); assert.equal(result.separation.semantic, null); assert.equal(result.hits[0].path, 'Source.md');
+});
+
 test('int8 exhaustive top ten agrees with the float32 reference on 200 deterministic fixture queries', () => {
   let seed = 86420; const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296 * 2 - 1; };
   const vectors = Array.from({ length: 240 }, () => Array.from({ length: 32 }, random)); const packed = vectors.map(vector => { const value = quantizeVector(vector); return reconstructedVector(value.bytes, value.scale); });

@@ -72,8 +72,10 @@ function recordServed(vault, directory, callId, hits, stalePaths) {
   });
 }
 
-export async function searchHybrid(vault, directory, input, { now = () => performance.now(), beforeServe = () => {}, beforeInference = () => {} } = {}) {
+export async function searchHybrid(vault, directory, input, { now = () => performance.now(), beforeServe = () => {}, beforeInference = () => {}, budgetMs = 60000 } = {}) {
   const started = now(); const limit = input.limit ?? 10; const callId = randomUUID();
+  if (!Number.isInteger(budgetMs) || budgetMs < 1 || budgetMs > 60000) refuse('INVALID_INPUT', 'The internal search allowance must fit the sixty-second command deadline.');
+  const semanticDeadline = started + budgetMs - Math.min(6000, budgetMs / 10);
   validText(input.query, 'Query');
   if (input.query.length > 4000 || !Number.isInteger(limit) || limit < 1 || limit > 20 || input.workspace !== undefined && (typeof input.workspace !== 'string' || !input.workspace.length || input.workspace.length > 255)) refuse('INVALID_INPUT', 'Search query, limit or workspace is outside its bounds.');
   if (input.sourcePath !== undefined) { validText(input.sourcePath, 'Source path'); input.sourcePath.split('/').forEach(portableName); }
@@ -90,13 +92,18 @@ export async function searchHybrid(vault, directory, input, { now = () => perfor
     reason = embeddingReason(embedding.state);
     if (!reason) {
       const profile = readConfig(directory).embeddings;
+      let queryStarted; let queryFinished = false; let scanStarted;
       try {
-        const query = embeddingInput(profile, input.query, 'query'); const queryStarted = now(); beforeInference(); const adapter = configuredAdapter(vault, directory, { profile });
+        const query = embeddingInput(profile, input.query, 'query'); queryStarted = now(); beforeInference(); const adapter = configuredAdapter(vault, directory, { profile });
         if (adapter.describe().spaceId !== embeddingSpace(profile)) refuse('EMBEDDING_STALE_MODEL', 'The query adapter differs from the frozen scan space.');
-        const response = await adapter.embed([query]); queryMs = now() - queryStarted;
+        const remaining = semanticDeadline - now();
+        if (remaining < 1) refuse('EMBEDDING_TIMEOUT', 'The remaining query budget is exhausted; lexical fallback remains available.', [], true);
+        const response = await adapter.embed([query], { signal: AbortSignal.timeout(Math.floor(Math.min(profile.timeoutMs, remaining))) }); queryMs = now() - queryStarted; queryFinished = true;
         if (response.model !== profile.model || response.responseModel !== profile.responseModel || response.dimension !== profile.dimension || adapter.describe().spaceId !== embeddingSpace(profile)) refuse('EMBEDDING_STALE_MODEL', 'The query response differs from the frozen scan space.');
-        const scanStarted = now(); semantic = semanticArm(vault, directory, profile, response.vectors[0], input, cap, { now, memory }); scanMs = now() - scanStarted;
+        scanStarted = now(); semantic = semanticArm(vault, directory, profile, response.vectors[0], input, cap, { now, memory, deadline: Math.min(scanStarted + 25000, semanticDeadline) }); scanMs = now() - scanStarted;
       } catch (error) {
+        if (queryStarted !== undefined && !queryFinished) queryMs = now() - queryStarted;
+        if (scanStarted !== undefined) scanMs = now() - scanStarted;
         if (error.code?.endsWith('_SCAN_LIMIT')) throw error;
         reason = error.code === 'EMBEDDING_STALE_MODEL' ? 'stale_model' : 'embedding_unavailable';
         if (error.code === 'EMBEDDING_STALE_MODEL' || /^EMBEDDING_(?:HTTP|TIMEOUT|UNAVAILABLE|RESPONSE_)/.test(error.code ?? '')) markVectorFailure(vault, directory, profile, error.code, error.retryable);
