@@ -195,9 +195,9 @@ export function persistPlan(vault, directory, plan, sync = syncDirectory) {
 export function finishRecord(vault, directory, record, adapter, options = {}) {
   if (!adapter) refuse('GIT_UNAVAILABLE', 'The Git write adapter is required.');
   const sync = name => { const supported = (options.sync ?? syncDirectory)(name); if (!supported) record.durability = 'directory-sync-unavailable'; return supported; };
-  prepareFileIntents(directory, vault, record, record.intentSet && record.files.every(file => currentFile(vault.path, file.path, { raw: true }).revision === file.before));
-  const intents = record.intentSet ? readFileIntents(directory, vault, record) : null;
   const published = adapter.recognize(record);
+  prepareFileIntents(directory, vault, record, !published && record.intentSet && record.files.every(file => currentFile(vault.path, file.path, { raw: true }).revision === file.before));
+  const intents = record.intentSet ? readFileIntents(directory, vault, record) : null;
   const states = published ? [] : classifyFiles(vault, record);
   for (const item of states) {
     const decision = reconcileFile(item.current.revision, item.file.before, item.file.after, intents?.get(item.file.path).write_started_at_ms ?? null);

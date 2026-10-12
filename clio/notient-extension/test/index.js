@@ -17,3 +17,4 @@ import './workspace-search.test.mjs';
 import './unconfigured.test.mjs';
 import './tokenizer-review.test.mjs';
 import './historical-logs.test.mjs';
+import './recovery-recognition.test.mjs';
