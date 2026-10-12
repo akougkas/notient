@@ -491,7 +491,11 @@ function inverseFiles(vault, directory, input) {
   }
   for (const original of eligible) {
     verify(original);
-    if (original.undoneBy) { certify(original.undoneBy); inverseIds.add(original.undoneBy); }
+    if (original.undoneBy) {
+      certify(original.undoneBy);
+      if (!cancelled.has(original.id)) refuse('UNDO_HISTORY_CHANGED', 'The cancellation backlink does not close this original operation.');
+      inverseIds.add(original.undoneBy);
+    }
   }
   const selected = eligible.filter(record => !record.undoneBy).sort((a, b) => position.get(a.git.commit) - position.get(b.git.commit));
   const source = input.targetBatch ? `batch:${input.targetBatch}` : eligible[0].source;

@@ -10,3 +10,4 @@ import './move-publication.test.mjs';
 import './batch-undo.test.mjs';
 import './structural-fault.test.mjs';
 import './review-fixes.test.mjs';
+import './cancelled-undo.test.mjs';
