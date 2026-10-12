@@ -20,7 +20,7 @@ export function lexicalArm(vault, directory, input, terms, significant, cap, mem
     const score = match => {
       for (const row of db.prepare(`SELECT c.*,n.revision,c.id AS ordinal,bm25(chunks_fts) AS cost
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.path=c.path JOIN blocks b ON b.id=c.block
-        WHERE chunks_fts MATCH ? AND b.kind!='heading' AND (? IS NULL OR c.path!=?)
+        WHERE chunks_fts MATCH ? AND b.kind!='heading' AND c.path NOT GLOB 'Notient/Plans/*' AND c.path NOT GLOB 'Notient/Digest/*' AND (? IS NULL OR c.path!=?)
         AND (? IS NULL OR EXISTS(SELECT 1 FROM note_workspaces w WHERE w.path=c.path AND w.workspace=?))`).iterate(match, input.sourcePath ?? null, input.sourcePath ?? null, input.workspace ?? null, input.workspace ?? null)) {
         candidates++; const value = { ...row, score: -row.cost };
         memory.retain(rows, value, cap); memory.retain(diagnostic, value, 50);

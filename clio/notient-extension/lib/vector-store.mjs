@@ -16,7 +16,7 @@ export const setMeta = (db, key, value) => db.prepare('INSERT OR REPLACE INTO me
 export function* vectorChunks(db, profile, { sourcePath, workspace, path: exact } = {}) {
   const rows = db.prepare(`SELECT c.*,n.revision,n.outline,ROW_NUMBER() OVER (PARTITION BY c.path ORDER BY c.id)-1 AS ordinal
     FROM chunks c JOIN notes n ON n.path=c.path JOIN blocks b ON b.id=c.block
-    WHERE b.kind!='heading' AND (? IS NULL OR c.path!=?) AND (? IS NULL OR c.path=?)
+    WHERE b.kind!='heading' AND c.path NOT GLOB 'Notient/Plans/*' AND c.path NOT GLOB 'Notient/Digest/*' AND (? IS NULL OR c.path!=?) AND (? IS NULL OR c.path=?)
     AND (? IS NULL OR EXISTS (SELECT 1 FROM note_workspaces w WHERE w.path=c.path AND w.workspace=?)) ORDER BY c.path,c.id`).iterate(sourcePath ?? null, sourcePath ?? null, exact ?? null, exact ?? null, workspace ?? null, workspace ?? null);
   for (const row of rows) {
     let input;

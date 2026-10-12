@@ -1,3 +1,4 @@
+import { validateVersionThree } from './journal-v3.mjs';
 import { existsSync, readdirSync, readFileSync, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, chmodSync, realpathSync, fchmodSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -56,9 +57,9 @@ export function operationDirectory(directory, vault, id) {
 
 export function validateRecord(record, vault) {
   const required = ['version', 'id', 'vaultId', 'vaultPath', 'tool', 'operation', 'requestDigest', 'batch', 'authorization', 'createdAt', 'updatedAt', 'state', 'planHash', 'source', 'destination', 'reads', 'inventoryHash', 'files', 'applyOrder', 'createdDirectories', 'git', 'log', 'undo', 'undoneBy', 'indexState', 'durability', 'conflicts', 'timings', 'error'];
-  if (!record || required.some(key => !Object.hasOwn(record, key)) || ![1, 2].includes(record.version) || !requestIdPattern.test(record.id) || record.vaultId !== vault.id || record.vaultPath !== vault.path || !states.includes(record.state) || !hashPattern.test(record.requestDigest) || !hashPattern.test(record.planHash) || !Array.isArray(record.files) || record.files.length > 101) refuse('JOURNAL_CORRUPT', 'The operation record has an invalid schema.');
-  if (!['capture', 'revise', 'undo'].includes(record.tool) || !['capture', 'replace', 'frontmatter', 'move', 'undo', ...(record.version === 2 ? ['link', 'relate'] : [])].includes(record.operation) || !['operator', 'clio', 'unattended'].includes(record.authorization?.origin) || typeof record.authorization.request !== 'string' || !record.authorization.request.trim()) refuse('JOURNAL_CORRUPT', 'The recorded authority or operation is invalid.');
-  if ((record.operation === 'move' || record.version === 2) && !record.intentSet || record.intentSet && (typeof record.intentSet.prepared !== 'boolean' || record.intentSet.manifestHash !== structuralManifest(record) || !['operator', 'own'].includes(record.roleAtIntent) || record.files.some(file => typeof file.intentId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.intentId)) || new Set(record.files.map(file => file.intentId)).size !== record.files.length)) refuse('JOURNAL_CORRUPT', 'Structural publication intents are invalid.');
+  if (!record || required.some(key => !Object.hasOwn(record, key)) || ![1, 2, 3].includes(record.version) || !requestIdPattern.test(record.id) || record.vaultId !== vault.id || record.vaultPath !== vault.path || !states.includes(record.state) || !hashPattern.test(record.requestDigest) || !hashPattern.test(record.planHash) || !Array.isArray(record.files) || record.files.length > 101) refuse('JOURNAL_CORRUPT', 'The operation record has an invalid schema.');
+  if (!['capture', 'revise', 'undo', ...(record.version === 3 ? ['garden'] : [])].includes(record.tool) || !['capture', 'replace', 'frontmatter', 'move', 'undo', ...(record.version >= 2 ? ['link', 'relate'] : []), ...(record.version === 3 ? ['garden_plan', 'garden_digest'] : [])].includes(record.operation) || !['operator', 'clio', 'unattended'].includes(record.authorization?.origin) || typeof record.authorization.request !== 'string' || !record.authorization.request.trim()) refuse('JOURNAL_CORRUPT', 'The recorded authority or operation is invalid.');
+  if ((record.operation === 'move' || record.version >= 2) && !record.intentSet || record.intentSet && (typeof record.intentSet.prepared !== 'boolean' || record.intentSet.manifestHash !== structuralManifest(record) || !['operator', 'own'].includes(record.roleAtIntent) || record.files.some(file => typeof file.intentId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.intentId)) || new Set(record.files.map(file => file.intentId)).size !== record.files.length)) refuse('JOURNAL_CORRUPT', 'Structural publication intents are invalid.');
   if (!Array.isArray(record.applyOrder) || new Set(record.applyOrder).size !== record.files.length || record.files.some(file => !record.applyOrder.includes(file.path))) refuse('JOURNAL_CORRUPT', 'The recorded publication order is invalid.');
   const seen = new Set();
   for (const file of record.files) {
@@ -76,14 +77,16 @@ export function validateRecord(record, vault) {
   if (![record.git.baseHead, record.git.tree, record.git.commit].every(oid) || typeof record.git.indexInstalled !== 'boolean' || record.git.lockSeed !== null || ![record.git.indexBeforeHash, record.git.indexAfterHash].every(value => value === null || hashPattern.test(value)) || record.git.ref !== null && (typeof record.git.ref !== 'string' || !/^refs\/heads\/[^\s\x00-\x1f]+$/.test(record.git.ref))) refuse('JOURNAL_CORRUPT', 'Recorded Git fields are invalid.');
   if (!record.log || typeof record.log.path !== 'string' || typeof record.log.line !== 'string' || !record.log.line.startsWith('- ') || /[\r\n]/.test(record.log.line) || !Array.isArray(record.undo.commits) || !record.undo.targets.every(id => requestIdPattern.test(id)) || !record.undo.commits.every(value => value !== null && oid(value)) || record.undoneBy !== null && !requestIdPattern.test(record.undoneBy) || !['full', 'directory-sync-unavailable'].includes(record.durability)) refuse('JOURNAL_CORRUPT', 'Recorded audit and undo fields are invalid.');
   if (!Array.isArray(record.createdDirectories) || !record.createdDirectories.every(name => typeof name === 'string') || !record.timings || !['scanMs', 'lockWaitMs', 'journalMs', 'applyMs', 'gitMs', 'totalMs'].every(key => Number.isFinite(record.timings[key]) && record.timings[key] >= 0) || record.error !== null && (typeof record.error?.code !== 'string' || typeof record.error?.message !== 'string')) refuse('JOURNAL_CORRUPT', 'Recorded durability and timing fields are invalid.');
-  if (record.version === 2) validateVersionTwo(record);
+  if (record.version >= 2) validateVersionTwo(record);
+  if (record.version === 3) validateVersionThree(record);
   return record;
 }
 
 function structuralManifest(record) {
-  const manifest = { id: record.id, vaultId: record.vaultId, authorization: record.authorization, batch: record.batch, operation: record.operation, applyOrder: record.applyOrder, files: record.files.map(file => ({ intentId: file.intentId, path: file.path, role: file.role, action: file.action, before: file.before, after: file.after, mode: file.mode, temp: file.temp, ...(record.version === 2 ? { splices: file.splices } : {}) })) };
-  if (record.version === 2) Object.assign(manifest, { version: 2, createdAt: record.createdAt, source: record.source, destination: record.destination, roleAtIntent: record.roleAtIntent, reads: record.reads, inventoryHash: record.inventoryHash, requestDigest: record.requestDigest, planHash: record.planHash, log: record.log, capture: record.capture, undo: record.undo, ref: record.git.ref, baseHead: record.git.baseHead, link: record.link, relate: record.relate, semanticEvidence: record.semanticEvidence, vitalsBefore: record.vitalsBefore });
-  if (record.version === 2 && Object.hasOwn(record, 'vitalsFallbackPaths')) manifest.vitalsFallbackPaths = record.vitalsFallbackPaths;
+  const manifest = { id: record.id, vaultId: record.vaultId, authorization: record.authorization, batch: record.batch, operation: record.operation, applyOrder: record.applyOrder, files: record.files.map(file => ({ intentId: file.intentId, path: file.path, role: file.role, action: file.action, before: file.before, after: file.after, mode: file.mode, temp: file.temp, ...(record.version >= 2 ? { splices: file.splices } : {}) })) };
+  if (record.version >= 2) Object.assign(manifest, { version: record.version, createdAt: record.createdAt, source: record.source, destination: record.destination, roleAtIntent: record.roleAtIntent, reads: record.reads, inventoryHash: record.inventoryHash, requestDigest: record.requestDigest, planHash: record.planHash, log: record.log, capture: record.capture, undo: record.undo, ref: record.git.ref, baseHead: record.git.baseHead, link: record.link, relate: record.relate, semanticEvidence: record.semanticEvidence, vitalsBefore: record.vitalsBefore });
+  if (record.version >= 2 && Object.hasOwn(record, 'vitalsFallbackPaths')) manifest.vitalsFallbackPaths = record.vitalsFallbackPaths;
+  if (record.version === 3) Object.assign(manifest, { gardenRun: record.gardenRun, managedDocument: record.managedDocument, plan: record.plan });
   return revision(JSON.stringify(manifest));
 }
 
@@ -284,7 +287,7 @@ export function journalStatus(directory, id) {
       const filename = path.join(ops, entry.name, 'record.json');
       if (!existsSync(filename) || lstatSync(filename).isSymbolicLink() || lstatSync(filename).size > 8 * 1024 * 1024) refuse('JOURNAL_CORRUPT', 'The operation projection is unreadable.');
       const item = JSON.parse(readFileSync(filename, 'utf8'));
-      if (![1, 2].includes(item.version)) refuse('JOURNAL_CORRUPT', 'Unknown operation version.');
+      if (![1, 2, 3].includes(item.version)) refuse('JOURNAL_CORRUPT', 'Unknown operation version.');
       const derivedIndexState = item.derivedIndexState ?? item.indexState;
       const indexState = item.git?.indexInstalled ? 'updated' : 'pending';
       operations.push({ id: item.id, requestId: item.id, batch: item.batch, state: item.state, commit: item.git?.commit ?? null, undoneBy: item.undoneBy, createdAt: item.createdAt, indexState, derivedIndexState });

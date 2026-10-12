@@ -35,3 +35,4 @@ import './embedding-candidates.test.mjs';
 import './hybrid-search.test.mjs';
 import './link-admission.test.mjs';
 import './garden-queue.test.mjs';
+import './garden-documents.test.mjs';

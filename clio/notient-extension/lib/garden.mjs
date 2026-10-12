@@ -6,6 +6,9 @@ import { readCoverage } from './embedding-off.mjs';
 import { graphDegrees } from './vitals-index.mjs';
 import { recoverVault, canonicalJson } from './write.mjs';
 import { withIndexWriter } from './index-lock.mjs';
+import { publishGardenDocument } from './garden-documents.mjs';
+import { manualFinding } from './garden-evidence.mjs';
+import { reconcileGarden } from './garden-reconcile.mjs';
 import { listRecords } from './journal.mjs';
 import { createGitAdapter } from './git.mjs';
 import { openGarden, gardenTransaction, gardenRun, liveGardenRun, queueCounts, gardenLimits } from './garden-store.mjs';
@@ -54,6 +57,7 @@ function eligible(vault, directory) {
 function begin(vault, directory, input, now) {
   const recovered = recoverVault(vault, directory);
   if (recovered.busy || recovered.blocking?.length || recovered.results.some(result => result.error || result.result === 'conflict_preserved')) return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, state: 'blocked', reason: 'recovery_required', recovery: recovered, items: [] };
+  reconcileGarden(vault, directory);
   const stamp = now(); const digest = revision(canonicalJson({ vault: vault.id, request: input.request }));
   const admitted = gardenTransaction(directory, vault, db => {
     const prior = db.prepare('SELECT * FROM runs WHERE id=?').get(input.runId);
@@ -70,6 +74,7 @@ function begin(vault, directory, input, now) {
   });
   if (admitted.busy) return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, state: 'busy', items: [] };
   if (admitted.retry && admitted.run.resultJson) {
+    if (JSON.parse(admitted.run.resultJson).undone) refuse('GARDEN_RUN_UNDONE', 'An undone run requires a fresh run ID and new review.');
     const db = openGarden(directory, vault);
     try { return { ...JSON.parse(admitted.run.resultJson), queue: queueCounts(db), receipts: db.prepare('SELECT key AS itemId,state,resultJson FROM queue WHERE runId=?').all(input.runId) }; }
     finally { db.close(); }
@@ -112,7 +117,7 @@ function begin(vault, directory, input, now) {
 }
 
 function settle(vault, directory, input, now) {
-  if (input.findingJson !== undefined) refuse('OPERATION_UNAVAILABLE', 'Manual findings are admitted with the managed digest seam.');
+  const finding = input.findingJson === undefined ? null : manualFinding(vault, directory, input.findingJson);
   return gardenTransaction(directory, vault, db => {
     liveGardenRun(db, input.runId, now(), true);
     const row = db.prepare('SELECT * FROM queue WHERE key=? AND runId=?').get(input.itemId, input.runId);
@@ -130,12 +135,12 @@ function settle(vault, directory, input, now) {
     const expected = records.filter(record => record.gardenRun?.runId === input.runId && record.gardenRun?.itemId === row.key && record.state === 'committed').flatMap(record => record.files.filter(file => file.path === row.path).map(file => file.after)).at(-1) ?? row.revision;
     const changed = currentFile(vault.path, row.path).revision !== expected;
     const state = changed ? 'skipped' : input.outcome === 'complete' ? 'complete' : row.attempts >= 5 ? 'poison' : 'queued';
-    const result = { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, itemId: row.key, state, operationIds: input.operationIds, reason: input.reason };
+    const result = { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, itemId: row.key, state, operationIds: input.operationIds, reason: input.reason, ...(finding ? { finding } : {}) };
     db.prepare('UPDATE queue SET state=?,processedRevision=?,lastError=?,resultJson=? WHERE key=?').run(state, state === 'complete' ? expected : row.processedRevision, input.outcome === 'complete' ? null : input.reason, JSON.stringify(result), row.key); return result;
   });
 }
 
-export function gardenCommand(raw, { directory = dataDirectory(), now = () => Date.now() } = {}) {
+export function gardenCommand(raw, { directory = dataDirectory(), now = () => Date.now(), ...options } = {}) {
   let input; let vault;
   try {
     input = gardenInput(raw);
@@ -144,6 +149,9 @@ export function gardenCommand(raw, { directory = dataDirectory(), now = () => Da
     if (vault.readOnly) refuse('READ_ONLY_VAULT', 'Garden work requires a writable registered vault.');
     if (input.action === 'begin') return begin(vault, directory, input, now);
     if (input.action === 'settle') return settle(vault, directory, input, now);
-    refuse('OPERATION_UNAVAILABLE', 'Managed garden publication is not yet available.');
-  } catch (error) { return { ok: false, tool: 'garden', vault: vault?.id ?? null, runId: input?.runId ?? raw?.runId ?? null, state: 'blocked', error: { code: error.code ?? 'GARDEN_UNAVAILABLE', message: error.message, retryable: error.retryable ?? false, paths: error.paths ?? [] } }; }
+    return publishGardenDocument(vault, directory, input, options);
+  } catch (error) {
+    if (input?.action === 'begin' && error.code === 'GARDEN_BUSY') return { ok: true, tool: 'garden', vault: vault.id, runId: input.runId, state: 'busy', items: [] };
+    return { ok: false, tool: 'garden', vault: vault?.id ?? null, runId: input?.runId ?? raw?.runId ?? null, state: 'blocked', error: { code: error.code ?? 'GARDEN_UNAVAILABLE', message: error.message, retryable: error.retryable ?? false, paths: error.paths ?? [] } };
+  }
 }

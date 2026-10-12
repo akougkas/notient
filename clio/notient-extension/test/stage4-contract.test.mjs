@@ -123,7 +123,7 @@ test('stage 4 actual revise link and relate commands publish version two and bat
     const input = { ...common, requestId: `contract-${operation}`, operation, revision: revision(readFileSync(path.join(f.vault.path, 'Source.md'))), ...fields };
     const before = snapshot(f.temporary); const preview = command(f, 'revise', { ...input, dryRun: true }); assert.equal(preview.status, 0, JSON.stringify(preview.value)); assert.equal(preview.value.outcome, 'preview'); assert.ok(preview.value[operation]); assert.deepEqual(snapshot(f.temporary), before);
     const written = command(f, 'revise', { ...input, planHash: preview.value.planHash }); assert.equal(written.status, 0, JSON.stringify(written.value)); assert.equal(written.value.ok, true); assert.ok(written.value.commit.oid);
-    assert.equal(readRecord(f.directory, f.vault, written.value.operationId).version, 2);
+    assert.equal(readRecord(f.directory, f.vault, written.value.operationId).version, 3);
     const retry = command(f, 'revise', { ...input, planHash: preview.value.planHash }); assert.equal(retry.status, 0, JSON.stringify(retry.value)); assert.equal(retry.value.operationId, written.value.operationId);
   }
   const inverse = { vault: f.vault.id, requestId: 'contract-inverse', batch: 'contract-undo', authorization, targetBatch: 'contract-edges' };

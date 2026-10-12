@@ -47,7 +47,7 @@ for (const [ordinal, [name, before, expected]] of goldens.entries()) test(`coord
   const written = writeOperation('revise', { ...input, planHash: preview.planHash }, options(f)); assert.equal(written.ok, true, JSON.stringify(written));
   assert.deepEqual(bytes(f), Buffer.from(expected)); assert.deepEqual(normalIndexEntries(f.vault.path).entries.get('Other.md').bytes, staged);
   if (before === expected) { assert.equal(written.outcome, 'noop'); assert.equal(written.operationId, null); return; }
-  const record = readRecord(f.directory, f.vault, written.operationId); assert.equal(record.version, 2); assert.equal(record.state, 'committed');
+  const record = readRecord(f.directory, f.vault, written.operationId); assert.equal(record.version, 3); assert.equal(record.state, 'committed');
   assert.deepEqual(record.link, written.link); assert.equal(record.relate, null); assert.equal(record.semanticEvidence, null);
   assert.deepEqual(record.vitalsBefore, [{ path: 'Source.md', lastUserEditMs: timestamp - 14 * 86400000 }]);
   assert.equal(record.files.length, 2); assert.equal(bytes(f, record.log.path).toString().split('\n').filter(line => line.startsWith('- ')).length, 1);
@@ -62,7 +62,7 @@ test('new nonrelationship operations freeze version two metadata and legacy retr
   const f = fixture(t, 'Authored original prose.\n');
   const input = { vault: f.vault.id, requestId: 'version-two-replace', batch: 'relationships', authorization, operation: 'replace', path: 'Source.md', revision: revision(bytes(f)), oldText: 'original', newText: 'changed' };
   const written = writeOperation('revise', input, options(f)); assert.equal(written.ok, true, JSON.stringify(written));
-  const record = readRecord(f.directory, f.vault, written.operationId); assert.equal(record.version, 2); assert.equal(record.link, null); assert.equal(record.relate, null); assert.equal(record.semanticEvidence, null);
+  const record = readRecord(f.directory, f.vault, written.operationId); assert.equal(record.version, 3); assert.equal(record.link, null); assert.equal(record.relate, null); assert.equal(record.semanticEvidence, null);
   assert.deepEqual(record.vitalsBefore, [{ path: 'Source.md', lastUserEditMs: timestamp - 14 * 86400000 }]);
   legacy(f, record.id); const before = snapshot(path.join(f.directory, 'journal'));
   const retry = writeOperation('revise', input, options(f)); assert.equal(retry.outcome, 'already_committed'); assert.equal(retry.link, null); assert.equal(retry.relate, null);
@@ -117,7 +117,7 @@ test('relationship dependencies and structural hashes bind target bytes and inve
 test('relationship recovery completes stamped partial publication after an index rebuild and preserves a later published save', t => {
   const f = fixture(t, 'Preserved authored prose.\n'); const input = request(f, 'link', 'relationship-recovery');
   const failed = writeOperation('revise', input, { ...options(f), barrier(name) { if (name === 'afterPublish') throw new Error('fixture interruption'); } }); assert.equal(failed.ok, false);
-  assert.match(bytes(f).toString(), /- \[\[Target\]\]/); const pending = readRecord(f.directory, f.vault, failed.operationId); assert.equal(pending.version, 2);
+  assert.match(bytes(f).toString(), /- \[\[Target\]\]/); const pending = readRecord(f.directory, f.vault, failed.operationId); assert.equal(pending.version, 3);
   unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
   const recovered = recoverVault(f.vault, f.directory); assert.equal(recovered.remaining.length, 0, JSON.stringify(recovered));
   const committed = readRecord(f.directory, f.vault, failed.operationId); assert.equal(committed.state, 'committed'); assert.equal(committed.git.indexInstalled, true);
@@ -193,7 +193,7 @@ test('capture frontmatter move replace and aggregate inverse freeze edit ages fo
   const replaced = writeOperation('revise', { vault: f.vault.id, requestId: 'v2-provenance-replace', batch: 'v2-history', authorization, operation: 'replace', path: 'Folder/Moved.md', revision: revision(bytes(f, 'Folder/Moved.md')), oldText: 'Original', newText: 'Changed' }, options(f)); assert.equal(replaced.ok, true, JSON.stringify(replaced));
   const metadata = writeOperation('revise', { vault: f.vault.id, requestId: 'v2-provenance-frontmatter', batch: 'v2-history', authorization, operation: 'frontmatter', path: 'Folder/Moved.md', revision: revision(bytes(f, 'Folder/Moved.md')), set: [{ key: 'tags', valueJson: '["preserved"]' }] }, options(f)); assert.equal(metadata.ok, true, JSON.stringify(metadata));
   for (const operation of [moved, replaced, metadata]) {
-    const record = readRecord(f.directory, f.vault, operation.operationId); assert.equal(record.version, 2);
+    const record = readRecord(f.directory, f.vault, operation.operationId); assert.equal(record.version, 3);
     assert.equal(record.vitalsBefore.length, record.files.filter(file => file.role === 'note').length);
     assert.ok(record.vitalsBefore.every(value => value.lastUserEditMs === timestamp - 14 * 86400000));
   }

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFileSync } from 'node:fs';
 import { writerFixture, put } from './write-helpers.mjs';
 import { git } from '../lib/git.mjs';
 import { openGarden } from '../lib/garden-store.mjs';
@@ -14,10 +15,15 @@ export function gardenFixture(t, files = { '0-inbox/A.md': '# A\n\nAuthored alph
   return f;
 }
 
-export async function gardenTool(f, name, input, { imports = [] } = {}) {
-  const child = spawn(process.execPath, [...imports.flatMap(filename => ['--import', filename]), fileURLToPath(new URL(`../tools/${name}.mjs`, import.meta.url)), JSON.stringify({ vault: f.vault.id, ...input })], { env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) }, stdio: ['ignore', 'pipe', 'pipe'] });
+export async function gardenTool(f, name, input, { imports = [], barrier } = {}) {
+  let entrypoint = fileURLToPath(new URL(`../tools/${name}.mjs`, import.meta.url));
+  if (barrier) {
+    entrypoint = path.join(f.temporary, 'fault-command.mjs');
+    writeFileSync(entrypoint, `import {runCommand} from ${JSON.stringify(new URL('../lib/command.mjs', import.meta.url).href)}; import {gardenCommand} from ${JSON.stringify(new URL('../lib/garden.mjs', import.meta.url).href)}; await runCommand('garden', input=>gardenCommand(input,{barrier(name){if(name===${JSON.stringify(barrier)})process.kill(process.pid,'SIGKILL')}}));`);
+  }
+  const child = spawn(process.execPath, [...imports.flatMap(filename => ['--import', filename]), entrypoint, JSON.stringify({ vault: f.vault.id, ...input })], { env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = ''; child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
-  const [status] = await once(child, 'exit'); return { status, value: JSON.parse(stdout), stderr };
+  const [status, signal] = await once(child, 'exit'); return { status, signal, value: stdout ? JSON.parse(stdout) : null, stderr };
 }
 
 export const beginGarden = (f, runId = 'garden-fixture-001') => gardenTool(f, 'garden', { action: 'begin', runId, request: 'Tend this fixture with bounded additive work and proposals.' });

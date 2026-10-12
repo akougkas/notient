@@ -34,7 +34,7 @@ export function openGarden(directory, vault, writable = false) {
         CREATE TABLE IF NOT EXISTS plan_actions (proposalId TEXT PRIMARY KEY,planRevision TEXT NOT NULL,requestId TEXT NOT NULL,inputDigest TEXT NOT NULL,operationId TEXT,state TEXT NOT NULL);`);
     }
     return db;
-  } catch (error) { db.close(); throw error; }
+  } catch (error) { db.close(); if (error.code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test(error.message)) refuse('GARDEN_BUSY', 'The garden writer is busy.', [], true); throw error; }
 }
 
 export function gardenTransaction(directory, vault, action) {
@@ -44,7 +44,7 @@ export function gardenTransaction(directory, vault, action) {
     if (current.path !== vault.path || current.readOnly) refuse('READ_ONLY_VAULT', 'Current registration must permit garden state changes.');
     const result = action(db); db.exec('COMMIT'); return result;
   }
-  catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error; }
+  catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); if (error.code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test(error.message)) refuse('GARDEN_BUSY', 'The garden writer is busy.', [], true); throw error; }
   finally { db.close(); }
 }
 
