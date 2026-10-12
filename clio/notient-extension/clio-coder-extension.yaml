@@ -419,6 +419,64 @@
             }
           }
         }
+      },
+      {
+        "name": "vitals",
+        "description": "Read revision-checked structural vitals from the external snapshot without promoting notes or changing the vault.",
+        "runtime": "node",
+        "entrypoint": "tools/vitals.mjs",
+        "timeoutMs": 60000,
+        "maxOutputBytes": 1048576,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vault"
+          ],
+          "properties": {
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "maturity": {
+              "type": "string",
+              "enum": [
+                "raw",
+                "adolescent",
+                "mature",
+                "synthesis-ready"
+              ]
+            },
+            "connectivityTier": {
+              "type": "string",
+              "enum": [
+                "isolated",
+                "sparse",
+                "connected",
+                "hub"
+              ]
+            },
+            "folder": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sort": {
+              "type": "string",
+              "enum": [
+                "health",
+                "freshness",
+                "words"
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        }
       }
     ]
   },
@@ -440,8 +498,22 @@
       "session_close"
     ],
     "hooks": [
-      { "on": "turn_start", "timeoutMs": 250, "onTimeout": "pass", "onError": "pass" },
-      { "on": "after_tool", "tools": ["extension_notient__search", "extension_notient__note"], "timeoutMs": 250, "onTimeout": "pass", "onError": "pass" }
+      {
+        "on": "turn_start",
+        "timeoutMs": 250,
+        "onTimeout": "pass",
+        "onError": "pass"
+      },
+      {
+        "on": "after_tool",
+        "tools": [
+          "extension_notient__search",
+          "extension_notient__note"
+        ],
+        "timeoutMs": 250,
+        "onTimeout": "pass",
+        "onError": "pass"
+      }
     ],
     "ui": [
       "status",

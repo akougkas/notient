@@ -280,6 +280,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       i = end + 1;
       continue;
     }
+    if (i < bodyStart && !yamlQuotes[i]) continue;
     const close = closingBracket(text, i, visible);
     if (close < 0) continue;
     if (text[close + 1] === '(') {

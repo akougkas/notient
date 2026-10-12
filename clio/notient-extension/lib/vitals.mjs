@@ -20,8 +20,8 @@ export function arithmeticVitals({ words, inbound, outbound, chunkCoverage, last
   return { freshness, wordBand, chunkCoverage, hasEdges, health: (wordBand + chunkCoverage + hasEdges) / 3, words, inbound, outbound, edges, connectivityTier: edges >= 12 ? 'hub' : edges >= 4 ? 'connected' : edges >= 1 ? 'sparse' : 'isolated', maturity: maturities[level], lastUserEditAt: new Date(lastUserEditMs).toISOString() };
 }
 
-export function proseMetrics(bytes, parsed) {
-  const { visible } = tokenizeMove(bytes, { visibility: true });
+export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { visibility: true })) {
+  const { visible } = tokenized;
   const text = bytes.toString('utf8');
   const wordPattern = /[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu;
   let words = 0;

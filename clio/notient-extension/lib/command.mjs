@@ -35,7 +35,7 @@ export async function runCommand(name, handler) {
     if (JSON.parse(output)?.ok === false) process.exitCode = 1;
   } catch (error) {
     const write = ['capture', 'revise', 'undo'].includes(name);
-    const result = write ? { ok: false, tool: name, vault: null, requestId: null, operationId: null, state: 'refused', error: { code: 'INVALID_INPUT', message: error.message, retryable: false, paths: [] }, recovery: [], partial: false, commit: null } : { error: error.message };
+    const result = write ? { ok: false, tool: name, vault: null, requestId: null, operationId: null, state: 'refused', error: { code: 'INVALID_INPUT', message: error.message, retryable: false, paths: [] }, recovery: [], partial: false, commit: null } : name === 'vitals' ? { ok: false, tool: name, vault: null, error: { code: 'INVALID_INPUT', message: error.message, retryable: false, paths: [] } } : { error: error.message };
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exitCode = 1;
   }
