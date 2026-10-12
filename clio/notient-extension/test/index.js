@@ -6,3 +6,4 @@ import './revise.test.mjs';
 import './undo.test.mjs';
 import './fault.test.mjs';
 import './move.test.mjs';
+import './move-publication.test.mjs';

@@ -1,15 +1,15 @@
 import { existsSync, mkdirSync, lstatSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, renameSync, unlinkSync, chmodSync, readdirSync, fchmodSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { currentFile, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
+import { currentFile, readNote, writePath, revision, refuse, WriteError, validText, MAX_NOTE_BYTES, portableName, portableFold } from './paths.mjs';
 import { selectVault, readConfig, dataDirectory } from './config.mjs';
 import { createGitAdapter, preflightGit, git } from './git.mjs';
 import { statusSnapshot } from './status.mjs';
 import { documentSpans, replaceBody, editFrontmatter, parseMarkdown, resolveLink } from './markdown.mjs';
 import { repairCommittedIndex } from './index.mjs';
 import { listNotes } from './vault.mjs';
-import { scanMoveVault, planMove } from './move.mjs';
-import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile } from './journal.mjs';
+import { scanMoveVault, planMove, moveInventory } from './move.mjs';
+import { persistIntent, saveRecord, readBlob, readRecord, listRecords, operationDirectory, withWriterLock, requestIdPattern, syncDirectory, durableFile, freezeIntentSet, prepareFileIntents, readFileIntents, claimFileIntent, markFileApplied } from './journal.mjs';
 
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -25,13 +25,14 @@ export function requestDigest(vault, tool, input) {
 export function requireAuthority(vault, authorization, files, { recovery = false, dryRun = false } = {}) {
   if (!authorization || !['operator', 'clio', 'unattended'].includes(authorization.origin) || !validText(authorization.request, 'Authorization request').trim()) refuse('INVALID_AUTHORIZATION', 'An origin and exact nonblank request are required.');
   if (vault.readOnly && !dryRun) refuse(recovery ? 'RECOVERY_BLOCKED_AUTHORIZATION' : 'READ_ONLY_VAULT', 'The registered vault is read-only.');
-  if (vault.role === 'operator' && authorization.origin === 'unattended' && files.some(file => file.role !== 'log' && !file.path.startsWith('Notient/'))) refuse('UNATTENDED_REFUSED', 'Unattended changes in an operator vault must remain inside Notient.', files.map(file => file.path));
+  if (vault.role === 'operator' && authorization.origin === 'unattended' && files.some(file => file.role !== 'log' && !file.path.startsWith('Notient/'))) refuse(recovery ? 'RECOVERY_BLOCKED_AUTHORIZATION' : 'UNATTENDED_REFUSED', 'Unattended changes in an operator vault must remain inside Notient.', files.map(file => file.path));
 }
 
 export function freshAuthority(vault, directory, record) {
   const selected = selectVault(vault.id, directory);
   if (selected.path !== vault.path) refuse('RECOVERY_BLOCKED_AUTHORIZATION', 'The registered vault root changed.');
   requireAuthority(selected, record.authorization, record.files, { recovery: true });
+  if ((selected.role === 'operator' || record.roleAtIntent === 'operator') && record.authorization.origin === 'unattended' && (record.operation === 'move' || record.undo.targets.some(id => readRecord(directory, vault, id).operation === 'move'))) refuse('RECOVERY_BLOCKED_AUTHORIZATION', 'Unattended structural work cannot be recovered in an operator vault.');
 }
 
 export function classifyFiles(vault, record) {
@@ -75,10 +76,11 @@ export function applyRecord(vault, directory, record, { observe = () => {}, sync
     if (performance.now() > deadline) refuse('WRITE_TIMEOUT', 'The cooperative write deadline expired.', [], true);
     const file = record.files.find(candidate => candidate.path === name);
     let current = currentFile(vault.path, name);
-    if (current.revision === file.after) { file.progress = 'applied'; continue; }
+    if (current.revision === file.after) { markFileApplied(directory, vault, record, file); file.progress = 'applied'; continue; }
     if (current.revision !== file.before) refuse('REVISION_CONFLICT', 'The file no longer matches its planned revision.', [name], true);
     ensureVaultParents(vault, record, file, sync);
     const filename = writePath(vault.path, name);
+    claimFileIntent(directory, vault, record, file);
     observe('beforeRecheck', record, file);
     const checked = currentFile(vault.path, name);
     if (checked.revision !== file.before || (current.stat && (checked.stat?.ino !== current.stat.ino || checked.stat?.dev !== current.stat.dev))) refuse('REVISION_CONFLICT', 'The file changed before its final publication check.', [name], true);
@@ -94,6 +96,7 @@ export function applyRecord(vault, directory, record, { observe = () => {}, sync
     observe('afterFilePublish', record, file);
     current = currentFile(vault.path, name);
     if (current.revision !== file.after) refuse('REVISION_CONFLICT', 'The published file changed before verification.', [name], true);
+    markFileApplied(directory, vault, record, file);
     file.progress = 'applied';
     saveRecord(directory, vault, record, sync);
   }
@@ -114,25 +117,28 @@ export function cleanupSiblings(vault, record, sync = syncDirectory) {
 }
 
 function checkDependencies(vault, record) {
-  for (const read of record.reads) if (currentFile(vault.path, read.path).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
+  for (const read of record.reads) if ((record.intentSet ? readNote(vault.path, read.path) : currentFile(vault.path, read.path)).revision !== read.revision) refuse('DEPENDENCY_CHANGED', 'A reviewed reference dependency changed.', [read.path]);
   if (!record.inventoryHash) return;
-  const names = new Set(listNotes(vault.path).notes.map(note => note.path));
+  const names = new Set(record.intentSet ? moveInventory(vault.path) : listNotes(vault.path).notes.map(note => note.path));
   for (const file of record.files) { if (file.before === null) names.delete(file.path); else names.add(file.path); }
   if (revision(canonicalJson([...names].sort())) !== record.inventoryHash) refuse('DEPENDENCY_CHANGED', 'The reviewed note inventory changed.');
 }
 
 export function newRecord(vault, plan) {
-  const files = plan.files.map((file, ordinal) => ({ path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
-  return {
+  const files = plan.files.map((file, ordinal) => ({ ...(plan.structural ? { intentId: randomUUID() } : {}), path: file.path, role: file.role ?? 'note', action: file.before === null ? 'create' : file.after === null ? 'delete' : 'replace', before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode ?? 0o600, temp: file.after === null ? null : path.posix.join(path.posix.dirname(file.path), `.notient-${plan.id}-${ordinal}.tmp`), progress: 'pending' }));
+  const record = {
     version: 1, id: plan.id, vaultId: vault.id, vaultPath: vault.path,
     tool: plan.tool, operation: plan.operation, requestDigest: plan.requestDigest, batch: plan.batch,
     authorization: plan.authorization, createdAt: plan.createdAt, updatedAt: plan.createdAt,
-    state: 'intent', planHash: plan.planHash, source: plan.source ?? null, destination: null,
+    state: 'intent', planHash: plan.planHash, source: plan.source ?? null, destination: plan.destination ?? null,
+    ...(plan.structural ? { roleAtIntent: vault.role } : {}),
     reads: plan.reads ?? [], inventoryHash: plan.inventoryHash ?? null, files, applyOrder: files.map(file => file.path), createdDirectories: [],
     git: { ref: plan.git?.ref ?? null, baseHead: plan.git?.baseHead ?? null, tree: null, commit: null, indexBeforeHash: null, indexAfterHash: null, lockSeed: null, indexInstalled: false },
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
   };
+  if (plan.structural) freezeIntentSet(record);
+  return record;
 }
 
 export function persistPlan(vault, directory, plan, sync = syncDirectory) {
@@ -151,18 +157,22 @@ export function persistPlan(vault, directory, plan, sync = syncDirectory) {
     }
   }
   persistIntent(directory, vault, record, blobs, name => { const supported = sync(name); if (!supported) record.durability = 'directory-sync-unavailable'; return supported; });
+  prepareFileIntents(directory, vault, record, record.files.every(file => currentFile(vault.path, file.path).revision === file.before));
   return record;
 }
 
 export function finishRecord(vault, directory, record, adapter, options = {}) {
   if (!adapter) refuse('GIT_UNAVAILABLE', 'The Git write adapter is required.');
   const sync = name => { const supported = (options.sync ?? syncDirectory)(name); if (!supported) record.durability = 'directory-sync-unavailable'; return supported; };
+  prepareFileIntents(directory, vault, record, record.intentSet && record.files.every(file => currentFile(vault.path, file.path).revision === file.before));
+  const intents = record.intentSet ? readFileIntents(directory, vault, record) : null;
   const published = adapter.recognize(record);
   const states = published ? [] : classifyFiles(vault, record);
+  for (const item of states) if (intents && item.state === 'after' && item.file.before !== item.file.after && intents.get(item.file.path).write_started_at_ms === null) { item.state = 'conflict'; item.reason = 'UNSTAMPED_AFTER: matching bytes have no durable publication stamp.'; }
   const conflicts = states.filter(item => item.state === 'conflict');
   if (conflicts.length) {
     record.state = 'conflicted';
-    record.conflicts = conflicts.map(({ file, current }) => ({ path: file.path, expectedBefore: file.before, expectedAfter: file.after, actual: current.revision, reason: 'Current bytes equal neither recorded revision.' }));
+    record.conflicts = conflicts.map(({ file, current, reason }) => ({ path: file.path, expectedBefore: file.before, expectedAfter: file.after, actual: current.revision, reason: reason ?? 'NEWER_EDIT: current bytes equal neither recorded revision.' }));
     saveRecord(directory, vault, record, sync);
     return { operationId: record.id, result: 'conflict_preserved', commit: null, conflicts: record.conflicts };
   }
@@ -182,6 +192,8 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     }
     if (!record.git.commit) { adapter.prepare(record); saveRecord(directory, vault, record, sync); }
     prepareSiblings(vault, directory, record, sync);
+    const first = states.find(item => item.state === 'before');
+    if (first) claimFileIntent(directory, vault, record, first.file);
     options.barrier?.('afterIntent', record);
     checkDependencies(vault, record);
     const started = performance.now();
@@ -326,7 +338,7 @@ function inputFor(tool, raw) {
       if (!input.oldText.length || input.oldText.length > 24000 || input.newText.length > 24000) refuse('INVALID_INPUT', 'Replacement strings exceed their declared bounds.');
     } else if (input.operation === 'move') {
       if (typeof input.destination !== 'string' || !input.destination.length || input.destination.startsWith('Notient/Log/')) refuse('INVALID_INPUT', 'Move requires a destination outside managed logs.');
-      if (!input.dryRun) refuse('STAGE_NOT_ENABLED', 'Move publication is not enabled yet; use dryRun: true.');
+      if (!input.dryRun && !input.planHash) refuse('PLAN_HASH_REQUIRED', 'A real move requires its preceding dry-run planHash.');
     } else {
       input.set ??= []; input.unset ??= [];
       if (!Array.isArray(input.set) || !Array.isArray(input.unset) || input.set.length > 32 || input.unset.length > 32 || !input.set.length && !input.unset.length) refuse('INVALID_INPUT', 'Supply at least one set or unset entry, with at most 32 of each.');
@@ -478,6 +490,10 @@ export function buildWritePlan(tool, vault, directory, input) {
   const noop = inverse?.noop || files.every(file => file.before !== null && file.after !== null && file.before.equals(file.after));
   const audit = noop ? null : plannedLog(vault, input, operation, source, files, createdAt, undo);
   if (audit) files.push(audit.file);
+  if (move) {
+    const blobs = new Map(files.flatMap(file => [file.before, file.after]).filter(bytes => bytes !== null).map(bytes => [revision(bytes), bytes]));
+    if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
+  }
   const gitStarted = performance.now();
   const git = preflightGit(vault, files);
   const gitMs = performance.now() - gitStarted;
@@ -485,7 +501,7 @@ export function buildWritePlan(tool, vault, directory, input) {
   const inventoryHash = inverse?.inventoryHash ?? (move ? revision(canonicalJson(move.inventory)) : null);
   const planHash = revision(canonicalJson({ ...(move ? { request: { vault: vault.id, operation, source, destination: input.destination, batch: input.batch, authorization: input.authorization } } : {}), files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
+  return { id: input.requestId, tool, operation, structural: !!move, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: performance.now() - started - gitMs, gitMs } };
 }
 
 export function byteSplices(before, after) {
@@ -553,7 +569,7 @@ export function writeOperation(tool, raw, { directory = dataDirectory(), ...opti
       return result;
     }
     requireAuthority(vault, input.authorization, []);
-    if (tool === 'revise' && !existing() && !listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) {
+    if (tool === 'revise' && (input.operation !== 'move' || input.path === input.destination) && !existing() && !listRecords(directory, vault).some(item => !['committed', 'aborted'].includes(item.state))) {
       const plan = buildWritePlan(tool, vault, directory, input);
       if (plan.noop) return previewResult(tool, vault, input, plan, started);
     }

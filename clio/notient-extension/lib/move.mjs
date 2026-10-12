@@ -9,6 +9,20 @@ const noMd = name => name.replace(/\.md$/i, '');
 const labelKey = label => label.replace(/\\([\p{P}\p{S}])/gu, '$1').trim().replace(/\s+/g, ' ').toLowerCase();
 const external = target => /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target);
 
+export function moveInventory(root) {
+  const names = [];
+  function visit(parent) {
+    for (const entry of readdirSync(path.join(root, parent), { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
+      const name = parent ? `${parent}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(name);
+      else if (entry.isFile()) names.push(name);
+    }
+  }
+  visit('');
+  return names.sort();
+}
+
 export function scanMoveVault(root, { maxNotes = 10000, maxBytes = 256 * 1024 * 1024 } = {}) {
   const inventory = [];
   const notes = [];

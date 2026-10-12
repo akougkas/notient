@@ -208,7 +208,7 @@
       },
       {
         "name": "revise",
-        "description": "Preview a move with reference repairs, or preview and apply body or frontmatter changes with the read revision.",
+        "description": "Preview or apply body, frontmatter or reference-safe move changes with the read revision. A real move requires the preview planHash.",
         "runtime": "node",
         "entrypoint": "tools/revise.mjs",
         "timeoutMs": 300000,

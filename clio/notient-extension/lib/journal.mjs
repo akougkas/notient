@@ -52,7 +52,8 @@ export function operationDirectory(directory, vault, id) {
 export function validateRecord(record, vault) {
   const required = ['version', 'id', 'vaultId', 'vaultPath', 'tool', 'operation', 'requestDigest', 'batch', 'authorization', 'createdAt', 'updatedAt', 'state', 'planHash', 'source', 'destination', 'reads', 'inventoryHash', 'files', 'applyOrder', 'createdDirectories', 'git', 'log', 'undo', 'undoneBy', 'indexState', 'durability', 'conflicts', 'timings', 'error'];
   if (!record || required.some(key => !Object.hasOwn(record, key)) || record.version !== 1 || !requestIdPattern.test(record.id) || record.vaultId !== vault.id || record.vaultPath !== vault.path || !states.includes(record.state) || !hashPattern.test(record.requestDigest) || !hashPattern.test(record.planHash) || !Array.isArray(record.files) || record.files.length > 101) refuse('JOURNAL_CORRUPT', 'The operation record has an invalid schema.');
-  if (!['capture', 'revise', 'undo'].includes(record.tool) || !['capture', 'replace', 'frontmatter', 'undo'].includes(record.operation) || !['operator', 'clio', 'unattended'].includes(record.authorization?.origin) || typeof record.authorization.request !== 'string' || !record.authorization.request.trim()) refuse('JOURNAL_CORRUPT', 'The recorded authority or operation is invalid.');
+  if (!['capture', 'revise', 'undo'].includes(record.tool) || !['capture', 'replace', 'frontmatter', 'move', 'undo'].includes(record.operation) || !['operator', 'clio', 'unattended'].includes(record.authorization?.origin) || typeof record.authorization.request !== 'string' || !record.authorization.request.trim()) refuse('JOURNAL_CORRUPT', 'The recorded authority or operation is invalid.');
+  if (record.operation === 'move' && !record.intentSet || record.intentSet && (typeof record.intentSet.prepared !== 'boolean' || record.intentSet.manifestHash !== structuralManifest(record) || !['operator', 'own'].includes(record.roleAtIntent) || record.files.some(file => typeof file.intentId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.intentId)) || new Set(record.files.map(file => file.intentId)).size !== record.files.length)) refuse('JOURNAL_CORRUPT', 'Structural publication intents are invalid.');
   if (!Array.isArray(record.applyOrder) || new Set(record.applyOrder).size !== record.files.length || record.files.some(file => !record.applyOrder.includes(file.path))) refuse('JOURNAL_CORRUPT', 'The recorded publication order is invalid.');
   const seen = new Set();
   for (const file of record.files) {
@@ -69,6 +70,90 @@ export function validateRecord(record, vault) {
   if (!record.log || typeof record.log.path !== 'string' || typeof record.log.line !== 'string' || !record.log.line.startsWith('- ') || /[\r\n]/.test(record.log.line) || !Array.isArray(record.undo.commits) || !record.undo.targets.every(id => requestIdPattern.test(id)) || !record.undo.commits.every(value => value !== null && oid(value)) || record.undoneBy !== null && !requestIdPattern.test(record.undoneBy) || !['full', 'directory-sync-unavailable'].includes(record.durability)) refuse('JOURNAL_CORRUPT', 'Recorded audit and undo fields are invalid.');
   if (!Array.isArray(record.createdDirectories) || !record.createdDirectories.every(name => typeof name === 'string') || !record.timings || !['scanMs', 'lockWaitMs', 'journalMs', 'applyMs', 'gitMs', 'totalMs'].every(key => Number.isFinite(record.timings[key]) && record.timings[key] >= 0) || record.error !== null && (typeof record.error?.code !== 'string' || typeof record.error?.message !== 'string')) refuse('JOURNAL_CORRUPT', 'Recorded durability and timing fields are invalid.');
   return record;
+}
+
+function structuralManifest(record) {
+  return revision(JSON.stringify({ id: record.id, vaultId: record.vaultId, authorization: record.authorization, batch: record.batch, operation: record.operation, applyOrder: record.applyOrder, files: record.files.map(file => ({ intentId: file.intentId, path: file.path, role: file.role, action: file.action, before: file.before, after: file.after, mode: file.mode, temp: file.temp })) }));
+}
+
+export function freezeIntentSet(record) {
+  record.intentSet = { manifestHash: structuralManifest(record), prepared: false };
+}
+
+function withIntents(directory, vault, handler, create = false) {
+  const filename = path.join(journalRoot(directory, vault), 'intents.db');
+  if (!existsSync(filename) && !create) refuse('JOURNAL_CORRUPT', 'Authoritative publication intents are missing.');
+  for (const name of [filename, `${filename}-wal`, `${filename}-shm`]) if (existsSync(name)) {
+    const stat = lstatSync(name);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) refuse('JOURNAL_CORRUPT', 'Publication intent storage is unsafe.');
+  }
+  if (!existsSync(filename)) durableFile(filename, Buffer.alloc(0));
+  const database = new DatabaseSync(filename);
+  try {
+    chmodSync(filename, 0o600);
+    database.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+    if (create) database.exec('CREATE TABLE IF NOT EXISTS intents (id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, path TEXT NOT NULL, manifest_hash TEXT NOT NULL, before_hash TEXT, after_hash TEXT, authorization_hash TEXT NOT NULL, state TEXT NOT NULL, write_started_at_ms INTEGER, UNIQUE(operation_id,path))');
+    const result = handler(database);
+    for (const name of [`${filename}-wal`, `${filename}-shm`]) if (existsSync(name)) chmodSync(name, 0o600);
+    syncDirectory(path.dirname(filename));
+    return result;
+  } catch (error) {
+    if (error instanceof WriteError) throw error;
+    refuse('JOURNAL_CORRUPT', `Publication intents cannot be verified: ${error.message}`);
+  } finally { database.close(); }
+}
+
+function verifyIntentRows(record, rows) {
+  if (!record.intentSet || record.intentSet.manifestHash !== structuralManifest(record) || typeof record.intentSet.prepared !== 'boolean' || rows.length !== record.files.length) refuse('JOURNAL_CORRUPT', 'The publication manifest or row set is invalid.');
+  const authorization = revision(JSON.stringify(record.authorization));
+  const result = new Map();
+  for (const file of record.files) {
+    const row = rows.find(candidate => candidate.id === file.intentId);
+    if (!row || row.operation_id !== record.id || row.path !== file.path || row.manifest_hash !== record.intentSet.manifestHash || row.before_hash !== file.before || row.after_hash !== file.after || row.authorization_hash !== authorization || !['prepared', 'applied'].includes(row.state) || row.write_started_at_ms !== null && (!Number.isSafeInteger(row.write_started_at_ms) || row.write_started_at_ms < 0) || row.state === 'applied' && row.write_started_at_ms === null) refuse('JOURNAL_CORRUPT', 'A publication intent differs from its immutable manifest.', [file.path]);
+    result.set(file.path, row);
+  }
+  return result;
+}
+
+export function readFileIntents(directory, vault, record) {
+  return withIntents(directory, vault, database => verifyIntentRows(record, database.prepare('SELECT * FROM intents WHERE operation_id=?').all(record.id)));
+}
+
+export function prepareFileIntents(directory, vault, record, allBefore) {
+  if (!record.intentSet) return;
+  withIntents(directory, vault, database => {
+    const rows = database.prepare('SELECT * FROM intents WHERE operation_id=?').all(record.id);
+    if (rows.length) { verifyIntentRows(record, rows); return; }
+    if (record.intentSet.prepared || !allBefore) refuse('JOURNAL_CORRUPT', 'Missing prepared intents cannot be reconstructed from after-bytes.');
+    if (record.intentSet.manifestHash !== structuralManifest(record)) refuse('JOURNAL_CORRUPT', 'Publication manifest mismatch.');
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      const insert = database.prepare('INSERT INTO intents VALUES (?,?,?,?,?,?,?, ?,NULL)');
+      for (const file of record.files) insert.run(file.intentId, record.id, file.path, record.intentSet.manifestHash, file.before, file.after, revision(JSON.stringify(record.authorization)), 'prepared');
+      database.exec('COMMIT');
+    } catch (error) { database.exec('ROLLBACK'); throw error; }
+  }, !record.intentSet.prepared);
+  if (!record.intentSet.prepared) { record.intentSet.prepared = true; saveRecord(directory, vault, record); }
+}
+
+export function claimFileIntent(directory, vault, record, file) {
+  if (!record.intentSet) return;
+  withIntents(directory, vault, database => {
+    const rows = database.prepare('SELECT * FROM intents WHERE operation_id=?').all(record.id);
+    const row = verifyIntentRows(record, rows).get(file.path);
+    if (row.write_started_at_ms !== null) return;
+    const update = database.prepare("UPDATE intents SET write_started_at_ms=? WHERE id=? AND write_started_at_ms IS NULL AND state='prepared'").run(Date.now(), file.intentId);
+    if (Number(update.changes) !== 1) refuse('INTENT_ALREADY_CLAIMED', 'A publication intent cannot be claimed by another writer.', [file.path]);
+  });
+}
+
+export function markFileApplied(directory, vault, record, file) {
+  if (!record.intentSet) return;
+  withIntents(directory, vault, database => {
+    verifyIntentRows(record, database.prepare('SELECT * FROM intents WHERE operation_id=?').all(record.id));
+    const update = database.prepare("UPDATE intents SET state='applied' WHERE id=? AND write_started_at_ms IS NOT NULL").run(file.intentId);
+    if (Number(update.changes) !== 1) refuse('UNSTAMPED_AFTER', 'Matching after-bytes lack a durable publication stamp.', [file.path]);
+  });
 }
 
 export function readRecord(directory, vault, id, verifyBlobs = true) {

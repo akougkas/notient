@@ -283,3 +283,20 @@ Read-only individual planner measurements, with reports retained in ignored `.lo
 | Vaultex, `agent-memory.md` in external_sources | 994 | 2,343 | 16,738,690 | 35,970.65 | 13,185.78 | 49,156.44 | Refused, 1,000 blockers counted, 100 reported, 0 changes |
 
 The Vaultex run refused unsupported link-bearing syntax as well as affected ambiguity. These are observations of one proposed move, not an estimate of accepted moves or a throughput percentile. No file in either vault was published or installed.
+
+## Stage 2b step 2: move publication
+
+Real move now requires the preview `planHash` and uses the shared coordinator. Publication order is destination creation, other referrers sorted by path, source removal after a final raw revision/identity check, then the frozen log. All structural file intents are inserted together in external `intents.db`, using WAL and `synchronous=FULL`; each publication receives a durable stamp and an applied marker. Recovery checks the complete manifest and every path before resuming. Missing or mismatching rows block with `JOURNAL_CORRUPT`; unstamped after-bytes and torn creations remain conflicts. Records from 2a remain readable while the architect reviews their separate semantics.
+
+Actual checks:
+
+```text
+node --test clio/notient-extension/test
+  tests 101, pass 101, fail 0, duration_ms 42155.35765
+clio-coder extensions validate clio/notient-extension
+  Valid; Registration check: passed; fs.write: []
+```
+
+A fresh command-process measurement on an isolated toy-vault copy committed `demo-move-001`, batch `stage2b-demo`, OID `5bd619dadba551b26ea734418e27879bcf3e3903`. Its delta contains 7 note paths plus one monthly log, with 5 reference splices. The unrelated staged entry stayed byte-identical. Preview took 156.72 ms; the real command took 1,679.99 ms end to end. Internal measurements: scan 22.40 ms, lock 11.66 ms, initial journal 136.06 ms, publication 440.94 ms, Git 843.53 ms, total 1,627.98 ms. The complete request/results and path set are retained in ignored `.local/stage2b-demo-ArOB9v/measurement.json`.
+
+Fixtures cover partial destination/referrer progress, one original candidate and log after recovery, exact after-bytes supplied without a stamp, torn destinations, final-source saves, changed dependencies/attachments, origin/request hash binding, all rows prepared before the first stamp, corrupt rows and revoked authority. No Vaultex write or installation was performed.

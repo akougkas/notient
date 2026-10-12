@@ -169,7 +169,7 @@ test('revise move preview returns exact splices and diffs without changing any w
   assert.equal(result.changes.find(file => file.path === 'From.md').splices.length, 2);
   assert.ok(result.changes.every(file => file.diff.includes('@@')));
   assert.deepEqual(snapshot(f.temporary), before);
-  assert.equal(writeOperation('revise', { ...input, dryRun: false }, { directory: f.directory }).error.code, 'STAGE_NOT_ENABLED');
+  assert.equal(writeOperation('revise', { ...input, dryRun: false }, { directory: f.directory }).error.code, 'PLAN_HASH_REQUIRED');
   const tool = fileURLToPath(new URL('../tools/revise.mjs', import.meta.url));
   const cli = spawnSync(process.execPath, [tool, JSON.stringify(input)], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) } });
   assert.equal(cli.status, 0, cli.stderr + cli.stdout);
