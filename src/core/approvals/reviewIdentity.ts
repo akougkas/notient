@@ -30,10 +30,17 @@ function appendSubjects(text: string): string[] {
     if (records.length !== [...text.matchAll(START_MARKER)].length || records.length === 0)
       return [`text:${digest(text)}`];
     for (const record of records) {
+      const qualifiedRecords = [...new Set(record.qualifications.flatMap((qualification) => {
+        const match = /^This qualifies retained record (i-[a-f0-9]{64}); it does not establish that the conclusion is false\.$/u.exec(qualification);
+        return match ? [match[1]!] : [];
+      }))].sort();
+      const subject = record.evidence.length > 0 || record.relationships.length > 0
+        ? intelligenceSuppressionSubject(record)
+        : `record:${record.kind}:${digest(record)}`;
       subjects.add(
-        record.evidence.length > 0 || record.relationships.length > 0
-          ? intelligenceSuppressionSubject(record)
-          : `record:${record.kind}:${digest(record)}`,
+        qualifiedRecords.length > 0 || record.assessmentOf !== undefined
+          ? `${subject}:targets:${digest({ qualifiedRecords, assessmentOf: record.assessmentOf ?? null })}`
+          : subject,
       );
     }
     const authored = withoutRetainedIntelligence(text).split(/\r?\n/u)
