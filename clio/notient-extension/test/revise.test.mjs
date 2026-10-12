@@ -23,11 +23,11 @@ function reviseFixture(t, bytes = '# Note\n\nOriginal sentence.\n') {
 
 const inputFor = f => ({ vault: f.vault.id, requestId: 'revise-golden-001', batch: 'revise-test', authorization: { origin: 'operator', request: 'Replace the original sentence.' }, operation: 'replace', path: 'One.md', revision: revision(readFileSync(path.join(f.vault.path, 'One.md'))), oldText: 'Original sentence.', newText: 'Revised sentence.' });
 
-test('body replacement preserves BOM, frontmatter, Unicode and exact supplied line endings', () => {
+test('body replacement preserves BOM, frontmatter, Unicode and the matched newline convention', () => {
   for (const [before, oldText, newText, after] of [
     ['# Note\nOriginal sentence.\n', 'Original sentence.', 'Revised sentence.', '# Note\nRevised sentence.\n'],
     ['\uFEFF--- \r\ntitle: Original sentence.\r\n...\r\n# Body\r\nOriginal sentence.\r\n', 'Original sentence.', 'Revised sentence.', '\uFEFF--- \r\ntitle: Original sentence.\r\n...\r\n# Body\r\nRevised sentence.\r\n'],
-    ['# Café 🧠\r\nOne\r\nTwo\nLast', 'One\r\nTwo', 'Changed\nLines', '# Café 🧠\r\nChanged\nLines\nLast'],
+    ['# Café 🧠\r\nOne\r\nTwo\nLast', 'One\r\nTwo', 'Changed\nLines', '# Café 🧠\r\nChanged\r\nLines\nLast'],
     ['# Note\nNo final newline', 'No final newline', 'New final newline\n', '# Note\nNew final newline\n'],
   ]) {
     const result = replaceBody(Buffer.from(before), oldText, newText);
@@ -35,6 +35,17 @@ test('body replacement preserves BOM, frontmatter, Unicode and exact supplied li
     const splice = result.splices[0];
     assert.deepEqual(Buffer.concat([Buffer.from(before).subarray(0, splice.startByte), Buffer.from(splice.replacement), Buffer.from(before).subarray(splice.endByte)]), result.bytes);
   }
+});
+
+test('R5 separator fallback follows the dominant file style and mixed-span multiline edits refuse', () => {
+  for (const [before, oldText, newText, expected] of [
+    ['First\nSecond\r\nThird\r\nPhrase', 'Phrase', 'New\nLines', 'First\nSecond\r\nThird\r\nNew\r\nLines'],
+    ['First\r\nSecond\nThird\nPhrase', 'Phrase', 'New\r\nLines', 'First\r\nSecond\nThird\nNew\nLines'],
+    ['One\r\nTwo\nLast', 'One\r\nTwo\n', 'Single', 'SingleLast'],
+    ['One\r\nTwo\nLast', 'One\r\nTwo\n', 'One\r\nTwo\n', 'One\r\nTwo\nLast'],
+  ]) assert.deepEqual(replaceBody(Buffer.from(before), oldText, newText).bytes, Buffer.from(expected));
+  assert.throws(() => replaceBody(Buffer.from('One\r\nTwo\nLast'), 'One\r\nTwo\n', 'New\nLines'), error => error.code === 'MIXED_NEWLINE_EDIT');
+  assert.throws(() => replaceBody(Buffer.from('Phrase'), 'Phrase', 'New\rLine'), error => error.code === 'INVALID_INPUT');
 });
 
 test('a BOM without frontmatter stays outside the body and does not hide the first heading', () => {

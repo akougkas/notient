@@ -23,6 +23,7 @@ export function documentSpans(bytes) {
 
 export function replaceBody(bytes, oldText, newText) {
   validText(oldText, 'oldText'); validText(newText, 'newText');
+  if (/\r(?!\n)/.test(newText)) refuse('INVALID_INPUT', 'newText cannot contain bare CR.');
   if (!oldText.length) refuse('INVALID_INPUT', 'oldText cannot be empty.');
   const document = documentSpans(bytes);
   const matches = [];
@@ -35,6 +36,14 @@ export function replaceBody(bytes, oldText, newText) {
     offset++;
   }
   if (!matches.length) refuse('QUOTE_NOT_FOUND', 'oldText is not an exact supplied body quotation. Preserve punctuation and whitespace.');
+  if (oldText === newText) return { bytes, splices: [] };
+  const conventions = new Set(oldText.match(/\r?\n/g) ?? []);
+  if (conventions.size > 1 && newText.includes('\n')) refuse('MIXED_NEWLINE_EDIT', 'A multiline replacement cannot choose a convention for a mixed-style matched span.');
+  const endings = document.lines.map(line => line.ending);
+  const crlf = endings.filter(ending => ending === '\r\n').length;
+  const lf = endings.filter(ending => ending === '\n').length;
+  const fallback = crlf === lf ? document.newline : crlf > lf ? '\r\n' : '\n';
+  newText = newText.replace(/\r?\n/g, conventions.size === 1 ? [...conventions][0] : fallback);
   const startByte = Buffer.byteLength(document.text.slice(0, matches[0]));
   const endByte = startByte + Buffer.byteLength(oldText);
   return { bytes: Buffer.concat([bytes.subarray(0, startByte), Buffer.from(newText), bytes.subarray(endByte)]), splices: [{ startByte, endByte, replacement: newText }] };
