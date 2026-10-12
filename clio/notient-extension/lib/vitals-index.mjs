@@ -17,6 +17,24 @@ export function storedVitals(db) {
   return new Map(db.prepare('SELECT * FROM note_vitals').all().map(row => [row.path, row]));
 }
 
+export function movedFiles(record) {
+  if (record?.operation !== 'move') return null;
+  const source = record.files.find(file => file.role === 'note' && file.path === record.source && file.before !== null && file.after === null);
+  const destination = record.files.find(file => file.role === 'note' && file.path === record.destination && file.before === null && file.after !== null);
+  return source && destination ? { source, destination } : null;
+}
+
+function inverseOrigins(record, previous, originals) {
+  const origins = new Map(record.files.filter(file => file.role === 'note' && file.before !== null).map(file => [file.path, previous(file)]));
+  if (record.operation === 'undo') for (const original of originals) {
+    const moved = movedFiles(original);
+    if (!moved) continue;
+    const value = origins.get(moved.destination.path); origins.delete(moved.destination.path);
+    if (value !== undefined) origins.set(moved.source.path, value);
+  }
+  return origins;
+}
+
 export function recoverEditAges(vault, directory, rows, now, { budget = createGitBudget(), strictBudget = false } = {}) {
   const result = new Map(rows.map(row => [row.path, { at: Math.min(now, row.mtime), fallback: false }]));
   if (!rows.length) return result;
@@ -46,9 +64,11 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
         if (Number.isFinite(frozen)) { result.set(row.path, { at: Math.min(now, frozen), fallback: false }); break; }
         if (record.operation === 'capture' && changed.before === null) { result.set(row.path, { at: Math.min(now, Date.parse(record.createdAt)), fallback: false }); break; }
         if (changed.before === null) {
-          const matches = record.files.filter(file => file.role === 'note' && file.after === null && file.before === changed.after);
-          if (matches.length !== 1) break;
-          const prior = matches[0];
+          const moved = movedFiles(record);
+          const originals = record.operation === 'undo' ? record.undo.targets.map(id => { const original = readRecord(directory, vault, id, false); verify(original); return original; }) : [];
+          const origin = moved?.destination.path === name ? moved.source.path : inverseOrigins(record, file => file.path, originals).get(name);
+          const prior = record.files.find(file => file.role === 'note' && file.path === origin && file.before !== null && file.after === null);
+          if (!prior) break;
           name = prior.path; after = prior.before;
         } else after = changed.before;
         head = record.git.baseHead;
@@ -65,32 +85,19 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
   const recovered = recoverEditAges(vault, directory, missing, now);
   const graph = graphDegrees(db);
   const put = db.prepare('INSERT OR REPLACE INTO note_vitals VALUES (?,?,?,?,?,?)');
-  const inverseOrigins = new Map();
-  if (record?.operation === 'undo') {
-    for (const file of record.files.filter(file => file.role === 'note' && file.before !== null)) {
-      const value = previous.get(file.path); if (value?.revision === file.before) inverseOrigins.set(file.path, value);
-    }
-    for (const id of record.undo.targets) {
-      const original = readRecord(directory, vault, id, false);
-      if (original.operation !== 'move') continue;
-      const from = original.files.find(file => file.role === 'note' && file.after === null);
-      const to = original.files.find(file => file.role === 'note' && file.before === null && file.after === from?.before);
-      if (!from || !to) continue;
-      const value = inverseOrigins.get(to.path); inverseOrigins.delete(to.path);
-      if (value) inverseOrigins.set(from.path, value);
-    }
-  }
+  const inverse = record?.operation === 'undo' ? inverseOrigins(record, file => { const value = previous.get(file.path); return value?.revision === file.before ? value : undefined; }, record.undo.targets.map(id => readRecord(directory, vault, id, false))) : new Map();
   const fallback = new Set(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]').filter(name => rows.some(row => row.path === name)));
   for (const row of rows) {
     let old = previous.get(row.path);
     let provenance = null;
     const published = record?.files.find(file => file.role === 'note' && file.path === row.path && file.after === row.revision);
     if (published) {
-      const moved = record.files.find(file => file.role === 'note' && file.after === null && file.before === published.after);
+      const pair = movedFiles(record);
+      const moved = pair?.destination.path === row.path ? pair.source : null;
       const candidate = previous.get(row.path) ?? (moved ? previous.get(moved.path) : null);
       const before = candidate?.revision === (moved?.before ?? published.before) ? candidate : null;
       if (!old && before) old = before;
-      if (!old && published.before === null && inverseOrigins.has(row.path)) old = inverseOrigins.get(row.path);
+      if (!old && published.before === null && inverse.has(row.path)) old = inverse.get(row.path);
       const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === row.path)?.lastUserEditMs : null;
       const at = record.operation === 'capture' && published.before === null ? Date.parse(record.createdAt) : Number.isFinite(frozen) ? frozen : before?.last_user_edit_ms ?? row.mtime;
       provenance = { at: Math.min(now, at), fallback: !Number.isFinite(frozen) && !before && record.operation !== 'capture' };

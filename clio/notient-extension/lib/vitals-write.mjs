@@ -1,8 +1,8 @@
 import { openIndex } from './index.mjs';
-import { recoverEditAges } from './vitals-index.mjs';
+import { recoverEditAges, movedFiles } from './vitals-index.mjs';
 import { currentFile, revision } from './paths.mjs';
 
-export function freezeEditAges(vault, directory, files, now, budget, baseHead, restoredAges = []) {
+export function freezeEditAges(vault, directory, files, now, budget, baseHead, restoredAges = [], move = null) {
   const notes = files.filter(file => file.role !== 'log');
   const current = new Map(notes.filter(file => file.before !== null).map(file => [file.path, currentFile(vault.path, file.path)]));
   const ages = new Map();
@@ -23,9 +23,9 @@ export function freezeEditAges(vault, directory, files, now, budget, baseHead, r
   finally { db?.close(); }
   const missing = notes.filter(file => file.before !== null && !ages.has(file.path)).map(file => ({ path: file.path, revision: revision(file.before), mtime: current.get(file.path).stat.mtimeMs }));
   for (const [name, value] of recoverEditAges(vault, directory, missing, now, { budget, strictBudget: true })) ages.set(name, value.at);
+  const moved = move ? movedFiles({ operation: 'move', ...move, files }) : null;
   return notes.map(file => {
-    const moved = file.before === null && file.after !== null ? notes.filter(candidate => candidate.after === null && candidate.before?.equals(file.after)) : [];
     const restored = restoredAges.find(value => value.path === file.path)?.lastUserEditMs;
-    return { path: file.path, lastUserEditMs: file.before === null ? moved.length === 1 ? ages.get(moved[0].path) ?? null : Number.isFinite(restored) ? Math.min(now, restored) : null : ages.get(file.path) ?? Math.min(now, current.get(file.path).stat.mtimeMs) };
+    return { path: file.path, lastUserEditMs: file.before === null ? moved?.destination.path === file.path ? ages.get(moved.source.path) ?? null : Number.isFinite(restored) ? Math.min(now, restored) : null : ages.get(file.path) ?? Math.min(now, current.get(file.path).stat.mtimeMs) };
   });
 }

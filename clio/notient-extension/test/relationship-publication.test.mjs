@@ -206,3 +206,28 @@ test('capture frontmatter move replace and aggregate inverse freeze edit ages fo
   unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
   assert.equal(inspectNote(f.vault, f.directory, { path: 'Source.md' }).vitals.values.lastUserEditAt, values.lastUserEditAt);
 });
+
+test('V13 move identity preserves age and earned maturity when outgoing references are rebased', t => {
+  const f = writerFixture(t); put(f, 'Target.md', '# Target\n'); baseline(f, ['Target.md', 'Other.md']);
+  const captured = writeOperation('capture', { vault: f.vault.id, requestId: 'rebased-provenance-capture', batch: 'capture', authorization, name: 'Rebased', content: 'Authored prose [shown](../../Target.md).\n' }, { ...options(f), now: () => new Date(timestamp - 14 * 86400000) }); assert.equal(captured.ok, true, JSON.stringify(captured));
+  const source = captured.capture.path; const before = bytes(f, source);
+  refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  const db = openIndex(f.directory, f.vault, true); db.prepare("UPDATE note_vitals SET maturity='synthesis-ready' WHERE path=?").run(source); db.close();
+  const input = { vault: f.vault.id, requestId: 'rebased-provenance-move', batch: 'rebased', authorization, operation: 'move', path: source, destination: 'Source.md', revision: revision(before) };
+  const preview = writeOperation('revise', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
+  const moved = writeOperation('revise', { ...input, planHash: preview.planHash }, options(f)); assert.equal(moved.ok, true, JSON.stringify(moved));
+  const record = readRecord(f.directory, f.vault, moved.operationId);
+  assert.equal(record.vitalsBefore.find(value => value.path === 'Source.md').lastUserEditMs, timestamp - 14 * 86400000);
+  assert.equal(bytes(f, 'Source.md').toString(), before.toString().replace('../../Target.md', 'Target.md'));
+  const after = inspectNote(f.vault, f.directory, { path: 'Source.md' }).vitals.values;
+  assert.equal(after.lastUserEditAt, new Date(timestamp - 14 * 86400000).toISOString()); assert.equal(after.maturity, 'synthesis-ready');
+  const undo = { vault: f.vault.id, requestId: 'rebased-provenance-inverse', batch: 'inverse', authorization, opId: moved.operationId };
+  const undoPreview = writeOperation('undo', { ...undo, dryRun: true }, options(f)); assert.equal(undoPreview.ok, true, JSON.stringify(undoPreview));
+  const inverse = writeOperation('undo', { ...undo, planHash: undoPreview.planHash }, options(f)); assert.equal(inverse.ok, true, JSON.stringify(inverse));
+  assert.deepEqual(bytes(f, source), before);
+  const restored = inspectNote(f.vault, f.directory, { path: source }).vitals.values;
+  assert.equal(restored.lastUserEditAt, after.lastUserEditAt); assert.equal(restored.maturity, after.maturity);
+  legacy(f, captured.operationId); legacy(f, moved.operationId); legacy(f, inverse.operationId);
+  unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  assert.equal(inspectNote(f.vault, f.directory, { path: source }).vitals.values.lastUserEditAt, after.lastUserEditAt);
+});

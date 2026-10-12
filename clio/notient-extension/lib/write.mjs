@@ -631,7 +631,7 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
     if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
   }
   const git = preflightGit(vault, files, { budget });
-  const vitalsBefore = noop ? [] : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, git.baseHead, inverse?.restoredAges);
+  const vitalsBefore = noop ? [] : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, git.baseHead, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null);
   budget.check();
   const gitMs = budget.usedMs;
   const reads = inverse?.reads ?? move?.reads ?? relationship?.reads ?? [];
