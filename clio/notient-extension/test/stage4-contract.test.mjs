@@ -76,6 +76,15 @@ test('stage 4 lexical reads preserve exact evidence and workspace filters while 
   assert.deepEqual(snapshot(f.vault.path), before);
 });
 
+test('V18 default search follows embedding readiness rather than the vault opt-in bit', async t => {
+  const f = writerFixture(t); put(f, 'Source.md', 'quartz evidence\n'); refreshIndex(f.vault, f.directory);
+  atomicJson(path.join(f.directory, 'config.json'), { version: 1, embeddings: { baseUrl: 'http://127.0.0.1:1/v1', model: 'stub-wire', responseModel: 'stub-pinned', dimension: 2, maxInputBytes: 1600 }, vaults: [{ ...f.vault, embeddings: true }] });
+  const result = command(f, 'search', { vault: f.vault.id, query: 'quartz' }); assert.equal(result.status, 0, JSON.stringify(result.value));
+  assert.equal(result.value.mode, 'lexical'); assert.equal(result.value.reason, null); assert.equal(result.value.coverage.state, 'current');
+  const { defaultSearchMode } = await import('../lib/embedding-off.mjs');
+  for (const state of ['off', 'building', 'stale-model', 'unavailable', 'ready', 'incomplete']) assert.equal(defaultSearchMode({ state }), state === 'ready' || state === 'incomplete' ? 'hybrid' : 'lexical', state);
+});
+
 test('stage 4 new read modes retain exit-zero unavailable setup guidance', t => {
   const f = writerFixture(t); unlinkSync(path.join(f.directory, 'config.json')); const before = snapshot(f.temporary);
   for (const [name, input] of [['candidates', { vault: 'missing', source: 'Source.md', revision: 'a'.repeat(64) }], ['search', { mode: 'semantic', query: 'quartz' }], ['refresh', { tier: 'embed' }]]) {

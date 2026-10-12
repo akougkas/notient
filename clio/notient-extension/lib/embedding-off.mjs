@@ -8,6 +8,7 @@ import { readNote, refuse, portableName, validText } from './paths.mjs';
 
 export const offEmbedding = () => ({ state: 'off', spaceId: null, model: null, responseModel: null, dimension: null, eligible: 0, embedded: 0, missing: 0, skipped: 0 });
 export const undeterminedSeparation = () => ({ state: 'undetermined', semantic: null, lexical: null });
+export const defaultSearchMode = embedding => ['ready', 'incomplete'].includes(embedding.state) ? 'hybrid' : 'lexical';
 
 export function readCoverage(vault, directory) {
   let db;
@@ -39,7 +40,7 @@ export function candidatesOff(vault, directory, input) {
 
 export function searchWithEmbeddingOff(vault, directory, input) {
   const started = performance.now();
-  const mode = input.mode ?? (vault.embeddings ? 'hybrid' : 'lexical');
+  const mode = input.mode ?? defaultSearchMode(offEmbedding());
   if (!['hybrid', 'lexical', 'semantic'].includes(mode)) refuse('INVALID_INPUT', 'Search mode must be hybrid, lexical or semantic.');
   validText(input.query, 'Query');
   const coverage = readCoverage(vault, directory);
