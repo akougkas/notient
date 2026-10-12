@@ -159,6 +159,18 @@ function relationshipReport(
       (!context.selected.includes(source) && !context.selected.includes(target))
     )
       throw new Error("comparison uses an invalid pair");
+    const titles = new Set(context.documents.flatMap((document) => [
+      document.note.path.toLocaleLowerCase(),
+      (document.note.path.split("/").at(-1)?.replace(/\.md$/iu, "") ?? "").toLocaleLowerCase(),
+      ...document.structure.headings.filter((heading) => heading.level === 1)
+        .map((heading) => heading.text.toLocaleLowerCase()),
+    ]));
+    const internalNames = item.explanation.match(/\b(?:note|document|source) +\d+\b/giu) ?? [];
+    if (internalNames.some((name) =>
+      Number(name.match(/\d+$/u)?.[0]) < context.documents.length &&
+      !titles.has(name.toLocaleLowerCase()),
+    ))
+      throw new Error("Explain the connection using actual supplied note titles or paths, not internal document names such as Note 0.");
     const key = [item.source, item.target].sort().join(":");
     if (seen.has(key)) throw new Error("comparison repeated the same pair");
     seen.add(key);
