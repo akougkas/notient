@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { contained, vaultId } from './paths.mjs';
+import { normalizeEmbeddings } from './embedding-config.mjs';
 
 export const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -38,6 +39,7 @@ export function readConfig(directory = dataDirectory()) {
     vault.embeddings ??= false;
     if (contained(vault.path, directory)) throw new Error('Notient data must be outside every vault.');
   }
+  if (config.embeddings !== undefined) config.embeddings = normalizeEmbeddings(config.embeddings);
   return config;
 }
 

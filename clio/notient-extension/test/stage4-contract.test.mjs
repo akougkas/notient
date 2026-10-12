@@ -141,10 +141,10 @@ test('stage 4 configuration opt-in stays per vault and status redacts the global
   const before = snapshot(f.temporary);
   for (const [name, input] of [['candidates', { vault: f.vault.id, source: 'Source.md', revision: revision('Authored evidence.\n') }], ['search', { query: 'evidence', mode: 'semantic' }], ['refresh', { tier: 'embed' }], ['status', {}]]) {
     const result = command(f, name, input); assert.equal(result.status, 0, JSON.stringify(result.value));
-    const text = JSON.stringify(result.value); for (const privateValue of Object.values(embeddings).filter(value => typeof value === 'string')) assert.equal(text.includes(privateValue), false, name);
-    if (name === 'status') { assert.equal(result.value.vaults[0].embeddings, true); assert.deepEqual(result.value.vaults[0].embedding, off); assert.equal(result.value.vaults[0].retainedPackBytes, 18); }
+    const text = JSON.stringify(result.value); for (const privateValue of [embeddings.apiKey, embeddings.baseUrl]) assert.equal(text.includes(privateValue), false, name);
+    if (name === 'status') { assert.equal(result.value.vaults[0].embeddings, true); assert.equal(result.value.vaults[0].embedding.model, embeddings.model); assert.equal(result.value.vaults[0].retainedPackBytes, 18); }
   }
-  const runtime = statusSnapshot(f.directory, { runtime: true }); assert.equal(runtime.vaults[0].retainedPackBytes, 18); assert.deepEqual(runtime.vaults[0].embedding, off);
+  const runtime = statusSnapshot(f.directory, { runtime: true }); assert.equal(runtime.vaults[0].retainedPackBytes, 18); assert.equal(runtime.vaults[0].embedding.model, embeddings.model);
   assert.deepEqual(snapshot(f.temporary), before);
   atomicJson(path.join(f.directory, 'config.json'), { version: 1, vaults: [{ ...f.vault, embeddings }] });
   assert.throws(() => readConfig(f.directory), /embeddings setting must be a boolean/);

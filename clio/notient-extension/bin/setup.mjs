@@ -1,8 +1,10 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import { atomicJson, dataDirectory, packageRoot, readConfig, ownVaultPath } from '../lib/config.mjs';
-import { contained, vaultId } from '../lib/paths.mjs';
+import { contained, vaultId, revision } from '../lib/paths.mjs';
 import { initializeGit } from '../lib/git.mjs';
+import { normalizeEmbeddings, embeddingCanary } from '../lib/embedding-config.mjs';
+import { createOpenAIAdapter } from '../lib/embedding-adapter.mjs';
 
 const conventions = `---
 title: Notient Conventions
@@ -46,7 +48,23 @@ Read before editing. Keep one batch label for each task. Review structural work 
 
 function quote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
 
-function main() {
+async function secretLine() {
+  return await new Promise((resolve, reject) => {
+    let input = '';
+    const finish = () => { process.stdin.pause(); process.stdin.removeListener('data', data); process.stdin.removeListener('end', end); };
+    const accept = value => { finish(); if (!value.length) reject(new Error('Embedding key stdin requires one nonempty secret line.')); else resolve(value); };
+    const data = chunk => {
+      input += chunk.toString('utf8');
+      if (Buffer.byteLength(input) > 8194) { finish(); reject(new Error('Embedding key stdin exceeds its byte bound.')); return; }
+      const newline = input.indexOf('\n');
+      if (newline >= 0) { if (input.slice(newline + 1).trim()) { finish(); reject(new Error('Embedding key stdin requires one secret line.')); } else accept(input.slice(0, newline).replace(/\r$/, '')); }
+    };
+    const end = () => accept(input.replace(/\r$/, ''));
+    process.stdin.on('data', data); process.stdin.once('end', end); process.stdin.resume();
+  });
+}
+
+async function main() {
   if (Object.hasOwn(process.env, 'AI_AGENT')) {
     process.stderr.write('Notient setup is an operator act and refuses AI_AGENT.\n');
     process.exitCode = 2;
@@ -58,18 +76,43 @@ function main() {
   let readOnly = false;
   let createOwn = false;
   let access;
+  const embeddingFlags = new Map([['--embeddings-url', 'baseUrl'], ['--embeddings-model', 'model'], ['--embeddings-dimension', 'dimension'], ['--embeddings-max-input-bytes', 'maxInputBytes'], ['--embeddings-batch', 'batch'], ['--embeddings-timeout-ms', 'timeoutMs'], ['--embeddings-document-prefix', 'documentPrefix'], ['--embeddings-query-prefix', 'queryPrefix'], ['--embeddings-space-version', 'spaceVersion']]);
+  const embeddingValues = {};
+  let embeddingMode;
+  let keyStdin = false;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
-    if (flag === '--vault' || flag === '--role' || flag === '--access') {
+    if (embeddingFlags.has(flag)) {
+      const value = args[++i]; const key = embeddingFlags.get(flag);
+      if (value === undefined || value.startsWith('--') || Object.hasOwn(embeddingValues, key)) throw new Error('Embedding flags require one value per field.');
+      embeddingValues[key] = ['dimension', 'maxInputBytes', 'batch', 'timeoutMs'].includes(key) && /^\d+$/.test(value) ? Number(value) : value;
+    } else if (['--embeddings-on', '--embeddings-off'].includes(flag)) {
+      if (embeddingMode) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
+      embeddingMode = flag.endsWith('-on') ? 'on' : 'off';
+    } else if (flag === '--embeddings-key-stdin') {
+      if (keyStdin) throw new Error('Embedding key stdin may be specified once.'); keyStdin = true;
+    } else if (flag === '--vault' || flag === '--role' || flag === '--access') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value.`);
-      if (flag === '--vault') vaultPath = value;
+      if (embeddingFlags.has(flag)) {
+      const value = args[++i]; const key = embeddingFlags.get(flag);
+      if (value === undefined || value.startsWith('--') || Object.hasOwn(embeddingValues, key)) throw new Error('Embedding flags require one value per field.');
+      embeddingValues[key] = ['dimension', 'maxInputBytes', 'batch', 'timeoutMs'].includes(key) && /^\d+$/.test(value) ? Number(value) : value;
+    } else if (['--embeddings-on', '--embeddings-off'].includes(flag)) {
+      if (embeddingMode) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
+      embeddingMode = flag.endsWith('-on') ? 'on' : 'off';
+    } else if (flag === '--embeddings-key-stdin') {
+      if (keyStdin) throw new Error('Embedding key stdin may be specified once.'); keyStdin = true;
+    } else if (flag === '--vault') vaultPath = value;
       else if (flag === '--role') role = value;
       else access = value;
     } else if (flag === '--read-only') readOnly = true;
     else if (flag === '--create-own') createOwn = true;
     else throw new Error('Usage: setup.mjs --vault <path> [--role operator|own] [--read-only], or --create-own.');
   }
+  const embeddingSetup = embeddingMode !== undefined || Object.keys(embeddingValues).length > 0 || keyStdin;
+  if (embeddingSetup && (createOwn || readOnly || access !== undefined || args.includes('--role'))) throw new Error('Embedding setup requires only an existing --vault registration.');
+  if (embeddingMode && (Object.keys(embeddingValues).length || keyStdin)) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
   if (createOwn && vaultPath) throw new Error('Use --create-own or --vault, not both.');
   if (access !== undefined && (!['read-only', 'read-write'].includes(access) || createOwn || readOnly || args.includes('--role'))) throw new Error('--access requires read-only or read-write and an existing --vault registration.');
   if (!['operator', 'own'].includes(role)) throw new Error('Role must be operator or own.');
@@ -86,6 +129,30 @@ function main() {
   if (!lstatSync(root).isDirectory()) throw new Error('Vault path must be a directory.');
   if (contained(root, directory) || (existsSync(directory) && contained(root, realpathSync(directory)))) throw new Error('Notient data must be outside every vault.');
   const config = readConfig(directory);
+  if (embeddingSetup) {
+    const selected = config.vaults.find(vault => vault.path === root);
+    if (!selected) throw new Error('Embedding setup requires an existing --vault registration.');
+    const baseline = revision(JSON.stringify(config));
+    const optedIn = config.vaults.filter(vault => vault.embeddings).map(vault => vault.id);
+    if (embeddingMode !== 'off') {
+      let profile;
+      if (embeddingMode === 'on') {
+        if (!config.embeddings) throw new Error('Configure and probe the shared embedding profile first.');
+        profile = config.embeddings;
+      } else {
+        if (!['baseUrl', 'model', 'dimension', 'maxInputBytes'].every(key => Object.hasOwn(embeddingValues, key))) throw new Error('Embedding configuration requires URL, model, dimension and max input bytes together.');
+        profile = normalizeEmbeddings({ ...embeddingValues, apiKey: keyStdin ? await secretLine() : null });
+      }
+      const response = await createOpenAIAdapter(profile, { probe: embeddingMode !== 'on' }).embed([embeddingCanary]);
+      if (revision(JSON.stringify(readConfig(directory))) !== baseline) throw new Error('Configuration changed during the probe; no settings were published.');
+      config.embeddings = { ...profile, responseModel: response.responseModel };
+      selected.embeddings = true;
+    } else selected.embeddings = false;
+    atomicJson(path.join(directory, 'config.json'), config);
+    const profile = config.embeddings;
+    process.stdout.write(`${JSON.stringify({ registered: selected, embedding: { enabled: selected.embeddings, model: profile?.model ?? null, responseModel: profile?.responseModel ?? null, dimension: profile?.dimension ?? null, destinationOrigin: selected.embeddings ? new URL(profile.baseUrl).origin : null }, affectedOptedInVaults: embeddingMode ? [selected.id] : [...new Set([...optedIn, selected.id])], purpose: 'Eligible note passages and queries are exported only for independently opted-in vaults.' })}\n`);
+    return;
+  }
   if (access !== undefined) {
     const registered = config.vaults.find(vault => vault.path === root);
     if (!registered) throw new Error('--access changes only an already registered vault.');
@@ -128,5 +195,5 @@ function main() {
   process.stdout.write(`clio-coder extensions install ${quote(packageRoot.replace(/\/$/, ''))} --user\n`);
 }
 
-try { main(); }
+try { await main(); }
 catch (error) { process.stderr.write(`${error.message.replace(/[\r\n]+/g, ' ')}\n`); process.exitCode = 2; }
