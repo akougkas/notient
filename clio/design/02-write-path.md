@@ -1,10 +1,10 @@
 # Stage 2: recoverable writes for Sentient Notes
 
-Status: implementation contract for Sol, incorporating the manager's amendments A through G and NOTIENT.md section 7. Product policies in section 8 are provisional pending the owner.
+Status: implementation contract for Sol, incorporating the manager's amendments A through G, NOTIENT.md section 7 and the manager's triage of 2a-review-1. Product policies in section 8 are provisional pending the owner.
 Baseline: `clio-mvp` at `453af506`. Scope: NOTIENT.md B3, B6 stage 2, B7 and the explicitly inherited archive cases. Target: Clio 0.6.2 as released.
 Implement only under `clio/`, with Node standard library, `node:sqlite` and installed Git. No dependencies, daemon, runtime writes or Clio repository changes. The external data directory remains necessary on 0.6.2.
 **2a:** capture, replace, frontmatter, single-operation undo, journal, recovery and Git. Ship and use 2a in a real Clio fixture session before implementing 2b.
-**2b:** move and batch undo, including all reference repair and multi-note recovery. Frozen schemas reserve these inputs in 2a; return `STAGE_NOT_ENABLED` without mutation until 2b ships.
+**2b:** move and batch undo, including all reference repair and multi-note recovery. Stage 2a may omit these inputs; stage 2b adds them through operator reinstallation and a fresh session.
 Sources: archive DESIGN sections 2.3, 3.4 through 3.7 and 4.2; SPRINT G-01 and N-19/N-22/N-23/N-25/N-26. Fresh implementations replace the old verbatim-port requirement. Current B3 tool scope supersedes old link/relate tools, old folder names and old approval workflows.
 
 ## 1. Revision and body semantics
@@ -15,18 +15,15 @@ Sources: archive DESIGN sections 2.3, 3.4 through 3.7 and 4.2; SPRINT G-01 and N
 - Accept valid UTF-8 only, at most 4 MiB per note; reject NUL and unpaired surrogates in supplied strings. Buffers are authoritative. Map UTF-16 parser positions to UTF-8 byte offsets before splicing.
 - Split lines into content plus exact terminator (`LF`, `CRLF`, none). Never normalize an existing file. Generated lines use its first terminator, otherwise LF; mixed endings outside an edit remain unchanged.
 - Frontmatter opens only on the first line after optional BOM, with `---` plus optional horizontal whitespace. It closes with `---` or `...` plus optional horizontal whitespace. An unclosed opening refuses with `FRONTMATTER_INVALID`. The span includes both delimiters and the closing terminator; the body begins after it, or after BOM when absent.
-- `replace` locates exact `oldText` in the body only, counting overlapping matches at offset + 1. Require one occurrence. Zero returns `QUOTE_NOT_FOUND`; several return `QUOTE_AMBIGUOUS`. Use the inherited exact quotation messages in section 7. Never match frontmatter or normalize the quotation to obtain a match.
-- Convert line separators in `newText` to the matched span's sole newline style, or the file's first style when the span has no newline. An exact oldText/newText identity remains a no-op. For any other mixed-style matched span containing newlines, refuse a multiline replacement with `MIXED_NEWLINE_EDIT`; a single-line replacement is safe. Normalize CRLF/LF only, rejecting bare CR in new input. All bytes outside the splice remain identical. EOF newline changes require a match reaching EOF and an explicit replacement that changes it.
+- `replace` locates exact `oldText` in the body only, counting overlapping matches at offset + 1. Require one occurrence. Zero returns `QUOTE_NOT_FOUND` with exactly `not an exact supplied quotation; copy a contiguous passage verbatim, preserving punctuation and whitespace`; several return `QUOTE_AMBIGUOUS` with exactly `occurs more than once; quote a longer contiguous passage identifying one occurrence`. Never match frontmatter or normalize the quotation to obtain a match.
+- Reject any bare CR in `newText`, meaning a CR not followed by LF, before planning a replacement. Recognize CRLF as one separator and LF as one separator. Convert every separator in `newText` to the matched span's sole newline convention, even when the caller supplied another convention. For example, replacing `a\r\nb` with `x\ny` stores `x\r\ny`. When the matched span has no separator, use the file's first separator, otherwise LF. An exact oldText/newText identity without bare CR remains a no-op. For any other matched span mixing CRLF and LF, refuse a replacement containing separators with `MIXED_NEWLINE_EDIT`; a single-line replacement is safe. Preserve every byte outside the splice. EOF newline changes require a match reaching EOF and an explicit replacement that changes it.
 - `frontmatter` changes top-level keys only, preserving BOM, delimiters, unrelated fields/comments/order and all body bytes. Read bounded spans for ordinary YAML mappings, quoted scalars, flow collections and block scalars. Reject duplicate/complex keys, ambiguous boundaries, merge keys, anchors, aliases, custom tags and malformed quoting. Do not repair YAML.
 - `set` values are JSON encoded in `valueJson`: null, boolean, finite number, string, array or object; maximum decoded depth 4 and serialized UTF-8 size 4,096 bytes. Emit JSON expressions, which are valid YAML 1.2. Preserve the key/colon prefix and an unambiguous same-line comment; append new keys before the closing delimiter in input order. Preserve standalone comments outside a replaced field span.
 - Reject duplicate set/unset keys and overlap. An absent unset is a no-op. With no block, prepend one after the BOM using the selected newline while retaining the complete body; unset-only remains a no-op. No implicit timestamps for revise.
 - Capture accepts a complete Markdown document, normalizes its new document's CRLF to LF, preserves optional BOM and body EOF choice, and adds the mandatory provenance described in section 5. It does not promise byte-identical caller frontmatter.
 - A move changes only parsed destination spans and paths, preserving display aliases, fragments, labels, titles and every unrelated byte. Exact before/after Buffers are the basis for preview, recovery and undo.
-- Inherited writeback has two internal pure planners: `related_to` inserts a body bullet; `supports`, `contradicts`, `extends`, `exemplifies`, `synthesizes` update only `frontmatter.notient.<relation>`. No link/relate command or automatic relation write is admitted in 2a/2b. Preserve the executable golden assets in section 7 without enlarging B3's public tools.
-- The related planner finds the first visible case-insensitive `## Related` outside frontmatter/fences; its section ends at the next H1/H2. Detect presence only inside that section, excluding fenced code. Bare `[[t]]` and `[[t|alias]]` satisfy a bare target; embeds and heading/block-qualified targets do not. Preserve exact source on a no-op.
-- Before insertion, close an unclosed EOF fence with its original character/count. Insert at the end of the first top-level list before an H3, otherwise after top-level content/below the H2; create the section at EOF if absent. Preserve LF/CRLF and EOF convention. A first-body-line U+FEFF is ignored only for heading/fence recognition, never removed from stored bytes. If a second presence check follows fence repair, return the repaired bytes.
-- The relation planner preserves the body and unrelated nested properties, appends one wikilink string to the selected relation array, and returns identical bytes for an existing target. Reject a nonmapping `notient`, a nonarray relation or nonstring member. Use nested spans for ordinary mappings, refusing unsupported YAML; no whole-document serialization.
-- Reason: byte splices retain authored Markdown and the U+FEFF behavior while making the inherited mechanisms testable with fresh code and no dependencies.
+- Link writeback, including Related sections and frontmatter relation arrays, belongs to stage 4. Its W table and planners are outside 2a/2b. The witness tool, served-window locator and V table are deferred. Stage 2 retains the body-only replacement quotation rules above and their ordinary replacement tests.
+- Reason: byte splices preserve authored Markdown without expanding stage 2 into deferred link writeback or witness work.
 
 ## 2. Intent journal and recovery
 
@@ -39,12 +36,12 @@ Use resolved external data directory `D`; directories 0700, journal files/blobs/
 ```text
 D/journal/<vault-id>/writer.db
 D/journal/<vault-id>/intents.db
-D/journal/<vault-id>/ops/<internal-UUID>/record.json
-D/journal/<vault-id>/ops/<internal-UUID>/blobs/<sha256>
-D/journal/<vault-id>/ops/<internal-UUID>/commit-index
+D/journal/<vault-id>/ops/<operation-id>/record.json
+D/journal/<vault-id>/ops/<operation-id>/blobs/<sha256>
+D/journal/<vault-id>/ops/<operation-id>/commit-index
 ```
 
-- `requestId` is optional. Accept 8 to 64 ASCII characters matching `[A-Za-z0-9._-]+`; mint and return a UUID if absent. Always allocate an internal UUID for `operationId` and directory names. Request IDs are unique per vault across tools; retries find the original record and OID. They are not paths.
+- `requestId` is optional. Accept 8 to 64 ASCII characters matching `[A-Za-z0-9._-]{8,64}`; mint and return a UUID if absent. The supplied or minted requestId is the operationId, journal record ID, operation-directory basename and audit/commit operation ID. Allocate no separate operation UUID and require no extra request-ID trailer. IDs are unique per vault across tools; retries find the original record and OID. Validate the entire ID before using it as a single directory component. Per-file intent IDs remain internal UUIDs.
 - Digest recursively key-sorted validated request JSON with defaults, excluding `dryRun`, `planHash` and `requestId`, and bind to vault ID/tool. Preserve array order/request words. Reuse of an ID with another digest is `REQUEST_ID_REUSED`. A retry with no supplied ID is new work; previews/no-ops reserve no ID.
 - Hold SQLite `BEGIN IMMEDIATE` on `writer.db` for the whole real write/recovery, busy timeout 5,000 ms; roll back on release. OS locks release after SIGKILL. Every Notient vault mutator takes it. A competing writer returns `WRITER_BUSY`; status reports busy. Do not age-reclaim a live writer.
 - `intents.db` is a separate database so durable stamp transactions can commit while the writer-lock transaction remains open. Use WAL, `synchronous=FULL`, busy timeout 5 seconds. The structural index remains independent, per-note transactional and idempotent by `(path,revision)`.
@@ -56,7 +53,7 @@ All fields required; unknown versions fail closed; null/empty values initialize 
 
 ```text
 record = {
-  version:1, id:UUID, requestId:string, vaultId:string, vaultPath:absolute path,
+  version:1, id:string, requestId:string, vaultId:string, vaultPath:absolute path,
   tool:capture|revise|undo, operation:capture|replace|frontmatter|move|undo,
   requestDigest:sha256, batch:string, authorization:{origin,request},
   roleAtIntent:operator|own, createdAt:UTC ISO, updatedAt:UTC ISO,
@@ -69,14 +66,14 @@ record = {
   createdDirectories:[relative path],
   git:{ref:string,baseHead:oid|null,tree:oid|null,commit:oid|null,
        entries:[{path,before:{mode,oid}|null,after:{mode,oid}|null}]},
-  log:{path,line}, undo:{targets:[UUID],commits:[oid]}, undoneBy:UUID|null,
+  log:{path,line}, undo:{targets:[string],commits:[oid]}, undoneBy:string|null,
   capture:{bodyHash:sha256,workspace:string,capturedAt:UTC ISO,limitPerHour:integer}|null,
   indexState:pending|updated, derivedIndexState:pending|updated,
   durability:full|limited, warnings:[{code,message}],
   conflicts:[{path,expectedBefore,expectedAfter,actual,reason}],
   timings:{scanMs,lockWaitMs,journalMs,applyMs,gitMs,totalMs}, error:{code,message}|null
 }
-intents row = {id:UUID PRIMARY KEY,operation_id:UUID,path:string,
+intents row = {id:UUID PRIMARY KEY,operation_id:string,path:string,
   manifest_hash:sha256,before_hash:sha256|null,after_hash:sha256|null,
   authorization_hash:sha256,state:prepared|applied,write_started_at_ms:integer|null}
 ```
@@ -148,8 +145,7 @@ Ordering: durable blobs/record; all SQL intents prepared; private Git preparatio
 ```text
 notient(<operation>): <JSON source path, capture path, or "batch:<targetBatch>">
 
-Notient-Operation: <internal UUID>
-Notient-Request-ID: <caller ID or minted UUID>
+Notient-Operation: <supplied requestId or minted UUID>
 Notient-Vault: <vault-id>
 Notient-Batch: <batch>
 Notient-Origin: <operator|clio|unattended>
@@ -163,16 +159,16 @@ Notient-Reverts: <JSON array of original commit OIDs; empty except undo>
 
 ## 5. Frozen command contracts and operation algorithms
 
-**2a:** capture, replace, frontmatter and undo by opId; reserve the complete schemas now. **2b:** enable move and targetBatch without a session schema change. In 2a reject those reserved operations with `STAGE_NOT_ENABLED` before creating an intent.
+**2a:** capture, replace, frontmatter and undo by opId. **2b:** add move, destination and targetBatch. The schemas below describe the completed stage 2b contract; 2a may omit its structural fields and modes. Schemas are frozen within a session, so expansion requires operator reinstallation and session restart.
 
-Each schema below is literal Clio input schema data. Every object is closed. Use node command entrypoints, 300,000 ms timeout and 1,048,576 maximum output bytes. Extend direct CLI validation to arrays/nested objects; no schema references, `oneOf` or executable keywords. `dryRun` defaults false; absent `planHash` binds no prior preview except where explicitly required.
+Each schema below is literal Clio input schema data. Every object is closed. Use node command entrypoints, 300,000 ms timeout and 1,048,576 maximum output bytes. Clio 0.6.2 rejects the `pattern` keyword; enforce character rules in semantic validation, including direct CLI calls. Extend validation to arrays/nested objects; no schema references, `oneOf` or executable keywords. `dryRun` defaults false; absent `planHash` binds no prior preview except where explicitly required.
 
 ### `capture`
 
 ```json
 {"type":"object","additionalProperties":false,"required":["vault","batch","authorization","name","content"],"properties":{
   "vault":{"type":"string","minLength":1,"maxLength":4096},
-  "requestId":{"type":"string","minLength":8,"maxLength":64,"pattern":"^[A-Za-z0-9._-]{8,64}$"},
+  "requestId":{"type":"string","minLength":8,"maxLength":64},
   "batch":{"type":"string","minLength":1,"maxLength":80},
   "authorization":{"type":"object","additionalProperties":false,"required":["origin","request"],"properties":{
     "origin":{"type":"string","enum":["operator","clio","unattended"]},"request":{"type":"string","minLength":1,"maxLength":2000}}},
@@ -204,7 +200,7 @@ Each schema below is literal Clio input schema data. Every object is closed. Use
 ```json
 {"type":"object","additionalProperties":false,"required":["vault","batch","authorization","operation","path","revision"],"properties":{
   "vault":{"type":"string","minLength":1,"maxLength":4096},
-  "requestId":{"type":"string","minLength":8,"maxLength":64,"pattern":"^[A-Za-z0-9._-]{8,64}$"},
+  "requestId":{"type":"string","minLength":8,"maxLength":64},
   "batch":{"type":"string","minLength":1,"maxLength":80},
   "authorization":{"type":"object","additionalProperties":false,"required":["origin","request"],"properties":{
     "origin":{"type":"string","enum":["operator","clio","unattended"]},"request":{"type":"string","minLength":1,"maxLength":2000}}},
@@ -221,8 +217,8 @@ Each schema below is literal Clio input schema data. Every object is closed. Use
 }}
 ```
 
-- Semantic validation is mandatory: `replace` requires only `oldText,newText`; `frontmatter` requires at least one nonempty `set/unset` and forbids the other modes' fields; `move` requires only `destination`. Reject even empty fields belonging to another mode. Keys match `[A-Za-z_][A-Za-z0-9_-]{0,79}`; hashes are lowercase hex; internal op IDs are canonical lowercase UUIDs; optional request IDs use their schema pattern; batch labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,79}`. Reject all-whitespace authorization requests.
-- A real move requires the preceding dry run's `planHash`. Other operations may supply one to bind a review. Hash canonical requested note changes `{path,before,after,mode}`, sorted dependencies, path inventory and base Git HEAD. Include log path/before revision, but exclude generated log timestamp/after bytes and Git OIDs. Apply the capture timestamp placeholder rule above. Include origin/request, batch, vault ID and operation, so review is bound to the actual request. Recompute at execution; any mismatch is `PLAN_CHANGED` before intent. No persistent preview store is needed.
+- Semantic validation is mandatory: `replace` requires only `oldText,newText`; `frontmatter` requires at least one nonempty `set/unset` and forbids the other modes' fields; `move` requires only `destination`. Reject even empty fields belonging to another mode. Keys match `[A-Za-z_][A-Za-z0-9_-]{0,79}`; hashes are lowercase hex; request IDs and operation IDs match `[A-Za-z0-9._-]{8,64}` and need not be UUIDs; batch labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,79}`. Reject all-whitespace authorization requests.
+- A real move requires the preceding dry run's `planHash`. Other operations may supply one to bind a review. Hash canonical requested note changes `{path,before,after,mode}`, the sorted read set with revisions, path inventory, base Git HEAD, vault ID and operation. Include log path/before revision; exclude generated log timestamp/after bytes, candidate Git OIDs and requestId. Apply the capture timestamp placeholder rule above. Request words, batch and origin are attribution and stay out of planHash; validate current authorization independently before publication and retain attribution in the journal/log/commit. Recompute at execution; a bound-content mismatch is `PLAN_CHANGED` before intent. No persistent preview store is needed.
 - Dry runs return complete deterministic unified diffs with three context lines, source byte ranges for splices and expected revisions of every changed path. Escape CR as `\r`, label missing final newlines, and state this display encoding. Preserve actual bytes in the planned hashes. If the full response exceeds 900,000 UTF-8 bytes, refuse with `PREVIEW_TOO_LARGE`; never silently truncate an approval diff.
 - Generate diffs in memory; dry runs cannot use filesystem scratch files or write Git objects. The host's 64 KiB total JSON input bound still applies independently of individual string limits. An affected file's before revision returned in a move preview is the read receipt for its automatic reference edits.
 - Byte-identical plans return `noop`; no journal, audit or commit is created. Always validate the supplied revision even for a no-op.
@@ -248,17 +244,17 @@ Each schema below is literal Clio input schema data. Every object is closed. Use
 ```json
 {"type":"object","additionalProperties":false,"required":["vault","batch","authorization"],"properties":{
   "vault":{"type":"string","minLength":1,"maxLength":4096},
-  "requestId":{"type":"string","minLength":8,"maxLength":64,"pattern":"^[A-Za-z0-9._-]{8,64}$"},
+  "requestId":{"type":"string","minLength":8,"maxLength":64},
   "batch":{"type":"string","minLength":1,"maxLength":80},
   "authorization":{"type":"object","additionalProperties":false,"required":["origin","request"],"properties":{
     "origin":{"type":"string","enum":["operator","clio","unattended"]},"request":{"type":"string","minLength":1,"maxLength":2000}}},
-  "opId":{"type":"string","minLength":36,"maxLength":36},
+  "opId":{"type":"string","minLength":8,"maxLength":64},
   "targetBatch":{"type":"string","minLength":1,"maxLength":80},
   "dryRun":{"type":"boolean"},"planHash":{"type":"string","minLength":64,"maxLength":64}
 }}
 ```
 
-- Require exactly one of `opId,targetBatch`. `batch` labels this undo request; `targetBatch` selects original work in this vault only. In 2a allow opId only for a capture/replace/frontmatter operation; a move target or targetBatch is `STAGE_NOT_ENABLED`. In both stages select committed, not-yet-undone, non-undo operations. Unknown targets refuse; an already wholly undone selection returns `noop` with its undo IDs. Undo-of-undo is outside stage 2 and refuses explicitly.
+- Require exactly one of `opId,targetBatch`. `batch` labels this undo request; `targetBatch` selects original work in this vault only. In 2a allow opId only for a capture/replace/frontmatter operation; structural selectors and move targets become available in 2b. In both stages select committed, not-yet-undone, non-undo operations. Unknown targets refuse; an already wholly undone selection returns `noop` with its undo IDs. Undo-of-undo is outside stage 2 and refuses explicitly.
 - A batch is all selected operations in reverse commit order, never a best-effort subset. Require their original commit OIDs to be reachable on this branch and verify their non-log Git tree deltas against journal blobs. Refuse changed Git history or a later active unselected Notient operation touching the same paths, even if its bytes happen to match. First cancel certified pairs of fully undone later operations and their inverse commits after verifying their non-log deltas cancel exactly. This permits successive single-op undos of frontmatter, replace and capture in reverse order; an inverse commit alone is not an active overlapping edit.
 - Simulate the reverse deltas in memory. The current affected paths must equal the final selected after-states; then each virtual reverse step must match its original after-state. This handles capture, replace and move chains without trying to restore a now-missing intermediate path from disk. Any third-party difference yields `UNDO_CONFLICT` and no change.
 - Undoing a move restores its original path/content and exact before-bytes of every rewritten reference, removes its destination, and preserves unrelated files. Rescan for new incoming references or name collisions that would become dangling/rebound under the inverse inventory; refuse those instead of expanding the undo's write set.
@@ -272,13 +268,13 @@ Every result is one JSON object. Fields below are required unless shown with `?`
 ```text
 success = {
   ok:true, tool:capture|revise|undo, operation:capture|replace|frontmatter|move|undo,
-  vault:string, requestId:string, operationId:UUID|null,
+  vault:string, requestId:string, operationId:string|null,
   outcome:preview|noop|committed|already_committed, batch:string,
   planHash:sha256, changes:[{path,action,before:sha256|null,after:sha256|null,
     diff:string,splices:[{startByte,endByte,replacement:string}]}],
   commit:{oid,parent:oid|null,subject:string}|null,
-  log:{path,line}|null, undo:{operationIds:[UUID],commits:[oid]},
-  capture:{path,bodyHash,workspace,capturedAt,revision,duplicateOf:UUID|null}|null,
+  log:{path,line}|null, undo:{operationIds:[string],commits:[oid]},
+  capture:{path,bodyHash,workspace,capturedAt,revision,duplicateOf:string|null}|null,
   recovery:[{operationId,result,commit:oid|null,elapsedMs,conflicts:[{path,reason}]}],
   indexState:pending|updated|unchanged, derivedIndexState:pending|updated|unchanged,
   warnings:[{code,message}],
@@ -286,7 +282,7 @@ success = {
 }
 failure = {
   ok:false, tool:string, vault:string|null, requestId:string|null,
-  operationId:UUID|null, state:refused|intent|applied|conflicted,
+  operationId:string|null, state:refused|intent|applied|conflicted,
   error:{code:string,message:string,retryable:boolean,paths:[string]},
   recovery:[{operationId,result,commit:oid|null,elapsedMs,conflicts:[{path,reason}]}],
   partial:boolean, commit:oid|null
@@ -310,7 +306,7 @@ failure = {
 - Append exactly one UTF-8 line per committed operation to the UTC intent month's `Notient/Log/YYYY-MM.md`. Use a Markdown bullet followed by compact JSON, so request text cannot inject Markdown lines or forge fields:
 
 ```text
-- {"time":"<UTC ISO>","id":"<UUID>","operation":"move","note":"<source>","destination":"<destination or null>","batch":"<label>","origin":"clio","request":"<exact words>","files":[{"path":"<note path>","before":"<hash or null>","after":"<hash or null>"}],"undo":["<original ids>"]}
+- {"time":"<UTC ISO>","id":"<operation ID>","operation":"move","note":"<source>","destination":"<destination or null>","batch":"<label>","origin":"clio","request":"<exact words>","files":[{"path":"<note path>","before":"<hash or null>","after":"<hash or null>"}],"undo":["<original ids>"]}
 ```
 
 - `files` includes all changed note paths but excludes the log itself to avoid self-referential hashes. The journal includes the log's exact before/after revision. Use the existing log's line ending; add one separator newline if missing, preserving all preceding bytes. Recovery applies the frozen after blob exactly once. Historical logs are never rewritten by undo.
@@ -320,41 +316,12 @@ failure = {
 
 ## 7. Implementation and verification for Sol
 
-**2a:** implement and ship the nonstructural path, execute the 46 W/R/V inherited cases and the required crash barriers, then demonstrate it in a real Clio fixture session. **2b:** only after that evidence, implement move/batch undo and execute the 14 M cases plus structural/fault integration checks. No stage 3 implementation before both gates.
+**2a:** implement and ship the nonstructural path, execute R01 through R08 plus the byte/contract cases and required crash barriers, then demonstrate it in a real Clio fixture session. **2b:** only after that evidence, implement move/batch undo and execute the 14 M cases plus structural/fault integration checks. W belongs to stage 4 and V is deferred; neither table nor its internal planners is a stage 2 gate. No stage 3 implementation before both gates.
 
-- Use one write coordinator for capture/revise/undo; split read-only journal projection from recovery. Internal pure quotation/writeback planners carry the inherited golden assets without adding link/relate/witness command tools. Do not infer permission from a planner result.
-- Freeze all four schemas above in 2a, validating nested arrays/objects, enums, patterns and bounds in direct CLI entrypoints. Update command descriptions/timeouts. Reinstallation and session restart are operator acts. Preserve API 2 read-only runtime behavior during stage 2.
+- Use one write coordinator for capture/revise/undo; split read-only journal projection from recovery. Test literal body quotation through replace. Do not implement link/relate/witness tools or their deferred planners for stage 2, and do not infer permission from a planner result.
+- Ship the applicable schemas for each stage, validating nested arrays/objects, enums, character rules and bounds in direct CLI entrypoints. Use supported schema keywords only. Update command descriptions/timeouts. Reinstallation and session restart are operator acts when schemas expand. Preserve API 2 read-only runtime behavior during stage 2.
 - Add registration-only setup `--access read-only|read-write --vault <registered path>`, retaining the AI_AGENT guard. This edits external registration/read roots only; no hidden vault/Git/conventions write. It enables the named B7 checks.
-- G-01 supplies minimum counts and named examples, not 60 separately enumerated original vectors. The IDs below are this design's exhaustive executable mapping: every named example is retained; additional boundary cases meet the minima. Goldens compare exact Buffers or exact structured decisions, not a copy of the implementation. Use at least 12 fixture notes with frontmatter, CRLF, callouts, block IDs, wiki/embeds, aliases, references, every GFM task state, unclosed fences, BOM and code-span tags.
-
-### G-01 writeback.json / N-22: 24 cases, stage 2a
-
-| ID | Input or boundary | Required result |
-| --- | --- | --- |
-| W01 | LF body without Related | Append one section/bullet; unrelated bytes unchanged. |
-| W02 | CRLF file | All generated separators are CRLF. |
-| W03 | Related heading inside fence | Ignore it; insert outside code. |
-| W04 | Related heading in frontmatter scalar | Ignore it; preserve complete frontmatter. |
-| W05 | Unclosed EOF backtick fence | Close same marker before append. |
-| W06 | Unclosed EOF tilde fence with longer marker | Close same character/count. |
-| W07 | Bare target already in Related | Return original Buffer exactly. |
-| W08 | Aliased target already in Related | Return original Buffer exactly. |
-| W09 | Only an embed of target | Insert a normal reference. |
-| W10 | Only target with heading fragment | Insert requested bare target. |
-| W11 | H3 after Related/top-level list | Insert in top-level section before H3; preserve nested content. |
-| W12 | UTF-8 BOM immediately before Related H2 | Recognize section, retain BOM bytes. |
-| W13 | U+FEFF at first body line after frontmatter | Recognize heading/fence without deleting that character. |
-| W14 | No final newline | Insert without adding a terminal newline. |
-| W15 | supports relation | Update only notient.supports array; preserve body/sibling fields. |
-| W16 | contradicts relation | Update only notient.contradicts array; preserve body/sibling fields. |
-| W17 | extends relation | Update only notient.extends array; preserve body/sibling fields. |
-| W18 | exemplifies relation | Update only notient.exemplifies array; preserve body/sibling fields. |
-| W19 | synthesizes relation | Update only notient.synthesizes array; preserve body/sibling fields. |
-| W20 | Existing relation target, including alias | Byte-identical no-op. |
-| W21 | Invalid notient/relation/member types | Typed refusal; no changed bytes. |
-| W22 | Target exists outside Related only | Insert in Related; outside occurrence remains unchanged. |
-| W23 | Empty body plus callout/task/math/code-tag fixtures | Empty creates LF section; other fixtures preserve all unrelated syntax. |
-| W24 | Target present before an unclosed later fence | Idempotent source unchanged; no gratuitous fence repair. |
+- G-01 supplies minimum counts and named examples. The active executable mappings below retain R01 through R08 for 2a and M01 through M14 for 2b. The archive W and V tables remain deferred reference material. Goldens compare exact Buffers or exact structured decisions, not a copy of the implementation. Use at least 12 fixture notes with frontmatter, CRLF, callouts, block IDs, wiki/embeds, aliases, references, every GFM task state, unclosed fences, BOM and code-span tags.
 
 ### G-01 reference-move.json / N-26: 14 cases, stage 2b
 
@@ -389,27 +356,6 @@ B=before, A=after, C=current, S=writeStartedAt. Unless stated, B differs from A;
 | R06 | C differs from B and A, S=set | Refuse newer edit, including partial create. |
 | R07 | C=B=A, S=null | Unchanged; no new mutation or stamp. |
 | R08 | C=B=A, S=set | Unchanged; no duplicate mutation. |
-
-### G-01 witness.json: 14 cases, stage 2a pure quotation assets
-
-The locator searches actual served windows for the selected note, never the whole document; deduplicate matches by absolute position and count overlaps. Return byte ranges after UTF-16 mapping. Zero-match reason is exactly `not an exact supplied quotation; copy a contiguous passage verbatim, preserving punctuation and whitespace`; duplicate reason is exactly `occurs more than once; quote a longer contiguous passage identifying one occurrence`. Replace uses the same locator with the complete body as its explicitly supplied window. These fixtures do not admit a witness tool or automatic reasoning.
-
-| ID | Input or boundary | Required result |
-| --- | --- | --- |
-| V01 | Absent quote | Zero-match conflict and exact reason. |
-| V02 | Duplicate quote in supplied window | Duplicate conflict and exact reason. |
-| V03 | aa inside aaa | Two overlapping matches; refuse. |
-| V04 | One contiguous match | Unique derived range; reslice equals quote. |
-| V05 | Match in overview only | Verify that served overview position. |
-| V06 | Same position in passage and overview | Deduplicate position; verify once. |
-| V07 | Out-of-range note index | Typed bounds refusal. |
-| V08 | Surrogate pair before match | Correct UTF-16 and UTF-8 range correspondence. |
-| V09 | CRLF quotation | Exact match; LF-only quotation is absent. |
-| V10 | 4,000-character quote | Full exact range; no truncation. |
-| V11 | Exists only outside supplied windows | Zero-match conflict, despite whole-note occurrence. |
-| V12 | Empty quote | Input refusal, never a match at every offset. |
-| V13 | Same quote in two passages at distinct positions | Duplicate conflict. |
-| V14 | Live revision changed after serving / derived slice differs | Refuse stale revision / quotation before any write. |
 
 ### Integration, fault injection and real use
 
