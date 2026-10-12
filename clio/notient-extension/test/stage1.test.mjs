@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { parseMarkdown } from '../lib/markdown.mjs';
 import { refreshIndex, searchIndex, openIndex, probeFts5 } from '../lib/index.mjs';
 import { inspectNote } from '../lib/note.mjs';
 import { statusSnapshot } from '../lib/status.mjs';
+import { git } from '../lib/git.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const toy = fileURLToPath(new URL('../../fixtures/toy-vault/', import.meta.url));
@@ -97,6 +98,98 @@ test('setup initializes a vault-local repository and preserves existing conventi
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(conventionsPath, 'utf8'), '# Operator conventions\r\nKeep these bytes.\r\n');
   assert.equal(readConfig(f.directory).vaults.length, 1);
+});
+
+test('setup baseline commits current bytes once with Notient identity and preserves vault content', t => {
+  for (const existing of [false, true]) {
+    const f = fixture(t);
+    const packageCopy = path.join(f.temporary, 'notient-extension');
+    cpSync(root, packageCopy, { recursive: true });
+    put(f, 'Existing.md', '# Initial\r\n\r\nOriginal.\r\n');
+    let parent = null;
+    if (existing) {
+      git(f.vault.path, ['init', '-q', '-b', 'main']);
+      git(f.vault.path, ['add', '--all']);
+      git(f.vault.path, ['commit', '-qm', 'Initial'], { env: { GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@localhost', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@localhost' } });
+      parent = git(f.vault.path, ['rev-parse', 'HEAD']);
+      put(f, 'Existing.md', '# Staged\r\n');
+      git(f.vault.path, ['add', '--all']);
+      git(f.vault.path, ['config', 'core.autocrlf', 'true']);
+      git(f.vault.path, ['config', 'core.filemode', 'false']);
+    }
+    put(f, 'Existing.md', '# Current\r\n\r\nPreserve these bytes.\r\n');
+    chmodSync(path.join(f.vault.path, 'Existing.md'), 0o744);
+    put(f, 'New.bin', Buffer.from([0, 255, 10, 13]));
+    put(f, '.gitignore', 'Ignored.md\n');
+    put(f, 'Ignored.md', 'Retain this ignored file.\r\n');
+    put(f, 'Notient/Conventions.md', '# Owner conventions\r\nKeep this.\r\n');
+    const expected = new Map(['Existing.md', 'New.bin', '.gitignore', 'Notient/Conventions.md'].map(name => [name, readFileSync(path.join(f.vault.path, name))]));
+    const env = { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) };
+    const args = [path.join(packageCopy, 'bin/setup.mjs'), '--vault', f.vault.path, '--baseline'];
+    const result = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(result.stdout.slice(0, result.stdout.indexOf('\nSetup updated')));
+    assert.equal(receipt.baseline.created, true);
+    assert.equal(receipt.baseline.parent, parent);
+    assert.equal(receipt.baseline.oid, git(f.vault.path, ['rev-parse', 'HEAD']));
+    assert.equal(git(f.vault.path, ['log', '-1', '--format=%an <%ae>%n%cn <%ce>%n%s']), 'Notient <notient@localhost>\nNotient <notient@localhost>\nNotient baseline');
+    assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), existing ? '2' : '1');
+    for (const [name, bytes] of expected) {
+      assert.deepEqual(git(f.vault.path, ['show', `HEAD:${name}`], { raw: true }), bytes);
+      assert.deepEqual(readFileSync(path.join(f.vault.path, name)), bytes);
+    }
+    assert.equal(git(f.vault.path, ['ls-files', '--', 'Ignored.md']), '');
+    assert.equal(readFileSync(path.join(f.vault.path, 'Ignored.md'), 'utf8'), 'Retain this ignored file.\r\n');
+    assert.equal(git(f.vault.path, ['diff', '--cached', '--name-only']), '');
+    assert.match(git(f.vault.path, ['ls-tree', 'HEAD', '--', 'Existing.md']), /^100755 blob /);
+    const before = snapshot(f.vault.path);
+    const retry = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+    assert.equal(retry.status, 0, retry.stderr);
+    const repeated = JSON.parse(retry.stdout.slice(0, retry.stdout.indexOf('\nSetup updated')));
+    assert.deepEqual(repeated.baseline, { created: false, oid: receipt.baseline.oid, parent });
+    assert.deepEqual(snapshot(f.vault.path), before);
+  }
+});
+
+test('setup baseline refuses AI_AGENT before any mutation and rejects read-only and configuration-only combinations', t => {
+  const f = fixture(t);
+  const packageCopy = path.join(f.temporary, 'notient-extension');
+  cpSync(root, packageCopy, { recursive: true });
+  for (const value of ['clio', '']) {
+    const before = snapshot(f.temporary);
+    const result = spawnSync(process.execPath, [path.join(packageCopy, 'bin/setup.mjs'), '--vault', f.vault.path, '--baseline'], { encoding: 'utf8', env: { ...process.env, AI_AGENT: value } });
+    assert.equal(result.status, 2);
+    assert.equal(result.stderr, 'Notient setup is an operator act and refuses AI_AGENT.\n');
+    assert.deepEqual(snapshot(f.temporary), before);
+  }
+  for (const extra of [['--read-only'], ['--access', 'read-write'], ['--embeddings-on']]) {
+    const before = snapshot(f.temporary);
+    const result = spawnSync(process.execPath, [path.join(packageCopy, 'bin/setup.mjs'), '--vault', f.vault.path, '--baseline', ...extra], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) } });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--baseline requires writable vault bootstrap/);
+    assert.deepEqual(snapshot(f.temporary), before);
+  }
+});
+
+test('setup baseline preserves Git state when a lock or content transform prevents publication', t => {
+  for (const locked of [false, true]) {
+    const f = fixture(t);
+    const packageCopy = path.join(f.temporary, 'notient-extension');
+    cpSync(root, packageCopy, { recursive: true });
+    const env = { ...process.env, XDG_STATE_HOME: path.dirname(f.directory) };
+    const args = [path.join(packageCopy, 'bin/setup.mjs'), '--vault', f.vault.path];
+    const setup = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+    assert.equal(setup.status, 0, setup.stderr);
+    put(f, 'Original.md', '# Original\r\nKeep CRLF.\r\n');
+    if (locked) writeFileSync(path.join(f.vault.path, '.git/index.lock'), 'Foreign lock.');
+    else put(f, '.gitattributes', '*.md text eol=lf\n');
+    const before = snapshot(f.temporary);
+    const result = spawnSync(process.execPath, [...args, '--baseline'], { encoding: 'utf8', env });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, locked ? /existing Git index lock/ : /transformed or concurrently changed bytes/);
+    const durableState = files => Object.fromEntries(Object.entries(files).filter(([name]) => !name.startsWith('vault/.git/objects/')));
+    assert.deepEqual(durableState(snapshot(f.temporary)), durableState(before));
+  }
 });
 
 test('toy vault tools return verified storage passages without changing vault bytes', t => {

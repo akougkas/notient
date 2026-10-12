@@ -3,6 +3,7 @@ import path from 'node:path';
 import { atomicJson, dataDirectory, packageRoot, readConfig, ownVaultPath } from '../lib/config.mjs';
 import { contained, vaultId, revision } from '../lib/paths.mjs';
 import { initializeGit } from '../lib/git.mjs';
+import { createBaseline } from '../lib/setup-baseline.mjs';
 import { normalizeEmbeddings, embeddingCanary } from '../lib/embedding-config.mjs';
 import { createOpenAIAdapter } from '../lib/embedding-adapter.mjs';
 import { verifyVectorConfiguration } from '../lib/vector-store.mjs';
@@ -77,6 +78,7 @@ async function main() {
   let readOnly = false;
   let createOwn = false;
   let access;
+  let baseline = false;
   const embeddingFlags = new Map([['--embeddings-url', 'baseUrl'], ['--embeddings-model', 'model'], ['--embeddings-dimension', 'dimension'], ['--embeddings-max-input-bytes', 'maxInputBytes'], ['--embeddings-batch', 'batch'], ['--embeddings-timeout-ms', 'timeoutMs'], ['--embeddings-document-prefix', 'documentPrefix'], ['--embeddings-query-prefix', 'queryPrefix'], ['--embeddings-space-version', 'spaceVersion']]);
   const embeddingValues = {};
   let embeddingMode;
@@ -100,9 +102,11 @@ async function main() {
       else access = value;
     } else if (flag === '--read-only') readOnly = true;
     else if (flag === '--create-own') createOwn = true;
-    else throw new Error('Usage: setup.mjs --vault <path> [--role operator|own] [--read-only], or --create-own.');
+    else if (flag === '--baseline') baseline = true;
+    else throw new Error('Usage: setup.mjs --vault <path> [--role operator|own] [--read-only | --baseline], or --create-own [--baseline].');
   }
   const embeddingSetup = embeddingMode !== undefined || Object.keys(embeddingValues).length > 0 || keyStdin;
+  if (baseline && (readOnly || access !== undefined || embeddingSetup)) throw new Error('--baseline requires writable vault bootstrap, without --read-only, --access or embedding flags.');
   if (embeddingSetup && (createOwn || readOnly || access !== undefined || args.includes('--role'))) throw new Error('Embedding setup requires only an existing --vault registration.');
   if (embeddingMode && (Object.keys(embeddingValues).length || keyStdin)) throw new Error('Embedding configuration, on and off modes are mutually exclusive.');
   if (createOwn && vaultPath) throw new Error('Use --create-own or --vault, not both.');
@@ -157,6 +161,7 @@ async function main() {
   if (config.vaults.length >= 15 && !config.vaults.some(v => v.path === root)) throw new Error('The read-only runtime supports at most 15 registered vaults.');
   let gitInitialized = false;
   let conventionsCreated = false;
+  let baselineCommit = null;
   if (!readOnly && access === undefined) {
     for (const part of ['Notient', 'Notient/Conventions.md', 'Notient/Inbox', 'Notient/Log', 'Notient/Plans']) {
       const target = path.join(root, part);
@@ -169,6 +174,7 @@ async function main() {
       writeFileSync(target, conventions, { flag: 'wx' });
       conventionsCreated = true;
     }
+    if (baseline) baselineCommit = createBaseline(root);
   }
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
@@ -182,7 +188,7 @@ async function main() {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.runtime.permissions.fs.read = [directory, ...config.vaults.map(v => v.path)];
   atomicJson(manifestPath, manifest);
-  process.stdout.write(`${JSON.stringify({ registered: vault, dataDirectory: directory, gitInitialized, conventionsCreated }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ registered: vault, dataDirectory: directory, gitInitialized, conventionsCreated, baseline: baselineCommit }, null, 2)}\n`);
   process.stdout.write('Setup updated the source capability envelope. Review and install both packages, then start a new Clio session:\n');
   process.stdout.write(`clio-coder library install ${quote(path.resolve(packageRoot, '../notient-plugin'))}\n`);
   process.stdout.write(`clio-coder extensions install ${quote(packageRoot.replace(/\/$/, ''))} --user\n`);

@@ -16,6 +16,10 @@ Persistent state defaults to `${XDG_STATE_HOME:-~/.local/state}/notient/`. `conf
 
 Setup initializes a vault's own git repository when needed and writes the PARA default to `Notient/Conventions.md` only when absent. It creates `Notient/Inbox`, `Notient/Log` and `Notient/Plans`. Setup is an explicit bootstrap action; stage 1 does not commit these files or provide journaled content writes. Existing conventions are preserved byte for byte. `--read-only` skips every vault mutation, including git initialization and conventions creation.
 
+Add `--baseline` to writable setup to record the vault's current tracked and nonignored files in one local commit, including bootstrap conventions. The author and committer are `Notient <notient@localhost>` and the message is `Notient baseline`. Existing history stays intact. The baseline records working files, including unstaged changes, additions and deletions, and makes the normal index match that snapshot; previously staged versions are replaced by the current working versions. Ignored untracked files remain outside the commit and keep their bytes. No remote operation occurs. Keep Obsidian saves and other Git operations quiescent while it runs.
+
+Baseline setup uses a private index, verifies raw file bytes and executable modes, and publishes only against its original branch and HEAD while holding Git's index lock. Executable modes are recorded even with `core.filemode=false`, without changing that Git configuration or filesystem permissions. A clean repeat returns the existing OID without another commit. A foreign index lock, active Git operation, detached HEAD, nested Git repository or content transform that changes the stored bytes refuses publication. CRLF bytes are preserved even with `core.autocrlf=true`; explicit attribute transforms that would normalize them refuse. Setup reports `baseline: {created, oid, parent}`, or `null` when the flag was omitted. `--baseline` works with `--vault` and `--create-own`, and refuses combinations with `--read-only`, registration-only `--access`, or embedding flags. The AI_AGENT guard still runs before parsing or mutation.
+
 Setup updates `runtime/settings.json` and the source manifest's exact read roots before installation. There may be at most 15 registered vaults plus the data directory. The manifest uses JSON syntax, which is valid YAML. Re-run setup and review a reinstall after changing registrations or the state location. Do not run setup against an installed, digested package copy.
 
 ## Operator setup and installation
@@ -30,6 +34,19 @@ clio-coder extensions validate clio/notient-extension
 clio-coder library install /home/akougkas/projects/notient/clio/notient-plugin
 clio-coder extensions install /home/akougkas/projects/notient/clio/notient-extension --user
 ```
+
+For the owner-authorized live campaign, use the separate live toy copy and writable Vaultex baseline, then create the own vault with clean bootstrap conventions:
+
+```sh
+cd /home/akougkas/projects/notient
+node clio/notient-extension/bin/setup.mjs --vault /home/akougkas/.local/share/notient/live-toy-vault --baseline
+node clio/notient-extension/bin/setup.mjs --vault /mnt/c/Users/akougk/Projects/vaultex --baseline
+node clio/notient-extension/bin/setup.mjs --create-own --baseline
+clio-coder library install /home/akougkas/projects/notient/clio/notient-plugin
+clio-coder extensions install /home/akougkas/projects/notient/clio/notient-extension --user
+```
+
+Configure toy-only embeddings separately after its registration and before installation. Endpoint selection and credential input remain operator acts. If an already installed package is being replaced, review the changed envelope and use the install command's `--force` flag.
 
 Start a new Clio session after installation. The command-tool schemas are frozen for a session, and any package edit changes its integrity digest. An update therefore needs a reviewed reinstall and a fresh session. The operator can display `/ext:notient:status` or `/ext:notient:log`.
 
