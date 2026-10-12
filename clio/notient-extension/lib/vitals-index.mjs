@@ -61,7 +61,7 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
         if (changed.after !== after || budget.call(vault.path, ['rev-list', '--first-parent', '-1', head, '--', name]) !== record.git.commit) break;
         verify(record);
         const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === name)?.lastUserEditMs : null;
-        if (Number.isFinite(frozen)) { result.set(row.path, { at: Math.min(now, frozen), fallback: false }); break; }
+        if (Number.isFinite(frozen)) { result.set(row.path, { at: Math.min(now, frozen), fallback: record.vitalsFallbackPaths?.includes(name) ?? false }); break; }
         if (record.operation === 'capture' && changed.before === null) { result.set(row.path, { at: Math.min(now, Date.parse(record.createdAt)), fallback: false }); break; }
         if (changed.before === null) {
           const moved = movedFiles(record);
@@ -100,7 +100,7 @@ export function installVitals(db, vault, directory, previous, metrics, now, { ad
       if (!old && published.before === null && inverse.has(row.path)) old = inverse.get(row.path);
       const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === row.path)?.lastUserEditMs : null;
       const at = record.operation === 'capture' && published.before === null ? Date.parse(record.createdAt) : Number.isFinite(frozen) ? frozen : before?.last_user_edit_ms ?? row.mtime;
-      provenance = { at: Math.min(now, at), fallback: !Number.isFinite(frozen) && !before && record.operation !== 'capture' };
+      provenance = { at: Math.min(now, at), fallback: (record.vitalsFallbackPaths?.includes(row.path) ?? false) || !Number.isFinite(frozen) && !before && record.operation !== 'capture' };
     } else if (old?.revision !== row.revision) provenance = recovered.get(row.path) ?? { at: Math.min(now, row.mtime), fallback: true };
     const at = provenance?.at ?? old?.last_user_edit_ms ?? Math.min(now, row.mtime);
     if (provenance) { if (provenance.fallback) fallback.add(row.path); else fallback.delete(row.path); }

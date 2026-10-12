@@ -171,6 +171,7 @@ export function newRecord(vault, plan) {
     log: plan.log, undo: plan.undo ?? { targets: [], commits: [] }, undoneBy: null,
     indexState: 'pending', derivedIndexState: 'pending', capture: plan.capture ?? null, durability: 'full', conflicts: [], timings: { scanMs: 0, lockWaitMs: 0, journalMs: 0, applyMs: 0, gitMs: 0, totalMs: 0 }, error: null,
     link: plan.link ?? null, relate: plan.relate ?? null, semanticEvidence: plan.semanticEvidence ?? null,
+    vitalsFallbackPaths: plan.vitalsFallbackPaths ?? [],
     vitalsBefore: plan.vitalsBefore ?? plan.files.filter(file => file.role !== 'log').map(file => ({ path: file.path, lastUserEditMs: file.before === null ? null : currentFile(vault.path, file.path).stat?.mtimeMs ?? null })),
   };
   freezeIntentSet(record);
@@ -585,7 +586,7 @@ function inverseFiles(vault, directory, input, budget) {
   const restoredAges = files.filter(file => file.before === null && file.after !== null).flatMap(file => {
     const original = [...selected].reverse().find(record => record.version === 2 && record.files.some(changed => changed.path === file.path && changed.before === revision(file.after)));
     const value = original?.vitalsBefore.find(value => value.path === file.path);
-    return Number.isFinite(value?.lastUserEditMs) ? [value] : [];
+    return Number.isFinite(value?.lastUserEditMs) ? [{ ...value, fallback: original.vitalsFallbackPaths?.includes(file.path) ?? false }] : [];
   });
   return { files, source, noop: false, undo: { targets: selected.map(record => record.id), commits: selected.map(record => record.git.commit) }, restoredAges, reads, inventoryHash, structural: structural || files.some(file => file.after === null), gitMs: budget.usedMs };
 }
@@ -631,14 +632,14 @@ export function buildWritePlan(tool, vault, directory, input, { now = () => new 
     if ([...blobs.values()].some(bytes => bytes.length > MAX_NOTE_BYTES) || [...blobs.values()].reduce((total, bytes) => total + bytes.length, 0) > 64 * 1024 * 1024) refuse('MOVE_PLAN_LIMIT', 'The move exceeds the note or combined blob bound.');
   }
   const git = preflightGit(vault, files, { budget });
-  const vitalsBefore = noop ? [] : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, git.baseHead, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null);
+  const { vitalsBefore, vitalsFallbackPaths } = noop ? { vitalsBefore: [], vitalsFallbackPaths: [] } : freezeEditAges(vault, directory, files, Date.parse(createdAt), budget, inverse?.restoredAges, move ? { source: move.source, destination: move.destination } : null);
   budget.check();
   const gitMs = budget.usedMs;
   const reads = inverse?.reads ?? move?.reads ?? relationship?.reads ?? [];
   const inventoryHash = inverse?.inventoryHash ?? (move || relationship ? revision(canonicalJson((move ?? relationship).inventory)) : null);
   const planHash = revision(canonicalJson({ vaultId: vault.id, operation, files: files.filter(file => file.role !== 'log').map(file => ({ path: file.path, before: file.before === null ? null : revision(file.before), after: file.after === null ? null : revision(tool === 'capture' ? captureReviewBytes(file.after) : file.after), mode: file.mode })), reads, inventoryHash, undo, ref: git.ref, baseHead: git.baseHead, log: audit ? { path: audit.file.path, before: audit.file.before === null ? null : revision(audit.file.before) } : null }));
   if (input.planHash && input.planHash !== planHash) refuse('PLAN_CHANGED', 'The requested bytes, log baseline or Git HEAD differ from the preview.', files.map(file => file.path));
-  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: null, vitalsBefore, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
+  return { id: input.requestId, tool, operation, capture: captured?.capture ?? null, link: relationship?.link ?? null, relate: relationship?.relate ?? null, semanticEvidence: null, vitalsBefore, vitalsFallbackPaths, structural: !!move || !!inverse?.structural, files, source, destination: move?.destination ?? null, createdAt, authorization: input.authorization, batch: input.batch, requestDigest: requestDigest(vault, tool, input), planHash, log: audit?.log ?? null, noop, undo, reads, inventoryHash, git, timings: { scanMs: Math.max(0, performance.now() - started - (gitMs - previousGitMs)), gitMs } };
 }
 
 export function byteSplices(before, after) {

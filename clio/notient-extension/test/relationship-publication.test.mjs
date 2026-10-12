@@ -129,7 +129,7 @@ test('relationship recovery completes stamped partial publication after an index
 test('version two rejects altered admission ages ranges and unknown versions before any recovery publication', t => {
   const f = fixture(t, 'Body.\n'); const result = writeOperation('revise', request(f, 'link', 'frozen-corruption'), options(f)); assert.equal(result.ok, true, JSON.stringify(result));
   const record = readRecord(f.directory, f.vault, result.operationId); const vault = snapshot(f.vault.path); const state = snapshot(f.directory);
-  for (const change of [value => { value.link.admitted[0].rationale = 'Altered evidence'; }, value => { value.vitalsBefore[0].lastUserEditMs++; }, value => { value.files[0].splices[0].startByte++; }, value => { delete value.semanticEvidence; }, value => { value.version = 99; }]) {
+  for (const change of [value => { value.link.admitted[0].rationale = 'Altered evidence'; }, value => { value.vitalsBefore[0].lastUserEditMs++; }, value => { value.vitalsFallbackPaths = ['Missing.md']; }, value => { delete value.vitalsFallbackPaths; }, value => { value.files[0].splices[0].startByte++; }, value => { delete value.semanticEvidence; }, value => { value.version = 99; }]) {
     const altered = structuredClone(record); change(altered); assert.throws(() => validateRecord(altered, f.vault), error => error.code === 'JOURNAL_CORRUPT');
   }
   assert.deepEqual(snapshot(f.vault.path), vault); assert.deepEqual(snapshot(f.directory), state);

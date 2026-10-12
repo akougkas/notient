@@ -51,6 +51,27 @@ for (const variant of ['restored path', 'moved restored path', 'unrelated path']
   assert.deepEqual(snapshot(path.join(f.directory, 'journal')), journal);
 });
 
+for (const refreshed of [false, true]) test(`V14 a restored operator revision cannot freeze a stale cached age with refresh ${refreshed}`, t => {
+  const f = writerFixture(t); baseline(f);
+  const capture = writeOperation('capture', { vault: f.vault.id, requestId: 'cache-age-capture', batch: 'cache-age', authorization: { origin: 'operator', request: 'Capture the cache fixture.' }, name: 'Cache age', content: 'Original prose.\n' }, { directory: f.directory, now: () => new Date(now - 14 * day) }); assert.equal(capture.ok, true, JSON.stringify(capture));
+  refreshIndex(f.vault, f.directory, { now: at });
+  const name = capture.capture.path; const original = readFileSync(path.join(f.vault.path, name));
+  for (const [index, bytes] of [Buffer.from('Foreign revision.\n'), original].entries()) {
+    put(f, name, bytes); git(f.vault.path, ['add', '--', name]); git(f.vault.path, ['-c', 'user.name=Operator', '-c', 'user.email=operator@localhost', 'commit', '-m', `cache foreign ${index}`]);
+  }
+  age(f, name, 3);
+  if (refreshed) refreshIndex(f.vault, f.directory, { now: at });
+  const input = { vault: f.vault.id, requestId: 'cache-age-replace', batch: 'cache-age', authorization: { origin: 'operator', request: 'Replace the fixture word.' }, operation: 'replace', path: name, revision: revision(original), oldText: 'Original', newText: 'Later' };
+  const written = writeOperation('revise', input, { directory: f.directory, now: () => new Date(now) }); assert.equal(written.ok, true, JSON.stringify(written));
+  const record = readRecord(f.directory, f.vault, written.operationId);
+  assert.equal(record.vitalsBefore[0].lastUserEditMs, now - 3 * day);
+  assert.equal(inspectNote(f.vault, f.directory, { path: name }, { now: at }).vitals.values.lastUserEditAt, new Date(now - 3 * day).toISOString());
+  assert.equal(indexSummary(f.vault, f.directory).editAgeFallbackPaths.includes(name), true);
+  unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: at });
+  assert.equal(inspectNote(f.vault, f.directory, { path: name }, { now: at }).vitals.values.lastUserEditAt, new Date(now - 3 * day).toISOString());
+  assert.equal(indexSummary(f.vault, f.directory).editAgeFallbackPaths.includes(name), true);
+});
+
 test('vitals count unique directed wiki edges and typed frontmatter while ignoring embeds self Markdown and code', t => {
   const f = writerFixture(t);
   put(f, 'A.md', '# A\n\nAuthored alpha prose.\n\n- [[B]]\n- [[B|alias]]\n- [[B#Part]]\n- ![[C]]\n- [[Missing]]\n- [[A]]\n\n[Only markdown](D.md)\n\n    [[C]]\n\n> ```\n> [[C]]\n> ```\n\n%% [[C]] %%\n');

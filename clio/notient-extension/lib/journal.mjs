@@ -79,6 +79,7 @@ export function validateRecord(record, vault) {
 function structuralManifest(record) {
   const manifest = { id: record.id, vaultId: record.vaultId, authorization: record.authorization, batch: record.batch, operation: record.operation, applyOrder: record.applyOrder, files: record.files.map(file => ({ intentId: file.intentId, path: file.path, role: file.role, action: file.action, before: file.before, after: file.after, mode: file.mode, temp: file.temp, ...(record.version === 2 ? { splices: file.splices } : {}) })) };
   if (record.version === 2) Object.assign(manifest, { version: 2, createdAt: record.createdAt, source: record.source, destination: record.destination, roleAtIntent: record.roleAtIntent, reads: record.reads, inventoryHash: record.inventoryHash, requestDigest: record.requestDigest, planHash: record.planHash, log: record.log, capture: record.capture, undo: record.undo, ref: record.git.ref, baseHead: record.git.baseHead, link: record.link, relate: record.relate, semanticEvidence: record.semanticEvidence, vitalsBefore: record.vitalsBefore });
+  if (record.version === 2 && Object.hasOwn(record, 'vitalsFallbackPaths')) manifest.vitalsFallbackPaths = record.vitalsFallbackPaths;
   return revision(JSON.stringify(manifest));
 }
 

@@ -16,6 +16,7 @@ function evidence(value) {
 export function validateVersionTwo(record) {
   if (!['link', 'relate', 'semanticEvidence', 'vitalsBefore'].every(key => Object.hasOwn(record, key))) refuse('JOURNAL_CORRUPT', 'Version two requires frozen admission and edit-age fields.');
   const notes = record.files.filter(file => file.role === 'note');
+  if (Object.hasOwn(record, 'vitalsFallbackPaths') && (!Array.isArray(record.vitalsFallbackPaths) || new Set(record.vitalsFallbackPaths).size !== record.vitalsFallbackPaths.length || record.vitalsFallbackPaths.some(name => !notes.some(file => file.path === name)))) refuse('JOURNAL_CORRUPT', 'Frozen fallback paths must name changed notes uniquely.');
   if (!Array.isArray(record.vitalsBefore) || record.vitalsBefore.length !== notes.length || new Set(record.vitalsBefore.map(value => value?.path)).size !== notes.length || record.vitalsBefore.some(value => !closed(value, ['path', 'lastUserEditMs']) || !notes.some(file => file.path === value.path) || value.lastUserEditMs !== null && (!Number.isFinite(value.lastUserEditMs) || Math.abs(value.lastUserEditMs) > 8640000000000000))) refuse('JOURNAL_CORRUPT', 'Frozen edit ages must cover each changed note exactly once.');
   for (const file of record.files) {
     if (!Array.isArray(file.splices)) refuse('JOURNAL_CORRUPT', 'Version two requires frozen chosen splice ranges.', [file.path]);
