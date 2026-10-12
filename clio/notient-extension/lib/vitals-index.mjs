@@ -63,11 +63,11 @@ export function recoverEditAges(vault, directory, rows, now, { budget = createGi
         const frozen = record.version === 2 ? record.vitalsBefore.find(value => value.path === name)?.lastUserEditMs : null;
         if (Number.isFinite(frozen)) { result.set(row.path, { at: Math.min(now, frozen), fallback: record.vitalsFallbackPaths?.includes(name) ?? false }); break; }
         if (record.operation === 'capture' && changed.before === null) { result.set(row.path, { at: Math.min(now, Date.parse(record.createdAt)), fallback: false }); break; }
-        if (changed.before === null) {
+        if (changed.before === null || record.operation === 'undo') {
           const moved = movedFiles(record);
           const originals = record.operation === 'undo' ? record.undo.targets.map(id => { const original = readRecord(directory, vault, id, false); verify(original); return original; }) : [];
           const origin = moved?.destination.path === name ? moved.source.path : inverseOrigins(record, file => file.path, originals).get(name);
-          const prior = record.files.find(file => file.role === 'note' && file.path === origin && file.before !== null && file.after === null);
+          const prior = record.files.find(file => file.role === 'note' && file.path === origin && file.before !== null && (record.operation === 'undo' || file.after === null));
           if (!prior) break;
           name = prior.path; after = prior.before;
         } else after = changed.before;

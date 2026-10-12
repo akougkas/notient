@@ -258,3 +258,28 @@ test('V17 batch inverse restores each note identity when another note occupied i
   assert.equal(inspectNote(f.vault, f.directory, { path: 'A.md' }).vitals.values.lastUserEditAt, restoredA.lastUserEditAt);
   assert.equal(inspectNote(f.vault, f.directory, { path: 'C.md' }).vitals.values.lastUserEditAt, restoredC.lastUserEditAt);
 });
+
+test('V20 a retained version one batch inverse rebuild follows restored identities across an occupied path', t => {
+  const f = writerFixture(t); baseline(f, ['Other.md']);
+  refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  function move(source, destination, id, batch) {
+    const input = { vault: f.vault.id, requestId: id, batch, authorization, operation: 'move', path: source, destination, revision: revision(bytes(f, source)) };
+    const preview = writeOperation('revise', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
+    const result = writeOperation('revise', { ...input, planHash: preview.planHash }, options(f)); assert.equal(result.ok, true, JSON.stringify(result)); legacy(f, result.operationId);
+  }
+  for (const [name, days] of [['A', 14], ['C', 1]]) {
+    const result = writeOperation('capture', { vault: f.vault.id, requestId: `legacy-identity-capture-${name}`, batch: 'legacy-captures', authorization, name, content: `Authored ${name} evidence.\n` }, { ...options(f), now: () => new Date(timestamp - days * 86400000) });
+    assert.equal(result.ok, true, JSON.stringify(result)); legacy(f, result.operationId);
+    move(result.capture.path, `${name}.md`, `legacy-identity-prepare-${name}`, 'legacy-preparation');
+  }
+  const a = bytes(f, 'A.md'); const c = bytes(f, 'C.md');
+  move('A.md', 'B.md', 'legacy-identity-move-A', 'legacy-identities'); move('C.md', 'A.md', 'legacy-identity-move-C', 'legacy-identities');
+  const input = { vault: f.vault.id, requestId: 'legacy-identity-inverse', batch: 'legacy-inverse', authorization, targetBatch: 'legacy-identities' };
+  const preview = writeOperation('undo', { ...input, dryRun: true }, options(f)); assert.equal(preview.ok, true, JSON.stringify(preview));
+  const result = writeOperation('undo', { ...input, planHash: preview.planHash }, options(f)); assert.equal(result.ok, true, JSON.stringify(result)); legacy(f, result.operationId);
+  assert.deepEqual(bytes(f, 'A.md'), a); assert.deepEqual(bytes(f, 'C.md'), c);
+  const before = snapshot(f.vault.path); unlinkSync(indexPath(f.directory, f.vault)); refreshIndex(f.vault, f.directory, { now: () => timestamp });
+  assert.equal(inspectNote(f.vault, f.directory, { path: 'A.md' }).vitals.values.lastUserEditAt, new Date(timestamp - 14 * 86400000).toISOString());
+  assert.equal(inspectNote(f.vault, f.directory, { path: 'C.md' }).vitals.values.lastUserEditAt, new Date(timestamp - 86400000).toISOString());
+  const db = openIndex(f.directory, f.vault); assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get().value), []); db.close(); assert.deepEqual(snapshot(f.vault.path), before);
+});
