@@ -117,6 +117,7 @@ export function applyRecord(vault, directory, record, { observe = () => {}, barr
     observe('afterFilePublish', record, file);
     current = currentFile(vault.path, name, { raw: true });
     if (current.revision !== file.after) refuse('REVISION_CONFLICT', 'The published file changed before verification.', [name], true);
+    if (file.role === 'note') barrier('afterPublish', record, file);
     markFileApplied(directory, vault, record, file);
     file.progress = 'applied';
     saveRecord(directory, vault, record, sync);
@@ -232,7 +233,6 @@ export function finishRecord(vault, directory, record, adapter, options = {}) {
     applyRecord(vault, directory, record, options);
     record.timings.applyMs += performance.now() - started;
     saveRecord(directory, vault, record, sync);
-    options.barrier?.('afterPublish', record);
     options.barrier?.('afterAllAfterBytes', record);
     const afterStates = classifyFiles(vault, record);
     if (afterStates.some(item => item.state !== 'after')) refuse('REVISION_CONFLICT', 'A file changed after publication and before the Git ref.', afterStates.filter(item => item.state !== 'after').map(item => item.file.path), true);

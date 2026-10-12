@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeOperation } from '../lib/write.mjs';
 import { revision } from '../lib/paths.mjs';
-import { readRecord, readBlob, syncDirectory } from '../lib/journal.mjs';
+import { readRecord, readBlob, readFileIntents, syncDirectory } from '../lib/journal.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { atomicJson } from '../lib/config.mjs';
 import { refreshIndex } from '../lib/index.mjs';
@@ -54,7 +54,7 @@ test('SIGKILL at all three stage 2a barriers recovers once through fresh status 
     const first = command(f, 'status');
     assert.equal(first.status, 0, first.stderr);
     const recovered = first.value.recovered.find(result => result.operationId === stopped.input.requestId);
-    assert.equal(recovered?.result, { afterIntent: 'resumed_from_intent', afterPublish: 'committed_after_apply', afterRef: 'already_committed' }[barrier]);
+    assert.equal(recovered?.result, { afterIntent: 'resumed_from_intent', afterPublish: 'completed_partial_apply', afterRef: 'already_committed' }[barrier]);
     const oid = git(f.vault.path, ['rev-parse', 'HEAD']);
     assert.equal(recovered?.commit, oid);
     const second = command(f, 'status');
@@ -82,7 +82,7 @@ test('SIGKILL recovery preserves third-party bytes until the original state is r
   assert.deepEqual(snapshot(f.vault.path), before);
   put(f, 'One.md', 'Baseline One.md\n');
   const resumed = command(f, 'status');
-  assert.equal(resumed.value.recovered[0].result, 'completed_partial_apply');
+  assert.equal(resumed.value.recovered[0].result, 'resumed_from_intent');
   assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), '2');
 });
 
@@ -174,6 +174,37 @@ test('an exclusive capture killed before publication recovers its frozen name an
   assert.equal(retry.value.outcome, 'already_committed');
   assert.equal(retry.value.commit.oid, resumed.value.recovered[0].commit);
   assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), '2');
+});
+
+test('R8 capture F2 has durable note bytes and a write stamp before its applied marker or log', async t => {
+  const f = fixture(t);
+  const input = { vault: f.vault.id, requestId: 'capture-f2-review', batch: 'capture-f2', authorization: { origin: 'operator', request: 'Capture at F2.' }, name: 'F2', content: 'Durable capture.\n' };
+  const stopped = await stopAt(t, f, 'afterPublish', input, 'capture');
+  const record = readRecord(f.directory, f.vault, input.requestId);
+  const rows = readFileIntents(f.directory, f.vault, record);
+  try {
+    const note = record.files.find(file => file.role === 'note');
+    assert.deepEqual(readFileSync(path.join(f.vault.path, note.path)), readBlob(f.directory, f.vault, record.id, note.after));
+    assert.ok(rows.get(note.path).write_started_at_ms);
+    assert.equal(rows.get(note.path).state, 'prepared');
+    assert.notEqual(note.progress, 'applied');
+    assert.equal(existsSync(path.join(f.vault.path, record.log.path)), false);
+  } finally { stopped.child.kill('SIGKILL'); await stopped.exited; }
+  assert.equal(command(f, 'status').value.recovered[0].result, 'completed_partial_apply');
+});
+
+test('R8 a later human save after ref publication is retained while the commit is recognized', async t => {
+  const f = fixture(t);
+  const stopped = await stopAt(t, f, 'afterRef');
+  const record = readRecord(f.directory, f.vault, stopped.input.requestId);
+  stopped.child.kill('SIGKILL'); await stopped.exited;
+  put(f, 'One.md', 'Operator saved after publication.\n');
+  const result = command(f, 'status');
+  assert.equal(result.value.recovered[0].result, 'already_committed');
+  assert.equal(result.value.recovered[0].commit, record.git.commit);
+  assert.equal(readFileSync(path.join(f.vault.path, 'One.md'), 'utf8'), 'Operator saved after publication.\n');
+  assert.equal(git(f.vault.path, ['rev-list', '--count', 'HEAD']), '2');
+  assert.equal(readRecord(f.directory, f.vault, record.id).state, 'committed');
 });
 
 test('an unapplied intent invalidated by a later HEAD aborts without pending recovery', async t => {
