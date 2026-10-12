@@ -56,6 +56,19 @@ test('relations initialize absent and null maps and lists while preserving comme
   check('---\nnotient:\n  supports: # kept\n  other: "keep"\n---\nBody.\n', '---\nnotient:\n  supports: ["[[Target]]"] # kept\n  other: "keep"\n---\nBody.\n');
 });
 
+test('V8 missing relation follows the complete kept block-scalar sibling including owned blank lines', () => {
+  for (const indicator of ['|+', '>+', '|2+', '>+2']) for (const newline of ['\n', '\r\n']) for (const blanks of [1, 3]) {
+    const scalar = [`  memo: ${indicator}`, '    Keep this line.', ...Array(blanks).fill('')].join(newline) + newline;
+    const before = `---${newline}notient:${newline}${scalar}# independent top-level comment${newline}tags: [keep]${newline}---${newline}Body.${newline}`;
+    const expected = before.replace(scalar, scalar + `  supports: ["[[Target]]"]${newline}`);
+    check(before, expected);
+    const plan = planRelate(scan(before), 'Source.md', { target: 'Target.md', relation: 'supports' });
+    assert.equal(plan.splices[0].startByte, Buffer.byteLength(before.slice(0, before.indexOf(scalar) + scalar.length)));
+  }
+  const before = '---\nnotient:\n  memo: |+\n    Keep this line.\n\n---\nBody.\n';
+  check(before, before.replace('\n\n---', '\n\n  supports: ["[[Target]]"]\n---'));
+});
+
 test('relations append to block and flow containers while preserving order nested siblings and single quotes', () => {
   const before = "---\nnotient: {supports: ['unmatched', '[[Earlier]]'], extra: {deep: [1, 2]}, text: 'Don''t change'}\n---\nBody.\n";
   check(before, before.replace("'[[Earlier]]']", "'[[Earlier]]', \"[[Target]]\"]"));

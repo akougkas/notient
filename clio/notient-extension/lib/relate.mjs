@@ -8,7 +8,7 @@ const unsupported = message => refuse('FRONTMATTER_UNSUPPORTED', message);
 
 function yamlSpans(document, field) {
   const text = document.text;
-  const limit = field.end;
+  const limit = document.lines.find(line => line.start >= field.end && line.start > field.start && line.start < document.bodyStart && line.content.trim() && !/^[ \t]|^#/.test(line.content))?.start ?? document.lines[document.closing].start;
   let nodes = 0;
   const lineAt = offset => document.lines.find(line => line.start <= offset && offset < line.end) ?? document.lines.at(-1);
   const indent = line => { if (/^ *\t/.test(line.content)) unsupported('Tabs make nested YAML indentation uncertain.'); return /^ */.exec(line.content)[0].length; };
@@ -76,8 +76,9 @@ function yamlSpans(document, field) {
     const value = parts.value.replace(/\s+#.*$/, '').trim();
     if (value && !value.startsWith('#')) {
       if (/^[|>]/.test(value)) {
+        if (!/^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(value)) unsupported('A block scalar has an unsupported indicator.');
         let last = line;
-        for (const next of document.lines.filter(next => next.start >= line.end && next.start < limit)) { if (next.content.trim() && indent(next) <= keyIndent) break; if (next.content.trim()) last = next; }
+        for (const next of document.lines.filter(next => next.start >= line.end && next.start < limit)) { if (next.content.trim() && indent(next) <= keyIndent) break; if (/^ *\t/.test(next.content)) unsupported('A block scalar has uncertain tab indentation.'); last = next; }
         return { type: 'opaque', start, end: last.end, line, lastLine: last };
       }
       const parsed = node(start, depth);
