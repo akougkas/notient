@@ -446,7 +446,7 @@ export function ReviewView(props: Props) {
                 <text fg={COLOR.accent} wrapMode="word">
                   {effect.destination ?? effect.path}
                 </text>
-                <Markdown text={effect.after} />
+                <Markdown text={effect.after} note />
               </box>
             ))
           )}

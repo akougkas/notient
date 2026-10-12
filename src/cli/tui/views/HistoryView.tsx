@@ -245,7 +245,7 @@ export function HistoryView(props: {
           ) : raw ? (
             <text fg={COLOR.text}>{body}</text>
           ) : (
-            <Markdown text={body} />
+            <Markdown text={body} note />
           )
         ) : (
           rows.map((entry, index) => (

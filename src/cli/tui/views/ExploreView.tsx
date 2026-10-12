@@ -146,7 +146,7 @@ function BodyPane({ state, layout }: { state: AppState; layout: ExploreLayout })
             {explore.selected?.quote ?? explore.body}
           </text>
         ) : (
-          <Markdown text={body} />
+          <Markdown text={body} note />
         )}
       </box>
     </scrollbox>

@@ -1,5 +1,6 @@
 import { SyntaxStyle } from "@opentui/core";
-import { memo } from "react";
+import { memo, useMemo } from "react";
+import { visibleNoteText } from "./noteText";
 import { COLOR } from "./views/theme";
 
 let style: SyntaxStyle | undefined;
@@ -39,10 +40,12 @@ function markdownStyle(): SyntaxStyle {
 export const Markdown = memo(function Markdown({
   text,
   streaming = false,
-}: { text: string; streaming?: boolean }) {
+  note = false,
+}: { text: string; streaming?: boolean; note?: boolean }) {
+  const content = useMemo(() => note ? visibleNoteText(text) : text, [text, note]);
   return (
     <markdown
-      content={text}
+      content={content}
       syntaxStyle={markdownStyle()}
       fg={COLOR.text}
       conceal

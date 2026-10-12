@@ -753,7 +753,7 @@ export function WritingView(props: Props) {
                   showLineNumbers
                 />
               ) : (
-                <Markdown text={preview.effects[0]?.after ?? ""} />
+                <Markdown text={preview.effects[0]?.after ?? ""} note />
               )}
             </box>
           </scrollbox>
