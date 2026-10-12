@@ -9,6 +9,7 @@ import { readBlob } from './journal.mjs';
 import { parseMarkdown, resolveLink } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 import { provenanceWorkspace } from './capture.mjs';
+import { migrateIndex, indexVersion } from './index-schema.mjs';
 
 export const unknownCoverageMessage = 'Structural index coverage is unavailable; empty results do not establish that the vault has no matching notes.';
 
@@ -35,7 +36,7 @@ export function openIndex(directory, vault, writable = false) {
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version !== 0 && version !== 1) throw new Error('Unsupported index version.');
+    if (![0, 1, indexVersion].includes(version)) throw new Error('Unsupported index version.');
     if (version === 0 && !writable) throw new Error('Index is incomplete. Run refresh.');
     if (writable) {
       chmodSync(filename, 0o600);
@@ -73,8 +74,9 @@ export function openIndex(directory, vault, writable = false) {
           path TEXT NOT NULL, revision TEXT NOT NULL, source TEXT NOT NULL,
           passage TEXT NOT NULL, passage_hash TEXT NOT NULL
         );
-        PRAGMA user_version = 1;
       `);
+      if (version === 0) db.exec('PRAGMA user_version = 1');
+      migrateIndex(db);
       if (db.prepare("SELECT value FROM meta WHERE key='workspaceRule'").get()?.value !== 'property-v1') {
         db.exec("BEGIN IMMEDIATE; DELETE FROM note_workspaces; INSERT OR REPLACE INTO meta VALUES ('workspaceRule','property-v1'); COMMIT");
       }

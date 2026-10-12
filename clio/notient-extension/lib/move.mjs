@@ -111,7 +111,7 @@ function destinationAt(text, start, limit, inline) {
   return { start: begin, end, angle, titleStart, finish: inline ? i + 1 : limit };
 }
 
-export function tokenizeMove(bytes) {
+export function tokenizeMove(bytes, { visibility = false } = {}) {
   const document = documentSpans(bytes);
   const { text, lines, bodyStart } = document;
   const visible = new Uint8Array(text.length).fill(1);
@@ -300,7 +300,7 @@ export function tokenizeMove(bytes) {
     i = end;
   }
   for (const entries of definitions.values()) if (entries.length > 1) for (const token of entries) token.duplicate = true;
-  return { tokens, issues, aliases: parseMarkdown(text).aliases };
+  return { tokens, issues, aliases: parseMarkdown(text).aliases, ...(visibility ? { visible, contexts, unclosedFence: fence } : {}) };
 }
 
 function inventoryIndex(names, notes) {
