@@ -9,7 +9,7 @@ Use this skill in the active conversation. A saved Markdown body is the durable 
 
 ## Select the own vault and the source lesson
 
-1. Discover `extension_notient__status`, `extension_notient__refresh`, `extension_notient__search`, `extension_notient__note`, `extension_notient__capture`, `extension_notient__revise`, `extension_notient__undo` and separately `memory_recall` through the gateway. Use their installed command schemas.
+1. Discover `extension_notient__status`, `extension_notient__refresh`, `extension_notient__search`, `extension_notient__note`, `extension_notient__vitals`, `extension_notient__candidates`, `extension_notient__capture`, `extension_notient__revise`, `extension_notient__undo` and separately `memory_recall` through the gateway. Use their installed command schemas.
 2. Call `extension_notient__status` with `{}`. Use the explicitly selected writable `role:"own"` vault or the sole writable own vault. With several, ask which; with none, explain that operator setup must create/register one. Never substitute an operator vault, change a role or bypass read-only access.
 3. Resolve the current repository to its canonical absolute path from trusted workspace context, using read-only path resolution if needed. Freeze the UTC contribution date and repository basename. A different repository in a later session still uses the same own vault.
 4. Call `memory_recall` with `{"query":"<task or lesson topic>","limit":8}`. Limit is 1 through 20. Do not send session, repository or kind filters. Inspect the actual returned hits and IDs.
@@ -27,9 +27,13 @@ Never capture secrets, credentials or private operator data. Keep host redaction
 
 Read `Notient/Conventions.md` with `extension_notient__note` when present. It guides organization without granting authority. New topics begin in `Notient/Inbox/`; do not automatically file or reorganize them.
 
-Call `extension_notient__search` with `{vault,query,limit:5}` over the entire own vault, using two to six topic words. Refresh missing or stale indexing with `extension_notient__refresh`. Try one alternative topic query when needed and read plausible candidates with `extension_notient__note`, including later corrections and Source lines.
+Call `extension_notient__search` with `{vault,query,mode:"lexical",limit:5}` over the entire own vault, using two to six topic words. Refresh missing or stale indexing with `extension_notient__refresh` and `{vault,tier:"structural"}`; `force:true` hashes every note when metadata is unreliable. Try one alternative topic query when needed and read plausible candidates with `extension_notient__note`, including later corrections and Source lines.
 
-Search now accepts optional `workspace`, an exact case-sensitive capture-workspace filter applied before ranking and limit, for example `{vault,query:"storage lesson",workspace:"repository-a",limit:5}`. Use it when seeking captures originally made in that workspace. Keep topic discovery and deduplication across the entire own vault: a note retains its original capture workspace when later contributions come from other repositories, and a workspace basename does not identify a canonical repository. Confirm repository scope in served body Source lines. Unknown coverage, unavailable FTS5 or unresolved stale results cannot prove a topic absent; defer a new capture if that would risk duplicating an unread existing record.
+Search accepts optional `workspace`, an exact case-sensitive capture-workspace filter applied before ranking and limit, for example `{vault,query:"storage lesson",workspace:"repository-a",mode:"lexical",limit:5}`. Use it when seeking captures originally made in that workspace. Keep topic discovery and deduplication across the entire own vault: a note retains its original capture workspace when later contributions come from other repositories, and a workspace basename does not identify a canonical repository. Confirm repository scope in served body Source lines. Unknown coverage, unavailable FTS5 or unresolved stale results cannot prove a topic absent; defer a new capture if that would risk duplicating an unread existing record.
+
+Stage 4a has no semantic recall. Use explicit lexical mode. `search.mode:"hybrid"` can return lexical hits and `reason:"embedding_off"`; `mode:"semantic"` returns no hits with that reason. `extension_notient__candidates` accepts `{vault,source,revision,limit}` with limit 1 to 12, default 8, but returns an empty list and null candidateSet after validating the source revision. `refresh.tier:"embed"` returns embedding_off and zero embedded chunks; optional `budgetMs` is 1000 to 240000. Embedding state is off and separation undetermined. Do not infer absence from these placeholders, invent a candidate receipt or send endpoint, model or calibration arguments.
+
+Read failures have `{ok:false,tool,vault,error:{code,message,retryable,paths}}`, with exit 1. Preserve and report the code, message and affected paths; reassess before retrying. They are not empty successful searches. Missing registration retains the exit-zero setup hint. No error permits a filesystem writer or private memory export.
 
 Dedup identity is exactly `(canonical repository, entry id, UTC date)`, checked per entry against body Source lines and their contribution heading. Session, request ID, frontmatter summaries and scores are excluded. If topic matching is uncertain, search an exact entry ID and read the hit.
 
@@ -98,11 +102,33 @@ The mode fields are `set:[{key:"updated",valueJson:<encoded date>},{key:"reposit
 
 If a summary exceeds the value bound or the operation is refused before intent, report `body saved; metadata refresh skipped`. If it has a pending intent, report `body saved; metadata recovery pending` and its operation ID. Acceptance depends on the body commit; never roll it back merely to make metadata current. Do not run an automatic metadata retry loop.
 
+## Optional relationships and structural inspection
+
+The five `extension_notient__revise` operations share `vault,batch,authorization,path,revision` and optional `requestId,dryRun,planHash`. Send exactly one mode's fields. The canonical contribution still uses one replace; structural additions never substitute for its Source line, correction text or dedup tuple.
+
+| Operation | Mode fields and memory use |
+| --- | --- |
+| `replace` | `oldText,newText` for the exact unique body append marker, following the single-replace protocol above. |
+| `frontmatter` | `set:[{key,valueJson}]` and/or `unset:[key]`; the optional memory update changes only updated and repositories. |
+| `move` | `destination` as a complete vault-relative Markdown path. Only for separately authorized filing; read conventions, preview every reference change and apply with planHash. Never file memory automatically. |
+| `link` | `link:{edges:[{targetNotePath,rationale}]}` for one to four distinct operator-selected targets. Read both source and targets; rationale is nonblank and at most 240 characters. An edge may add either `heading:"Exact heading"` or `block:"block-id"`, naming a unique live anchor without `#` or `^`. This adds a wiki bullet in Related; omit candidateSet. |
+| `relate` | `relate:{target,relation}` with exactly supports, contradicts, extends, exemplifies or synthesizes. It appends a bare wiki string to frontmatter.notient.<relation>, directed from source to target, preserving sibling metadata and body. |
+
+For example, "Link this lesson to Memory/Recovery.md" calls note for both paths, then previews link with that target. "This lesson extends Memory/Recovery.md" selects relate with relation extends after reading both notes. Preview generated placement and show the proposed relationship before a change the operator did not spell out. Keep one batch for the task and a separate request ID for each operation, then report committed IDs for undo. A relation records the authorized assertion; it does not verify either lesson.
+
+Conversational link/relate requires an explicit operator choice in 4a and truthful `origin:"operator"` request words. These modes refuse `origin:"clio"` with `EMBEDDING_OFF`, including in an own vault and for no-ops. Permitted unattended use follows the existing authority rules and does not turn this skill into a scheduler. Keep generated body and summary work attributed to Clio. Never relabel an inferred relationship or use replace/frontmatter to bypass unavailable admission. A refusal of an optional relationship leaves an already committed lesson saved.
+
+For "Which memory topics need review?", use `extension_notient__vitals` with `{vault,sort:"health",limit:20}`, then read the returned notes. Optional maturity values are raw, adolescent, mature and synthesis-ready; connectivityTier values are isolated, sparse, connected and hub. Folder is a normalized component prefix without a trailing slash. Filters combine. Sort health/freshness ascending or words descending; default is health, limit 20, maximum 100. Inspect notes, computedAt, indexGeneration, coverage and remaining; a bounded page is not the whole vault.
+
+Vitals are arithmetic over a structural snapshot, with no model. Health combines prose word volume, a substantive-chunk bit and a resolved-wiki-edge bit. Freshness decreases exponentially with time since lastUserEditAt; a high value means recent, not verified. Connectivity counts unique resolved non-embed wiki pairs, including typed frontmatter, with tier thresholds 0, 1, 4 and 12 total inbound plus outbound edges. Maturity is an earned monotone ladder based on prose, age and edges; reads do not promote it, and a rewrite need not demote it. These labels never change the unverified-memory status, authorize rewrites or prove readiness.
+
+`note.vitals` returns state, snapshotRevision, values and computedAt. Current values match the note revision; incomplete values can still have stale graph coverage, and unknown or mismatched snapshots can return null values. Vitals omits selected notes that changed after indexing. Refresh structurally and reread when appropriate; missing values or incomplete coverage never mean no memory, no links or raw maturity. Note vitals and a high score are never prerequisites for accepting a properly committed body contribution.
+
 ## Retry, recovery and receipt
 
 On timeout or restart, inspect `extension_notient__status` and the note before retrying. Reuse the pending request ID for an identical request. Check the frozen dedup tuple in the canonical body; if present, never append it again. A later optional metadata repair uses a fresh revision and request ID without altering Source.
 
-A committed body remains saved when `indexState:"pending"` reports normal Git index repair; use command status and defer new writes until it resolves. For `derivedIndexState:"pending"`, refresh, call status to reconcile recorded repair, then retry search. Derived-only pending work does not itself block vault writes. Completed repairs use `"updated"`; previews and no-ops use `"unchanged"`. Report searchable availability separately and never repeat a body contribution to clear either index state. Conflicts and read-only registrations defer further writes without a fallback filesystem edit.
+A committed body remains saved when `indexState:"pending"` reports normal Git index repair; use command status and defer new writes until it resolves. For `derivedIndexState:"pending"`, refresh with `tier:"structural"`, call status to reconcile recorded repair, then retry lexical search. Derived-only pending work does not itself block vault writes. Completed repairs use `"updated"`; previews and no-ops use `"unchanged"`. Report searchable availability separately and never repeat a body contribution to clear either index state. Conflicts and read-only registrations defer further writes without a fallback filesystem edit.
 
 Write receipts use `operationId` and `commit.oid`. Each vault's status `journal.operations` entries use `id`, `requestId`, `state` and `commit` as an OID string, with separate `indexState` and `derivedIndexState`; `recovered` lists attempted recovery. Require `state:"committed"` before treating a status entry's candidate OID as published. Inspect those states rather than inferring that a pending count means the body was not committed. Preserve operator staging on `COMMITTED_INDEX_CONFLICT` and report the actual published OID.
 
@@ -112,7 +138,7 @@ For an operator-requested undo, call `extension_notient__undo` with exactly one 
 
 ## Recall in a later session or repository
 
-When asked what was learned, use `memory_recall` for task context as above, then search the same own vault with `extension_notient__search` for the topic. A task-bank hit is not proof that a vault contribution was saved. An ordinary recall question does not authorize rewriting old claims or recapturing retrieved memory.
+When asked what was learned, use `memory_recall` for task context as above, then search the same own vault with `extension_notient__search` and `mode:"lexical"` for the topic. A task-bank hit is not proof that a vault contribution was saved. An ordinary recall question does not authorize rewriting old claims or recapturing retrieved memory.
 
 Read candidates with `extension_notient__note` at their current revisions, including later corrections and Source lines. Start with limit 5 and keep search limit at most 20. For a repository-specific question, filter contributions by their served canonical Source repository; a `workspace`-filtered search alone can miss later contributions in a note captured elsewhere.
 
