@@ -444,13 +444,23 @@ function plannedLog(vault, input, operation, source, files, createdAt, undo) {
 function captureFiles(vault, directory, input, createdAt) {
   const content = captureDocument(input, createdAt);
   const records = listRecords(directory, vault);
+  let history;
   for (const original of records.filter(record => record.operation === 'capture' && record.state === 'committed' && !record.undoneBy)) {
     const note = original.files.find(file => file.role === 'note' && file.after !== null);
     if (!note) continue;
     const originalHash = original.capture?.bodyHash ?? captureBodyHash(readBlob(directory, vault, original.id, note.after));
     if (originalHash !== content.bodyHash) continue;
+    history ??= new Map(git(vault.path, ['rev-list', '--first-parent', 'HEAD']).split('\n').map((oid, ordinal) => [oid, ordinal]));
+    const origin = history.get(original.git.commit);
+    if (origin === undefined) continue;
     let name = original.capture?.path ?? note.path;
-    for (const move of records.filter(record => record.operation === 'move' && record.state === 'committed' && !record.undoneBy)) if (move.source === name) name = move.destination;
+    const lineage = records.filter(record => ['capture', 'move'].includes(record.operation) && record.state === 'committed' && !record.undoneBy && history.has(record.git.commit) && history.get(record.git.commit) < origin).sort((a, b) => history.get(b.git.commit) - history.get(a.git.commit));
+    for (const next of lineage) {
+      if (next.source !== name) continue;
+      if (next.operation === 'capture') { name = null; break; }
+      name = next.destination;
+    }
+    if (name === null) continue;
     let current;
     try { current = currentFile(vault.path, name); } catch { continue; }
     try { if (current.bytes === null || captureBodyHash(current.bytes) !== content.bodyHash) continue; }

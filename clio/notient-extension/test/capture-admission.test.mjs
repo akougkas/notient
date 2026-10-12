@@ -15,6 +15,26 @@ import { snapshot } from './write-helpers.mjs';
 const input = (f, n = 0) => ({ vault: f.vault.id, requestId: `r6-capture-${n}`, batch: 'r6-capture', authorization: { origin: 'operator', request: 'Capture the supplied fixture body.' }, name: 'Admission', content: `# Body ${n}\n` });
 const run = (f, raw, options = {}) => writeOperation('capture', raw, { directory: f.directory, ...options });
 
+test('T4 capture dedup follows its own later moves when an inbox path is reused on the same UTC date', t => {
+  const f = moveFixture(t); const time = new Date(); const now = () => time;
+  const first = run(f, { ...input(f, 90), content: 'Body A\n' }, { now }); assert.equal(first.ok, true, JSON.stringify(first));
+  const move = (captured, destination, requestId) => {
+    const request = { requestId, batch: 'lineage-moves', authorization: input(f).authorization, operation: 'move', path: captured.capture.path, destination, revision: captured.capture.revision };
+    const preview = writeOperation('revise', { ...request, dryRun: true }, { directory: f.directory });
+    const result = writeOperation('revise', { ...request, planHash: preview.planHash }, { directory: f.directory }); assert.equal(result.ok, true, JSON.stringify(result));
+  };
+  move(first, 'Archive/A.md', 'lineage-move-first');
+  const second = run(f, { ...input(f, 91), content: 'Body B\n' }, { now }); assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(second.capture.path, first.capture.path);
+  const before = snapshot(f.temporary);
+  const repeated = run(f, { ...input(f, 92), content: 'Body B\n' }, { now });
+  assert.equal(repeated.outcome, 'noop', JSON.stringify(repeated)); assert.equal(repeated.capture.path, second.capture.path); assert.equal(repeated.capture.duplicateOf, second.operationId);
+  assert.deepEqual(snapshot(f.temporary), before);
+  move(second, 'Archive/B.md', 'lineage-move-second');
+  const moved = run(f, { ...input(f, 93), content: 'Body B\n' }, { now });
+  assert.equal(moved.outcome, 'noop'); assert.equal(moved.capture.path, 'Archive/B.md'); assert.equal(moved.capture.duplicateOf, second.operationId);
+});
+
 test('R6 capture construction preserves caller fields, BOM, EOF and string tags with origin attribution', () => {
   for (const tags of ['[]', '["a # b", \'c\'\'d\', plain]', '[\n  "one", # comment\n  "two"\n]', '\n  - "one" # inline\n  - plain']) {
     const content = `\uFEFF--- \r\ntitle: "Caller"\r\ntags: ${tags}\r\n...\r\n# Body\r\nExact EOF`;
