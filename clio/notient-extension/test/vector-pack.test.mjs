@@ -99,6 +99,12 @@ test('a live reader retains its exact generation while rebuilding reuses packed 
   assert.equal(readdirSync(path.dirname(old.filename)).filter(name => name.endsWith('.i8')).length, 2);
 });
 
+test('E4 rebuild metadata capacity refuses before publication and leaves the original generation usable', t => {
+  const f = fixture(t); publishAll(f); const before = pack(f); const bytes = readFileSync(before.filename);
+  assert.throws(() => rebuildVectorGeneration(f.vault, f.directory, f.profile, { maxBufferBytes: 512 }), error => error.code === 'VECTOR_REBUILD_LIMIT');
+  assert.equal(pack(f).generation, before.generation); assert.deepEqual(readFileSync(before.filename), bytes); assert.equal(vectorState(f.vault, f.directory).state, 'ready');
+});
+
 test('pack readers ignore crash tails, refuse corruption, and leave structural evidence and journal state usable', t => {
   const f = fixture(t); publishAll(f); const row = pack(f); appendFileSync(row.filename, Buffer.from([127, 127, 127]));
   let reader = openVectorSnapshot(f.vault, f.directory, f.profile);

@@ -7,6 +7,7 @@ import { embeddingSpace, embeddingInput, configuredEmbedding } from './embedding
 import { quantizeVector, reconstructedVector } from './vector-math.mjs';
 import { revision, refuse, readNote } from './paths.mjs';
 import { syncDirectory } from './journal.mjs';
+import { scanBudget } from './retrieval-evidence.mjs';
 
 const maxPackBytes = 1024 * 1024 * 1024;
 export const metaValue = (db, key) => db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value ?? null;
@@ -199,14 +200,14 @@ export function verifyVectorConfiguration(vault, directory, profile) {
   });
 }
 
-export function rebuildVectorGeneration(vault, directory, profile, { barrier = () => {}, deadline = Infinity, now = () => performance.now(), sync = syncDirectory } = {}) {
+export function rebuildVectorGeneration(vault, directory, profile, { barrier = () => {}, deadline = Infinity, now = () => performance.now(), sync = syncDirectory, maxBufferBytes = 64 * 1024 * 1024 } = {}) {
   return withIndexWriter(vault, directory, () => {
     const config = readConfig(directory);
     if (!config.vaults.find(value => value.id === vault.id)?.embeddings || JSON.stringify(config.embeddings) !== JSON.stringify(profile)) refuse('EMBEDDING_CONFIG_CHANGED', 'Embedding configuration changed before rebuild.', [], true);
     const snapshot = openVectorSnapshot(vault, directory, profile); let fd; let db;
     try {
       const created = nextPack(directory, vault, snapshot.space); fd = created.fd;
-      const metadata = []; let slots = 0;
+      const metadata = []; const memory = scanBudget('VECTOR_REBUILD_LIMIT', maxBufferBytes); let slots = 0;
       for (const chunk of snapshot.chunks()) {
         if (now() >= deadline) refuse('VECTOR_REBUILD_TIMEOUT', 'Vector generation rebuild exceeded its deadline.', [], true);
         if (!chunk.eligible) continue;
@@ -214,7 +215,8 @@ export function rebuildVectorGeneration(vault, directory, profile, { barrier = (
         snapshot.vector(row);
         const packed = { bytes: snapshot.packed(row), scale: row.scale };
         if ((slots + 1) * profile.dimension > maxPackBytes) refuse('VECTOR_PACK_LIMIT', 'The rebuilt active pack cannot exceed 1 GiB.');
-        writeAll(fd, packed.bytes, slots * profile.dimension); metadata.push({ ...row, slot: slots++, scale: packed.scale });
+        const retained = { ...row, slot: slots++, scale: packed.scale }; memory.add(retained); metadata.push(retained);
+        writeAll(fd, packed.bytes, retained.slot * profile.dimension);
       }
       barrier('afterAppend'); fsyncSync(fd); const durable = sync(created.root); barrier('afterFsync');
       snapshot.close(); db = openIndex(directory, vault, true); db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;');
