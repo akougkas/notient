@@ -22,7 +22,7 @@ export const PIPELINES = {
     purpose:
       "Find specific connections using lexical and graph candidates and evidence from both notes.",
     stages: ["read", "retrieve", "compare", "validate", "propose"],
-    effects: ["relationships"],
+    effects: ["relationships", "body"],
     model: "reasoning",
   },
   contradictions: {
@@ -30,7 +30,7 @@ export const PIPELINES = {
     purpose:
       "Compare claims across relevant notes, separating genuine conflict from changes over time or assumptions.",
     stages: ["read", "retrieve", "compare-claims", "validate", "propose"],
-    effects: ["relationships"],
+    effects: ["relationships", "body"],
     model: "reasoning",
   },
   reconsider: {
