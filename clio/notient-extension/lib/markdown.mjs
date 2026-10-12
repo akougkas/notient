@@ -290,6 +290,16 @@ export function splitTarget(target) {
   return { target: hash < 0 ? target : target.slice(0, hash), fragment: hash < 0 ? null : target.slice(hash + 1) };
 }
 
+const displaySpans = Symbol('displaySpans');
+
+export function linkDisplaySpans(link) {
+  return link[displaySpans] ?? [];
+}
+
+function displayedLink(link, start, end) {
+  return { ...link, [displaySpans]: [{ start, end }] };
+}
+
 function scanLinks(text, start, end, definitions = new Map()) {
   const links = [];
   let i = start;
@@ -310,7 +320,8 @@ function scanLinks(text, start, end, definitions = new Map()) {
       const inner = text.slice(open + 2, close);
       const pipe = inner.indexOf('|');
       const rawTarget = (pipe < 0 ? inner : inner.slice(0, pipe)).trim();
-      links.push({ kind: 'wiki', ...splitTarget(rawTarget), alias: pipe < 0 ? null : inner.slice(pipe + 1), embed, source: sourceRange(text, i, close + 2) });
+      const displayStart = pipe < 0 ? open + 2 + inner.indexOf(rawTarget) : open + 3 + pipe;
+      links.push(displayedLink({ kind: 'wiki', ...splitTarget(rawTarget), alias: pipe < 0 ? null : inner.slice(pipe + 1), embed, source: sourceRange(text, i, close + 2) }, displayStart, pipe < 0 ? displayStart + rawTarget.length : close));
       i = close + 2;
       continue;
     }
@@ -336,7 +347,7 @@ function scanLinks(text, start, end, definitions = new Map()) {
         }
         const definition = definitions.get(label.trim().replace(/\s+/g, ' ').toLowerCase());
         if (definition) {
-          links.push({ kind: 'reference', ...splitTarget(definition.target), alias, embed, source: sourceRange(text, i, referenceEnd), definitionSource: definition.source });
+          links.push(displayedLink({ kind: 'reference', ...splitTarget(definition.target), alias, embed, source: sourceRange(text, i, referenceEnd), definitionSource: definition.source }, open + 1, cursor - 1));
           i = referenceEnd;
         } else i++;
         continue;
@@ -355,7 +366,7 @@ function scanLinks(text, start, end, definitions = new Map()) {
       if (depth) { i++; continue; }
       const inner = text.slice(targetStart, cursor - 1).trim();
       const rawTarget = inner.startsWith('<') ? inner.slice(1, inner.indexOf('>')) : inner.replace(/\s+["'].*$/, '');
-      links.push({ kind: 'markdown', ...splitTarget(rawTarget.replace(/\\([()])/g, '$1')), alias, embed, source: sourceRange(text, i, cursor) });
+      links.push(displayedLink({ kind: 'markdown', ...splitTarget(rawTarget.replace(/\\([()])/g, '$1')), alias, embed, source: sourceRange(text, i, cursor) }, open + 1, targetStart - 2));
       i = cursor;
       continue;
     }

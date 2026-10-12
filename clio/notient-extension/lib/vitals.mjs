@@ -1,4 +1,5 @@
 import { tokenizeMove } from './move.mjs';
+import { linkDisplaySpans } from './markdown.mjs';
 
 export const maturities = ['raw', 'adolescent', 'mature', 'synthesis-ready'];
 export const connectivityTiers = ['isolated', 'sparse', 'connected', 'hub'];
@@ -34,7 +35,7 @@ export function proseMetrics(bytes, parsed, tokenized = tokenizeMove(bytes, { vi
     const masked = text.slice(start, end).split('').map((char, offset) => visible[start + offset] ? char : ' ');
     for (const link of links) {
       if (link.start < start || link.end > end || masked[link.start - start] === ' ') continue;
-      const display = link.alias ?? `${link.target}${link.fragment === null ? '' : `#${link.fragment}`}`;
+      const display = linkDisplaySpans(link).map(span => text.slice(span.start, span.end).split('').map((char, offset) => visible[span.start + offset] ? char : ' ').join('')).join('');
       masked.fill(' ', link.start - start, link.end - start);
       for (let offset = 0; offset < display.length; offset++) masked[link.start - start + offset] = display[offset];
     }

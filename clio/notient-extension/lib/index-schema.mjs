@@ -1,5 +1,5 @@
 export const indexVersion = 2;
-export const wordCountVersion = 'unicode-prose-v4';
+export const wordCountVersion = 'unicode-prose-v5';
 export const graphRule = 'typed-wiki-v3';
 
 export function migrateIndex(db) {

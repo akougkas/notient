@@ -83,6 +83,16 @@ test('V1 refresh explicitly rebuilds obsolete word counts with unchanged file me
   assert.deepEqual(snapshot(f.vault.path), before);
 });
 
+test('V10 link display text keeps the visibility mask for inline code', () => {
+  for (const text of [
+    'See [shown `hidden code`](folder/hidden(nested).md).\n',
+    'See [[Hidden destination|shown ``hidden ` code``]].\r\n',
+    'See [shown `hidden code`][id].\n\n[id]: hidden.md\n',
+    '𐐀See [[Hidden destination|𐐀shown `秘密 code`]].\n',
+    'See [before`hidden`after](hidden.md).\n',
+  ]) assert.deepEqual(proseMetrics(Buffer.from(text), parseMarkdown(text)), { words: text.includes('before') ? 3 : 2, chunkCoverage: 1 }, text);
+});
+
 test('V2 parser retains exact visible source spans on both sides of HTML comments', () => {
   for (const [text, words] of [
     ['Visible <!-- hidden --> prose.\n', 2],
