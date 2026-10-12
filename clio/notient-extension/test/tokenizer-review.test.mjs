@@ -22,6 +22,16 @@ test('T1 unmatched inline code never hides live references across a blank paragr
   }
 });
 
+test('T2 escaped labels and unsupported Markdown destinations block both move and inverse with a line', () => {
+  for (const text of ['[go][a\\]b]\n\n[a\\]b]: old/One.md\n', '[go](old/One&#46;md)\n', '[go](old/One&period;md)\n', '[go](old/One\\.md)\n', '[go][ref]\n\n[ref]: <old/One&#46;md>\n']) {
+    const result = planMove(scan(text), 'old/One.md', 'new/Two.md');
+    assert.equal(result.ok, false, text); assert.deepEqual(result.files, []);
+    assert.ok(result.blockers.some(blocker => blocker.code === 'AMBIGUOUS_REFERENCE' && Number.isInteger(blocker.line)), JSON.stringify(result.blockers));
+    const inverse = guardInverseReferences(scan(text), [{ path: 'old/One.md', before: Buffer.from('Source\n'), after: null }]);
+    assert.ok(inverse.blockers.some(blocker => Number.isInteger(blocker.line)), JSON.stringify(inverse.blockers));
+  }
+});
+
 for (const [name, before, expected] of [
   ['blockquote fence', '> ~~~\n> [[One]]\n> ~~~\n[[One]]\n', '> ~~~\n> [[One]]\n> ~~~\n[[Two]]\n'],
   ['Obsidian comments', '%% [[One]] %%\n%%\n![[One]]\n%%\n[[One]]\n', '%% [[One]] %%\n%%\n![[One]]\n%%\n[[Two]]\n'],

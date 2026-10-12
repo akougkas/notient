@@ -217,6 +217,7 @@ export function tokenizeMove(bytes) {
   const tokens = [];
   function add(kind, span, end, extra = {}) {
     const raw = text.slice(span.start, span.end);
+    if (!external(raw) && /[&\\]/.test(raw)) issues.push({ start: span.start, end: span.end, line: text.slice(0, span.start).split('\n').length, code: 'AMBIGUOUS_REFERENCE', reason: 'Escaped or character-reference destinations are unsupported.' });
     const fragment = raw.indexOf('#');
     const pathEnd = fragment < 0 ? span.end : span.start + fragment;
     const token = { kind, start: span.start, end: pathEnd, target: text.slice(span.start, pathEnd), fragment: fragment < 0 ? '' : raw.slice(fragment), angle: span.angle ?? false, finish: end, ...extra };
@@ -239,8 +240,9 @@ export function tokenizeMove(bytes) {
     if (line.start < bodyStart) continue;
     const offset = contexts.get(line.start) ?? 0;
     if (!visible[line.start + offset]) continue;
-    const match = /^ {0,3}\[([^\]\n]+)\]:[ \t]*/.exec(line.content.slice(offset));
+    const match = /^ {0,3}\[((?:\\.|[^\]\\\n])+)\]:[ \t]*/.exec(line.content.slice(offset));
     if (!match) continue;
+    if (/\\[\[\]]/.test(match[1])) { issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing escaped brackets are unsupported.' }); mask(line.start, line.end); continue; }
     let last = ordinal;
     const begin = line.start + offset + match[0].length;
     if (!text.slice(begin, line.start + line.content.length).trim()) {
@@ -293,6 +295,7 @@ export function tokenizeMove(bytes) {
       if (labelEnd >= 0) { label = text.slice(close + 2, labelEnd) || label; end = labelEnd; }
     }
     const entries = definitions.get(labelKey(label));
+    if (/\\[\[\]]/.test(label)) issues.push({ start: i, end: end + 1, line: text.slice(0, i).split('\n').length, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing escaped brackets are unsupported.' });
     if (entries?.length > 1) for (const token of entries) token.duplicate = true;
     i = end;
   }
@@ -506,7 +509,7 @@ export function guardInverseReferences(scan, files) {
   const changedNames = new Set(files.filter(file => file.before === null || file.after === null).map(file => file.path));
   for (const note of notes) {
     if (changed.has(note.path)) continue;
-    for (const issue of note.issues) blockers.push({ path: note.path, reason: issue.reason });
+    for (const issue of note.issues) blockers.push({ path: note.path, line: issue.line ?? note.bytes.toString('utf8').slice(0, issue.start).split('\n').length, code: issue.code ?? 'AMBIGUOUS_REFERENCE', reason: issue.reason });
     for (const token of note.tokens) {
       const before = resolveMoveTarget(token, note.path, beforeIndex);
       const after = resolveMoveTarget(token, note.path, afterIndex);
