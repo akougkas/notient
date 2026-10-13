@@ -272,6 +272,10 @@ export class Coordinator {
     for (const pipeline of pipelineIdSchema.options) {
       const policy = configuration.settings.pipelines[pipeline];
       const prior = jobs.filter((job) => job.background && job.pipeline === pipeline);
+      const submittedByPath = new Map<string, number>();
+      for (const job of prior)
+        for (const source of job.sourceRevisions)
+          submittedByPath.set(source.path, Math.max(submittedByPath.get(source.path) ?? 0, job.createdAt));
       const last = prior.reduce<number | null>(
         (value, job) => Math.max(value ?? 0, job.createdAt),
         null,
@@ -316,15 +320,15 @@ export class Coordinator {
       const saved = pipeline !== "reconsider" && policy.triggers.includes("save")
         ? [...this.saves]
             .filter(
-              ([, savedAt]) =>
-                at - savedAt >= policy.debounceMs && (last === null || savedAt > last),
+              ([path, savedAt]) =>
+                at - savedAt >= policy.debounceMs && savedAt > (submittedByPath.get(path) ?? 0),
             )
             .map(([path]) => path)
         : [];
       if (
         policy.triggers.includes("save") &&
         pipeline !== "reconsider" &&
-        [...this.saves].some(([, savedAt]) => at - savedAt < policy.debounceMs + 1000 && (last === null || savedAt > last))
+        [...this.saves].some(([path, savedAt]) => at - savedAt < policy.debounceMs + 1000 && savedAt > (submittedByPath.get(path) ?? 0))
       )
         workPending = true;
       const idle =
