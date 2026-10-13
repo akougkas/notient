@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { constants, createReadStream, fstatSync } from "node:fs";
+import { closeSync, constants, fstatSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { type Socket, connect } from "node:net";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -67,20 +67,21 @@ export async function readPairedCredentialFd(fd: number): Promise<string> {
   } catch {
     throw new Error("INVALID_PARAMS: --credential-fd requires an open inherited pipe or socket");
   }
-  const stream = createReadStream("", { fd, autoClose: true, highWaterMark: 129 });
-  const timeout = setTimeout(
-    () =>
-      stream.destroy(
-        new Error("INVALID_PARAMS: credential pipe did not close within five seconds"),
-      ),
-    5000,
-  );
-  timeout.unref();
+  const reader = Bun.file(fd).stream().getReader();
+  let expired = false;
+  const timeout = setTimeout(() => {
+    expired = true;
+    void reader.cancel().catch(() => {});
+  }, 5000);
   const chunks: Buffer[] = [];
   let bytes = 0;
   try {
-    for await (const chunk of stream) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    while (true) {
+      const chunk = await reader.read();
+      if (expired)
+        throw new Error("INVALID_PARAMS: credential pipe did not close within five seconds");
+      if (chunk.done) break;
+      const buffer = Buffer.from(chunk.value);
       bytes += buffer.length;
       if (bytes > 128) throw new Error("INVALID_PARAMS: credential pipe exceeds 128 bytes");
       chunks.push(buffer);
@@ -91,7 +92,10 @@ export async function readPairedCredentialFd(fd: number): Promise<string> {
     return credential;
   } finally {
     clearTimeout(timeout);
-    stream.destroy();
+    await reader.cancel().catch(() => {});
+    try {
+      closeSync(fd);
+    } catch {}
   }
 }
 

@@ -350,6 +350,7 @@ export interface MethodDispatcherOptions {
   /** Resolves `session.hello` params into a principal. */
   authenticate?: Authenticator;
   beforeInvoke?: (method: string, kind: MethodKind) => void;
+  authorizePrincipal?: (principal: Principal) => void;
 }
 
 function readClientIdentity(params: Record<string, unknown>): string {
@@ -412,10 +413,12 @@ export class MethodDispatcher {
   private readonly handlers = new Map<string, Registration>();
   private readonly authenticate: Authenticator;
   private readonly beforeInvoke?: MethodDispatcherOptions["beforeInvoke"];
+  private readonly authorizePrincipal?: MethodDispatcherOptions["authorizePrincipal"];
 
   constructor(options: MethodDispatcherOptions = {}) {
     this.authenticate = options.authenticate ?? defaultAuthenticator;
     this.beforeInvoke = options.beforeInvoke;
+    this.authorizePrincipal = options.authorizePrincipal;
   }
 
   register(method: string, handler: MethodHandler, descriptor: MethodDescriptor): void {
@@ -433,9 +436,19 @@ export class MethodDispatcher {
     if (!registration) throw new RpcError("METHOD_NOT_FOUND", `unknown method: ${method}`);
     if (!context.principal.scopes.includes(registration.descriptor.kind))
       throw new RpcError("FORBIDDEN", `${method} requires ${registration.descriptor.kind} scope`);
+    const authorize = () => this.authorizePrincipal?.(context.principal);
+    authorize();
     context.signal?.throwIfAborted();
     this.beforeInvoke?.(method, registration.descriptor.kind);
-    return registration.handler(context);
+    const result = await registration.handler({
+      ...context,
+      emit: (line) => {
+        authorize();
+        context.emit(line);
+      },
+    });
+    authorize();
+    return result;
   }
 
   async dispatch(

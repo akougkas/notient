@@ -303,6 +303,13 @@ async function main(argv: string[]): Promise<void> {
 
   const dispatcher = new MethodDispatcher({
     authenticate: makeHelloAuthenticator({ adminToken, pairing }),
+    authorizePrincipal: (principal) => {
+      if (principal.id.startsWith("paired-") && !pairing.isActivePrincipal(principal))
+        throw new RpcError(
+          "UNAUTHENTICATED",
+          "paired credential is revoked or no longer grants these scopes",
+        );
+    },
     beforeInvoke: (method, kind) => {
       if (
         !bootstrapResult.mutationsReady() &&
