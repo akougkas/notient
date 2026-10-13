@@ -26,8 +26,15 @@ export function toolSources(tool: string, data: unknown): SourceReference[] {
       parsed.success &&
       parsed.data.notePath === parsed.data.evidence.path &&
       parsed.data.body === parsed.data.evidence.quote
-    )
+    ) {
       addSource(sources, parsed.data.evidence);
+      for (const record of parsed.data.retainedUnderstanding?.records ?? [])
+        if (
+          record.source.path === parsed.data.notePath &&
+          record.source.revision === parsed.data.evidence.revision
+        )
+          addSource(sources, record.source);
+    }
   } else if (tool === "vault.search_notes") {
     const parsed = retrievalResultSchema.safeParse(data);
     if (parsed.success)

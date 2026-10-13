@@ -13,6 +13,7 @@ import {
   revisionSchema,
 } from "../../../api/schema";
 import type { GraphService } from "../../graph/graphService";
+import { intelligenceRecordId, parseIntelligenceRecordSpans } from "../../intelligence";
 import type { ToolJsonSchema } from "./registry";
 
 import type { SearchPipeline } from "../../search/searchPipeline";
@@ -69,6 +70,10 @@ export interface VaultReadResult {
   body: string;
   totalLines: number;
   totalCharacters: number;
+  retainedUnderstanding?: {
+    records: Array<{ recordId: string; source: SourceReference }>;
+    omitted: number;
+  };
   lineRange: { start: number; end: number };
   evidence: SourceReference;
   truncated: boolean;
@@ -84,7 +89,7 @@ export function makeReadNoteTool(
   return {
     name: "vault.read_note",
     description:
-      "Read a saved note with headings, properties, links, tasks and exact source evidence. Body reads return at most 12,000 characters; structure is omitted if it exceeds another 12,000 characters. If truncated, continue with startOffset equal to evidence.range.end and the returned evidence.revision; offsets are UTF-16 characters in the exact saved note and can continue within a long line. Alternatively select a 1-based inclusive lineRange, without startOffset. Read the complete needed finding and qualifications before describing them; encoded metadata is not a substitute for its readable passage.",
+      "Read a saved note with headings, properties, links, tasks and exact source evidence. Body reads return at most 12,000 characters; structure is omitted if it exceeds another 12,000 characters. A default whole-note request also supplies up to four complete recent readable retainedUnderstanding records within 8,000 serialized bytes, with current exact source quotations and an omitted count. They evidence what the note retains, never independent verification or permission. Body truncation is separate from these complete records. If needed content is still omitted, continue with startOffset equal to evidence.range.end and the returned evidence.revision; offsets are UTF-16 characters and can continue within a long line. Alternatively select a 1-based inclusive lineRange, without startOffset. Read the complete needed finding and qualifications; encoded metadata or earlier prose is not a substitute.",
     schema: z.toJSONSchema(readArgs, { io: "input" }) as ToolJsonSchema,
     validate: (raw) => readArgs.parse(raw),
     invoke: async (args, signal, context) => {
@@ -125,6 +130,9 @@ export function makeReadNoteTool(
         body,
         totalLines,
         totalCharacters: note.body.length,
+        ...(request.lineRange === undefined && request.startOffset === undefined
+          ? { retainedUnderstanding: retainedNotePassages(note) }
+          : {}),
         lineRange: { start: range.startLine, end: range.endLine },
         evidence: { ...note.note, range, quote: body },
         truncated: end < selectedEnd,
@@ -134,6 +142,38 @@ export function makeReadNoteTool(
     },
     writeGated: false,
   };
+}
+
+function retainedNotePassages(note: NoteReadResult) {
+  const spans = parseIntelligenceRecordSpans(note.body);
+  const records: Array<{ recordId: string; source: SourceReference }> = [];
+  let omitted = Math.max(0, spans.length - 4);
+  let bytes = Buffer.byteLength(JSON.stringify({ records: [], omitted: spans.length }));
+  for (const span of spans.slice(-4).reverse()) {
+    const raw = note.body.slice(span.start, span.end);
+    const start = span.start + raw.indexOf("\n") + 1;
+    const end = span.start + raw.lastIndexOf("<!-- notient-intelligence:v1:end:");
+    if (start <= span.start || end <= start) {
+      omitted++;
+      continue;
+    }
+    const item = {
+      recordId: intelligenceRecordId(span.record),
+      source: {
+        ...note.note,
+        range: sourceRange(note.body, start, end),
+        quote: note.body.slice(start, end),
+      },
+    };
+    const size = Buffer.byteLength(JSON.stringify(item)) + 1;
+    if (bytes + size > 8000) {
+      omitted++;
+      continue;
+    }
+    records.push(item);
+    bytes += size;
+  }
+  return { records, omitted };
 }
 
 export interface VaultListNeighborsArgs {

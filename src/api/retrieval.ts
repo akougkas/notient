@@ -48,6 +48,18 @@ export const noteExcerptSchema = z
     body: z.string().max(12000),
     totalLines: z.number().int().positive(),
     totalCharacters: z.number().int().nonnegative().optional(),
+    retainedUnderstanding: z
+      .object({
+        records: z
+          .array(z.object({
+            recordId: z.string().regex(/^i-[a-f0-9]{64}$/),
+            source: sourceReferenceSchema,
+          }).strict())
+          .max(4),
+        omitted: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
     lineRange: z.object({ start: z.number().int().positive(), end: z.number().int().positive() }),
     evidence: sourceReferenceSchema,
     truncated: z.boolean(),
