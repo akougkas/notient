@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { normalizeAgentId } from "../core/auth/agentIdentity";
 import { VERSION } from "../version";
+import { NoteApiError, apiErrorCodeSchema } from "../api/schema";
 import { readPairedCredentialFd, withPairedCredential, withPairedCredentialFile } from "./client";
 import { runAnalysisCommand } from "./commands/analysis";
 import { runApiCommand } from "./commands/api";
@@ -1545,6 +1546,22 @@ async function requireVault(parsed: ParsedArgs): Promise<string> {
   return vaultPath;
 }
 
+function classifyError(error: unknown): string {
+  if (error instanceof NoteApiError) {
+    const parsed = apiErrorCodeSchema.safeParse(error.code);
+    if (parsed.success) return parsed.data;
+  }
+  if (error instanceof Error) {
+    const codePrefix = /^([A-Z][A-Z0-9_]*)\s*:/;
+    const match = codePrefix.exec(error.message);
+    if (match) {
+      const parsed = apiErrorCodeSchema.safeParse(match[1]);
+      if (parsed.success) return parsed.data;
+    }
+  }
+  return "INTERNAL";
+}
+
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   let emitter = makeEmitter({ mode: defaultMode(process.stdout.isTTY === true) });
@@ -1554,7 +1571,7 @@ async function main(argv: string[]): Promise<number> {
   } catch (error) {
     const event = {
       type: "error",
-      code: "INTERNAL",
+      code: classifyError(error),
       message: error instanceof Error ? error.message : String(error),
     };
     if (parsed.command === "mcp") {
