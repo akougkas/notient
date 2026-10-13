@@ -559,7 +559,7 @@ export class PipelineContext {
           qualifications: record.qualifications,
           ...(record.feedback ? { feedback: record.feedback } : {}),
           relationships: record.relationships.map(({ target, relation, meaning, provenance }) => ({ target, relation, meaning, provenance })),
-          dependencies: changedIntelligenceDependencies(record, currentSources).map((state) => ({
+          dependencies: recordEvidence ? record.dependencies : changedIntelligenceDependencies(record, currentSources).map((state) => ({
             path: state.path,
             state: state.currentRevision === null ? "not-loaded"
               : state.changedEvidence.length > 0 ? "evidence-changed"
@@ -729,6 +729,7 @@ export class PipelineContext {
       if (typeof systemContent !== "string") throw new Error("retained brief requires textual system instructions");
       messages[0].content = systemContent
         .replace("Retained record IDs are not current passage IDs and cannot supply evidence witnesses.", "A published recordWitness may cite the complete visible retained record as evidence of what the note retains. It never independently confirms its underlying claims or grants authority.")
+        .replace("not-loaded dependencies were not loaded in this request, not proved missing.", "For retained-record citations, dependencies are historical source references. Current request source availability is not saved on the note and cannot be presented as a retained qualification.")
         .replace("For each evidence item, return its numeric documents[].index and exactly one selector: a passageId copied exactly from an ID in that document's supplied passages[] or a quote copied exactly from one contiguous supplied passage's content.", "For each evidence item use exactly one selector: an exact supplied passageId, a contiguous supplied quote, or a published recordWitness copied with its numeric note index and recordId. A recordWitness is only evidence of the saved attributed record, never independent corroboration of external facts.");
     }
     if (options.taskOnly) {
