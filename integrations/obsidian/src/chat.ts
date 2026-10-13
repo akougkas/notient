@@ -128,6 +128,7 @@ export function createChatPanelState(saved?: unknown): ChatPanelState {
 
 export function renderChatPanel(options: ChatPanelOptions): void {
   const { parent, state, signal } = options;
+  let initialHistoryStarted = false;
   parent.empty();
   const root = parent.createDiv({ cls: "notient-chat notient-chat-room" });
   const toolbar = root.createDiv({ cls: "notient-chat-toolbar" });
@@ -878,6 +879,8 @@ export function renderChatPanel(options: ChatPanelOptions): void {
     textarea.disabled = false;
     if (doc.activeElement !== textarea) textarea.value = state.draft;
     void renderTranscript();
+    if (!initialHistoryStarted && !state.historyLoaded && !state.loading && !state.sending)
+      void loadHistory();
   };
 
   const subscriber = () => refresh();
@@ -909,11 +912,12 @@ export function renderChatPanel(options: ChatPanelOptions): void {
 
   const loadHistory = async (selectPath?: string) => {
     if (state.loading || signal.aborted) return;
+    initialHistoryStarted = true;
     state.loading = true;
     setNotice(null);
     notify();
     try {
-      const page = await options.client.chatList();
+      const page = await options.client.chatList(signal);
       if (signal.aborted) return;
       state.conversations = [...page.conversations].sort((a, b) => b.updatedAt - a.updatedAt);
       state.historyLoaded = true;
@@ -935,7 +939,7 @@ export function renderChatPanel(options: ChatPanelOptions): void {
       }
       if (!isCanonicalConversationPath(selected.notePath))
         throw new Error("The selected history entry is not a stored Notient conversation.");
-      const loaded = await options.client.chatLoad(selected.notePath);
+      const loaded = await options.client.chatLoad(selected.notePath, signal);
       if (signal.aborted) return;
       if (loaded.conversation.id !== selected.id)
         throw new Error("Conversation history changed while it was loading. Select it again to refresh.");
@@ -1575,7 +1579,6 @@ export function renderChatPanel(options: ChatPanelOptions): void {
   textarea.value = state.draft;
   fitTextarea(textarea);
   refresh();
-  if (!state.historyLoaded && !state.sending) void loadHistory();
 }
 
 export async function copyToClipboard(doc: Document, text: string): Promise<void> {
