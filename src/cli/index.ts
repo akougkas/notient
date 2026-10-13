@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { normalizeAgentId } from "../core/auth/agentIdentity";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../core/auth/agentIdentity";
 import { VERSION } from "../version";
 import { NoteApiError, apiErrorCodeSchema } from "../api/schema";
 import { readPairedCredentialFd, withPairedCredential, withPairedCredentialFile } from "./client";
@@ -232,7 +232,10 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (rootEntry === "version") return emitVersion(emitter);
   if (rootEntry === "tui") {
     if (resolveCredentialFile(parsed) !== undefined || resolveCredentialFd(parsed) !== undefined)
-      throw new Error("INVALID_PARAMS: paired credentials require an explicit CLI command");
+      throw new Error("INVALID_PARAMS: paired credentials require an explicit CLI command; use notient chat to open the terminal");
+    const clientIdentity = resolveClientIdentity(parsed);
+    if (clientIdentity !== undefined && clientIdentity !== DEFAULT_AGENT_ID)
+      return await dispatchChat(parsed, emitter, clientIdentity);
     return await dispatchRootWorkspace(parsed, emitter);
   }
   const command = parsed.command;
@@ -558,7 +561,9 @@ function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
       );
     return raw;
   }
-  if (typeof raw !== "string") return undefined;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string")
+    throw new Error("INVALID_PARAMS: --as requires an exact agent id");
   return normalizeAgentId(raw);
 }
 
