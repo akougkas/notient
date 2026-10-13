@@ -121,7 +121,7 @@
       },
       {
         "name": "note",
-        "description": "Read a vault-relative Markdown path or inclusive source line range. Select vault by registered id or exact absolute path. The returned revision is a 64-character raw-content hash, not a Git commit id. Includes original frontmatter, outline, links and tags.",
+        "description": "Read a note or inclusive source line range. Supply path as a vault-relative Markdown path; this tool has no source argument. Select vault by registered id or exact absolute path. The returned revision is a 64-character raw-content hash, not a Git commit id. Includes original frontmatter, outline, links and tags.",
         "runtime": "node",
         "entrypoint": "tools/note.mjs",
         "timeoutMs": 60000,
