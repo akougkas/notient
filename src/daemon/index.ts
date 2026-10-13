@@ -1215,7 +1215,7 @@ async function main(argv: string[]): Promise<void> {
         id: principal.id,
         kind: principal.kind,
         scopes: [...principal.scopes],
-        vaultOwner: principal.vaultOwner === true,
+        vaultOwner: pairing.isActiveVaultOwner(principal),
       },
       apiVersion: "v1",
       version: VERSION,
