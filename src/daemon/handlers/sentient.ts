@@ -1,13 +1,12 @@
 import { DateTime, RecordId, type Surreal } from "surrealdb";
 import { type VaultAdapter, VaultPathError } from "../../adapters/vaultAdapter";
 import type { GraphService } from "../../core/graph/graphService";
-import { readNoteNeighbors } from "../../core/graph/noteNeighbors";
 import { isCanonicalOrdinaryNotePath } from "../../core/vault/publicPath";
 import { RpcError, type RpcRequestContext } from "../rpc";
 
 export interface SentientHandlerDeps {
   db: Surreal;
-  graph: Pick<GraphService, "path">;
+  graph: Pick<GraphService, "path"> & Partial<Pick<GraphService, "neighbors">>;
   vault: Pick<VaultAdapter, "exists">;
 }
 
@@ -151,6 +150,21 @@ function isRecord(raw: unknown): raw is Record<string, unknown> {
 }
 
 export function makeSentientHandlers(deps: SentientHandlerDeps) {
+  const currentNeighbors = async (notePath: string, includePending = false, signal?: AbortSignal) => {
+    if (!deps.graph.neighbors) throw new RpcError("INTERNAL", "Revision-checked connections are unavailable.");
+    const result = await deps.graph.neighbors({ path: notePath, includeProposed: includePending, limit: 200 }, signal);
+    if (result.truncated || result.omitted || result.coverage.state !== "current")
+      throw new RpcError("LIMIT_EXCEEDED", "Connections are incomplete; use graph.neighbors for coverage details.");
+    return result.connections.map((edge) => ({
+      notePath: edge.note.path,
+      table: edge.relation,
+      direction: edge.direction,
+      agent: edge.author,
+      confidence: edge.assessment ?? (edge.state === "retained" ? 0 : 1),
+      proposed: edge.state === "proposed",
+      ...(edge.state === "retained" ? { retainedIntelligence: true } : {}),
+    }));
+  };
   return {
     neighbors: async ({ params, signal }: RpcRequestContext) => {
       const notePath = typeof params.notePath === "string" ? params.notePath : "";
@@ -160,7 +174,7 @@ export function makeSentientHandlers(deps: SentientHandlerDeps) {
       return {
         ok: true,
         notePath,
-        neighbors: await readNoteNeighbors(deps.db, notePath, { includePending, signal }),
+        neighbors: await currentNeighbors(notePath, includePending, signal),
       };
     },
     findPath: async ({ params, signal }: RpcRequestContext) => {
@@ -175,14 +189,14 @@ export function makeSentientHandlers(deps: SentientHandlerDeps) {
         );
       return { ok: true, path: result.path.map((note) => note.path), hops: result.steps.length };
     },
-    activeNote: async (_request: RpcRequestContext) => {
+    activeNote: async ({ signal }: RpcRequestContext) => {
       const notePath = await readActiveNotePath(deps.db);
       const swarm = await readSwarmStatus(deps.db);
       if (notePath === null) return { ok: true, notePath: null, neighbors: [], swarm };
       return {
         ok: true,
         notePath,
-        neighbors: await readNoteNeighbors(deps.db, notePath),
+        neighbors: await currentNeighbors(notePath, false, signal),
         swarm,
       };
     },
