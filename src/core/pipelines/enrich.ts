@@ -214,6 +214,7 @@ export async function enrichNotes(context: PipelineContext, plan: PipelinePlan):
     },
     {
       includeMethodology: false,
+      includeRetainedUnderstanding: false,
       validateOutput: (value, validateWitnesses) => {
         resolvedSummaryEvidence.clear();
         const { suggestions, ...other } = value;
