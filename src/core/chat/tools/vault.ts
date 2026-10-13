@@ -127,17 +127,17 @@ export function makeReadNoteTool(
       const body = note.body.slice(range.start, range.end);
       return {
         notePath: note.note.path,
-        body,
         totalLines,
         totalCharacters: note.body.length,
+        lineRange: { start: range.startLine, end: range.endLine },
+        truncated: end < selectedEnd,
+        structureOmitted: JSON.stringify(note.structure).length > 12000,
         ...(request.lineRange === undefined && request.startOffset === undefined
           ? { retainedUnderstanding: retainedNotePassages(note) }
           : {}),
-        lineRange: { start: range.startLine, end: range.endLine },
+        body,
         evidence: { ...note.note, range, quote: body },
-        truncated: end < selectedEnd,
         structure: JSON.stringify(note.structure).length <= 12000 ? note.structure : null,
-        structureOmitted: JSON.stringify(note.structure).length > 12000,
       };
     },
     writeGated: false,

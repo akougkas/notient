@@ -70,7 +70,7 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
   if (probe === null) segments.push({ text: "Model checking…", tone: "dim" });
   else if (probe.status === "ok") segments.push({ text: `Model ${model} ready`, tone: "ok" });
   else if (probe.status === "available")
-    segments.push({ text: `Model ${model} loads on first ask`, tone: "ok" });
+    segments.push({ text: `Model ${model} listed`, tone: "dim" });
   else if (probe.status === "not-loaded")
     segments.push({
       text: `Model ${model} not loaded. Capture and search still work`,
