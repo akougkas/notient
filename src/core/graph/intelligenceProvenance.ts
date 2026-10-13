@@ -149,7 +149,7 @@ export function alreadyRetainedRelationship(
 }
 
 function sameRationaleWording(left: string, right: string): boolean {
-  const words = (text: string) => text.normalize("NFKC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? [];
+  const words = (text: string): string[] => text.normalize("NFKC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? [];
   const a = words(left), b = words(right);
   if (a.length && a.join(" ") === b.join(" ")) return true;
   const shorter = a.length < b.length ? a : b, longer = a.length < b.length ? b : a;
