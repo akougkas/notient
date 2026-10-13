@@ -29,7 +29,7 @@ import type {
 } from "../../daemon/wire";
 import type { ChatLine } from "./ChatView";
 import { conversationLines, conversationTitle, lastPreparedDraft } from "./conversations";
-import { conversationSources, mergeSources, toolSources } from "./sources";
+import { conversationReadScope, conversationSources, mergeSources, readScopeSummary, toolSources } from "./sources";
 import { extractCitations } from "./viewModels";
 
 export const VIEW_IDS = ["home", "inbox", "ask", "explore", "stream"] as const;
@@ -80,6 +80,7 @@ export interface AskState {
   readonly citations: ReadonlyArray<string>;
   /** Revision-bound passages observed in successful tools in the current turn. */
   readonly sources: ReadonlyArray<SourceReference>;
+  readonly readScope: string | null;
   readonly sourceCalls: ReadonlyMap<string, string>;
   readonly citationCursor: number;
   /** Text stays text until Esc explicitly enters navigation. */
@@ -211,6 +212,7 @@ export function initialState(vaultPath: string): AppState {
       pendingApprovals: new Map(),
       citations: [],
       sources: [],
+      readScope: null,
       sourceCalls: new Map(),
       citationCursor: 0,
       composerMode: "editing",
@@ -553,6 +555,7 @@ export function reducer(state: AppState, action: Action): AppState {
           lines,
           citations: extractCitations(`${answer}\n${lastPreparedDraft(lines)?.markdown ?? ""}`),
           sources: conversationSources(action.conversation.messages),
+          readScope: conversationReadScope(action.conversation.messages),
         },
       };
     }
@@ -587,7 +590,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ask: {
           ...state.ask,
           ...(action.line.kind === "user"
-            ? { sources: [], sourceCalls: new Map(), citations: [], citationCursor: 0 }
+            ? { sources: [], readScope: null, sourceCalls: new Map(), citations: [], citationCursor: 0 }
             : {}),
           lines: [...state.ask.lines, action.line],
         },
@@ -595,7 +598,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "ask/sources":
       return {
         ...state,
-        ask: { ...state.ask, sources: action.sources, sourceCalls: new Map(), citationCursor: 0 },
+        ask: { ...state.ask, sources: action.sources, readScope: null, sourceCalls: new Map(), citationCursor: 0 },
       };
     case "ask/sourceStarted": {
       if (action.tool !== "vault.read_note" && action.tool !== "vault.search_notes") return state;
@@ -611,7 +614,8 @@ export function reducer(state: AppState, action: Action): AppState {
       const sourceCalls = new Map(state.ask.sourceCalls);
       sourceCalls.delete(action.callId);
       const sources = mergeSources(state.ask.sources, toolSources(tool, action.data));
-      return { ...state, ask: { ...state.ask, sourceCalls, sources } };
+      const readScope = readScopeSummary(tool, action.data) ?? state.ask.readScope;
+      return { ...state, ask: { ...state.ask, sourceCalls, sources, readScope } };
     }
     case "ask/reset":
       return {
@@ -621,6 +625,7 @@ export function reducer(state: AppState, action: Action): AppState {
           lines: action.line === undefined ? [] : [action.line],
           citations: [],
           sources: [],
+          readScope: null,
           sourceCalls: new Map(),
           citationCursor: 0,
           composerMode: "editing",

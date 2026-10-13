@@ -17,6 +17,43 @@ export function conversationSources(messages: readonly ChatMessage[]): SourceRef
   return sources;
 }
 
+export function readScopeSummary(tool: string, data: unknown, recorded = false): string | null {
+  if (tool !== "vault.read_note") return null;
+  const parsed = noteExcerptSchema.safeParse(data);
+  if (!parsed.success) return null;
+  const read = parsed.data;
+  if (
+    read.notePath !== read.evidence.path || read.body !== read.evidence.quote ||
+    read.evidence.range.end - read.evidence.range.start !== read.body.length
+  ) return null;
+  const records = read.retainedUnderstanding;
+  if (records?.records.some((record) =>
+    record.source.path !== read.notePath || record.source.revision !== read.evidence.revision ||
+    record.source.range.end - record.source.range.start !== record.source.quote.length,
+  )) return null;
+  const filename = read.notePath.split("/").at(-1)?.replace(/\.md$/, "") ?? read.notePath;
+  const name = filename.length > 26 ? `${filename.slice(0, 25)}…` : filename;
+  return [
+    `${recorded ? "Saved read" : "Read"}: ${name}`,
+    read.truncated ? "body excerpt" : "returned passage complete",
+    ...(records ? [`${records.records.length} complete records${records.omitted ? `; ${records.omitted} omitted` : ""}`] : []),
+    read.structure !== null && !read.structureOmitted ? "outline included" : "outline not supplied",
+  ].join(" · ");
+}
+
+export function conversationReadScope(messages: readonly ChatMessage[]): string | null {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== "assistant") continue;
+    for (const call of [...message.toolCalls ?? []].reverse()) {
+      const results = message.toolResults?.filter((result) => result.callId === call.id);
+      if (results?.length !== 1 || results[0]?.status !== "ok") continue;
+      const scope = readScopeSummary(call.name, results[0].data, true);
+      if (scope) return scope;
+    }
+  }
+  return null;
+}
+
 /** Only completed domain results can supply early evidence; never call arguments. */
 export function toolSources(tool: string, data: unknown): SourceReference[] {
   const sources: SourceReference[] = [];

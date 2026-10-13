@@ -66,6 +66,8 @@ export function AskView({
   ).length;
   const activityRows = toolCalls > 0 || state.ask.busy ? 1 : 0;
   const compact = layout.height < 12;
+  const readScope = compact ? null : state.ask.readScope;
+  const readScopeRows = readScope ? Math.max(1, Math.ceil(readScope.length / layout.conversationWidth)) : 0;
   const strip = compact
     ? null
     : buildDevelopmentsStrip(state, developmentRowLimit(layout.height), layout.conversationWidth);
@@ -75,7 +77,7 @@ export function AskView({
   const headerRows = 2 + capabilityHeight + stripRows;
   const chatHeight = Math.max(
     1,
-    layout.height - inputHeight - 2 - headerRows - citationRows - activityRows,
+    layout.height - inputHeight - 2 - headerRows - citationRows - activityRows - readScopeRows,
   );
   const focused = state.ask.composerMode !== "navigation" && state.prompt.kind === null;
   return (
@@ -136,6 +138,11 @@ export function AskView({
           {state.ask.busy
             ? `Working · ${elapsedSeconds}s · Esc stops this turn · Ctrl+T activity`
             : `${state.ask.showActivity ? "▾" : "▸"} ${toolCalls} tool ${toolCalls === 1 ? "call" : "calls"} · Ctrl+T ${state.ask.showActivity ? "hide details" : "details"}`}
+        </text>
+      ) : null}
+      {readScope ? (
+        <text height={readScopeRows} fg={COLOR.dim} wrapMode="word">
+          {readScope}
         </text>
       ) : null}
       <CitationBar
