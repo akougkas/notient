@@ -129,6 +129,8 @@ export function createChatPanelState(saved?: unknown): ChatPanelState {
 export function renderChatPanel(options: ChatPanelOptions): void {
   const { parent, state, signal } = options;
   let initialHistoryStarted = false;
+  let principalId: string | null = null;
+  let principalError = false;
   parent.empty();
   const root = parent.createDiv({ cls: "notient-chat notient-chat-room" });
   const toolbar = root.createDiv({ cls: "notient-chat-toolbar" });
@@ -875,7 +877,18 @@ export function renderChatPanel(options: ChatPanelOptions): void {
               ? { state: "error", label: "Needs your attention" }
               : { state: "idle", label: "" });
     stopButton.hidden = !state.sending;
-    sendButton.disabled = state.loading || state.sending || !state.draft.trim();
+    const foreignHistory = state.conversation !== null && principalId !== null &&
+      state.conversation.clientIdentity !== principalId;
+    const checkingHistory = state.conversation !== null && principalId === null;
+    const command = parseSlashCommand(state.draft.trim());
+    const localCommand = command !== null && ["new", "search", "connections", "review"].includes(command.name);
+    hint.setText(foreignHistory
+      ? "Read-only history · choose New to continue · / for local commands"
+      : checkingHistory
+        ? principalError ? "Conversation access unavailable · / for local commands" : "Checking conversation access…"
+        : idleHint);
+    sendButton.disabled = state.loading || state.sending || !state.draft.trim() ||
+      ((foreignHistory || checkingHistory) && !localCommand);
     textarea.disabled = false;
     if (doc.activeElement !== textarea) textarea.value = state.draft;
     void renderTranscript();
@@ -1018,6 +1031,12 @@ export function renderChatPanel(options: ChatPanelOptions): void {
       if (await runSlashCommand(command.name, command.argument)) return;
       if (signal.aborted) return;
       text = command.prompt ?? text;
+    }
+    if (state.conversation && state.conversation.clientIdentity !== principalId) {
+      setNotice(principalId === null
+        ? "Conversation access is still being checked. Your draft is kept."
+        : "This history belongs to another client. Choose New to continue; your draft is kept.");
+      return;
     }
     const originalDraft = state.draft;
     state.loading = true;
@@ -1579,6 +1598,18 @@ export function renderChatPanel(options: ChatPanelOptions): void {
   textarea.value = state.draft;
   fitTextarea(textarea);
   refresh();
+  void options.client.connect(signal).then((capabilities) => {
+    if (signal.aborted) return;
+    const identity = capabilities.principal?.id;
+    if (!identity) throw new Error("The daemon did not supply a conversation identity. Use the current Notient daemon to continue saved threads.");
+    principalId = identity;
+    notify();
+  }).catch((error) => {
+    if (signal.aborted) return;
+    principalError = true;
+    setNotice(`Could not check conversation access: ${message(error)}`, true);
+    notify();
+  });
 }
 
 export async function copyToClipboard(doc: Document, text: string): Promise<void> {
