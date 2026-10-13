@@ -538,7 +538,7 @@ export class ChangeService {
           await this.options.authorize?.(caller, preview, effect);
           await reviewAccess();
           await authority?.(preview, effect);
-          if (effect.relationship) await this.notes.read(effect.relationship.target);
+          if (effect.relationship) await this.relationshipTarget(preview, index);
         };
         await authorize();
         const review = reviewId ? await readReview(this.options.db, reviewId) : null;
@@ -558,7 +558,7 @@ export class ChangeService {
           effect,
         );
         const receipt = effect.relationship
-          ? await this.applyRelationship(effect, caller, authorize)
+          ? await this.applyRelationship(preview, index, caller, authorize)
           : await this.options.writer.apply({
               kind:
                 effect.kind === "move"
@@ -686,7 +686,7 @@ export class ChangeService {
           await this.options.authorizeCaller?.(job.caller);
           await this.options.authorizeRecoveredJob(job, preview, effect);
         }
-        if (effect.relationship) await this.notes.read(effect.relationship.target);
+        if (effect.relationship) await this.relationshipTarget(preview, authority.index);
         return;
       }
       throw new EffectAuthorityRevoked(
@@ -698,20 +698,47 @@ export class ChangeService {
     }
   }
 
+  private async relationshipTarget(preview: ChangePreview, index: number) {
+    const reference = preview.effects[index]?.relationship?.target;
+    if (!reference) throw new Error("relationship target is unavailable");
+    let revision = reference.revision;
+    let advanced = false;
+    for (const prior of preview.effects.slice(0, index)) {
+      if (prior.path !== reference.path) continue;
+      if (prior.afterRevision === revision) continue;
+      if (
+        prior.kind !== "write" ||
+        prior.beforeRevision !== revision ||
+        prior.category !== "body" ||
+        !isIntelligenceOnlyAppend(prior.before, prior.after)
+      )
+        throw new NoteApiError(
+          "CONFLICT",
+          "relationship target changed beyond the reviewed intelligence appends",
+        );
+      revision = prior.afterRevision;
+      advanced = true;
+    }
+    const note = await this.notes.read({ path: reference.path, revision });
+    return { note, evidenceRevision: advanced ? null : note.note.revision };
+  }
+
   private async applyRelationship(
-    effect: PreviewEffect,
+    preview: ChangePreview,
+    index: number,
     caller: ChangeCaller,
     authorize: () => Promise<void>,
   ) {
-    if (!effect.relationship || !this.options.approvalService || effect.before === null)
+    const effect = preview.effects[index];
+    if (!effect?.relationship || !this.options.approvalService || effect.before === null)
       throw new Error("relationship effect is missing its approval authority");
     const edge = parseSurrealRelationRecordId(effect.relationship.edgeId, WRITEBACK_EDGE_TABLES);
-    const target = await this.notes.read(effect.relationship.target);
+    const { note: target, evidenceRevision } = await this.relationshipTarget(preview, index);
     const suppressGenericRelationshipRetention = hasValidatedRelationshipIntelligence(
       effect.before,
       edge.table,
       { path: effect.path, revision: null, body: effect.before },
-      { path: target.note.path, revision: target.note.revision, body: target.body },
+      { path: target.note.path, revision: evidenceRevision, body: target.body },
     );
     const receipt = await this.options.approvalService.approveEdge(
       { id: edge.recordId, table: edge.table, approvedBy: caller.id },
