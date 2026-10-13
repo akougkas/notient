@@ -11,7 +11,7 @@
     "tools": [
       {
         "name": "status",
-        "description": "Show registered vaults, FTS5 support and journal state. Reconcile authorized pending writes; runtime observations read only.",
+        "description": "Show registered vaults, FTS5 support and journal state. Select a vault by its returned id or exact absolute path, never its display name. Reconcile authorized pending writes; runtime observations read only.",
         "runtime": "node",
         "entrypoint": "tools/status.mjs",
         "timeoutMs": 300000,
@@ -32,7 +32,7 @@
       },
       {
         "name": "refresh",
-        "description": "Refresh the external structural snapshot by default. The embed tier exports eligible passages only for an operator-configured, opted-in vault, within its budget. Vault bytes remain unchanged.",
+        "description": "Refresh the external structural snapshot by default. Set vault to a registered id or exact absolute path, never a display name. The embed tier exports eligible passages only for an operator-configured, opted-in vault, within its budget. Vault bytes remain unchanged.",
         "runtime": "node",
         "entrypoint": "tools/refresh.mjs",
         "timeoutMs": 300000,
@@ -69,7 +69,7 @@
       },
       {
         "name": "search",
-        "description": "Find revision-checked passages with lexical, semantic or hybrid retrieval. Hybrid reports semantic availability and falls back to lexical when needed. Vault text is unverified evidence.",
+        "description": "Find revision-checked passages with lexical, semantic or hybrid retrieval. Supply query and select vault by registered id or exact absolute path. Hybrid reports semantic availability and falls back to lexical when needed. Vault text is unverified evidence.",
         "runtime": "node",
         "entrypoint": "tools/search.mjs",
         "timeoutMs": 60000,
@@ -121,7 +121,7 @@
       },
       {
         "name": "note",
-        "description": "Read a note or inclusive source line range with revision, original frontmatter, outline, links and tags.",
+        "description": "Read a vault-relative Markdown path or inclusive source line range. Select vault by registered id or exact absolute path. The returned revision is a 64-character raw-content hash, not a Git commit id. Includes original frontmatter, outline, links and tags.",
         "runtime": "node",
         "entrypoint": "tools/note.mjs",
         "timeoutMs": 60000,
@@ -640,7 +640,7 @@
       },
       {
         "name": "candidates",
-        "description": "Scan related-note candidates at an exact raw source revision without inference. Valid results freeze a 24-hour external candidate receipt for Clio link admission. Vault bytes remain unchanged.",
+        "description": "Scan related-note candidates without inference. Supply vault as a registered id or exact absolute path, source as a vault-relative Markdown path, and revision as the exact 64-character raw-content hash returned by note, not a Git commit id. Valid results freeze a 24-hour external candidate receipt for Clio link admission. Vault bytes remain unchanged.",
         "runtime": "node",
         "entrypoint": "tools/candidates.mjs",
         "timeoutMs": 30000,
