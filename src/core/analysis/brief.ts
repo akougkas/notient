@@ -1,18 +1,18 @@
 import { z } from "zod";
 import type { BriefResult } from "../../api/brief";
 import { hasInternalSourceMarkers } from "../markdown/sourceMarkers";
-import { type PipelineContext, witnessSchema } from "../pipelines/context";
+import { type PipelineContext, retainedRecordWitnessSchema, witnessSchema } from "../pipelines/context";
 
 const statement = z.strictObject({
   text: z
     .string()
     .min(1)
-    .max(4000)
+    .max(3600)
     .refine(
       (text) => !hasInternalSourceMarkers(text),
       "Write readable prose without numeric source markers; use structured evidence instead.",
     ),
-  evidence: z.array(witnessSchema).min(1).max(8),
+  evidence: z.array(z.union([witnessSchema, retainedRecordWitnessSchema])).min(1).max(8),
 });
 const schema = z.strictObject({
   summary: statement.nullable(),
@@ -22,8 +22,6 @@ const schema = z.strictObject({
   abstention: z.string().min(1).nullable(),
 });
 
-/** A compact source-grounded briefing, using the same bounded context and
- * schema correction as other note analysis. Stored paraphrases are not evidence. */
 export async function composeBrief(
   context: PipelineContext,
   topic: string,
@@ -38,7 +36,7 @@ export async function composeBrief(
     };
   const output = await context.model(
     "knowledge_brief",
-    "Prepare a compact, useful brief on task.topic from the supplied saved notes. The summary should be two or three concise sentences in your own words. Put exact quotations in the structured evidence fields, without repeating them verbatim in the prose. Each quotation must be long enough to identify one occurrence in its supplied source and support the actual claim, including order or conditions when those matter. Add only the most useful distinct findings: claim for a concrete assertion, decision only for an explicitly adopted choice (not a plan or suggestion), question for a question actually raised in the text, and tension for competing claims with quotations from both notes. A question being present does not prove it is still unanswered. Different dates, scopes or assumptions alone do not establish a contradiction. Explain those qualifiers. Do not invent historical decisions, recency, resolution status or absence from truncated excerpts. Keep the result focused; do not fill categories with weak material. If there is insufficient relevant evidence, return summary=null, findings=[] and an explicit abstention.",
+    "Prepare a compact, useful brief on task.topic from the supplied saved notes. The summary should be two or three concise sentences in your own words. Put exact quotations in the structured evidence fields, without repeating them verbatim in the prose. Each quotation must be long enough to identify one occurrence in its supplied source and support the actual claim, including order or conditions when those matter. Add only the most useful distinct findings: claim for a concrete assertion, decision only for an explicitly adopted choice (not a plan or suggestion), question for a question actually raised in the text, and tension for competing claims with quotations from both notes. A question being present does not prove it is still unanswered. Different dates, scopes or assumptions alone do not establish a contradiction. Explain those qualifiers. Do not invent historical decisions, recency, resolution status or absence from truncated excerpts. Keep the result focused; do not fill categories with weak material. When describing saved findings, assessments, feedback, statuses or qualifications from retainedUnderstanding, cite each corresponding published recordWitness using its note and recordId. An introductory question or general topic passage does not evidence those retained contents. These citations report what the note retains, not independent evidence of the underlying facts. Do not describe a provisional suggestion as an adopted decision, supported as externally verified, or saved feedback as proven true. If there is insufficient relevant evidence, return summary=null, findings=[] and an explicit abstention.",
     schema.superRefine((output, validation) => {
       try {
         resolveBrief(context, output);
@@ -50,6 +48,7 @@ export async function composeBrief(
       }
     }),
     { topic },
+    { retainedRecordEvidence: true },
   );
   return resolveBrief(context, output);
 }
@@ -71,17 +70,30 @@ function resolveBrief(
   if (output.abstention !== null)
     throw new Error("a supported brief cannot simultaneously abstain");
   return {
-    summary: {
-      text: output.summary.text,
-      evidence: output.summary.evidence.map((witness) => context.evidence(witness)),
-    },
+    summary: resolveStatement(context, output.summary),
     findings: output.findings.map((finding) => {
-      const evidence = finding.evidence.map((witness) => context.evidence(witness));
+      const resolved = resolveStatement(context, finding);
+      const evidence = resolved.evidence;
       if (finding.kind === "tension" && new Set(evidence.map((source) => source.path)).size < 2)
         throw new Error("a cross-note tension requires exact quotations from both notes");
-      return { ...finding, evidence };
+      if (finding.kind === "decision" && finding.evidence.every((witness) => "recordId" in witness) &&
+        !finding.evidence.some((witness) => "recordId" in witness && context.retainedRecord(witness)?.kind === "decision" && context.retainedRecord(witness)?.status === "decided"))
+        throw new Error("a retained suggestion or finding does not establish an adopted decision");
+      return { kind: finding.kind, ...resolved };
     }),
     abstained: false,
     reason: null,
+  };
+}
+
+function resolveStatement(context: PipelineContext, value: z.infer<typeof statement>) {
+  const recordIds = value.text.match(/\bi-[a-f0-9]{64}\b/gu) ?? [];
+  for (const recordId of recordIds)
+    if (!value.evidence.some((witness) => "recordId" in witness && witness.recordId === recordId))
+      throw new Error("A statement about a retained record ID must cite that record's published recordWitness, not an introductory or unrelated passage.");
+  const retained = value.evidence.some((witness) => "recordId" in witness);
+  return {
+    text: retained ? `As attributed understanding retained on the note: ${value.text} This brief does not independently verify the underlying claims.` : value.text,
+    evidence: value.evidence.map((witness) => context.evidence(witness)),
   };
 }
