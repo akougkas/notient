@@ -264,7 +264,7 @@ function NeighborsPane({
   return (
     <box width={layout.neighborsScrollWidth} height={layout.scrollHeight} flexDirection="column">
       <text fg={COLOR.dim} marginBottom={1} wrapMode="word">
-        file · saved reference kept · retained intelligence idea · proposed 0–1 · assessment
+        file: saved reference · kept: retained intelligence · idea: proposed · 0–1: assessment
       </text>
       {result && (result.coverage.state !== "current" || result.truncated) && (
         <text fg={COLOR.warn} marginBottom={1} wrapMode="word">
@@ -313,7 +313,7 @@ function NeighborsPane({
               ? "Saved reference · checked against saved files"
               : detail.state === "retained"
                 ? isWritebackEdgeTable(detail.relation)
-                  ? "Retained provisional relationship · approval history not restored"
+                  ? `Retained provisional relationship · ${detail.author} · approval history not restored`
                   : "Retained reference · factual support not established"
                 : `${detail.state} relationship · ${detail.author}`}
           </text>

@@ -518,6 +518,7 @@ export class Coordinator {
     const current = this.opts.settings.background();
     const policy = current.settings.pipelines[pipeline];
     const scope = scopeSchema.parse(policy.readScope);
+    const writeScope = pipeline === "enrich" ? scopeSchema.parse(policy.writeScope) : null;
     const maximum = ["index-extract", "enrich"].includes(pipeline)
       ? policy.budget.notes
       : pipeline === "synthesize"
@@ -526,6 +527,7 @@ export class Coordinator {
     const files = await this.opts.vault.listMarkdown();
     const inventory = contentRevision(JSON.stringify(files));
     const pathScope = { ...scope, tags: [], excludeTags: [] };
+    const writePathScope = writeScope ? { ...writeScope, tags: [], excludeTags: [] } : null;
     const savedAt = new Map(saved.map((path) => [path, this.saves.get(path) ?? this.now()]));
     const attention = current.settings.cultivation.attention;
     const priorities = attentionPriorityMap(attention);
@@ -575,6 +577,7 @@ export class Coordinator {
       .filter(
         (file) =>
           scopeAllows(pathScope, file.path, []) &&
+          (!writePathScope || scopeAllows(writePathScope, file.path, [])) &&
           (!saved.length || saved.includes(file.path)) &&
           (pipeline !== "inbox" || insideFolder(file.path, policy.destinations.inbox)),
       )
@@ -677,6 +680,7 @@ export class Coordinator {
         throw error;
       }
       if (!scopeAllows(scope, note.note.path, note.structure.tags)) continue;
+      if (writeScope && !scopeAllows(writeScope, note.note.path, note.structure.tags)) continue;
       const records = this.retainedRecords(note.body);
       const assessed = assessAttention(
         {
