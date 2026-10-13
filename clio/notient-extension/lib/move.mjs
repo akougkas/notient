@@ -124,6 +124,29 @@ function wikiEnd(text, start) {
   return -1;
 }
 
+function pandocTextSpan(text, start) {
+  const span = /^\[\[([\p{L}\p{N} .,;:!?_-]+)\](\{[^{}\r\n]+\})\](\{[^{}\r\n]+\})/u.exec(text.slice(start, start + 8192));
+  if (!span) return null;
+  for (const attributes of span.slice(2)) {
+    let remaining = attributes.slice(1, -1).trim();
+    const seen = new Set();
+    let count = 0;
+    while (remaining && ++count <= 32) {
+      const token = /^(?:([.#][a-z][a-z0-9_-]*)|(style|lang)=(?:"([^"\\]*)"|'([^'\\]*)'))(?:[ \t]+|$)/i.exec(remaining);
+      if (!token) return null;
+      const key = token[1]?.startsWith('.') ? token[1] : token[1] ? 'id' : token[2].toLowerCase();
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const value = token[3] ?? token[4] ?? '';
+      if (key === 'style' && /[\[\]\\&@]|\/\*|\*\/|(?:url|image|image-set|cross-fade|element|var|expression)\s*\(/i.test(value)) return null;
+      if (key === 'lang' && !/^[a-z]+(?:-[a-z0-9]+)*$/i.test(value)) return null;
+      remaining = remaining.slice(token[0].length);
+    }
+    if (remaining) return null;
+  }
+  return { labelStart: start + 2, labelEnd: start + 2 + span[1].length, finish: start + span[0].length };
+}
+
 function htmlDestinations(text, start) {
   const tag = /^<(a|img|source|video|audio|div|span|p|link|iframe)\b/i.exec(text.slice(start));
   if (!tag) return null;
@@ -392,6 +415,8 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       continue;
     }
     if (text[i + 1] === '[') {
+      const format = pandocTextSpan(text, i);
+      if (format) { mask(i, format.labelStart); mask(format.labelEnd, format.finish); continue; }
       const end = wikiEnd(text, i);
       const lineEnd = text.indexOf('\n', i);
       if (end < 0 || lineEnd >= 0 && end > lineEnd) {

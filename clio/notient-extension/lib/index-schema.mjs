@@ -1,6 +1,6 @@
 export const indexVersion = 2;
-export const wordCountVersion = 'unicode-prose-v10';
-export const graphRule = 'typed-wiki-v9';
+export const wordCountVersion = 'unicode-prose-v11';
+export const graphRule = 'typed-wiki-v10';
 
 export function migrateIndex(db) {
   const version = db.prepare('PRAGMA user_version').get().user_version;
