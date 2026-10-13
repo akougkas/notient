@@ -539,11 +539,9 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
                   "The convention output did not meet the exact-evidence and structure requirements; no change was staged.",
                   actionEvidence,
                 );
-              if (!context.isComplete(selected))
-                return decline(
-                  "The selected note was truncated to fit the inference budget; no convention change was staged.",
-                  actionEvidence,
-                );
+              const coverageQualification = context.documents.some((note) => !context.isComplete(note))
+                ? "This suggestion is based on bounded current excerpts; omitted content was not assessed. Review the complete notes before retaining or activating this guidance."
+                : null;
               const evidencePaths = new Set(actionEvidence.map((item) => item.path));
               if (
                 !evidencePaths.has(selected.note.path) ||
@@ -574,6 +572,7 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
                 })),
                 qualifications: [
                   output.conventionRationale!,
+                  ...(coverageQualification ? [coverageQualification] : []),
                   ...output.functionalComparison.limitations.map(
                     (limitation) => `Comparison limitation: ${limitation}`,
                   ),
@@ -615,7 +614,7 @@ Choose abstain when you do not recommend a convention. Let functionalComparison 
                 {
                   previewId: preview.previewId,
                   previewRevision: preview.revision,
-                  rationale: `${reviewRationale}\n\n${conventionReviewSuffix}`,
+                  rationale: `${reviewRationale}${coverageQualification ? `\n\n${coverageQualification}` : ""}\n\n${conventionReviewSuffix}`,
                   evidence: reviewEvidence,
                   idempotencyKey: contentRevision(`methodology-review:${caller.id}:${sourceKey}`),
                 },
