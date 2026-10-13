@@ -52,18 +52,23 @@ const readArgs = z
   .object({
     notePath: notePathSchema,
     revision: revisionSchema.optional(),
+    startOffset: z.number().int().nonnegative().optional(),
     lineRange: z
       .object({ start: z.number().int().positive(), end: z.number().int().positive() })
       .strict()
       .refine((value) => value.end >= value.start)
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((args) => args.startOffset === undefined || args.lineRange === undefined, {
+    message: "choose startOffset or lineRange, not both",
+  });
 export type VaultReadArgs = z.infer<typeof readArgs>;
 export interface VaultReadResult {
   notePath: string;
   body: string;
   totalLines: number;
+  totalCharacters: number;
   lineRange: { start: number; end: number };
   evidence: SourceReference;
   truncated: boolean;
@@ -79,7 +84,7 @@ export function makeReadNoteTool(
   return {
     name: "vault.read_note",
     description:
-      "Read a saved note with headings, properties, links, tasks and exact source evidence. Body reads return at most 12,000 characters; structure is omitted if it exceeds another 12,000 characters. Use a 1-based inclusive lineRange to continue; pass a retrieved revision to reject changed notes.",
+      "Read a saved note with headings, properties, links, tasks and exact source evidence. Body reads return at most 12,000 characters; structure is omitted if it exceeds another 12,000 characters. If truncated, continue with startOffset equal to evidence.range.end and the returned evidence.revision; offsets are UTF-16 characters in the exact saved note and can continue within a long line. Alternatively select a 1-based inclusive lineRange, without startOffset. Read the complete needed finding and qualifications before describing them; encoded metadata is not a substitute for its readable passage.",
     schema: z.toJSONSchema(readArgs, { io: "input" }) as ToolJsonSchema,
     validate: (raw) => readArgs.parse(raw),
     invoke: async (args, signal, context) => {
@@ -101,7 +106,9 @@ export function makeReadNoteTool(
       const startLine = request.lineRange?.start ?? 1;
       if (startLine > totalLines)
         throw new Error(`lineRange exceeds the note's ${totalLines} lines`);
-      const start = lines[startLine - 1]?.index ?? note.body.length;
+      const start = request.startOffset ?? lines[startLine - 1]?.index ?? note.body.length;
+      if (start > note.body.length)
+        throw new NoteApiError("INVALID_PARAMS", "startOffset exceeds the saved note length");
       const requestedEnd = request.lineRange
         ? Math.min(request.lineRange.end, totalLines)
         : totalLines;
@@ -117,7 +124,8 @@ export function makeReadNoteTool(
         notePath: note.note.path,
         body,
         totalLines,
-        lineRange: { start: startLine, end: range.endLine },
+        totalCharacters: note.body.length,
+        lineRange: { start: range.startLine, end: range.endLine },
         evidence: { ...note.note, range, quote: body },
         truncated: end < selectedEnd,
         structure: JSON.stringify(note.structure).length <= 12000 ? note.structure : null,

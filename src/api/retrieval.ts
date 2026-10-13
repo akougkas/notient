@@ -47,6 +47,7 @@ export const noteExcerptSchema = z
     notePath: noteReferenceSchema.shape.path,
     body: z.string().max(12000),
     totalLines: z.number().int().positive(),
+    totalCharacters: z.number().int().nonnegative().optional(),
     lineRange: z.object({ start: z.number().int().positive(), end: z.number().int().positive() }),
     evidence: sourceReferenceSchema,
     truncated: z.boolean(),
