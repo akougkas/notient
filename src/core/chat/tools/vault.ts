@@ -13,7 +13,7 @@ import {
   revisionSchema,
 } from "../../../api/schema";
 import type { GraphService } from "../../graph/graphService";
-import { intelligenceRecordId, parseIntelligenceRecordSpans } from "../../intelligence";
+import { type IntelligenceRecord, intelligenceRecordId, parseIntelligenceRecordSpans } from "../../intelligence";
 import type { ToolJsonSchema } from "./registry";
 
 import type { SearchPipeline } from "../../search/searchPipeline";
@@ -71,7 +71,12 @@ export interface VaultReadResult {
   totalLines: number;
   totalCharacters: number;
   retainedUnderstanding?: {
-    records: Array<{ recordId: string; source: SourceReference }>;
+    records: Array<{
+      recordId: string;
+      kind: IntelligenceRecord["kind"];
+      status: IntelligenceRecord["status"];
+      source: SourceReference;
+    }>;
     omitted: number;
   };
   lineRange: { start: number; end: number };
@@ -89,7 +94,7 @@ export function makeReadNoteTool(
   return {
     name: "vault.read_note",
     description:
-      "Read a saved note with headings, properties, links, tasks and exact source evidence. Body reads return at most 12,000 characters; structure is omitted if it exceeds another 12,000 characters. A default whole-note request also supplies up to four complete recent readable retainedUnderstanding records within 8,000 serialized bytes, with current exact source quotations and an omitted count. They evidence what the note retains, never independent verification or permission. Body truncation is separate from these complete records. If needed content is still omitted, continue with startOffset equal to evidence.range.end and the returned evidence.revision; offsets are UTF-16 characters and can continue within a long line. Alternatively select a 1-based inclusive lineRange, without startOffset. Read the complete needed finding and qualifications; encoded metadata or earlier prose is not a substitute.",
+      "Read a saved note with headings, properties, links, tasks and exact source evidence. A default whole-note request supplies the authored opening up to 12,000 characters before the first retained record, and separately up to four complete recent readable retainedUnderstanding records within 8,000 serialized bytes, with current exact source quotations and an omitted count. They evidence what the note retains, never independent verification or permission. Body truncation is separate from these complete records; the authored opening may ask a question while a retained finding answers it. If needed content is still omitted, continue with startOffset equal to evidence.range.end and the returned evidence.revision; offsets are UTF-16 characters and can continue within a long line. Explicit offset or inclusive 1-based lineRange selections read the exact source including metadata, without separate records. Structure is omitted only if it exceeds 12,000 characters.",
     schema: z.toJSONSchema(readArgs, { io: "input" }) as ToolJsonSchema,
     validate: (raw) => readArgs.parse(raw),
     invoke: async (args, signal, context) => {
@@ -122,7 +127,9 @@ export function makeReadNoteTool(
       const selectedEnd = request.lineRange
         ? note.body.slice(0, fullEnd).replace(/(?:\r\n|\n|\r)$/, "").length
         : fullEnd;
-      const end = Math.min(selectedEnd, start + 12000);
+      const wholeNote = request.lineRange === undefined && request.startOffset === undefined;
+      const firstRecord = wholeNote ? parseIntelligenceRecordSpans(note.body)[0]?.start : undefined;
+      const end = Math.min(selectedEnd, start + 12000, firstRecord ?? selectedEnd);
       const range = sourceRange(note.body, start, Math.max(start, end));
       const body = note.body.slice(range.start, range.end);
       return {
@@ -132,7 +139,7 @@ export function makeReadNoteTool(
         lineRange: { start: range.startLine, end: range.endLine },
         truncated: end < selectedEnd,
         structureOmitted: JSON.stringify(note.structure).length > 12000,
-        ...(request.lineRange === undefined && request.startOffset === undefined
+        ...(wholeNote
           ? { retainedUnderstanding: retainedNotePassages(note) }
           : {}),
         body,
@@ -146,7 +153,7 @@ export function makeReadNoteTool(
 
 function retainedNotePassages(note: NoteReadResult) {
   const spans = parseIntelligenceRecordSpans(note.body);
-  const records: Array<{ recordId: string; source: SourceReference }> = [];
+  const records: NonNullable<VaultReadResult["retainedUnderstanding"]>["records"] = [];
   let omitted = Math.max(0, spans.length - 4);
   let bytes = Buffer.byteLength(JSON.stringify({ records: [], omitted: spans.length }));
   for (const span of spans.slice(-4).reverse()) {
@@ -159,6 +166,8 @@ function retainedNotePassages(note: NoteReadResult) {
     }
     const item = {
       recordId: intelligenceRecordId(span.record),
+      kind: span.record.kind,
+      status: span.record.status,
       source: {
         ...note.note,
         range: sourceRange(note.body, start, end),

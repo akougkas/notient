@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { searchCoverageSchema } from "./indexing";
+import { intelligenceKindSchema, intelligenceStatusSchema } from "../core/intelligence/types";
 import {
   noteReferenceSchema,
   noteStructureSchema,
@@ -53,6 +54,8 @@ export const noteExcerptSchema = z
         records: z
           .array(z.object({
             recordId: z.string().regex(/^i-[a-f0-9]{64}$/),
+            kind: intelligenceKindSchema.optional(),
+            status: intelligenceStatusSchema.optional(),
             source: sourceReferenceSchema,
           }).strict())
           .max(4),
