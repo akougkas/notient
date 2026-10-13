@@ -126,11 +126,12 @@ function wikiEnd(text, start) {
 }
 
 function htmlDestinations(text, start) {
-  const tag = /^<(a|img|source|video|audio|div|span|p|link)\b/i.exec(text.slice(start));
+  const tag = /^<(a|img|source|video|audio|div|span|p|link|iframe)\b/i.exec(text.slice(start));
   if (!tag) return null;
-  const targets = { a: ['href'], img: ['src'], source: ['src'], video: ['src', 'poster'], audio: ['src'], div: [], span: [], p: [], link: ['href'] }[tag[1].toLowerCase()];
-  const booleans = new Set(['controls', 'autoplay', 'muted', 'loop', 'playsinline']);
-  const allowed = new Set([...targets, ...booleans, 'id', 'class', 'title', 'alt', 'width', 'height', 'align', 'target', 'rel', 'loading', 'decoding', 'referrerpolicy', 'aria-label', 'aria-hidden', 'style', 'type', 'preload']);
+  const tagName = tag[1].toLowerCase();
+  const targets = { a: ['href'], img: ['src'], source: ['src'], video: ['src', 'poster', 'data-canonical-src'], audio: ['src'], div: [], span: [], p: [], link: ['href'], iframe: ['src'] }[tagName];
+  const booleans = new Set(['controls', 'autoplay', 'muted', 'loop', 'playsinline', ...(tagName === 'iframe' ? ['allowfullscreen'] : [])]);
+  const allowed = new Set([...targets, ...booleans, 'id', 'class', 'title', 'alt', 'width', 'height', 'align', 'target', 'rel', 'loading', 'decoding', 'referrerpolicy', 'aria-label', 'aria-hidden', 'style', 'type', 'preload', ...(tagName === 'iframe' ? ['frameborder', 'allow'] : [])]);
   const attributes = new Map();
   const destinations = [];
   let cursor = start + tag[0].length;
@@ -138,7 +139,16 @@ function htmlDestinations(text, start) {
     const whitespace = /^[ \t\r\n]*/.exec(text.slice(cursor))[0];
     cursor += whitespace.length;
     const close = /^(?:\/?>)/.exec(text.slice(cursor));
-    if (close) return { finish: cursor + close[0].length, destinations };
+    if (close) {
+      let finish = cursor + close[0].length;
+      if (tagName === 'iframe') {
+        if (close[0] !== '>') return null;
+        const emptyEnd = /^[ \t\r\n]*<\/iframe[ \t\r\n]*>/i.exec(text.slice(finish));
+        if (!emptyEnd || finish + emptyEnd[0].length - start > 8192) return null;
+        finish += emptyEnd[0].length;
+      }
+      return { finish, destinations };
+    }
     if (!whitespace) return null;
     const attribute = /^([a-z][a-z0-9-]*)(?:[ \t\r\n]*=[ \t\r\n]*)?/i.exec(text.slice(cursor));
     if (!attribute) return null;
@@ -164,6 +174,7 @@ function htmlDestinations(text, start) {
       value = unquoted[0]; cursor += value.length; end = cursor;
     }
     if (name === 'style' && /[\\&@]|\/\*|\*\/|(?:url|image|image-set|cross-fade|element|var|expression)\s*\(/i.test(value)) return null;
+    if (name === 'allow' && !/^[a-z][a-z0-9-]*(?:[ \t]*;[ \t]*[a-z][a-z0-9-]*)*[ \t]*$/i.test(value)) return null;
     if (targets.includes(name)) {
       if (external(value) && !/^(?:https?:\/\/|\/\/|mailto:|tel:)/i.test(value)) return null;
       destinations.push({ start: begin, end });
