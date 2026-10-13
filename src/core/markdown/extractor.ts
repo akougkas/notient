@@ -96,7 +96,7 @@ function collectInlineSignals(
   intelligenceSpans: readonly IntelligenceRecordSpan[],
 ): void {
   visit(node, (current, _index, parent) => {
-    const position = current.position ?? parent?.position;
+    const position = current.position ?? (parent as Node | undefined)?.position;
     const start = position?.start.offset;
     const end = position?.end.offset;
     const retained =
