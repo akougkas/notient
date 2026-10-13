@@ -30,6 +30,8 @@ export interface AskViewProps {
   state: AppState;
   layout: AskLayout;
   elapsedSeconds?: number;
+  canWrite?: boolean;
+  canAdmin?: boolean;
   scrollRef: React.MutableRefObject<ScrollBoxRenderable | null>;
   onBufferChange: (next: string) => void;
   onSubmit: (final: string) => void;
@@ -50,6 +52,8 @@ export function AskView({
   onToggleActivity,
   onOpenDevelopment,
   elapsedSeconds = 0,
+  canWrite = true,
+  canAdmin = true,
 }: AskViewProps): React.ReactNode {
   const inputHeight = computeInputHeight(state.ask.buffer, layout.inputTextWidth, 6);
   const items = sourceItems(state, layout.citationPathWidth);
@@ -67,12 +71,14 @@ export function AskView({
   const activityRows = toolCalls > 0 || state.ask.busy ? 1 : 0;
   const compact = layout.height < 12;
   const readScope = compact ? null : state.ask.readScope;
-  const readScopeRows = readScope ? Math.max(1, Math.ceil(readScope.length / layout.conversationWidth)) : 0;
+  const readScopeRows = readScope
+    ? Math.max(1, Math.ceil(readScope.length / layout.conversationWidth))
+    : 0;
   const strip = compact
     ? null
     : buildDevelopmentsStrip(state, developmentRowLimit(layout.height), layout.conversationWidth);
   const stripRows = strip === null ? 0 : 1 + strip.rows.length;
-  const capability = capabilitySegments(state, layout.conversationWidth);
+  const capability = capabilitySegments(state, layout.conversationWidth, canWrite, canAdmin);
   const capabilityHeight = capabilityRows(capability, layout.conversationWidth);
   const headerRows = 2 + capabilityHeight + stripRows;
   const chatHeight = Math.max(
@@ -123,7 +129,7 @@ export function AskView({
             : [
                 {
                   kind: "system",
-                  text: welcomeText(state),
+                  text: welcomeText(state, canWrite),
                 },
               ]
         }

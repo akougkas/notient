@@ -37,7 +37,12 @@ export function threadLine(state: AppState): string {
   return `${vault} · ${thread} · Ctrl+O switch · Ctrl+N new`;
 }
 
-export function capabilitySegments(state: AppState, width: number): CapabilitySegment[] {
+export function capabilitySegments(
+  state: AppState,
+  width: number,
+  canWrite = true,
+  canAdmin = true,
+): CapabilitySegment[] {
   if (!state.connection.connected)
     return [
       {
@@ -46,17 +51,29 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
       },
     ];
   const segments: CapabilitySegment[] = [];
+  if (!canWrite)
+    segments.push({
+      text: "Read-only access · sending and saving require a write grant",
+      tone: "dim",
+    });
   const indexing = state.status?.indexing ?? null;
   if (indexing === null) segments.push({ text: "Checking your notes…", tone: "dim" });
   else if (indexing.state === "current")
     segments.push({ text: "Reading and search ready", tone: "ok" });
   else if (indexing.state === "failed")
     segments.push({
-      text: `Search index needs attention. Reading and capture work`,
+      text: canWrite
+        ? "Search index needs attention. Reading and capture work"
+        : "Search index needs attention. Reading works",
       tone: "warn",
     });
   else if (indexing.state === "paused")
-    segments.push({ text: "Search indexing paused. Reading and capture work", tone: "warn" });
+    segments.push({
+      text: canWrite
+        ? "Search indexing paused. Reading and capture work"
+        : "Search indexing paused. Reading works",
+      tone: "warn",
+    });
   else if (indexing.state === "unknown")
     segments.push({ text: "Reading ready, search coverage unknown", tone: "warn" });
   else
@@ -73,26 +90,33 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
     segments.push({ text: `Model ${model} listed`, tone: "dim" });
   else if (probe.status === "not-loaded")
     segments.push({
-      text: `Model ${model} not loaded. Capture and search still work`,
+      text: `Model ${model} not loaded. ${canWrite ? "Capture and search" : "Reading and search"} still work`,
       tone: "warn",
     });
   else if (probe.status === "unconfigured")
     segments.push({
-      text: "No model set up (notient setup). Capture and search work",
+      text: canWrite
+        ? "No model set up (notient setup). Capture and search work"
+        : "No model set up. Reading and search work",
       tone: "warn",
     });
   else if (probe.status === "mismatch")
     segments.push({ text: `Model ${model} differs from settings`, tone: "warn" });
   else
     segments.push({
-      text: "Model unreachable. Capture, find and reading still work",
+      text: canWrite
+        ? "Model unreachable. Capture, find and reading still work"
+        : "Model unreachable. Find and reading still work",
       tone: "warn",
     });
 
   const { digest, enabledPipelines } = state.developments;
   if (digest === null) segments.push({ text: "Cultivation status loading", tone: "dim" });
   else if (digest.paused)
-    segments.push({ text: "Cultivation paused (/unpause resumes)", tone: "warn" });
+    segments.push({
+      text: canAdmin ? "Cultivation paused (/unpause resumes)" : "Cultivation paused",
+      tone: "warn",
+    });
   else if (digest.conditions.some((condition) => condition.id === "no-trigger"))
     segments.push({ text: "Cultivation has no active trigger", tone: "warn" });
   else if (digest.conditions.some((condition) => condition.id === "no-save-trigger"))
@@ -100,12 +124,18 @@ export function capabilitySegments(state: AppState, width: number): CapabilitySe
   else if ((enabledPipelines ?? 0) > 0)
     segments.push({
       text:
-        width >= 110
+        canAdmin && width >= 110
           ? "Cultivation on within its budget, continues after you exit (/pause stops it)"
-          : "Cultivation on (/pause)",
+          : canAdmin
+            ? "Cultivation on (/pause)"
+            : "Cultivation on within its budget",
       tone: "ok",
     });
-  else segments.push({ text: "Cultivation off (Ctrl+P, Preferences)", tone: "dim" });
+  else
+    segments.push({
+      text: canAdmin ? "Cultivation off (Ctrl+P, Preferences)" : "Cultivation off",
+      tone: "dim",
+    });
   return segments;
 }
 
@@ -166,14 +196,18 @@ export function buildDevelopmentsStrip(
   };
 }
 
-export function welcomeText(state: AppState): string {
+export function welcomeText(state: AppState, canWrite = true): string {
   const sample = state.developments.samples[0];
   const stem = sample?.replace(/\.md$/i, "").split("/").pop();
   const lines = [
     "Your vault, in conversation.",
     "",
-    `Ask          Type below and press Enter.${stem ? ` Try: What do my notes say about "${stem}"?` : ""}`,
-    "Capture      Ctrl+B or Alt+C saves a thought in your own words before any model answers.",
+    canWrite
+      ? `Ask          Type below and press Enter.${stem ? ` Try: What do my notes say about "${stem}"?` : ""}`
+      : "Conversation Read saved threads with Ctrl+O. Sending requires a write grant.",
+    canWrite
+      ? "Capture      Ctrl+B or Alt+C saves a thought in your own words before any model answers."
+      : "Capture      Saving a thought requires a write grant. Reading and search are available.",
     `Find a note  Alt+O, or /find <words>.${sample ? ` Your notes include ${state.developments.samples.slice(0, 2).join(" and ")}.` : ""}`,
     "",
     "Ctrl+P opens every action. /help lists them with their keys.",

@@ -684,6 +684,13 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         await runCommand(trimmed);
         return;
       }
+      if (!rpcRef.current.client.principal.scopes.includes("write")) {
+        dispatch({
+          type: "notice",
+          text: "Read-only access. Sending a turn requires a write grant. Your draft is kept.",
+        });
+        return;
+      }
       if (!sessionReadyRef.current) {
         dispatch({
           type: "notice",
@@ -917,6 +924,24 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const runIntent = useCallback(
     (intent: Intent): void => {
       const activeState = stateRef.current;
+      if (
+        [
+          "capture",
+          "edit-note",
+          "keep-answer",
+          "save-answer",
+          "archive-note",
+          "move-note",
+          "delete-note",
+        ].includes(intent.kind) &&
+        !rpcRef.current.client.principal.scopes.includes("write")
+      ) {
+        dispatch({
+          type: "notice",
+          text: "Read-only access. Saving or changing notes requires a write grant. Your draft is kept.",
+        });
+        return;
+      }
       if (intent.kind === "view" || intent.kind === "discuss-note") {
         methodologyReviewReturnRef.current = false;
         reviewSourceReturnRef.current = false;
@@ -1340,11 +1365,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         session={briefSession.current}
         initialPath={state.explore.notePath ?? ""}
         vaultPath={vaultPath}
-        clientIdentity={
-          rpcRef.current.client.principal.kind === "agent"
-            ? rpcRef.current.client.principal.id
-            : undefined
-        }
+        clientIdentity={rpcRef.current.client.principal.id}
         width={width}
         height={height}
         onClose={() => setBriefOpen(false)}
@@ -1366,11 +1387,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         session={analysisSessions.current[analysisOpen]}
         kind={analysisOpen}
         vaultPath={vaultPath}
-        clientIdentity={
-          rpcRef.current.client.principal.kind === "agent"
-            ? rpcRef.current.client.principal.id
-            : undefined
-        }
+        clientIdentity={rpcRef.current.client.principal.id}
         initialPath={state.explore.notePath ?? ""}
         rpc={() => rpcRef.current}
         width={width}
@@ -1531,6 +1548,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
         <AskView
           state={state}
           layout={viewLayout.ask}
+          canWrite={rpcRef.current.client.principal.scopes.includes("write")}
+          canAdmin={rpcRef.current.client.principal.scopes.includes("admin")}
           elapsedSeconds={elapsedSeconds}
           scrollRef={askScrollRef}
           onBufferChange={(next) => {
