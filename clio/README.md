@@ -73,6 +73,8 @@ Every tool accepts a registered vault ID or exact canonical absolute path. Statu
 
 Structural refresh reports `cursor`, `remaining` and `parserRemaining` on every call. A partial call returns `reason: "budget_exhausted"`; repeat the refresh to continue without reparsing completed notes. Parser upgrades track each note separately and mark the global parser versions current only when the full scan has been processed. Older indexes need one resumable parser refresh to establish this progress. Status and structural coverage expose pending parser work even when file metadata is unchanged.
 
+An isolated Pandoc citation marker such as `[@source2026]:` with no destination remains visible text. A citation label with a real link-definition destination still participates in move repairs. Unsupported or duplicate definitions continue to refuse completeness.
+
 Refused commands also emit a bounded code/message summary on stderr so Clio can show the reason when its command host discards failed stdout. Typed stdout and exit 1 remain intact. Note line ranges must come from current served source bounds; omit both range fields to request the full bounded note instead of guessing endpoints.
 
 ## Evidence and practical limits

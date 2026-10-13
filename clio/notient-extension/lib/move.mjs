@@ -391,6 +391,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     const tail = lines[last];
     const span = destinationAt(text, begin, tail.start + tail.content.length, false);
     if (!span || span.start === span.end) {
+      if (last === ordinal && /^@[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$/.test(match[1]) && !text.slice(begin, line.start + line.content.length).trim()) continue;
       issues.push({ start: line.start, end: tail.end, line: ordinal + 1, reason: 'Unlocatable reference definition destination.' }); mask(line.start, tail.end); continue;
     }
     const label = labelKey(match[1]);
