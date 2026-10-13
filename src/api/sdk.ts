@@ -46,6 +46,7 @@ export type {
   ChatStreamEvent,
   ChatStartResult,
   ChatListResult,
+  ConversationSummary,
   ChatLoadResult,
   ChatSendResult,
   ChatAbortResult,

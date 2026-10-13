@@ -16,6 +16,7 @@ import { indexingReadinessSchema } from "../api/indexing";
 import type { ProposalSource } from "../core/approvals/proposalStorage";
 import type { AwakenStatus } from "../core/awaken/awakenRun";
 import type { Conversation } from "../core/chat/types";
+import type { ConversationSummary } from "../api/chat";
 import type { WritebackEdgeTable } from "../core/db/edgeTables";
 import type { EndpointModel } from "../core/llm/modelSelection";
 import type { SearchMode, SearchResult } from "../core/search/types";
@@ -360,7 +361,7 @@ export interface ChatSendResult {
 
 export interface ChatListResult {
   ok: true;
-  conversations: Conversation[];
+  conversations: ConversationSummary[];
 }
 
 /**

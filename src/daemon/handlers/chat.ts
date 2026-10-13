@@ -16,6 +16,7 @@ import type { InferenceAttempt } from "../../core/llm/executionBudget";
  */
 
 import type { VaultAdapter } from "../../adapters/vaultAdapter";
+import { summarizeConversation } from "../../api/chat";
 import { resolveAttachments } from "../../agent/attachments";
 import type { VisionRouter } from "../../agent/visionProbe";
 import { normalizeRejectionReason } from "../../core/approvals/rejectionReason";
@@ -206,12 +207,12 @@ export function makeChatHandlers(deps: ChatHandlerDeps): ChatHandlers {
     },
     list: async ({ principal }) => {
       const conversations = await deps.chatService.listConversations();
+      const visible = principal.kind === "human"
+        ? conversations
+        : conversations.filter((conversation) => conversation.clientIdentity === principal.id);
       return {
         ok: true,
-        conversations:
-          principal.kind === "human"
-            ? conversations
-            : conversations.filter((conversation) => conversation.clientIdentity === principal.id),
+        conversations: visible.map(summarizeConversation),
       };
     },
     load: async ({ params, principal }) => {

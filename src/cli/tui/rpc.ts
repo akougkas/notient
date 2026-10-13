@@ -6,7 +6,7 @@ import {
   changePreviewSchema,
   changeResultSchema,
 } from "../../api/changes";
-import { chatConfigureResultSchema, chatSettingsResultSchema } from "../../api/chat";
+import { chatConfigureResultSchema, chatListResultSchema as chatListSchema, chatSettingsResultSchema } from "../../api/chat";
 import { cultivationDigestSchema, cultivationSettingsResultSchema } from "../../api/cultivation";
 import {
   type GraphNeighbors,
@@ -649,10 +649,6 @@ export const conversationSchema = z
     }
   });
 const chatStartSchema = z.strictObject({ ok: z.literal(true), conversation: conversationSchema });
-const chatListSchema = z.strictObject({
-  ok: z.literal(true),
-  conversations: z.array(conversationSchema),
-});
 const chatApproveSchema = z.discriminatedUnion("approved", [
   z.strictObject({ ok: z.literal(true), callId: trimmedString, approved: z.literal(true) }),
   z.strictObject({

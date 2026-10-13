@@ -4,7 +4,7 @@ import { createPresence } from "./presence";
 import { createSurfaceViews } from "./surfaceViews";
 import { projectToolSurfaces, type SurfaceToolResult, type NotientSurface } from "../../../src/api/surfaces";
 import { NotientApiError, type NotientClient } from "../../../src/api/client";
-import type { Conversation } from "../../../src/api/chat";
+import { type Conversation, type ConversationSummary, summarizeConversation } from "../../../src/api/chat";
 import type { GraphNeighbors } from "../../../src/api/graph";
 import { sourceReferenceSchema, type SourceReference } from "../../../src/api/schema";
 import {
@@ -54,7 +54,7 @@ export interface ChatActionResult {
 
 export interface ChatPanelState extends ChatPanelPersistedState {
   conversation: Conversation | null;
-  conversations: Conversation[];
+  conversations: ConversationSummary[];
   historyLoaded: boolean;
   loading: boolean;
   sending: boolean;
@@ -963,7 +963,7 @@ export function renderChatPanel(options: ChatPanelOptions): void {
       state.streamedAssistant = "";
       state.scrollToBottom = true;
       updatePersistedConversation(result.conversation);
-      state.conversations = [result.conversation, ...state.conversations.filter((c) => c.id !== result.conversation.id)];
+      state.conversations = [summarizeConversation(result.conversation), ...state.conversations.filter((c) => c.id !== result.conversation.id)];
       setNotice("New conversation ready.");
       return true;
     } catch (error) {
@@ -1025,7 +1025,7 @@ export function renderChatPanel(options: ChatPanelOptions): void {
         const started = await options.client.chatStart({ topic: conversationTopic(text) });
         if (signal.aborted) return;
         updatePersistedConversation(started.conversation);
-        state.conversations = [started.conversation, ...state.conversations.filter((c) => c.id !== started.conversation.id)];
+        state.conversations = [summarizeConversation(started.conversation), ...state.conversations.filter((c) => c.id !== started.conversation.id)];
       }
       const conversation = state.conversation;
       if (!conversation) throw new Error("The conversation could not be started.");
@@ -1105,7 +1105,7 @@ export function renderChatPanel(options: ChatPanelOptions): void {
             finishingReply = false;
             updatePersistedConversation(completedConversation);
             state.conversations = [
-              completedConversation,
+              summarizeConversation(completedConversation),
               ...state.conversations.filter((item) => item.id !== completedConversation.id),
             ];
             state.streamedAssistant = "";

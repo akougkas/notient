@@ -91,12 +91,32 @@ export const conversationSchema = z
   })
   .strict();
 export type Conversation = z.infer<typeof conversationSchema>;
+export const conversationSummarySchema = conversationSchema
+  .omit({ messages: true })
+  .extend({ firstUserMessage: z.string().max(90).nullable() })
+  .strict()
+  .refine((conversation) => conversation.updatedAt >= conversation.createdAt, {
+    message: "updatedAt precedes createdAt",
+  });
+export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
+export function summarizeConversation(
+  conversation: Omit<Conversation, "messages"> & {
+    messages: readonly Pick<ChatMessage, "role" | "content">[];
+  },
+): ConversationSummary {
+  const { messages, ...metadata } = conversation;
+  return {
+    ...metadata,
+    firstUserMessage: messages.find((item) => item.role === "user")
+      ?.content.replace(/\s+/g, " ").slice(0, 90) ?? null,
+  };
+}
 
 export const chatStartResultSchema = z
   .object({ ok: z.literal(true), conversation: conversationSchema })
   .strict();
 export const chatListResultSchema = z
-  .object({ ok: z.literal(true), conversations: z.array(conversationSchema) })
+  .object({ ok: z.literal(true), conversations: z.array(conversationSummarySchema) })
   .strict();
 export const chatLoadResultSchema = chatStartResultSchema;
 export const chatSendResultSchema = chatStartResultSchema;

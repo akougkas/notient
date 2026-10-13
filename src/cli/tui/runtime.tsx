@@ -29,6 +29,7 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Conversation } from "../../core/chat/types";
+import type { ConversationSummary } from "../../api/chat";
 import { currentPlatform, resolveSocketPath } from "../../daemon/socket";
 import type { AgentEventWire, ChatApproveResult } from "../../daemon/wire";
 import { type ClientHandle, connectClient } from "../client";
@@ -178,7 +179,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
   const sessionFlightRef = useRef(false);
   const turnStopRef = useRef(false);
   const sessionReadyRef = useRef(false);
-  const conversationsRef = useRef<Conversation[]>([]);
+  const conversationsRef = useRef<Array<Conversation | ConversationSummary>>([]);
   const noteRequestRef = useRef(0);
   const intentRef = useRef<(intent: Intent) => void>(() => {});
   useEffect(

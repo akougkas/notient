@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { preparedDrafts } from "../../core/chat/tools/draft";
 import type { ChatMessage, Conversation } from "../../core/chat/types";
+import type { ConversationSummary } from "../../api/chat";
 import { vaultStateDir } from "../../core/vault/identity";
 import { isCanonicalConversationPath } from "../../core/vault/publicPath";
 import { readPrivateJson, writePrivateJson } from "../../daemon/ipcSecurity";
@@ -27,7 +28,9 @@ export async function rememberConversation(
   await writePrivateJson(selectionPath(vaultPath, identity), selectionSchema.parse({ notePath }));
 }
 
-export async function ownConversations(rpc: NotientRpc): Promise<Conversation[]> {
+export async function ownConversations(
+  rpc: NotientRpc,
+): Promise<Array<Conversation | ConversationSummary>> {
   const result = await rpc.chatList();
   return result.conversations
     .filter((conversation) => conversation.clientIdentity === rpc.client.principal.id)
@@ -65,22 +68,22 @@ export async function restoreConversation(
   return latest === undefined ? null : loadOwnConversation(rpc, latest.notePath);
 }
 
-export function conversationTitle(conversation: Conversation): string {
+export function conversationTitle(conversation: Conversation | ConversationSummary): string {
   if (!["TUI session", "Untitled", "single-shot"].includes(conversation.topic)) {
     return conversation.topic;
   }
   return (
-    conversation.messages
-      .find((message) => message.role === "user")
-      ?.content.replace(/\s+/g, " ")
-      .slice(0, 90) || "New conversation"
+    ("firstUserMessage" in conversation
+      ? conversation.firstUserMessage
+      : conversation.messages.find((message) => message.role === "user")
+        ?.content.replace(/\s+/g, " ").slice(0, 90)) || "New conversation"
   );
 }
 
-export function conversationMatches(
-  conversations: readonly Conversation[],
+export function conversationMatches<T extends Conversation | ConversationSummary>(
+  conversations: readonly T[],
   query: string,
-): Conversation[] {
+): T[] {
   const search = query.trim().toLowerCase();
   return conversations.filter((conversation) =>
     `${conversationTitle(conversation)} ${conversation.summary} ${conversation.notePath}`
@@ -89,7 +92,7 @@ export function conversationMatches(
   );
 }
 
-export function conversationLabel(conversation: Conversation): string {
+export function conversationLabel(conversation: Conversation | ConversationSummary): string {
   const date = new Date(conversation.updatedAt).toLocaleDateString();
   return `${conversationTitle(conversation)} · ${date} · ${conversation.messageCount} messages · ${conversation.id.slice(-6)}`;
 }
