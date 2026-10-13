@@ -71,6 +71,8 @@ The model-facing capability names are:
 
 Every tool accepts a registered vault ID or exact canonical absolute path. Status, refresh, search and note may omit `vault` only with one registered vault. Candidates, vitals and all write tools require it. Every input schema is closed and direct command invocation validates the same schema. Read failures now return `ok: false` with `error: { code, message, retryable, paths }` and exit 1; clients that read the old error string must use error.message. An absent registration returns configured:false with setupHint and exit 0. Direct scripts take one JSON argument, for example `node clio/notient-extension/tools/status.mjs '{}'`.
 
+Structural refresh reports `cursor`, `remaining` and `parserRemaining` on every call. A partial call returns `reason: "budget_exhausted"`; repeat the refresh to continue without reparsing completed notes. Parser upgrades track each note separately and mark the global parser versions current only when the full scan has been processed. Older indexes need one resumable parser refresh to establish this progress. Status and structural coverage expose pending parser work even when file metadata is unchanged.
+
 Refused commands also emit a bounded code/message summary on stderr so Clio can show the reason when its command host discards failed stdout. Typed stdout and exit 1 remain intact. Note line ranges must come from current served source bounds; omit both range fields to request the full bounded note instead of guessing endpoints.
 
 ## Evidence and practical limits

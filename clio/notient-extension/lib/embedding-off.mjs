@@ -58,7 +58,7 @@ export function refreshWithEmbeddingOff(vault, directory, input) {
   const budgetMs = input.budgetMs ?? 240000;
   if (!['structural', 'embed'].includes(tier) || !Number.isInteger(budgetMs) || budgetMs < 1000 || budgetMs > 240000) refuse('INVALID_INPUT', 'Refresh requires structural or embed and a budget from 1000 to 240000 ms.');
   const result = tier === 'structural' ? refreshIndex(vault, directory, input) : { vault: vault.id, scanned: 0, changed: 0, unchanged: 0, deleted: 0, hashed: 0, skipped: [], skippedCount: 0, errors: [], errorCount: 0, completedAt: null, durationMs: 0 };
-  return { ...result, ok: true, tool: 'refresh', tier, budgetMs, reason: tier === 'embed' ? 'embedding_off' : null, embedding: { ...offEmbedding(), embeddedThisCall: 0, failedBatches: 0, remaining: 0 } };
+  return { ...result, ok: true, tool: 'refresh', tier, budgetMs, reason: tier === 'embed' ? 'embedding_off' : result.remaining ? 'budget_exhausted' : null, embedding: { ...offEmbedding(), embeddedThisCall: 0, failedBatches: 0, remaining: 0 } };
 }
 
 export function retainedPackBytes(directory, vault) {

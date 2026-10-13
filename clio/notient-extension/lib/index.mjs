@@ -11,6 +11,7 @@ import { parseMarkdown, resolveLink, sourceRange } from './markdown.mjs';
 import { lastCommit } from './git.mjs';
 import { provenanceWorkspace } from './capture.mjs';
 import { migrateIndex, indexVersion, graphRule, wordCountVersion } from './index-schema.mjs';
+import { parserVersions, currentParser, recordParserVersion } from './index-parser.mjs';
 import { proseMetrics } from './vitals.mjs';
 import { storedVitals, installVitals } from './vitals-index.mjs';
 import { tokenizeMove, inventoryIndex, resolveMoveTarget } from './move.mjs';
@@ -76,6 +77,10 @@ export function openIndex(directory, vault, writable = false, { immutable = fals
         );
         CREATE TABLE IF NOT EXISTS note_workspaces (
           path TEXT PRIMARY KEY REFERENCES notes(path) ON DELETE CASCADE, workspace TEXT
+        );
+        CREATE TABLE IF NOT EXISTS note_parse_versions (
+          path TEXT PRIMARY KEY REFERENCES notes(path) ON DELETE CASCADE,
+          graph_rule TEXT NOT NULL, word_count_version TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS own_revisions (path TEXT NOT NULL, revision TEXT, operation TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(path, operation));
@@ -143,9 +148,10 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     const scan = listNotes(vault.path);
     db.exec('BEGIN IMMEDIATE');
     const priorVitals = storedVitals(db);
+    const versions = parserVersions(db);
     const metrics = new Map();
     const graphIssues = new Map(Object.entries(JSON.parse(db.prepare("SELECT value FROM meta WHERE key='graphIssuePaths'").get()?.value ?? '{}')));
-    const rebuildGraph = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule || db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get()?.value !== wordCountVersion;
+    const rebuildGraph = scan.notes.some(entry => !currentParser(versions.get(entry.path))) || db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule || db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get()?.value !== wordCountVersion;
     const rebuild = db.prepare("SELECT value FROM meta WHERE key='vitalsInitialized'").get()?.value !== '1';
     const previous = new Map(db.prepare('SELECT n.*, w.path AS workspaceIndexed FROM notes n LEFT JOIN note_workspaces w ON w.path=n.path').all().map(row => [row.path, row]));
     const present = new Set(scan.notes.map(note => note.path));
@@ -154,7 +160,8 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     }
     for (const entry of scan.notes) {
       const old = previous.get(entry.path);
-      if (!force && !rebuildGraph && old?.workspaceIndexed && priorVitals.get(entry.path)?.revision === old.revision && sameStat(old, entry.stat)) { unchanged++; continue; }
+      const rebuildParser = !currentParser(versions.get(entry.path));
+      if (!force && !rebuildParser && old?.workspaceIndexed && priorVitals.get(entry.path)?.revision === old.revision && sameStat(old, entry.stat)) { unchanged++; continue; }
       if (hashed >= maxChanged || performance.now() - started >= budgetMs) { remaining++; continue; }
       let content;
       let parsed;
@@ -163,7 +170,7 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
         content = readNote(vault.path, entry.path);
         hashed++;
         cursor = entry.path;
-        if (old?.revision === content.revision && !rebuildGraph) {
+        if (old?.revision === content.revision && !rebuildParser) {
           if (priorVitals.get(entry.path)?.revision !== content.revision) {
             const structural = snapshotLinks(content.bytes, parseMarkdown(content.text, entry.path));
             metrics.set(entry.path, structural.metrics);
@@ -186,6 +193,7 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
       }
       deleteNote(db, entry.path);
       db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(entry.path, content.revision, content.stat.size, content.stat.mtimeMs, content.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      recordParserVersion(db, entry.path);
       db.prepare('INSERT INTO note_workspaces VALUES (?, ?)').run(entry.path, provenanceWorkspace(content.bytes));
       const blockIds = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(entry.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
       for (const chunk of parsed.chunks) {
@@ -210,13 +218,18 @@ function refreshLocked(vault, directory, { force = false, now = () => Date.now()
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('indexGeneration', ?)").run(String(Number(db.prepare("SELECT value FROM meta WHERE key='indexGeneration'").get()?.value ?? 0) + 1));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('structuralErrors', ?)").run(JSON.stringify({ skipped: scan.skipped.length, errors: errors.length }));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphIssuePaths', ?)").run(JSON.stringify(Object.fromEntries(graphIssues)));
-    db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', ?)").run(graphRule);
-    db.prepare("INSERT OR REPLACE INTO meta VALUES ('wordCountVersion', ?)").run(wordCountVersion);
+    const completedVersions = parserVersions(db);
+    const parserRemaining = scan.notes.filter(entry => !currentParser(completedVersions.get(entry.path))).length;
+    if (parserRemaining) db.exec("DELETE FROM meta WHERE key IN ('graphRule', 'wordCountVersion')");
+    else {
+      db.prepare("INSERT OR REPLACE INTO meta VALUES ('graphRule', ?)").run(graphRule);
+      db.prepare("INSERT OR REPLACE INTO meta VALUES ('wordCountVersion', ?)").run(wordCountVersion);
+    }
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('refreshedAt', ?)").run(completedAt);
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('lastCommit', ?)").run(JSON.stringify(lastCommit(vault.path)));
     const visited = promotionEpoch ? JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenPromotions'").get().value).paths.length : 0;
     const vitalsRemaining = promotionEpoch ? db.prepare('SELECT count(*) AS n FROM notes').get().n - JSON.parse(db.prepare("SELECT value FROM meta WHERE key='gardenVitalsCycle'").get().value).length : 0;
-    const result = { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, ...(promotionEpoch ? { cursor, remaining, promoted, vitalsVisited: visited, vitalsRemaining } : {}), durationMs: Math.round((performance.now() - started) * 100) / 100 };
+    const result = { vault: vault.id, scanned: scan.notes.length, changed, unchanged, deleted, hashed, cursor, remaining, parserRemaining, skipped: scan.skipped.slice(0, 100), skippedCount: scan.skipped.length, errors: errors.slice(0, 100), errorCount: errors.length, completedAt, ...(promotionEpoch ? { promoted, vitalsVisited: visited, vitalsRemaining } : {}), durationMs: Math.round((performance.now() - started) * 100) / 100 };
     if (promotionEpoch) db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run(`gardenTick.${promotionEpoch}`, JSON.stringify(result));
     db.exec('COMMIT'); return result;
   } catch (error) {
@@ -234,16 +247,21 @@ export function indexSummary(vault, directory, checkFiles = true) {
     const refreshedAt = db.prepare("SELECT value FROM meta WHERE key = 'refreshedAt'").get()?.value ?? null;
     const editAgeFallbackPaths = JSON.parse(db.prepare("SELECT value FROM meta WHERE key='editAgeFallbackPaths'").get()?.value ?? '[]');
     const attribution = { editAgeFallbackCount: editAgeFallbackPaths.length, editAgeFallbackPaths: editAgeFallbackPaths.slice(0, 100) };
-    if (!checkFiles) return { state: 'ready', ...counts, refreshedAt, ...attribution, freshness: 'last refresh only; files not scanned' };
     const records = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
+    const versions = parserVersions(db);
+    const parserPending = [...records.keys()].filter(name => !currentParser(versions.get(name)));
+    if (!checkFiles) return { state: 'ready', ...counts, refreshedAt, ...attribution, parserRemaining: parserPending.length, freshness: parserPending.length ? 'parser refresh pending; files not scanned' : 'last refresh only; files not scanned' };
     const scan = listNotes(vault.path);
     let pending = 0;
+    let parserRemaining = 0;
     for (const note of scan.notes) {
-      if (!records.has(note.path) || !sameStat(records.get(note.path), note.stat)) pending++;
+      const needsParser = !currentParser(versions.get(note.path));
+      if (needsParser) parserRemaining++;
+      if (!records.has(note.path) || !sameStat(records.get(note.path), note.stat) || needsParser) pending++;
       records.delete(note.path);
     }
     pending += records.size;
-    return { state: 'ready', ...counts, refreshedAt, ...attribution, pending, skippedCount: scan.skipped.length, freshness: pending ? 'changed since refresh' : 'current by file metadata' };
+    return { state: 'ready', ...counts, refreshedAt, ...attribution, pending, parserRemaining, skippedCount: scan.skipped.length, freshness: parserRemaining ? 'parser refresh pending' : pending ? 'changed since refresh' : 'current by file metadata' };
   } finally { db.close(); }
 }
 
@@ -271,6 +289,7 @@ function repairLocked(vault, directory, record) {
       metrics.set(file.path, structural.metrics);
       if (structural.issues) graphIssues.set(file.path, structural.issues); else graphIssues.delete(file.path);
       db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)').run(file.path, file.after, current.stat.size, current.stat.mtimeMs, current.stat.ctimeMs, JSON.stringify(parsed.aliases), JSON.stringify(parsed.outline));
+      recordParserVersion(db, file.path);
       db.prepare('INSERT INTO note_workspaces VALUES (?, ?)').run(file.path, provenanceWorkspace(bytes));
       const blocks = parsed.blocks.map(block => db.prepare('INSERT INTO blocks(path, kind, heading, source) VALUES (?, ?, ?, ?)').run(file.path, block.kind, JSON.stringify(block.headingPath), JSON.stringify(block.source)).lastInsertRowid);
       for (const chunk of parsed.chunks) {

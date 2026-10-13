@@ -4,16 +4,21 @@ import { readNote, portableName } from './paths.mjs';
 import { arithmeticVitals, maturities, connectivityTiers } from './vitals.mjs';
 import { graphDegrees } from './vitals-index.mjs';
 import { graphRule, wordCountVersion } from './index-schema.mjs';
+import { parserVersions, currentParser } from './index-parser.mjs';
 
 export const unknownVitalsCoverage = () => ({ state: 'unknown', indexing: { state: 'unavailable', reason: 'structural_index_missing' }, message: unknownCoverageMessage });
 
 export function structuralCoverage(db, vault) {
   const records = new Map(db.prepare('SELECT path,size,mtime,ctime FROM notes').all().map(row => [row.path, row]));
   const scan = listNotes(vault.path);
+  const versions = parserVersions(db);
   let pending = 0;
+  let parserRemaining = 0;
   for (const entry of scan.notes) {
     const old = records.get(entry.path);
-    if (!old || old.size !== entry.stat.size || old.mtime !== entry.stat.mtimeMs || old.ctime !== entry.stat.ctimeMs) pending++;
+    const needsParser = !currentParser(versions.get(entry.path));
+    if (needsParser) parserRemaining++;
+    if (!old || old.size !== entry.stat.size || old.mtime !== entry.stat.mtimeMs || old.ctime !== entry.stat.ctimeMs || needsParser) pending++;
     records.delete(entry.path);
   }
   pending += records.size;
@@ -25,7 +30,7 @@ export function structuralCoverage(db, vault) {
   const graphBackfill = db.prepare("SELECT value FROM meta WHERE key='graphRule'").get()?.value !== graphRule;
   const wordCountBackfill = db.prepare("SELECT value FROM meta WHERE key='wordCountVersion'").get()?.value !== wordCountVersion;
   const state = pending || skipped || errors || missingVitals || graphIssues || graphBackfill || wordCountBackfill ? 'incomplete' : 'current';
-  return { state, indexing: { state: 'ready', pending, skipped, errors, missingVitals, graphIssues, graphBackfill, wordCountBackfill }, message: state === 'current' ? null : 'Structural metrics use a refresh snapshot; changed or skipped notes prevent complete graph coverage.' };
+  return { state, indexing: { state: 'ready', pending, parserRemaining, skipped, errors, missingVitals, graphIssues, graphBackfill, wordCountBackfill }, message: state === 'current' ? null : 'Structural metrics use a refresh snapshot; pending parser work, changed or skipped notes prevent complete graph coverage.' };
 }
 
 function valueFor(row, graph, db, now) {

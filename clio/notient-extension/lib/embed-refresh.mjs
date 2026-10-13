@@ -40,7 +40,7 @@ export async function refreshVectors(vault, directory, input = {}, { now = () =>
   if (!['structural', 'embed'].includes(tier) || !Number.isInteger(budgetMs) || budgetMs < 1000 || budgetMs > 240000) refuse('INVALID_INPUT', 'Refresh requires structural or embed and a budget from 1000 to 240000 ms.');
   let result = { vault: vault.id, scanned: 0, changed: 0, unchanged: 0, deleted: 0, hashed: 0, skipped: [], skippedCount: 0, errors: [], errorCount: 0, completedAt: null };
   let state = vectorState(vault, directory); let reason = null; let embeddedThisCall = 0; let failedBatches = 0; const warnings = []; const batchMs = []; let generation = null; let forcePending = null;
-  if (tier === 'structural') { result = refreshIndex(vault, directory, input); reclaimExpired(vault, directory); state = vectorState(vault, directory); }
+  if (tier === 'structural') { result = refreshIndex(vault, directory, input); reclaimExpired(vault, directory); state = vectorState(vault, directory); if (result.remaining) reason = 'budget_exhausted'; }
   else if (state.state === 'off') reason = 'embedding_off';
   else if (readCoverage(vault, directory).state !== 'current') reason = 'structural_refresh_required';
   else if (state.state === 'stale-model' && staleProfile(vault, directory, state.spaceId)) reason = 'stale_model';
