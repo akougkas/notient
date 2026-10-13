@@ -128,3 +128,36 @@ export function recoverCurrentRelationshipIntelligence(
   }
   return matches.length === 1 ? matches[0] : null;
 }
+
+export function alreadyRetainedRelationship(
+  source: CurrentEndpoint,
+  target: CurrentEndpoint,
+  relation: WritebackEdgeTable,
+  rationale: string,
+  evidence: readonly SourceReference[],
+): string | null {
+  const recovered = recoverCurrentRelationshipIntelligence(source, target, relation);
+  if (!recovered || !evidence.length) return null;
+  const record = parseAllIntelligenceRecords(source.body).find((item) => intelligenceRecordId(item) === recovered.id);
+  if (!record || !sameRationaleWording(record.statement, rationale)) return null;
+  if (!evidence.every((candidate) => recovered.evidence.some((previous) =>
+    candidate.path === previous.path && candidate.revision === previous.revision &&
+    candidate.range.start >= previous.range.start && candidate.range.end <= previous.range.end &&
+    previous.quote.slice(candidate.range.start - previous.range.start, candidate.range.end - previous.range.start) === candidate.quote
+  ))) return null;
+  return recovered.id;
+}
+
+function sameRationaleWording(left: string, right: string): boolean {
+  const words = (text: string) => text.normalize("NFKC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? [];
+  const a = words(left), b = words(right);
+  if (a.length && a.join(" ") === b.join(" ")) return true;
+  const shorter = a.length < b.length ? a : b, longer = a.length < b.length ? b : a;
+  if (shorter.length < 30 || longer.length !== shorter.length + 1) return false;
+  let at = 0;
+  while (at < shorter.length && shorter[at] === longer[at]) at++;
+  const repeated = longer[at];
+  if (!repeated || !shorter.includes(repeated) || /^\d+$/u.test(repeated) ||
+    ["no", "not", "never", "neither", "without", "cannot", "one", "two", "three", "first", "second", "third", "always", "only", "sometimes", "all", "none"].includes(repeated)) return false;
+  return shorter.slice(at).every((word, index) => word === longer[at + index + 1]);
+}

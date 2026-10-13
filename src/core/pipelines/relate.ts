@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { NoteComparison } from "../../api/comparison";
 import type { PipelinePlan } from "../../api/pipelines";
 import { hasInternalSourceMarkers } from "../markdown/sourceMarkers";
+import { isWritebackEdgeTable } from "../db/edgeTables";
+import { alreadyRetainedRelationship } from "../graph/intelligenceProvenance";
 import { type PipelineContext, witnessSchema } from "./context";
 
 const schema = z
@@ -71,6 +73,7 @@ export async function relateNotes(
 ): Promise<void> {
   await context.retrieve();
   const report = await analyzeRelationships(context, { contradictions });
+  const retained = new Set<string>();
   for (const item of report.comparisons) {
     if (["unrelated", "insufficient"].includes(item.judgment)) continue;
     if (
@@ -78,6 +81,13 @@ export async function relateNotes(
       !["contradiction", "temporal-change", "different-assumptions"].includes(item.judgment)
     )
       continue;
+    const relation = item.judgment === "contradiction" ? "contradicts" : item.judgment;
+    if (isWritebackEdgeTable(relation)) {
+      const source = context.documents.find((note) => note.note.path === item.source.path);
+      const target = context.documents.find((note) => note.note.path === item.target.path);
+      const recordId = source && target ? alreadyRetainedRelationship(source, target, relation, item.explanation, item.evidence) : null;
+      if (recordId) { retained.add(recordId); continue; }
+    }
     const kind = ["contradiction", "temporal-change", "different-assumptions"].includes(
       item.judgment,
     )
@@ -104,7 +114,7 @@ export async function relateNotes(
   }
   if (!plan.findings.length)
     plan.reason =
-      report.reason ??
+      retained.size ? `No new relationship was staged. ${retained.size} suggested connection${retained.size === 1 ? "" : "s"} repeated a retained directed relation with unchanged or nearly identical phrasing and quoted evidence already covered by its current source passages. The existing interpretation remains qualified; this does not reapprove or independently verify it.` : report.reason ??
       "The examined sources do not establish incompatible claims under matching assumptions.";
 }
 
