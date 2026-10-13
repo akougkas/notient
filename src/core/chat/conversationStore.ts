@@ -212,7 +212,7 @@ export class ConversationStore {
     if (!(await this.options.facade.writeIfUnchanged(next.notePath, expected, content))) {
       throw conversationConflict(next.notePath);
     }
-    return next;
+    return parseConversation(content, next.notePath);
   }
 
   private async serializeMutation<T>(notePath: string, operation: () => Promise<T>): Promise<T> {

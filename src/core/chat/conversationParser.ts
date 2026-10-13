@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CONVERSATION_CLIENT_ID_PATTERN,
   isCanonicalConversationClientId,
@@ -24,11 +25,6 @@ import type {
  *     message content from being mistaken for a new turn. Tool calls and
  *     approvals remain native Obsidian callouts.
  *
- * Roundtrip contract: `parseConversation(serializeConversation(c)).messages`
- * preserves role, content, toolCalls, toolResults, approvals, and createdAt
- * (timestamp goes through ISO 8601 which is millisecond-precise). Message
- * `id` is regenerated on parse since the markdown does not carry it; callers
- * that need stable ids should keep the in-memory Conversation alive.
  */
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
@@ -122,7 +118,7 @@ export function parseConversation(raw: string, notePath: string): Conversation {
   }
   const frontmatter = parseFrontmatter(match[1] ?? "");
   const body = raw.slice(match[0].length);
-  const messages = parseMessages(body, frontmatter.topic);
+  const messages = parseMessages(body, frontmatter.topic, frontmatter.conversation_id);
   if (frontmatter.message_count !== messages.length) {
     throw new Error(
       `invalid conversation: message_count is ${frontmatter.message_count}, parsed ${messages.length}`,
@@ -414,7 +410,7 @@ function renderToolCall(
   return block;
 }
 
-function parseMessages(body: string, topic: string): ChatMessage[] {
+function parseMessages(body: string, topic: string, conversationId: string): ChatMessage[] {
   const heading = `# ${topic.length > 0 ? topic : "Conversation"}`;
   if (body !== heading && !body.startsWith(`${heading}\n`)) {
     throw new Error("invalid conversation: body title does not match topic");
@@ -430,7 +426,11 @@ function parseMessages(body: string, topic: string): ChatMessage[] {
     if (transcript.slice(cursor, start).trim().length > 0) {
       throw new Error("invalid conversation: content outside a Notient message boundary");
     }
-    messages.push(parseMessageSection(match[1] ?? ""));
+    const section = match[1] ?? "";
+    const messageId = `m-${createHash("sha256")
+      .update(JSON.stringify([conversationId, messages.length, section]))
+      .digest("hex")}`;
+    messages.push(parseMessageSection(section, messageId));
     cursor = start + match[0].length;
   }
   if (transcript.slice(cursor).trim().length > 0) {
@@ -439,7 +439,7 @@ function parseMessages(body: string, topic: string): ChatMessage[] {
   return messages;
 }
 
-function parseMessageSection(section: string): ChatMessage {
+function parseMessageSection(section: string, messageId: string): ChatMessage {
   const headerEnd = section.indexOf("\n");
   const header = headerEnd >= 0 ? section.slice(0, headerEnd) : section;
   const rest = headerEnd >= 0 ? section.slice(headerEnd + 1) : "";
@@ -447,7 +447,7 @@ function parseMessageSection(section: string): ChatMessage {
   const callouts = extractCallouts(rest);
   const content = callouts.contentWithoutCallouts.trim();
   if (role === "tool") {
-    return parseToolMessage(content, createdAt, callouts);
+    return parseToolMessage(content, createdAt, callouts, messageId);
   }
   if (callouts.toolCallId !== undefined) {
     throw new Error("invalid conversation: tool-result callout is outside a tool message");
@@ -461,7 +461,7 @@ function parseMessageSection(section: string): ChatMessage {
     throw new Error("invalid conversation: only assistant messages may contain tool calls");
   }
   return {
-    id: cryptoRandomId(),
+    id: messageId,
     role,
     content,
     toolCalls: callouts.toolCalls,
@@ -475,6 +475,7 @@ function parseToolMessage(
   content: string,
   createdAt: number,
   callouts: CalloutExtraction,
+  messageId: string,
 ): ChatMessage {
   if (callouts.toolCallId === undefined) {
     throw new Error("invalid conversation: tool message is missing its tool-call id");
@@ -487,7 +488,7 @@ function parseToolMessage(
     throw new Error("invalid conversation: tool message contains assistant callouts");
   }
   return {
-    id: cryptoRandomId(),
+    id: messageId,
     role: "tool",
     content,
     toolCallId: callouts.toolCallId,
@@ -795,21 +796,6 @@ function formatTimestamp(value: number): string {
 function capitalize(value: string): string {
   if (value.length === 0) return value;
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function cryptoRandomId(): string {
-  const cryptoRef = (
-    globalThis as unknown as {
-      crypto?: { randomUUID?: () => string; getRandomValues?: (array: Uint8Array) => Uint8Array };
-    }
-  ).crypto;
-  if (cryptoRef?.randomUUID) return cryptoRef.randomUUID();
-  if (cryptoRef?.getRandomValues) {
-    const bytes = new Uint8Array(16);
-    cryptoRef.getRandomValues(bytes);
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-  return `message-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 }
 
 function parseFlatYaml(yaml: string): Record<string, string> {
