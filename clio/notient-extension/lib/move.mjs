@@ -111,37 +111,48 @@ function destinationAt(text, start, limit, inline) {
   return { start: begin, end, angle, titleStart, finish: inline ? i + 1 : limit };
 }
 
-function externalHtmlEnd(text, start) {
-  const tag = /^<(a|img)\b/i.exec(text.slice(start));
+function htmlDestinations(text, start) {
+  const tag = /^<(a|img|source|video|audio|div|span|p|link)\b/i.exec(text.slice(start));
   if (!tag) return null;
-  const target = tag[1].toLowerCase() === 'a' ? 'href' : 'src';
-  const allowed = new Set([target, 'id', 'class', 'title', 'alt', 'width', 'height', 'align', 'target', 'rel', 'loading', 'decoding', 'referrerpolicy', 'aria-label', 'aria-hidden']);
+  const targets = { a: ['href'], img: ['src'], source: ['src'], video: ['src', 'poster'], audio: ['src'], div: [], span: [], p: [], link: ['href'] }[tag[1].toLowerCase()];
+  const booleans = new Set(['controls', 'autoplay', 'muted', 'loop', 'playsinline']);
+  const allowed = new Set([...targets, ...booleans, 'id', 'class', 'title', 'alt', 'width', 'height', 'align', 'target', 'rel', 'loading', 'decoding', 'referrerpolicy', 'aria-label', 'aria-hidden', 'style', 'type', 'preload']);
   const attributes = new Map();
+  const destinations = [];
   let cursor = start + tag[0].length;
   while (cursor < text.length && cursor - start < 8192 && attributes.size <= 32) {
     const whitespace = /^[ \t\r\n]*/.exec(text.slice(cursor))[0];
     cursor += whitespace.length;
     const close = /^(?:\/?>)/.exec(text.slice(cursor));
-    if (close) {
-      const value = attributes.get(target);
-      return value && (/^(?:https?:\/\/|\/\/|mailto:|tel:)/i.test(value) || target === 'href' && value.startsWith('#')) ? cursor + close[0].length : null;
-    }
+    if (close) return { finish: cursor + close[0].length, destinations };
     if (!whitespace) return null;
-    const attribute = /^([a-z][a-z0-9-]*)[ \t\r\n]*=[ \t\r\n]*/i.exec(text.slice(cursor));
+    const attribute = /^([a-z][a-z0-9-]*)(?:[ \t\r\n]*=[ \t\r\n]*)?/i.exec(text.slice(cursor));
     if (!attribute) return null;
     const name = attribute[1].toLowerCase();
     if (!allowed.has(name) || attributes.has(name)) return null;
     cursor += attribute[0].length;
+    if (!attribute[0].includes('=')) {
+      if (!booleans.has(name)) return null;
+      attributes.set(name, '');
+      continue;
+    }
     const quote = text[cursor];
     let value;
+    const begin = cursor + (quote === '"' || quote === "'" ? 1 : 0);
+    let end;
     if (quote === '"' || quote === "'") {
-      const end = text.indexOf(quote, cursor + 1);
+      end = text.indexOf(quote, cursor + 1);
       if (end < 0) return null;
       value = text.slice(cursor + 1, end); cursor = end + 1;
     } else {
       const unquoted = /^[^\s<>"'`=]+/.exec(text.slice(cursor));
       if (!unquoted) return null;
-      value = unquoted[0]; cursor += value.length;
+      value = unquoted[0]; cursor += value.length; end = cursor;
+    }
+    if (name === 'style' && /[\\&@]|\/\*|\*\/|(?:url|image|image-set|cross-fade|element|var|expression)\s*\(/i.test(value)) return null;
+    if (targets.includes(name)) {
+      if (external(value) && !/^(?:https?:\/\/|\/\/|mailto:|tel:)/i.test(value)) return null;
+      destinations.push({ start: begin, end });
     }
     attributes.set(name, value);
   }
@@ -347,8 +358,11 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     if (text[i] === '\\') { i++; continue; }
     if (text[i] !== '[') {
       if (text[i] === '<' && /^<[a-z][a-z0-9:-]*\b[^>]*\b(?:href|src|srcset|action|poster|background|style)\s*=/i.test(text.slice(i))) {
-        const end = externalHtmlEnd(text, i);
-        if (end !== null) { mask(i, end); i = end - 1; }
+        const html = htmlDestinations(text, i);
+        if (html !== null) {
+          for (const span of html.destinations) add('html', span, html.finish);
+          mask(i, html.finish); i = html.finish - 1;
+        }
         else issues.push({ start: i, end: text.indexOf('>', i) + 1 || text.length, reason: 'HTML link-bearing syntax is unsupported.' });
       }
       continue;
