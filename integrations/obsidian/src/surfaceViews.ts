@@ -43,6 +43,12 @@ export function createSurfaceViews(parent: HTMLElement, options: SurfaceViewOpti
     const row = element("article", "notient-evidence-item");
     row.append(noteLink(item.path, item.title));
     row.append(element("div", "notient-surface-path", item.path));
+    if (item.retainedRecord) {
+      const retained = element("div", "notient-surface-qualification",
+        `Retained ${item.retainedRecord.kind ?? "understanding"}${item.retainedRecord.status ? ` · ${item.retainedRecord.status}` : ""}`);
+      retained.dataset.recordId = item.retainedRecord.id;
+      row.append(retained);
+    }
     const status = item.freshness === "current" ? "Current at retrieval"
       : item.freshness === "lagging" ? "Index was behind this source" : "Freshness not rechecked";
     row.append(element("span", "notient-evidence-freshness", status));
@@ -201,7 +207,7 @@ export function createSurfaceViews(parent: HTMLElement, options: SurfaceViewOpti
       for (const item of surface.items.slice(0, 3)) card.append(passage(item));
       if (surface.items.length > 3) {
         const more = element("details", "notient-evidence-more");
-        more.append(element("summary", "", `${surface.items.length - 3} more returned notes`));
+        more.append(element("summary", "", `${surface.items.length - 3} more returned passages`));
         let mounted = false;
         more.addEventListener("toggle", () => {
           if (!more.open || mounted) return;

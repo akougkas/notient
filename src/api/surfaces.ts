@@ -1,6 +1,7 @@
 import { graphNeighborsSchema, graphPathSchema } from "./graph";
 import { noteExcerptSchema, retrievalResultSchema } from "./retrieval";
 import type { SourceReference } from "./schema";
+import type { IntelligenceRecord } from "../core/intelligence/types";
 
 export type SurfaceEvidence = {
   path: string;
@@ -8,6 +9,11 @@ export type SurfaceEvidence = {
   quote: string | null;
   evidence: SourceReference | null;
   freshness: "current" | "lagging" | "unknown";
+  retainedRecord?: {
+    id: string;
+    kind?: IntelligenceRecord["kind"];
+    status?: IntelligenceRecord["status"];
+  };
 };
 
 export type EvidenceSurface = {
@@ -84,12 +90,33 @@ export function projectToolSurfaces(results: readonly SurfaceToolResult[]): Noti
     const excerpt = noteExcerptSchema.safeParse(result.data);
     if (excerpt.success && (!result.tool || result.tool === "vault.read_note")) {
       const data = excerpt.data;
-      if (data.evidence.path !== data.notePath) continue;
+      if (
+        data.evidence.path !== data.notePath || data.body !== data.evidence.quote ||
+        data.evidence.range.end - data.evidence.range.start !== data.body.length
+      ) continue;
+      const records = data.retainedUnderstanding?.records.filter((record) =>
+        record.source.path === data.notePath && record.source.revision === data.evidence.revision &&
+        record.source.range.end - record.source.range.start === record.source.quote.length,
+      ) ?? [];
+      const invalidRecords = (data.retainedUnderstanding?.records.length ?? 0) - records.length;
+      const omittedRecords = (data.retainedUnderstanding?.omitted ?? 0) + invalidRecords;
       surfaces.push({
-        kind: "evidence", id: `evidence:${result.callId}`, title: "A passage from your note",
+        kind: "evidence", id: `evidence:${result.callId}`, title: "Read from your note",
         items: [{ path: data.notePath, title: title(data.notePath), quote: data.evidence.quote,
-          evidence: data.evidence, freshness: "unknown" }],
-        qualification: data.truncated ? "This is an excerpt; the complete note contains more." : null,
+          evidence: data.evidence, freshness: "unknown" },
+          ...records.map((record): SurfaceEvidence => ({
+            path: data.notePath, title: title(data.notePath), quote: record.source.quote,
+            evidence: record.source, freshness: "unknown",
+            retainedRecord: { id: record.recordId, kind: record.kind, status: record.status },
+          })),
+        ],
+        qualification: [
+          data.truncated ? "Body excerpt; the complete note contains more." : "Returned passage complete.",
+          ...(data.retainedUnderstanding ? [
+            `${records.length} complete retained record${records.length === 1 ? "" : "s"}${omittedRecords ? `; ${omittedRecords} omitted` : ""}.`,
+          ] : []),
+          data.structure !== null && !data.structureOmitted ? "Outline included." : "Outline not supplied.",
+        ].join(" "),
       });
       continue;
     }
