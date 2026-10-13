@@ -15,6 +15,7 @@ import { type NoteScope, scopeAllows } from "../../api/scope";
 import type { ReasoningScheduler } from "../coordinator/reasoningScheduler";
 import { InferenceBudget } from "../llm/executionBudget";
 import type { LLMProvider } from "../llm/provider";
+import { noteTitle } from "../markdown/noteTitle";
 import { PipelineContext } from "../pipelines/context";
 import { analyzeRelationships } from "../pipelines/relate";
 import type { SearchPipeline } from "../search/searchPipeline";
@@ -56,7 +57,7 @@ export class NoteAnalysis {
       trustedScope,
       async (context) => {
         if (args.source) {
-          topic = context.selected[0].structure.headings[0]?.text ?? args.source.path;
+          topic = noteTitle(context.selected[0]);
           const focus = args.focus ? context.anchor(args.source.path, args.focus) : undefined;
           if (focus) topic = `${topic}: ${focus.replace(/\s+/g, " ").trim().slice(0, 300)}`;
           await context.retrieve(context.selected, args.limit - 1, focus);
