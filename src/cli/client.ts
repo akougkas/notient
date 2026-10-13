@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, createReadStream, fstatSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { type Socket, connect } from "node:net";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -35,15 +35,64 @@ export interface ClientOptions {
    */
   rootToken?: string;
   credentialFile?: string;
+  pairedCredential?: string;
 }
 
 const credentialFileContext = new AsyncLocalStorage<string | undefined>();
+const pairedCredentialContext = new AsyncLocalStorage<string | undefined>();
 
 export function withPairedCredentialFile<T>(
   path: string | undefined,
   operation: () => Promise<T>,
 ): Promise<T> {
   return credentialFileContext.run(path, operation);
+}
+
+export function withPairedCredential<T>(
+  credential: string | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return pairedCredentialContext.run(credential, operation);
+}
+
+export async function readPairedCredentialFd(fd: number): Promise<string> {
+  if (!Number.isInteger(fd) || fd < 3 || fd > 1024)
+    throw new Error(
+      "INVALID_PARAMS: --credential-fd requires an inherited descriptor from 3 to 1024",
+    );
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFIFO() && !stat.isSocket())
+      throw new Error("credential descriptor is not a pipe");
+  } catch {
+    throw new Error("INVALID_PARAMS: --credential-fd requires an open inherited pipe or socket");
+  }
+  const stream = createReadStream("", { fd, autoClose: true, highWaterMark: 129 });
+  const timeout = setTimeout(
+    () =>
+      stream.destroy(
+        new Error("INVALID_PARAMS: credential pipe did not close within five seconds"),
+      ),
+    5000,
+  );
+  timeout.unref();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  try {
+    for await (const chunk of stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > 128) throw new Error("INVALID_PARAMS: credential pipe exceeds 128 bytes");
+      chunks.push(buffer);
+    }
+    const credential = Buffer.concat(chunks).toString("utf8").trim();
+    if (!/^[A-Za-z0-9_-]{43}$/.test(credential))
+      throw new Error("INVALID_PARAMS: credential pipe has invalid content");
+    return credential;
+  } finally {
+    clearTimeout(timeout);
+    stream.destroy();
+  }
 }
 
 export interface RpcResponseFrame {
@@ -280,13 +329,19 @@ async function performHello(
 ): Promise<Principal> {
   const clientIdentity = options.clientIdentity ?? DEFAULT_AGENT_ID;
   const credentialFile = options.credentialFile ?? credentialFileContext.getStore();
+  const pairedCredential = options.pairedCredential ?? pairedCredentialContext.getStore();
+  if (credentialFile !== undefined && pairedCredential !== undefined)
+    throw new Error(`${HELLO_FAILED_PREFIX}: choose one paired credential source`);
   let params: Record<string, unknown>;
-  if (credentialFile !== undefined) {
+  if (credentialFile !== undefined || pairedCredential !== undefined) {
     if (!isPairedIdentity(clientIdentity))
-      throw new Error(`${HELLO_FAILED_PREFIX}: --credential-file requires an exact paired agent id`);
+      throw new Error(`${HELLO_FAILED_PREFIX}: paired credentials require an exact paired agent id`);
+    const credential = pairedCredential ?? (await readPairedCredentialFile(credentialFile!));
+    if (!/^[A-Za-z0-9_-]{43}$/.test(credential))
+      throw new Error(`${HELLO_FAILED_PREFIX}: paired credential has invalid content`);
     params = {
       clientIdentity,
-      pairedCredential: await readPairedCredentialFile(credentialFile),
+      pairedCredential: credential,
     };
   } else {
     const rootToken = await resolveRootToken(options);

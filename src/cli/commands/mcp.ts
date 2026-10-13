@@ -33,6 +33,7 @@ export interface McpCommandOptions {
   vaultPath: string;
   clientIdentity: string;
   credentialFile?: string;
+  pairedCredential?: string;
   /** Test seam; defaults to a newline-terminated write to process.stderr. */
   writeStderr?: (line: string) => void;
   /** Test seam; defaults to dialing the real per-vault socket. */
@@ -59,6 +60,7 @@ export async function runMcpCommand(options: McpCommandOptions): Promise<number>
         vaultPath: options.vaultPath,
         clientIdentity: options.clientIdentity,
         credentialFile: options.credentialFile,
+        pairedCredential: options.pairedCredential,
       };
       return connectClient(clientOptions);
     });

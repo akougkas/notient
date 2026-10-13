@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { normalizeAgentId } from "../core/auth/agentIdentity";
 import { VERSION } from "../version";
-import { withPairedCredentialFile } from "./client";
+import { readPairedCredentialFd, withPairedCredential, withPairedCredentialFile } from "./client";
 import { runAnalysisCommand } from "./commands/analysis";
 import { runApiCommand } from "./commands/api";
 import { parseAskFormat, parseAskMaxRounds, parseAskScope, runAskCommand } from "./commands/ask";
@@ -156,6 +156,7 @@ interface DispatchContext {
   parsed: ParsedArgs;
   emitter: Emitter;
   clientIdentity: string | undefined;
+  pairedCredential?: string;
 }
 
 type CommandDispatcher = (context: DispatchContext) => Promise<number>;
@@ -198,7 +199,7 @@ const COMMAND_DISPATCHERS = {
   events: ({ parsed, emitter, clientIdentity }) => dispatchEvents(parsed, emitter, clientIdentity),
   session: ({ parsed, emitter, clientIdentity }) =>
     dispatchSession(parsed, emitter, clientIdentity),
-  mcp: ({ parsed }) => dispatchMcp(parsed),
+  mcp: ({ parsed, pairedCredential }) => dispatchMcp(parsed, pairedCredential),
   graph: ({ parsed, emitter, clientIdentity }) => dispatchGraph(parsed, emitter, clientIdentity),
   links: ({ parsed, emitter, clientIdentity }) => dispatchLinks(parsed, emitter, clientIdentity),
   proposals: ({ parsed, emitter, clientIdentity }) =>
@@ -229,8 +230,8 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   if (rootEntry === "help") return emitRootHelp(emitter);
   if (rootEntry === "version") return emitVersion(emitter);
   if (rootEntry === "tui") {
-    if (resolveCredentialFile(parsed) !== undefined)
-      throw new Error("INVALID_PARAMS: --credential-file requires an explicit CLI command");
+    if (resolveCredentialFile(parsed) !== undefined || resolveCredentialFd(parsed) !== undefined)
+      throw new Error("INVALID_PARAMS: paired credentials require an explicit CLI command");
     return await dispatchRootWorkspace(parsed, emitter);
   }
   const command = parsed.command;
@@ -241,9 +242,13 @@ async function dispatch(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
   // principal is invalid even when the command token is unknown.
   const clientIdentity = resolveClientIdentity(parsed);
   if (!isCommandName(command)) return emitUnknownCommand(command, emitter);
-
+  const credentialFd = resolveCredentialFd(parsed);
+  const pairedCredential =
+    credentialFd === undefined ? undefined : await readPairedCredentialFd(credentialFd);
   return await withPairedCredentialFile(resolveCredentialFile(parsed), () =>
-    COMMAND_DISPATCHERS[command]({ parsed, emitter, clientIdentity }),
+    withPairedCredential(pairedCredential, () =>
+      COMMAND_DISPATCHERS[command]({ parsed, emitter, clientIdentity, pairedCredential }),
+    ),
   );
 }
 
@@ -292,7 +297,13 @@ const VERB_HELP: Record<string, VerbHelp> = {
   },
   api: {
     usage: "notient api <operation> --input <JSON> --vault <path>",
-    flags: ["--input <JSON>", "--vault <path>", "--as <agent-id>", "--credential-file <path>"],
+    flags: [
+      "--input <JSON>",
+      "--vault <path>",
+      "--as <agent-id>",
+      "--credential-file <path>",
+      "--credential-fd <3-1024; inherited pipe, closes after token>",
+    ],
   },
   pair: {
     usage: "notient pair create|list|revoke|owner-grant|owner-revoke --vault <path>",
@@ -465,8 +476,13 @@ const VERB_HELP: Record<string, VerbHelp> = {
     flags: ["--candidate-limit <1-6>", "--idempotency-key <key>", "--vault <path>"],
   },
   mcp: {
-    usage: "notient mcp --vault <path> [--as <agent-id>] [--credential-file <path>]",
-    flags: ["--vault <path>", "--as <agent-id>", "--credential-file <path>"],
+    usage: "notient mcp --vault <path> [--as <agent-id>] [--credential-file <path> | --credential-fd <3-1024>]",
+    flags: [
+      "--vault <path>",
+      "--as <agent-id>",
+      "--credential-file <path>",
+      "--credential-fd <3-1024; inherited pipe, leaves stdin for MCP>",
+    ],
   },
   graph: {
     usage: "notient graph dump|stats --vault <path>",
@@ -527,13 +543,17 @@ function printVerbHelp(command: string, emitter: Emitter): number {
  */
 function resolveClientIdentity(parsed: ParsedArgs): string | undefined {
   const raw = parsed.flags.as;
-  if (resolveCredentialFile(parsed) !== undefined) {
+  const credentialFile = resolveCredentialFile(parsed);
+  const credentialFd = resolveCredentialFd(parsed);
+  if (credentialFile !== undefined && credentialFd !== undefined)
+    throw new Error("INVALID_PARAMS: choose --credential-file or --credential-fd");
+  if (credentialFile !== undefined || credentialFd !== undefined) {
     if (
       typeof raw !== "string" ||
       !/^paired-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)
     )
       throw new Error(
-        "INVALID_PARAMS: --credential-file requires an exact paired identity in --as",
+        "INVALID_PARAMS: paired credentials require an exact paired identity in --as",
       );
     return raw;
   }
@@ -547,6 +567,21 @@ function resolveCredentialFile(parsed: ParsedArgs): string | undefined {
   if (typeof raw !== "string" || raw.length === 0)
     throw new Error("INVALID_PARAMS: --credential-file requires a path");
   return raw;
+}
+
+function resolveCredentialFd(parsed: ParsedArgs): number | undefined {
+  const raw = parsed.flags["credential-fd"];
+  if (raw === undefined) return undefined;
+  if (
+    typeof raw !== "string" ||
+    !/^[0-9]{1,4}$/.test(raw) ||
+    Number(raw) < 3 ||
+    Number(raw) > 1024
+  )
+    throw new Error(
+      "INVALID_PARAMS: --credential-fd requires an inherited descriptor from 3 to 1024",
+    );
+  return Number(raw);
 }
 
 async function dispatchInit(parsed: ParsedArgs, emitter: Emitter): Promise<number> {
@@ -1489,13 +1524,14 @@ async function dispatchNuke(
  * agent principal, so an absent `--as` must not fall through to the daemon's
  * human default.
  */
-async function dispatchMcp(parsed: ParsedArgs): Promise<number> {
+async function dispatchMcp(parsed: ParsedArgs, pairedCredential?: string): Promise<number> {
   const vaultPath = await requireVault(parsed);
   const clientIdentity = resolveClientIdentity(parsed) ?? MCP_DEFAULT_AGENT_ID;
   return await runMcpCommand({
     vaultPath,
     clientIdentity,
     credentialFile: resolveCredentialFile(parsed),
+    pairedCredential,
   });
 }
 
