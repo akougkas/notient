@@ -16,10 +16,11 @@ export async function fetchNeighbors(
         "Connection results are incomplete; open the note’s Links view for details.",
     );
   return result.connections.map((row) => ({
+    ...(row.state === "retained" ? { retainedIntelligence: true } : {}),
     notePath: row.note.path,
     table: row.relation,
     direction: row.direction,
-    confidence: row.assessment ?? 1,
+    confidence: row.assessment ?? (row.state === "retained" ? 0 : 1),
     agent: row.author,
     proposed: row.state === "proposed",
   }));
@@ -42,13 +43,13 @@ export async function rpcGraph(context: SlashContext, rest: string): Promise<Sla
     try {
       const neighbors = await fetchNeighbors(context, fromPath);
       if (neighbors.length === 0)
-        return { message: `No authored links or reviewed relationships for ${fromPath}.` };
+        return { message: `No saved references or retained relationships for ${fromPath}.` };
       return {
         message: [
           `Connections for ${fromPath}:`,
           ...neighbors.map(
             (neighbor) =>
-              `- ${neighbor.direction === "outgoing" ? "→" : "←"} ${neighbor.table} ${neighbor.notePath}`,
+              `- ${neighbor.direction === "outgoing" ? "→" : "←"} ${neighbor.table} ${neighbor.notePath}${neighbor.retainedIntelligence ? " · retained intelligence; approval history not implied" : ""}`,
           ),
         ].join("\n"),
       };
@@ -117,7 +118,7 @@ export async function rpcPulse(context: SlashContext, path: string): Promise<Sla
         `pulse: ${path}`,
         `maturity:     ${snapshot.maturity}`,
         `health:       ${snapshot.health.toFixed(2)}`,
-        `connectivity: ${snapshot.connectivityTier} (${neighbors.length} approved neighbors)`,
+        `connectivity: ${snapshot.connectivityTier} (${neighbors.length} saved connections)`,
         neighbors.length === 0
           ? "next: run /awaken so the linker can propose semantic edges."
           : "next: /graph to inspect the edges, /proposals to review pending ones.",

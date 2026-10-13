@@ -22,9 +22,16 @@ export interface IntelligenceAppendPlan {
   continuation: boolean;
 }
 
+export interface IntelligenceRecordSpan {
+  record: IntelligenceRecord;
+  start: number;
+  end: number;
+}
+
 const START_MARKER = /^<!-- notient-intelligence:v1:start:(i-[a-f0-9]{64}):([A-Za-z0-9_-]+) -->$/;
 const END_MARKER = /^<!-- notient-intelligence:v1:end:(i-[a-f0-9]{64}) -->$/;
-const RECORD_HEADING = /^ {0,3}### (finding|interpretation|decision|question|relationship|feedback) · (supported|provisional|disputed|decided|open|retained|superseded)$/u;
+const RECORD_HEADING =
+  /^ {0,3}### (finding|interpretation|decision|question|relationship|feedback) · (supported|provisional|disputed|decided|open|retained|superseded)$/u;
 
 export class EditedIntelligenceRecordError extends Error {
   constructor(id: string, reason: string) {
@@ -64,7 +71,7 @@ function matchesHeading(text: string, section: string): boolean {
 
 function headingLevel(text: string): number | null {
   const match = text.match(/^ {0,3}(#{1,6})(?:[ \t]+|$)/u);
-  return match ? match[1]?.length ?? null : null;
+  return match ? (match[1]?.length ?? null) : null;
 }
 
 function looksLikeUnmarkedRecord(lines: readonly LineSpan[], index: number, end: number): boolean {
@@ -75,7 +82,11 @@ function looksLikeUnmarkedRecord(lines: readonly LineSpan[], index: number, end:
     const text = lines[cursor]?.text ?? "";
     if (/^ {0,3}#{1,6}[ \t]+/u.test(text)) break;
     if (/^- \*\*Attribution:\*\*/u.test(text)) attribution = true;
-    if (/^- \*\*(Assessment of retained record|Capture|Evidence|Qualification|Relationship|Source revision|Feedback)/u.test(text))
+    if (
+      /^- \*\*(Assessment of retained record|Capture|Evidence|Qualification|Relationship|Source revision|Feedback)/u.test(
+        text,
+      )
+    )
       details = true;
   }
   return attribution && details;
@@ -117,7 +128,11 @@ function findSections(text: string, section?: string): HeadingSection[] {
   return sections;
 }
 
-function recordsInSection(body: string, section?: string): IntelligenceRecord[] {
+function recordsInSection(
+  body: string,
+  section?: string,
+  spans?: IntelligenceRecordSpan[],
+): IntelligenceRecord[] {
   const lines = linesOf(body);
   const records: IntelligenceRecord[] = [];
   const ids = new Set<string>();
@@ -144,17 +159,26 @@ function recordsInSection(body: string, section?: string): IntelligenceRecord[] 
       const start = raw.match(START_MARKER);
       if (!start) {
         if (RECORD_HEADING.test(raw) && looksLikeUnmarkedRecord(lines, index, range.endLine))
-          throw new EditedIntelligenceRecordError("unmarked", "a generated record block lost its marker");
+          throw new EditedIntelligenceRecordError(
+            "unmarked",
+            "a generated record block lost its marker",
+          );
         continue;
       }
       const id = start[1];
       const payload = start[2];
-      if (!id || !payload) throw new EditedIntelligenceRecordError("unknown", "its marker is malformed");
+      if (!id || !payload)
+        throw new EditedIntelligenceRecordError("unknown", "its marker is malformed");
       let record: IntelligenceRecord;
       try {
-        record = intelligenceRecordSchema.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+        record = intelligenceRecordSchema.parse(
+          JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
+        );
       } catch (error) {
-        throw new EditedIntelligenceRecordError(id, `its stored record is invalid (${String(error)})`);
+        throw new EditedIntelligenceRecordError(
+          id,
+          `its stored record is invalid (${String(error)})`,
+        );
       }
       if (intelligenceRecordId(record) !== id)
         throw new EditedIntelligenceRecordError(id, "its stored identity no longer matches");
@@ -162,7 +186,8 @@ function recordsInSection(body: string, section?: string): IntelligenceRecord[] 
       while (endIndex < range.endLine) {
         const end = (lines[endIndex]?.text ?? "").match(END_MARKER);
         if (end) {
-          if (end[1] !== id) throw new EditedIntelligenceRecordError(id, "its ending marker does not match");
+          if (end[1] !== id)
+            throw new EditedIntelligenceRecordError(id, "its ending marker does not match");
           break;
         }
         endIndex += 1;
@@ -175,6 +200,7 @@ function recordsInSection(body: string, section?: string): IntelligenceRecord[] 
       const original = `${renderRecordContent(record, "\n", false)}\n`;
       if (normalized !== expected && normalized !== original)
         throw new EditedIntelligenceRecordError(id, "its visible content changed");
+      spans?.push({ record, start: lines[index]!.start, end: lines[endIndex]!.next });
       if (!ids.has(id)) {
         ids.add(id);
         records.push(record);
@@ -233,13 +259,15 @@ function renderRecordContent(record: IntelligenceRecord, newline: string, compac
     `- **Attribution:** ${record.attribution.kind} — ${displayText(record.attribution.label)} (${displayText(record.attribution.id)})`,
   ];
   if (record.capturedContribution) lines.push("- **Capture:** submitted contribution");
-  if (record.assessmentOf) lines.push(`- **Assessment of retained record:** ${record.assessmentOf}`);
+  if (record.assessmentOf)
+    lines.push(`- **Assessment of retained record:** ${record.assessmentOf}`);
   for (const evidence of record.evidence) {
     const source = evidence.source;
     const excerpt = compact ? evidenceExcerpt(source.quote) : source.quote;
-    const qualification = excerpt !== source.quote
-      ? ` Quoted excerpt; the complete quote is retained in this note's record. Source lines ${source.range.startLine}–${source.range.endLine}.`
-      : "";
+    const qualification =
+      excerpt !== source.quote
+        ? ` Quoted excerpt; the complete quote is retained in this note's record. Source lines ${source.range.startLine}–${source.range.endLine}.`
+        : "";
     lines.push(
       `- **Evidence (${evidence.relation}, ${evidence.assessment}):** ${displayNoteTarget(source.path)} — “${displayText(excerpt)}”${qualification}`,
     );
@@ -251,7 +279,9 @@ function renderRecordContent(record: IntelligenceRecord, newline: string, compac
       `- **Relationship (${relationship.provenance}${relationship.relation ? `, ${relationship.relation}` : ""}):** ${displayNoteTarget(relationship.target)} — ${displayText(relationship.meaning)}`,
     );
   for (const dependency of record.dependencies)
-    lines.push(`- **Source revision:** ${displayNoteTarget(dependency.path)} — ${dependency.revision}`);
+    lines.push(
+      `- **Source revision:** ${displayNoteTarget(dependency.path)} — ${dependency.revision}`,
+    );
   if (record.feedback !== null) {
     lines.push(
       `- **Feedback (${record.feedback.reason}):** ${displayText(record.feedback.explanation)} — ${displayText(record.feedback.target)}`,
@@ -281,11 +311,14 @@ export function parseAllIntelligenceRecords(body: string): IntelligenceRecord[] 
   return recordsInSection(body);
 }
 
+export function parseIntelligenceRecordSpans(body: string): IntelligenceRecordSpan[] {
+  const spans: IntelligenceRecordSpan[] = [];
+  recordsInSection(body, undefined, spans);
+  return spans;
+}
+
 export function stripIntelligenceMarkers(text: string): string {
-  return text.replace(
-    /^<!-- notient-intelligence:v1:(?:start|end):[^\r\n]*(?:\r?\n|$)/gmu,
-    "",
-  );
+  return text.replace(/^<!-- notient-intelligence:v1:(?:start|end):[^\r\n]*(?:\r?\n|$)/gmu, "");
 }
 
 export function withoutRetainedIntelligence(text: string): string {
@@ -317,11 +350,12 @@ export function prepareIntelligenceAppend(
     pending.set(id, record);
     appendedIds.push(id);
   }
-  if (pending.size === 0)
-    return { text: "", body, appendedIds, duplicateIds, continuation: false };
+  if (pending.size === 0) return { text: "", body, appendedIds, duplicateIds, continuation: false };
   const newline = detectNewline(body);
   const prefix = body.length === 0 ? "" : body.endsWith("\n") ? newline : `${newline}${newline}`;
-  const rendered = [...pending.values()].map((record) => renderRecord(record, newline)).join(`${newline}${newline}`);
+  const rendered = [...pending.values()]
+    .map((record) => renderRecord(record, newline))
+    .join(`${newline}${newline}`);
   const continuation = canContinueSection(body, designation);
   const text = continuation
     ? `${prefix}${rendered}${newline}`
@@ -413,8 +447,13 @@ export function canContinueSection(body: string, designation: string): boolean {
   return fence === null;
 }
 
-export function appendedIntelligenceRecords(before: string, addition: string): IntelligenceRecord[] {
-  const known = new Set(parseAllIntelligenceRecords(before).map((record) => intelligenceRecordId(record)));
+export function appendedIntelligenceRecords(
+  before: string,
+  addition: string,
+): IntelligenceRecord[] {
+  const known = new Set(
+    parseAllIntelligenceRecords(before).map((record) => intelligenceRecordId(record)),
+  );
   return parseAllIntelligenceRecords(`${before}${addition}`).filter(
     (record) => !known.has(intelligenceRecordId(record)),
   );

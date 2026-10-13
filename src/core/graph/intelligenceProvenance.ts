@@ -1,8 +1,36 @@
 import type { Connection } from "../../api/graph";
 import { sourceRange } from "../../api/notes";
 import type { NoteReference, SourceReference } from "../../api/schema";
-import type { WritebackEdgeTable } from "../db/edgeTables";
-import { parseAllIntelligenceRecords, withoutRetainedIntelligence } from "../intelligence";
+import { isWritebackEdgeTable, type WritebackEdgeTable } from "../db/edgeTables";
+import {
+  intelligenceRecordId,
+  parseAllIntelligenceRecords,
+  withoutRetainedIntelligence,
+} from "../intelligence";
+
+export function retainedRelationshipCandidates(
+  body: string,
+): Array<{ target: string; relation: WritebackEdgeTable }> | null {
+  try {
+    return parseAllIntelligenceRecords(body).flatMap((record) =>
+      record.kind === "relationship" && record.status === "provisional"
+        ? record.relationships.flatMap((relationship) =>
+            relationship.provenance === "inferred" &&
+            isWritebackEdgeTable(relationship.relation ?? "")
+              ? [
+                  {
+                    target: relationship.target,
+                    relation: relationship.relation as WritebackEdgeTable,
+                  },
+                ]
+              : [],
+          )
+        : [],
+    );
+  } catch {
+    return null;
+  }
+}
 
 interface CurrentEndpoint {
   note: NoteReference;
@@ -68,14 +96,16 @@ export function recoverCurrentRelationshipIntelligence(
   source: CurrentEndpoint,
   target: CurrentEndpoint,
   relation: WritebackEdgeTable,
-): Pick<Connection, "rationale" | "evidence" | "evidenceState"> | null {
+): Pick<Connection, "rationale" | "evidence" | "evidenceState" | "id" | "author"> | null {
   let records;
   try {
     records = parseAllIntelligenceRecords(source.body);
   } catch {
     return null;
   }
-  const matches: Array<Pick<Connection, "rationale" | "evidence" | "evidenceState">> = [];
+  const matches: Array<
+    Pick<Connection, "rationale" | "evidence" | "evidenceState" | "id" | "author">
+  > = [];
   for (const record of records) {
     if (record.kind !== "relationship" || record.status !== "provisional") continue;
     for (const relationship of record.relationships) {
@@ -88,6 +118,8 @@ export function recoverCurrentRelationshipIntelligence(
       const evidence = currentEvidence(relationship.evidence, record.dependencies, source, target);
       if (!evidence) continue;
       matches.push({
+        id: intelligenceRecordId(record),
+        author: record.attribution.id,
         rationale: relationship.meaning,
         evidence,
         evidenceState: "current",

@@ -7,6 +7,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type React from "react";
 import { useEffect, useMemo, useRef } from "react";
 import type { NoteSelector } from "../../../api/schema";
+import { isWritebackEdgeTable } from "../../../core/db/edgeTables";
 import { locateFrontmatter } from "../../../core/markdown/frontmatter";
 import type { ExtractionItemWire } from "../../../daemon/wire";
 import { Markdown } from "../Markdown";
@@ -263,7 +264,7 @@ function NeighborsPane({
   return (
     <box width={layout.neighborsScrollWidth} height={layout.scrollHeight} flexDirection="column">
       <text fg={COLOR.dim} marginBottom={1} wrapMode="word">
-        file · authored link idea · proposed 0–1 · relationship assessment
+        file · saved reference kept · retained intelligence idea · proposed 0–1 · assessment
       </text>
       {result && (result.coverage.state !== "current" || result.truncated) && (
         <text fg={COLOR.warn} marginBottom={1} wrapMode="word">
@@ -310,7 +311,11 @@ function NeighborsPane({
           <text fg={COLOR.dim} wrapMode="word">
             {detail.state === "authored"
               ? "Saved reference · checked against saved files"
-              : `${detail.state} relationship · ${detail.author}`}
+              : detail.state === "retained"
+                ? isWritebackEdgeTable(detail.relation)
+                  ? "Retained provisional relationship · approval history not restored"
+                  : "Retained reference · factual support not established"
+                : `${detail.state} relationship · ${detail.author}`}
           </text>
           {detail.meaningSource && (
             <text fg={COLOR.dim} wrapMode="word">
@@ -320,7 +325,7 @@ function NeighborsPane({
             </text>
           )}
           {detail.rationale && <Markdown text={detail.rationale} />}
-          {detail.state !== "authored" && (
+          {isWritebackEdgeTable(detail.relation) && (
             <text fg={COLOR.dim} wrapMode="word">
               {detail.evidenceState === "current"
                 ? `${detail.evidence.length} current evidence passage(s)`
@@ -405,8 +410,10 @@ function NeighborRow({
           layout.neighborPathWidth,
         )}
       </span>
-      <span fg={row.proposed ? COLOR.warn : confidenceColor(row.confidence)}>
-        {` ${connectionAssessment(row.table, row.proposed, row.confidence).padStart(4)}`}
+      <span
+        fg={row.proposed || row.retainedIntelligence ? COLOR.warn : confidenceColor(row.confidence)}
+      >
+        {` ${connectionAssessment(row.table, row.proposed, row.confidence, row.retainedIntelligence).padStart(4)}`}
       </span>
     </text>
   );

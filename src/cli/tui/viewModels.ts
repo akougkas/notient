@@ -432,6 +432,7 @@ export function buildInboxDetail(entry: InboxEntry | null): ProposalDetailModel 
 /* ------------------------------------------------------------------ */
 
 export interface NeighborRow {
+  readonly retainedIntelligence?: boolean;
   readonly connectionId?: string;
   readonly notePath: string;
   readonly table: string;
@@ -453,6 +454,7 @@ export function sortNeighbors(
   return [...neighbors]
     .map((entry) => ({
       ...(entry.connectionId ? { connectionId: entry.connectionId } : {}),
+      ...(entry.retainedIntelligence ? { retainedIntelligence: true } : {}),
       notePath: entry.notePath,
       table: entry.table,
       direction: entry.direction,

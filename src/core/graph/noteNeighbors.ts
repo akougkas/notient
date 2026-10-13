@@ -6,6 +6,7 @@ import { isCanonicalOrdinaryNotePath } from "../vault/publicPath";
 export type NoteNeighborTable = (typeof NOTE_CONNECTION_TABLES)[number];
 
 export interface NoteNeighbor {
+  readonly retainedIntelligence?: boolean;
   readonly notePath: string;
   readonly table: NoteNeighborTable;
   readonly direction: "outgoing" | "incoming";
@@ -162,6 +163,7 @@ function decodeNeighbor(
   }
   return {
     id: raw.id.toString(),
+    ...(source === "note-intelligence" ? { retainedIntelligence: true } : {}),
     provenance: typeof raw.provenance === "string" ? raw.provenance : null,
     notePath: outgoing ? toPath : fromPath,
     table,

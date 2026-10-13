@@ -19,9 +19,10 @@ export interface BlockSpec {
   text: string;
 }
 
-export const STRUCTURAL_INDEX_VERSION = 4;
+export const STRUCTURAL_INDEX_VERSION = 5;
 
 export interface NoteLinkSpec {
+  retainedIntelligence?: boolean;
   syntax: "wiki" | "markdown";
   fromBlockOrd: number | null;
   rawTarget: string;
@@ -36,11 +37,13 @@ export interface TagSpec {
 }
 
 export interface FrontmatterRefSpec {
+  retainedIntelligence?: boolean;
   key: string;
   rawTarget: string;
 }
 
 export interface MarkdownExtraction {
+  intelligenceTargets?: string[];
   blocks: BlockSpec[];
   links: NoteLinkSpec[];
   tags: TagSpec[];

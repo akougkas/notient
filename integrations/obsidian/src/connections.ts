@@ -1,5 +1,6 @@
 import type { NotientClient } from "../../../src/api/client";
 import type { SourceReference } from "../../../src/api/schema";
+import { isWritebackEdgeTable } from "../../../src/core/db/edgeTables";
 
 /** Daemon owns graph/evidence; the host alone opens files and saved-source ranges. */
 export async function renderConnections(options: {
@@ -74,7 +75,7 @@ export async function renderConnections(options: {
             ? "property"
             : edge.relation.replaceAll("_", " ");
       card.createEl("div", {
-        text: `${edge.direction === "incoming" ? "Backlink" : "Outgoing"} · ${relation} · ${edge.state}`,
+        text: `${edge.direction === "incoming" ? "Backlink" : "Outgoing"} · ${relation} · ${edge.state === "retained" && isWritebackEdgeTable(edge.relation) ? "retained provisional relationship; approval history not restored" : edge.state}`,
         cls: "notient-muted",
       });
       const title = card.createEl("button", {
@@ -101,7 +102,7 @@ export async function renderConnections(options: {
       card.createEl("div", { text: edge.note.path, cls: "notient-path" });
       if (edge.rationale) await options.markdown(card.createDiv(), edge.rationale, options.path);
       signal.throwIfAborted();
-      if (edge.state === "authored") continue;
+      if (!isWritebackEdgeTable(edge.relation)) continue;
       card.createEl("p", {
         text:
           edge.evidenceState === "stale"

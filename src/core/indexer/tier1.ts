@@ -350,8 +350,13 @@ function appendWikilink(
   const fromExpr = fromExpression(link.fromBlockOrd, blockCount);
   // The existing structural relation table also stores Markdown destinations;
   // provenance preserves the authored syntax without migrating stable edges.
-  const defaultSourceLabel =
-    link.syntax === "markdown" ? "markdown" : link.isEmbed ? "embed" : "wikilink";
+  const defaultSourceLabel = link.retainedIntelligence
+    ? "note-intelligence"
+    : link.syntax === "markdown"
+      ? "markdown"
+      : link.isEmbed
+        ? "embed"
+        : "wikilink";
   if (target.kind === "unresolved") {
     const unresolvedTable = link.isEmbed ? "embed_unresolved" : "wikilink_unresolved";
     state.bindings[`wl${index}_rawTarget`] = link.rawTarget;
@@ -395,10 +400,13 @@ function appendFrontmatterRef(
   target: FrontmatterTarget,
   index: number,
   daemonOverride: DaemonWriteOverride | null,
+  ref: FrontmatterRefSpec,
 ): void {
   if (target.kind === "unresolved") return;
   const { toExpr, resolvedTargetKey } = bindResolvedTarget(state, target, `fm${index}`);
-  state.bindings[`fm${index}_source`] = "frontmatter";
+  state.bindings[`fm${index}_source`] = ref.retainedIntelligence
+    ? "note-intelligence"
+    : "frontmatter";
   const attributedAgent = resolveDaemonAttribution(resolvedTargetKey, daemonOverride);
   const agentClause = attributedAgent === null ? "" : `, agent = $fm${index}_agent`;
   if (attributedAgent !== null) state.bindings[`fm${index}_agent`] = attributedAgent;
@@ -409,12 +417,12 @@ function appendFrontmatterRef(
 
 function appendFrontmatterRefs(
   state: Tier1TransactionState,
-  refCount: number,
+  refs: FrontmatterRefSpec[],
   targets: FrontmatterTarget[],
   daemonOverride: DaemonWriteOverride | null,
 ): void {
-  for (let index = 0; index < refCount; index += 1) {
-    appendFrontmatterRef(state, targets[index], index, daemonOverride);
+  for (let index = 0; index < refs.length; index += 1) {
+    appendFrontmatterRef(state, targets[index], index, daemonOverride, refs[index]);
   }
 }
 
@@ -478,20 +486,18 @@ function buildTier1Transaction(
       tier1Class: TIER1_EDGE_CLASS,
       structuralVersion: STRUCTURAL_INDEX_VERSION,
       referenceTargets: JSON.stringify(references),
+      intelligenceTargets: extraction.intelligenceTargets ?? [],
     },
   };
   appendNoteWrite(state, existingNoteId);
-  state.statements.push("UPDATE $noteId SET reference_targets = $referenceTargets;");
+  state.statements.push(
+    "UPDATE $noteId SET reference_targets = $referenceTargets, intelligence_targets = $intelligenceTargets;",
+  );
   appendTier1EdgeCleanup(state, existingBlockIds);
   appendBlockWrites(state, extraction.blocks, existingBlockIds);
   appendBlockRelations(state.statements, extraction.blocks);
   appendWikilinks(state, extraction, wikilinkTargets, daemonOverride);
-  appendFrontmatterRefs(
-    state,
-    extraction.frontmatterRefs.length,
-    frontmatterTargets,
-    daemonOverride,
-  );
+  appendFrontmatterRefs(state, extraction.frontmatterRefs, frontmatterTargets, daemonOverride);
   appendTags(state, extraction, existingTagIds);
   state.statements.push(
     deferCompletion

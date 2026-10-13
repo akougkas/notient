@@ -16,6 +16,8 @@ import { toString as mdastToString } from "mdast-util-to-string";
 import type { Node } from "unist";
 import { visit } from "unist-util-visit";
 import { parse as parseYaml } from "yaml";
+import { parseIntelligenceRecordSpans, type IntelligenceRecordSpan } from "../intelligence";
+import { isCanonicalOrdinaryNotePath } from "../vault/publicPath";
 import type { TagRefNode } from "./plugins/remarkTag";
 import {
   type WikiEmbedNode,
@@ -91,8 +93,16 @@ function collectInlineSignals(
   links: NoteLinkSpec[],
   tags: TagSpec[],
   definitions: ReadonlyMap<string, Definition>,
+  intelligenceSpans: readonly IntelligenceRecordSpan[],
 ): void {
-  visit(node, (current) => {
+  visit(node, (current, _index, parent) => {
+    const position = current.position ?? parent?.position;
+    const start = position?.start.offset;
+    const end = position?.end.offset;
+    const retained =
+      start !== undefined &&
+      end !== undefined &&
+      intelligenceSpans.some((span) => start >= span.start && end <= span.end);
     if (current.type === "wikiLink" || current.type === "wikiEmbed") {
       const link = current as WikiLinkNode | WikiEmbedNode;
       links.push({
@@ -102,13 +112,14 @@ function collectInlineSignals(
         targetHeading: link.heading,
         targetBlockId: link.block,
         isEmbed: current.type === "wikiEmbed",
+        ...(retained ? { retainedIntelligence: true } : {}),
       });
     } else if (current.type === "tagRef") {
       const tag = current as TagRefNode;
       tags.push({ fromBlockOrd, path: tagIdentity(tag.path) });
     } else {
       const link = markdownLinkSignal(current, fromBlockOrd, definitions);
-      if (link) links.push(link);
+      if (link) links.push({ ...link, ...(retained ? { retainedIntelligence: true } : {}) });
     }
   });
 }
@@ -264,6 +275,7 @@ function countWords(text: string): number {
 }
 
 interface ExtractionWalkState {
+  intelligenceSpans: IntelligenceRecordSpan[];
   definitions: Map<string, Definition>;
   blocks: BlockSpec[];
   links: NoteLinkSpec[];
@@ -361,7 +373,14 @@ function makeCalloutBlock(state: ExtractionWalkState, node: Node, text: string):
 }
 
 function collectBlockSignals(state: ExtractionWalkState, node: Node, block: OpenBlock): void {
-  collectInlineSignals(node, block.spec.ord, state.links, state.tags, state.definitions);
+  collectInlineSignals(
+    node,
+    block.spec.ord,
+    state.links,
+    state.tags,
+    state.definitions,
+    state.intelligenceSpans,
+  );
 }
 
 function consumeHeading(state: ExtractionWalkState, child: Heading): void {
@@ -457,12 +476,17 @@ function consumeChild(state: ExtractionWalkState, child: RootContent): void {
   consumeGeneric(state, child);
 }
 
-export function extract(ast: Root, _notePath: string, source: string): MarkdownExtraction {
+export function extract(ast: Root, notePath: string, source: string): MarkdownExtraction {
+  let intelligenceSpans: IntelligenceRecordSpan[] = [];
+  try {
+    intelligenceSpans = parseIntelligenceRecordSpans(source);
+  } catch {}
   const definitions = new Map<string, Definition>();
   visit(ast, "definition", (node) => {
     if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
   });
   const state: ExtractionWalkState = {
+    intelligenceSpans,
     definitions,
     blocks: [],
     links: [],
@@ -485,8 +509,33 @@ export function extract(ast: Root, _notePath: string, source: string): MarkdownE
   const bodySha = createHash("sha256").update(source).digest("hex");
   const joinedText = state.blocks.map((block) => block.text).join("\n");
   const wordCount = countWords(joinedText);
+  const relationshipRecords = intelligenceSpans
+    .map((span) => span.record)
+    .filter((record) => record.kind === "relationship" && record.status === "provisional");
+  const intelligenceTargets = [
+    ...new Set(
+      relationshipRecords.flatMap((record) => [
+        ...record.relationships.map((relationship) => relationship.target),
+        ...record.evidence.map((evidence) => evidence.source.path),
+      ]),
+    ),
+  ].filter((path) => path !== notePath && isCanonicalOrdinaryNotePath(path));
+  for (const ref of state.frontmatterRefs) {
+    if (
+      relationshipRecords.some((record) =>
+        record.relationships.some(
+          (relationship) =>
+            ref.key === `notient.${relationship.relation}` &&
+            (ref.rawTarget === relationship.target ||
+              `${ref.rawTarget}.md` === relationship.target),
+        ),
+      )
+    )
+      ref.retainedIntelligence = true;
+  }
 
   return {
+    intelligenceTargets,
     blocks: state.blocks,
     links: state.links,
     tags: state.tags,

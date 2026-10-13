@@ -72,6 +72,7 @@ export function writebackEdgeTableFromId(id: string): WritebackEdgeTable | null 
 
 /** Every persisted provenance source accepted by the graph schema. */
 export const EDGE_SOURCES = [
+  "note-intelligence",
   "wikilink",
   "markdown",
   "embed",

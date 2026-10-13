@@ -5,6 +5,7 @@ import { comparisonMarkdown } from "../api/comparisonMarkdown";
 import { cultivationDigestSchema, cultivationSettingsResultSchema } from "../api/cultivation";
 import { cultivationDigestMarkdown, cultivationSettingsMarkdown } from "../api/cultivationMarkdown";
 import { graphNeighborsSchema } from "../api/graph";
+import { isWritebackEdgeTable } from "../core/db/edgeTables";
 import { historyEntrySchema } from "../api/history";
 import { methodologySuggestionResultSchema } from "../api/methodology";
 import { relationshipRetentionResultSchema } from "../api/relationshipRetention";
@@ -217,6 +218,7 @@ export function makeEmitter(options: EmitterOptions): Emitter {
         const { type: _type, operation: _operation, ...payload } = event;
         const result = graphNeighborsSchema.parse(payload);
         const connections = result.connections.map((connection) => {
+          const semantic = isWritebackEdgeTable(connection.relation);
           const direction = connection.direction === "outgoing" ? "→" : "←";
           const sourceLabel =
             connection.meaningSource === "note"
@@ -225,9 +227,9 @@ export function makeEmitter(options: EmitterOptions): Emitter {
                 ? "Meaning read from the private relationship record"
                 : null;
           return [
-            `${direction} ${connection.relation} ${connection.note.path} · ${connection.state === "authored" ? "saved reference" : `${connection.state} relationship`} · ${connection.author}`,
+            `${direction} ${connection.relation} ${connection.note.path} · ${semantic ? (connection.state === "retained" ? "retained provisional relationship" : `${connection.state} relationship`) : connection.state === "retained" ? "retained reference" : "saved reference"} · ${connection.author}`,
             sourceLabel && connection.rationale ? `  ${sourceLabel}: ${connection.rationale}` : "",
-            connection.state === "authored"
+            !semantic
               ? ""
               : connection.evidenceState === "stale"
                 ? "  Evidence has changed since this relationship was assessed."
@@ -269,7 +271,8 @@ export function makeEmitter(options: EmitterOptions): Emitter {
         const meaning: Record<string, string> = {
           pending: "private and not yet staged for review",
           "awaiting-review": "staged; a human or vault owner has not decided",
-          retained: "approved and applied to the note when decided; later edits or an undo are not tracked here",
+          retained:
+            "approved and applied to the note when decided; later edits or an undo are not tracked here",
           rejected: "review rejected; the note was not changed",
           stale: "its evidence changed before a decision; nothing was applied",
           dismissed: "dismissed before review",

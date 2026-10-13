@@ -21,7 +21,11 @@ import { operationInputs } from "../../api/operations";
 import { proposalProvenanceSchema } from "../../api/proposals";
 import { NoteApiError, type NoteReference, revisionSchema } from "../../api/schema";
 import { isWritebackEdgeTable } from "../db/edgeTables";
-import { recoverCurrentRelationshipIntelligence } from "./intelligenceProvenance";
+import {
+  recoverCurrentRelationshipIntelligence,
+  retainedRelationshipCandidates,
+} from "./intelligenceProvenance";
+import { isCanonicalOrdinaryNotePath } from "../vault/publicPath";
 import { STRUCTURAL_INDEX_VERSION } from "../markdown/types";
 import { type StoredNoteNeighbor, readNoteNeighborPage } from "./noteNeighbors";
 
@@ -267,7 +271,7 @@ class GraphRead {
     }
     const page = await readNoteNeighborPage(this.deps.db, source.note.path, {
       includePending: proposed,
-      limit,
+      limit: 200,
       signal: this.signal,
     });
     const connections: Connection[] = [];
@@ -280,7 +284,109 @@ class GraphRead {
       }
       connections.push(await this.connection(row, source, target));
     }
-    return { connections, truncated: page.truncated };
+    const recovered = await this.retainedConnections(source);
+    const semanticKey = (edge: Connection) =>
+      `${edge.note.path}\0${edge.relation}\0${edge.direction}`;
+    const existing = new Set(
+      connections.filter((edge) => edge.state !== "proposed").map(semanticKey),
+    );
+    for (const edge of recovered.connections) {
+      if (!existing.has(semanticKey(edge))) {
+        connections.push(edge);
+        existing.add(semanticKey(edge));
+      }
+    }
+    const typedPairs = new Set(
+      connections
+        .filter((edge) => isWritebackEdgeTable(edge.relation) && edge.state !== "proposed")
+        .map((edge) => edge.note.path),
+    );
+    const visible = connections.filter(
+      (edge) =>
+        !(
+          edge.state === "retained" &&
+          !isWritebackEdgeTable(edge.relation) &&
+          typedPairs.has(edge.note.path)
+        ),
+    );
+    visible.sort(
+      (a, b) =>
+        Number(isWritebackEdgeTable(b.relation)) - Number(isWritebackEdgeTable(a.relation)) ||
+        a.note.path.localeCompare(b.note.path) ||
+        a.id.localeCompare(b.id),
+    );
+    return {
+      connections: visible.slice(0, limit),
+      truncated: page.truncated || recovered.truncated || visible.length > limit,
+    };
+  }
+  private async retainedConnections(requested: ReadNote) {
+    const outgoing = retainedRelationshipCandidates(requested.body);
+    if (outgoing === null) this.omitted++;
+    const raw: unknown = await this.deps.db
+      .query(
+        "SELECT path FROM note WHERE tombstoned_at IS NONE AND $path INSIDE intelligence_targets ORDER BY path LIMIT 201 TIMEOUT 2s;",
+        { path: requested.note.path },
+      )
+      .collect();
+    if (
+      !Array.isArray(raw) ||
+      raw.length !== 1 ||
+      !Array.isArray(raw[0]) ||
+      raw[0].some(
+        (row) => typeof row !== "object" || row === null || !isCanonicalOrdinaryNotePath(row.path),
+      )
+    )
+      throw new Error("graph storage integrity: invalid retained relationship discovery");
+    const paths = [
+      ...new Set([
+        ...(outgoing ?? []).map((candidate) => candidate.target),
+        ...raw[0].map((row) => row.path as string),
+      ]),
+    ].filter((path) => path !== requested.note.path);
+    const connections: Connection[] = [];
+    const identities = new Set<string>();
+    for (const path of paths.slice(0, 200)) {
+      this.check();
+      const neighbor = await this.read(path);
+      if (!neighbor?.indexed) {
+        this.omitted++;
+        continue;
+      }
+      const incoming = retainedRelationshipCandidates(neighbor.body);
+      if (incoming === null) this.omitted++;
+      for (const direction of ["outgoing", "incoming"] as const) {
+        const source = direction === "outgoing" ? requested : neighbor;
+        const target = direction === "outgoing" ? neighbor : requested;
+        const candidates = direction === "outgoing" ? outgoing : incoming;
+        for (const candidate of candidates ?? []) {
+          if (candidate.target !== target.note.path) continue;
+          const recovered = recoverCurrentRelationshipIntelligence(
+            source,
+            target,
+            candidate.relation,
+          );
+          if (!recovered) {
+            this.omitted++;
+            continue;
+          }
+          const id = `note:${recovered.id}:${contentRevision(`${target.note.path}\0${candidate.relation}\0${direction}`)}`;
+          if (identities.has(id)) continue;
+          identities.add(id);
+          connections.push({
+            ...recovered,
+            id,
+            note: neighbor.note,
+            relation: candidate.relation,
+            direction,
+            state: "retained",
+            assessment: null,
+            meaningSource: "note",
+          });
+        }
+      }
+    }
+    return { connections, truncated: paths.length > 200 || raw[0].length > 200 };
   }
   private async connection(
     row: StoredNoteNeighbor,
@@ -295,14 +401,32 @@ class GraphRead {
       note: neighbor.note,
       relation: row.table,
       direction: row.direction,
-      state: row.proposed ? "proposed" : semantic ? "approved" : "authored",
+      state: row.proposed
+        ? "proposed"
+        : row.retainedIntelligence
+          ? "retained"
+          : semantic
+            ? "approved"
+            : "authored",
       assessment: semantic ? row.confidence : null,
       author: row.agent,
-      rationale: null,
-      meaningSource: null,
+      rationale: row.retainedIntelligence
+        ? "Reference retained in note intelligence; it does not establish a factual relationship or restore approval history."
+        : null,
+      meaningSource: row.retainedIntelligence ? "note" : null,
       evidence: [],
       evidenceState: "unavailable",
     };
+    if (semantic && !row.proposed) {
+      const recovered = recoverCurrentRelationshipIntelligence(source, target, row.table);
+      if (recovered) {
+        result.rationale = recovered.rationale;
+        result.meaningSource = "note";
+        result.evidence = recovered.evidence;
+        result.evidenceState = recovered.evidenceState;
+        return result;
+      }
+    }
     if (row.provenance === null) {
       if (semantic) {
         const recovered = recoverCurrentRelationshipIntelligence(source, target, row.table);

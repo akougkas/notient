@@ -522,7 +522,8 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
       quote?: string,
       keepPane?: boolean,
     ): Promise<void> => {
-      if (stateRef.current.view === "ask") noteReturnModeRef.current = stateRef.current.ask.composerMode;
+      if (stateRef.current.view === "ask")
+        noteReturnModeRef.current = stateRef.current.ask.composerMode;
       const request = ++noteRequestRef.current;
       const update: React.Dispatch<Action> = (action) => {
         if (noteRequestRef.current === request) dispatch(action);
@@ -1032,8 +1033,7 @@ export function App({ vaultPath, client, connect, onExit }: AppProps): React.Rea
             type: "notice",
             text: "Open a note first, then keep the answer on it. Ctrl+S saves it as a new note.",
           });
-        else if (!text)
-          dispatch({ type: "notice", text: "There is no answer to keep yet." });
+        else if (!text) dispatch({ type: "notice", text: "There is no answer to keep yet." });
         else dispatch({ type: "writing/open", request: { path, text, action: "append" } });
         return;
       }
@@ -2537,10 +2537,11 @@ async function loadNeighbors(
       connections: neighbors,
       neighbors: neighbors.connections.map((row) => ({
         connectionId: row.id,
+        ...(row.state === "retained" ? { retainedIntelligence: true } : {}),
         notePath: row.note.path,
         table: row.relation,
         direction: row.direction,
-        confidence: row.assessment ?? 1,
+        confidence: row.assessment ?? (row.state === "retained" ? 0 : 1),
         agent: row.author,
         proposed: row.state === "proposed",
       })),

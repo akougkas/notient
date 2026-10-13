@@ -26,6 +26,7 @@ DEFINE FIELD OVERWRITE structural_version ON note TYPE option<int>;
 -- Revision-bound authored destinations, including currently missing notes.
 -- JSON is runtime validated; Markdown remains the sole source of these values.
 DEFINE FIELD OVERWRITE reference_targets ON note TYPE option<string>;
+DEFINE FIELD OVERWRITE intelligence_targets ON note TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE tier2_at ON note TYPE option<datetime>;
 DEFINE FIELD OVERWRITE tier3_at ON note TYPE option<datetime>;
 -- Durable hand-off between an embedding-model migration and the boot-time

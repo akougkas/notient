@@ -15,11 +15,12 @@ export {
   isRecordsOnlyContinuation,
   parseIntelligenceRecords,
   parseAllIntelligenceRecords,
+  parseIntelligenceRecordSpans,
   prepareIntelligenceAppend,
   stripIntelligenceMarkers,
   withoutRetainedIntelligence,
 } from "./markdown";
-export type { IntelligenceAppendPlan } from "./markdown";
+export type { IntelligenceAppendPlan, IntelligenceRecordSpan } from "./markdown";
 export {
   intelligenceAttributionSchema,
   intelligenceEvidenceSchema,

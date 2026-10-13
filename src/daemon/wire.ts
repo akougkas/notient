@@ -424,6 +424,7 @@ export type VaultResolveLinkResult =
   | { ok: true; resolved: false; path: null };
 
 export interface NeighborWire {
+  retainedIntelligence?: boolean;
   notePath: string;
   /** Authored link/embed/property relation or one of the reviewed semantic tables. */
   table: string;

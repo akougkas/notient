@@ -8,7 +8,7 @@ export const connectionSchema = z.object({
   note: noteReferenceSchema,
   relation: z.enum(NOTE_CONNECTION_TABLES),
   direction: z.enum(["outgoing", "incoming"]),
-  state: z.enum(["authored", "approved", "proposed"]),
+  state: z.enum(["authored", "retained", "approved", "proposed"]),
   assessment: z.number().min(0).max(1).nullable(),
   author: z.string(),
   rationale: z.string().nullable(),

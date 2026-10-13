@@ -72,8 +72,14 @@ export function connectionLabel(table: string): string {
   return table.replaceAll("_", " ");
 }
 
-export function connectionAssessment(table: string, proposed: boolean, assessment: number): string {
+export function connectionAssessment(
+  table: string,
+  proposed: boolean,
+  assessment: number,
+  retained = false,
+): string {
   if (proposed) return "idea";
+  if (retained) return "kept";
   if (["wikilink", "embed", "frontmatter_ref"].includes(table)) return "file";
   return assessment.toFixed(2);
 }
