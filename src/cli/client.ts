@@ -462,28 +462,32 @@ function decodePrincipal(raw: unknown, requestedId: string): Principal {
     throw malformedPrincipal("kind must be 'human' or 'agent'");
   }
   const expectedKind = requestedId === DEFAULT_AGENT_ID ? "human" : "agent";
-  if (candidate.kind !== expectedKind) {
+  const paired = isPairedIdentity(requestedId);
+  if (!paired && candidate.kind !== expectedKind) {
     throw malformedPrincipal(`${requestedId} must be assigned kind '${expectedKind}'`);
   }
   const expectedScopes = candidate.kind === "human" ? HUMAN_SCOPES : AGENT_SCOPES;
   const validPairedScopes =
-    isPairedIdentity(requestedId) &&
+    paired &&
     Array.isArray(candidate.scopes) &&
     candidate.scopes.length > 0 &&
-    candidate.scopes.every((scope) => scope === "read" || scope === "write") &&
+    candidate.scopes.every((scope) =>
+      scope === "read" || scope === "write" ||
+      (candidate.kind === "human" && (scope === "admin" || scope === "host")),
+    ) &&
     new Set(candidate.scopes).size === candidate.scopes.length;
   const validStandardScopes =
     Array.isArray(candidate.scopes) &&
     candidate.scopes.length === expectedScopes.length &&
     candidate.scopes.every((scope, index) => scope === expectedScopes[index]);
-  if (!(isPairedIdentity(requestedId) ? validPairedScopes : validStandardScopes)) {
+  if (!(paired ? validPairedScopes : validStandardScopes)) {
     throw malformedPrincipal(
       `${candidate.kind} scopes must be exactly [${expectedScopes.join(", ")}]`,
     );
   }
   if (
     candidate.vaultOwner !== undefined &&
-    (candidate.vaultOwner !== true || !isPairedIdentity(requestedId))
+    (candidate.vaultOwner !== true || !paired || candidate.kind !== "agent")
   )
     throw malformedPrincipal("vaultOwner may only be true for an authenticated paired agent");
   const scopes = candidate.scopes as string[];

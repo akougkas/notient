@@ -78,7 +78,10 @@ function authenticatePaired(
     throw unauthenticated("paired authentication failed");
   try {
     const authenticated = pairing.authenticate(token);
-    if (authenticated.principal.id !== id || authenticated.principal.kind !== "agent")
+    if (
+      authenticated.principal.id !== id ||
+      (authenticated.principal.kind !== "agent" && authenticated.principal.kind !== "human")
+    )
       throw unauthenticated("paired authentication failed");
     return authenticated.principal;
   } catch {
