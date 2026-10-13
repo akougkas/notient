@@ -1,12 +1,11 @@
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { readNote, revision, portableFold, refuse } from './paths.mjs';
-import { documentSpans, frontmatterFields, parseMarkdown } from './markdown.mjs';
+import { documentSpans, frontmatterFields, parseMarkdown, referenceLabelKey as labelKey } from './markdown.mjs';
 
 const posix = path.posix;
 const sorted = values => [...new Set(values)].sort();
 const noMd = name => name.replace(/\.md$/i, '');
-const labelKey = label => label.replace(/\\([\p{P}\p{S}])/gu, '$1').trim().replace(/\s+/g, ' ').toLowerCase();
 const external = target => /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target);
 const indentation = (text, start = 0) => [...(/^[ \t]*/.exec(text)?.[0] ?? '')].reduce((column, char) => char === '\t' ? column + 4 - column % 4 : column + 1, start) - start;
 const escaped = (text, offset) => { let count = 0; while (offset > 0 && text[--offset] === '\\') count++; return count % 2 === 1; };
@@ -357,7 +356,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
     const match = /^ {0,3}\[((?:\\.|[^\]\\\n])+)\]:[ \t]*/.exec(line.content.slice(offset));
     if (!match) continue;
     if (match[1].startsWith('^')) continue;
-    if (/\\[\[\]]/.test(match[1])) { issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing escaped brackets are unsupported.' }); mask(line.start, line.end); continue; }
+    if (/[\[\]]/.test(match[1].replace(/\\./g, ''))) { issues.push({ start: line.start, end: line.end, line: ordinal + 1, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing unescaped brackets are unsupported.' }); mask(line.start, line.end); continue; }
     let last = ordinal;
     const begin = line.start + offset + match[0].length;
     if (!text.slice(begin, line.start + line.content.length).trim()) {
@@ -429,7 +428,6 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       if (labelEnd >= 0) { label = text.slice(close + 2, labelEnd) || label; end = labelEnd; }
     }
     const entries = definitions.get(labelKey(label));
-    if (/\\[\[\]]/.test(label)) issues.push({ start: i, end: end + 1, line: text.slice(0, i).split('\n').length, code: 'AMBIGUOUS_REFERENCE', reason: 'Reference labels containing escaped brackets are unsupported.' });
     if (entries?.length > 1) for (const token of entries) token.duplicate = true;
     i = end;
   }

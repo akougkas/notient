@@ -293,6 +293,10 @@ export function splitTarget(target) {
 
 const displaySpans = Symbol('displaySpans');
 
+export function referenceLabelKey(label) {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 export function linkDisplaySpans(link) {
   return link[displaySpans] ?? [];
 }
@@ -341,12 +345,17 @@ function scanLinks(text, start, end, definitions = new Map()) {
         let label = alias;
         let referenceEnd = cursor;
         if (text[cursor] === '[') {
-          const close = text.indexOf(']', cursor + 1);
-          if (close < 0 || close >= end) { i++; continue; }
+          let close = cursor + 1;
+          while (close < end && text[close] !== ']') {
+            if (text[close] === '\\') { close += 2; continue; }
+            if (text[close] === '[') break;
+            close++;
+          }
+          if (close >= end || text[close] !== ']') { i++; continue; }
           label = text.slice(cursor + 1, close) || alias;
           referenceEnd = close + 1;
         }
-        const definition = definitions.get(label.trim().replace(/\s+/g, ' ').toLowerCase());
+        const definition = definitions.get(referenceLabelKey(label));
         if (definition) {
           links.push(displayedLink({ kind: 'reference', ...splitTarget(definition.target), alias, embed, source: sourceRange(text, i, referenceEnd), definitionSource: definition.source }, open + 1, cursor - 1));
           i = referenceEnd;
@@ -503,9 +512,9 @@ export function parseMarkdown(text, filename = '') {
   for (const group of linkLines) {
     if (group.code || !group.parts.length) continue;
     const filtered = group.parts.map(part => text.slice(part.start, part.end)).join('');
-    const match = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))/.exec(filtered);
+    const match = /^ {0,3}\[((?:\\.|[^\[\]\\\n])+)\]:\s*(?:<([^>]+)>|(\S+))/.exec(filtered);
     if (match && !match[1].startsWith('^')) {
-      const key = match[1].trim().replace(/\s+/g, ' ').toLowerCase();
+      const key = referenceLabelKey(match[1]);
       if (!definitions.has(key)) definitions.set(key, { target: match[2] ?? match[3], source: sourceRange(text, group.parts[0].start, group.parts.at(-1).end) });
       for (const row of group.rows) definitionLines.add(lines[row].start);
     }
