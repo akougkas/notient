@@ -48,7 +48,7 @@ import {
   selectorSchema,
 } from "../../api/schema";
 import { isProposalSource, proposalProvenanceIssue } from "../../core/approvals/proposalStorage";
-import { validateAgentId } from "../../core/auth/agentIdentity";
+import { isCanonicalConversationClientId } from "../../core/auth/agentIdentity";
 import { NOTE_CONNECTION_TABLES, WRITEBACK_EDGE_TABLES } from "../../core/db/edgeTables";
 import { parseSurrealRelationRecordId, parseUuidRecordId } from "../../core/db/recordId";
 import { AGENT_EVENT_TYPES } from "../../core/services/agentEventStore";
@@ -181,10 +181,10 @@ const score = finiteNumber.min(0).max(1);
 const canonicalPath = z
   .string()
   .refine(isCanonicalVaultPath, "must be a canonical vault-relative path");
-const clientIdentity = trimmedString.refine((value) => {
-  const validated = validateAgentId(value);
-  return validated.valid && validated.id === value;
-}, "must be a canonical client identity");
+const clientIdentity = trimmedString.refine(
+  isCanonicalConversationClientId,
+  "must be a canonical client identity",
+);
 
 const uuidRecordId = (table: string) =>
   z.string().refine((value) => {
