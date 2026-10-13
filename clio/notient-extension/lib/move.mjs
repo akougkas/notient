@@ -111,6 +111,20 @@ function destinationAt(text, start, limit, inline) {
   return { start: begin, end, angle, titleStart, finish: inline ? i + 1 : limit };
 }
 
+function wikiEnd(text, start) {
+  let depth = 0;
+  for (let cursor = start + 2; cursor < text.length; cursor++) {
+    if (text[cursor] === '\n' || text[cursor] === '\r') return -1;
+    if (text[cursor] === '|' && depth === 0) return text.indexOf(']]', cursor + 1);
+    if (text[cursor] === '[') depth++;
+    else if (text[cursor] === ']') {
+      if (depth > 0) depth--;
+      else if (text[cursor + 1] === ']') return cursor;
+    }
+  }
+  return -1;
+}
+
 function htmlDestinations(text, start) {
   const tag = /^<(a|img|source|video|audio|div|span|p|link)\b/i.exec(text.slice(start));
   if (!tag) return null;
@@ -368,7 +382,7 @@ export function tokenizeMove(bytes, { visibility = false } = {}) {
       continue;
     }
     if (text[i + 1] === '[') {
-      const end = text.indexOf(']]', i + 2);
+      const end = wikiEnd(text, i);
       const lineEnd = text.indexOf('\n', i);
       if (end < 0 || lineEnd >= 0 && end > lineEnd) {
         const labelEnd = closingBracket(text, i + 1, visible);
