@@ -816,9 +816,6 @@ export class NotientView extends ItemView {
             : await this.client.call("changes.apply", request);
           if (proposal && (result.state === "conflict" || result.state === "partial")) {
             applyButton.remove();
-            const invalidated =
-              result.state === "conflict" ||
-              result.effects.some((effect) => effect.state === "conflict");
             const showOutcome = () => {
               const outcome = this.content.createDiv({ cls: "notient-warning" });
               outcome.createEl("p", { text: `Application ${result.state}.` });
@@ -827,7 +824,7 @@ export class NotientView extends ItemView {
               this.content.insertBefore(outcome, this.content.firstChild);
             };
             try {
-              await this.inspectProposal(proposal.id, invalidated);
+              await this.inspectProposal(proposal.id);
             } catch (error) {
               showOutcome();
               throw error;
@@ -847,9 +844,9 @@ export class NotientView extends ItemView {
             (result.state === "conflict" ||
               (result.state === "partial" && result.effects.some((effect) => effect.state === "conflict")))
           ) {
-            applyButton.remove();
+            applyButton.setText("Retry these reviewed changes");
             parent.createEl("p", {
-              text: "This exact preview cannot be retried because a source changed. The before and after content remains available above; prepare a fresh preview from the current note.",
+              text: "Resolve the reported conflict before retrying this exact review. If saved content or evidence changed, prepare a fresh preview. Completed effects keep their existing history receipts.",
               cls: "notient-warning",
             });
           }
